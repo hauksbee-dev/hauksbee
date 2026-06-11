@@ -359,15 +359,49 @@ fn operating_point(
                 power_w: 0.0,
             }
         }
-        Some(Device::Bjt { c, b, e, .. }) => {
+        Some(Device::Bjt { c, b, e, model, .. }) => {
+            // Gummel-Poon transport at the sampled node voltages, polarity
+            // folded — the same equations the solver stamps, so the monitor
+            // sees the operating point the solve actually settled at.
+            let sign = match model.polarity {
+                galvani_ir::Polarity::N => 1.0,
+                galvani_ir::Polarity::P => -1.0,
+            };
+            let vt = galvani_ir::thermal_voltage_c(circuit.temp_c);
+            let vbe = sign * (node_v(*b) - node_v(*e));
+            let vbc = sign * (node_v(*b) - node_v(*c));
+            let ex = |v: f64, n: f64| ((v / (n * vt)).clamp(-100.0, 200.0)).exp();
+            let cf = model.is * (ex(vbe, model.nf) - 1.0);
+            let cr = model.is * (ex(vbc, model.nr) - 1.0);
+            let ic = (cf - cr) - cr / model.br;
+            let ib = cf / model.bf + cr / model.br;
             let vce = node_v(*c) - node_v(*e);
-            let _ = b;
-            // No closed-form branch current here; approximate dissipation from
-            // Vce and the rated current is handled by the voltage check only.
+            let i_worst = ic.abs().max(ib.abs()).min(1e3);
             OperatingPoint {
-                current_a: 0.0,
+                current_a: i_worst,
                 voltage_v: vce,
-                power_w: 0.0,
+                power_w: (vce * ic).abs().min(1e6) + (sign * vbe * ib).abs().min(1e6),
+            }
+        }
+        Some(Device::VSwitch {
+            a,
+            b,
+            ctrl_p,
+            ctrl_n,
+            von,
+            ron,
+            roff,
+            ..
+        }) => {
+            // Channel current through the switch at its present state.
+            let vc = node_v(*ctrl_p) - node_v(*ctrl_n);
+            let r = if vc >= *von { *ron } else { *roff };
+            let v = node_v(*a) - node_v(*b);
+            let i = (v / r.max(1e-3)).abs();
+            OperatingPoint {
+                current_a: i,
+                voltage_v: v,
+                power_w: v.abs() * i,
             }
         }
         Some(Device::Mosfet { d, g, s, .. }) => {
@@ -474,6 +508,14 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
         | ComponentKind::BjtPnp
         | ComponentKind::Nmos
         | ComponentKind::Pmos => {
+            if let Some(imax) = r.max_current_a {
+                checks.push(Check {
+                    kind: FaultKind::Overcurrent,
+                    value: op.current_a,
+                    limit: imax,
+                    surge: false,
+                });
+            }
             if let Some(vmax) = r.max_voltage_v {
                 checks.push(Check {
                     kind: FaultKind::Overvoltage,
@@ -497,6 +539,16 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
                     kind: FaultKind::Overcurrent,
                     value: op.current_a,
                     limit: imax,
+                    surge: false,
+                });
+            }
+        }
+        ComponentKind::AnalogSwitch => {
+            if let Some(ipin) = r.max_pin_current_a {
+                checks.push(Check {
+                    kind: FaultKind::PinOvercurrent,
+                    value: op.current_a,
+                    limit: ipin,
                     surge: false,
                 });
             }
