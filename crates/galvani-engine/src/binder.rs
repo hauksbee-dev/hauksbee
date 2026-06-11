@@ -403,7 +403,25 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
-    // Passives by reference class, only if the value actually parses.
+    // Connector-class references: not simulatable parts; classify so they
+    // don't count against resolution (J5 "Power", P1, test points, jumpers).
+    if matches!(prefix.as_str(), "J" | "P" | "X" | "JP" | "TP" | "MP" | "H")
+        && parse_value(&comp.value).is_none()
+    {
+        return Some(make_entry(
+            "connector_fallback",
+            ComponentKind::Ignore,
+            "connector / mechanical (engine fallback by reference class)",
+            Default::default(),
+            BTreeMap::new(),
+        ));
+    }
+
+    // Passives by reference class, when a magnitude can be recovered from the
+    // value field. Handles plain engineering values ("4k7", "100n") and the
+    // structured naming some teams use ("R_47k_0402", "C_22u_25V_0805",
+    // "CTEB_2.2UF_35V_10%_...): the first underscore-separated token that
+    // parses as a value wins.
     let kind_pins: Option<(ComponentKind, [(&str, &str); 2])> = match prefix.chars().next() {
         Some('R') => Some((ComponentKind::Passive, [("1", "a"), ("2", "b")])),
         Some('C') => Some((ComponentKind::Passive, [("1", "pos"), ("2", "neg")])),
@@ -411,16 +429,35 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         _ => None,
     };
     if let Some((kind, pinmap)) = kind_pins {
-        if parse_value(&comp.value).is_some() {
+        let direct = parse_value(&comp.value).is_some();
+        let structured = !direct
+            && comp
+                .value
+                .split(['_', ' '])
+                .filter(|t| !t.is_empty())
+                .any(|t| parse_value(t).is_some());
+        if direct || structured {
+            let value_hint = if direct {
+                None
+            } else {
+                comp.value
+                    .split(['_', ' '])
+                    .find(|t| parse_value(t).is_some())
+                    .map(str::to_string)
+            };
             let pins: BTreeMap<String, String> = pinmap
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
+            let mut params = galvani_models::Params::default();
+            if let Some(hint) = value_hint {
+                params.set_str("value_override", hint);
+            }
             return Some(make_entry(
                 &format!("{}_fallback", prefix.to_ascii_lowercase()),
                 kind,
                 "passive (engine fallback from value field)",
-                Default::default(),
+                params,
                 pins,
             ));
         }
@@ -549,7 +586,7 @@ fn bind_component(
     };
 
     match model.kind {
-        Passive => bind_passive(comp, circuit, node_of),
+        Passive => bind_passive(comp, model, circuit, node_of),
         Diode => bind_diode(comp, model, circuit, &role_nets),
         BjtNpn | BjtPnp => bind_bjt(comp, model, circuit, &role_nets),
         Nmos | Pmos => bind_mosfet(comp, model, circuit, &role_nets),
@@ -685,10 +722,17 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
 
 fn bind_passive(
     comp: &Component,
+    model: &ModelEntry,
     circuit: &mut Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (BindOutcome, Option<String>) {
-    let parsed = parse_value(&comp.value);
+    // A fallback entry may carry the magnitude recovered from a structured
+    // value string ("R_47k_0402" -> "47k").
+    let effective_value = model
+        .params
+        .get_str("value_override")
+        .unwrap_or(&comp.value);
+    let parsed = parse_value(effective_value);
     let (a, b) = two_terminal_nodes(comp, node_of);
     let (Some(a), Some(b)) = (a, b) else {
         return (
