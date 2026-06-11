@@ -1,0 +1,35 @@
+# DAC and ADC models.
+
+[[models]]
+id = "mcp4728"
+kind = "dac"
+description = "MCP4728 quad 12-bit I2C DAC with internal EEPROM, MSOP-10"
+
+[models.match]
+value_re = "(?i)^MCP4728"
+mpn_re   = "(?i)MCP4728"
+
+[models.params]
+# Source: Microchip MCP4728 datasheet DS22187E, Section 1.0 Electrical Specs
+bits       = 12
+vref_int   = 2.048       # internal reference voltage (V) — Vref_int
+vref_ext   = 5.0         # assumed external VDD reference option (V)
+lsb_size_v = 0.000488    # 2.048 / 4096 V per LSB
+i2c_addr   = 0x60        # default unshifted 7-bit I2C address (A2A1A0=000)
+sda_pin    = "4"
+scl_pin    = "3"
+# Supply pins
+supply_pin = "1"          # VDD
+gnd_pin    = "2"          # VSS
+
+[models.pins]
+"1"  = "vdd"
+"2"  = "vss"
+"3"  = "scl"
+"4"  = "sda"
+"5"  = "ldac_n"
+"6"  = "vout_d"
+"7"  = "vout_c"
+"8"  = "vout_b"
+"9"  = "vout_a"
+"10" = "rdy_bsy_n"

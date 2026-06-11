@@ -1,0 +1,208 @@
+# Generic passive components.
+# Resistors, capacitors, and inductors are resolved purely from their Value
+# field (parsed by the engineering-notation value parser), so no explicit
+# param entries are needed; these entries exist only to anchor the kind and
+# provide pin maps for the match-rule engine.
+
+[[models]]
+id = "generic_r"
+kind = "passive"
+description = "Generic resistor — value parsed from component Value field"
+
+[models.match]
+lib_id = "Device:R"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_r_small"
+kind = "passive"
+description = "Generic resistor, small package (R_Small)"
+
+[models.match]
+lib_id = "Device:R_Small"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_c"
+kind = "passive"
+description = "Generic capacitor — value parsed from component Value field"
+
+[models.match]
+lib_id = "Device:C"
+
+[models.pins]
+"1" = "pos"
+"2" = "neg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_c_small"
+kind = "passive"
+description = "Generic capacitor, small package (C_Small)"
+
+[models.match]
+lib_id = "Device:C_Small"
+
+[models.pins]
+"1" = "pos"
+"2" = "neg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_cp"
+kind = "passive"
+description = "Generic polarised capacitor (electrolytic / tantalum)"
+
+[models.match]
+lib_id = "Device:CP"
+
+[models.pins]
+"1" = "pos"
+"2" = "neg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_cp1"
+kind = "passive"
+description = "Generic polarised capacitor variant"
+
+[models.match]
+lib_id = "Device:CP1"
+
+[models.pins]
+"1" = "pos"
+"2" = "neg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_l"
+kind = "passive"
+description = "Generic inductor — value parsed from component Value field"
+
+[models.match]
+lib_id = "Device:L"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_l_small"
+kind = "passive"
+description = "Generic inductor, small package"
+
+[models.match]
+lib_id = "Device:L_Small"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ferrite_bead"
+kind = "passive"
+description = "Ferrite bead — modelled as series RL"
+
+[models.match]
+lib_id = "Device:Ferrite_Bead"
+
+[models.params]
+# Typical 600 Ω @ 100 MHz ferrite; solver uses DC resistance only
+# Source: Murata BLM18AG601SN1D datasheet, typical Rdc = 0.35 Ω
+ohms = 0.35
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "crystal"
+kind = "passive"
+description = "Quartz crystal — series resonant LC model"
+
+[models.match]
+lib_id = "Device:Crystal"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "fuse"
+kind = "passive"
+description = "Fuse — zero-ohm wire (pre-fault)"
+
+[models.match]
+lib_id = "Device:Fuse"
+
+[models.params]
+ohms = 0.01
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resistors matched by footprint prefix (catch-all for non-Device: lib_ids)
+
+[[models]]
+id = "resistor_tht"
+kind = "passive"
+description = "Through-hole resistor (footprint-matched)"
+
+[models.match]
+footprint_re = "^Resistor_THT:"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "capacitor_tht"
+kind = "passive"
+description = "Through-hole capacitor (footprint-matched)"
+
+[models.match]
+footprint_re = "^Capacitor_THT:"
+
+[models.pins]
+"1" = "pos"
+"2" = "neg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "inductor_tht"
+kind = "passive"
+description = "Through-hole inductor (footprint-matched)"
+
+[models.match]
+footprint_re = "^Inductor_THT:"
+
+[models.pins]
+"1" = "a"
+"2" = "b"

@@ -1,0 +1,61 @@
+# Components that should be silently ignored during simulation extraction.
+# Mechanical items: mounting holes, logos, test points, fiducials, solder
+# jumpers, and anything else with no electrical model.
+
+[[models]]
+id = "mounting_hole"
+kind = "ignore"
+description = "Mechanical mounting hole — no electrical function"
+
+[models.match]
+footprint_re = "(?i)MountingHole"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "test_point"
+kind = "ignore"
+description = "Test point pad — no model, appears as floating net in netlist"
+
+[models.match]
+footprint_re = "(?i)TestPoint"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "fiducial"
+kind = "ignore"
+description = "Board fiducial marker"
+
+[models.match]
+footprint_re = "(?i)Fiducial"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "logo"
+kind = "ignore"
+description = "PCB logo or artwork"
+
+[models.match]
+footprint_re = "(?i)Symbol|Logo"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "solder_jumper"
+kind = "ignore"
+description = "Solder jumper — treated as open during simulation"
+
+[models.match]
+lib_id = "Device:SolderJumper"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "solder_jumper_2"
+kind = "ignore"
+description = "Solder jumper (footprint-matched)"
+
+[models.match]
+footprint_re = "(?i)SolderJumper|Jumper"

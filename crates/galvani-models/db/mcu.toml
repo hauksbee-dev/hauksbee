@@ -1,0 +1,96 @@
+# MCU and module models.
+
+[[models]]
+id = "atmega328p"
+kind = "mcu"
+description = "ATmega328P 8-bit AVR MCU, TQFP-32 or DIP-28"
+
+[models.match]
+value_re   = "(?i)^ATmega328P?$"
+mpn_re     = "(?i)^ATmega328P"
+
+[models.params]
+# galvani-mcu backend identifier — tells the co-sim layer which emulator core
+# to instantiate.
+backend = "simavr:atmega328p"
+
+[models.pins]
+# TQFP-32 / DIP-28 pin map (KiCad Device:ATmega328P default symbol)
+"1"  = "pc6_reset"
+"2"  = "pd0_rxd"
+"3"  = "pd1_txd"
+"4"  = "pd2_int0"
+"5"  = "pd3_int1_oc2b"
+"6"  = "pd4_t0_xck"
+"7"  = "vcc"
+"8"  = "gnd"
+"9"  = "pb6_xtal1"
+"10" = "pb7_xtal2"
+"11" = "pd5_t1_oc0b"
+"12" = "pd6_ain0_oc0a"
+"13" = "pd7_ain1"
+"14" = "pb0_icp1"
+"15" = "pb1_oc1a"
+"16" = "pb2_ss_oc1b"
+"17" = "pb3_mosi_oc2a"
+"18" = "pb4_miso"
+"19" = "pb5_sck"
+"20" = "avcc"
+"21" = "aref"
+"22" = "gnd2"
+"23" = "pc0_adc0"
+"24" = "pc1_adc1"
+"25" = "pc2_adc2"
+"26" = "pc3_adc3"
+"27" = "pc4_adc4_sda"
+"28" = "pc5_adc5_scl"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "arduino_nano"
+kind = "mcu"
+description = "Arduino Nano module (ATmega328P carrier, 30-pin 2.54mm header)"
+
+[models.match]
+value_re   = "(?i)^Arduino.?Nano"
+footprint_re = "(?i)Arduino.*Nano"
+
+[models.params]
+# The Nano is a module that wraps an ATmega328P; the solver should recursively
+# resolve the embedded MCU using the atmega328p entry above.
+backend = "simavr:atmega328p"
+module  = true        # flag: pin map is at the module header level
+
+[models.pins]
+# Arduino Nano pin header (A-side = left, B-side = right when USB at top)
+"1"  = "d1_tx"
+"2"  = "d0_rx"
+"3"  = "reset"
+"4"  = "gnd"
+"5"  = "d2"
+"6"  = "d3_pwm"
+"7"  = "d4"
+"8"  = "d5_pwm"
+"9"  = "d6_pwm"
+"10" = "d7"
+"11" = "d8"
+"12" = "d9_pwm"
+"13" = "d10_pwm_ss"
+"14" = "d11_pwm_mosi"
+"15" = "d12_miso"
+"16" = "d13_sck"
+"17" = "3v3"
+"18" = "aref"
+"19" = "a0"
+"20" = "a1"
+"21" = "a2"
+"22" = "a3"
+"23" = "a4_sda"
+"24" = "a5_scl"
+"25" = "a6"
+"26" = "a7"
+"27" = "5v"
+"28" = "reset2"
+"29" = "gnd2"
+"30" = "vin"

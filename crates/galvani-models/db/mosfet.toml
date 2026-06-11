@@ -1,0 +1,80 @@
+# MOSFET models.
+# Level-1 SPICE params: vto (V), kp (A/V²), lambda (1/V), gamma (V^0.5),
+# phi (V), rd (Ω), rs (Ω), cbd (F), cbs (F), cgd (F), cgs (F).
+
+# ── N-channel ─────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "2n7002"
+kind = "nmos"
+description = "2N7002 N-channel MOSFET SOT-23, 60V, 300mA, Vth≈2.5V"
+
+[models.match]
+value_re = "(?i)^2N7002$"
+
+[models.params]
+# Source: Nexperia 2N7002 datasheet Rev. 4 2021, SPICE model
+vto    = 2.5      # threshold voltage (V)
+kp     = 0.04     # transconductance parameter (A/V²) — k'*(W/L)
+lambda = 0.01     # channel-length modulation (1/V)
+rd     = 2.0      # drain ohmic resistance (Ω)
+rs     = 0.5      # source ohmic resistance (Ω)
+cgd    = 3.0e-13  # gate-drain capacitance (F)
+cgs    = 5.0e-13  # gate-source capacitance (F)
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bss138"
+kind = "nmos"
+description = "BSS138 N-channel MOSFET SOT-23, 50V, 200mA, Vth≈1.5V"
+
+[models.match]
+value_re = "(?i)^BSS138$"
+
+[models.params]
+# Source: Nexperia BSS138 datasheet Rev. 5, SPICE model
+vto    = 1.5
+kp     = 0.052
+lambda = 0.02
+rd     = 2.0
+rs     = 0.5
+cgd    = 2.0e-13
+cgs    = 4.0e-13
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── P-channel ─────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ao3401a"
+kind = "pmos"
+description = "AO3401A P-channel MOSFET SOT-23, 30V, 4A, Vth≈−1V"
+
+[models.match]
+value_re = "(?i)^AO3401A?$"
+
+[models.params]
+# Source: Alpha & Omega AO3401A datasheet, SPICE parameters
+vto    = -1.1     # threshold voltage (V) — negative for PMOS
+kp     = 4.5      # transconductance (A/V²)
+lambda = 0.04
+rd     = 0.08
+rs     = 0.02
+cgd    = 6.0e-13
+cgs    = 1.0e-12
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
