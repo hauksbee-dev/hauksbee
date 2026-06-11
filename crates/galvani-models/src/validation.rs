@@ -133,6 +133,7 @@ mod tests {
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            ratings: Default::default(),
         }
     }
 
@@ -162,6 +163,7 @@ mod tests {
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            ratings: Default::default(),
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("'n'")));
@@ -182,6 +184,7 @@ mod tests {
             r#match: Default::default(),
             params: p,
             pins: BTreeMap::new(),
+            ratings: Default::default(),
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("bf")));

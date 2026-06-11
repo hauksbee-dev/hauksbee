@@ -27,6 +27,10 @@ vth  = 1.5       # switch threshold (V) — midpoint of Vih/Vil at 3.3V
 "5" = "s1"
 "6" = "vcc"
 
+[models.ratings]
+max_pin_current_a = 0.05  # continuous channel current (TI)
+max_voltage_v = 6.5
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -51,6 +55,10 @@ vth  = 1.5
 "3" = "in_out_b"
 "4" = "ctrl"
 "5" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.05
+max_voltage_v = 6.5
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -83,3 +91,7 @@ vth  = 1.3     # control threshold (V) at Vcc=2.7V conservative
 "12" = "in_out_4a"
 "13" = "in_out_4b"
 "14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0

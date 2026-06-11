@@ -30,6 +30,11 @@ tf  = 3.0e-10
 "2" = "emitter"
 "3" = "collector"
 
+[models.ratings]
+max_current_a = 0.1
+max_power_w = 0.25
+max_voltage_v = 45.0  # VCEO
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -58,6 +63,11 @@ tf  = 3.011e-10
 "1" = "emitter"
 "2" = "base"
 "3" = "collector"
+
+[models.ratings]
+max_current_a = 0.2
+max_power_w = 0.625
+max_voltage_v = 40.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -93,6 +103,11 @@ tf  = 3.5e-10
 # BCM847BS — matched NPN pair, SOT-363 (6-pin)
 # Each transistor in the pair shares the same SPICE model as BC847.
 # Pin mapping: SOT-363 pin 1=B1, 2=E1, 3=E2, 4=B2, 5=C2, 6=C1
+
+[models.ratings]
+max_current_a = 0.1
+max_power_w = 0.625
+max_voltage_v = 45.0
 
 [[models]]
 id = "bcm847bs"
@@ -130,6 +145,11 @@ pair_count = 2
 "5" = "collector_q2"
 "6" = "collector_q1"
 
+[models.ratings]
+max_current_a = 0.1       # per transistor (Nexperia)
+max_power_w = 0.25
+max_voltage_v = 45.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── PNP ───────────────────────────────────────────────────────────────────────
@@ -161,6 +181,11 @@ tf  = 3.0e-10
 "2" = "emitter"
 "3" = "collector"
 
+[models.ratings]
+max_current_a = 0.1
+max_power_w = 0.25
+max_voltage_v = 45.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -190,6 +215,11 @@ tf  = 2.4e-10
 "2" = "base"
 "3" = "collector"
 
+[models.ratings]
+max_current_a = 0.2
+max_power_w = 0.625
+max_voltage_v = 40.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -218,6 +248,11 @@ tf  = 3.5e-10
 "1" = "collector"
 "2" = "base"
 "3" = "emitter"
+
+[models.ratings]
+max_current_a = 0.1
+max_power_w = 0.625
+max_voltage_v = 45.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -252,3 +287,8 @@ pair_count = 2
 "4" = "base_q2"
 "5" = "collector_q2"
 "6" = "collector_q1"
+
+[models.ratings]
+max_current_a = 0.1
+max_power_w = 0.25
+max_voltage_v = 45.0

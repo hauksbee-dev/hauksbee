@@ -72,6 +72,9 @@ lib_id = "Device:CP"
 "1" = "pos"
 "2" = "neg"
 
+[models.ratings]
+polarized = true
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -85,6 +88,9 @@ lib_id = "Device:CP1"
 [models.pins]
 "1" = "pos"
 "2" = "neg"
+
+[models.ratings]
+polarized = true
 
 # ─────────────────────────────────────────────────────────────────────────────
 

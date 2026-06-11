@@ -45,6 +45,11 @@ backend = "simavr:atmega328p"
 "27" = "pc4_adc4_sda"
 "28" = "pc5_adc5_scl"
 
+[models.ratings]
+max_pin_current_a = 0.04  # 40mA abs max per I/O pin
+max_current_a = 0.2       # 200mA total VCC/GND
+max_voltage_v = 6.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -94,3 +99,7 @@ module  = true        # flag: pin map is at the module header level
 "28" = "reset2"
 "29" = "gnd2"
 "30" = "vin"
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.2

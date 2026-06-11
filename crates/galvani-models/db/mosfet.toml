@@ -27,6 +27,12 @@ cgs    = 5.0e-13  # gate-source capacitance (F)
 "S" = "source"
 "D" = "drain"
 
+[models.ratings]
+max_current_a = 0.3        # ID continuous (Nexperia)
+max_surge_current_a = 0.8  # ID pulsed
+max_power_w = 0.35
+max_voltage_v = 60.0  # VDS
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -51,6 +57,11 @@ cgs    = 4.0e-13
 "G" = "gate"
 "S" = "source"
 "D" = "drain"
+
+[models.ratings]
+max_current_a = 0.2
+max_power_w = 0.36
+max_voltage_v = 50.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -78,3 +89,8 @@ cgs    = 1.0e-12
 "G" = "gate"
 "S" = "source"
 "D" = "drain"
+
+[models.ratings]
+max_current_a = 4.0
+max_power_w = 1.4
+max_voltage_v = 30.0
