@@ -1,0 +1,85 @@
+# Voltage regulator models (LDO and switching).
+
+[[models]]
+id = "ams1117_3v3"
+kind = "vreg"
+description = "AMS1117-3.3 / LM1117-3.3 LDO, 1A, 3.3V fixed"
+
+[models.match]
+value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
+
+[models.params]
+# Source: Advanced Monolithic Systems AMS1117 datasheet Rev. H, Table 1
+vout      = 3.3     # output voltage (V)
+dropout_v = 1.1     # max dropout voltage (V) @ Iout=800mA
+iq_a      = 5.0e-3  # quiescent current (A) typ
+
+[models.pins]
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ams1117_5v"
+kind = "vreg"
+description = "AMS1117-5.0 / LM1117-5.0 LDO, 1A, 5V fixed"
+
+[models.match]
+value_re = "(?i)^(AMS|LM)1117.?5[._]?0?"
+
+[models.params]
+vout      = 5.0
+dropout_v = 1.2
+iq_a      = 5.0e-3
+
+[models.pins]
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lp2985_3v3"
+kind = "vreg"
+description = "LP2985-3.3 150mA LDO, SOT-23-5"
+
+[models.match]
+value_re = "(?i)^LP2985.*(3[._]?3)"
+mpn_re   = "(?i)LP2985"
+
+[models.params]
+# Source: Texas Instruments LP2985 datasheet (SNVS044I), Table 7.2
+vout      = 3.3
+dropout_v = 0.3     # typ dropout @ 150mA (V)
+iq_a      = 1.0e-4  # quiescent current typ 100 µA
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "noise_bypass"
+"5" = "out"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7805"
+kind = "vreg"
+description = "78xx / LM7805 linear regulator +5V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^78[01][0-9]|^LM78[0-9]+|^7805"
+
+[models.params]
+# Source: ST LM7805 datasheet, Table 4 (typical)
+vout      = 5.0
+dropout_v = 2.0     # typical (V)
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"

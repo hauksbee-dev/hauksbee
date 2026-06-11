@@ -1,0 +1,150 @@
+# Digital behavioral models.
+# params: voh, vol, vih, vil, tpd_s (propagation delay in seconds),
+#         supply_pin, gnd_pin, plus any function-specific params.
+
+[[models]]
+id = "74hc595"
+kind = "shift_register"
+description = "74HC595 8-bit serial-in parallel-out shift register with output latch"
+
+[models.match]
+value_re = "(?i)^74HC595|^SN74HC595"
+
+[models.params]
+# Source: Texas Instruments 74HC595 datasheet (SCLS041I), Table 6.5
+voh       = 4.4      # output high (V) at Vcc=4.5V, IoH=−20µA
+vol       = 0.1      # output low (V) at Vcc=4.5V, IoL=20µA
+vih       = 3.15     # input high threshold (V) at Vcc=4.5V
+vil       = 1.35     # input low threshold (V) at Vcc=4.5V
+tpd_s     = 1.4e-8   # max propagation delay clock→Qn = 14 ns at 4.5V (Table 6.5)
+bits      = 8
+supply_pin = "16"
+gnd_pin    = "8"
+
+[models.pins]
+"1"  = "qb"
+"2"  = "qc"
+"3"  = "qd"
+"4"  = "qe"
+"5"  = "qf"
+"6"  = "qg"
+"7"  = "qh"
+"8"  = "gnd"
+"9"  = "qh_serial"
+"10" = "srclr_n"
+"11" = "srclk"
+"12" = "rclk"
+"13" = "oe_n"
+"14" = "ser"
+"15" = "qa"
+"16" = "vcc"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc165"
+kind = "shift_register"
+description = "74HC165 8-bit parallel-in serial-out shift register"
+
+[models.match]
+value_re = "(?i)^74HC165|^SN74HC165"
+
+[models.params]
+# Source: Texas Instruments 74HC165 datasheet (SCLS052I), Table 6.5
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 1.4e-8
+bits      = 8
+supply_pin = "16"
+gnd_pin    = "8"
+
+[models.pins]
+"1"  = "pl_n"
+"2"  = "clk"
+"3"  = "e"
+"4"  = "f"
+"5"  = "g"
+"6"  = "h"
+"7"  = "qh_n"
+"8"  = "gnd"
+"9"  = "qh"
+"10" = "ser"
+"11" = "a"
+"12" = "b"
+"13" = "c"
+"14" = "d"
+"15" = "clk_inh"
+"16" = "vcc"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc125"
+kind = "digital"
+description = "74HC125 quad 3-state buffer"
+
+[models.match]
+value_re = "(?i)^74HC125|^SN74HC125"
+
+[models.params]
+# Source: Texas Instruments 74HC125 datasheet (SCLS049), Table 6.5
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 8.0e-9  # 8 ns max at 4.5V
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "oe_n_1"
+"2"  = "a1"
+"3"  = "y1"
+"4"  = "oe_n_2"
+"5"  = "a2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "oe_n_3"
+"11" = "y4"
+"12" = "a4"
+"13" = "oe_n_4"
+"14" = "vcc"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc27"
+kind = "digital"
+description = "74HC27 triple 3-input NOR gate"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC27"
+
+[models.params]
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 8.0e-9
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "b1"
+"3"  = "a2"
+"4"  = "b2"
+"5"  = "c2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "b3"
+"11" = "c3"
+"12" = "c1"
+"13" = "y1"
+"14" = "vcc"

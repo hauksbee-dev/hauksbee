@@ -1,0 +1,254 @@
+# BJT models — NPN and PNP.
+# Gummel-Poon basics: is, bf, nf, vaf, br, rb, rc, re, cje, cjc, tf.
+
+# ── NPN ───────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bc847"
+kind = "bjt_npn"
+description = "BC847 NPN small-signal SOT-23, 45V, 100mA"
+
+[models.match]
+value_re = "(?i)^BC84[5-9][A-C]?$"
+
+[models.params]
+# Source: Nexperia BC847 datasheet Rev. 11 2019-01-30, SPICE model appendix
+is  = 1.0e-14
+bf  = 150.0
+nf  = 1.0
+vaf = 80.0
+br  = 4.0
+rb  = 10.0
+rc  = 1.0
+re  = 0.5
+cje = 9.0e-13
+cjc = 5.0e-13
+tf  = 3.0e-10
+
+[models.pins]
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "2n3904"
+kind = "bjt_npn"
+description = "2N3904 NPN general-purpose TO-92, 40V, 200mA"
+
+[models.match]
+value_re = "(?i)^2N3904$"
+
+[models.params]
+# Source: ON Semiconductor 2N3904 SPICE model, Rev. 7
+is  = 6.734e-15
+bf  = 300.0
+nf  = 1.0
+vaf = 74.03
+br  = 0.7372
+rb  = 9.0
+rc  = 0.09
+re  = 0.09
+cje = 2.2e-12
+cjc = 7.306e-13
+tf  = 3.011e-10
+
+[models.pins]
+"1" = "emitter"
+"2" = "base"
+"3" = "collector"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bc237"
+kind = "bjt_npn"
+description = "BC237/BC547 NPN general-purpose TO-92, 45V, 100mA"
+
+[models.match]
+value_re = "(?i)^BC2[3-5][0-9]$|^BC54[7-9][A-C]?$"
+
+[models.params]
+# Source: Fairchild BC546/547/548/549/550 datasheet, SPICE parameters
+is  = 2.0e-14
+bf  = 200.0
+nf  = 1.0
+vaf = 100.0
+br  = 4.0
+rb  = 15.0
+rc  = 1.0
+re  = 0.5
+cje = 1.2e-12
+cjc = 5.0e-13
+tf  = 3.5e-10
+
+[models.pins]
+"1" = "collector"
+"2" = "base"
+"3" = "emitter"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# BCM847BS — matched NPN pair, SOT-363 (6-pin)
+# Each transistor in the pair shares the same SPICE model as BC847.
+# Pin mapping: SOT-363 pin 1=B1, 2=E1, 3=E2, 4=B2, 5=C2, 6=C1
+
+[[models]]
+id = "bcm847bs"
+kind = "bjt_npn"
+description = "BCM847BS matched NPN pair SOT-363 (2x BC847-grade NPN)"
+
+[models.match]
+value_re = "(?i)^BCM847BS"
+mpn_re   = "(?i)BCM847BS"
+
+[models.params]
+# Source: Nexperia BCM847BS datasheet Rev. 4 2022, SPICE model (same as BC847)
+is  = 1.0e-14
+bf  = 150.0
+nf  = 1.0
+vaf = 80.0
+br  = 4.0
+rb  = 10.0
+rc  = 1.0
+re  = 0.5
+cje = 9.0e-13
+cjc = 5.0e-13
+tf  = 3.0e-10
+# Note: this entry models a single transistor in the pair.
+# galvani-extract must instantiate two Device::Bjt entries per footprint,
+# using the pin map below for Q1 and Q2 respectively.
+pair_count = 2
+
+[models.pins]
+# SOT-363 pinout per Nexperia BCM847BS datasheet Fig. 3
+"1" = "base_q1"
+"2" = "emitter_q1"
+"3" = "emitter_q2"
+"4" = "base_q2"
+"5" = "collector_q2"
+"6" = "collector_q1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── PNP ───────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bc857"
+kind = "bjt_pnp"
+description = "BC857 PNP small-signal SOT-23, 45V, 100mA"
+
+[models.match]
+value_re = "(?i)^BC85[5-9][A-C]?$"
+
+[models.params]
+# Source: Nexperia BC857 datasheet Rev. 9 2019, SPICE model appendix
+is  = 1.0e-14
+bf  = 180.0
+nf  = 1.0
+vaf = 70.0
+br  = 4.0
+rb  = 10.0
+rc  = 1.0
+re  = 0.5
+cje = 9.0e-13
+cjc = 5.0e-13
+tf  = 3.0e-10
+
+[models.pins]
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "2n3906"
+kind = "bjt_pnp"
+description = "2N3906 PNP general-purpose TO-92, 40V, 200mA"
+
+[models.match]
+value_re = "(?i)^2N3906$"
+
+[models.params]
+# Source: ON Semiconductor 2N3906 SPICE model, Rev. 7
+is  = 1.41e-15
+bf  = 180.18
+nf  = 1.0
+vaf = 18.7
+br  = 4.0
+rb  = 10.0
+rc  = 0.1
+re  = 0.1
+cje = 2.2e-11
+cjc = 8.49e-13
+tf  = 2.4e-10
+
+[models.pins]
+"1" = "emitter"
+"2" = "base"
+"3" = "collector"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bc307"
+kind = "bjt_pnp"
+description = "BC307/BC557 PNP small-signal TO-92, 45V, 100mA"
+
+[models.match]
+value_re = "(?i)^BC3(0[0-9]|[12][0-9])$|^BC55[7-9][A-C]?$"
+
+[models.params]
+# Source: Fairchild BC557/558/559 datasheet, SPICE parameters
+is  = 2.0e-14
+bf  = 180.0
+nf  = 1.0
+vaf = 80.0
+br  = 4.0
+rb  = 15.0
+rc  = 1.0
+re  = 0.5
+cje = 1.2e-12
+cjc = 5.0e-13
+tf  = 3.5e-10
+
+[models.pins]
+"1" = "collector"
+"2" = "base"
+"3" = "emitter"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bcm857bs"
+kind = "bjt_pnp"
+description = "BCM857BS matched PNP pair SOT-363 (2x BC857-grade PNP)"
+
+[models.match]
+value_re = "(?i)^BCM857BS"
+mpn_re   = "(?i)BCM857BS"
+
+[models.params]
+# Source: Nexperia BCM857BS datasheet (PNP complement of BCM847BS)
+is  = 1.0e-14
+bf  = 180.0
+nf  = 1.0
+vaf = 70.0
+br  = 4.0
+rb  = 10.0
+rc  = 1.0
+re  = 0.5
+cje = 9.0e-13
+cjc = 5.0e-13
+tf  = 3.0e-10
+pair_count = 2
+
+[models.pins]
+"1" = "base_q1"
+"2" = "emitter_q1"
+"3" = "emitter_q2"
+"4" = "base_q2"
+"5" = "collector_q2"
+"6" = "collector_q1"

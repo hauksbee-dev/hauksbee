@@ -1,0 +1,251 @@
+# Diode models.
+# SPICE params: is (A), n, rs (Ω), cjo (F), vj (V), m, tt (s), bv (V).
+
+[[models]]
+id = "1n4148"
+kind = "diode"
+description = "1N4148 small-signal switching diode, DO-35"
+
+[models.match]
+value_re = "(?i)^1N4148$"
+
+[models.params]
+# Source: Vishay 1N4148 datasheet Rev. 14, SPICE model parameters
+is  = 2.52e-9   # saturation current
+n   = 1.752     # emission coefficient
+rs  = 0.568     # series resistance (Ω)
+cjo = 4.0e-12   # zero-bias junction capacitance (F)
+vj  = 0.8       # built-in potential (V)
+m   = 0.4       # grading coefficient
+tt  = 6.0e-9    # transit time (s)
+bv  = 100.0     # reverse breakdown voltage (V)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4001"
+kind = "diode"
+description = "1N400x rectifier diode (1N4001–1N4007), DO-41"
+
+[models.match]
+value_re = "(?i)^1N400[1-7]$"
+
+[models.params]
+# Source: Vishay 1N4001-1N4007 datasheet, Rev. 15, SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 50.0     # 1N4001; BV rises to 1000V for 1N4007 — conservative here
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4004"
+kind = "diode"
+description = "1N4004 rectifier diode, DO-41 (explicit match over 1N400x family)"
+
+[models.match]
+value_re = "(?i)^1N4004$"
+
+[models.params]
+# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 400.0   # 1N4004 rated 400 V PIV
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bat54"
+kind = "diode"
+description = "BAT54 / BAT43 Schottky diode, SOT-23 or DO-35"
+
+[models.match]
+value_re = "(?i)^BAT5[0-9]$|^BAT43$"
+
+[models.params]
+# Source: Nexperia BAT54 datasheet Rev. 8 2021, SPICE model
+is  = 2.2e-8
+n   = 1.69
+rs  = 3.0
+cjo = 1.2e-12
+vj  = 0.4
+m   = 0.4
+tt  = 1.0e-11
+bv  = 30.0
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "schottky_generic"
+kind = "diode"
+description = "Generic Schottky diode (value field contains SCHOTTKY)"
+
+[models.match]
+value_re = "(?i)SCHOTTKY"
+
+[models.params]
+# Reasonable Schottky defaults (low-power, ~30V rated)
+is  = 1.0e-8
+n   = 1.5
+rs  = 2.0
+cjo = 1.5e-12
+vj  = 0.35
+m   = 0.4
+tt  = 5.0e-12
+bv  = 30.0
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "led_red"
+kind = "diode"
+description = "Red LED, Vf ≈ 2.0 V @ 20 mA"
+
+[models.match]
+value_re = "(?i)RED.?LED|LED.?RED"
+
+[models.params]
+# Source: typical AlGaInP red LED parameters
+is  = 1.0e-20
+n   = 1.8
+rs  = 6.0
+cjo = 2.0e-12
+vj  = 1.7
+m   = 0.5
+tt  = 1.0e-9
+bv  = 5.0
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "led_green"
+kind = "diode"
+description = "Green LED, Vf ≈ 2.1 V @ 20 mA"
+
+[models.match]
+value_re = "(?i)GREEN.?LED|LED.?GREEN"
+
+[models.params]
+# Source: typical InGaN green LED parameters
+is  = 1.0e-20
+n   = 1.8
+rs  = 5.0
+cjo = 2.0e-12
+vj  = 1.8
+m   = 0.5
+tt  = 1.0e-9
+bv  = 5.0
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "led_blue"
+kind = "diode"
+description = "Blue LED, Vf ≈ 3.3 V @ 20 mA"
+
+[models.match]
+value_re = "(?i)BLUE.?LED|LED.?BLUE"
+
+[models.params]
+# Source: typical InGaN blue LED parameters
+is  = 1.0e-22
+n   = 2.0
+rs  = 5.0
+cjo = 2.0e-12
+vj  = 2.8
+m   = 0.5
+tt  = 1.0e-9
+bv  = 5.0
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "led_yellow"
+kind = "diode"
+description = "Yellow LED, Vf ≈ 2.1 V @ 20 mA"
+
+[models.match]
+value_re = "(?i)YELLOW.?LED|LED.?YELLOW"
+
+[models.params]
+# Source: typical AlGaInP yellow LED parameters
+is  = 1.0e-20
+n   = 1.8
+rs  = 6.0
+cjo = 2.0e-12
+vj  = 1.8
+m   = 0.5
+tt  = 1.0e-9
+bv  = 5.0
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic LED (footprint-matched, when value alone is not enough)
+
+[[models]]
+id = "led_generic"
+kind = "diode"
+description = "Generic LED matched by footprint prefix"
+
+[models.match]
+footprint_re = "^LED_THT:|^LED_SMD:"
+
+[models.params]
+# Conservative defaults: Vf ≈ 2 V red-ish
+is  = 1.0e-20
+n   = 1.8
+rs  = 6.0
+cjo = 2.0e-12
+vj  = 1.7
+m   = 0.5
+tt  = 1.0e-9
+bv  = 5.0
+
+[models.pins]
+"K" = "cathode"
+"A" = "anode"
