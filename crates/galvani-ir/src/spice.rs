@@ -449,6 +449,16 @@ fn parse_source_kind(line: usize, raw: &str, rest: &[String]) -> Result<SourceKi
     if rest.is_empty() {
         return Ok(SourceKind::Dc(0.0));
     }
+    // KiCad and vendor netlists combine specs: `DC 0 SIN( 0 1 1k ) AC 1`.
+    // The transient function wins for us, wherever it sits in the line.
+    if let Some(pos) = rest.iter().skip(1).position(|t| {
+        matches!(
+            t.to_ascii_lowercase().as_str(),
+            "sin" | "sine" | "pulse" | "pwl"
+        )
+    }) {
+        return parse_source_kind(line, raw, &rest[pos + 1..]);
+    }
     let head = rest[0].to_ascii_lowercase();
     // `Vx n+ n- DC 5`, `Vx n+ n- 5`, or a function.
     match head.as_str() {
