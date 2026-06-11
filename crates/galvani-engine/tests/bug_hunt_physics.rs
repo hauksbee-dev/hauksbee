@@ -18,10 +18,11 @@
 //! C_stretch τ class, not general topology correctness.
 //!
 //! Findings reproduced here:
-//!   * CONFIRMED (known, excluded): C_stretch = 10 pF on every synapse →
-//!     τ_pulse = 1.5 µs, ~600× too short. The output layer cannot fire.
-//!     Asserted as a *demonstration* that the toolchain reproduces the bug
-//!     straight from the layout value.
+//!   * CONFIRMED (known, excluded): C_stretch = 10 pF on every neuron's pulse
+//!     stretcher (19 instances, one per neuron — NOT per synapse) → τ_pulse =
+//!     1.5 µs, ~600× too short. The output layer cannot fire. Asserted as a
+//!     *demonstration* that the toolchain reproduces the bug straight from the
+//!     layout value.
 //!   * NEGATIVE RESULT (the "siblings" hunt): every *other* neuron timing
 //!     constant extracted from the layout matches the calibrated reference
 //!     within tolerance — membrane τ_m, threshold-divider θ₀, threshold
@@ -304,14 +305,24 @@ fn siblings_all_neurons_share_one_timing_value_set() {
 // ════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn inh_q4_both_mirror_set_resistors_present_in_every_synapse() {
-    // The emulator documents (params.rs INH_Q4_BROKEN / synapse.rs) that the
-    // inhibitory 1× mirror branch delivers no current on this board revision.
-    // A *gross* cause would be a missing inhibitory current-set resistor. We
-    // disprove that: every synapse must carry exactly TWO 10 MΩ mirror-set
-    // resistors — one excitatory (PNP ref), one inhibitory (NPN ref) — even
-    // though they are inconsistently NAMED across instances
-    // (R_Set_G / R_Set_VCC / bare R####). Presence, not name, is what matters.
+fn inh_q4_mirror_banks_fully_populated() {
+    // Context: the emulator documents (params.rs INH_Q4_BROKEN / synapse.rs) that
+    // the inhibitory 1× mirror leg (Q4) delivers no current on this board. Q4 is
+    // ONE transistor in a shared-reference 1×/2×/4× NPN bank, so a broken 1× leg
+    // could NOT show up as a missing set resistor (the set resistor serves the
+    // whole bank). This test therefore does NOT speak to the Q4 root cause; it
+    // only rules out the cruder "an entire inhibitory mirror bank is missing /
+    // un-referenced" failure by confirming both banks are fully populated.
+    //
+    // What it asserts: the board carries exactly 2 × 90 = 180 of the 10 MΩ
+    // mirror-set resistors — one excitatory (PNP ref) and one inhibitory (NPN
+    // ref) per synapse — even though they are inconsistently NAMED across
+    // instances (R_Set_G / R_Set_VCC / bare R####). Presence, not name, matters.
+    //
+    // Caveat (stated, not hidden): this is a board-WIDE count, not a per-synapse
+    // check. A synapse missing its inhibitory resistor while another carried a
+    // spare would still sum to 180 and pass. It is a coarse population sanity
+    // check, not a localizer.
     let text = match std::fs::read_to_string(LAYOUT) {
         Ok(t) => t,
         Err(_) => {
@@ -320,35 +331,19 @@ fn inh_q4_both_mirror_set_resistors_present_in_every_synapse() {
         }
     };
     let board = ExtractedBoard::from_kicad_pcb(&text).unwrap();
-
-    // Group every component by its synapse sheet via position is unavailable in
-    // PCB-only extraction; instead we use the netlist export (richer sheetpaths)
-    // for the per-synapse grouping, but assert the COUNT invariant on the PCB so
-    // the claim tracks the fabricated board. We approximate the synapse grouping
-    // by the reference-designator block: each synapse's parts share a numeric
-    // band. Simpler and robust: assert the board-wide invariant that the number
-    // of 10 MΩ resistors equals 2 × (number of synapse shift registers).
-    let r10m = board
-        .components
-        .iter()
-        .filter(|c| c.value == "10M")
-        .count();
-    // 90 synapses × 2 set resistors = 180 expected (the neuron sheets carry no
-    // 10 MΩ parts — their resistors are 820k/150k/120k/47k/1k).
+    let r10m = board.components.iter().filter(|c| c.value == "10M").count();
     let hc595 = board
         .components
         .iter()
         .filter(|c| c.value.contains("74HC595"))
         .count();
     println!("10MΩ mirror-set resistors on board: {r10m}; 74HC595 (one per synapse): {hc595}");
+    assert_eq!(hc595, 90, "expected the 90-synapse shift chain");
     assert_eq!(
-        hc595, 90,
-        "expected the 90-synapse shift chain"
-    );
-    assert_eq!(
-        r10m, 2 * 90,
-        "every synapse must have BOTH mirror-set resistors (exc+inh); \
-         a deficit would mean a missing inhibitory current-set — found {r10m}, expected 180. \
-         (This disproves 'missing inhibitory mirror' as the Q4 mechanism.)"
+        r10m,
+        2 * 90,
+        "expected 180 (both mirror banks populated per synapse), found {r10m} \
+         — a deficit would mean a wholesale missing/un-referenced inhibitory bank \
+         (NOT the same as the documented single-transistor Q4 defect)."
     );
 }
