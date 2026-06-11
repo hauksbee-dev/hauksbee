@@ -229,9 +229,9 @@ export function renderBoard(
   const hasHighlight = highlightNets && highlightNets.size > 0
   const hasVoltages = netVoltages && netVoltages.size > 0
 
-  // Pulsing factor for fault highlight (0..1, 1Hz)
+  // Pulsing factor for fault highlight (0..1, 2Hz for urgency)
   const faultPulse = faultedRefs && faultedRefs.size > 0
-    ? 0.4 + 0.6 * Math.abs(Math.sin(animTime * Math.PI * 2))
+    ? 0.35 + 0.65 * Math.abs(Math.sin(animTime * Math.PI * 4))
     : 0
 
   // ── Board graphics, grouped by layer ──
@@ -451,12 +451,21 @@ export function renderBoard(
       if (!faultedRefs.has(fp.ref)) continue
       const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
       const ringR = Math.max(8, 6 * cam.scale)
+      // Double ring: outer softer, inner crisp
       ctx.beginPath()
-      ctx.arc(fpX, fpY, ringR * (1 + faultPulse * 0.3), 0, Math.PI * 2)
-      ctx.strokeStyle = `rgba(248,71,71,${0.3 + faultPulse * 0.5})`
-      ctx.lineWidth = 2
+      ctx.arc(fpX, fpY, ringR * (1.4 + faultPulse * 0.5), 0, Math.PI * 2)
+      ctx.strokeStyle = `rgba(248,71,71,${0.15 + faultPulse * 0.25})`
+      ctx.lineWidth = 3
       ctx.shadowColor = '#ff2222'
-      ctx.shadowBlur = 10 * faultPulse
+      ctx.shadowBlur = 14 * faultPulse
+      ctx.stroke()
+
+      ctx.beginPath()
+      ctx.arc(fpX, fpY, ringR * (1 + faultPulse * 0.2), 0, Math.PI * 2)
+      ctx.strokeStyle = `rgba(248,71,71,${0.5 + faultPulse * 0.5})`
+      ctx.lineWidth = 1.5
+      ctx.shadowColor = '#ff3333'
+      ctx.shadowBlur = 8 * faultPulse
       ctx.stroke()
       ctx.shadowBlur = 0
     }
