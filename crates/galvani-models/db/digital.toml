@@ -39,6 +39,10 @@ gnd_pin    = "8"
 "15" = "qa"
 "16" = "vcc"
 
+[models.ratings]
+max_pin_current_a = 0.025  # ±25mA per output (TI abs max 35)
+max_voltage_v = 7.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -78,6 +82,10 @@ gnd_pin    = "8"
 "15" = "clk_inh"
 "16" = "vcc"
 
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -114,6 +122,10 @@ gnd_pin    = "7"
 "13" = "oe_n_4"
 "14" = "vcc"
 
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -148,3 +160,7 @@ gnd_pin    = "7"
 "12" = "c1"
 "13" = "y1"
 "14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0

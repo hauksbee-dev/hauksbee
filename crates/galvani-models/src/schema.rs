@@ -41,6 +41,54 @@ pub struct ModelEntry {
     /// Pad-number to role mapping.
     #[serde(default)]
     pub pins: BTreeMap<String, String>,
+
+    /// Absolute maximum ratings for the fault/stress monitor. Absent fields
+    /// mean "no limit known"; the engine may derive defaults (e.g. resistor
+    /// power from footprint size).
+    #[serde(default, skip_serializing_if = "Ratings::is_empty")]
+    pub ratings: Ratings,
+}
+
+/// Absolute maximum ratings, straight from the datasheet's table. The
+/// stress monitor compares the live operating point against these and
+/// raises faults (optionally destructive) when exceeded.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Ratings {
+    /// Continuous current through the device (A): diode IF, transistor IC/ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_current_a: Option<f64>,
+
+    /// Non-repetitive surge current (A), checked against short spikes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_surge_current_a: Option<f64>,
+
+    /// Total power dissipation (W).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_power_w: Option<f64>,
+
+    /// Maximum blocking/working voltage (V): diode VRRM, cap rated voltage,
+    /// transistor VCEO/VDS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_voltage_v: Option<f64>,
+
+    /// Polarized part (electrolytic/tantalum cap): reverse bias beyond
+    /// about -0.5V is a fault.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub polarized: bool,
+
+    /// Per-pin source/sink limit for ICs and MCUs (A).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_pin_current_a: Option<f64>,
+
+    /// Maximum junction temperature (C), for when self-heating lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_junction_temp_c: Option<f64>,
+}
+
+impl Ratings {
+    pub fn is_empty(&self) -> bool {
+        *self == Ratings::default()
+    }
 }
 
 // ── Component kind ────────────────────────────────────────────────────────────

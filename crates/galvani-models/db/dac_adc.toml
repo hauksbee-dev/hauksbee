@@ -33,3 +33,7 @@ gnd_pin    = "2"          # VSS
 "8"  = "vout_b"
 "9"  = "vout_a"
 "10" = "rdy_bsy_n"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 6.5

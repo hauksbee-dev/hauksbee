@@ -19,6 +19,11 @@ iq_a      = 5.0e-3  # quiescent current (A) typ
 "2" = "out"
 "3" = "in"
 
+[models.ratings]
+max_current_a = 1.0
+max_voltage_v = 15.0  # input
+max_power_w = 1.0     # SOT-223 on typical pad, thermally limited
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -38,6 +43,11 @@ iq_a      = 5.0e-3
 "1" = "gnd"
 "2" = "out"
 "3" = "in"
+
+[models.ratings]
+max_current_a = 1.0
+max_voltage_v = 15.0
+max_power_w = 1.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -63,6 +73,10 @@ iq_a      = 1.0e-4  # quiescent current typ 100 µA
 "4" = "noise_bypass"
 "5" = "out"
 
+[models.ratings]
+max_current_a = 0.15
+max_voltage_v = 16.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -83,3 +97,8 @@ iq_a      = 6.0e-3
 "1" = "in"
 "2" = "gnd"
 "3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0  # TO-220 no heatsink

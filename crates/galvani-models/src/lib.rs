@@ -333,6 +333,7 @@ impl ModelLibrary {
             r#match: MatchRules::default(),
             params,
             pins,
+            ratings: Default::default(),
         };
 
         Resolution {

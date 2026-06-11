@@ -24,6 +24,12 @@ bv  = 100.0     # reverse breakdown voltage (V)
 "A" = "anode"
 "K" = "cathode"
 
+[models.ratings]
+max_current_a = 0.3        # IF repetitive peak (Vishay Rev 14)
+max_surge_current_a = 2.0  # IFSM 1us
+max_power_w = 0.5
+max_voltage_v = 100.0      # VRRM
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -48,6 +54,10 @@ bv  = 50.0     # 1N4001; BV rises to 1000V for 1N4007 — conservative here
 [models.pins]
 "A" = "anode"
 "K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0        # IF(AV)
+max_surge_current_a = 30.0 # IFSM 8.3ms half-sine
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -74,6 +84,11 @@ bv  = 400.0   # 1N4004 rated 400 V PIV
 "A" = "anode"
 "K" = "cathode"
 
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 400.0      # VRRM 1N4004
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -98,6 +113,12 @@ bv  = 30.0
 [models.pins]
 "A" = "anode"
 "K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.2
+max_surge_current_a = 0.6
+max_power_w = 0.2
+max_voltage_v = 30.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -124,6 +145,9 @@ bv  = 30.0
 "A" = "anode"
 "K" = "cathode"
 
+[models.ratings]
+max_current_a = 1.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -148,6 +172,11 @@ bv  = 5.0
 [models.pins]
 "K" = "cathode"
 "A" = "anode"
+
+[models.ratings]
+max_current_a = 0.025      # typical 0603/0805 indicator LED IF max
+max_surge_current_a = 0.1
+max_voltage_v = 5.0  # reverse
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -174,6 +203,11 @@ bv  = 5.0
 "K" = "cathode"
 "A" = "anode"
 
+[models.ratings]
+max_current_a = 0.025
+max_surge_current_a = 0.1
+max_voltage_v = 5.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -198,6 +232,11 @@ bv  = 5.0
 [models.pins]
 "K" = "cathode"
 "A" = "anode"
+
+[models.ratings]
+max_current_a = 0.025
+max_surge_current_a = 0.1
+max_voltage_v = 5.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -227,6 +266,11 @@ bv  = 5.0
 # ─────────────────────────────────────────────────────────────────────────────
 # Generic LED (footprint-matched, when value alone is not enough)
 
+[models.ratings]
+max_current_a = 0.025
+max_surge_current_a = 0.1
+max_voltage_v = 5.0
+
 [[models]]
 id = "led_generic"
 kind = "diode"
@@ -249,3 +293,8 @@ bv  = 5.0
 [models.pins]
 "K" = "cathode"
 "A" = "anode"
+
+[models.ratings]
+max_current_a = 0.025
+max_surge_current_a = 0.1
+max_voltage_v = 5.0
