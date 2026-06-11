@@ -2,9 +2,15 @@
 //! `(export (components (comp ...)) (nets (net (node ...))))`.
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+use forge_sexpr::Document;
 
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let doc = forge_sexpr::parse(text)?;
+    extract_from_doc(&doc)
+}
+
+/// Extract from an already-parsed netlist `(export ...)` document.
+pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> {
     let root = doc.root().ok_or(ExtractError::WrongRoot {
         expected: "export",
         found: None,
