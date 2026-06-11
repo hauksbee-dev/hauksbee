@@ -3,5 +3,10 @@ name = "galvani-extract"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Extracts the circuit a PCB implements: components, pads, nets, connectivity"
 
 [dependencies]
+forge-sexpr.workspace = true
+quick-xml = "0.40.1"
+serde.workspace = true
+thiserror.workspace = true
