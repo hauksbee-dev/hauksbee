@@ -7,6 +7,7 @@
 //! gmin-stepping and source-stepping homotopy when the cold-start Newton stalls.
 
 use crate::options::SolverOptions;
+use crate::plan::StampPlan;
 use crate::sparse::{SparseMatrix, Symbolic};
 use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
@@ -30,6 +31,21 @@ pub struct Workspace {
     /// True when every device is linear, so one solve per step is exact and
     /// Newton needs no second iteration to confirm convergence.
     linear: bool,
+    /// Compiled constant linear backbone (resistors + gmin slots), pre-bound to
+    /// the frozen pattern. The first stage of the "compiled netlist": it lets a
+    /// caller re-stamp the constant matrix part with `add_at` and no per-device
+    /// enum match. The reference monolithic loop deliberately does *not* route
+    /// through it, because reordering the assembly would change floating-point
+    /// rounding and break the bit-for-bit `Partitioning::Off` guarantee; it is
+    /// exposed for the partitioned/compiled paths and for future codegen.
+    plan: StampPlan,
+}
+
+impl Workspace {
+    /// Access the compiled constant-backbone stamp plan.
+    pub fn stamp_plan(&self) -> &StampPlan {
+        &self.plan
+    }
 }
 
 impl Workspace {
@@ -41,6 +57,7 @@ impl Workspace {
         let symbolic = matrix.factorize_symbolic();
         let size = layout.size;
         let linear = circuit.devices.iter().all(|d| d.is_linear());
+        let plan = StampPlan::compile(circuit, &layout, &matrix);
         Workspace {
             layout,
             symbolic,
@@ -49,6 +66,7 @@ impl Workspace {
             x: vec![0.0; size],
             x_prev_iter: vec![0.0; size],
             linear,
+            plan,
         }
     }
 }

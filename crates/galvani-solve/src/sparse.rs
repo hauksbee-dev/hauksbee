@@ -57,6 +57,26 @@ impl SparseMatrix {
         }
     }
 
+    /// Resolve `(row, col)` to a stable `(row, position)` handle into the frozen
+    /// pattern, or `None` if no slot exists. Used by the compiled stamp plan to
+    /// write entries without a per-write binary search in the hot loop.
+    ///
+    /// Only valid after the pattern is fully reserved (see `reserve_pattern`);
+    /// the returned position indexes into `rows[row]`.
+    pub fn slot(&self, row: usize, col: usize) -> Option<(usize, usize)> {
+        self.rows[row]
+            .binary_search_by_key(&col, |&(c, _)| c)
+            .ok()
+            .map(|i| (row, i))
+    }
+
+    /// Add `value` into a pre-resolved `(row, position)` slot. Caller guarantees
+    /// the slot came from [`Self::slot`] on the same (unchanged) pattern.
+    #[inline]
+    pub fn add_at(&mut self, slot: (usize, usize), value: f64) {
+        self.rows[slot.0][slot.1].1 += value;
+    }
+
     /// Reset all stored values to zero, keeping the pattern.
     pub fn clear_values(&mut self) {
         for r in &mut self.rows {

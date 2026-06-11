@@ -31,15 +31,22 @@
 //! assert!(wf.final_node(&c, "out").unwrap() > 0.99);
 //! ```
 
+mod linear;
 mod newton;
 mod options;
+mod partition;
+mod partitioned;
+mod plan;
 mod sparse;
 mod stamp;
 mod system;
 mod transient;
 
+pub use linear::LinearIsland;
 pub use newton::{dc_operating_point, Workspace};
-pub use options::{DeviceEffects, Integration, SolverOptions, StepControl};
+pub use options::{DeviceEffects, Integration, Partitioning, SolverOptions, StepControl};
+pub use partition::{Island, Partition};
+pub use plan::StampPlan;
 pub use sparse::{SparseMatrix, Symbolic};
 pub use system::Layout;
 pub use transient::{StepSample, Transient, Waveforms};

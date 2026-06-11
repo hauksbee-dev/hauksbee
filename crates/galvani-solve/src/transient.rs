@@ -108,6 +108,15 @@ impl Transient {
         mut sink: F,
     ) -> Result<(), String> {
         let opts = &self.opts;
+
+        // Partitioned fast path: only taken when Auto and the topology/step make
+        // it safe and profitable. Otherwise we fall through to the reference
+        // monolithic engine below (which `Partitioning::Off` always uses), so
+        // results never regress and Off is bit-identical to the classic solver.
+        if let Some(mut pt) = crate::partitioned::PartitionedTransient::try_build(circuit, opts) {
+            return pt.run_streaming(circuit, tstop, sink);
+        }
+
         let mut ws = Workspace::new(circuit);
         let n_dev = circuit.devices.len();
 
