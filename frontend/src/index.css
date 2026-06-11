@@ -46,3 +46,25 @@ select option {
   background: #1e293b;
   color: #cbd5e1;
 }
+
+/* Tab hover glow */
+.sidebar-tab-btn:hover {
+  color: #64748b !important;
+  background: rgba(59,130,246,0.04) !important;
+}
+
+/* Running pulse animation */
+@keyframes runpulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px #22c55e80; }
+  50% { opacity: 0.7; box-shadow: 0 0 8px #22c55ecc; }
+}
+
+/* Fault toast slide-in */
+@keyframes slideInRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.fault-toast {
+  animation: slideInRight 0.3s ease-out;
+}

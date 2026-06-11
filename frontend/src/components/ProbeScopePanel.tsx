@@ -55,11 +55,17 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       const H = canvas.height
 
       ctx.clearRect(0, 0, W, H)
-      ctx.fillStyle = '#010b1a'
+      // CRT-like phosphor background: very dark blue-green
+      ctx.fillStyle = '#00080f'
       ctx.fillRect(0, 0, W, H)
+      // Subtle scanline effect (every 3px a slightly lighter strip)
+      ctx.fillStyle = 'rgba(0,255,100,0.012)'
+      for (let sy = 0; sy < H; sy += 3) {
+        ctx.fillRect(0, sy, W, 1)
+      }
 
       if (probes.length === 0) {
-        ctx.fillStyle = '#1e293b'
+        ctx.fillStyle = 'rgba(0,200,80,0.25)'
         ctx.font = '11px monospace'
         ctx.textAlign = 'center'
         ctx.fillText('Select nets below to probe', W / 2, H / 2)
@@ -99,8 +105,8 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       const gridStep = vRange > 4 ? 1 : vRange > 2 ? 0.5 : 0.2
       const gridStart = Math.ceil(vMin / gridStep) * gridStep
 
-      // Grid
-      ctx.strokeStyle = '#1e293b'
+      // Grid — phosphor green grid
+      ctx.strokeStyle = 'rgba(0,200,80,0.15)'
       ctx.lineWidth = 0.5
       ctx.setLineDash([2, 4])
       for (let gv = gridStart; gv <= vMax; gv += gridStep) {
@@ -110,8 +116,8 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.lineTo(PAD_L + plotW, gy)
         ctx.stroke()
 
-        // Voltage label
-        ctx.fillStyle = '#334155'
+        // Voltage label — dim phosphor green
+        ctx.fillStyle = 'rgba(0,200,80,0.45)'
         ctx.font = '9px JetBrains Mono, monospace'
         ctx.textAlign = 'right'
         ctx.fillText(`${gv.toFixed(gv % 1 !== 0 ? 1 : 0)}V`, PAD_L - 4, gy + 3)
@@ -119,33 +125,56 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       ctx.setLineDash([])
 
       // Time axis label
-      ctx.fillStyle = '#334155'
+      ctx.fillStyle = 'rgba(0,200,80,0.35)'
       ctx.font = '9px JetBrains Mono, monospace'
       ctx.textAlign = 'center'
       ctx.fillText('← 3s window →', PAD_L + plotW / 2, H - 4)
 
-      // Traces
+      // Traces — phosphor glow with multi-pass bloom
       probes.forEach((net, idx) => {
         const buf = buffers.current.get(net) ?? []
         const color = PROBE_COLORS[idx % PROBE_COLORS.length]
 
         if (buf.length < 2) return
 
-        ctx.strokeStyle = color
-        ctx.lineWidth = 1.5
-        ctx.shadowColor = color
-        ctx.shadowBlur = 3
-        ctx.beginPath()
-        let started = false
-
+        // Build path points once
+        const pts: { x: number; y: number }[] = []
         for (const s of buf) {
           if (s.t < tMin) continue
-          const x = PAD_L + ((s.t - tMin) / WINDOW_SECS) * plotW
-          const y = PAD_T + plotH - ((s.v - vMin) / (vMax - vMin)) * plotH
-          if (!started) { ctx.moveTo(x, y); started = true }
-          else ctx.lineTo(x, y)
+          pts.push({
+            x: PAD_L + ((s.t - tMin) / WINDOW_SECS) * plotW,
+            y: PAD_T + plotH - ((s.v - vMin) / (vMax - vMin)) * plotH,
+          })
         }
-        ctx.stroke()
+        if (pts.length < 2) return
+
+        const drawPath = () => {
+          ctx.beginPath()
+          ctx.moveTo(pts[0].x, pts[0].y)
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+          ctx.stroke()
+        }
+
+        // Pass 1: wide soft glow bloom
+        ctx.strokeStyle = color + '33'
+        ctx.lineWidth = 6
+        ctx.shadowColor = color
+        ctx.shadowBlur = 12
+        drawPath()
+
+        // Pass 2: medium halo
+        ctx.strokeStyle = color + '66'
+        ctx.lineWidth = 3
+        ctx.shadowColor = color
+        ctx.shadowBlur = 8
+        drawPath()
+
+        // Pass 3: crisp bright core (phosphor "beam")
+        ctx.strokeStyle = color
+        ctx.lineWidth = 1.2
+        ctx.shadowColor = color
+        ctx.shadowBlur = 4
+        drawPath()
         ctx.shadowBlur = 0
 
         // Legend label on right
@@ -156,7 +185,10 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.fillStyle = color
         ctx.font = 'bold 9px JetBrains Mono, monospace'
         ctx.textAlign = 'left'
+        ctx.shadowColor = color
+        ctx.shadowBlur = 4
         ctx.fillText(net, PAD_L + plotW + 4, Math.max(PAD_T + 10, Math.min(H - PAD_B - 2, labelY + 3)))
+        ctx.shadowBlur = 0
       })
     }
 
@@ -166,21 +198,22 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Oscilloscope canvas */}
+      {/* Oscilloscope canvas — CRT-style container */}
       <div
         className="relative"
         style={{
-          border: '1px solid #1e293b',
+          border: '1px solid rgba(0,180,70,0.3)',
           borderRadius: 6,
           overflow: 'hidden',
-          background: '#010b1a',
+          background: '#00080f',
+          boxShadow: '0 0 12px rgba(0,180,70,0.12), inset 0 0 20px rgba(0,0,0,0.6)',
         }}
       >
         <canvas
           ref={canvasRef}
-          width={240}
-          height={140}
-          style={{ display: 'block', width: '100%', height: 140 }}
+          width={260}
+          height={160}
+          style={{ display: 'block', width: '100%', height: 160 }}
         />
       </div>
 

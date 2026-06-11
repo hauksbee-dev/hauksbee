@@ -65,18 +65,28 @@ export function NetPanel({ frame, selectedNet, onSelectNet }: NetPanelProps) {
                       {name}
                     </span>
                     <span className="text-[10px] font-mono ml-2 shrink-0" style={{
-                      color: isSelected ? '#60a5fa' : '#64748b',
+                      color: isSelected ? '#60a5fa'
+                        : voltage > 4 ? '#f59e0b'
+                        : voltage > 0.1 ? '#4ade80'
+                        : voltage < -0.1 ? '#f87171'
+                        : '#64748b',
                       fontFamily: "'JetBrains Mono', monospace",
                     }}>
                       {voltage >= 0 ? '+' : ''}{voltage.toFixed(3)}V
                     </span>
                   </div>
-                  <div className="h-0.5 rounded-full overflow-hidden" style={{ background: '#1e293b' }}>
+                  <div className="h-0.5 rounded-full overflow-hidden" style={{ background: '#0f172a' }}>
                     <div
                       className="h-full rounded-full transition-all duration-150"
                       style={{
                         width: `${barWidth}%`,
-                        background: voltage > 0 ? '#22c55e' : voltage < 0 ? '#ef4444' : '#475569',
+                        background: voltage > 4 ? '#f59e0b'
+                          : voltage > 0.1 ? '#22c55e'
+                          : voltage < -0.1 ? '#ef4444'
+                          : '#475569',
+                        boxShadow: absV > 0.5
+                          ? `0 0 4px ${voltage > 0 ? '#22c55e80' : '#ef444480'}`
+                          : 'none',
                       }}
                     />
                   </div>

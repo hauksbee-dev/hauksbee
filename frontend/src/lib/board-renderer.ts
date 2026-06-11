@@ -35,9 +35,9 @@ function setStroke(ctx: CanvasRenderingContext2D, color: string, glowColor: stri
   ctx.lineWidth = lw
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
-  if (glowColor && lw > 1.5) {
+  if (glowColor && lw > 1.0) {
     ctx.shadowColor = glowColor
-    ctx.shadowBlur = Math.min(lw * 1.5, 8)
+    ctx.shadowBlur = Math.min(lw * 2.5, 14)
   } else {
     ctx.shadowBlur = 0
   }
@@ -107,7 +107,7 @@ function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: st
   ctx.globalAlpha = alpha
   ctx.fillStyle = color
   ctx.shadowColor = glowColor
-  ctx.shadowBlur = Math.min(w * 0.4, 5)
+  ctx.shadowBlur = Math.min(w * 0.6, 8)
   ctx.translate(sx, sy)
   ctx.rotate((pad.angle * Math.PI) / 180)
 
@@ -185,13 +185,13 @@ function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string 
 
   let tr: number, tg: number, tb: number, strength: number
   if (t > 0) {
-    // Warm: #ffb347
-    tr = 0xff; tg = 0xb3; tb = 0x47
-    strength = t * 0.55
+    // Warm: brighter amber-orange for high voltage (3.3V / 5V rails)
+    tr = 0xff; tg = 0xc0; tb = 0x40
+    strength = t * 0.72
   } else if (t < 0) {
-    // Cool blue: #60a0ff
+    // Cool blue: negative voltage
     tr = 0x60; tg = 0xa0; tb = 0xff
-    strength = (-t) * 0.55
+    strength = (-t) * 0.72
   } else {
     return baseColor
   }
@@ -213,6 +213,17 @@ export function renderBoard(
   // Background
   ctx.fillStyle = '#020617'
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+
+  // Subtle radial vignette so the board area stands out against the flat background
+  {
+    const W = ctx.canvas.width
+    const H = ctx.canvas.height
+    const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.65)
+    grad.addColorStop(0, 'rgba(10,18,40,0)')
+    grad.addColorStop(1, 'rgba(0,0,0,0.55)')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, W, H)
+  }
 
   const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0 } = opts
   const hasHighlight = highlightNets && highlightNets.size > 0
@@ -352,9 +363,9 @@ export function renderBoard(
         } else if (hasVoltages && s.netName && netVoltages!.has(s.netName)) {
           const v = netVoltages!.get(s.netName)!
           trackColor = voltageTintColor(color, v)
-          // Bloom-like glow on active traces
+          // Bloom-like glow on active traces — stronger to visually pulse
           if (Math.abs(v) > 0.05) {
-            trackGlow = v > 0 ? '#ffb34788' : '#60a0ff88'
+            trackGlow = v > 0 ? '#ffb347cc' : '#60a0ffcc'
           }
         }
 
@@ -383,7 +394,7 @@ export function renderBoard(
         } else if (hasVoltages && a.netName && netVoltages!.has(a.netName)) {
           const v = netVoltages!.get(a.netName)!
           trackColor = voltageTintColor(color, v)
-          if (Math.abs(v) > 0.05) trackGlow = v > 0 ? '#ffb34788' : '#60a0ff88'
+          if (Math.abs(v) > 0.05) trackGlow = v > 0 ? '#ffb347cc' : '#60a0ffcc'
         }
 
         drawArc(ctx, cam, a.start, a.mid, a.end, trackColor, trackGlow, a.width)

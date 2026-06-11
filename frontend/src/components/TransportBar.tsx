@@ -48,14 +48,15 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
         height: 44,
       }}
     >
-      {/* Logo */}
+      {/* Logo — electric-blue wordmark with glow */}
       <div
-        className="font-bold tracking-widest text-sm"
+        className="font-bold tracking-widest select-none"
         style={{
-          color: '#3b82f6',
-          letterSpacing: '0.2em',
+          fontSize: 13,
+          color: '#60a5fa',
+          letterSpacing: '0.25em',
           fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          textShadow: '0 0 12px rgba(59,130,246,0.5)',
+          textShadow: '0 0 8px rgba(96,165,250,0.8), 0 0 20px rgba(59,130,246,0.4)',
         }}
       >
         GALVANI
