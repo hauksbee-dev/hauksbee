@@ -2,10 +2,16 @@
 //! (20171130, bare atoms) through KiCad 10 (20250907).
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
-use forge_sexpr::List;
+use forge_sexpr::{Document, List};
 
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let doc = forge_sexpr::parse(text)?;
+    extract_from_doc(&doc)
+}
+
+/// Extract from an already-parsed `.kicad_pcb` document, avoiding a re-parse
+/// when the caller already holds the CST.
+pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> {
     let root = doc.root().ok_or(ExtractError::WrongRoot {
         expected: "kicad_pcb",
         found: None,

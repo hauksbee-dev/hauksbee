@@ -98,6 +98,23 @@ impl ExtractedBoard {
         ipc356::extract(text)
     }
 
+    /// Extract from an already-parsed forge-sexpr [`Document`], avoiding a
+    /// re-parse when the caller has already built the CST (e.g. for lossless
+    /// editing). Dispatches on the root keyword: `kicad_pcb` → layout
+    /// extraction, `export` → netlist extraction.
+    ///
+    /// [`Document`]: forge_sexpr::Document
+    pub fn from_document(doc: &forge_sexpr::Document) -> Result<Self, ExtractError> {
+        match doc.root().and_then(|r| r.name()) {
+            Some("kicad_pcb") | Some("module") => pcb::extract_from_doc(doc),
+            Some("export") => netlist::extract_from_doc(doc),
+            other => Err(ExtractError::WrongRoot {
+                expected: "kicad_pcb or export",
+                found: other.map(str::to_string),
+            }),
+        }
+    }
+
     /// Sniff the format from content and extract accordingly.
     pub fn from_auto(text: &str) -> Result<Self, ExtractError> {
         let head: String = text.chars().take(512).collect();
