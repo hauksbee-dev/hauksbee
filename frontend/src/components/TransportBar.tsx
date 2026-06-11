@@ -124,7 +124,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
 
       {/* Speed */}
       <div className="flex items-center gap-2">
-        <span className="text-[10px]" style={{ color: '#475569' }}>SPEED</span>
+        <span className="text-[9px] uppercase tracking-wider" style={{ color: '#334155' }}>spd</span>
         <input
           type="range"
           min={0.1}
@@ -132,12 +132,12 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
           step={0.1}
           value={speedInput}
           onChange={handleSpeedChange}
-          className="w-20 h-1 rounded appearance-none cursor-pointer"
+          className="w-16 h-1 rounded appearance-none cursor-pointer"
           style={{ accentColor: '#3b82f6' }}
         />
         <span
           className="text-[11px] font-mono w-8 text-right"
-          style={{ color: '#94a3b8', fontFamily: "'JetBrains Mono', monospace" }}
+          style={{ color: '#64748b', fontFamily: "'JetBrains Mono', monospace" }}
         >
           {speedInput.toFixed(1)}x
         </span>
@@ -145,10 +145,10 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
 
       <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />
 
-      {/* Sim time */}
-      <div className="flex items-center gap-2 text-[11px]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-        <span style={{ color: '#475569' }}>t =</span>
-        <span style={{ color: '#94a3b8' }}>{formatTime(simTime)}</span>
+      {/* Sim time — primary readout: larger + brighter */}
+      <div className="flex items-center gap-1.5" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+        <span className="text-[9px] uppercase tracking-wider" style={{ color: '#334155' }}>t</span>
+        <span className="text-[13px] font-semibold" style={{ color: '#cbd5e1' }}>{formatTime(simTime)}</span>
       </div>
 
       <div className="flex-1" />

@@ -47,20 +47,24 @@ export class Board3DViewer {
   private disposed = false
 
   constructor(canvas: HTMLCanvasElement) {
-    // Renderer
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
+    // Renderer — alpha:true so the CSS gradient underneath is visible through the canvas
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false)
+    const rW = canvas.width > 0 ? canvas.width : (canvas.clientWidth > 0 ? canvas.clientWidth : 1280)
+    const rH = canvas.height > 0 ? canvas.height : (canvas.clientHeight > 0 ? canvas.clientHeight : 800)
+    this.renderer.setSize(rW, rH, false)
     this.renderer.shadowMap.enabled = true
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.6
+    this.renderer.setClearColor(0x000000, 0) // fully transparent clear
 
     // Scene
     this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color(0x020617)
-    this.scene.fog = new THREE.FogExp2(0x020617, 3)
+    // No scene.background — let the CSS radial gradient show through the alpha channel
+    // Subtle depth fog — colour matched to background so it doesn't tint the board
+    this.scene.fog = new THREE.FogExp2(0x020617, 1.5)
 
     // Environment map (RoomEnvironment — cheap PMREM IBL, transforms PBR soldermask from flat to shiny)
     const pmremGen = new THREE.PMREMGenerator(this.renderer)
@@ -71,10 +75,13 @@ export class Board3DViewer {
     roomEnv.dispose()
     pmremGen.dispose()
 
-    // Camera
-    this.camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.001, 10)
+    // Camera — use canvas pixel dimensions (set by attribute) with safe fallback
+    const initW = canvas.width > 0 ? canvas.width : (canvas.clientWidth > 0 ? canvas.clientWidth : 1280)
+    const initH = canvas.height > 0 ? canvas.height : (canvas.clientHeight > 0 ? canvas.clientHeight : 800)
+    this.camera = new THREE.PerspectiveCamera(45, initW / initH, 0.001, 10)
     this.camera.position.set(0.15, 0.12, 0.18)
     this.camera.lookAt(0.12, 0, -0.08)
+    this.camera.updateProjectionMatrix()
 
     // Studio lighting: hemisphere + strong key + cool rim + warm fill
     // Physical light scale: these values are in candela for point/spot; directional needs higher values
@@ -149,20 +156,37 @@ export class Board3DViewer {
     box.getSize(size)
     const maxDim = Math.max(size.x, size.y, size.z)
 
+    // Point orbit controls at board center
     this.controls.target.copy(center)
 
-    // Frame the board tightly. Use the camera FOV to compute the correct orbit
-    // distance so the board fills roughly 75% of the viewport.
-    // Use slightly oblique angle for a product-photo feel.
+    // Frame the board so it fills ~65% of the viewport centered in frame.
+    // Key insight: with an oblique camera angle, we need to offset the look-at
+    // point slightly toward the camera (upward in world space) so the board
+    // appears centered rather than in the lower half.
     const fovRad = (this.camera.fov * Math.PI) / 180
-    const boardSpan = Math.max(size.x, size.z) // board footprint (ignoring height)
-    // Distance needed to see the board at 75% of vertical FOV
-    const dist = (boardSpan * 0.6) / Math.tan(fovRad / 2)
+    const boardSpan = Math.max(size.x, size.z) // board footprint span in metres
+    const boardDiag = Math.sqrt(size.x * size.x + size.z * size.z)
+
+    // Effective half-FOV: use vertical (smaller in landscape) for fill calculation
+    const halfFovV = fovRad / 2  // vertical half-FOV = 22.5° for 45° FOV
+
+    // Distance so the board diagonal fills 65% of the vertical viewport extent
+    const targetFill = 0.65
+    const dist = (boardDiag / 2) / (Math.tan(halfFovV) * targetFill)
+
+    // Product-photo angle: 30° elevation for a shallower, more centered view
+    const elevAngle = 0.52  // radians ~30°
+    const sideOffset = 0.15 // small lateral offset for visual interest
     this.camera.position.set(
-      center.x + boardSpan * 0.3,
-      center.y + dist * 0.6,
-      center.z + dist * 0.8,
+      center.x + sideOffset * boardSpan,
+      center.y + dist * Math.sin(elevAngle),
+      center.z + dist * Math.cos(elevAngle),
     )
+
+    // Shift the lookAt point slightly downward (toward board surface) to
+    // compensate for the overhead camera angle and center the board in frame
+    const lookAtShift = new THREE.Vector3(0, -dist * 0.08, 0)
+    this.controls.target.copy(center).add(lookAtShift)
     this.camera.near = maxDim * 0.001
     this.camera.far = maxDim * 30
     this.camera.updateProjectionMatrix()
@@ -192,15 +216,59 @@ export class Board3DViewer {
       mesh.castShadow = true
       mesh.receiveShadow = true
 
-      // Enhance PBR materials: ensure they pick up the environment map
+      // Enhance PBR materials and darken near-white plastic components
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      const newMats: THREE.Material[] = []
       for (const mat of mats) {
-        if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
-          // Soldermask tends to be slightly glossy — dial up specular
-          if (mat.roughness > 0.7) mat.roughness = Math.max(0.45, mat.roughness - 0.2)
-          mat.envMapIntensity = 1.5
-          mat.needsUpdate = true
+        // Check for any material that has a .color property (Standard, Physical, Basic, Lambert, Phong)
+        const hasPBR = mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial
+        const hasFlatColor = mat instanceof THREE.MeshBasicMaterial || mat instanceof THREE.MeshLambertMaterial || mat instanceof THREE.MeshPhongMaterial
+        const matWithColor = mat as THREE.MeshStandardMaterial  // all above have .color
+
+        if (!hasPBR && !hasFlatColor) {
+          newMats.push(mat)
+          continue
         }
+
+        const c = matWithColor.color
+        const lr = c.r, lg = c.g, lb = c.b
+        const luminance = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
+        const maxC = Math.max(lr, lg, lb)
+        const minC = Math.min(lr, lg, lb)
+        const saturation = maxC > 0.01 ? (maxC - minC) / maxC : 0
+
+        // Near-white/cream placeholder GLB materials look flat and overexposed.
+        // Fix: check if the material is very high-luminance and low-saturation (pure white/cream)
+        // AND has high roughness (unlit flat look). Make it glossier so it reads as plastic.
+        // stickhub mat_0: r=0.871 g=0.791 b=0.604 → lum=0.795 sat=0.307 rough=1.0
+        // For materials where the entire model is one cream color, we tone them down slightly
+        // and add gloss rather than going full dark (which would darken the board body too).
+        if (hasPBR && luminance > 0.55 && saturation < 0.45 && (mat as THREE.MeshStandardMaterial).roughness >= 0.8) {
+          const pbr = mat as THREE.MeshStandardMaterial
+          // Tone the color down by 35% and add gloss
+          pbr.color.multiplyScalar(0.65)
+          pbr.roughness = 0.45
+          pbr.metalness = 0.0
+          pbr.envMapIntensity = 2.0
+          pbr.needsUpdate = true
+          newMats.push(mat)
+          continue
+        }
+
+        if (hasPBR) {
+          // Soldermask tends to be slightly glossy — dial up specular
+          const pbr = mat as THREE.MeshStandardMaterial
+          if (pbr.roughness > 0.7) pbr.roughness = Math.max(0.45, pbr.roughness - 0.2)
+          pbr.envMapIntensity = 1.5
+          pbr.needsUpdate = true
+        }
+        newMats.push(mat)
+      }
+
+      if (Array.isArray(mesh.material)) {
+        mesh.material = newMats
+      } else if (newMats.length === 1) {
+        mesh.material = newMats[0]
       }
     })
 

@@ -490,7 +490,11 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       {board && !loading && viewMode === '2d' && (
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded"
           style={{ background: 'rgba(15,23,42,0.8)', color: '#475569', pointerEvents: 'none' }}>
-          {board.footprints.length} fp · {board.segments.length} segs · {board.nets.size} nets
+          {board.footprints.length} fp · {board.segments.length} segs
+          {/* Show live net count from simulation frame (consistent with status bar) when available */}
+          {frame && Object.keys(frame.net_voltages).length > 0
+            ? ` · ${Object.keys(frame.net_voltages).length} nets`
+            : board.nets.size > 0 ? ` · ${board.nets.size} nets` : null}
         </div>
       )}
     </div>

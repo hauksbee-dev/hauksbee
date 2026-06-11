@@ -36,6 +36,17 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
     setError(null)
 
     const canvas = canvasRef.current
+    const container = containerRef.current
+
+    // Ensure the canvas pixel dimensions are set before Three.js reads them.
+    // In headless (Playwright) the ResizeObserver may not have fired yet; sync explicitly.
+    if (container) {
+      const { width, height } = container.getBoundingClientRect()
+      if (width > 0 && height > 0) {
+        canvas.width = Math.round(width)
+        canvas.height = Math.round(height)
+      }
+    }
 
     import('../lib/board-3d-viewer').then(async ({ Board3DViewer: Viewer3D }) => {
       if (!alive) return
@@ -94,10 +105,18 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
       className="relative w-full h-full overflow-hidden"
       style={{ background: '#020617' }}
     >
+      {/* Radial gradient backdrop — gives the board a grounded space instead of flat black */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(ellipse 70% 60% at 50% 58%, #0d1a2e 0%, #07101f 45%, #020617 100%)',
+          zIndex: 0,
+        }}
+      />
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full"
-        style={{ display: 'block' }}
+        style={{ display: 'block', zIndex: 1 }}
       />
 
       {loading && (

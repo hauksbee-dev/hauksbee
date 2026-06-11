@@ -168,6 +168,8 @@ export default function App() {
               width: 280,
               borderLeft: '1px solid #1e293b',
               background: '#0a0f1e',
+              // Inner top border accent gives the panel a grounded top edge
+              boxShadow: 'inset 0 1px 0 rgba(59,130,246,0.12)',
             }}
           >
             {/* Tab bar */}
@@ -199,6 +201,54 @@ export default function App() {
                   )}
                 </button>
               ))}
+            </div>
+
+            {/* Simulation stats — always-visible compact card below the tab bar */}
+            <div
+              className="shrink-0 px-3 py-2"
+              style={{ borderBottom: '1px solid #1e293b', background: 'rgba(15,23,42,0.6)' }}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[9px] font-bold tracking-widest uppercase" style={{ color: '#334155' }}>Simulation</span>
+                <span
+                  className="text-[9px] px-1.5 py-0.5 rounded"
+                  style={{
+                    background: status?.running ? 'rgba(34,197,94,0.12)' : 'rgba(71,85,105,0.2)',
+                    color: status?.running ? '#4ade80' : '#475569',
+                    border: status?.running ? '1px solid rgba(34,197,94,0.25)' : '1px solid #1e293b',
+                  }}
+                >
+                  {status?.running ? 'running' : 'paused'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                <div className="flex justify-between">
+                  <span className="text-[10px]" style={{ color: '#475569' }}>t</span>
+                  <span className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{(status?.sim_time ?? 0).toFixed(4)}s</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[10px]" style={{ color: '#475569' }}>rt</span>
+                  <span className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{frame ? `${frame.realtime_factor.toFixed(2)}×` : '—'}</span>
+                </div>
+                {boardInfo && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-[10px]" style={{ color: '#475569' }}>comp</span>
+                      <span className="text-[10px] font-mono" style={{ color: '#64748b' }}>{boardInfo.num_components}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[10px]" style={{ color: '#475569' }}>nets</span>
+                      <span className="text-[10px] font-mono" style={{ color: '#64748b' }}>{boardInfo.num_nets}</span>
+                    </div>
+                  </>
+                )}
+                {status?.options?.integration && (
+                  <div className="col-span-2 flex justify-between">
+                    <span className="text-[10px]" style={{ color: '#475569' }}>solver</span>
+                    <span className="text-[10px] font-mono" style={{ color: '#64748b' }}>{status.options.integration}</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Tab content */}
@@ -270,6 +320,13 @@ export default function App() {
                   send={send}
                 />
               )}
+
+              {/* Empty-state hint when the active tab has no data yet */}
+              {(sidebarTab === 'faults' && faultCount === 0) && (
+                <div className="px-4 py-6 flex flex-col items-center gap-2">
+                  <div className="text-[10px] font-mono text-center" style={{ color: '#1e293b' }}>no faults detected</div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -277,12 +334,14 @@ export default function App() {
 
       {/* Bottom status bar */}
       <div
-        className="flex items-center gap-4 px-4 shrink-0 text-[10px]"
+        className="flex items-center gap-3 px-3 shrink-0 text-[10px] overflow-hidden"
         style={{
+          minHeight: 26,
           height: 26,
           background: '#050d1a',
           borderTop: '1px solid #1e293b',
           fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+          flexWrap: 'nowrap',
         }}
       >
         {/* Running indicator */}
@@ -331,7 +390,7 @@ export default function App() {
         {probes.length > 0 && (
           <>
             <span style={{ color: '#1e293b' }}>|</span>
-            <span style={{ color: '#334155' }}>
+            <span className="overflow-hidden" style={{ color: '#334155', maxWidth: 160, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
               probes: <span style={{ color: '#3b82f6' }}>{probes.join(', ')}</span>
             </span>
           </>
