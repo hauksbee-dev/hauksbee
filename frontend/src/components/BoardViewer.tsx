@@ -6,6 +6,7 @@ import type { Camera } from '../lib/camera'
 import { renderBoard, renderOverlay } from '../lib/board-renderer'
 import type { OverlayData } from '../lib/board-renderer'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
+import { Board3DViewer } from './Board3DViewer'
 
 interface FootprintInfo {
   ref: string
@@ -22,12 +23,32 @@ interface BoardViewerProps {
   /** Externally chosen net to highlight (e.g., from probe click) */
   selectedNet?: string | null
   onFootprintClick?: (info: FootprintInfo) => void
+  /** Faulted component references for pulse highlights */
+  faultedRefs?: Set<string>
 }
 
 const PARTICLE_COUNT = 4
 const PARTICLE_SPEED = 0.3 // t units per second
 
-export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick }: BoardViewerProps) {
+// Map board name to GLB URL. Extends as more boards are exported.
+const BOARD_GLB_MAP: Record<string, string> = {
+  'demo': '/boards3d/demo.glb',
+  'pic_programmer': '/boards3d/pic_programmer.glb',
+  'stickhub': '/boards3d/stickhub.glb',
+}
+
+function resolveGlbUrl(boardFile: string, boardInfo?: BoardInfoMsg | null): string | null {
+  // Check protocol-provided URL first (future field)
+  if (boardInfo?.glb_url) return boardInfo.glb_url
+
+  // Try matching by board name in the path
+  for (const [key, url] of Object.entries(BOARD_GLB_MAP)) {
+    if (boardFile.includes(key)) return url
+  }
+  return null
+}
+
+export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick, faultedRefs }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -36,6 +57,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [cam, setCam] = useState<Camera>({ panX: 0, panY: 0, scale: 1 })
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
 
   // Interaction state
   const dragging = useRef(false)
@@ -44,8 +66,22 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   const particlePhases = useRef<Map<string, number>>(new Map())
   const hoveredNet = useRef<string | null>(null)
   const probePos = useRef<{ boardX: number; boardY: number } | null>(null)
+  const animTimeRef = useRef(0)
+  const lastTickTime = useRef(performance.now())
 
   const netIndex = useMemo(() => board ? buildNetIndex(board) : null, [board])
+
+  // Precompute per-net segment lists (avoids recomputing in the render loop)
+  // This is already done by buildNetIndex; netIndex.get(net).segments is the precomputed list.
+
+  // Build net voltages map (throttled by frame reference -- only recompute when frame changes)
+  const netVoltagesMap = useMemo(() => {
+    if (!frame?.net_voltages) return undefined
+    return new Map<string, number>(Object.entries(frame.net_voltages))
+  }, [frame?.net_voltages])
+
+  // GLB URL for 3D view
+  const glbUrl = useMemo(() => resolveGlbUrl(boardFile, boardInfo), [boardFile, boardInfo])
 
   // ── Load board ──
   useEffect(() => {
@@ -92,9 +128,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       if (board) {
         const b = board.bounds
         setCam(c => {
-          // Refit only if scale is the initial fit
           const fitScale = Math.min((width * 0.9) / b.width, (height * 0.9) / b.height)
-          // If scale is close to a fit scale, refit
           const refitThreshold = 0.15
           const relativeDiff = Math.abs(c.scale - fitScale) / fitScale
           if (relativeDiff < refitThreshold) {
@@ -117,7 +151,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
     for (const s of board.segments) {
       if (!s.netName) continue
-      // Distance from point to segment
       const dx = s.end.x - s.start.x
       const dy = s.end.y - s.start.y
       const len2 = dx * dx + dy * dy
@@ -132,7 +165,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       }
     }
 
-    // Also check pads
     for (const fp of board.footprints) {
       for (const pad of fp.pads) {
         if (!pad.netName) continue
@@ -161,7 +193,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         bestDist = d
         best = { ref: fp.ref, value: fp.value, lib_id: fp.lib_id, x: fp.at.x, y: fp.at.y }
       }
-      // Also check if within any pad
       for (const pad of fp.pads) {
         const pd = Math.sqrt((bx - pad.at.x) ** 2 + (by - pad.at.y) ** 2)
         const padR = Math.max(pad.size.w, pad.size.h) / 2 + 0.5
@@ -174,18 +205,24 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     return best
   }, [board, cam.scale])
 
-  // ── Animation loop ──
+  // ── Animation loop (2D only) ──
   const camRef = useRef(cam)
   camRef.current = cam
+  const netVoltagesRef = useRef(netVoltagesMap)
+  netVoltagesRef.current = netVoltagesMap
+  const faultedRefsRef = useRef(faultedRefs)
+  faultedRefsRef.current = faultedRefs
 
   useEffect(() => {
-    if (!board) return
+    if (!board || viewMode === '3d') return
 
     let lastT = performance.now()
 
     function tick(now: number) {
       const dt = (now - lastT) / 1000
       lastT = now
+      animTimeRef.current += dt
+      lastTickTime.current = now
 
       const canvas = canvasRef.current
       const overlay = overlayRef.current
@@ -195,7 +232,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       const octx = overlay.getContext('2d')!
       const currentCam = camRef.current
 
-      // Collect nets to highlight
       const hlNets = new Set<string>()
       if (selectedNet) hlNets.add(selectedNet)
       if (hoveredNet.current) hlNets.add(hoveredNet.current)
@@ -205,7 +241,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       if (flowNet && netIndex?.has(flowNet)) {
         const segs = netIndex.get(flowNet)!.segments
         if (segs.length > 0) {
-          // Cycle particles per-segment
           for (let i = 0; i < PARTICLE_COUNT; i++) {
             const key = `${flowNet}:${i}`
             const prev = particlePhases.current.get(key) ?? (i / PARTICLE_COUNT)
@@ -215,7 +250,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         }
       }
 
-      // Build overlay data
       const particles = new Map<string, number[]>()
       if (flowNet) {
         const ts: number[] = []
@@ -227,7 +261,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         particles.set(flowNet, ts)
       }
 
-      // Probe tooltip
       const probeNet = hoveredNet.current
       const probeData = probeNet && probePos.current && frame?.net_voltages[probeNet] !== undefined
         ? {
@@ -250,6 +283,9 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       renderBoard(ctx, board, currentCam, {
         highlightNets: hlNets,
         dimOthers: hlNets.size > 0,
+        netVoltages: netVoltagesRef.current,
+        faultedRefs: faultedRefsRef.current,
+        animTime: animTimeRef.current,
       })
       renderOverlay(octx, board, currentCam, overlayData)
 
@@ -258,7 +294,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
     animFrame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animFrame.current)
-  }, [board, selectedNet, netIndex, frame, boardInfo])
+  }, [board, selectedNet, netIndex, frame, boardInfo, viewMode])
 
   // ── Mouse / wheel handlers ──
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -287,7 +323,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       lastMouse.current = { x: e.clientX, y: e.clientY }
       setCam(c => panCamera(c, dx, dy))
     } else {
-      // Update hover net and probe position
       const { x, y } = screenToWorld(camRef.current, sx, sy)
       probePos.current = { boardX: x, boardY: y }
       hoveredNet.current = findNearestNet(x, y)
@@ -295,14 +330,10 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   }, [findNearestNet])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    if (e.button === 0 && !dragging.current) {
-      // click
-    }
     if (e.button === 0) {
       const wasDragging = dragging.current
       dragging.current = false
       if (!wasDragging) {
-        // Single click: check footprint
         const rect = canvasRef.current!.getBoundingClientRect()
         const sx = e.clientX - rect.left
         const sy = e.clientY - rect.top
@@ -359,12 +390,13 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden"
-      style={{ background: '#020617', cursor: dragging.current ? 'grabbing' : 'crosshair' }}
+      style={{ background: '#020617', cursor: viewMode === '2d' ? (dragging.current ? 'grabbing' : 'crosshair') : 'default' }}
     >
+      {/* 2D canvas layer */}
       <canvas
         ref={canvasRef}
         className="absolute inset-0"
-        style={{ display: 'block' }}
+        style={{ display: viewMode === '2d' ? 'block' : 'none' }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -377,11 +409,68 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       <canvas
         ref={overlayRef}
         className="absolute inset-0 pointer-events-none"
-        style={{ display: 'block' }}
+        style={{ display: viewMode === '2d' ? 'block' : 'none' }}
       />
 
+      {/* 3D view -- only mounted when 3D tab is active */}
+      {viewMode === '3d' && (
+        <div className="absolute inset-0">
+          {glbUrl ? (
+            <Board3DViewer
+              glbUrl={glbUrl}
+              board={board}
+              frame={frame}
+              boardInfo={boardInfo}
+              faults={frame?.faults}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div
+                className="px-4 py-3 rounded-lg text-sm"
+                style={{ background: '#1e293b', color: '#94a3b8', border: '1px solid #334155' }}
+              >
+                No 3D model available for this board
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 2D/3D toggle */}
+      <div
+        className="absolute top-3 right-3 z-20 flex rounded overflow-hidden"
+        style={{ border: '1px solid #1e293b', boxShadow: '0 2px 8px rgba(0,0,0,0.4)' }}
+      >
+        <button
+          onClick={() => setViewMode('2d')}
+          className="px-3 py-1 text-[10px] font-bold tracking-wider transition-all"
+          style={{
+            background: viewMode === '2d' ? '#1e3a5f' : '#0a0f1e',
+            color: viewMode === '2d' ? '#93c5fd' : '#334155',
+            borderRight: '1px solid #1e293b',
+          }}
+        >
+          2D
+        </button>
+        <button
+          onClick={() => {
+            if (!glbUrl) return
+            setViewMode('3d')
+          }}
+          title={!glbUrl ? 'No 3D model available for this board' : undefined}
+          className="px-3 py-1 text-[10px] font-bold tracking-wider transition-all"
+          style={{
+            background: viewMode === '3d' ? '#1e3a5f' : '#0a0f1e',
+            color: viewMode === '3d' ? '#93c5fd' : glbUrl ? '#334155' : '#1e293b',
+            cursor: glbUrl ? 'pointer' : 'not-allowed',
+          }}
+        >
+          3D
+        </button>
+      </div>
+
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin"
               style={{ borderColor: '#3b82f6', borderTopColor: 'transparent' }} />
@@ -398,7 +487,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         </div>
       )}
 
-      {board && !loading && (
+      {board && !loading && viewMode === '2d' && (
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded"
           style={{ background: 'rgba(15,23,42,0.8)', color: '#475569', pointerEvents: 'none' }}>
           {board.footprints.length} fp · {board.segments.length} segs · {board.nets.size} nets
@@ -407,3 +496,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     </div>
   )
 }
+
+// Re-export FootprintInfo for App.tsx usage
+export type { FootprintInfo }

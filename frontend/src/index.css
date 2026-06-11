@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Keep the class scanner away from served binary assets (multi-MB GLB
+   models hang the oxide scanner) and other non-source trees. */
+@source not "../public";
 
 :root {
   --bg-primary: #020617;

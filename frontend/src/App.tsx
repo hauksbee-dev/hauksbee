@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { BoardViewer } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
@@ -8,6 +8,8 @@ import { SerialConsole } from './components/SerialConsole'
 import { SolverControlsPanel } from './components/SolverControlsPanel'
 import { InputSourcesPanel } from './components/InputSourcesPanel'
 import { ProbeScopePanel } from './components/ProbeScopePanel'
+import { FaultPanel } from './components/FaultPanel'
+import { PowerPanel } from './components/PowerPanel'
 import type { ClientMessage, SimFrame } from './types/protocol'
 
 interface FootprintInfo {
@@ -18,13 +20,15 @@ interface FootprintInfo {
   y: number
 }
 
-type SidebarTab = 'nets' | 'serial' | 'controls' | 'inputs' | 'probes'
+type SidebarTab = 'nets' | 'serial' | 'controls' | 'inputs' | 'probes' | 'faults' | 'power'
 
 const TAB_LABELS: { id: SidebarTab; label: string }[] = [
   { id: 'nets', label: 'Nets' },
   { id: 'probes', label: 'Scope' },
   { id: 'serial', label: 'Serial' },
   { id: 'inputs', label: 'Inputs' },
+  { id: 'faults', label: 'Faults' },
+  { id: 'power', label: 'Power' },
   { id: 'controls', label: 'Solver' },
 ]
 
@@ -36,6 +40,7 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('nets')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [probes, setProbes] = useState<string[]>([])
+  const [selectedFaultRef, setSelectedFaultRef] = useState<string | null>(null)
   const frameHistory = useRef<SimFrame[]>([])
 
   // Accumulate frame history for serial console
@@ -45,10 +50,23 @@ export default function App() {
     }
   }, [frame])
 
+  // Compute faulted refs set (for 2D/3D highlights)
+  const faultedRefs = useMemo(() => {
+    const faults = (frame as { faults?: { component: string }[] } | null)?.faults
+    if (!faults || faults.length === 0) return undefined
+    return new Set(faults.map(f => f.component))
+  }, [frame])
+
+  // Jump to faults tab on first fault (optional convenience)
+  useEffect(() => {
+    if (faultedRefs && faultedRefs.size > 0 && sidebarTab !== 'faults') {
+      // Don't auto-switch, but badge the tab (handled via faultedRefs count)
+    }
+  }, [faultedRefs, sidebarTab])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Skip if focused on input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === ' ') {
         e.preventDefault()
@@ -82,6 +100,8 @@ export default function App() {
 
   const mcus = boardInfo?.mcus ?? []
 
+  const faultCount = faultedRefs?.size ?? 0
+
   return (
     <div
       className="flex flex-col h-screen overflow-hidden"
@@ -105,6 +125,7 @@ export default function App() {
             boardInfo={boardInfo}
             selectedNet={selectedNet}
             onFootprintClick={handleFootprintClick}
+            faultedRefs={faultedRefs}
           />
 
           {/* Floating footprint panel */}
@@ -158,7 +179,7 @@ export default function App() {
                 <button
                   key={id}
                   onClick={() => setSidebarTab(id)}
-                  className="px-3 py-2 text-[10px] font-bold tracking-wider whitespace-nowrap transition-all"
+                  className="px-3 py-2 text-[10px] font-bold tracking-wider whitespace-nowrap transition-all relative"
                   style={{
                     color: sidebarTab === id ? '#94a3b8' : '#334155',
                     borderBottom: sidebarTab === id ? '2px solid #3b82f6' : '2px solid transparent',
@@ -167,6 +188,14 @@ export default function App() {
                   }}
                 >
                   {label}
+                  {id === 'faults' && faultCount > 0 && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 text-[8px] px-1 rounded-full font-bold"
+                      style={{ background: '#7f1d1d', color: '#fca5a5', minWidth: 14 }}
+                    >
+                      {faultCount}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -212,6 +241,26 @@ export default function App() {
                   frame={frame}
                   send={send}
                 />
+              )}
+
+              {sidebarTab === 'faults' && (
+                <div className="p-2">
+                  <FaultPanel
+                    frame={frame}
+                    onFaultComponentSelect={setSelectedFaultRef}
+                    selectedFaultRef={selectedFaultRef}
+                  />
+                </div>
+              )}
+
+              {sidebarTab === 'power' && (
+                <div className="p-2">
+                  <PowerPanel
+                    boardInfo={boardInfo}
+                    frame={frame}
+                    send={send}
+                  />
+                </div>
               )}
 
               {sidebarTab === 'controls' && (
@@ -283,6 +332,16 @@ export default function App() {
             <span style={{ color: '#1e293b' }}>|</span>
             <span style={{ color: '#334155' }}>
               probes: <span style={{ color: '#3b82f6' }}>{probes.join(', ')}</span>
+            </span>
+          </>
+        )}
+
+        {/* Fault indicator */}
+        {faultCount > 0 && (
+          <>
+            <span style={{ color: '#1e293b' }}>|</span>
+            <span style={{ color: '#f87171' }}>
+              FAULTS: {faultCount}
             </span>
           </>
         )}
