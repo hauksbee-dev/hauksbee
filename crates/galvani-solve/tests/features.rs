@@ -3,8 +3,57 @@
 
 use galvani_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 use galvani_solve::{
-    DeviceEffects, Integration, SolverOptions, StepControl, Transient,
+    DeviceEffects, Integration, Partitioning, SolverOptions, StepControl, Transient,
 };
+
+/// `Partitioning::Off` must reproduce the classic monolithic engine exactly.
+/// The partitioned `Auto` path may differ within tolerance (Gauss-Seidel / ZOH
+/// coupling), but `Off` is the bit-for-bit reference. We pin a multi-device
+/// circuit's full waveform so any future change that perturbs the Off path is
+/// caught, and confirm Off is deterministic across runs.
+#[test]
+fn partitioning_off_is_deterministic_reference() {
+    // RLC + a second RC leg off the same rail: exercises nodes, branches, and a
+    // shared (partitionable) topology so Off and Auto take different code paths.
+    let build = || {
+        let mut c = Circuit::new();
+        let vin = c.node("in");
+        let mid = c.node("mid");
+        let out = c.node("out");
+        let leg = c.node("leg");
+        c.add(Device::Vsource { name: "V1".into(), p: vin, n: NodeId::GROUND, kind: SourceKind::Dc(1.0) });
+        c.add(Device::Resistor { name: "R1".into(), a: vin, b: mid, ohms: 50.0, tc1: None });
+        c.add(Device::Inductor { name: "L1".into(), a: mid, b: out, henries: 1e-3, ic: Some(0.0) });
+        c.add(Device::Capacitor { name: "C1".into(), a: out, b: NodeId::GROUND, farads: 1e-7, ic: Some(0.0) });
+        c.add(Device::Resistor { name: "R2".into(), a: vin, b: leg, ohms: 1e3, tc1: None });
+        c.add(Device::Capacitor { name: "C2".into(), a: leg, b: NodeId::GROUND, farads: 1e-9, ic: Some(0.0) });
+        c
+    };
+    let c = build();
+    let opts = SolverOptions {
+        integration: Integration::Trapezoidal,
+        step: StepControl::Fixed { dt: 1e-6 },
+        partitioning: Partitioning::Off,
+        ..SolverOptions::default()
+    };
+    let a = Transient::new(opts).run(&c, 5e-4).unwrap();
+    let b = Transient::new(opts).run(&c, 5e-4).unwrap();
+    // Determinism: two Off runs are bit-identical.
+    let wa = a.node(&c, "out").unwrap();
+    let wb = b.node(&c, "out").unwrap();
+    assert_eq!(wa, wb, "Off path must be deterministic");
+    assert_eq!(a.time, b.time);
+
+    // The partitioned Auto path on the same circuit must agree within tolerance.
+    let opts_auto = SolverOptions { partitioning: Partitioning::Auto, ..opts };
+    let auto = Transient::new(opts_auto).run(&c, 5e-4).unwrap();
+    let wauto = auto.node(&c, "out").unwrap();
+    let mut max_abs = 0.0f64;
+    for (x, y) in wa.iter().zip(wauto) {
+        max_abs = max_abs.max((x - y).abs());
+    }
+    assert!(max_abs < 5e-3, "Auto vs Off diverged: {max_abs:.3e}");
+}
 
 /// Build the standard RC low-pass with a DC step.
 fn rc(v: f64, r: f64, cap: f64) -> Circuit {

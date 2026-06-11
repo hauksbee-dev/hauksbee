@@ -20,6 +20,28 @@ pub enum Integration {
     BackwardEuler,
 }
 
+/// Whether the solver splits the circuit into islands before time-marching.
+///
+/// `Off` runs the classic monolithic engine: one global MNA matrix, one Newton
+/// loop per step. It is the reference path and is bit-for-bit identical to the
+/// pre-partitioning solver.
+///
+/// `Auto` lets the engine partition the circuit at ideal-source boundaries,
+/// route purely linear islands through a state-space matrix-exponential advance
+/// (exact per fixed step), and solve each nonlinear island on its own small
+/// matrix, exchanging boundary values once per step (Gauss-Seidel). When the
+/// topology or options make partitioning unprofitable or unsafe (adaptive step,
+/// no separable linear island, strongly-coupled nonlinear core) it transparently
+/// falls back to the monolithic path, so results never regress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Partitioning {
+    /// Always solve one global system (reference behaviour).
+    Off,
+    /// Partition when it is safe and faster; fall back to monolithic otherwise.
+    #[default]
+    Auto,
+}
+
 /// How the timestep is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum StepControl {
@@ -87,6 +109,19 @@ pub struct SolverOptions {
     /// Enable gmin-stepping then source-stepping homotopy if the plain DC
     /// operating-point Newton fails to converge.
     pub dc_homotopy: bool,
+    /// Whether to partition the circuit into islands before solving.
+    #[serde(default)]
+    pub partitioning: Partitioning,
+    /// Coupling granularity for the partitioned path, in `[0, 1]`. At `1.0` the
+    /// orchestrator runs extra Gauss-Seidel relaxation sweeps per step to tighten
+    /// inter-island agreement (more accurate, slower); at `0.0` it does a single
+    /// sweep (fastest, looser coupling). Ignored when `partitioning == Off`.
+    #[serde(default = "default_granularity")]
+    pub granularity: f64,
+}
+
+fn default_granularity() -> f64 {
+    1.0
 }
 
 impl Default for SolverOptions {
@@ -107,6 +142,8 @@ impl Default for SolverOptions {
             temperature_c: 27.0,
             effects: DeviceEffects::default(),
             dc_homotopy: true,
+            partitioning: Partitioning::Auto,
+            granularity: 1.0,
         }
     }
 }
