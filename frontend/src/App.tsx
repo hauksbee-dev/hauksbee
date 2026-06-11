@@ -1,9 +1,14 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { BoardViewer } from './components/BoardViewer'
-import { ControlBar } from './components/ControlBar'
+import { TransportBar } from './components/TransportBar'
 import { FootprintPanel } from './components/FootprintPanel'
 import { NetPanel } from './components/NetPanel'
+import { SerialConsole } from './components/SerialConsole'
+import { SolverControlsPanel } from './components/SolverControlsPanel'
+import { InputSourcesPanel } from './components/InputSourcesPanel'
+import { ProbeScopePanel } from './components/ProbeScopePanel'
+import type { ClientMessage, SimFrame } from './types/protocol'
 
 interface FootprintInfo {
   ref: string
@@ -13,56 +18,91 @@ interface FootprintInfo {
   y: number
 }
 
-const BOARDS = [
-  { id: 'pic_programmer', label: 'PIC Programmer', file: '/boards/pic_programmer.kicad_pcb' },
-  { id: 'microwave', label: 'Microwave Module', file: '/boards/microwave.kicad_pcb' },
-  { id: 'stickhub', label: 'StickHub', file: '/boards/stickhub.kicad_pcb' },
+type SidebarTab = 'nets' | 'serial' | 'controls' | 'inputs' | 'probes'
+
+const TAB_LABELS: { id: SidebarTab; label: string }[] = [
+  { id: 'nets', label: 'Nets' },
+  { id: 'probes', label: 'Scope' },
+  { id: 'serial', label: 'Serial' },
+  { id: 'inputs', label: 'Inputs' },
+  { id: 'controls', label: 'Solver' },
 ]
 
-const WS_URL = `ws://${window.location.hostname}:3002/ws`
-
 export default function App() {
-  const [selectedBoard, setSelectedBoard] = useState('pic_programmer')
+  const { connected, boardInfo, frame, status, send } = useSimulation()
+
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('nets')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [probes, setProbes] = useState<string[]>([])
+  const frameHistory = useRef<SimFrame[]>([])
 
-  const { connected, frame, send } = useSimulation(WS_URL)
+  // Accumulate frame history for serial console
+  useEffect(() => {
+    if (frame) {
+      frameHistory.current = [...frameHistory.current.slice(-119), frame]
+    }
+  }, [frame])
 
-  const board = BOARDS.find(b => b.id === selectedBoard)!
-
-  const handlePlay = useCallback(() => send({ type: 'Play' }), [send])
-  const handlePause = useCallback(() => send({ type: 'Pause' }), [send])
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Skip if focused on input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === ' ') {
+        e.preventDefault()
+        const running = status?.running ?? false
+        send({ type: running ? 'Pause' : 'Play' })
+      } else if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault()
+        send({ type: 'Step', dt: 0.001 })
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [status, send])
 
   const handleFootprintClick = useCallback((info: FootprintInfo) => {
     setSelectedFp(info)
   }, [])
 
-  const handleBoardChange = useCallback((id: string) => {
-    setSelectedBoard(id)
-    setSelectedNet(null)
-    setSelectedFp(null)
-  }, [])
+  const handleAddProbe = useCallback((net: string) => {
+    setProbes(prev => prev.includes(net) ? prev : [...prev, net])
+    send({ type: 'AddProbe', net } satisfies ClientMessage)
+  }, [send])
+
+  const handleRemoveProbe = useCallback((net: string) => {
+    setProbes(prev => prev.filter(p => p !== net))
+    send({ type: 'RemoveProbe', net } satisfies ClientMessage)
+  }, [send])
+
+  // Board URL from boardInfo, fallback to demo
+  const boardUrl = boardInfo?.board_url ?? '/boards/demo.kicad_pcb'
+
+  const mcus = boardInfo?.mcus ?? []
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: '#020617' }}>
-      <ControlBar
+    <div
+      className="flex flex-col h-screen overflow-hidden"
+      style={{ background: '#020617', fontFamily: 'system-ui, sans-serif' }}
+    >
+      {/* Top transport bar */}
+      <TransportBar
         connected={connected}
-        frame={frame}
-        onPlay={handlePlay}
-        onPause={handlePause}
-        boardName={board.file}
-        boards={BOARDS}
-        selectedBoard={selectedBoard}
-        onBoardChange={handleBoardChange}
+        boardInfo={boardInfo}
+        status={status}
         send={send}
       />
 
+      {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Board canvas area */}
-        <div className="flex-1 relative min-w-0">
+        {/* Board canvas (dominant center) */}
+        <div className="flex-1 relative min-w-0 overflow-hidden">
           <BoardViewer
-            boardFile={board.file}
+            boardFile={boardUrl}
             frame={frame}
+            boardInfo={boardInfo}
             selectedNet={selectedNet}
             onFootprintClick={handleFootprintClick}
           />
@@ -73,50 +113,188 @@ export default function App() {
               <FootprintPanel info={selectedFp} onClose={() => setSelectedFp(null)} />
             </div>
           )}
+
+          {/* Board overlay hints */}
+          <div
+            className="absolute bottom-2 left-2 text-[9px] px-2 py-1 rounded pointer-events-none"
+            style={{ background: 'rgba(10,15,30,0.8)', color: '#334155', border: '1px solid #1e293b' }}
+          >
+            Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe
+          </div>
         </div>
+
+        {/* Right sidebar toggle */}
+        <button
+          onClick={() => setSidebarOpen(o => !o)}
+          className="flex items-center justify-center w-5 shrink-0 transition-all hover:opacity-80"
+          style={{
+            background: '#0a0f1e',
+            borderLeft: '1px solid #1e293b',
+            color: '#334155',
+            fontSize: 10,
+            cursor: 'pointer',
+          }}
+          title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        >
+          {sidebarOpen ? '›' : '‹'}
+        </button>
 
         {/* Right sidebar */}
-        <div
-          className="flex flex-col gap-2 p-2 overflow-y-auto shrink-0"
-          style={{
-            width: 260,
-            borderLeft: '1px solid #1e293b',
-            background: '#0a0f1e',
-          }}
-        >
-          <NetPanel frame={frame} selectedNet={selectedNet} onSelectNet={setSelectedNet} />
-
-          {/* Overlay hints */}
+        {sidebarOpen && (
           <div
-            className="p-2.5 rounded-lg text-[10px]"
-            style={{ background: '#0f172a', border: '1px solid #1e293b' }}
+            className="flex flex-col shrink-0 overflow-hidden"
+            style={{
+              width: 280,
+              borderLeft: '1px solid #1e293b',
+              background: '#0a0f1e',
+            }}
           >
-            <div className="font-bold tracking-wider mb-1.5" style={{ color: '#475569' }}>OVERLAY</div>
-            <div className="flex flex-col gap-1" style={{ color: '#334155' }}>
-              <span>• Hover track = voltage probe</span>
-              <span>• Click net panel = highlight + particle flow</span>
-              <span>• Click footprint = side info</span>
-              <span>• Scroll = zoom · drag = pan</span>
+            {/* Tab bar */}
+            <div
+              className="flex shrink-0 overflow-x-auto"
+              style={{ borderBottom: '1px solid #1e293b' }}
+            >
+              {TAB_LABELS.map(({ id, label }) => (
+                <button
+                  key={id}
+                  onClick={() => setSidebarTab(id)}
+                  className="px-3 py-2 text-[10px] font-bold tracking-wider whitespace-nowrap transition-all"
+                  style={{
+                    color: sidebarTab === id ? '#94a3b8' : '#334155',
+                    borderBottom: sidebarTab === id ? '2px solid #3b82f6' : '2px solid transparent',
+                    background: sidebarTab === id ? 'rgba(59,130,246,0.05)' : 'transparent',
+                    boxShadow: sidebarTab === id ? 'inset 0 -1px 0 rgba(59,130,246,0.3)' : 'none',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab content */}
+            <div className="flex-1 overflow-y-auto">
+              {sidebarTab === 'nets' && (
+                <div className="p-2">
+                  <NetPanel
+                    frame={frame}
+                    selectedNet={selectedNet}
+                    onSelectNet={setSelectedNet}
+                  />
+                </div>
+              )}
+
+              {sidebarTab === 'probes' && (
+                <div className="p-2">
+                  <ProbeScopePanel
+                    boardInfo={boardInfo}
+                    frame={frame}
+                    probes={probes}
+                    onAddProbe={handleAddProbe}
+                    onRemoveProbe={handleRemoveProbe}
+                    send={send}
+                  />
+                </div>
+              )}
+
+              {sidebarTab === 'serial' && (
+                <div className="h-full" style={{ minHeight: 300 }}>
+                  <SerialConsole
+                    mcus={mcus}
+                    frames={frameHistory.current}
+                    send={send}
+                  />
+                </div>
+              )}
+
+              {sidebarTab === 'inputs' && (
+                <InputSourcesPanel
+                  boardInfo={boardInfo}
+                  frame={frame}
+                  send={send}
+                />
+              )}
+
+              {sidebarTab === 'controls' && (
+                <SolverControlsPanel
+                  controls={status?.options ?? null}
+                  send={send}
+                />
+              )}
             </div>
           </div>
+        )}
+      </div>
 
-          {/* Sim data summary */}
-          {frame && (
-            <div
-              className="p-2.5 rounded-lg text-[10px]"
-              style={{ background: '#0f172a', border: '1px solid #1e293b' }}
-            >
-              <div className="font-bold tracking-wider mb-1.5" style={{ color: '#475569' }}>SIM FRAME</div>
-              <div className="flex flex-col gap-0.5" style={{ color: '#64748b' }}>
-                <span>t = <span style={{ color: '#94a3b8' }}>{frame.time_ms.toFixed(3)} ms</span></span>
-                <span>step = <span style={{ color: '#94a3b8' }}>{frame.timestep}</span></span>
-                <span>nets = <span style={{ color: '#94a3b8' }}>{Object.keys(frame.net_voltages).length}</span></span>
-                <span>components = <span style={{ color: '#94a3b8' }}>{Object.keys(frame.component_states).length}</span></span>
-                <span>particles = <span style={{ color: '#94a3b8' }}>{Object.values(frame.signal_particles ?? {}).flat().length}</span></span>
-              </div>
-            </div>
-          )}
+      {/* Bottom status bar */}
+      <div
+        className="flex items-center gap-4 px-4 shrink-0 text-[10px]"
+        style={{
+          height: 26,
+          background: '#050d1a',
+          borderTop: '1px solid #1e293b',
+          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        }}
+      >
+        {/* Running indicator */}
+        <div className="flex items-center gap-1.5">
+          <div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              background: status?.running ? '#22c55e' : '#475569',
+              boxShadow: status?.running ? '0 0 4px #22c55e80' : 'none',
+              animation: status?.running ? 'pulse 1s ease-in-out infinite' : 'none',
+            }}
+          />
+          <span style={{ color: status?.running ? '#4ade80' : '#475569' }}>
+            {status?.running ? 'running' : 'paused'}
+          </span>
         </div>
+
+        <span style={{ color: '#1e293b' }}>|</span>
+
+        {/* Sim time */}
+        <span style={{ color: '#334155' }}>
+          sim: <span style={{ color: '#64748b' }}>{(status?.sim_time ?? 0).toFixed(4)}s</span>
+        </span>
+
+        {/* Realtime factor */}
+        {frame && (
+          <>
+            <span style={{ color: '#1e293b' }}>|</span>
+            <span style={{ color: '#334155' }}>
+              rt: <span style={{ color: '#64748b' }}>{frame.realtime_factor.toFixed(2)}x</span>
+            </span>
+          </>
+        )}
+
+        {/* Net voltages count */}
+        {frame && (
+          <>
+            <span style={{ color: '#1e293b' }}>|</span>
+            <span style={{ color: '#334155' }}>
+              nets: <span style={{ color: '#64748b' }}>{Object.keys(frame.net_voltages).length}</span>
+            </span>
+          </>
+        )}
+
+        {/* Probes */}
+        {probes.length > 0 && (
+          <>
+            <span style={{ color: '#1e293b' }}>|</span>
+            <span style={{ color: '#334155' }}>
+              probes: <span style={{ color: '#3b82f6' }}>{probes.join(', ')}</span>
+            </span>
+          </>
+        )}
+
+        <div className="flex-1" />
+
+        {/* Board info */}
+        {boardInfo && (
+          <span style={{ color: '#334155' }}>
+            {boardInfo.num_components} comp · {boardInfo.num_nets} nets
+          </span>
+        )}
       </div>
     </div>
   )

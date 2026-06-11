@@ -58,10 +58,16 @@ export function NetPanel({ frame, selectedNet, onSelectNet }: NetPanelProps) {
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[10px] truncate" style={{ color: isSelected ? '#93c5fd' : '#94a3b8' }}>
+                    <span className="text-[10px] truncate font-mono" style={{
+                      color: isSelected ? '#93c5fd' : '#94a3b8',
+                      fontFamily: "'JetBrains Mono', monospace",
+                    }}>
                       {name}
                     </span>
-                    <span className="text-[10px] font-mono ml-2 shrink-0" style={{ color: isSelected ? '#60a5fa' : '#64748b' }}>
+                    <span className="text-[10px] font-mono ml-2 shrink-0" style={{
+                      color: isSelected ? '#60a5fa' : '#64748b',
+                      fontFamily: "'JetBrains Mono', monospace",
+                    }}>
                       {voltage >= 0 ? '+' : ''}{voltage.toFixed(3)}V
                     </span>
                   </div>

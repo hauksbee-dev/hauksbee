@@ -370,6 +370,18 @@ export interface OverlayData {
   probe?: { x: number; y: number; label: string; value: string }
   /** Active net voltages for colour tinting */
   netVoltages?: Map<string, number>
+  /** Component state glows: ref -> state map */
+  componentStates?: Record<string, Record<string, number>>
+  /** Component kinds: ref -> kind string */
+  componentKinds?: Record<string, string>
+}
+
+function heatColor(t: number): string {
+  // t: 0=blue, 0.5=yellow, 1=red
+  const r = Math.round(Math.min(255, t * 2 * 255))
+  const g = Math.round(Math.min(255, (1 - Math.abs(t - 0.5) * 2) * 200))
+  const b = Math.round(Math.max(0, (1 - t * 2) * 255))
+  return `rgb(${r},${g},${b})`
 }
 
 export function renderOverlay(
@@ -379,6 +391,44 @@ export function renderOverlay(
   overlay: OverlayData,
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+
+  // ── Component state glows ──
+  if (overlay.componentStates && overlay.componentKinds) {
+    for (const fp of board.footprints) {
+      const states = overlay.componentStates[fp.ref]
+      const kind = overlay.componentKinds[fp.ref]
+      if (!states && !kind) continue
+
+      const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
+      const radius = Math.max(20, 12 * cam.scale)
+
+      const running = states?.['running'] ?? 0
+      const dissipation = states?.['dissipation_mw'] ?? 0
+
+      if (kind === 'mcu' && running > 0) {
+        // Faint cyan glow for running MCU
+        const grad = ctx.createRadialGradient(fpX, fpY, 0, fpX, fpY, radius)
+        grad.addColorStop(0, 'rgba(34,211,238,0.18)')
+        grad.addColorStop(0.6, 'rgba(34,211,238,0.06)')
+        grad.addColorStop(1, 'rgba(34,211,238,0)')
+        ctx.fillStyle = grad
+        ctx.beginPath()
+        ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (dissipation > 0) {
+        // Heat color glow for dissipation
+        const t = Math.min(1, dissipation / 500)
+        const color = heatColor(t)
+        const grad = ctx.createRadialGradient(fpX, fpY, 0, fpX, fpY, radius)
+        grad.addColorStop(0, color.replace('rgb', 'rgba').replace(')', `,${0.25 * t + 0.05})`))
+        grad.addColorStop(1, 'rgba(0,0,0,0)')
+        ctx.fillStyle = grad
+        ctx.beginPath()
+        ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  }
 
   // ── Net highlight glow pulses (driven from outside with animation) ──
   for (const netName of overlay.highlightNets) {
