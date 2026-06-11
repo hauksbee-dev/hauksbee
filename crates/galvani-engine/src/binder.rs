@@ -270,9 +270,21 @@ fn gather_device_meta(
 
     let mut metas = Vec::new();
     for (id, dev) in circuit.iter() {
-        // Match analog two/three-terminal devices and behavioral parts by name.
+        // Match analog devices by name. Multi-unit packages stamp one device
+        // per unit with a suffix ("IC3906_q2", "SW1_s0"); strip it so the
+        // package's ratings apply to every unit.
         let name = dev.name();
-        if let Some(info) = by_ref.get(name) {
+        let base = name
+            .rsplit_once("_q")
+            .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+            .map(|(b, _)| b)
+            .or_else(|| {
+                name.rsplit_once("_s")
+                    .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+                    .map(|(b, _)| b)
+            })
+            .unwrap_or(name);
+        if let Some(info) = by_ref.get(base) {
             // Only monitor kinds the evaluator knows how to score.
             let monitor = matches!(
                 info.kind,
@@ -282,6 +294,7 @@ fn gather_device_meta(
                     | ComponentKind::BjtPnp
                     | ComponentKind::Nmos
                     | ComponentKind::Pmos
+                    | ComponentKind::AnalogSwitch
             );
             if monitor {
                 metas.push(DeviceMeta {
@@ -593,6 +606,12 @@ fn bind_component(
 }
 
 /// Map each connected pin to its model role string.
+///
+/// Schematic pinfunctions are authoritative when they carry recognizable
+/// electrode names — they encode what the symbol's author connected, which
+/// the model db's by-pin-number map cannot know for vendor symbols with
+/// nonstandard numbering. The db map fills any remaining pins (and is the
+/// only source for PCB-only extraction, where pinfunctions are empty).
 fn role_node_map(
     comp: &Component,
     model: &ModelEntry,
@@ -600,13 +619,66 @@ fn role_node_map(
 ) -> HashMap<String, NodeId> {
     let mut m = HashMap::new();
     for pin in &comp.pins {
-        if let Some(role) = model.pins.get(&pin.number) {
-            if let Some(node) = node_of(pin.net) {
-                m.insert(role.clone(), node);
-            }
+        let Some(node) = node_of(pin.net) else { continue };
+        if let Some(role) = role_from_pinfunction(model.kind, &pin.function) {
+            m.entry(role).or_insert(node);
+        }
+    }
+    // The db's by-pin-number map fills any role the functions did not cover
+    // (and is the only source for PCB-only extraction, where functions are
+    // empty).
+    for pin in &comp.pins {
+        if let (Some(role), Some(node)) = (model.pins.get(&pin.number), node_of(pin.net)) {
+            m.entry(role.clone()).or_insert(node);
         }
     }
     m
+}
+
+/// Normalize a schematic pinfunction into a binder role. Pin names are only
+/// meaningful per component kind ("B1" is a base on a transistor pair but a
+/// throw on an SPDT switch), so the resolved model kind disambiguates.
+fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> {
+    let f = function.trim().to_ascii_lowercase();
+    if f.is_empty() {
+        return None;
+    }
+    let role: &str = match kind {
+        ComponentKind::BjtNpn | ComponentKind::BjtPnp => match f.as_str() {
+            "b" | "base" => "base",
+            "c" | "collector" => "collector",
+            "e" | "emitter" => "emitter",
+            "e1" => "emitter_q1",
+            "b1" => "base_q1",
+            "c1" => "collector_q1",
+            "e2" => "emitter_q2",
+            "b2" => "base_q2",
+            "c2" => "collector_q2",
+            _ => return None,
+        },
+        ComponentKind::Nmos | ComponentKind::Pmos => match f.as_str() {
+            "g" | "gate" => "gate",
+            "d" | "drain" => "drain",
+            "s" | "source" => "source",
+            _ => return None,
+        },
+        ComponentKind::Diode => match f.as_str() {
+            "a" | "anode" => "anode",
+            "k" | "c" | "cathode" => "cathode",
+            _ => return None,
+        },
+        ComponentKind::AnalogSwitch => match f.as_str() {
+            "a" | "com" => "com",
+            "b1" | "s0" | "no" => "s0",
+            "b2" | "s1" | "nc" => "s1",
+            "s" | "sel" | "in" | "ctrl" => "ctrl",
+            "gnd" | "vss" => "vss",
+            "vcc" | "vdd" => "vcc",
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(role.to_string())
 }
 
 // ── Per-kind binders ────────────────────────────────────────────────────────
@@ -981,8 +1053,54 @@ fn bind_analog_switch(
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
-    // SPDT/SPST: switch COM<->S0 (or in_out_a<->in_out_b) controlled by ctrl
-    // vs vss. Model the on-leg only; the other throw is left open.
+    // True SPDT when both throws are wired (com + s0 + s1 + ctrl): two
+    // complementary VSwitch legs. select low -> com<->s0, select high ->
+    // com<->s1 (the SN74LVC1G3157 convention). The s0 leg senses the
+    // INVERTED control by measuring (vcc - select).
+    let com = pick(roles, &["com", "a"]).copied();
+    let s0 = pick(roles, &["s0", "b1"]).copied();
+    let s1 = pick(roles, &["s1", "b2"]).copied();
+    let sel = pick(roles, &["ctrl", "s", "in"]).copied();
+    let vss = pick(roles, &["vss", "gnd"]).copied().unwrap_or(NodeId::GROUND);
+    if let (Some(com), Some(s0), Some(s1), Some(sel), Some(vcc)) =
+        (com, s0, s1, sel, pick(roles, &["vcc"]).copied())
+    {
+        let ron = model.params.get_f64("ron").unwrap_or(50.0);
+        let roff = model.params.get_f64("roff").unwrap_or(1e9);
+        let vth = model.params.get_f64("vth").unwrap_or(1.5);
+        circuit.add(Device::VSwitch {
+            name: format!("{}_s1", comp.reference),
+            a: com,
+            b: s1,
+            ctrl_p: sel,
+            ctrl_n: vss,
+            von: vth + 0.25,
+            voff: vth - 0.25,
+            ron,
+            roff,
+        });
+        circuit.add(Device::VSwitch {
+            name: format!("{}_s0", comp.reference),
+            a: com,
+            b: s0,
+            // Conducts when the select is LOW: sense vcc - select.
+            ctrl_p: vcc,
+            ctrl_n: sel,
+            von: 5.0 - vth + 0.25,
+            voff: 5.0 - vth - 0.25,
+            ron,
+            roff,
+        });
+        return (
+            BindOutcome::Analog {
+                device: "spdt x2".to_string(),
+            },
+            None,
+        );
+    }
+
+    // SPST fallback: switch COM<->S0 (or in_out_a<->in_out_b) controlled by
+    // ctrl vs vss. Model the on-leg only; the other throw is left open.
     let a = pick(roles, &["com", "in_out_a", "in_out_1a", "s0"]).copied();
     let b = pick(roles, &["s0", "in_out_b", "in_out_1b", "com"]).copied();
     // Resolve a and b to distinct nodes.

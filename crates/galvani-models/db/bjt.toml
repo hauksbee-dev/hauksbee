@@ -137,12 +137,13 @@ tf  = 3.0e-10
 pair_count = 2
 
 [models.pins]
-# SOT-363 pinout per Nexperia BCM847BS datasheet Fig. 3
-"1" = "base_q1"
-"2" = "emitter_q1"
-"3" = "emitter_q2"
-"4" = "base_q2"
-"5" = "collector_q2"
+# SOT-363 per Nexperia BCM847BS/BCM857BS datasheet Table 2:
+# 1=E1, 2=B1, 3=C2, 4=E2, 5=B2, 6=C1
+"1" = "emitter_q1"
+"2" = "base_q1"
+"3" = "collector_q2"
+"4" = "emitter_q2"
+"5" = "base_q2"
 "6" = "collector_q1"
 
 [models.ratings]
@@ -281,11 +282,11 @@ tf  = 3.0e-10
 pair_count = 2
 
 [models.pins]
-"1" = "base_q1"
-"2" = "emitter_q1"
-"3" = "emitter_q2"
-"4" = "base_q2"
-"5" = "collector_q2"
+"1" = "emitter_q1"
+"2" = "base_q1"
+"3" = "collector_q2"
+"4" = "emitter_q2"
+"5" = "base_q2"
 "6" = "collector_q1"
 
 [models.ratings]
