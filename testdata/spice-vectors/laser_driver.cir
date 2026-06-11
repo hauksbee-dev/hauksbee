@@ -1,0 +1,19 @@
+.title KiCad schematic
+.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/laser_driver/ad8009.lib"
+.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/laser_driver/fzt1049a.lib"
+.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/laser_driver/laser.lib"
+.tran 10p 150n
+R2 Net-_U1-+_ /in 160
+R1 Net-_U1--_ GND 220
+R3 Net-_Q1-E_ Net-_U1--_ 220
+C1 Net-_U1--_ Net-_Q1-E_ 1p
+XU1 Net-_U1-+_ Net-_U1--_ VDD VSS Net-_Q1-B_ ad8009
+V1 /in GND PULSE( 0 3 100n 1n 1n 20n 100n ) 
+D1 /out GND laser
+R5 /out Net-_Q1-E_ 2.5
+C2 /out Net-_Q1-E_ 1p
+V2 VDD GND DC 10 
+V3 GND VSS DC 10 
+Q1 VDD Net-_Q1-B_ Net-_Q1-E_ fzt1049a
+R4 /out Net-_U1-+_ 220
+.end

@@ -1,0 +1,16 @@
+.title KiCad schematic
+.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/sallen_key/ad8051.lib"
+.ac dec 10 1 1Meg
+
+.control
+version
+.endc
+R1 Net-_C1-Pad2_ Net-_R1-Pad2_ 1k
+V1 Net-_R1-Pad2_ GND DC ac=1 AC 1  
+C1 /lowpass Net-_C1-Pad2_ 100n
+XU1 Net-_U1-+_ /lowpass VDD VSS /lowpass AD8051
+C2 Net-_U1-+_ GND 100n
+R2 Net-_U1-+_ Net-_C1-Pad2_ 1k
+V2 VDD GND DC 10 
+V3 GND VSS DC 10 
+.end

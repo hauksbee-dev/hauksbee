@@ -1,0 +1,10 @@
+.title KiCad schematic
+.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/rectifier/diode.mod"
+.tran 1u 10m
+
+R1 /signal_in Net-_D1-A_ 1k
+D1 Net-_D1-A_ /rect_out 1N4148
+V1 /signal_in GND DC 0 SIN( 0 1 1k 0 0 0 ) AC 1  
+C1 /rect_out GND 100n
+R2 /rect_out GND 100k
+.end
