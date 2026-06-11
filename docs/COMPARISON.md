@@ -30,11 +30,22 @@ Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
 
 | circuit | galvani | vs ngspice | accuracy |
 |---|---|---|---|
-| half-wave rectifier, 10ms tran | 1.77 ms | ~38x wall-clock | <1% rel |
+| half-wave rectifier, 10ms tran | 2.05 ms | 23x wall-clock (48.1 ms incl. process start) | <1% rel |
 | synapse array, 90 Tarski-like blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
 | small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) | — | 9.6e-10 vs analytic |
-| RC ladder 1000 stages | 11.6k steps/s (Auto keeps monolithic: sparse LU already optimal there) | TBD | bit-identical to monolithic |
-| KiCad demo vectors (rectifier, sallen_key, amplifier-ac, laser_driver) | TBD | TBD | target ≤1% rel |
+| RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) | — | partitioned vs monolithic 3.8e-4 |
+| KiCad-authored vectors: rectifier / 3x-2N2222 amplifier | runs both via SpiceLoader | same netlists | 2.5e-5 / 0.92% max rel vs ngspice |
+
+File-layer performance (forge-sexpr span CST): the 85MB Jetson AGX Thor
+baseboard parses in ~230ms, emits byte-exact in ~114ms (2.1x end-to-end vs
+the string CST); the 44MB Tarski board extracts to a bound circuit in
+under a second.
+
+"Any PCB" evidence (bind_sweep over the corpus): 19/19 boards extract and
+bind with zero failures across KiCad 5-10 and Eagle formats — Jetson AGX
+Thor baseboard 81.4% of simulatable parts resolved (788 analog devices),
+vme-wren 77.8%, multichannel mixer 80.7%, pic_programmer 92.3%, and both
+ATmega boards find and instantiate their MCU.
 
 Honest engineering note: the matrix-exponential fast path wins where circuits
 fragment into many small islands (exactly the PCB regime: per-component RC
@@ -58,7 +69,7 @@ without the hand-modeling:
 | extraction | hand-written simplifier | automatic binder + model db |
 | device physics | closed-form behavioral | SPICE-class, temperature, tolerances |
 | MCU | simavr ATmega328P | same bridge, generalized API |
-| Tarski board inference run | baseline | TBD (target: same order of magnitude) |
+| hardware bug discovery | models the intended circuit (cannot see wiring defects) | independently derived the inhibitory miswire: 689mA through a 100mA junction when INH_Q4 enables (docs/BUG_HUNT.md Finding 15) |
 
 ## Unique capabilities
 
