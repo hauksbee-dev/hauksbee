@@ -262,6 +262,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "galvani-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "galvani-extract",
+ "galvani-ir",
+ "galvani-mcu",
+ "galvani-models",
+ "galvani-server",
+ "galvani-solve",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "galvani-extract"
 version = "0.1.0"
 dependencies = [

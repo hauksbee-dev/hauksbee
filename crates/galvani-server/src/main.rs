@@ -4,7 +4,24 @@ use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let firmware = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
+    let arg = std::env::args().nth(1);
+    // The demo server only knows the synthetic `McuDemoEngine`. Live board
+    // co-simulation (extract → bind → solve + MCU + digital) lives behind the
+    // `GalvaniEngine` in the `galvani-engine` crate; pointing this binary at a
+    // real board file would mean depending on that crate (which depends on this
+    // one), so we direct the user to the dedicated `galvani` binary instead.
+    if let Some(a) = &arg {
+        let lower = a.to_ascii_lowercase();
+        if lower.ends_with(".kicad_pcb") || lower.ends_with(".net") || lower.ends_with(".brd") {
+            eprintln!(
+                "galvani-server is the demo MCU server. To bring a real board to life run:\n  \
+                 galvani run {a} [--firmware <hex>] [--port 3001]\n(the `galvani` binary is built \
+                 from the galvani-engine crate)."
+            );
+            std::process::exit(2);
+        }
+    }
+    let firmware = arg.map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex")
     });
     let engine = McuDemoEngine::new(&firmware, "demo", "/boards/demo.kicad_pcb")?;

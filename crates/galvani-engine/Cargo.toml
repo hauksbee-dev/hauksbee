@@ -1,0 +1,29 @@
+[package]
+name = "galvani-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Integration heart: binds an extracted board to models and co-simulates analog + MCU + digital"
+
+[[bin]]
+name = "galvani"
+path = "src/main.rs"
+
+[lib]
+name = "galvani_engine"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+galvani-extract = { version = "0.1.0", path = "../galvani-extract" }
+galvani-models = { version = "0.1.0", path = "../galvani-models" }
+galvani-ir = { version = "0.1.0", path = "../galvani-ir" }
+galvani-solve = { version = "0.1.0", path = "../galvani-solve" }
+galvani-mcu = { version = "0.1.0", path = "../galvani-mcu" }
+galvani-server = { version = "0.1.0", path = "../galvani-server" }
+tokio = { version = "1.52.3", features = ["full"] }
+toml = "0.8"
+
+[dev-dependencies]
