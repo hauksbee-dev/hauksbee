@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/galvani-ir",
+    "crates/galvani-solve",
+    "crates/galvani-extract",
+    "crates/galvani-models",
+    "crates/galvani-mcu",
+    "crates/galvani-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+forge-sexpr = { path = "../kicad-forge/crates/forge-sexpr" }
+forge-model = { path = "../kicad-forge/crates/forge-model" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+
+[profile.release]
+lto = "thin"
+debug = true
+
+[profile.dev]
+opt-level = 1
