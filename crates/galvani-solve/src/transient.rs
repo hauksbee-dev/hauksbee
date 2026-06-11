@@ -1,0 +1,372 @@
+//! The transient driver: time-marching with companion models, adaptive step
+//! control, and event-aware timestep refinement.
+//!
+//! Each accepted step solves a Newton operating point at `t + dt`, estimates
+//! the local truncation error of the reactive elements, and either accepts the
+//! step (advancing history) or shrinks `dt` and retries. Comparators and
+//! switches are watched for threshold crossings; when one is straddled, the
+//! step is bisected to land near the crossing so edges aren't smeared.
+
+use crate::newton::{dc_operating_point, newton_solve, Workspace};
+use crate::options::{Integration, SolverOptions, StepControl};
+use crate::stamp::IntegCoeffs;
+use crate::system::ReactiveState;
+use galvani_ir::{Circuit, Device, NodeId};
+
+/// Collected transient results.
+#[derive(Debug, Clone, Default)]
+pub struct Waveforms {
+    /// Sample times (s).
+    pub time: Vec<f64>,
+    /// `node_voltages[node][sample]`, indexed by `NodeId.0` (ground included,
+    /// always 0).
+    pub node_voltages: Vec<Vec<f64>>,
+    /// Branch currents for voltage sources / inductors, keyed by device name.
+    pub branch_currents: Vec<(String, Vec<f64>)>,
+}
+
+impl Waveforms {
+    /// Voltage waveform of a node by name, if present.
+    pub fn node(&self, circuit: &Circuit, name: &str) -> Option<&[f64]> {
+        for id in 0..circuit.node_count() {
+            if circuit.node_name(NodeId(id as u32)) == name {
+                return self.node_voltages.get(id).map(Vec::as_slice);
+            }
+        }
+        None
+    }
+
+    /// Last value of a named node.
+    pub fn final_node(&self, circuit: &Circuit, name: &str) -> Option<f64> {
+        self.node(circuit, name).and_then(|w| w.last().copied())
+    }
+}
+
+/// A single accepted step, handed to streaming consumers.
+#[derive(Debug, Clone)]
+pub struct StepSample<'a> {
+    pub time: f64,
+    /// All unknowns: node voltages `[0..n_nodes]` then branch currents.
+    pub x: &'a [f64],
+}
+
+/// The transient engine.
+pub struct Transient {
+    opts: SolverOptions,
+}
+
+impl Transient {
+    /// New engine with the given options.
+    pub fn new(opts: SolverOptions) -> Self {
+        Transient { opts }
+    }
+
+    /// Run to `tstop`, collecting every accepted step into [`Waveforms`].
+    pub fn run(&self, circuit: &Circuit, tstop: f64) -> Result<Waveforms, String> {
+        let n_nodes = circuit.node_count();
+        let mut wf = Waveforms {
+            time: Vec::new(),
+            node_voltages: vec![Vec::new(); n_nodes],
+            branch_currents: Vec::new(),
+        };
+        // Pre-name branch current outputs.
+        let mut branch_names = Vec::new();
+        for (_, dev) in circuit.iter() {
+            if matches!(dev, Device::Vsource { .. } | Device::Inductor { .. }) {
+                branch_names.push(dev.name().to_string());
+            }
+        }
+        for name in &branch_names {
+            wf.branch_currents.push((name.clone(), Vec::new()));
+        }
+
+        self.run_streaming(circuit, tstop, |s| {
+            wf.time.push(s.time);
+            for node in 0..n_nodes {
+                let v = if node == 0 {
+                    0.0
+                } else {
+                    s.x[node - 1]
+                };
+                wf.node_voltages[node].push(v);
+            }
+            for (bi, slot) in wf.branch_currents.iter_mut().enumerate() {
+                // Branch unknowns follow the node block in layout order.
+                let idx = n_nodes - 1 + bi;
+                slot.1.push(s.x.get(idx).copied().unwrap_or(0.0));
+            }
+        })?;
+        Ok(wf)
+    }
+
+    /// Run to `tstop`, invoking `sink` with each accepted step. This is what the
+    /// live UI will consume; it never buffers the whole waveform.
+    pub fn run_streaming<F: FnMut(StepSample)>(
+        &self,
+        circuit: &Circuit,
+        tstop: f64,
+        mut sink: F,
+    ) -> Result<(), String> {
+        let opts = &self.opts;
+        let mut ws = Workspace::new(circuit);
+        let n_dev = circuit.devices.len();
+
+        // DC operating point seeds t = 0.
+        dc_operating_point(&mut ws, circuit, opts)?;
+
+        let mut state = ReactiveState::new(n_dev);
+        seed_reactive_state(&mut state, circuit, &ws);
+
+        let mut t = 0.0;
+        let mut dt = match opts.step {
+            StepControl::Fixed { dt } => dt,
+            StepControl::Adaptive { dt_initial, .. } => dt_initial.min(tstop),
+        };
+        let (dt_min, dt_max) = match opts.step {
+            StepControl::Fixed { dt } => (dt, dt),
+            StepControl::Adaptive { dt_min, dt_max, .. } => (dt_min, dt_max.min(tstop)),
+        };
+
+        // Emit the operating point at t = 0.
+        sink(StepSample { time: 0.0, x: &ws.x });
+
+        let mut first_step = true;
+        let mut x_accepted = ws.x.clone();
+        let mut steps_taken: u64 = 0;
+        let max_steps: u64 = 50_000_000; // safety valve
+
+        while t < tstop - 1e-18 {
+            steps_taken += 1;
+            if steps_taken > max_steps {
+                return Err(format!("exceeded step budget at t={t}"));
+            }
+            let mut h = dt.min(tstop - t);
+            if h < dt_min {
+                h = dt_min;
+            }
+
+            // Trial solve at t + h.
+            ws.x.copy_from_slice(&x_accepted);
+            let coeffs = IntegCoeffs::for_step(opts.integration, h, first_step);
+            let r = newton_solve(
+                &mut ws, circuit, opts, t + h, h, coeffs, &state, false, false, opts.gmin, 1.0,
+            );
+
+            if !r.converged {
+                // Cut the step hard and retry.
+                if h <= dt_min * 1.0001 {
+                    return Err(format!(
+                        "Newton failed at t={t} even at dt_min={dt_min}"
+                    ));
+                }
+                dt = (h * 0.25).max(dt_min);
+                continue;
+            }
+
+            // Event check: did a comparator/switch control cross threshold?
+            if let Some(frac) = crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes()) {
+                if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
+                    // Bisect toward the crossing for a sharper edge.
+                    let refined = (h * frac).clamp(dt_min, h);
+                    if (refined - h).abs() > dt_min {
+                        dt = refined;
+                        continue;
+                    }
+                }
+            }
+
+            // LTE control for adaptive stepping.
+            let accept;
+            let mut next_dt = dt;
+            match opts.step {
+                StepControl::Fixed { .. } => accept = true,
+                StepControl::Adaptive { .. } => {
+                    let err = lte_estimate(circuit, &ws, &state, h, opts);
+                    if err <= 1.0 || h <= dt_min * 1.0001 {
+                        accept = true;
+                        // Grow/shrink for next step from the error ratio.
+                        let safety = 0.9;
+                        let factor = if err > 0.0 {
+                            (safety * err.powf(-1.0 / 3.0)).clamp(0.5, 2.0)
+                        } else {
+                            2.0
+                        };
+                        next_dt = (h * factor).clamp(dt_min, dt_max);
+                    } else {
+                        accept = false;
+                        let factor = (0.9 * err.powf(-1.0 / 3.0)).clamp(0.1, 0.9);
+                        next_dt = (h * factor).max(dt_min);
+                    }
+                }
+            }
+
+            if !accept {
+                dt = next_dt;
+                continue;
+            }
+
+            // Accept: advance time, update reactive history, emit.
+            t += h;
+            advance_reactive_state(&mut state, circuit, &ws, &x_accepted, h, opts, first_step);
+            x_accepted.copy_from_slice(&ws.x);
+            first_step = false;
+            dt = next_dt;
+            sink(StepSample { time: t, x: &ws.x });
+        }
+        Ok(())
+    }
+}
+
+// --- reactive state bookkeeping ---------------------------------------------
+
+/// At the operating point, capacitor voltage = node-voltage difference and
+/// inductor current = its branch current; derivatives are zero (DC).
+fn seed_reactive_state(state: &mut ReactiveState, circuit: &Circuit, ws: &Workspace) {
+    for (id, dev) in circuit.iter() {
+        let i = id.0 as usize;
+        match dev {
+            Device::Capacitor { a, b, ic, .. } => {
+                state.x1[i] = ic.unwrap_or_else(|| node_v(ws, *a) - node_v(ws, *b));
+                state.x2[i] = state.x1[i];
+                state.dx1[i] = 0.0;
+            }
+            Device::Inductor { ic, .. } => {
+                let cur = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
+                state.x1[i] = ic.unwrap_or(cur);
+                state.x2[i] = state.x1[i];
+                state.dx1[i] = 0.0;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// After an accepted step, roll history forward: x2 <- x1, x1 <- new value,
+/// dx1 <- new derivative (for the trapezoidal predictor).
+fn advance_reactive_state(
+    state: &mut ReactiveState,
+    circuit: &Circuit,
+    ws: &Workspace,
+    _x_prev: &[f64],
+    h: f64,
+    opts: &SolverOptions,
+    first: bool,
+) {
+    // The derivative must be backed out with whatever rule actually ran this
+    // step. A multi-step rule (trapezoidal) falls back to backward Euler on the
+    // very first step, so the derivative there is the BE one.
+    let trapz = opts.integration == Integration::Trapezoidal && !first;
+    for (id, dev) in circuit.iter() {
+        let i = id.0 as usize;
+        match dev {
+            Device::Capacitor { a, b, .. } => {
+                let v_new = node_v(ws, *a) - node_v(ws, *b);
+                let v_old = state.x1[i];
+                // dv/dt consistent with the integration rule used this step.
+                let dv = if trapz {
+                    2.0 * (v_new - v_old) / h - state.dx1[i]
+                } else {
+                    (v_new - v_old) / h
+                };
+                state.x2[i] = v_old;
+                state.x1[i] = v_new;
+                state.dx1[i] = dv;
+            }
+            Device::Inductor { .. } => {
+                let i_new = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
+                let i_old = state.x1[i];
+                let di = if trapz {
+                    2.0 * (i_new - i_old) / h - state.dx1[i]
+                } else {
+                    (i_new - i_old) / h
+                };
+                state.x2[i] = i_old;
+                state.x1[i] = i_new;
+                state.dx1[i] = di;
+            }
+            _ => {}
+        }
+    }
+}
+
+#[inline]
+fn node_v(ws: &Workspace, node: NodeId) -> f64 {
+    match ws.layout.node(node) {
+        Some(i) => ws.x[i],
+        None => 0.0,
+    }
+}
+
+// --- LTE estimate -----------------------------------------------------------
+
+/// Dimensionless local-truncation-error norm (>1 means reject). Uses the
+/// divided-difference of reactive-element states, the classic SPICE estimator:
+/// `lte ~ C2 * h^2 * d3x/dt3`, normalized by `reltol*|x| + atol`.
+fn lte_estimate(
+    circuit: &Circuit,
+    ws: &Workspace,
+    state: &ReactiveState,
+    h: f64,
+    opts: &SolverOptions,
+) -> f64 {
+    let mut worst = 0.0f64;
+    for (id, dev) in circuit.iter() {
+        let i = id.0 as usize;
+        let (x_new, atol) = match dev {
+            Device::Capacitor { a, b, .. } => {
+                (node_v(ws, *a) - node_v(ws, *b), opts.chgtol.max(opts.vntol))
+            }
+            Device::Inductor { .. } => {
+                let cur = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
+                (cur, opts.abstol.max(1e-9))
+            }
+            _ => continue,
+        };
+        // Second difference as a curvature proxy: |x_new - 2 x1 + x2|.
+        let curv = (x_new - 2.0 * state.x1[i] + state.x2[i]).abs();
+        let tol = opts.reltol * x_new.abs().max(state.x1[i].abs()) + atol;
+        // Trapezoidal error coefficient ~ 1/12; scale into a [0,1]-ish norm.
+        let err = (curv / 12.0) / tol.max(1e-30);
+        let _ = h;
+        worst = worst.max(err);
+    }
+    worst
+}
+
+// --- event detection --------------------------------------------------------
+
+/// If any comparator/switch control voltage crosses its midpoint between the
+/// accepted state and the trial state, return the approximate fraction of the
+/// step at which it happens (for bisection). `None` if nothing crosses.
+fn crossing_fraction(
+    circuit: &Circuit,
+    x0: &[f64],
+    x1: &[f64],
+    node_idx: &dyn Fn(NodeId) -> Option<usize>,
+) -> Option<f64> {
+    let mut earliest: Option<f64> = None;
+    let vat = |x: &[f64], n: NodeId| node_idx(n).map(|i| x[i]).unwrap_or(0.0);
+    for (_, dev) in circuit.iter() {
+        let (cp, cn, mid) = match dev {
+            Device::Comparator { inp, inn, .. } => (*inp, *inn, 0.0),
+            Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } => {
+                (*ctrl_p, *ctrl_n, 0.5 * (von + voff))
+            }
+            _ => continue,
+        };
+        let d0 = vat(x0, cp) - vat(x0, cn) - mid;
+        let d1 = vat(x1, cp) - vat(x1, cn) - mid;
+        if d0.signum() != d1.signum() && (d1 - d0).abs() > 1e-15 {
+            let frac = (d0 / (d0 - d1)).clamp(0.0, 1.0);
+            earliest = Some(earliest.map_or(frac, |e| e.min(frac)));
+        }
+    }
+    earliest
+}
+
+impl Workspace {
+    /// A node->unknown index closure for event checks.
+    fn layout_nodes(&self) -> impl Fn(NodeId) -> Option<usize> + '_ {
+        move |n: NodeId| self.layout.node(n)
+    }
+}
