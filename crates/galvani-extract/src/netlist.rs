@@ -1,0 +1,86 @@
+//! Extraction from a KiCad netlist export:
+//! `(export (components (comp ...)) (nets (net (node ...))))`.
+
+use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+
+pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
+    let doc = forge_sexpr::parse(text)?;
+    let root = doc.root().ok_or(ExtractError::WrongRoot {
+        expected: "export",
+        found: None,
+    })?;
+    if root.name() != Some("export") {
+        return Err(ExtractError::WrongRoot {
+            expected: "export",
+            found: root.name().map(str::to_string),
+        });
+    }
+
+    let name = root
+        .find("design")
+        .and_then(|d| d.find_value("source"))
+        .unwrap_or_default();
+
+    let mut components = Vec::new();
+    if let Some(comps) = root.find("components") {
+        for comp in comps.find_all("comp") {
+            let lib_id = comp
+                .find("libsource")
+                .map(|ls| {
+                    let lib = ls.find_value("lib").unwrap_or_default();
+                    let part = ls.find_value("part").unwrap_or_default();
+                    if lib.is_empty() { part } else { format!("{lib}:{part}") }
+                })
+                .unwrap_or_default();
+            let mut properties = Vec::new();
+            for prop in comp.find_all("property") {
+                if let (Some(k), Some(v)) =
+                    (prop.find_value("name"), prop.find_value("value"))
+                {
+                    properties.push((k, v));
+                }
+            }
+            components.push(Component {
+                reference: comp.find_value("ref").unwrap_or_default(),
+                value: comp.find_value("value").unwrap_or_default(),
+                lib_id,
+                footprint: comp.find_value("footprint").unwrap_or_default(),
+                position: None,
+                layer: String::new(),
+                properties,
+                pins: Vec::new(),
+            });
+        }
+    }
+
+    let index: std::collections::HashMap<String, usize> = components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.reference.clone(), i))
+        .collect();
+
+    let mut nets = Vec::new();
+    if let Some(net_list) = root.find("nets") {
+        for net in net_list.find_all("net") {
+            let id = net.find_i64("code").unwrap_or(-1);
+            nets.push(Net {
+                id,
+                name: net.find_value("name").unwrap_or_default(),
+            });
+            for node in net.find_all("node") {
+                let Some(reference) = node.find_value("ref") else { continue };
+                let Some(&ci) = index.get(&reference) else { continue };
+                components[ci].pins.push(Pin {
+                    number: node.find_value("pin").unwrap_or_default(),
+                    net: Some(id),
+                    function: node.find_value("pinfunction").unwrap_or_default(),
+                    kind: node.find_value("pintype").unwrap_or_default(),
+                    position: None,
+                });
+            }
+        }
+    }
+    nets.sort_by_key(|n| n.id);
+
+    Ok(ExtractedBoard { name, nets, components })
+}
