@@ -51,6 +51,9 @@ use crate::partition::Island;
 pub struct LinearIsland {
     states: Vec<(DeviceId, StateKind)>,
     inputs: Vec<NodeId>,
+    /// Current sources inside the island: extra input columns after the
+    /// voltage inputs, evaluated by the caller per step (ZOH).
+    isources: Vec<(DeviceId, NodeId, NodeId)>,
     /// Continuous `A` (n_states x n_states), row-major.
     a: Vec<f64>,
     /// Continuous `B` (n_states x n_inputs), row-major.
@@ -214,6 +217,17 @@ impl LinearIsland {
         &self.inputs
     }
 
+    /// Current sources whose values the caller must append to the input
+    /// vector, in order, after the voltage inputs.
+    pub fn isources(&self) -> &[(DeviceId, NodeId, NodeId)] {
+        &self.isources
+    }
+
+    /// Total input vector length: voltage inputs then current inputs.
+    pub fn n_inputs_total(&self) -> usize {
+        self.inputs.len() + self.isources.len()
+    }
+
     /// The island-local index for a node, if it is a free node here.
     pub fn local_of(&self, n: NodeId) -> Option<usize> {
         self.node_local.get(n.0 as usize).copied().flatten()
@@ -268,8 +282,16 @@ impl LinearIsland {
             return None;
         }
 
+        let mut isources: Vec<(DeviceId, NodeId, NodeId)> = Vec::new();
+        for &id in &island.devices {
+            if let Device::Isource { p, n, .. } = &circuit.devices[id.0 as usize] {
+                isources.push((id, *p, *n));
+            }
+        }
+
         let n_states = states.len();
         let n_in = inputs.len();
+        let n_in_t = n_in + isources.len();
 
         // Augmented MNA unknowns: [free nodes (n_free) | cap branches (n_cap)].
         let n_cap = states
@@ -286,9 +308,9 @@ impl LinearIsland {
             m[mi(f, f)] += gmin;
         }
 
-        // RHS columns: [states (n_states) | inputs (n_in)] so one factorization
-        // serves every excitation.
-        let rhs_cols = n_states + n_in;
+        // RHS columns: [states (n_states) | voltage inputs (n_in) | current
+        // inputs (n_isrc)] so one factorization serves every excitation.
+        let rhs_cols = n_states + n_in_t;
         let ri = |r: usize, c: usize| r * rhs_cols + c;
         let mut rhs = vec![0.0f64; dim * rhs_cols];
 
@@ -329,6 +351,18 @@ impl LinearIsland {
                     }
                     _ => {}
                 }
+            }
+        }
+
+        // Current sources: a unit of source k injects +1 into its n node and
+        // pulls -1 from its p node (matching the monolithic stamp convention).
+        for (k, (_, ip, inn)) in isources.iter().enumerate() {
+            let col = n_states + n_in + k;
+            if let Slot::Free(f) = slot(*ip) {
+                rhs[ri(f, col)] -= 1.0;
+            }
+            if let Slot::Free(f) = slot(*inn) {
+                rhs[ri(f, col)] += 1.0;
             }
         }
 
@@ -388,13 +422,13 @@ impl LinearIsland {
 
         // Reconstruction maps.
         let mut sx = vec![0.0f64; n_free * n_states];
-        let mut su = vec![0.0f64; n_free * n_in];
+        let mut su = vec![0.0f64; n_free * n_in_t];
         for f in 0..n_free {
             for s in 0..n_states {
                 sx[f * n_states + s] = w[wi(f, s)];
             }
-            for p in 0..n_in {
-                su[f * n_in + p] = w[wi(f, n_states + p)];
+            for p in 0..n_in_t {
+                su[f * n_in_t + p] = w[wi(f, n_states + p)];
             }
         }
 
@@ -419,7 +453,7 @@ impl LinearIsland {
 
         // Assemble A, B.
         let mut a_mat = vec![0.0f64; n_states * n_states];
-        let mut b_mat = vec![0.0f64; n_states * n_in];
+        let mut b_mat = vec![0.0f64; n_states * n_in_t];
         for (si, (_, k)) in states.iter().enumerate() {
             match k {
                 StateKind::Cap { c, .. } => {
@@ -428,8 +462,8 @@ impl LinearIsland {
                     for s2 in 0..n_states {
                         a_mat[si * n_states + s2] = w[wi(br, s2)] / *c;
                     }
-                    for p in 0..n_in {
-                        b_mat[si * n_in + p] = w[wi(br, n_states + p)] / *c;
+                    for p in 0..n_in_t {
+                        b_mat[si * n_in_t + p] = w[wi(br, n_states + p)] / *c;
                     }
                 }
                 StateKind::Ind { a, b, l } => {
@@ -438,9 +472,9 @@ impl LinearIsland {
                         let vl = node_v(*a, s2, false) - node_v(*b, s2, false);
                         a_mat[si * n_states + s2] = vl / *l;
                     }
-                    for p in 0..n_in {
+                    for p in 0..n_in_t {
                         let vl = node_v(*a, p, true) - node_v(*b, p, true);
-                        b_mat[si * n_in + p] = vl / *l;
+                        b_mat[si * n_in_t + p] = vl / *l;
                     }
                 }
             }
@@ -452,6 +486,7 @@ impl LinearIsland {
         Some(LinearIsland {
             states,
             inputs,
+            isources,
             a: a_mat,
             b: b_mat,
             node_local,
@@ -496,7 +531,7 @@ impl LinearIsland {
             }
         }
         let n = self.states.len();
-        let m = self.inputs.len();
+        let m = self.n_inputs_total();
         let (ad, bd) = discretize(&self.a, &self.b, n, m, dt);
         self.cache = Some(ExpCache { dt, ad, bd });
     }
@@ -514,7 +549,7 @@ impl LinearIsland {
     fn step_dense(&self, x: &mut [f64], u: &[f64]) {
         let cache = self.cache.as_ref().expect("ensure_cache first");
         let n = self.states.len();
-        let m = self.inputs.len();
+        let m = self.n_inputs_total();
         let mut nx = vec![0.0f64; n];
         for i in 0..n {
             let mut s = 0.0;
@@ -542,7 +577,7 @@ impl LinearIsland {
     fn step_matrix_free(&self, x: &mut [f64], u: &[f64]) {
         let mf = self.mf.as_ref().expect("ensure_cache first");
         let n = self.states.len();
-        let m = self.inputs.len();
+        let m = self.n_inputs_total();
         // Constant drive d = B u (dense B, but n_inputs is tiny).
         let mut d = vec![0.0f64; n];
         for i in 0..n {
@@ -585,7 +620,7 @@ impl LinearIsland {
     /// (indexed by island-local free-node index).
     pub fn node_voltages(&self, x: &[f64], u: &[f64], out_v: &mut [f64]) {
         let n = self.states.len();
-        let m = self.inputs.len();
+        let m = self.n_inputs_total();
         if self.uses_matrix_free() {
             // Sparse Sx (large island); dense Su (n_inputs is tiny).
             self.sx_sparse.matvec(x, out_v);

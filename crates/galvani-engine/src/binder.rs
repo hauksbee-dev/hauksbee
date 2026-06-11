@@ -27,7 +27,9 @@ use galvani_models::{ComponentKind, ComponentQuery, Confidence, ModelEntry, Mode
 
 use crate::digital::{output_roles, DigitalComponent};
 use crate::drivers::{PinDriver, DEFAULT_RO};
+use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::report::{BindOutcome, BindReport, BindRow};
+use crate::stress::DeviceMeta;
 
 /// Default supply voltage for an ideal +5V rail.
 pub const DEFAULT_VCC: f64 = 5.0;
@@ -66,6 +68,12 @@ pub struct BoundBoard {
     /// Named controllable input sources: reference -> DeviceId of a Vsource /
     /// Isource the UI can override (sliders).
     pub input_sources: HashMap<String, galvani_ir::DeviceId>,
+    /// Configurable power supplies, one per detected supply net (Feature 1).
+    /// Default to [`PowerSupply::Ideal`] at the rail's nominal voltage, which
+    /// preserves the old ideal-rail behaviour bit-for-bit.
+    pub supplies: Vec<SupplyLeg>,
+    /// Per-device metadata for the fault/stress monitor (Feature 2).
+    pub device_meta: Vec<DeviceMeta>,
     pub report: BindReport,
 }
 
@@ -169,10 +177,17 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
         });
     }
 
-    // ── Pass 3: attach ideal power rails ────────────────────────────────────
-    // Every detected supply net gets an ideal Vsource to ground, unless a vreg
-    // already sources that exact net (we keep the regulator chain).
-    for (name, volts) in &power_nets {
+    // ── Pass 3: attach configurable power supplies ──────────────────────────
+    // Every detected supply net gets a behavioral supply (default Ideal at the
+    // rail's nominal voltage — identical to the old ideal Vsource), unless a
+    // vreg already sources that exact net (we keep the regulator chain). The
+    // supply is stamped as a controllable Vsource behind a tiny series resistor
+    // so the scheduler can read rail current and update the supply per chunk.
+    let mut supplies: Vec<SupplyLeg> = Vec::new();
+    // Deterministic order so supply indices are stable across runs.
+    let mut supply_names: Vec<(&String, &f64)> = power_nets.iter().collect();
+    supply_names.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, volts) in supply_names {
         let node = match net_nodes.get(name) {
             Some(&n) if !n.is_ground() => n,
             _ => continue,
@@ -184,12 +199,13 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
         }) {
             continue;
         }
-        circuit.add(Device::Vsource {
-            name: format!("Vrail_{name}"),
-            p: node,
-            n: NodeId::GROUND,
-            kind: SourceKind::Dc(*volts),
-        });
+        let leg = SupplyLeg::stamp(
+            &mut circuit,
+            node,
+            name,
+            PowerSupply::Ideal { volts: *volts },
+        );
+        supplies.push(leg);
         report.push(BindRow {
             reference: format!("RAIL:{name}"),
             value: format!("{volts:.2}V"),
@@ -200,6 +216,13 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
         });
     }
 
+    // ── Pass 4: gather fault-monitor metadata ───────────────────────────────
+    // Match each monitorable IR device back to its component (device name ==
+    // reference for the parts we stamp) and the component's resolved ratings +
+    // footprint, so the stress monitor can evaluate it. Supplies/regulators are
+    // matched by their Vsource device id directly.
+    let device_meta = gather_device_meta(board, lib, &circuit);
+
     BoundBoard {
         name: board.name.clone(),
         circuit,
@@ -209,8 +232,87 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
         mcus,
         component_kinds,
         input_sources,
+        supplies,
+        device_meta,
         report,
     }
+}
+
+/// Build the per-device metadata the stress monitor needs. Walks the bound
+/// circuit and matches each monitorable device to its originating component
+/// (by reference == device name) and that component's resolved ratings +
+/// footprint. Vreg sources and the configurable supplies are matched too.
+fn gather_device_meta(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    circuit: &Circuit,
+) -> Vec<DeviceMeta> {
+    // Index components by reference, with their resolved kind/ratings/footprint.
+    struct CompInfo {
+        kind: ComponentKind,
+        ratings: galvani_models::schema::Ratings,
+        footprint: String,
+    }
+    let mut by_ref: HashMap<String, CompInfo> = HashMap::new();
+    for comp in &board.components {
+        let res = resolve(lib, comp);
+        if let Some(m) = res.model {
+            by_ref.insert(
+                comp.reference.clone(),
+                CompInfo {
+                    kind: m.kind,
+                    ratings: m.ratings.clone(),
+                    footprint: comp.footprint.clone(),
+                },
+            );
+        }
+    }
+
+    let mut metas = Vec::new();
+    for (id, dev) in circuit.iter() {
+        // Match analog two/three-terminal devices and behavioral parts by name.
+        let name = dev.name();
+        if let Some(info) = by_ref.get(name) {
+            // Only monitor kinds the evaluator knows how to score.
+            let monitor = matches!(
+                info.kind,
+                ComponentKind::Passive
+                    | ComponentKind::Diode
+                    | ComponentKind::BjtNpn
+                    | ComponentKind::BjtPnp
+                    | ComponentKind::Nmos
+                    | ComponentKind::Pmos
+            );
+            if monitor {
+                metas.push(DeviceMeta {
+                    reference: name.to_string(),
+                    device: id,
+                    kind: info.kind,
+                    footprint: info.footprint.clone(),
+                    ratings: info.ratings.clone(),
+                });
+            }
+        }
+    }
+
+    // Vreg output sources: name is "Vreg_<ref>".
+    for (id, dev) in circuit.iter() {
+        if let Device::Vsource { name, .. } = dev {
+            if let Some(reference) = name.strip_prefix("Vreg_") {
+                if let Some(info) = by_ref.get(reference) {
+                    metas.push(DeviceMeta {
+                        reference: reference.to_string(),
+                        device: id,
+                        kind: ComponentKind::Vreg,
+                        footprint: info.footprint.clone(),
+                        ratings: info.ratings.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    metas
 }
 
 /// Resolve one component into a model entry.
@@ -641,12 +743,66 @@ fn bind_bjt(
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
+    let m = bjt_model_from(model);
+
+    // Multi-transistor packages (matched pairs like BCM847BS/BCM857BS) use
+    // suffixed roles: collector_q1/base_q1/emitter_q1, ..._q2. Stamp one
+    // BJT per suffix group, sharing the package's model card.
+    let suffixes: std::collections::BTreeSet<String> = roles
+        .keys()
+        .filter_map(|r| r.rsplit_once("_q").map(|(_, n)| format!("_q{n}")))
+        .collect();
+    if !suffixes.is_empty() {
+        let mut stamped = 0;
+        for suffix in &suffixes {
+            let get = |role: &str| roles.get(&format!("{role}{suffix}")).copied();
+            let (Some(c), Some(b), Some(e)) =
+                (get("collector"), get("base"), get("emitter"))
+            else {
+                continue;
+            };
+            circuit.add(Device::Bjt {
+                name: format!("{}{}", comp.reference, suffix),
+                c,
+                b,
+                e,
+                model: m.clone(),
+            });
+            stamped += 1;
+        }
+        if stamped == 0 {
+            return open_warning(comp, "paired BJT: no complete c/b/e group connected");
+        }
+        return (
+            BindOutcome::Analog {
+                device: format!("bjt x{stamped}"),
+            },
+            None,
+        );
+    }
+
     let c = roles.get("collector").or_else(|| pick(roles, &["c"])).copied();
     let b = roles.get("base").or_else(|| pick(roles, &["b"])).copied();
     let e = roles.get("emitter").or_else(|| pick(roles, &["e"])).copied();
     let (Some(c), Some(b), Some(e)) = (c, b, e) else {
         return open_warning(comp, "BJT pins not all connected");
     };
+    circuit.add(Device::Bjt {
+        name: comp.reference.clone(),
+        c,
+        b,
+        e,
+        model: m,
+    });
+    (
+        BindOutcome::Analog {
+            device: "bjt".to_string(),
+        },
+        None,
+    )
+}
+
+fn bjt_model_from(model: &ModelEntry) -> BjtModel {
     let polarity = if model.kind == ComponentKind::BjtPnp {
         Polarity::P
     } else {
@@ -654,7 +810,7 @@ fn bind_bjt(
     };
     let d = BjtModel::default();
     let p = &model.params;
-    let m = BjtModel {
+    BjtModel {
         polarity,
         is: p.get_f64("is").unwrap_or(d.is),
         bf: p.get_f64("bf").unwrap_or(d.bf),
@@ -672,20 +828,7 @@ fn bind_bjt(
         tr: p.get_f64("tr").unwrap_or(d.tr),
         xti: p.get_f64("xti").unwrap_or(d.xti),
         eg: p.get_f64("eg").unwrap_or(d.eg),
-    };
-    circuit.add(Device::Bjt {
-        name: comp.reference.clone(),
-        c,
-        b,
-        e,
-        model: m,
-    });
-    (
-        BindOutcome::Analog {
-            device: "bjt".to_string(),
-        },
-        None,
-    )
+    }
 }
 
 fn bind_mosfet(

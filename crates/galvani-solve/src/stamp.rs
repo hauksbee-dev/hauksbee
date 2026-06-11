@@ -517,17 +517,15 @@ fn stamp_bjt(
     // transconductance: ic depends on vbe = v(b)-v(e).
     add_transconductance(g, ci, ei, bi, ei, gm);
 
-    // Equivalent currents: residual = I_terminal - linearized part.
-    // For each terminal, ieq = I - (stamped conductances * present voltages).
-    let veb = ctx.v(b) - ctx.v(e);
-    let vcb = ctx.v(b) - ctx.v(c);
-    let _ = (veb, vcb);
-
-    // Build equivalent current sources so the linear solve reproduces Newton.
-    // Collector node residual.
-    let ic_eq = sign * ic - (gm * vbe + go * (sign * (ctx.v(c) - ctx.v(e))) - gmu * vbc);
-    let ib_eq = sign * ib - (gpi * vbe + gmu * vbc);
-    let ie_eq = sign * ie + (gm * vbe + (gpi) * vbe + go * (sign * (ctx.v(c) - ctx.v(e))));
+    // Equivalent currents: residual = I_terminal - linearized part, both in
+    // folded (NPN-reference) space, then mapped to real space by `sign`. The
+    // matrix rows in real space equal sign * (folded linear part), so the
+    // whole bracket folds together -- folding only some terms breaks PNP
+    // convergence (sign = -1 flips gm/gpi/gmu contributions).
+    let vce_f = sign * (ctx.v(c) - ctx.v(e));
+    let ic_eq = sign * (ic - (gm * vbe + go * vce_f - gmu * vbc));
+    let ib_eq = sign * (ib - (gpi * vbe + gmu * vbc));
+    let ie_eq = sign * (ie + (gm + gpi) * vbe + go * vce_f);
 
     inject(rhs, ci, -ic_eq);
     inject(rhs, bi, -ib_eq);
