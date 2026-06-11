@@ -167,16 +167,47 @@ export class Board3DViewer {
     const boardSpan = Math.max(size.x, size.z) // board footprint span in metres
     const boardDiag = Math.sqrt(size.x * size.x + size.z * size.z)
 
-    // Effective half-FOV: use vertical (smaller in landscape) for fill calculation
-    const halfFovV = fovRad / 2  // vertical half-FOV = 22.5° for 45° FOV
-
-    // Distance so the board diagonal fills 65% of the vertical viewport extent
-    const targetFill = 0.65
-    const dist = (boardDiag / 2) / (Math.tan(halfFovV) * targetFill)
-
-    // Product-photo angle: 30° elevation for a shallower, more centered view
-    const elevAngle = 0.52  // radians ~30°
-    const sideOffset = 0.15 // small lateral offset for visual interest
+    // Solve the orbit distance exactly: project the bounding-box corners at
+    // each trial distance and binary-search until the larger of the
+    // horizontal/vertical screen extents hits the target fill. This accounts
+    // for elevation foreshortening and aspect ratio, which closed-form
+    // diagonal formulas under-fill badly on flat boards.
+    const targetFill = 0.78
+    const elevAngle = 0.52 // ~30° product-photo elevation
+    const sideOffset = 0.15
+    const halfFovV = fovRad / 2
+    const aspect = this.camera.aspect
+    const halfFovH = Math.atan(Math.tan(halfFovV) * aspect)
+    const corners: THREE.Vector3[] = []
+    for (const sx of [-0.5, 0.5])
+      for (const sy of [-0.5, 0.5])
+        for (const sz of [-0.5, 0.5])
+          corners.push(new THREE.Vector3(
+            center.x + sx * size.x, center.y + sy * size.y, center.z + sz * size.z))
+    const fillAt = (d: number): number => {
+      const eye = new THREE.Vector3(
+        center.x + sideOffset * boardSpan,
+        center.y + d * Math.sin(elevAngle),
+        center.z + d * Math.cos(elevAngle))
+      const m = new THREE.Matrix4().lookAt(eye, center, new THREE.Vector3(0, 1, 0))
+      const inv = m.clone().invert()
+      let maxH = 0, maxV = 0
+      for (const c of corners) {
+        const p = c.clone().sub(eye).applyMatrix4(inv)
+        const depth = -p.z
+        if (depth <= 1e-9) return 10 // inside/behind: way overfilled
+        maxH = Math.max(maxH, Math.abs(p.x) / (depth * Math.tan(halfFovH)))
+        maxV = Math.max(maxV, Math.abs(p.y) / (depth * Math.tan(halfFovV)))
+      }
+      return Math.max(maxH, maxV)
+    }
+    let lo = boardDiag * 0.05, hi = boardDiag * 20
+    for (let i = 0; i < 40; i++) {
+      const mid = (lo + hi) / 2
+      if (fillAt(mid) > targetFill) lo = mid
+      else hi = mid
+    }
+    const dist = (lo + hi) / 2
     this.camera.position.set(
       center.x + sideOffset * boardSpan,
       center.y + dist * Math.sin(elevAngle),
@@ -246,7 +277,7 @@ export class Board3DViewer {
         if (hasPBR && luminance > 0.55 && saturation < 0.45 && (mat as THREE.MeshStandardMaterial).roughness >= 0.8) {
           const pbr = mat as THREE.MeshStandardMaterial
           // Tone the color down by 35% and add gloss
-          pbr.color.multiplyScalar(0.65)
+          pbr.color.multiplyScalar(0.5)
           pbr.roughness = 0.45
           pbr.metalness = 0.0
           pbr.envMapIntensity = 2.0
