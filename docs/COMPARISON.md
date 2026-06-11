@@ -28,12 +28,19 @@ MCUs, rendered live on the actual board.
 
 Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
 
-| circuit | galvani | ngspice | speedup |
+| circuit | galvani | vs ngspice | accuracy |
 |---|---|---|---|
-| half-wave rectifier, 10ms tran | 1.77 ms | 41.9 ms (incl. process start) | ~24x |
-| RC ladder, 1000 stages, 10k steps | 859 ms (11.6k steps/s) | TBD | TBD |
-| synapse array (90 Tarski-like blocks) | TBD (partitioned) | TBD | target ≥100x |
-| KiCad demo vectors (rectifier, sallen_key, amplifier-ac, laser_driver) | TBD | TBD | accuracy ≤1% rel |
+| half-wave rectifier, 10ms tran | 1.77 ms | ~38x wall-clock | <1% rel |
+| synapse array, 90 Tarski-like blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
+| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) | — | 9.6e-10 vs analytic |
+| RC ladder 1000 stages | 11.6k steps/s (Auto keeps monolithic: sparse LU already optimal there) | TBD | bit-identical to monolithic |
+| KiCad demo vectors (rectifier, sallen_key, amplifier-ac, laser_driver) | TBD | TBD | target ≤1% rel |
+
+Honest engineering note: the matrix-exponential fast path wins where circuits
+fragment into many small islands (exactly the PCB regime: per-component RC
+dynamics off shared rails) and where exact large steps replace thousands of
+small ones. On one giant tridiagonal ladder the classic sparse LU is already
+optimal and the partitioner correctly leaves it alone.
 
 Architecture, not corner-cutting: partitioned islands (linear → exact matrix
 exponential steps; nonlinear → small per-island MNA+Newton; digital →
