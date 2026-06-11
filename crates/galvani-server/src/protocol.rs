@@ -35,6 +35,11 @@ pub struct BoardInfo {
     pub component_kinds: HashMap<String, String>,
     /// MCUs available for interaction (reference, backend name).
     pub mcus: Vec<(String, String)>,
+    /// Configurable supply nets and their current supply config (Feature 1).
+    /// Net name -> the supply currently driving it. Additive; older clients
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub power_supplies: HashMap<String, PowerSupplyConfig>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -51,6 +56,93 @@ pub struct SimFrame {
     /// Per-net current magnitude (A) for flow animation, when enabled.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub net_currents: HashMap<String, f64>,
+    /// Faults raised since the last frame (Feature 2). Additive; older clients
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faults: Vec<FaultInfo>,
+    /// Live supply readout per supply net (Feature 1): rail current and SoC.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub supply_states: HashMap<String, SupplyState>,
+}
+
+/// A fault raised by the stress monitor, for the UI's fault list / overlay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaultInfo {
+    /// Component reference designator (e.g. "D1").
+    pub component: String,
+    /// Fault kind: "overcurrent" | "surge_current" | "overpower" |
+    /// "overvoltage" | "reverse_bias" | "pin_overcurrent".
+    pub kind: String,
+    /// The offending live value (A, V, or W depending on kind).
+    pub value: f64,
+    /// The rating it exceeded (same units as `value`).
+    pub limit: f64,
+    /// Simulation time (s) the fault was raised.
+    pub t: f64,
+    /// Whether the circuit was mutated (destructive mode) in response.
+    #[serde(default)]
+    pub destroyed: bool,
+}
+
+/// Live readout of a configurable supply (Feature 1).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SupplyState {
+    /// Supply kind: "ideal" | "bench" | "wall" | "usb" | "battery".
+    pub kind: String,
+    /// Last measured rail current delivered into the net (A).
+    pub current_a: f64,
+    /// Battery state-of-charge (0..1); 1.0 for non-depleting supplies.
+    pub soc: f64,
+}
+
+/// Serde-friendly mirror of the engine's `PowerSupply` for the wire (Feature
+/// 1). The engine maps this onto its internal behavioral supply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PowerSupplyConfig {
+    /// Ideal constant-voltage rail.
+    Ideal { volts: f64 },
+    /// Bench PSU: constant voltage with constant-current foldback.
+    Bench { volts: f64, current_limit_a: f64 },
+    /// Wall adapter: nominal volts behind output resistance, with ripple.
+    Wall {
+        volts: f64,
+        r_out_ohms: f64,
+        ripple_vpp: f64,
+        ripple_hz: f64,
+    },
+    /// USB source: 5 V with droop and a hard foldback at the spec limit.
+    Usb { spec: UsbSpecConfig },
+    /// Battery pack: cells in series, draining a capacity from an initial SoC.
+    Battery {
+        chemistry: ChemistryConfig,
+        cells: u32,
+        capacity_mah: f64,
+        soc: f64,
+        r_internal_ohms: f64,
+    },
+}
+
+/// USB power profile (wire mirror).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsbSpecConfig {
+    /// 5 V, 0.5 A.
+    V5_0_5a,
+    /// 5 V, 1.5 A.
+    V5_1_5a,
+    /// 5 V, 3.0 A.
+    V5_3a,
+}
+
+/// Battery chemistry (wire mirror).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChemistryConfig {
+    LiIon,
+    Alkaline,
+    NiMh,
+    LiFePo4,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -76,6 +168,12 @@ pub struct SolverControls {
     /// 0.0..=1.0 granularity dial: 1.0 full physics, lower trades accuracy
     /// for speed (larger tolerances, coarser event resolution).
     pub granularity: f64,
+    /// When true, faults mutate the bound circuit (devices open/short) and the
+    /// sim keeps running so the consequence is visible. Default false: faults
+    /// are reported continuously but the circuit is untouched. Additive;
+    /// older clients omit it and get the safe default.
+    #[serde(default)]
+    pub destructive_faults: bool,
 }
 
 impl Default for SolverControls {
@@ -88,6 +186,7 @@ impl Default for SolverControls {
             integration: "trap".into(),
             fixed_dt: 0.0,
             granularity: 1.0,
+            destructive_faults: false,
         }
     }
 }
@@ -107,6 +206,8 @@ pub enum ClientMessage {
     /// Drive an alternative input source bound to a net (slider, signal
     /// generator, file). The engine decides what "value" means per source.
     SetInput { source: String, value: f64 },
+    /// Configure the power supply driving a supply net (Feature 1).
+    SetPowerSupply { net: String, supply: PowerSupplyConfig },
     AddProbe { net: String },
     RemoveProbe { net: String },
 }
