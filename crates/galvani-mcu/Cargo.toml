@@ -3,5 +3,15 @@ name = "galvani-mcu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
+description = "Generalized MCU emulation bridge (simavr-backed AVR)"
 
 [dependencies]
+anyhow = { workspace = true }
+libc = "0.2"
+
+[build-dependencies]
+bindgen = "0.71"
+pkg-config = "0.3"
+
+[dev-dependencies]
