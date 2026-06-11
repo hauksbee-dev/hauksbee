@@ -54,6 +54,7 @@ export class Board3DViewer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 2.2
     this.renderer.toneMappingExposure = 1.2
 
     // Scene
