@@ -23,12 +23,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use galvani_ir::{Circuit, Device, NodeId};
+use galvani_ir::{Circuit, Device, DeviceId, NodeId};
 use galvani_mcu::{AvrMcu, Mcu, PinId};
-use galvani_solve::{SolverOptions, Transient};
+use galvani_solve::{Layout, SolverOptions, Transient};
 
 use crate::binder::{BoundBoard, McuBinding};
 use crate::digital::DigitalComponent;
+use crate::power_supply::{PowerSupply, SupplyLeg};
+use crate::stress::{FaultEvent, StressMonitor};
 
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
@@ -59,6 +61,17 @@ pub struct Scheduler {
     mcus: Vec<LiveMcu>,
     /// Latest solved node voltages, indexed by `NodeId.0`.
     pub node_volts: Vec<f64>,
+    /// Latest solved branch currents, indexed by branch unknown (after nodes).
+    /// `branch_x[branch_index]`; map a device to its branch with [`Layout`].
+    branch_x: Vec<f64>,
+    /// Frozen MNA unknown layout for the current circuit (branch lookup).
+    layout: Layout,
+    /// Configurable power supplies, updated between chunks (Feature 1).
+    pub supplies: Vec<SupplyLeg>,
+    /// Fault / stress monitor, evaluated after each chunk (Feature 2).
+    pub stress: StressMonitor,
+    /// Faults raised since the last frame drain.
+    faults_pending: Vec<FaultEvent>,
     pub chunk_s: f64,
     pub opts: SolverOptions,
     pub sim_time: f64,
@@ -99,6 +112,8 @@ impl Scheduler {
             net_nodes,
             digital,
             mcus,
+            supplies,
+            device_meta,
             ..
         } = bound;
 
@@ -109,12 +124,19 @@ impl Scheduler {
         }
 
         let n_nodes = circuit.node_count();
+        let layout = Layout::new(&circuit);
+        let n_branch = layout.size.saturating_sub(layout.n_nodes);
         Ok(Scheduler {
             circuit,
             net_nodes,
             digital,
             mcus: live,
             node_volts: vec![0.0; n_nodes],
+            branch_x: vec![0.0; n_branch],
+            layout,
+            supplies,
+            stress: StressMonitor::new(device_meta),
+            faults_pending: Vec::new(),
             chunk_s: DEFAULT_CHUNK_S,
             opts,
             sim_time: 0.0,
@@ -197,12 +219,62 @@ impl Scheduler {
             }
         }
 
-        // 3. Analog: solve a transient over the chunk; read final voltages.
+        // 2b. Update configurable power supplies from the rail current measured
+        // in the *previous* chunk, setting this chunk's commanded voltage (the
+        // PinDriver pattern: behavioral source updated between solver chunks).
+        self.update_supplies(chunk);
+
+        // 3. Analog: solve a transient over the chunk; read final voltages and
+        // branch currents.
         self.solve_chunk(chunk);
 
         // 4. Update running stats and advance time.
         self.sim_time += chunk;
         self.update_stats();
+
+        // 6. Fault / stress monitor: evaluate every device against its ratings
+        // using this chunk's solved operating point (may mutate the circuit in
+        // destructive mode).
+        self.evaluate_faults();
+    }
+
+    /// Recompute each supply's commanded voltage from its last-measured rail
+    /// current and write it onto the supply's `Vsource`.
+    fn update_supplies(&mut self, chunk: f64) {
+        if self.supplies.is_empty() {
+            return;
+        }
+        let t = self.sim_time;
+        for s in &mut self.supplies {
+            let i = self
+                .layout
+                .branch(s.vsource)
+                .and_then(|b| self.branch_x.get(b.saturating_sub(self.layout.n_nodes)).copied())
+                .unwrap_or(0.0);
+            // Branch current of a Vsource flows p->n internally; the current
+            // *delivered to the net* is the negative of that. Use magnitude.
+            s.update(&mut self.circuit, i.abs(), t, chunk);
+        }
+    }
+
+    /// Evaluate the stress monitor over the chunk just solved.
+    fn evaluate_faults(&mut self) {
+        if self.stress.device_count() == 0 {
+            return;
+        }
+        let volts = self.node_volts.clone();
+        let branch = self.branch_x.clone();
+        let layout = self.layout.clone();
+        let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+        let branch_current = |id: DeviceId| -> Option<f64> {
+            layout
+                .branch(id)
+                .and_then(|b| branch.get(b.saturating_sub(layout.n_nodes)).copied())
+        };
+        let new = self
+            .stress
+            .evaluate(&mut self.circuit, &node_v, &branch_current, self.sim_time);
+        self.faults_pending.extend(new);
     }
 
     fn solve_chunk(&mut self, chunk: f64) {
@@ -222,6 +294,12 @@ impl Scheduler {
                 self.node_volts[0] = 0.0;
                 for node in 1..n_nodes {
                     self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
+                }
+                // Branch currents follow the node block in layout order.
+                let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
+                self.branch_x.resize(n_branch, 0.0);
+                for b in 0..n_branch {
+                    self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
                 }
             }
             Err(_) => {
@@ -317,6 +395,55 @@ impl Scheduler {
             .iter()
             .map(|d| (d.reference.clone(), d.state_summary()))
             .collect()
+    }
+
+    /// Drain the faults raised since the last call (for SimFrame).
+    pub fn drain_faults(&mut self) -> Vec<FaultEvent> {
+        std::mem::take(&mut self.faults_pending)
+    }
+
+    /// Enable or disable destructive faulting (mutate the circuit on fault).
+    pub fn set_destructive_faults(&mut self, on: bool) {
+        self.stress.destructive = on;
+    }
+
+    /// Configure the power supply on a named supply net. Returns true if a
+    /// supply leg for that net existed and was reconfigured.
+    pub fn set_power_supply(&mut self, net: &str, supply: PowerSupply) -> bool {
+        for s in &mut self.supplies {
+            if s.net_name == net {
+                s.reconfigure(&mut self.circuit, supply);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Names of the configurable supply nets, in stable order.
+    pub fn supply_nets(&self) -> Vec<String> {
+        self.supplies.iter().map(|s| s.net_name.clone()).collect()
+    }
+
+    /// Live supply readout per net: (kind label, last rail current A, SoC).
+    pub fn supply_states(&self) -> HashMap<String, (String, f64, f64)> {
+        self.supplies
+            .iter()
+            .map(|s| {
+                (
+                    s.net_name.clone(),
+                    (
+                        s.supply.kind_label().to_string(),
+                        s.last_current_a,
+                        s.supply.soc(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// Live per-component stress fraction (0..1) for heat-mapping.
+    pub fn stress_states(&self) -> HashMap<String, f64> {
+        self.stress.stress_by_ref().clone()
     }
 }
 

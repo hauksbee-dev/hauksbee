@@ -23,9 +23,13 @@ pub mod binder;
 pub mod digital;
 pub mod drivers;
 pub mod engine;
+pub mod power_supply;
 pub mod report;
 pub mod scheduler;
+pub mod stress;
 
 pub use binder::{bind_board, BoundBoard};
 pub use engine::GalvaniEngine;
+pub use power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
+pub use stress::{FaultEvent, FaultKind, StressMonitor};

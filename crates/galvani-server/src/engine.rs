@@ -2,7 +2,7 @@
 //! the real circuit engine plugs in behind this trait, and a lightweight
 //! demo engine exists so the UI stack can run before full integration.
 
-use crate::protocol::{BoardInfo, SimFrame, SolverControls};
+use crate::protocol::{BoardInfo, PowerSupplyConfig, SimFrame, SolverControls};
 
 pub trait Engine: Send + 'static {
     fn board_info(&self) -> BoardInfo;
@@ -15,6 +15,9 @@ pub trait Engine: Send + 'static {
     fn serial(&mut self, mcu: &str, data: &[u8]);
     /// Drive a bound input source.
     fn set_input(&mut self, source: &str, value: f64);
+    /// Configure the power supply on a supply net (Feature 1). Default no-op
+    /// for engines without configurable supplies.
+    fn set_power_supply(&mut self, _net: &str, _supply: PowerSupplyConfig) {}
 }
 
 /// Demo engine: an emulated AVR running real firmware with a synthetic
@@ -72,6 +75,7 @@ impl Engine for McuDemoEngine {
             nets: vec!["D13_LED".into(), "A0".into()],
             component_kinds: [("U1".to_string(), "mcu".to_string())].into(),
             mcus: vec![("U1".into(), "simavr:atmega328p".into())],
+            power_supplies: Default::default(),
         }
     }
 
@@ -101,6 +105,8 @@ impl Engine for McuDemoEngine {
                 [("U1".to_string(), uart)].into()
             },
             net_currents: Default::default(),
+            faults: Default::default(),
+            supply_states: Default::default(),
         }
     }
 

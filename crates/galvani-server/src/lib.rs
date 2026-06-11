@@ -165,6 +165,9 @@ async fn sim_loop(
                     ClientMessage::SetInput { source, value } => {
                         engine.set_input(&source, value);
                     }
+                    ClientMessage::SetPowerSupply { net, supply } => {
+                        engine.set_power_supply(&net, supply);
+                    }
                     ClientMessage::LoadBoard { .. }
                     | ClientMessage::AddProbe { .. }
                     | ClientMessage::RemoveProbe { .. } => {

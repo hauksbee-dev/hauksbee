@@ -8,10 +8,14 @@ use std::path::Path;
 use galvani_extract::ExtractedBoard;
 use galvani_models::ModelLibrary;
 use galvani_server::engine::Engine;
-use galvani_server::protocol::{BoardInfo, SimFrame, SolverControls};
+use galvani_server::protocol::{
+    BoardInfo, ChemistryConfig, FaultInfo, PowerSupplyConfig, SimFrame, SolverControls,
+    SupplyState, UsbSpecConfig,
+};
 use galvani_solve::{Integration, SolverOptions, StepControl};
 
 use crate::binder::{bind_board, BoundBoard};
+use crate::power_supply::{Chemistry, PowerSupply, UsbSpec};
 use crate::report::BindReport;
 use crate::scheduler::Scheduler;
 
@@ -94,6 +98,12 @@ impl Engine for GalvaniEngine {
             nets: self.net_names.clone(),
             component_kinds: self.component_kinds.clone(),
             mcus: self.mcu_backends.clone(),
+            power_supplies: self
+                .sched
+                .supplies
+                .iter()
+                .map(|s| (s.net_name.clone(), supply_to_config(&s.supply)))
+                .collect(),
         }
     }
 
@@ -101,6 +111,42 @@ impl Engine for GalvaniEngine {
         let result = self.sched.step(dt);
         let mut component_states = self.sched.mcu_states();
         component_states.extend(self.sched.digital_states());
+        // Fold per-component stress (0..1) into the component-state maps so the
+        // UI can heat-map parts approaching their ratings.
+        for (reference, stress) in self.sched.stress_states() {
+            component_states
+                .entry(reference)
+                .or_default()
+                .insert("stress".to_string(), stress);
+        }
+        let faults = self
+            .sched
+            .drain_faults()
+            .into_iter()
+            .map(|f| FaultInfo {
+                component: f.component,
+                kind: f.kind.as_str().to_string(),
+                value: f.value,
+                limit: f.limit,
+                t: f.t,
+                destroyed: f.destroyed,
+            })
+            .collect();
+        let supply_states = self
+            .sched
+            .supply_states()
+            .into_iter()
+            .map(|(net, (kind, current_a, soc))| {
+                (
+                    net,
+                    SupplyState {
+                        kind,
+                        current_a,
+                        soc,
+                    },
+                )
+            })
+            .collect();
         SimFrame {
             t: result.sim_time,
             realtime_factor: 1.0,
@@ -108,6 +154,8 @@ impl Engine for GalvaniEngine {
             component_states,
             uart: result.uart,
             net_currents: Default::default(),
+            faults,
+            supply_states,
         }
     }
 
@@ -121,6 +169,7 @@ impl Engine for GalvaniEngine {
     fn set_controls(&mut self, controls: SolverControls) {
         self.controls = controls.clone();
         self.sched.opts = controls_to_options(&controls);
+        self.sched.set_destructive_faults(controls.destructive_faults);
         if controls.fixed_dt > 0.0 {
             self.sched.chunk_s = controls.fixed_dt;
         }
@@ -136,6 +185,110 @@ impl Engine for GalvaniEngine {
 
     fn set_input(&mut self, source: &str, value: f64) {
         self.sched.set_input(source, value);
+    }
+
+    fn set_power_supply(&mut self, net: &str, supply: PowerSupplyConfig) {
+        self.sched.set_power_supply(net, config_to_supply(supply));
+    }
+}
+
+/// Map a wire [`PowerSupplyConfig`] onto the engine's behavioral [`PowerSupply`].
+pub fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
+    match c {
+        PowerSupplyConfig::Ideal { volts } => PowerSupply::Ideal { volts },
+        PowerSupplyConfig::Bench {
+            volts,
+            current_limit_a,
+        } => PowerSupply::Bench {
+            volts,
+            current_limit_a,
+        },
+        PowerSupplyConfig::Wall {
+            volts,
+            r_out_ohms,
+            ripple_vpp,
+            ripple_hz,
+        } => PowerSupply::Wall {
+            volts,
+            r_out_ohms,
+            ripple_vpp,
+            ripple_hz,
+        },
+        PowerSupplyConfig::Usb { spec } => PowerSupply::Usb {
+            spec: match spec {
+                UsbSpecConfig::V5_0_5a => UsbSpec::V5_0_5A,
+                UsbSpecConfig::V5_1_5a => UsbSpec::V5_1_5A,
+                UsbSpecConfig::V5_3a => UsbSpec::V5_3A,
+            },
+        },
+        PowerSupplyConfig::Battery {
+            chemistry,
+            cells,
+            capacity_mah,
+            soc,
+            r_internal_ohms,
+        } => PowerSupply::Battery {
+            chemistry: match chemistry {
+                ChemistryConfig::LiIon => Chemistry::LiIon,
+                ChemistryConfig::Alkaline => Chemistry::Alkaline,
+                ChemistryConfig::NiMh => Chemistry::NiMh,
+                ChemistryConfig::LiFePo4 => Chemistry::LiFePO4,
+            },
+            cells,
+            capacity_mah,
+            soc,
+            r_internal_ohms,
+        },
+    }
+}
+
+/// Map the engine's [`PowerSupply`] back to a wire [`PowerSupplyConfig`].
+pub fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
+    match s {
+        PowerSupply::Ideal { volts } => PowerSupplyConfig::Ideal { volts: *volts },
+        PowerSupply::Bench {
+            volts,
+            current_limit_a,
+        } => PowerSupplyConfig::Bench {
+            volts: *volts,
+            current_limit_a: *current_limit_a,
+        },
+        PowerSupply::Wall {
+            volts,
+            r_out_ohms,
+            ripple_vpp,
+            ripple_hz,
+        } => PowerSupplyConfig::Wall {
+            volts: *volts,
+            r_out_ohms: *r_out_ohms,
+            ripple_vpp: *ripple_vpp,
+            ripple_hz: *ripple_hz,
+        },
+        PowerSupply::Usb { spec } => PowerSupplyConfig::Usb {
+            spec: match spec {
+                UsbSpec::V5_0_5A => UsbSpecConfig::V5_0_5a,
+                UsbSpec::V5_1_5A => UsbSpecConfig::V5_1_5a,
+                UsbSpec::V5_3A => UsbSpecConfig::V5_3a,
+            },
+        },
+        PowerSupply::Battery {
+            chemistry,
+            cells,
+            capacity_mah,
+            soc,
+            r_internal_ohms,
+        } => PowerSupplyConfig::Battery {
+            chemistry: match chemistry {
+                Chemistry::LiIon => ChemistryConfig::LiIon,
+                Chemistry::Alkaline => ChemistryConfig::Alkaline,
+                Chemistry::NiMh => ChemistryConfig::NiMh,
+                Chemistry::LiFePO4 => ChemistryConfig::LiFePo4,
+            },
+            cells: *cells,
+            capacity_mah: *capacity_mah,
+            soc: *soc,
+            r_internal_ohms: *r_internal_ohms,
+        },
     }
 }
 
