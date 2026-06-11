@@ -6,7 +6,7 @@
 
 import { serve } from 'bun'
 
-const PORT = 3002
+const PORT = Number(process.env.MOCK_PORT ?? 3002)
 
 const DEFAULT_CONTROLS = {
   temperature_c: 27.0,
@@ -33,8 +33,8 @@ const clients = new Set<import('bun').ServerWebSocket<unknown>>()
 function boardInfo() {
   return JSON.stringify({
     type: 'BoardInfo',
-    name: 'demo',
-    board_url: '/boards/demo.kicad_pcb',
+    name: process.env.MOCK_BOARD ?? 'demo',
+    board_url: `/boards/${process.env.MOCK_BOARD ?? 'demo'}.kicad_pcb`,
     num_components: 1,
     num_nets: 2,
     nets: ['D13_LED', 'A0'],

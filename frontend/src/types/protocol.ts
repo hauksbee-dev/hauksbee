@@ -30,6 +30,19 @@ export interface BoardInfoMsg {
   component_kinds: Record<string, string>
   /** [(ref, backend_name), ...] -- serialized as nested arrays */
   mcus: [string, string][]
+  /** Future: list of power supply net names. Optional chaining required. */
+  power_supplies?: string[]
+  /** Future: URL to the pre-exported GLB for 3D view. Optional chaining required. */
+  glb_url?: string
+}
+
+export interface SimFault {
+  component: string
+  fault_kind: string
+  value: number
+  limit: number
+  /** Simulation time when fault was detected */
+  t: number
 }
 
 export interface SimFrame {
@@ -45,6 +58,10 @@ export interface SimFrame {
   uart: Record<string, number[]>
   /** Per-net current magnitude (A), optional */
   net_currents?: Record<string, number>
+  /** Future: per-component faults. Optional chaining required. */
+  faults?: SimFault[]
+  /** Future: power supply state of charge per net. Optional chaining required. */
+  power_supply_soc?: Record<string, number>
 }
 
 export interface StatusMsg {
@@ -84,3 +101,5 @@ export type ClientMessage =
   | { type: 'SetInput'; source: string; value: number }
   | { type: 'AddProbe'; net: string }
   | { type: 'RemoveProbe'; net: string }
+  /** Future: configure a power supply on a net. Gate on BoardInfo.power_supplies presence. */
+  | { type: 'SetPowerSupply'; net: string; supply: Record<string, unknown> }

@@ -160,6 +160,46 @@ function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: st
 export interface RenderOptions {
   highlightNets?: Set<string>
   dimOthers?: boolean
+  /** net name → voltage, used to tint copper traces */
+  netVoltages?: Map<string, number>
+  /** References of faulted components for pulsing red highlight */
+  faultedRefs?: Set<string>
+  /** Animation time in seconds (for pulsing effects) */
+  animTime?: number
+}
+
+/**
+ * Compute a tinted copper colour from a net voltage.
+ * 0 V     = base layer colour (pass-through)
+ * +5 V    = warm bright (#ffb347 blended with base)
+ * negative= cool blue (#60a0ff blended with base)
+ * Smooth lerp; only applied to nets present in netVoltages.
+ */
+function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string {
+  const t = Math.max(-1, Math.min(1, voltage / maxV))  // -1..1
+
+  // Parse base color (assumes #rrggbb format)
+  const br = parseInt(baseColor.slice(1, 3), 16)
+  const bg = parseInt(baseColor.slice(3, 5), 16)
+  const bb = parseInt(baseColor.slice(5, 7), 16)
+
+  let tr: number, tg: number, tb: number, strength: number
+  if (t > 0) {
+    // Warm: #ffb347
+    tr = 0xff; tg = 0xb3; tb = 0x47
+    strength = t * 0.55
+  } else if (t < 0) {
+    // Cool blue: #60a0ff
+    tr = 0x60; tg = 0xa0; tb = 0xff
+    strength = (-t) * 0.55
+  } else {
+    return baseColor
+  }
+
+  const r = Math.round(br + (tr - br) * strength)
+  const g = Math.round(bg + (tg - bg) * strength)
+  const b = Math.round(bb + (tb - bb) * strength)
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
 }
 
 export function renderBoard(
@@ -174,8 +214,14 @@ export function renderBoard(
   ctx.fillStyle = '#020617'
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
-  const { highlightNets, dimOthers } = opts
+  const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0 } = opts
   const hasHighlight = highlightNets && highlightNets.size > 0
+  const hasVoltages = netVoltages && netVoltages.size > 0
+
+  // Pulsing factor for fault highlight (0..1, 1Hz)
+  const faultPulse = faultedRefs && faultedRefs.size > 0
+    ? 0.4 + 0.6 * Math.abs(Math.sin(animTime * Math.PI * 2))
+    : 0
 
   // ── Board graphics, grouped by layer ──
   const layersToRender = [...LAYER_ORDER]
@@ -297,8 +343,21 @@ export function renderBoard(
         const isHighlighted = hasHighlight && s.netName != null && highlightNets!.has(s.netName)
         const alpha = hasHighlight && dimOthers && !isHighlighted ? 0.15 : 1
         if (alpha < 1) ctx.globalAlpha = alpha
-        const trackColor = isHighlighted ? '#ffffff' : color
-        const trackGlow = isHighlighted ? '#80c0ff' : glow
+
+        let trackColor = color
+        let trackGlow = glow
+        if (isHighlighted) {
+          trackColor = '#ffffff'
+          trackGlow = '#80c0ff'
+        } else if (hasVoltages && s.netName && netVoltages!.has(s.netName)) {
+          const v = netVoltages!.get(s.netName)!
+          trackColor = voltageTintColor(color, v)
+          // Bloom-like glow on active traces
+          if (Math.abs(v) > 0.05) {
+            trackGlow = v > 0 ? '#ffb34788' : '#60a0ff88'
+          }
+        }
+
         const lw = lineWidth(cam, s.width)
         ctx.beginPath()
         setStroke(ctx, trackColor, trackGlow, lw)
@@ -315,8 +374,18 @@ export function renderBoard(
         const isHighlighted = hasHighlight && a.netName != null && highlightNets!.has(a.netName)
         const alpha = hasHighlight && dimOthers && !isHighlighted ? 0.15 : 1
         if (alpha < 1) ctx.globalAlpha = alpha
-        const trackColor = isHighlighted ? '#ffffff' : color
-        const trackGlow = isHighlighted ? '#80c0ff' : glow
+
+        let trackColor = color
+        let trackGlow = glow
+        if (isHighlighted) {
+          trackColor = '#ffffff'
+          trackGlow = '#80c0ff'
+        } else if (hasVoltages && a.netName && netVoltages!.has(a.netName)) {
+          const v = netVoltages!.get(a.netName)!
+          trackColor = voltageTintColor(color, v)
+          if (Math.abs(v) > 0.05) trackGlow = v > 0 ? '#ffb34788' : '#60a0ff88'
+        }
+
         drawArc(ctx, cam, a.start, a.mid, a.end, trackColor, trackGlow, a.width)
         ctx.globalAlpha = 1
       }
@@ -348,12 +417,37 @@ export function renderBoard(
 
   // ── Pads ──
   for (const fp of board.footprints) {
+    const isFaulted = faultedRefs?.has(fp.ref) ?? false
     for (const pad of fp.pads) {
       const isHighlighted = hasHighlight && pad.netName != null && highlightNets!.has(pad.netName)
-      const alpha = hasHighlight && dimOthers && !isHighlighted ? 0.15 : 1
-      const padColor = isHighlighted ? '#ffdd44' : PAD_COLOR
-      const padGlow = isHighlighted ? '#ffe080' : PAD_GLOW
+      const alpha = hasHighlight && dimOthers && !isHighlighted && !isFaulted ? 0.15 : 1
+      let padColor = PAD_COLOR
+      let padGlow = PAD_GLOW
+      if (isFaulted) {
+        padColor = `rgba(248,${Math.round(50 + faultPulse * 50)},50,1)`
+        padGlow = '#ff2222'
+      } else if (isHighlighted) {
+        padColor = '#ffdd44'
+        padGlow = '#ffe080'
+      }
       drawPad(ctx, cam, pad, padColor, padGlow, alpha)
+    }
+  }
+
+  // ── Faulted footprint ring overlays ──
+  if (faultedRefs && faultedRefs.size > 0) {
+    for (const fp of board.footprints) {
+      if (!faultedRefs.has(fp.ref)) continue
+      const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
+      const ringR = Math.max(8, 6 * cam.scale)
+      ctx.beginPath()
+      ctx.arc(fpX, fpY, ringR * (1 + faultPulse * 0.3), 0, Math.PI * 2)
+      ctx.strokeStyle = `rgba(248,71,71,${0.3 + faultPulse * 0.5})`
+      ctx.lineWidth = 2
+      ctx.shadowColor = '#ff2222'
+      ctx.shadowBlur = 10 * faultPulse
+      ctx.stroke()
+      ctx.shadowBlur = 0
     }
   }
 }
