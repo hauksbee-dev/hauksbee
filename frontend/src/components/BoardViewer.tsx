@@ -5,7 +5,7 @@ import { makeCamera, zoomCamera, panCamera, screenToWorld } from '../lib/camera'
 import type { Camera } from '../lib/camera'
 import { renderBoard, renderOverlay } from '../lib/board-renderer'
 import type { OverlayData } from '../lib/board-renderer'
-import type { SimFrame } from '../types/protocol'
+import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 
 interface FootprintInfo {
   ref: string
@@ -18,6 +18,7 @@ interface FootprintInfo {
 interface BoardViewerProps {
   boardFile: string
   frame: SimFrame | null
+  boardInfo?: BoardInfoMsg | null
   /** Externally chosen net to highlight (e.g., from probe click) */
   selectedNet?: string | null
   onFootprintClick?: (info: FootprintInfo) => void
@@ -26,7 +27,7 @@ interface BoardViewerProps {
 const PARTICLE_COUNT = 4
 const PARTICLE_SPEED = 0.3 // t units per second
 
-export function BoardViewer({ boardFile, frame, selectedNet, onFootprintClick }: BoardViewerProps) {
+export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -241,6 +242,8 @@ export function BoardViewer({ boardFile, frame, selectedNet, onFootprintClick }:
         highlightNets: hlNets,
         particles,
         probe: probeData,
+        componentStates: frame?.component_states,
+        componentKinds: boardInfo?.component_kinds,
       }
 
       if (!board) { animFrame.current = requestAnimationFrame(tick); return }
@@ -255,7 +258,7 @@ export function BoardViewer({ boardFile, frame, selectedNet, onFootprintClick }:
 
     animFrame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animFrame.current)
-  }, [board, selectedNet, netIndex, frame])
+  }, [board, selectedNet, netIndex, frame, boardInfo])
 
   // ── Mouse / wheel handlers ──
   const handleWheel = useCallback((e: React.WheelEvent) => {

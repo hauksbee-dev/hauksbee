@@ -249,11 +249,22 @@ function parseFootprint(node: SNode[], nets: Map<string, string>): Footprint {
   let ref = ''
   let value = ''
   for (const c of node) {
-    if (!isList(c) || head(c) !== 'property') continue
-    const propName = str(c[1])
-    const propVal = str(c[2])
-    if (propName === 'Reference') ref = propVal
-    if (propName === 'Value') value = propVal
+    if (!isList(c)) continue
+    if (head(c) === 'property') {
+      const propName = str(c[1])
+      const propVal = str(c[2])
+      if (propName === 'Reference') ref = propVal
+      if (propName === 'Value') value = propVal
+    } else if (head(c) === 'fp_text') {
+      // Legacy KiCad 5/6 format: (fp_text reference "U1" ...)
+      const kind = str(c[1])
+      const val = str(c[2])
+      if (kind === 'reference' && !ref) ref = val
+      if (kind === 'value' && !value) value = val
+    } else if (head(c) === 'reference') {
+      // Even older: (reference "U1")
+      if (!ref) ref = str(c[1])
+    }
   }
 
   const pads: Pad[] = []

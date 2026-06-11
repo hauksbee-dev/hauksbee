@@ -1,17 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { ServerMessage, SimFrame, BoardInfoMsg, ClientMessage } from '../types/protocol'
+import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, ClientMessage } from '../types/protocol'
+
+const WS_URL = `ws://${window.location.hostname}:3001/ws`
 
 export interface SimulationState {
   connected: boolean
   boardInfo: BoardInfoMsg | null
   frame: SimFrame | null
+  status: StatusMsg | null
+  probeData: ProbeDataMsg[]
   send: (msg: ClientMessage) => void
 }
 
-export function useSimulation(wsUrl: string): SimulationState {
+export function useSimulation(): SimulationState {
   const [connected, setConnected] = useState(false)
   const [boardInfo, setBoardInfo] = useState<BoardInfoMsg | null>(null)
   const [frame, setFrame] = useState<SimFrame | null>(null)
+  const [status, setStatus] = useState<StatusMsg | null>(null)
+  const [probeData, setProbeData] = useState<ProbeDataMsg[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
   const send = useCallback((msg: ClientMessage) => {
@@ -28,13 +34,13 @@ export function useSimulation(wsUrl: string): SimulationState {
     function connect() {
       if (!alive) return
 
-      const ws = new WebSocket(wsUrl)
+      const ws = new WebSocket(WS_URL)
       wsRef.current = ws
 
       ws.onopen = () => {
         if (!alive) { ws.close(); return }
         setConnected(true)
-        ws.send(JSON.stringify({ type: 'GetBoardInfo' } satisfies ClientMessage))
+        // Server sends BoardInfo automatically on connect -- no GetBoardInfo needed
       }
 
       ws.onmessage = (ev: MessageEvent) => {
@@ -45,12 +51,25 @@ export function useSimulation(wsUrl: string): SimulationState {
         switch (msg.type) {
           case 'BoardInfo': setBoardInfo(msg); break
           case 'SimFrame': setFrame(msg); break
+          case 'Status': setStatus(msg); break
+          case 'ProbeData':
+            setProbeData(prev => {
+              const filtered = prev.filter(p => p.net !== msg.net)
+              return [...filtered, msg]
+            })
+            break
+          case 'Error':
+            console.warn('[galvani] server error:', msg.message)
+            break
         }
       }
 
       ws.onclose = () => {
         if (!alive) return
         setConnected(false)
+        setBoardInfo(null)
+        setFrame(null)
+        setStatus(null)
         reconnectTimer = setTimeout(connect, 2000)
       }
 
@@ -66,7 +85,7 @@ export function useSimulation(wsUrl: string): SimulationState {
       if (reconnectTimer) clearTimeout(reconnectTimer)
       wsRef.current?.close()
     }
-  }, [wsUrl])
+  }, [])
 
-  return { connected, boardInfo, frame, send }
+  return { connected, boardInfo, frame, status, probeData, send }
 }

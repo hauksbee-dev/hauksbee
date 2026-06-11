@@ -1,5 +1,19 @@
-// WebSocket protocol types -- mirrors galvani-server protocol shapes.
+// WebSocket protocol types -- mirrors galvani-server protocol.rs exactly.
 // Server uses serde tag = "type" so every message has a `type` discriminant.
+
+// ============================================================
+// Shared structures
+// ============================================================
+
+export interface SolverControls {
+  temperature_c: number   // -40..125°C
+  parasitics: boolean
+  junction_caps: boolean
+  tolerances: boolean
+  integration: 'trap' | 'gear2'
+  fixed_dt: number        // seconds; 0 = adaptive
+  granularity: number     // 0..1
+}
 
 // ============================================================
 // Server → Client
@@ -7,34 +21,52 @@
 
 export interface BoardInfoMsg {
   type: 'BoardInfo'
-  num_nets: number
+  name: string
+  board_url: string
   num_components: number
-  board_file: string
+  num_nets: number
+  nets: string[]
+  /** reference -> model kind ("bjt_npn", "mcu", ...) */
+  component_kinds: Record<string, string>
+  /** [(ref, backend_name), ...] -- serialized as nested arrays */
+  mcus: [string, string][]
 }
 
 export interface SimFrame {
   type: 'SimFrame'
-  time_ms: number
-  timestep: number
-  running: boolean
-  speed: number
+  /** Simulation time in seconds */
+  t: number
+  realtime_factor: number
   /** net name → voltage in V */
   net_voltages: Record<string, number>
-  /** component ref → state */
-  component_states: Record<string, ComponentVizState>
-  /** Signal particles: net name → list of t∈[0,1] along the net's segments */
-  signal_particles: Record<string, number[]>
+  /** component ref → state map (keys: "dissipation_mw", "running", "conducting", ...) */
+  component_states: Record<string, Record<string, number>>
+  /** UART bytes since last frame, per MCU reference */
+  uart: Record<string, number[]>
+  /** Per-net current magnitude (A), optional */
+  net_currents?: Record<string, number>
 }
 
-export type ComponentVizState =
-  | { kind: 'ShiftRegister'; bits: boolean[]; value: number }
-  | { kind: 'Dac'; voltage: number; channel: number }
-  | { kind: 'Comparator'; output_high: boolean }
-  | { kind: 'Latch'; q: boolean }
-  | { kind: 'Switch'; closed: boolean }
-  | { kind: 'Generic'; label: string }
+export interface StatusMsg {
+  type: 'Status'
+  running: boolean
+  sim_time: number
+  options: SolverControls
+}
 
-export type ServerMessage = BoardInfoMsg | SimFrame
+export interface ProbeDataMsg {
+  type: 'ProbeData'
+  net: string
+  time: number[]
+  volts: number[]
+}
+
+export interface ErrorMsg {
+  type: 'Error'
+  message: string
+}
+
+export type ServerMessage = BoardInfoMsg | SimFrame | StatusMsg | ProbeDataMsg | ErrorMsg
 
 // ============================================================
 // Client → Server
@@ -43,8 +75,12 @@ export type ServerMessage = BoardInfoMsg | SimFrame
 export type ClientMessage =
   | { type: 'Play' }
   | { type: 'Pause' }
-  | { type: 'Step' }
-  | { type: 'SetSpeed'; speed: number }
-  | { type: 'AddProbe'; net_name: string }
-  | { type: 'RemoveProbe'; net_name: string }
-  | { type: 'GetBoardInfo' }
+  | { type: 'Step'; dt: number }
+  | { type: 'Reset' }
+  | { type: 'SetSpeed'; factor: number }
+  | ({ type: 'SetControls' } & SolverControls)
+  | { type: 'LoadBoard'; path: string }
+  | { type: 'Serial'; mcu: string; data: number[] }
+  | { type: 'SetInput'; source: string; value: number }
+  | { type: 'AddProbe'; net: string }
+  | { type: 'RemoveProbe'; net: string }

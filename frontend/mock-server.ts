@@ -1,93 +1,77 @@
 #!/usr/bin/env bun
 // Mock galvani-server: streams SimFrames at 30fps over WebSocket.
-// Protocol mirrors crates/tarski-server/src/protocol.rs: serde tag="type".
+// Protocol exactly mirrors crates/galvani-server/src/protocol.rs (serde tag="type").
 //
 // Usage: bun run mock-server.ts
-//        (or: bun run mock-server from package.json)
 
 import { serve } from 'bun'
 
 const PORT = 3002
 
-// ── Fake net names that would come from a real board extraction ──
-const NET_NAMES = [
-  'VCC', 'GND', '/MCLR', '/RB0', '/RB1', '/RB2', '/RB3', '/RB4', '/RB5',
-  '/RC0', '/RC1', '/RC2', 'CLK', 'DATA', 'SPI_CS', 'SPI_MOSI', 'SPI_MISO',
-  '/ICSP_CLK', '/ICSP_DAT', 'VREF', 'AGND', 'DVDD', 'AVDD',
-]
-
-const COMP_REFS = ['U1', 'U2', 'C1', 'C2', 'C3', 'R1', 'R2', 'R3', 'R4', 'LED1', 'J1', 'J2']
+const DEFAULT_CONTROLS = {
+  temperature_c: 27.0,
+  parasitics: false,
+  junction_caps: true,
+  tolerances: false,
+  integration: 'trap',
+  fixed_dt: 0.0,
+  granularity: 1.0,
+}
 
 // ── State ──
-let time_ms = 0
-let timestep = 0
+let sim_time = 0
 let running = false
 let speed = 1.0
 let phase = 0
+let controls = { ...DEFAULT_CONTROLS }
+let adc_volts = 2.5
 
 // ── Client connections ──
 const clients = new Set<import('bun').ServerWebSocket<unknown>>()
 
-// ── Board info (sent once on connect) ──
+// ── Board info ──
 function boardInfo() {
   return JSON.stringify({
     type: 'BoardInfo',
-    num_nets: NET_NAMES.length,
-    num_components: COMP_REFS.length,
-    board_file: '/boards/pic_programmer.kicad_pcb',
+    name: 'demo',
+    board_url: '/boards/demo.kicad_pcb',
+    num_components: 1,
+    num_nets: 2,
+    nets: ['D13_LED', 'A0'],
+    component_kinds: { U1: 'mcu' },
+    mcus: [['U1', 'simavr:atmega328p']],
+  })
+}
+
+function statusMsg() {
+  return JSON.stringify({
+    type: 'Status',
+    running,
+    sim_time,
+    options: controls,
   })
 }
 
 // ── Sim frame generator ──
 function makeFrame() {
-  // Generate interesting voltage patterns
-  const net_voltages: Record<string, number> = {}
-  NET_NAMES.forEach((name, i) => {
-    const base = name === 'VCC' ? 5.0
-      : name === 'GND' ? 0.0
-      : name.includes('CLK') ? Math.sin(phase * 3 + i) > 0 ? 3.3 : 0
-      : name.includes('DATA') ? Math.sin(phase * 7 + i) > 0 ? 3.3 : 0
-      : name.startsWith('/R') ? (Math.sin(phase + i * 0.7) * 0.5 + 1.5)
-      : (Math.sin(phase * 0.5 + i) * 0.8 + 1.6)
-    net_voltages[name] = parseFloat(base.toFixed(4))
-  })
-
-  // Signal particles — positions along nets (t ∈ [0, 1])
-  const signal_particles: Record<string, number[]> = {}
-  if (running) {
-    const flowNets = ['CLK', 'DATA', '/ICSP_CLK']
-    flowNets.forEach((n, ni) => {
-      const count = 3
-      const ts: number[] = []
-      for (let i = 0; i < count; i++) {
-        ts.push(((phase * 0.4 + i / count + ni * 0.1) % 1 + 1) % 1)
-      }
-      signal_particles[n] = ts
-    })
+  const led_high = phase % (Math.PI * 2) < Math.PI  // ~5Hz blink
+  const net_voltages: Record<string, number> = {
+    D13_LED: led_high ? 5.0 : 0.0,
+    A0: adc_volts,
   }
 
-  // Component states
-  const component_states: Record<string, object> = {}
-  COMP_REFS.forEach(ref => {
-    if (ref.startsWith('U')) {
-      component_states[ref] = { kind: 'Generic', label: running ? 'active' : 'idle' }
-    } else if (ref === 'LED1') {
-      component_states[ref] = {
-        kind: 'Generic',
-        label: net_voltages['VCC']! > 4.5 ? 'ON' : 'OFF',
-      }
-    }
-  })
+  const component_states: Record<string, Record<string, number>> = {
+    U1: { running: 1.0 },
+  }
 
   return JSON.stringify({
     type: 'SimFrame',
-    time_ms: parseFloat(time_ms.toFixed(3)),
-    timestep,
-    running,
-    speed,
+    t: parseFloat(sim_time.toFixed(6)),
+    realtime_factor: 1.0,
     net_voltages,
     component_states,
-    signal_particles,
+    uart: {},
+    net_currents: {},
   })
 }
 
@@ -98,30 +82,108 @@ function handleMessage(ws: import('bun').ServerWebSocket<unknown>, raw: string) 
   catch { return }
 
   switch (msg.type) {
-    case 'Play':    running = true; console.log('[mock] play'); break
-    case 'Pause':   running = false; console.log('[mock] pause'); break
-    case 'Step':    if (!running) { time_ms += 1 / 30; timestep++ }; break
-    case 'SetSpeed': speed = (msg.speed as number) ?? 1; break
-    case 'GetBoardInfo': ws.send(boardInfo()); break
-    case 'AddProbe': console.log(`[mock] probe: ${msg.net_name}`); break
-    case 'RemoveProbe': console.log(`[mock] remove probe: ${msg.net_name}`); break
+    case 'Play':
+      running = true
+      console.log('[mock] play')
+      break
+    case 'Pause':
+      running = false
+      console.log('[mock] pause')
+      break
+    case 'Step': {
+      const dt = (msg.dt as number) || (1 / 30)
+      sim_time += dt
+      phase += dt * 2 * Math.PI * 5  // 5Hz
+      ws.send(makeFrame())
+      break
+    }
+    case 'Reset':
+      running = false
+      sim_time = 0
+      phase = 0
+      console.log('[mock] reset')
+      break
+    case 'SetSpeed':
+      speed = (msg.factor as number) ?? 1
+      console.log(`[mock] speed: ${speed}x`)
+      break
+    case 'SetControls':
+      controls = {
+        temperature_c: (msg.temperature_c as number) ?? controls.temperature_c,
+        parasitics: (msg.parasitics as boolean) ?? controls.parasitics,
+        junction_caps: (msg.junction_caps as boolean) ?? controls.junction_caps,
+        tolerances: (msg.tolerances as boolean) ?? controls.tolerances,
+        integration: (msg.integration as string) ?? controls.integration,
+        fixed_dt: (msg.fixed_dt as number) ?? controls.fixed_dt,
+        granularity: (msg.granularity as number) ?? controls.granularity,
+      }
+      break
+    case 'Serial': {
+      const mcu = (msg.mcu as string) ?? 'U1'
+      const data = (msg.data as number[]) ?? []
+      const text = new TextDecoder().decode(new Uint8Array(data))
+      console.log(`[mock] serial <- ${JSON.stringify(text)}`)
+      // Demo responses
+      const responses: Record<string, string> = {
+        'i\n': 'galvani-demo v1\r\n',
+        'v\n': `${Math.round(adc_volts * 1000)} mV\r\n`,
+      }
+      const resp = responses[text]
+      if (resp) {
+        const respBytes = Array.from(new TextEncoder().encode(resp))
+        setTimeout(() => {
+          ws.send(JSON.stringify({
+            type: 'SimFrame',
+            t: sim_time,
+            realtime_factor: 1.0,
+            net_voltages: { D13_LED: 0, A0: adc_volts },
+            component_states: { U1: { running: 1.0 } },
+            uart: { [mcu]: respBytes },
+            net_currents: {},
+          }))
+        }, 20)
+      }
+      break
+    }
+    case 'SetInput':
+      if (msg.source === 'A0') {
+        adc_volts = (msg.value as number) ?? 2.5
+        console.log(`[mock] SetInput A0=${adc_volts}V`)
+      }
+      break
+    case 'AddProbe':
+      console.log(`[mock] AddProbe: ${msg.net}`)
+      break
+    case 'RemoveProbe':
+      console.log(`[mock] RemoveProbe: ${msg.net}`)
+      break
+  }
+
+  // Always broadcast status after a command
+  for (const c of clients) {
+    try { c.send(statusMsg()) } catch { clients.delete(c) }
   }
 }
 
 // ── 30fps broadcast loop ──
 const FRAME_MS = 1000 / 30
+const BLINK_HZ = 5
 setInterval(() => {
   if (clients.size === 0) return
 
   if (running) {
-    time_ms += (FRAME_MS / 1000) * speed
-    timestep++
-    phase += 0.06 * speed
+    const dt = (FRAME_MS / 1000) * speed
+    sim_time += dt
+    phase += dt * 2 * Math.PI * BLINK_HZ
   }
 
   const frame = makeFrame()
+  const status = statusMsg()
   for (const ws of clients) {
-    try { ws.send(frame) } catch { clients.delete(ws) }
+    try {
+      ws.send(frame)
+      ws.send(status)
+    } catch { clients.delete(ws) }
   }
 }, FRAME_MS)
 
@@ -133,6 +195,7 @@ serve({
       clients.add(ws)
       console.log(`[mock] client connected (total: ${clients.size})`)
       ws.send(boardInfo())
+      ws.send(statusMsg())
     },
     close(ws) {
       clients.delete(ws)
