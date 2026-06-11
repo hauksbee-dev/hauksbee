@@ -145,7 +145,7 @@ impl PartitionedTransient {
                         let n = li.n_states();
                         let free: Vec<NodeId> = collect_free_nodes(isl, &li);
                         lin_state.push(vec![0.0; n]);
-                        lin_input_buf.push(vec![0.0; li.inputs().len()]);
+                        lin_input_buf.push(vec![0.0; li.n_inputs_total()]);
                         lin_free_nodes.push(free);
                         linear.push(li);
                     }
@@ -246,11 +246,20 @@ impl PartitionedTransient {
     fn sweep(&mut self, circuit: &Circuit, h: f64, tnext: f64, first: bool) -> Result<(), String> {
         // Linear islands.
         for (idx, li) in self.linear.iter().enumerate() {
-            // Gather inputs.
+            // Gather inputs: boundary voltages, then current-source values
+            // evaluated at the end of the step (ZOH over the interval).
             let inputs = li.inputs();
+            let n_vin = inputs.len();
             let buf = &mut self.lin_input_buf[idx];
             for (k, n) in inputs.iter().enumerate() {
                 buf[k] = self.vbuf[n.0 as usize];
+            }
+            for (k, (id, _, _)) in li.isources().iter().enumerate() {
+                if let galvani_ir::Device::Isource { kind, .. } =
+                    &circuit.devices[id.0 as usize]
+                {
+                    buf[n_vin + k] = kind.eval(tnext);
+                }
             }
             // Advance state only on the first sweep (the exact step); later
             // sweeps just re-read outputs with refreshed inputs.
@@ -272,7 +281,6 @@ impl PartitionedTransient {
             nl.step(h, tnext, first, &self.opts)?;
             nl.write_back(&mut self.vbuf);
         }
-        let _ = circuit;
         Ok(())
     }
 
