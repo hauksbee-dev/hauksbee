@@ -54,10 +54,12 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
       <div
         className="flex flex-col gap-1"
         style={{
-          background: '#0f172a',
-          border: '1px solid #1e293b',
+          background: faults.length > 0 ? 'rgba(30,0,0,0.95)' : '#0f172a',
+          border: faults.length > 0 ? '1px solid #7f1d1d' : '1px solid #1e293b',
           borderRadius: 8,
           overflow: 'hidden',
+          boxShadow: faults.length > 0 ? '0 0 16px rgba(248,71,71,0.15), inset 0 0 20px rgba(127,29,29,0.08)' : 'none',
+          transition: 'all 0.3s ease',
         }}
       >
         <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
@@ -69,8 +71,12 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
           </span>
           {faults.length > 0 && (
             <span
-              className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-              style={{ background: '#7f1d1d', color: '#fca5a5' }}
+              className="text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse"
+              style={{
+                background: '#7f1d1d',
+                color: '#fca5a5',
+                boxShadow: '0 0 6px rgba(248,113,113,0.6)',
+              }}
             >
               {faults.length}
             </span>
@@ -100,27 +106,36 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
                   onClick={() => onFaultComponentSelect?.(isSelected ? null : f.component)}
                   className="flex flex-col gap-0.5 px-3 py-2 cursor-pointer hover:opacity-90"
                   style={{
-                    background: isSelected ? '#3b0a0a' : 'rgba(127,29,29,0.12)',
-                    borderLeft: isSelected ? '2px solid #f87171' : '2px solid #7f1d1d',
+                    background: isSelected ? '#4a0a0a' : 'rgba(127,29,29,0.2)',
+                    borderLeft: isSelected ? '3px solid #f87171' : '3px solid #dc2626',
                     marginBottom: 1,
+                    boxShadow: isSelected ? 'inset 0 0 12px rgba(248,71,71,0.1)' : 'none',
                   }}
                 >
                   <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span style={{ color: '#f87171', fontSize: 10 }}>⚡</span>
+                      <span
+                        className="text-[10px] font-mono font-bold"
+                        style={{ color: '#fca5a5', fontFamily: "'JetBrains Mono', monospace" }}
+                      >
+                        {f.component}
+                      </span>
+                    </div>
                     <span
-                      className="text-[10px] font-mono font-bold"
-                      style={{ color: '#fca5a5', fontFamily: "'JetBrains Mono', monospace" }}
-                    >
-                      {f.component}
-                    </span>
-                    <span
-                      className="text-[9px] px-1.5 py-0.5 rounded"
-                      style={{ background: '#7f1d1d', color: '#fca5a5' }}
+                      className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                      style={{
+                        background: '#991b1b',
+                        color: '#fca5a5',
+                        border: '1px solid #dc2626',
+                      }}
                     >
                       {f.fault_kind}
                     </span>
                   </div>
-                  <div className="text-[9px]" style={{ color: '#94a3b8' }}>
-                    val: {f.value.toFixed(3)} / lim: {f.limit.toFixed(3)} @ {f.t.toFixed(4)}s
+                  <div className="text-[9px] mt-0.5" style={{ color: '#94a3b8' }}>
+                    <span style={{ color: '#f87171' }}>{f.value.toFixed(3)}</span>
+                    <span style={{ color: '#64748b' }}> / lim: {f.limit.toFixed(3)} @ {f.t.toFixed(4)}s</span>
                   </div>
                 </div>
               )
