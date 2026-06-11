@@ -67,10 +67,10 @@ export class Board3DViewer {
     this.camera.lookAt(0.12, 0, -0.08)
 
     // Studio lighting: hemisphere + key + rim + ambient
-    const hemi = new THREE.HemisphereLight(0x6688cc, 0x332211, 0.6)
+    const hemi = new THREE.HemisphereLight(0x88aadd, 0x443322, 1.6)
     this.scene.add(hemi)
 
-    const keyLight = new THREE.DirectionalLight(0xfff5e0, 1.4)
+    const keyLight = new THREE.DirectionalLight(0xfff5e0, 3.2)
     keyLight.position.set(0.3, 0.5, 0.2)
     keyLight.castShadow = true
     keyLight.shadow.mapSize.set(2048, 2048)
