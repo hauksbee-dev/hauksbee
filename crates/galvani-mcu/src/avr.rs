@@ -331,6 +331,12 @@ impl AvrMcu {
         unsafe {
             ffi::avr_init(avr);
             (*avr).frequency = frequency as u32;
+            // simavr defaults the rails to 3.3V; standard Arduino-class
+            // parts run at 5V and the ADC full scale follows AVcc. The
+            // co-sim layer can override via set_rails().
+            (*avr).vcc = 5000;
+            (*avr).avcc = 5000;
+            (*avr).aref = 5000;
         }
 
         let state = Arc::new(Mutex::new(SharedState {
@@ -370,6 +376,16 @@ impl AvrMcu {
     /// Convenience constructor for an ATmega328P at 16 MHz (Arduino Nano/Uno).
     pub fn atmega328p_16mhz() -> Result<Self> {
         Self::new("atmega328p", 16_000_000)
+    }
+
+    /// Set the supply/reference rails in volts (defaults are 5V). The ADC
+    /// full scale follows AVcc/ARef, so a 3.3V board must set these.
+    pub fn set_rails(&mut self, vcc: f64, avcc: f64, aref: f64) {
+        unsafe {
+            (*self.avr).vcc = (vcc * 1000.0).round() as u32;
+            (*self.avr).avcc = (avcc * 1000.0).round() as u32;
+            (*self.avr).aref = (aref * 1000.0).round() as u32;
+        }
     }
 
     /// Register GPIO port hooks for the listed ports.
