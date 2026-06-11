@@ -18,6 +18,12 @@ const DEFAULT_CONTROLS = {
   granularity: 1.0,
 }
 
+// ── Fault demo mode ──
+// Set MOCK_FAULTS=1 to stream a scripted fault sequence:
+//   t=0..2s  → stress climbing on R1
+//   t>2s     → FaultInfo destroyed on R1
+const FAULT_MODE = process.env.MOCK_FAULTS === '1'
+
 // ── State ──
 let sim_time = 0
 let running = false
@@ -31,6 +37,19 @@ const clients = new Set<import('bun').ServerWebSocket<unknown>>()
 
 // ── Board info ──
 function boardInfo() {
+  // Fault mode: expose R1 component so fault highlight is visible
+  if (FAULT_MODE) {
+    return JSON.stringify({
+      type: 'BoardInfo',
+      name: process.env.MOCK_BOARD ?? 'pic_programmer',
+      board_url: `/boards/${process.env.MOCK_BOARD ?? 'pic_programmer'}.kicad_pcb`,
+      num_components: 5,
+      num_nets: 4,
+      nets: ['D13_LED', 'A0', 'VCC', 'GND'],
+      component_kinds: { U1: 'mcu', R1: 'resistor', C1: 'capacitor' },
+      mcus: [],
+    })
+  }
   return JSON.stringify({
     type: 'BoardInfo',
     name: process.env.MOCK_BOARD ?? 'demo',
@@ -53,6 +72,24 @@ function statusMsg() {
 }
 
 // ── Sim frame generator ──
+function makeFaults(): { component: string; fault_kind: string; value: number; limit: number; t: number }[] {
+  if (!FAULT_MODE) return []
+  // Ramp: stress increases from t=0.5s; fault triggers at t=2s
+  if (sim_time < 0.5) return []
+  if (sim_time < 2.5) {
+    // Pre-fault: only stress state (no fault entry yet — shown via component heat in 2D)
+    return []
+  }
+  // Post 2.5s: R1 destroyed
+  return [{
+    component: 'R1',
+    fault_kind: 'overpower',
+    value: parseFloat((4.8 + Math.random() * 0.4).toFixed(3)),
+    limit: 0.25,
+    t: parseFloat(sim_time.toFixed(4)),
+  }]
+}
+
 function makeFrame() {
   const led_high = phase % (Math.PI * 2) < Math.PI  // ~5Hz blink
   const net_voltages: Record<string, number> = {
@@ -64,6 +101,14 @@ function makeFrame() {
     U1: { running: 1.0 },
   }
 
+  // Fault mode: show R1 heating up before the fault fires
+  if (FAULT_MODE && sim_time > 0.5) {
+    const stress = Math.min(1, (sim_time - 0.5) / 2.0)
+    component_states['R1'] = { dissipation_mw: stress * 600 }
+  }
+
+  const faults = makeFaults()
+
   return JSON.stringify({
     type: 'SimFrame',
     t: parseFloat(sim_time.toFixed(6)),
@@ -72,6 +117,7 @@ function makeFrame() {
     component_states,
     uart: {},
     net_currents: {},
+    ...(faults.length > 0 ? { faults } : {}),
   })
 }
 

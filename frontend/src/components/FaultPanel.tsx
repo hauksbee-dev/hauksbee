@@ -134,16 +134,21 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
         {toasts.map(t => (
           <div
             key={t.id}
-            className="px-3 py-2 rounded-lg text-[11px] font-mono animate-pulse"
+            className="px-3 py-2 rounded-lg text-[11px] font-mono fault-toast"
             style={{
-              background: '#7f1d1d',
+              background: 'rgba(127,29,29,0.95)',
               color: '#fca5a5',
               border: '1px solid #f87171',
-              boxShadow: '0 0 12px rgba(248,113,113,0.4)',
+              boxShadow: '0 0 18px rgba(248,113,113,0.5), 0 4px 20px rgba(0,0,0,0.5)',
               fontFamily: "'JetBrains Mono', monospace",
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
             }}
           >
-            FAULT: {t.ref} — {t.kind}
+            <span style={{ color: '#f87171', fontSize: 14 }}>⚡</span>
+            <span>FAULT: <strong style={{ color: '#fca5a5' }}>{t.ref}</strong> — {t.kind}</span>
           </div>
         ))}
       </div>

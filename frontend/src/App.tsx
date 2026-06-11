@@ -181,10 +181,11 @@ export default function App() {
                   onClick={() => setSidebarTab(id)}
                   className="px-3 py-2 text-[10px] font-bold tracking-wider whitespace-nowrap transition-all relative"
                   style={{
-                    color: sidebarTab === id ? '#94a3b8' : '#334155',
+                    color: sidebarTab === id ? '#bfdbfe' : '#475569',
                     borderBottom: sidebarTab === id ? '2px solid #3b82f6' : '2px solid transparent',
-                    background: sidebarTab === id ? 'rgba(59,130,246,0.05)' : 'transparent',
-                    boxShadow: sidebarTab === id ? 'inset 0 -1px 0 rgba(59,130,246,0.3)' : 'none',
+                    background: sidebarTab === id ? 'rgba(59,130,246,0.08)' : 'transparent',
+                    boxShadow: sidebarTab === id ? 'inset 0 -1px 0 rgba(59,130,246,0.4), 0 0 6px rgba(59,130,246,0.08)' : 'none',
+                    textShadow: sidebarTab === id ? '0 0 8px rgba(59,130,246,0.5)' : 'none',
                   }}
                 >
                   {label}

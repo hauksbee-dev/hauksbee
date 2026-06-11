@@ -24,6 +24,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { ParsedBoard } from './kicad-parser'
 
 // KiCad PCB standard 1.6 mm → top surface in Three.js
@@ -54,47 +55,63 @@ export class Board3DViewer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 2.2
-    this.renderer.toneMappingExposure = 1.2
+    this.renderer.toneMappingExposure = 1.6
 
     // Scene
     this.scene = new THREE.Scene()
     this.scene.background = new THREE.Color(0x020617)
-    this.scene.fog = new THREE.FogExp2(0x020617, 4)
+    this.scene.fog = new THREE.FogExp2(0x020617, 3)
+
+    // Environment map (RoomEnvironment — cheap PMREM IBL, transforms PBR soldermask from flat to shiny)
+    const pmremGen = new THREE.PMREMGenerator(this.renderer)
+    pmremGen.compileEquirectangularShader()
+    const roomEnv = new RoomEnvironment()
+    const envTexture = pmremGen.fromScene(roomEnv, 0.04).texture
+    this.scene.environment = envTexture
+    roomEnv.dispose()
+    pmremGen.dispose()
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.001, 10)
     this.camera.position.set(0.15, 0.12, 0.18)
     this.camera.lookAt(0.12, 0, -0.08)
 
-    // Studio lighting: hemisphere + key + rim + ambient
-    const hemi = new THREE.HemisphereLight(0x88aadd, 0x443322, 1.6)
+    // Studio lighting: hemisphere + strong key + cool rim + warm fill
+    // Physical light scale: these values are in candela for point/spot; directional needs higher values
+    const hemi = new THREE.HemisphereLight(0xb0c8ee, 0x3d2b1f, 2.5)
     this.scene.add(hemi)
 
-    const keyLight = new THREE.DirectionalLight(0xfff5e0, 3.2)
-    keyLight.position.set(0.3, 0.5, 0.2)
+    const keyLight = new THREE.DirectionalLight(0xfff8f0, 5.5)
+    keyLight.position.set(0.4, 0.7, 0.3)
     keyLight.castShadow = true
     keyLight.shadow.mapSize.set(2048, 2048)
     keyLight.shadow.camera.near = 0.001
     keyLight.shadow.camera.far = 2
-    keyLight.shadow.camera.left = -0.3
-    keyLight.shadow.camera.right = 0.3
-    keyLight.shadow.camera.top = 0.3
-    keyLight.shadow.camera.bottom = -0.3
+    keyLight.shadow.camera.left = -0.5
+    keyLight.shadow.camera.right = 0.5
+    keyLight.shadow.camera.top = 0.5
+    keyLight.shadow.camera.bottom = -0.5
     keyLight.shadow.bias = -0.0005
     this.scene.add(keyLight)
 
-    const rimLight = new THREE.DirectionalLight(0x8090ff, 0.5)
-    rimLight.position.set(-0.3, 0.2, -0.3)
+    // Cool rim/back light for board edge glow
+    const rimLight = new THREE.DirectionalLight(0x6080ff, 1.2)
+    rimLight.position.set(-0.5, 0.3, -0.5)
     this.scene.add(rimLight)
 
-    const fill = new THREE.DirectionalLight(0xffffff, 0.3)
-    fill.position.set(0, 0.4, 0.4)
+    // Warm front fill (reduces harsh shadows on component faces)
+    const fill = new THREE.DirectionalLight(0xfff4e0, 1.0)
+    fill.position.set(0.1, 0.5, 0.6)
     this.scene.add(fill)
+
+    // Under-bounce fill (simulates light bouncing off the desk — warms up board underside)
+    const underFill = new THREE.DirectionalLight(0xffeecc, 0.4)
+    underFill.position.set(0, -1, 0)
+    this.scene.add(underFill)
 
     // Ground shadow plane (receives shadows only)
     const groundGeo = new THREE.PlaneGeometry(2, 2)
-    const groundMat = new THREE.ShadowMaterial({ opacity: 0.25 })
+    const groundMat = new THREE.ShadowMaterial({ opacity: 0.35 })
     const ground = new THREE.Mesh(groundGeo, groundMat)
     ground.rotation.x = -Math.PI / 2
     ground.position.y = -0.001
@@ -133,21 +150,57 @@ export class Board3DViewer {
     const maxDim = Math.max(size.x, size.y, size.z)
 
     this.controls.target.copy(center)
+
+    // Frame the board tightly. Use the camera FOV to compute the correct orbit
+    // distance so the board fills roughly 75% of the viewport.
+    // Use slightly oblique angle for a product-photo feel.
+    const fovRad = (this.camera.fov * Math.PI) / 180
+    const boardSpan = Math.max(size.x, size.z) // board footprint (ignoring height)
+    // Distance needed to see the board at 75% of vertical FOV
+    const dist = (boardSpan * 0.6) / Math.tan(fovRad / 2)
     this.camera.position.set(
-      center.x + maxDim * 0.6,
-      center.y + maxDim * 0.9,
-      center.z + maxDim * 1.1,
+      center.x + boardSpan * 0.3,
+      center.y + dist * 0.6,
+      center.z + dist * 0.8,
     )
     this.camera.near = maxDim * 0.001
-    this.camera.far = maxDim * 20
+    this.camera.far = maxDim * 30
     this.camera.updateProjectionMatrix()
+    this.controls.minDistance = dist * 0.2
+    this.controls.maxDistance = dist * 4
     this.controls.update()
 
-    // Enable shadows on all meshes
+    // Scale shadow camera to board size for correct shadow coverage
+    const shadowHalf = boardSpan * 0.75
+    const keyLightObj = this.scene.children.find(c => c instanceof THREE.DirectionalLight && (c as THREE.DirectionalLight).intensity > 4) as THREE.DirectionalLight | undefined
+    if (keyLightObj) {
+      keyLightObj.position.set(center.x + boardSpan * 0.8, boardSpan * 1.2, center.z + boardSpan * 0.6)
+      keyLightObj.target.position.copy(center)
+      keyLightObj.shadow.camera.left = -shadowHalf
+      keyLightObj.shadow.camera.right = shadowHalf
+      keyLightObj.shadow.camera.top = shadowHalf
+      keyLightObj.shadow.camera.bottom = -shadowHalf
+      keyLightObj.shadow.camera.far = boardSpan * 6
+      keyLightObj.shadow.camera.updateProjectionMatrix()
+      this.scene.add(keyLightObj.target)
+    }
+
+    // Enable shadows on all meshes; boost PBR materials for product-photo look
     model.traverse(obj => {
-      if ((obj as THREE.Mesh).isMesh) {
-        obj.castShadow = true
-        obj.receiveShadow = true
+      const mesh = obj as THREE.Mesh
+      if (!mesh.isMesh) return
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+
+      // Enhance PBR materials: ensure they pick up the environment map
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      for (const mat of mats) {
+        if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+          // Soldermask tends to be slightly glossy — dial up specular
+          if (mat.roughness > 0.7) mat.roughness = Math.max(0.45, mat.roughness - 0.2)
+          mat.envMapIntensity = 1.5
+          mat.needsUpdate = true
+        }
       }
     })
 
