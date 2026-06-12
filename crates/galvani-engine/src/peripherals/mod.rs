@@ -25,6 +25,7 @@
 //!     its commanded voltage onto its net (timeline events fire here);
 //!   - [`Peripheral::post_solve`] after the solve, so a sink can sample the
 //!     freshly-solved node voltages.
+//!
 //! Bus slaves do their work inside the MCU hook callbacks, not in these two,
 //! but they still implement the trait so they live in one collection.
 
