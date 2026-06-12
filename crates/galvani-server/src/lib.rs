@@ -163,10 +163,17 @@ async fn sim_loop(
                     ClientMessage::SetControls(c) => engine.set_controls(c),
                     ClientMessage::Serial { mcu, data } => engine.serial(&mcu, &data),
                     ClientMessage::SetInput { source, value } => {
+                        // Route to a bound input source first; if nothing
+                        // matched, fall back to a peripheral of that id so a
+                        // frontend slider wired to a peripheral works as-is.
                         engine.set_input(&source, value);
+                        engine.set_peripheral(&source, value);
                     }
                     ClientMessage::SetPowerSupply { net, supply } => {
                         engine.set_power_supply(&net, supply);
+                    }
+                    ClientMessage::SetPeripheral { id, value } => {
+                        engine.set_peripheral(&id, value);
                     }
                     ClientMessage::LoadBoard { .. }
                     | ClientMessage::AddProbe { .. }
