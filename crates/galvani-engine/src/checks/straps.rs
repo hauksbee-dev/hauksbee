@@ -75,7 +75,17 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
             if is_unconnected_net(&net.name) {
                 continue;
             }
-            examine_strap(board, comp, strap.role.as_str(), strap.level, &strap.note, net_id, &net.name, &mut report);
+            examine_strap(
+                board,
+                comp,
+                strap.role.as_str(),
+                strap.level,
+                strap.boot_select,
+                &strap.note,
+                net_id,
+                &net.name,
+                &mut report,
+            );
         }
     }
     report
@@ -89,6 +99,7 @@ fn examine_strap(
     mcu: &Component,
     role: &str,
     level: StrapLevel,
+    boot_select: bool,
     note: &str,
     net_id: i64,
     net_name: &str,
@@ -119,10 +130,17 @@ fn examine_strap(
 
     // (b) A pull resistor biasing the strap to the WRONG level for normal boot.
     //     Only fire when the required level is a hard HIGH or LOW (not the
-    //     "defined" case, where either polarity is acceptable for this lint).
+    //     "defined" case), AND only for a *boot-select* strap whose wrong level
+    //     is unrecoverable (BOOT0, GPIO0, GPIO9, QSPI_SS). A cosmetic or
+    //     flash-voltage strap (ESP32 GPIO15 boot-log, GPIO2, GPIO12) may be
+    //     legitimately repurposed as an ordinary GPIO with a pull on a shipped
+    //     board, so a wrong-bias finding there would be a confident false
+    //     positive on a correct design - exactly the cardinal sin. Gating on
+    //     boot_select keeps this arm to the pins where "wrong pull" == "won't
+    //     boot".
     let want_high = matches!(level, StrapLevel::High);
     let want_low = matches!(level, StrapLevel::Low);
-    if want_high || want_low {
+    if boot_select && (want_high || want_low) {
         if let Some((rref, to_ground)) = wrong_pull(board, net_id, &members, want_high) {
             let dir = if to_ground { "pull-down to ground" } else { "pull-up to a rail" };
             report.findings.push(LintFinding {
@@ -176,6 +194,14 @@ fn is_clock_oscillator(c: &Component) -> bool {
     if connected < 3 {
         return false;
     }
+    // The >= 3-pad gate (a powered oscillator, not a 2-terminal crystal) plus
+    // the rail/ground hop-exclusion in clock_source_reaching is what keeps this
+    // sound. The value-string match below is the soft edge: a 3+-pad part whose
+    // value merely contains "MHZ"/"OSC" could be mis-classed, but it only
+    // matters if it ALSO sits on a strap signal net (or one series-R away), and
+    // a free-running clock that close to a strap pin is the fault we want. The
+    // lib_id "oscillator" match is the strong signal; the rest are value/ref
+    // heuristics for parts whose symbol library does not say "oscillator".
     lib.contains("oscillator")
         || v.contains("OSCILLATOR")
         || v.contains("MHZ")
@@ -449,6 +475,93 @@ mod tests {
             r.of_check(LintCheck::StrapPin).count(),
             0,
             "sharing only the +3V3 rail with an oscillator must not fire"
+        );
+    }
+
+    /// A boot-select strap (STM32 BOOT0, which needs LOW) pulled to the WRONG
+    /// level (a pull-up to +3V3) must fire medium; the correct pull-down is
+    /// silent. STM32F103 pad 44 = BOOT0.
+    fn stm32_boot0_board(pull_to_rail: bool) -> String {
+        let (pull_net, pull_name) = if pull_to_rail {
+            (2, "+3V3") // pull-up: WRONG for BOOT0 (needs low)
+        } else {
+            (1, "GND") // pull-down: correct
+        };
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "/BOOT0")
+  (module Package_QFP:LQFP-48 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
+    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 8  smd rect (at 0 1) (net 1 "GND"))
+    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
+    (pad 2 smd rect (at 2 0) (net {pull_net} "{pull_name}"))
+  )
+)"#
+        )
+    }
+
+    #[test]
+    fn boot0_pulled_to_wrong_level_fires_medium() {
+        let r = strap_findings(&stm32_boot0_board(true));
+        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(strap.len(), 1, "BOOT0 pulled high is wrong (needs low)");
+        assert!(matches!(strap[0].severity, Severity::Medium));
+        assert!(strap[0].message.contains("boot0"));
+        assert!(strap[0].message.contains("wrong level"));
+    }
+
+    #[test]
+    fn boot0_pulled_to_correct_level_is_clean() {
+        let r = strap_findings(&stm32_boot0_board(false));
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "BOOT0 pulled low is correct, no finding"
+        );
+    }
+
+    #[test]
+    fn non_boot_select_strap_with_a_pull_does_not_fire_wrong_level() {
+        // The cardinal-sin guard: an ESP32 GPIO15 (boot-log strap, level=high,
+        // NOT boot_select) reused as an ordinary GPIO with a pull-DOWN must NOT
+        // be flagged as "wrong level". A board may legitimately repurpose it.
+        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "/GPIO15_LED")
+  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U3 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 23 smd rect (at 0 5) (net 3 "/GPIO15_LED"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/GPIO15_LED"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)"#;
+        let r = strap_findings(text);
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "GPIO15 is not boot_select; a pull there is the board's choice, not a fault"
         );
     }
 

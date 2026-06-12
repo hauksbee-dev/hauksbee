@@ -76,12 +76,14 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     }
 }
 
-/// Boot-coverage: the control net named by `net` must be actively driven to its
-/// defined level (`min`, volts) by `deadline_ms` after reset, and no stress
-/// fault may fire during the boot window before it is first driven. This is the
-/// formerly-rejected "Hi-Z control input" class made decidable by running the
-/// firmware: instead of guessing the intended power-up default from the netlist
-/// (which is not encodable), we watch the firmware drive it.
+/// Boot-coverage: the control net named by `net` must reach and hold its defined
+/// level (`min`, volts) by `deadline_ms` after reset, and no stress fault may
+/// fire during the boot window before it does. This is the formerly-rejected
+/// "Hi-Z control input" class made decidable by running the firmware: on a net
+/// with no static board bias (the genuinely-undefined case this targets) only
+/// the firmware can bring it to level, so this measures whether the firmware
+/// drives it in time. A statically-biased net reads at level from t=0 and is out
+/// of scope (it was never undefined).
 fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.net.clone().unwrap_or_default();
     let level = a.min.unwrap_or(0.0);

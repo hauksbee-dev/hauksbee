@@ -158,6 +158,7 @@ max_voltage_v = 3.6
 [[models.straps]]
 role = "boot0"
 level = "low"
+boot_select = true   # latches the boot memory; firmware cannot undo it
 note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +203,7 @@ value_re = "(?i)^(ESP[- ]?WROOM[- ]?32|ESP32[- ]?WRO(OM|VER)[- ]?32?.*|ESP32(-D0
 [[models.straps]]
 role = "gpio0"
 level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
 note = "GPIO0 high = SPI boot (normal); low = download/UART boot. A 50 MHz clock here randomly enters download mode (Olimex ESP32-EVB)"
 
 [[models.straps]]
@@ -244,6 +246,7 @@ value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
 [[models.straps]]
 role = "gpio0"
 level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
 note = "GPIO0 high = SPI boot (normal); low = download/UART boot"
 
 [[models.straps]]
@@ -276,6 +279,7 @@ value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
 [[models.straps]]
 role = "gpio0"
 level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
 note = "GPIO0 high = SPI boot (normal); low with GPIO46=0 = download boot"
 
 [[models.straps]]
@@ -310,6 +314,7 @@ value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
 [[models.straps]]
 role = "gpio0"
 level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
 note = "GPIO0 high = SPI boot (normal); low = download boot"
 
 [[models.straps]]
@@ -346,6 +351,7 @@ value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
 [[models.straps]]
 role = "gpio9"
 level = "high"
+boot_select = true   # the C3 BOOT pin; latches SPI-vs-download boot
 note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
 
 [[models.straps]]
@@ -382,6 +388,7 @@ value_re = "(?i)^RP2040$"
 [[models.straps]]
 role = "qspi_ss"
 level = "high"
+boot_select = true   # held low at reset selects the USB bootloader (BOOTSEL)
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
 
 # ─────────────────────────────────────────────────────────────────────────────
