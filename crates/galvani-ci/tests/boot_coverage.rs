@@ -174,8 +174,10 @@ fn watchy_v15_display_res_driven_passes() {
         eprintln!("skipping watchy_v15 boot-coverage (Espressif QEMU not installed)");
         return;
     }
+    let t0 = std::time::Instant::now();
     let result = run(&RunConfig { spec: example("watchy_v15_display_res.toml") })
         .expect("Watchy PASS spec runs");
+    let wall = t0.elapsed();
     let bc = result
         .results
         .iter()
@@ -187,6 +189,18 @@ fn watchy_v15_display_res_driven_passes() {
         result.render_human()
     );
     assert!(bc.detail.contains("RES"), "names the RES net: {}", bc.detail);
+    // Regression guard for the external-backend chunk coarsening
+    // (Scheduler::has_external_backend -> runner sets chunk_s ~ frame size).
+    // Without it, this 800 ms / 8 ms-frame co-sim sub-divides into ~80 QMP
+    // cont/stop pairs per frame at the 100 us AVR-default chunk and takes over
+    // ten MINUTES of wall time; with it, ~3.5 s. A generous 120 s ceiling
+    // tolerates slow CI machines while still failing hard if the coarsening is
+    // ever lost (the regression is a ~200x slowdown, not a marginal one).
+    assert!(
+        wall.as_secs() < 120,
+        "Watchy QEMU co-sim took {wall:?}; the external-backend chunk \
+         coarsening in galvani-ci's runner has likely regressed"
+    );
 }
 
 /// FAIL (negative control): firmware that drives GPIO2/4 but never GPIO9 leaves
