@@ -53,6 +53,10 @@ pub enum FaultKind {
     ReverseBias,
     /// Per-pin source/sink current over `max_pin_current_a`.
     PinOvercurrent,
+    /// Two nets are shorted together (detected from copper geometry, or applied
+    /// as a what-if solder-bridge scenario). Surfaced so the frontend highlights
+    /// the bridge through the same fault channel as electrical-limit faults.
+    Short,
 }
 
 impl FaultKind {
@@ -64,6 +68,7 @@ impl FaultKind {
             FaultKind::Overvoltage => "overvoltage",
             FaultKind::ReverseBias => "reverse_bias",
             FaultKind::PinOvercurrent => "pin_overcurrent",
+            FaultKind::Short => "short",
         }
     }
 

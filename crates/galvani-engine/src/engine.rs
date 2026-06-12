@@ -86,6 +86,35 @@ impl GalvaniEngine {
     pub fn scheduler_mut(&mut self) -> &mut Scheduler {
         &mut self.sched
     }
+
+    /// What-if: short two nets together (the solder-bridge scenario). Bridges
+    /// them with a small resistance and raises a `short` fault. Returns whether
+    /// the bridge was applied (both nets exist and were not already bridged).
+    pub fn short_nets(&mut self, net_a: &str, net_b: &str) -> bool {
+        self.sched.short_nets(net_a, net_b)
+    }
+
+    /// Apply every copper short a geometric DRC report detected, bridging each
+    /// shorted net pair so the simulation shows the consequences. Returns the
+    /// number of bridges stamped.
+    pub fn apply_drc_shorts(&mut self, report: &galvani_extract::DrcReport) -> usize {
+        self.sched.apply_drc_shorts(report)
+    }
+
+    /// Convenience: extract + bind + build, then run geometric DRC on the same
+    /// board text and apply every detected short before simulating. This is the
+    /// "detect shorts from geometry, then simulate what the board does with them
+    /// present" path. Returns the engine and the DRC report.
+    pub fn from_board_file_with_drc_shorts(
+        board_text: &str,
+        firmware: Option<&Path>,
+        board_url: &str,
+    ) -> anyhow::Result<(Self, galvani_extract::DrcReport)> {
+        let mut engine = Self::from_board_file(board_text, firmware, board_url)?;
+        let report = ExtractedBoard::drc(board_text)?;
+        engine.apply_drc_shorts(&report);
+        Ok((engine, report))
+    }
 }
 
 impl Engine for GalvaniEngine {
