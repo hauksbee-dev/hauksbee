@@ -62,8 +62,8 @@ fn lumenpnp_motor_supply_is_poured_and_coil_traces_are_adequately_sized() {
 
     // The per-motor coil phase nets ARE routed as discrete traces; the board
     // routes them at 1.5 mm (IPC-2221 external 1 oz, 10 C ~ 3.2 A), comfortably
-    // above the TMC2226's 1.4 A RMS coil rating. Confirm a representative coil
-    // net is Traces and adequately wide.
+    // above the TMC2226's 2.0 A RMS max coil rating (1.6x). Confirm a
+    // representative coil net is Traces and adequately wide.
     let coil = copper
         .iter()
         .find(|n| n.name.ends_with("/A1") && n.kind == CopperKind::Traces)
@@ -75,9 +75,10 @@ fn lumenpnp_motor_supply_is_poured_and_coil_traces_are_adequately_sized() {
         coil.name
     );
 
-    // The audit, given the TMC2226's cited 1.4 A RMS coil current on EVERY
-    // trace-routed coil net, fires nothing: the traces carry it with margin, and
-    // the poured rails are out of scope. This is the honest negative.
+    // The audit, given the TMC2226's worst-case cited 2.0 A RMS max coil current
+    // on EVERY trace-routed coil net, fires nothing: the 1.5 mm traces carry it
+    // with a 1.6x margin at a 10 C rise, and the poured rails are out of scope.
+    // This is the honest negative, asserted at the driver's datasheet maximum.
     let mut cited: HashMap<String, (f64, String)> = HashMap::new();
     for nc in &copper {
         // Attribute the coil current to the routed coil phase nets only.
@@ -89,7 +90,7 @@ fn lumenpnp_motor_supply_is_poured_and_coil_traces_are_adequately_sized() {
         {
             cited.insert(
                 nc.name.clone(),
-                (1.4, "TMC2226 1.4 A RMS coil (datasheet)".to_string()),
+                (2.0, "TMC2226 2.0 A RMS max coil (datasheet rev 1.10)".to_string()),
             );
         }
     }
@@ -97,7 +98,8 @@ fn lumenpnp_motor_supply_is_poured_and_coil_traces_are_adequately_sized() {
     let findings = audit_trace_currents(&copper, &cited, &TraceAudit::default());
     assert!(
         findings.is_empty(),
-        "LumenPnP coil traces (1.5 mm) carry the 1.4 A coil current with margin; \
-         the trace-current audit must be silent. Unexpected: {findings:?}"
+        "LumenPnP coil traces (1.5 mm, ~3.2 A at 10 C) carry the TMC2226's 2.0 A \
+         RMS max with margin; the trace-current audit must be silent. \
+         Unexpected: {findings:?}"
     );
 }
