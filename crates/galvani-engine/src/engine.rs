@@ -9,8 +9,8 @@ use galvani_extract::ExtractedBoard;
 use galvani_models::ModelLibrary;
 use galvani_server::engine::Engine;
 use galvani_server::protocol::{
-    BoardInfo, ChemistryConfig, FaultInfo, PowerSupplyConfig, SimFrame, SolverControls,
-    SupplyState, UsbSpecConfig,
+    BoardInfo, ChemistryConfig, FaultInfo, PeripheralInfo, PowerSupplyConfig, SimFrame,
+    SolverControls, SupplyState, UsbSpecConfig,
 };
 use galvani_solve::{Integration, SolverOptions, StepControl};
 
@@ -133,6 +133,12 @@ impl Engine for GalvaniEngine {
                 .iter()
                 .map(|s| (s.net_name.clone(), supply_to_config(&s.supply)))
                 .collect(),
+            peripherals: self
+                .sched
+                .peripheral_infos()
+                .into_iter()
+                .map(|(id, kind)| PeripheralInfo { id, kind })
+                .collect(),
         }
     }
 
@@ -140,6 +146,7 @@ impl Engine for GalvaniEngine {
         let result = self.sched.step(dt);
         let mut component_states = self.sched.mcu_states();
         component_states.extend(self.sched.digital_states());
+        component_states.extend(self.sched.peripheral_states());
         // Fold per-component stress (0..1) into the component-state maps so the
         // UI can heat-map parts approaching their ratings.
         for (reference, stress) in self.sched.stress_states() {
@@ -218,6 +225,10 @@ impl Engine for GalvaniEngine {
 
     fn set_power_supply(&mut self, net: &str, supply: PowerSupplyConfig) {
         self.sched.set_power_supply(net, config_to_supply(supply));
+    }
+
+    fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
+        self.sched.set_peripheral(id, value)
     }
 }
 

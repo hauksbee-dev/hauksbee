@@ -40,6 +40,20 @@ pub struct BoardInfo {
     /// ignore it.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub power_supplies: HashMap<String, PowerSupplyConfig>,
+    /// Attached peripherals the UI can wire controls to (id, kind). E.g.
+    /// ("BTN1","pushbutton"), ("POT1","potentiometer"), ("U2","i2c_bus"),
+    /// ("VCD","vcd_sink"). Additive; older clients ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peripherals: Vec<PeripheralInfo>,
+}
+
+/// One attached peripheral, for the UI's control panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeripheralInfo {
+    /// Stable id used in `SetPeripheral { id, .. }`.
+    pub id: String,
+    /// Kind string ("pushbutton", "potentiometer", "i2c_bus", ...).
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -208,6 +222,12 @@ pub enum ClientMessage {
     SetInput { source: String, value: f64 },
     /// Configure the power supply driving a supply net (Feature 1).
     SetPowerSupply { net: String, supply: PowerSupplyConfig },
+    /// Live-control a peripheral by id (button press/release, pot/encoder
+    /// position, sensor temperature, stimulus level). `value` is interpreted
+    /// per peripheral kind. Additive; older clients never send it. The existing
+    /// `SetInput` is also routed to peripherals as a fallback so a frontend
+    /// slider wired to a peripheral id works without changes.
+    SetPeripheral { id: String, value: f64 },
     AddProbe { net: String },
     RemoveProbe { net: String },
 }

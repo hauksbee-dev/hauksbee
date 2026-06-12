@@ -220,6 +220,26 @@ impl Scheduler {
         self.peripherals.set_value(id, value)
     }
 
+    /// (id, kind) of every attached peripheral and bus, for board_info.
+    pub fn peripheral_infos(&self) -> Vec<(String, String)> {
+        use crate::peripherals::Peripheral as _;
+        let mut out: Vec<(String, String)> = self
+            .peripherals
+            .peripherals
+            .iter()
+            .map(|p| (p.id().to_string(), p.kind().to_string()))
+            .collect();
+        for bus in &self.i2c_buses {
+            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            out.push((b.id().to_string(), b.kind().to_string()));
+        }
+        for bus in &self.spi_buses {
+            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            out.push((b.id().to_string(), b.kind().to_string()));
+        }
+        out
+    }
+
     /// Peripheral state map, keyed by id, for component-state frames.
     pub fn peripheral_states(&self) -> HashMap<String, HashMap<String, f64>> {
         let mut m = self.peripherals.states();
