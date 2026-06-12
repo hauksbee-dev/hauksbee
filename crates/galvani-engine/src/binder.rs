@@ -72,6 +72,10 @@ pub struct BoundBoard {
     /// Default to [`PowerSupply::Ideal`] at the rail's nominal voltage, which
     /// preserves the old ideal-rail behaviour bit-for-bit.
     pub supplies: Vec<SupplyLeg>,
+    /// Behavioural devices (power ICs with a declarative behavioural model:
+    /// chargers, PMICs, balancers). Iterated by the scheduler each chunk, the
+    /// same cadence as the supplies.
+    pub behavioral: Vec<crate::behavioral::BehavioralDevice>,
     /// Per-device metadata for the fault/stress monitor (Feature 2).
     pub device_meta: Vec<DeviceMeta>,
     pub report: BindReport,
@@ -216,6 +220,14 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
         });
     }
 
+    // ── Pass 3b: stamp behavioural devices (power ICs) ──────────────────────
+    // Any resolved model carrying a non-empty `[models.behavioral]` block (a
+    // charger / PMIC / balancer the SPICE kinds cannot express) is stamped as a
+    // behavioural device: controllable Thevenin legs + sense resistors the
+    // scheduler iterates each chunk. Programmable limits read board resistor
+    // values through `board_resistor`.
+    let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of);
+
     // ── Pass 4: gather fault-monitor metadata ───────────────────────────────
     // Match each monitorable IR device back to its component (device name ==
     // reference for the parts we stamp) and the component's resolved ratings +
@@ -233,9 +245,60 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
         component_kinds,
         input_sources,
         supplies,
+        behavioral,
         device_meta,
         report,
     }
+}
+
+/// Stamp every component whose resolved model carries a behavioural block.
+///
+/// Builds, per component, the role->node map (schematic pin functions first,
+/// then the model's pad->role map, same precedence as [`role_node_map`]) and a
+/// board-resistor lookup (reference designator -> parsed ohms) so a programmable
+/// limit reads the actual on-board resistor. Returns the live devices.
+fn bind_behavioral(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    circuit: &mut Circuit,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> Vec<crate::behavioral::BehavioralDevice> {
+    // Board resistor lookup: reference designator -> ohms, parsed from the
+    // component value. Used by programmable current limits (e.g. LTC4020 ILIMIT
+    // reads R8). Built once.
+    let mut resistor_ohms: HashMap<String, f64> = HashMap::new();
+    for comp in &board.components {
+        if comp.reference.starts_with('R') {
+            if let Some(p) = parse_value(&comp.value) {
+                resistor_ohms.insert(comp.reference.clone(), p.si);
+            }
+        }
+    }
+    let board_resistor = |refdes: &str| -> Option<f64> { resistor_ohms.get(refdes).copied() };
+
+    let mut out = Vec::new();
+    for comp in &board.components {
+        let res = resolve(lib, comp);
+        let Some(model) = res.model else { continue };
+        if model.behavioral.is_empty() {
+            continue;
+        }
+        // role -> node for this component's connected pins (functions then pads).
+        let role_nets = role_node_map(comp, &model, node_of);
+        let role_map: std::collections::BTreeMap<String, NodeId> =
+            role_nets.into_iter().collect();
+        if let Some(dev) = crate::behavioral::BehavioralDevice::stamp(
+            circuit,
+            &comp.reference,
+            &model.behavioral,
+            &model.params,
+            &role_map,
+            &board_resistor,
+        ) {
+            out.push(dev);
+        }
+    }
+    out
 }
 
 /// Build the per-device metadata the stress monitor needs. Walks the bound

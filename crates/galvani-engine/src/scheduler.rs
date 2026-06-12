@@ -29,6 +29,7 @@ use galvani_mcu::AvrMcu;
 use galvani_mcu::{Mcu, PinId};
 use galvani_solve::{Layout, SolverOptions, Transient};
 
+use crate::behavioral::BehavioralDevice;
 use crate::binder::{BoundBoard, McuBinding};
 use crate::digital::DigitalComponent;
 use crate::peripherals::{I2cBus, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
@@ -74,6 +75,9 @@ pub struct Scheduler {
     layout: Layout,
     /// Configurable power supplies, updated between chunks (Feature 1).
     pub supplies: Vec<SupplyLeg>,
+    /// Behavioural devices (power ICs), updated between chunks the same way the
+    /// supplies are.
+    pub behavioral: Vec<BehavioralDevice>,
     /// Fault / stress monitor, evaluated after each chunk (Feature 2).
     pub stress: StressMonitor,
     /// Faults raised since the last frame drain.
@@ -126,6 +130,7 @@ impl Scheduler {
             digital,
             mcus,
             supplies,
+            behavioral,
             device_meta,
             ..
         } = bound;
@@ -148,6 +153,7 @@ impl Scheduler {
             branch_x: vec![0.0; n_branch],
             layout,
             supplies,
+            behavioral,
             stress: StressMonitor::new(device_meta),
             faults_pending: Vec::new(),
             chunk_s: DEFAULT_CHUNK_S,
@@ -335,6 +341,11 @@ impl Scheduler {
         // PinDriver pattern: behavioral source updated between solver chunks).
         self.update_supplies(chunk);
 
+        // 2b'. Update behavioural devices (chargers/PMICs/balancers) from the
+        // previous chunk's solved operating point: advance FSMs, recompute
+        // converter regulation/limits, evaluate expression laws. Same cadence.
+        self.update_behavioral(chunk);
+
         // 2c. Peripherals: fire any timeline events due by now, then let each
         // control push its commanded level onto its net before the solve.
         if !self.peripherals.is_empty() {
@@ -392,6 +403,65 @@ impl Scheduler {
             // *delivered to the net* is the negative of that. Use magnitude.
             s.update(&mut self.circuit, i.abs(), t, chunk);
         }
+    }
+
+    /// Update behavioural devices from the previous chunk's solved operating
+    /// point: node voltages and the converter output-source branch currents.
+    /// Collects any faults each device raised (input overdraw, etc).
+    fn update_behavioral(&mut self, chunk: f64) {
+        if self.behavioral.is_empty() {
+            return;
+        }
+        let t = self.sim_time;
+        let volts = self.node_volts.clone();
+        let branch = self.branch_x.clone();
+        let layout = self.layout.clone();
+        let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+        let branch_current = |id: DeviceId| -> Option<f64> {
+            layout
+                .branch(id)
+                .and_then(|b| branch.get(b.saturating_sub(layout.n_nodes)).copied())
+        };
+        for d in &mut self.behavioral {
+            d.update(&mut self.circuit, &node_v, &branch_current, t, chunk);
+            self.faults_pending.extend(d.drain_faults());
+        }
+    }
+
+    /// Live readout per behavioural device: (reference, state, converter input
+    /// current A, converter input limit A). For diagnostics / frames / tests.
+    pub fn behavioral_states(&self) -> Vec<(String, String, Option<f64>, Option<f64>)> {
+        self.behavioral
+            .iter()
+            .map(|d| {
+                (
+                    d.reference.clone(),
+                    d.state().to_string(),
+                    d.converter_iin(),
+                    d.converter_iin_limit(),
+                )
+            })
+            .collect()
+    }
+
+    /// Set an input-power budget (W) at a given input voltage on a named
+    /// behavioural device's converter; raises an overpower fault when the
+    /// reflected input draw exceeds the budget. Returns true if the device
+    /// existed. The scheduler calls the per-device budget check each chunk once
+    /// a budget is set.
+    pub fn set_behavioral_input_budget(&mut self, reference: &str, vin: f64, budget_w: f64) -> bool {
+        for d in &mut self.behavioral {
+            if d.reference == reference {
+                d.set_input_budget(vin, budget_w);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Mutable access to a behavioural device by reference (tests/sweeps).
+    pub fn behavioral_device(&mut self, reference: &str) -> Option<&mut BehavioralDevice> {
+        self.behavioral.iter_mut().find(|d| d.reference == reference)
     }
 
     /// Evaluate the stress monitor over the chunk just solved.
