@@ -206,6 +206,10 @@ fn polarized_cap_reverse_bias_faults() {
     assert!(f.value > 1.5, "reverse magnitude {:.2} V reported", f.value);
 }
 
+// This test runs a real firmware co-sim, so it needs an MCU backend. The demo
+// firmware is AVR; gate it on the `avr` feature so a renode-only build (no
+// libsimavr) skips it cleanly rather than panicking at engine construction.
+#[cfg(feature = "avr")]
 #[test]
 fn healthy_board_raises_no_faults() {
     // The synthetic demo board (MCU + 330 Ω + LED + 10k/10k divider) is within
@@ -241,12 +245,14 @@ fn healthy_board_raises_no_faults() {
 
 /// Path to the demo firmware (mirrors tests/common but kept local so this test
 /// file is self-contained — the brief asks for distinct new test files).
+#[cfg(feature = "avr")]
 fn demo_firmware() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/firmware/demo/demo.hex")
 }
 
 /// The synthetic demo board fixture (same topology as tests/common::SYNTH_BOARD).
+#[cfg(feature = "avr")]
 const SYNTH_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
