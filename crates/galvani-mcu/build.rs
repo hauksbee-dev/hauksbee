@@ -2,6 +2,13 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    // The simavr link + bindgen step is only needed for the `avr` backend.
+    // When that feature is off (e.g. a renode-only build on a machine without
+    // libsimavr), skip it entirely so the crate still compiles.
+    if env::var_os("CARGO_FEATURE_AVR").is_none() {
+        return;
+    }
+
     // Link against system-installed simavr (homebrew on macOS)
     println!("cargo:rustc-link-search=/opt/homebrew/lib");
     println!("cargo:rustc-link-lib=static=simavr");

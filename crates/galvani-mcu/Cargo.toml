@@ -6,6 +6,14 @@ license.workspace = true
 build = "build.rs"
 description = "Generalized MCU emulation bridge (simavr-backed AVR)"
 
+[features]
+# `avr` links libsimavr (GPL-3.0) and builds the AvrMcu backend.
+# `renode` builds the process-driven RenodeBackend (pure std, no native link).
+# Both are on by default; either can be disabled for a lighter build.
+default = ["avr", "renode"]
+avr = []
+renode = []
+
 [dependencies]
 anyhow = { workspace = true }
 libc = "0.2"
