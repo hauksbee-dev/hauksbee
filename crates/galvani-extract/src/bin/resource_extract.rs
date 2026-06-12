@@ -104,17 +104,45 @@ fn extract_pdf_text(path: &Path) -> Result<String, String> {
 /// reads the right table, not 600 pages of the whole manual.
 fn focus_on_pwm(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
-    // Anchor on the GPIO-function table or the PWM chapter. `find` gives a BYTE
-    // offset; convert it to a CHAR index so the window is sliced char-safely.
-    let anchor_byte = ["gpio function", "function select", "pwm", "bank 0"]
-        .iter()
-        .filter_map(|k| lower.find(k))
-        .min();
+    // Anchor on the actual GPIO-function table, not the earliest "pwm" mention -
+    // in a 600-page datasheet "pwm" appears in the TOC / intro long before the
+    // function table, which would centre the window on the wrong page. Prefer the
+    // densest cluster of "PWMk A/B" function entries (the table itself); fall back
+    // to specific section headers, then to a bare "pwm" only as a last resort.
+    let anchor_byte = densest_pwm_cluster(text)
+        .or_else(|| ["bank 0 (user gpio)", "gpio function", "function select"].iter().find_map(|k| lower.find(k)))
+        .or_else(|| lower.find("pwm"));
     let start = match anchor_byte {
         Some(b) => text[..b].chars().count().saturating_sub(2_000),
         None => 0,
     };
     text.chars().skip(start).take(48_000).collect()
+}
+
+/// Byte offset of the start of the densest window of `PWMk A` / `PWMk_A` function
+/// entries - i.e. the GPIO-function table - or None if no such cluster exists.
+fn densest_pwm_cluster(text: &str) -> Option<usize> {
+    // Positions of every "PWM<digit>" occurrence (the function-table column).
+    let mut hits = Vec::new();
+    let lower = text.to_ascii_lowercase();
+    let lb = lower.as_bytes();
+    for i in 0..lb.len().saturating_sub(4) {
+        if &lb[i..i + 3] == b"pwm" && lb[i + 3].is_ascii_digit() {
+            hits.push(i);
+        }
+    }
+    if hits.len() < 8 {
+        return None; // no real table
+    }
+    // Slide a window and pick the start of the densest 8-hit run.
+    let mut best = (usize::MAX, hits[0]);
+    for w in hits.windows(8) {
+        let span = w[7] - w[0];
+        if span < best.0 {
+            best = (span, w[0]);
+        }
+    }
+    Some(best.1)
 }
 
 // -- Prompt -------------------------------------------------------------------
@@ -266,13 +294,17 @@ fn parse_pad_pwm_table(raw: &str) -> Result<BTreeMap<String, String>, String> {
 }
 
 fn validate_pwm(s: &str) -> Result<(), String> {
+    // Char-safe: the last char is the channel, the rest is the slice. A
+    // byte-split would panic on a multi-byte trailing char (e.g. a stray Ω / U+FFFD
+    // that survived into the model's TOML string).
     let s = s.trim();
-    let (slice, chan) = s.split_at(s.len().saturating_sub(1));
+    let chan = s.chars().last().ok_or_else(|| "empty pwm value".to_string())?;
+    let slice: String = s.chars().take(s.chars().count().saturating_sub(1)).collect();
     let n: u8 = slice.parse().map_err(|_| format!("bad slice in '{s}'"))?;
     if n > 7 {
         return Err(format!("slice {n} out of range 0..7"));
     }
-    if !matches!(chan, "A" | "B" | "a" | "b") {
+    if !matches!(chan, 'A' | 'B' | 'a' | 'b') {
         return Err(format!("bad channel in '{s}'"));
     }
     Ok(())
