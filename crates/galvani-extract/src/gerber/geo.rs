@@ -210,9 +210,168 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
     }
 }
 
+/// A grid-accelerated point-in-polygon tester for a large fixed polygon (a
+/// copper pour). Point-in-polygon is O(vertices); a board-spanning pour has
+/// tens of thousands of vertices and is tested against every primitive, so the
+/// naive cost is quadratic. This rasterises the polygon's bounding box into a
+/// coarse grid once: each cell is tagged fully-inside, fully-outside, or
+/// boundary. A query is then an O(1) grid lookup, falling back to the exact
+/// even-odd test only for the few points that land in a boundary cell.
+pub struct PolyGrid<'a> {
+    pts: &'a [(f64, f64)],
+    minx: f64,
+    miny: f64,
+    inv_cell: f64,
+    nx: usize,
+    ny: usize,
+    /// 0 = outside, 1 = inside, 2 = boundary (needs exact test).
+    cells: Vec<u8>,
+}
+
+impl<'a> PolyGrid<'a> {
+    /// Build a grid for `pts`. `target_cells` is the rough number of cells along
+    /// the longer axis (more = finer = fewer exact fallbacks, more build cost).
+    pub fn new(pts: &'a [(f64, f64)], target_cells: usize) -> Self {
+        let mut minx = f64::INFINITY;
+        let mut miny = f64::INFINITY;
+        let mut maxx = f64::NEG_INFINITY;
+        let mut maxy = f64::NEG_INFINITY;
+        for &(x, y) in pts {
+            minx = minx.min(x);
+            miny = miny.min(y);
+            maxx = maxx.max(x);
+            maxy = maxy.max(y);
+        }
+        let span = (maxx - minx).max(maxy - miny).max(1e-6);
+        let cell = span / target_cells.max(1) as f64;
+        let inv_cell = 1.0 / cell;
+        let nx = (((maxx - minx) * inv_cell).ceil() as usize + 1).max(1);
+        let ny = (((maxy - miny) * inv_cell).ceil() as usize + 1).max(1);
+
+        // Mark cells the polygon boundary passes through as boundary (2): a
+        // query landing here falls back to the exact even-odd test.
+        let mut cells = vec![0u8; nx * ny];
+        let n = pts.len();
+        if n >= 2 {
+            let mut j = n - 1;
+            for i in 0..n {
+                Self::stamp_edge(&mut cells, nx, ny, minx, miny, inv_cell, pts[j], pts[i]);
+                j = i;
+            }
+        }
+        // Classify the non-boundary cells exactly, by *scanline parity* rather
+        // than by per-cell even-odd (which would be O(cells x vertices)). For
+        // each grid row we intersect the polygon edges with the row's centre
+        // line once (O(vertices)), sort the crossing x's, and fill the spans
+        // between consecutive crossings as inside. This is exact (no flood-fill
+        // leakage) and costs O(rows x vertices) total. Cells already marked
+        // boundary keep their exact-test flag.
+        if n >= 3 {
+            let mut xs: Vec<f64> = Vec::new();
+            for gy in 0..ny {
+                let yc = miny + (gy as f64 + 0.5) / inv_cell;
+                xs.clear();
+                let mut j = n - 1;
+                for i in 0..n {
+                    let (xi, yi) = pts[i];
+                    let (xj, yj) = pts[j];
+                    if (yi > yc) != (yj > yc) {
+                        let x = (xj - xi) * (yc - yi) / (yj - yi) + xi;
+                        xs.push(x);
+                    }
+                    j = i;
+                }
+                xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                // Inside the spans [xs[0],xs[1]], [xs[2],xs[3]], ...
+                let mut k = 0;
+                while k + 1 < xs.len() {
+                    let (x0, x1) = (xs[k], xs[k + 1]);
+                    let g0 = (((x0 - minx) * inv_cell).floor() as isize).max(0);
+                    let g1 = (((x1 - minx) * inv_cell).ceil() as isize).min(nx as isize - 1);
+                    for gx in g0..=g1 {
+                        let cxc = minx + (gx as f64 + 0.5) / inv_cell;
+                        let idx = gy * nx + gx as usize;
+                        if cells[idx] != 2 && cxc >= x0 && cxc <= x1 {
+                            cells[idx] = 1;
+                        }
+                    }
+                    k += 2;
+                }
+            }
+        }
+
+        PolyGrid { pts, minx, miny, inv_cell, nx, ny, cells }
+    }
+
+    fn stamp_edge(
+        cells: &mut [u8],
+        nx: usize,
+        ny: usize,
+        minx: f64,
+        miny: f64,
+        inv_cell: f64,
+        a: (f64, f64),
+        b: (f64, f64),
+    ) {
+        // Sample the edge densely enough to hit every cell it crosses.
+        let len = (b.0 - a.0).hypot(b.1 - a.1);
+        let steps = ((len * inv_cell).ceil() as usize + 1).max(1);
+        for s in 0..=steps {
+            let t = s as f64 / steps as f64;
+            let x = a.0 + (b.0 - a.0) * t;
+            let y = a.1 + (b.1 - a.1) * t;
+            let gx = ((x - minx) * inv_cell) as isize;
+            let gy = ((y - miny) * inv_cell) as isize;
+            if gx >= 0 && gy >= 0 && (gx as usize) < nx && (gy as usize) < ny {
+                cells[gy as usize * nx + gx as usize] = 2;
+            }
+        }
+    }
+
+    /// Is `(px, py)` inside the polygon? O(1) grid lookup, exact test only on a
+    /// boundary cell.
+    pub fn contains(&self, px: f64, py: f64) -> bool {
+        let gx = ((px - self.minx) * self.inv_cell) as isize;
+        let gy = ((py - self.miny) * self.inv_cell) as isize;
+        if gx < 0 || gy < 0 || gx as usize >= self.nx || gy as usize >= self.ny {
+            return false;
+        }
+        match self.cells[gy as usize * self.nx + gx as usize] {
+            0 => false,
+            1 => true,
+            _ => point_in_polygon(px, py, self.pts),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poly_grid_matches_exact() {
+        // An L-shaped polygon: grid containment must equal exact for many points.
+        let poly = vec![
+            (0.0, 0.0),
+            (4.0, 0.0),
+            (4.0, 2.0),
+            (2.0, 2.0),
+            (2.0, 4.0),
+            (0.0, 4.0),
+        ];
+        let grid = PolyGrid::new(&poly, 32);
+        for i in 0..50 {
+            for j in 0..50 {
+                let x = i as f64 * 0.1 - 0.5;
+                let y = j as f64 * 0.1 - 0.5;
+                assert_eq!(
+                    grid.contains(x, y),
+                    point_in_polygon(x, y, &poly),
+                    "mismatch at ({x},{y})"
+                );
+            }
+        }
+    }
 
     #[test]
     fn touching_discs() {
