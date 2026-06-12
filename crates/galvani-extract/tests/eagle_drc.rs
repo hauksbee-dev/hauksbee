@@ -331,6 +331,46 @@ fn mirrored_package_pad_is_placed_on_the_bottom() {
 }
 
 #[test]
+fn mirror_reflects_x_not_y_for_offset_pads() {
+    // Regression for the SparkFun RP2040 Thing Plus false-short class: an `MR0`
+    // mirrored element must reflect its pads about the Y axis (negate local X),
+    // NOT the X axis (negate local Y). With a pad OFFSET from the element origin
+    // the two conventions place it on opposite sides, so this discriminates them
+    // (the origin-pad test above cannot). The element sits at x=10; the pad is
+    // local (+3, +4). Correct (flip-X): world (10-3, 0+4) = (7, 4). The buggy
+    // flip-Y would give (10+3, -4) = (13, -4).
+    let packages = r#"
+<package name="OFFPAD">
+  <smd name="1" x="3" y="4" dx="1" dy="1" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="U1" library="lib" package="OFFPAD" x="10" y="0" rot="MR0"/>"#;
+    // A short bottom wire centred on the flip-X position (7, 4): must short.
+    let at_flipx = r#"
+<signal name="A">
+  <wire x1="6.5" y1="4" x2="7.5" y2="4" width="0.4" layer="16"/>
+</signal>
+<signal name="B">
+  <contactref element="U1" pad="1"/>
+</signal>
+"#;
+    let r = drc(packages, elements, at_flipx);
+    assert_short(&r, "A", "B");
+
+    // A wire at the WRONG flip-Y position (13, -4) must NOT short: nothing is
+    // there under the correct transform.
+    let at_flipy = r#"
+<signal name="A">
+  <wire x1="12.5" y1="-4" x2="13.5" y2="-4" width="0.4" layer="16"/>
+</signal>
+<signal name="B">
+  <contactref element="U1" pad="1"/>
+</signal>
+"#;
+    let r2 = drc(packages, elements, at_flipy);
+    assert!(r2.is_clean(), "the pad must be at flip-X (7,4), not flip-Y (13,-4)");
+}
+
+#[test]
 fn designrules_clearance_is_respected() {
     // Two wires 0.3 mm edge-to-edge. Under a loose 6 mil (0.1524 mm) rule: clean.
     // Under a strict 20 mil (0.508 mm) rule embedded in the board: a clearance
