@@ -143,6 +143,16 @@ pub struct SupplySpec {
     pub soc: Option<f64>,
     #[serde(default)]
     pub r_internal_ohms: Option<f64>,
+    /// BMS over-current protection trip threshold (A). Present = protected pack.
+    #[serde(default)]
+    pub protection_trip_a: Option<f64>,
+    /// Sustained time above the trip threshold before the cutoff latches (ms).
+    /// Default 0 (instant) when `protection_trip_a` is set.
+    #[serde(default)]
+    pub protection_delay_ms: Option<f64>,
+    /// Current the load must fall below to re-arm the cutoff (A). Default: trip.
+    #[serde(default)]
+    pub protection_reset_a: Option<f64>,
 }
 
 /// A net forced to a fixed DC voltage for the run.

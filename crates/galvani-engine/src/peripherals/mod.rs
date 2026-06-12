@@ -35,12 +35,14 @@ use galvani_ir::{Circuit, NodeId};
 
 pub mod controls;
 pub mod i2c;
+pub mod load;
 pub mod sink;
 pub mod spi;
 
 pub use controls::{
     Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch,
 };
+pub use load::DynamicLoad;
 pub use i2c::{Bme280, Eeprom24c, I2cBus, I2cSlave};
 pub use sink::VcdSink;
 pub use spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave};
