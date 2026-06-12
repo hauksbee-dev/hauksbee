@@ -144,18 +144,32 @@ export class Board3DViewer {
     this.controls.target.set(0.12, 0, -0.08)
     this.controls.update()
 
+    // Capture-harness hooks: ?fastgl=1 skips SSAO (software-GL headless
+    // chromium takes seconds per SSAO frame, freezing input/recording);
+    // ?orbit=1 turns on a slow cinematic auto-rotate so recordings never
+    // need synthetic mouse input at all.
+    const params = new URLSearchParams(window.location.search)
+    const fastgl = params.get('fastgl') === '1'
+    if (params.get('orbit') === '1') {
+      this.controls.autoRotate = true
+      this.controls.autoRotateSpeed = 1.1
+    }
+
     // Post-processing composer: SSAO for per-component ambient occlusion
-    // Modest settings — boards are well under 500k tris so this is cheap.
+    // Modest settings — boards are well under 500k tris so this is cheap
+    // on real GPUs.
     this.composer = new EffectComposer(this.renderer)
     const renderPass = new RenderPass(this.scene, this.camera)
     this.composer.addPass(renderPass)
 
-    const ssaoPass = new SSAOPass(this.scene, this.camera, rW, rH)
-    ssaoPass.kernelRadius = 0.018   // tight radius — appropriate for mm-scale PCB details
-    ssaoPass.minDistance = 0.0005
-    ssaoPass.maxDistance = 0.025
-    ssaoPass.output = SSAOPass.OUTPUT.Default
-    this.composer.addPass(ssaoPass)
+    if (!fastgl) {
+      const ssaoPass = new SSAOPass(this.scene, this.camera, rW, rH)
+      ssaoPass.kernelRadius = 0.018 // tight radius for mm-scale PCB details
+      ssaoPass.minDistance = 0.0005
+      ssaoPass.maxDistance = 0.025
+      ssaoPass.output = SSAOPass.OUTPUT.Default
+      this.composer.addPass(ssaoPass)
+    }
 
     const outputPass = new OutputPass()
     this.composer.addPass(outputPass)
