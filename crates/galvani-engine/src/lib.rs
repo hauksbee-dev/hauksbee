@@ -26,10 +26,12 @@ pub mod engine;
 pub mod power_supply;
 pub mod report;
 pub mod scheduler;
+pub mod shorts;
 pub mod stress;
 
 pub use binder::{bind_board, BoundBoard};
 pub use engine::GalvaniEngine;
 pub use power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
+pub use shorts::{AppliedShort, BRIDGE_OHMS};
 pub use stress::{FaultEvent, FaultKind, StressMonitor};
