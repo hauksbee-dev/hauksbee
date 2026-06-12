@@ -50,14 +50,17 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
     // 2-layer board (GTL + GBL).
     assert_eq!(s.n_layers, 2, "Inkplate is a 2-layer board");
 
-    // The Altium drill must parse: hundreds of plated holes. Before the reader
-    // fix (modal coords, FILE_FORMAT=2:5, T<idx>F..S..C.. tool defs, TYPE
-    // sections) this was ZERO and the two layers did not stitch. This is the
-    // load-bearing regression guard.
-    assert!(
-        s.n_holes > 400,
-        "drill must parse to hundreds of plated holes, got {}",
-        s.n_holes
+    // The Altium drill must parse. Before the reader fix (modal coords,
+    // FILE_FORMAT=2:5, T<idx>F..S..C.. tool defs, TYPE sections) this was ZERO
+    // and the two layers did not stitch. This is the load-bearing regression
+    // guard, pinned exactly: 630 round plated holes (EPD_board-RoundHoles.TXT)
+    // plus the 8 endpoints of the 4 routed plated slots (-RectHoles/-SlotHoles,
+    // each a G00/M15/G01/M16 rout whose two endpoints stitch as plated barrels).
+    // The corpus file is fixed, so an exact pin is stable and catches any
+    // dialect regression (a partial parse lands on a different number).
+    assert_eq!(
+        s.n_holes, 638,
+        "Inkplate plated-hole count must be 630 round + 8 slot endpoints"
     );
 
     // Connectivity reconstructs from copper alone; a dominant ground net exists.
