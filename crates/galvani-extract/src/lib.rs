@@ -24,6 +24,7 @@ mod netlint;
 mod netlist;
 mod pcb;
 mod schematic;
+pub mod si;
 pub mod trace_current;
 
 pub use drc::{
@@ -31,6 +32,10 @@ pub use drc::{
     ViolationKind, DEFAULT_CLEARANCE_MM,
 };
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
+pub use si::{
+    cl_board_pf, cl_series, i2c_rise_time_ns, render_si, routed_length_mm, SiCheck, SiFinding,
+    SiReport, SiSeverity,
+};
 pub use trace_current::{
     audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root, CopperKind,
     NetCopper, TraceAudit, TraceCurrentFinding,
