@@ -278,6 +278,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "galvani-ci"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "galvani-engine",
+ "galvani-extract",
+ "galvani-ir",
+ "galvani-models",
+ "galvani-server",
+ "galvani-solve",
+ "regex",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "galvani-engine"
 version = "0.1.0"
 dependencies = [
