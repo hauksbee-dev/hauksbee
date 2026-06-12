@@ -46,6 +46,11 @@ pub enum LintCheck {
     /// drive the net to opposite levels and fight. A schematic-stage ERC check
     /// built from extracted pin electrical types.
     OutputContention,
+    /// An MCU boot strapping pin (per the model db's per-part strap table) whose
+    /// net cannot hold the level the part needs at the reset latch window: a
+    /// free-running clock source on it, a pull to the wrong rail, or no defined
+    /// level where one is required. Produced by the engine-layer strap lint.
+    StrapPin,
 }
 
 impl LintCheck {
@@ -55,6 +60,7 @@ impl LintCheck {
             LintCheck::FloatingControlPin => "floating_control_pin",
             LintCheck::LedCurrentSanity => "led_current_sanity",
             LintCheck::OutputContention => "output_contention",
+            LintCheck::StrapPin => "strap_pin",
         }
     }
 }

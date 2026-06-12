@@ -134,6 +134,7 @@ mod tests {
             params: p,
             pins: BTreeMap::new(),
             ratings: Default::default(),
+            straps: Vec::new(),
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
             params: p,
             pins: BTreeMap::new(),
             ratings: Default::default(),
+            straps: Vec::new(),
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("'n'")));
@@ -185,6 +187,7 @@ mod tests {
             params: p,
             pins: BTreeMap::new(),
             ratings: Default::default(),
+            straps: Vec::new(),
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("bf")));

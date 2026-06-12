@@ -141,7 +141,7 @@ backend = "renode:stm32f103"
 "31" = "pa10"      # USART1 RX
 "35" = "vss3"
 "36" = "vdd3"
-"44" = "vss4"      # VSSA
+"44" = "boot0"     # BOOT0 strapping pin (LQFP-48 pin 44; RM0008 boot config)
 "48" = "vdd4"      # VDDA
 
 [models.ratings]
@@ -149,15 +149,40 @@ max_pin_current_a = 0.025  # 25 mA abs max per I/O pin
 max_current_a = 0.15
 max_voltage_v = 3.6
 
+# Strapping. STM32F1 samples BOOT0 (and BOOT1=PB2) on the 4th rising SYSCLK
+# edge after reset to select the boot memory. BOOT0=0 -> boot from main flash
+# (normal). BOOT0=1 -> system memory (bootloader) or SRAM. A floating BOOT0
+# leaves the boot source undefined, so it must be biased (the bluepill ties it
+# low through the BOOT0 header). Ref: ST RM0008 rev 21, sec 3.4 "Boot
+# configuration", Table 9.
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true   # latches the boot memory; firmware cannot undo it
+note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
+
 # ─────────────────────────────────────────────────────────────────────────────
+# ESP32 family. The classic ESP32 and ESP32-C3 co-simulate through the
+# Espressif-QEMU backend (`backend = "qemu:..."`, see docs/MCU.md); with no
+# firmware given the scheduler leaves the MCU out and the board solves as a
+# passive circuit, so extraction/report and the strap lint work regardless.
+#
+# All strap data below is from the Espressif TRMs/datasheets, cited per entry.
+# The strap-pin lint reads `[models.straps]` + the pad->role map to find which
+# net each strap sits on, then flags a strap net driven by a free-running clock
+# at reset, biased to the wrong level, or left with no defined level.
 
 [[models]]
 id = "esp32_wroom"
 kind = "mcu"
-description = "Espressif ESP32-WROOM-32 module (Xtensa LX6 dual-core), 38-pin"
+description = "Espressif ESP32 classic (WROOM-32 / WROVER module, or bare ESP32-D0WD)"
 
 [models.match]
-value_re = "(?i)^(ESP32|ESP32-?WROOM(-32)?|ESP-?WROOM-32)$"
+# ESP-WROOM-32 / ESP32-WROOM-32(E/D/U/-N4/-N8/-N16) / ESP32-WROVER modules and
+# the bare ESP32 chip. The trailing flash/PSRAM/revision suffixes (e.g.
+# "ESP32-WROOM-32E-N4" on the Olimex EVB rev L) must all match the same strap
+# table, so the suffix is left open after "32".
+value_re = "(?i)^(ESP[- ]?WROOM[- ]?32|ESP32[- ]?WRO(OM|VER)[- ]?32?.*|ESP32(-D0WD.*)?)$"
 mpn_re   = "(?i)^ESP32-?WROOM"
 
 [models.params]
@@ -165,18 +190,25 @@ mpn_re   = "(?i)^ESP32-?WROOM"
 # QEMU machine (esp32) from the merged flash image and bridges GPIO (via the RAM
 # mailbox) / UART through QMP + gdbstub + the serial socket. The ESP32 is a 3.3 V
 # part; the scheduler drives its GPIO outputs at 3.3 V (the qemu: prefix selects
-# the rail, same as renode:).
+# the rail, same as renode:). With no firmware given the scheduler skips the
+# MCU entirely, so lint/report-only runs never need QEMU.
 backend = "qemu:esp32"
 
 [models.pins]
-# ESP32-WROOM-32 module header (38-pin). Only the pads the galvani demo board
-# wires carry GPIO roles; the rest carry power/role so the binder can stamp
-# drivers when wired. ESP32 GPIO is a flat 0..39 space mapped to port '0'
-# (bits 0..31); roles use the "p0<bit>" convention the binder's gpio_of_role
-# parses (e.g. "p02" = GPIO2, "p04" = GPIO4).
+# ESP-WROOM-32 module pad map (KiCad RF_Module:ESP32-WROOM-32 / Olimex symbol).
+# Strap pads carry flat "gpio<n>" roles: the binder's gpio_of_role parses them
+# (port '0', bit n) for co-sim drive, and the strap lint matches them against
+# [models.straps] by exact string. Pad numbers verified against the Olimex
+# ESP32-EVB netlist (U3 = ESP-WROOM-32): pad25=GPIO0, 24=GPIO2, 29=GPIO5,
+# 14=GPIO12/MTDI, 23=GPIO15/MTDO. The demo-board pads (GPIO4, UART0) keep the
+# "p0<bit>" convention; both spellings resolve to the same port/bit.
 "1"  = "vss"        # GND
 "2"  = "vdd"        # 3V3
-"24" = "p02"        # GPIO2: alive indicator into the analog circuit (LED path)
+"25" = "gpio0"
+"24" = "gpio2"      # alive indicator on the QEMU demo board (LED path)
+"29" = "gpio5"
+"14" = "gpio12"    # MTDI
+"23" = "gpio15"    # MTDO
 "26" = "p04"        # GPIO4: ~5 Hz blink, observable through the solved circuit
 "34" = "p01_txd"    # U0TXD (UART0 TX)
 "33" = "p03_rxd"    # U0RXD (UART0 RX)
@@ -186,32 +218,190 @@ max_pin_current_a = 0.04   # ~40 mA abs max source/sink per pad (datasheet)
 max_current_a = 0.5
 max_voltage_v = 3.6
 
+# Strapping pins. Ref: ESP32 Technical Reference Manual v5.1, Table "Strapping
+# Pins" (sec "IO_MUX and GPIO Matrix"), and ESP32 datasheet v4.3, sec 5.10
+# "Strapping Pins". Latched on the rising edge of the chip-power-on reset; the
+# level must be stable through the latch window.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+note = "GPIO0 high = SPI boot (normal); low = download/UART boot. A 50 MHz clock here randomly enters download mode (Olimex ESP32-EVB)"
+
+[[models.straps]]
+role = "gpio2"
+level = "low"     # low-or-floating; must NOT be pulled high during download
+note = "GPIO2 must be low or floating at reset; tie-high blocks download mode"
+
+[[models.straps]]
+role = "gpio12"   # MTDI
+level = "low"
+note = "MTDI/GPIO12 selects VDD_SDIO flash voltage: low = 3.3 V (normal), high = 1.8 V"
+
+[[models.straps]]
+role = "gpio15"   # MTDO
+level = "high"
+note = "MTDO/GPIO15 high (normal) silences boot log on U0TXD; low enables it"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "esp32_pico"
+kind = "mcu"
+description = "Espressif ESP32-PICO-D4 SiP (Watchy v1.x/v2.x)"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
+
+[models.pins]
+# ESP32-PICO-D4 LGA-48 (KiCad RF_Module:ESP32-PICO-D4). Same ESP32 die, same
+# strap GPIOs; on the SiP the flash straps (GPIO12/GPIO15) are bonded internally
+# to the in-package flash, so only GPIO0/GPIO2/GPIO5 are board-exposed. Pad
+# numbers from the KiCad symbol; GPIO0 = pad 23 (verified on Watchy v1.5/v2.0).
+"23" = "gpio0"
+"24" = "gpio2"
+"34" = "gpio5"
+
+# Ref: ESP32-PICO-D4 datasheet v1.7, sec "Strapping Pins" (inherits ESP32 TRM
+# v5.1 strap table). The package-internal flash straps are not listed (fixed by
+# the SiP).
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+note = "GPIO0 high = SPI boot (normal); low = download/UART boot"
+
+[[models.straps]]
+role = "gpio2"
+level = "low"
+note = "GPIO2 must be low or floating at reset"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "esp32s3"
+kind = "mcu"
+description = "Espressif ESP32-S3 (WROOM-1 module or bare, Watchy v3)"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
+
+[models.pins]
+# ESP32-S3 strap GPIOs (KiCad RF_Module:ESP32-S3-WROOM-1). On the S3 the
+# strapping pins are GPIO0, GPIO3, GPIO45, GPIO46. Pad map from the WROOM-1
+# symbol; GPIO0 = pad 27 (verified vs Watchy v3 BOOT net).
+"27" = "gpio0"
+"15" = "gpio3"
+"7"  = "gpio45"
+"6"  = "gpio46"
+
+# Ref: ESP32-S3 Technical Reference Manual v1.6, Table 2-9 "Strapping Pins";
+# ESP32-S3 datasheet v1.7 sec 2.4. GPIO0 high = SPI boot; GPIO46 selects ROM
+# messages / boot mode and must be low-or-floating at reset.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+note = "GPIO0 high = SPI boot (normal); low with GPIO46=0 = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset (joins GPIO0 to pick boot mode)"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage (low = 3.3 V default); must be defined"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "esp32s2"
+kind = "mcu"
+description = "Espressif ESP32-S2 (WROOM module or bare)"
+
+[models.match]
+value_re = "(?i)^ESP32[- ]?S2([- ]?WROOM.*)?$"
+
+[models.pins]
+# ESP32-S2 strap GPIOs: GPIO0, GPIO45, GPIO46. Pad map from KiCad
+# RF_Module:ESP32-S2-WROOM symbol.
+"27" = "gpio0"
+"7"  = "gpio45"
+"6"  = "gpio46"
+
+# Ref: ESP32-S2 Technical Reference Manual v1.2, Table "Strapping Pins";
+# ESP32-S2 datasheet v1.4 sec 2.4.
+[[models.straps]]
+role = "gpio0"
+level = "high"
+boot_select = true   # latches SPI-vs-download boot; unrecoverable in firmware
+note = "GPIO0 high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio46"
+level = "low"
+note = "GPIO46 must be low or floating at reset"
+
+[[models.straps]]
+role = "gpio45"
+level = "defined"
+note = "GPIO45 selects VDD_SPI flash voltage; must be defined"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "esp32c3"
 kind = "mcu"
-description = "Espressif ESP32-C3 (RISC-V RV32IMC) module"
+description = "Espressif ESP32-C3 (RISC-V RV32IMC; WROOM-02 / MINI-1 module or bare)"
 
 [models.match]
-value_re = "(?i)^(ESP32-?C3|ESP32-?C3-?(MINI|WROOM).*)$"
+value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
 mpn_re   = "(?i)^ESP32-?C3"
 
 [models.params]
 backend = "qemu:esp32c3"
 
 [models.pins]
+# Demo-board pads (the QEMU C3 proof board) use the "p0<bit>" convention; the
+# strap pads ("gpio<n>", from the KiCad RF_Module:ESP32-C3-WROOM-02 / MINI-1
+# symbol) are matched by the strap lint by exact role string. Both spellings
+# parse to the same flat GPIO space in the binder.
 "1"  = "vss"
 "2"  = "vdd"
-"12" = "p02"        # GPIO2
-"13" = "p04"        # GPIO4
+"12" = "p02"        # GPIO2 (demo board)
+"13" = "p04"        # GPIO4 (demo board)
 "30" = "p021_txd"   # U0TXD on GPIO21
 "31" = "p020_rxd"   # U0RXD on GPIO20
+"16" = "gpio2"      # strap (WROOM-02/MINI-1 pad numbering)
+"5"  = "gpio8"      # strap
+"6"  = "gpio9"      # strap (BOOT)
 
 [models.ratings]
 max_pin_current_a = 0.04
 max_current_a = 0.4
 max_voltage_v = 3.6
+
+# Ref: ESP32-C3 Technical Reference Manual v1.1, Table 2-8 "Strapping Pins";
+# ESP32-C3 datasheet v1.5 sec 2.4. GPIO9 is the C3's "BOOT" pin (the GPIO0
+# equivalent): high = SPI boot (normal), low = download. GPIO8 must be high at
+# reset. GPIO2 must be high.
+[[models.straps]]
+role = "gpio9"
+level = "high"
+boot_select = true   # the C3 BOOT pin; latches SPI-vs-download boot
+note = "GPIO9 (BOOT) high = SPI boot (normal); low = download boot"
+
+[[models.straps]]
+role = "gpio8"
+level = "high"
+note = "GPIO8 must be high at reset (with GPIO9) for normal boot"
+
+[[models.straps]]
+role = "gpio2"
+level = "high"
+note = "GPIO2 must be high at reset"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -272,3 +462,40 @@ backend = "renode:sifive_fe310"
 max_pin_current_a = 0.02
 max_current_a = 0.1
 max_voltage_v = 3.6
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "rp2040"
+kind = "mcu"
+description = "Raspberry Pi RP2040 (Cortex-M0+ dual). QSPI_SS is the BOOTSEL strap."
+
+[models.match]
+value_re = "(?i)^RP2040$"
+
+[models.pins]
+# RP2040 QFN-56 (KiCad MCU_RaspberryPi_and_Boards:RP2040). The boot strap is
+# QSPI_SS (pad 56): at reset the boot ROM samples it; pulled high (the flash
+# chip-select idles high) = boot from QSPI flash (normal), held low = USB
+# BOOTSEL mass-storage. The BOOTSEL button shorts it low through a series R.
+# Pad 56 = QSPI_SS verified vs rp2040_minimal and SparkFun Thing Plus RP2040.
+"56" = "qspi_ss"
+
+# Ref: RP2040 Datasheet (build 2.21), sec 2.8.1.2 "Boot sequence" and sec 2.8.6
+# "Bootrom contents"; the GPIO_QSPI_SS pin must idle high (flash CS) for normal
+# boot. Held low at reset selects the USB bootloader.
+[[models.straps]]
+role = "qspi_ss"
+level = "high"
+boot_select = true   # held low at reset selects the USB bootloader (BOOTSEL)
+note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AVR: documented NONE. The ATmega328P (and the classic 8-bit AVR line) has no
+# boot strapping pin. Boot behaviour is chosen by the BOOTRST/BOOTSZ fuse bits
+# (non-volatile, set at programming time), not by a pin level sampled at reset.
+# RESET is a reset input, not a boot-mode strap. So the atmega328p / arduino_nano
+# entries above carry no `[models.straps]`, and the strap lint correctly never
+# examines them. Ref: ATmega328P datasheet (Rev. DS40002061B), sec "Boot Loader
+# Support" (BOOTRST fuse) and sec "System Control and Reset". This is recorded
+# so the absence is deliberate, not an oversight.

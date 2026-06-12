@@ -329,7 +329,7 @@ fn gather_device_meta(
 }
 
 /// Resolve one component into a model entry.
-fn resolve(lib: &ModelLibrary, comp: &Component) -> galvani_models::Resolution {
+pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> galvani_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
         non_empty(&comp.value),
@@ -1351,6 +1351,22 @@ fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     //     "p013" = port '0' bit 13 (nRF52840-DK LED1), "p02" = port '0' bit 2
     //     (ESP32 GPIO2), "p119" = port '1' bit 19. This matches the renode
     //     PortMap letters '0'/'1' and the QEMU GpioBank letter '0'.
+    // Flat GPIO-space roles ("gpio0", "gpio15_mtdo"): ESP32 / FE310 style.
+    // Bits 0-31 live in numeric port '0', 32+ in port '1', matching the
+    // two-bank numeric-port convention below. These names double as the
+    // strap-table roles, which match pin roles by exact string.
+    if let Some(rest) = r.strip_prefix("gpio") {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = digits.parse::<u8>() {
+            if n < 32 {
+                return Some(('0', n));
+            }
+            if n < 64 {
+                return Some(('1', n - 32));
+            }
+        }
+        return None;
+    }
     if let Some(rest) = r.strip_prefix('p') {
         let mut chars = rest.chars();
         if let Some(port_c) = chars.next() {

@@ -73,6 +73,7 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "peripheral" => check_peripheral(a, out),
         "rail_window" => check_rail_window(a, out),
         "protection_trip" => check_protection_trip(a, out),
+        "boot-coverage" => check_boot_coverage(a, out),
         other => (false, format!("unknown assertion kind '{other}'")),
     }
 }
@@ -142,6 +143,56 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
             false,
             format!("{net} has no battery protection supply leg (nothing to trip)"),
         ),
+    }
+}
+
+/// Boot-coverage: the control net named by `net` must reach and hold its defined
+/// level (`min`, volts) by `deadline_ms` after reset, and no stress fault may
+/// fire during the boot window before it does. This is the formerly-rejected
+/// "Hi-Z control input" class made decidable by running the firmware: on a net
+/// with no static board bias (the genuinely-undefined case this targets) only
+/// the firmware can bring it to level, so this measures whether the firmware
+/// drives it in time. A statically-biased net reads at level from t=0 and is out
+/// of scope (it was never undefined).
+fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let net = a.net.clone().unwrap_or_default();
+    let level = a.min.unwrap_or(0.0);
+    let deadline = a.deadline_ms.unwrap_or(0.0);
+    let key = (net.clone(), level.to_bits());
+
+    let reached = out.first_reach_ms.get(&key).copied();
+    match reached {
+        None => (
+            false,
+            format!(
+                "control net '{net}' was NEVER driven to >= {level} V (firmware left it Hi-Z / undefined through the whole run)"
+            ),
+        ),
+        Some(t_ms) if t_ms > deadline + 1e-9 => (
+            false,
+            format!(
+                "control net '{net}' first reached {level} V at {t_ms:.2} ms, past the {deadline} ms boot deadline"
+            ),
+        ),
+        Some(t_ms) => {
+            // Driven in time. Now require no fault fired in the boot window
+            // *before* the net was first driven (rails must hold and nothing
+            // over-stresses while the control input is still undefined).
+            if let Some(ft) = out.first_fault_ms {
+                if ft < t_ms - 1e-9 {
+                    return (
+                        false,
+                        format!(
+                            "control net '{net}' was driven at {t_ms:.2} ms, but a stress fault fired earlier at {ft:.2} ms during the boot window"
+                        ),
+                    );
+                }
+            }
+            (
+                true,
+                format!("control net '{net}' driven to >= {level} V at {t_ms:.2} ms (<= {deadline} ms), boot window clean"),
+            )
+        }
     }
 }
 
