@@ -40,7 +40,16 @@ const CELL_REFS: &[&str] = &[
 fn netlist() -> Option<String> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/tarski_inputsystem.net");
-    std::fs::read_to_string(p).ok()
+    match std::fs::read_to_string(&p) {
+        Ok(s) => Some(s),
+        Err(_) => {
+            // Corpus-gated skip; GALVANI_REQUIRE_CORPUS=1 makes it a hard fail.
+            if std::env::var("GALVANI_REQUIRE_CORPUS").is_ok() {
+                panic!("GALVANI_REQUIRE_CORPUS set but {} is missing", p.display());
+            }
+            None
+        }
+    }
 }
 
 /// Extract the cell and return it as Board-as-Code text.
