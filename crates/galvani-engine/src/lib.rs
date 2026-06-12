@@ -22,6 +22,7 @@
 pub mod binder;
 pub mod boardcode;
 pub mod checks;
+pub mod decoupling;
 pub mod digital;
 pub mod drivers;
 pub mod engine;
@@ -41,15 +42,17 @@ pub use boardcode::{
     check_board_text, check_code, code_to_board_text, decompile_board_to_code, load_code,
     program_from_extracted, render_check_report, CheckOptions, CheckReport,
 };
+pub use decoupling::{apply_parasitics, CapClass, EsrEsl};
 pub use engine::GalvaniEngine;
 pub use peripherals::{
     controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},
     i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75},
+    load::DynamicLoad,
     sink::VcdSink,
     spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave},
     Peripheral, PeripheralSet, TickCtx, TimelineEvent,
 };
-pub use power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
+pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};
 pub use stress::{FaultEvent, FaultKind, StressMonitor};

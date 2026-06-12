@@ -82,6 +82,12 @@ pub struct RunOutcome {
     pub peak_current: HashMap<String, f64>,
     /// Per-peripheral end-of-run snapshot, keyed by peripheral id.
     pub peripherals: HashMap<String, PeripheralSnapshot>,
+    /// Per-scenario, per-net rail-window timeseries, keyed by (scenario id, net).
+    /// The scenario id is "" for the run-wide window when a scenario has no id.
+    pub rail_windows: HashMap<(String, String), crate::scenarios::RailWindow>,
+    /// Whether each supply net's battery protection latched at any point in the
+    /// run, keyed by net name.
+    pub protection_tripped: HashMap<String, bool>,
     /// Total simulated time (ms).
     pub sim_ms: f64,
 }
@@ -328,6 +334,10 @@ fn run_one(
     let lib = ModelLibrary::builtin();
     let mut bound = bind_board(&board, &lib);
 
+    // 0. Apply opt-in capacitor parasitics (ESR/ESL) before anything else, so the
+    //    decoupling is honest for the whole run. Off by default.
+    apply_decoupling(spec, &board, &mut bound)?;
+
     // 1. Suppress auto-rails on requested nets: drop the supply leg and turn its
     //    internal Vsource into an open so the net is fed only via board parts.
     for net in &spec.suppress_rail {
@@ -365,6 +375,10 @@ fn run_one(
     // timeline events to the engine's scheduler.
     let vcd_targets = attach_peripherals(spec, &board, &net_node, engine.scheduler_mut())?;
 
+    // Attach this spec's transient scenarios: dynamic load profiles stamped as
+    // current sinks on the parts' supply nets.
+    let scenario_windows = attach_scenarios(spec, &board, &net_node, engine.scheduler_mut())?;
+
     // Run the co-sim, sampling each frame.
     let frame_dt = (spec.frame_ms / 1000.0).max(1e-6);
     let total_s = spec.duration_ms / 1000.0;
@@ -374,6 +388,9 @@ fn run_one(
     let mut uart: HashMap<String, String> = HashMap::new();
     let mut faults: Vec<RunFault> = Vec::new();
     let mut peak_current: HashMap<String, f64> = HashMap::new();
+    // Per-scenario rail-window timeseries and protection-trip tracking.
+    let mut rail_windows: HashMap<(String, String), crate::scenarios::RailWindow> = HashMap::new();
+    let mut protection_tripped: HashMap<String, bool> = HashMap::new();
 
     while t < total_s - 1e-12 {
         let frame = engine.step(frame_dt);
@@ -410,6 +427,30 @@ fn run_one(
         // Peak current for monitored components.
         update_peak_currents(&engine, &net_node, &mut peak_current);
 
+        // Scenario rail windows: for each scenario window active at this time,
+        // record the referenced rails' voltages into the window timeseries.
+        for sw in &scenario_windows {
+            if frame.t + 1e-12 >= sw.start_s {
+                for net in &sw.nets {
+                    if let Some(&v) = frame.net_voltages.get(net) {
+                        rail_windows
+                            .entry((sw.id.clone(), net.clone()))
+                            .or_default()
+                            .observe(frame.t, v);
+                    }
+                }
+            }
+        }
+        // Protection-trip tracking: read the sticky "ever tripped" flag so a
+        // trip that occurs and re-arms within one coarse frame is still caught.
+        for leg in &engine.scheduler().supplies {
+            if leg.supply.protection_ever_tripped() {
+                protection_tripped.insert(leg.net_name.clone(), true);
+            } else {
+                protection_tripped.entry(leg.net_name.clone()).or_insert(false);
+            }
+        }
+
         t += frame_dt;
     }
 
@@ -432,8 +473,211 @@ fn run_one(
         toggles,
         peak_current,
         peripherals,
+        rail_windows,
+        protection_tripped,
         sim_ms: engine.scheduler().sim_time * 1000.0,
     })
+}
+
+/// A scenario's measurement window: an id (empty for run-wide), the time it
+/// begins, and the set of rails the spec's assertions reference for it.
+struct ScenarioWindow {
+    id: String,
+    start_s: f64,
+    nets: Vec<String>,
+}
+
+/// Attach every `[[scenario]]` load to the engine and build the list of
+/// measurement windows the frame loop will populate. The window's rails are the
+/// nets named by any `rail_window` assertion scoped to this scenario (or run-wide
+/// when a rail_window has no scenario scope).
+fn attach_scenarios(
+    spec: &Spec,
+    board: &ExtractedBoard,
+    net_node: &HashMap<String, NodeId>,
+    sched: &mut galvani_engine::scheduler::Scheduler,
+) -> Result<Vec<ScenarioWindow>, SpecError> {
+    use galvani_engine::DynamicLoad;
+
+    // Resolve the profile set: built-ins plus any inline spec-local profiles.
+    let resolve_profile = |name: &str| -> Option<galvani_models::LoadProfile> {
+        if let Some(ip) = spec.profiles.iter().find(|p| p.id == name) {
+            return Some(ip.to_profile());
+        }
+        galvani_models::LoadProfile::by_id(name)
+    };
+
+    for sc in &spec.scenarios {
+        let profile = resolve_profile(&sc.profile).ok_or_else(|| {
+            SpecError::Invalid(format!(
+                "scenario on part '{}' references unknown profile '{}' (not a built-in or [[profile]])",
+                sc.part, sc.profile
+            ))
+        })?;
+
+        // Resolve the supply net: explicit `supply_net`, else inferred from the
+        // part's power pins.
+        let net_name = match &sc.supply_net {
+            Some(n) => n.clone(),
+            None => infer_supply_net(board, &sc.part).ok_or_else(|| {
+                SpecError::Invalid(format!(
+                    "scenario on part '{}': could not infer a supply net (no VDD/VCC-class power pin found); set `supply_net` explicitly",
+                    sc.part
+                ))
+            })?,
+        };
+        let node = net_node.get(&net_name).copied().ok_or_else(|| {
+            SpecError::Invalid(format!(
+                "scenario on part '{}': supply net '{}' not found on the board",
+                sc.part, net_name
+            ))
+        })?;
+
+        let id = sc.id.clone().unwrap_or_else(|| sc.part.clone());
+        let load = DynamicLoad::new(
+            sched.circuit_mut(),
+            &format!("load_{id}"),
+            node,
+            profile,
+            sc.start_ms / 1000.0,
+            sc.seed,
+        );
+        sched.attach_peripheral(Box::new(load));
+    }
+
+    // Build measurement windows from the rail_window assertions.
+    let mut windows: Vec<ScenarioWindow> = Vec::new();
+    for a in &spec.asserts {
+        if a.kind != "rail_window" {
+            continue;
+        }
+        let Some(net) = &a.net else { continue };
+        let scope = a.scenario.clone().unwrap_or_default();
+        // The window start is the scoped scenario's start_ms; a run-wide window
+        // (no scope) starts at 0 and must not borrow the first scenario's start.
+        let start_s = if scope.is_empty() {
+            0.0
+        } else {
+            spec.scenarios
+                .iter()
+                .find(|s| s.id.as_deref() == Some(scope.as_str()))
+                .map(|s| s.start_ms / 1000.0)
+                .unwrap_or(0.0)
+        };
+        match windows.iter_mut().find(|w| w.id == scope) {
+            Some(w) => {
+                if !w.nets.contains(net) {
+                    w.nets.push(net.clone());
+                }
+            }
+            None => windows.push(ScenarioWindow {
+                id: scope,
+                start_s,
+                nets: vec![net.clone()],
+            }),
+        }
+    }
+    Ok(windows)
+}
+
+/// Infer a part's supply net from its power pins. Looks for a pin whose function
+/// name is a supply name (VDD/VCC/VBAT/AVDD/3V3/5V class) and returns that pin's
+/// net name. Returns the first such net found.
+fn infer_supply_net(board: &ExtractedBoard, part_ref: &str) -> Option<String> {
+    const SUPPLY_HINTS: &[&str] = &[
+        "VDD", "VCC", "VBAT", "AVDD", "DVDD", "VDDA", "VDD3P3", "3V3", "3.3V", "VIN", "VBUS", "5V",
+        "VDDIO", "VDD_SPI",
+    ];
+    let comp = board.components.iter().find(|c| c.reference == part_ref)?;
+    for pin in &comp.pins {
+        let f = pin.function.to_ascii_uppercase();
+        if SUPPLY_HINTS.iter().any(|h| f.contains(h)) {
+            if let Some(net_id) = pin.net {
+                if let Some(net) = board.nets.iter().find(|n| n.id == net_id) {
+                    return Some(net.name.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Apply opt-in capacitor parasitics (ESR/ESL) to the bound circuit. Default
+/// (no `[decoupling]` block, or `parasitics = false`) leaves caps ideal. With
+/// `parasitics = true`, every bound capacitor gets package/dielectric-default
+/// ESR/ESL inferred from its footprint and value; per-ref overrides win.
+fn apply_decoupling(
+    spec: &Spec,
+    board: &ExtractedBoard,
+    bound: &mut BoundBoard,
+) -> Result<(), SpecError> {
+    use galvani_engine::{apply_parasitics, EsrEsl};
+    use galvani_ir::Device;
+
+    let Some(dec) = &spec.decoupling else {
+        return Ok(());
+    };
+
+    // Footprint/value lookup by capacitor reference, for default inference.
+    let cap_meta: HashMap<String, (String, f64)> = board
+        .components
+        .iter()
+        .map(|c| {
+            // Parse the value to farads best-effort (0 if unparseable).
+            let f = galvani_models::value::parse_value(&c.value)
+                .map(|p| p.si)
+                .unwrap_or(0.0);
+            (c.reference.clone(), (c.footprint.clone(), f))
+        })
+        .collect();
+
+    // Collect the capacitor names actually in the bound circuit.
+    let cap_names: Vec<String> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|d| match d {
+            Device::Capacitor { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Per-ref override table.
+    let overrides: HashMap<&str, &crate::scenarios::CapOverride> = dec
+        .overrides
+        .iter()
+        .map(|o| (o.reference.as_str(), o))
+        .collect();
+
+    for name in cap_names {
+        let p = if let Some(ov) = overrides.get(name.as_str()) {
+            // Start from the footprint default, then apply whichever fields the
+            // override specifies.
+            let (fp, val) = cap_meta
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), 0.0));
+            let mut base = EsrEsl::from_footprint(&fp, val);
+            if let Some(r) = ov.esr_ohms {
+                base.esr_ohms = r;
+            }
+            if let Some(l) = ov.esl_henries {
+                base.esl_henries = l;
+            }
+            base
+        } else if dec.parasitics {
+            let (fp, val) = cap_meta
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| (String::new(), 0.0));
+            EsrEsl::from_footprint(&fp, val)
+        } else {
+            // Parasitics off and no override for this cap: leave it ideal.
+            continue;
+        };
+        apply_parasitics(&mut bound.circuit, &name, p);
+    }
+    Ok(())
 }
 
 /// Resolve a peripheral's attachment net by net name or connector ref+pin.
@@ -866,6 +1110,20 @@ fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
             capacity_mah: s.capacity_mah.unwrap_or(1000.0),
             soc: s.soc.unwrap_or(1.0),
             r_internal_ohms: s.r_internal_ohms.unwrap_or(0.1),
+            protection: match (s.protection_trip_a, s.protection_delay_ms) {
+                (Some(trip_a), delay_ms) => {
+                    let mut p =
+                        galvani_engine::power_supply::BatteryProtection::new(
+                            trip_a,
+                            delay_ms.unwrap_or(0.0) / 1000.0,
+                        );
+                    if let Some(reset) = s.protection_reset_a {
+                        p.reset_a = reset;
+                    }
+                    Some(p)
+                }
+                (None, _) => None,
+            },
         },
         other => {
             return Err(SpecError::Invalid(format!(

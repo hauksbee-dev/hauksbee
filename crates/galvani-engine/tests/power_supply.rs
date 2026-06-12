@@ -152,6 +152,7 @@ fn battery_soc_depletes_at_expected_rate() {
             capacity_mah: 100.0,
             soc: 1.0,
             r_internal_ohms: 0.05,
+            protection: None,
         },
     );
 
