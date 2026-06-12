@@ -56,6 +56,62 @@ class CiRun:
         return f"{self.pass_count}/{self.total} assertions passed — {verdict}"
 
 
+def find_specs(*search_dirs: str) -> List[str]:
+    """All ``*.toml`` galvani-ci specs found in the given directories.
+
+    File-type-agnostic on purpose: a spec's ``board`` may be a ``.kicad_pcb``
+    (layout-stage CI) or a ``.kicad_sch`` (schematic-stage CI). Discovery only
+    looks at the spec files, never the board, so the same logic serves the
+    pcbnew action plugin, a schematic-stage pre-commit hook, and any CLI driver.
+    Directories that do not exist are skipped; results are sorted and de-duped.
+    """
+    seen = set()
+    out: List[str] = []
+    for d in search_dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if name.endswith(".toml"):
+                full = os.path.join(d, name)
+                if full not in seen:
+                    seen.add(full)
+                    out.append(full)
+    return out
+
+
+def spec_board(spec_path: str) -> Optional[str]:
+    """The raw ``board = "..."`` value declared in a spec, or None.
+
+    A deliberately tiny TOML reader (no dependency): it scans for the first
+    top-level ``board`` key. Used to tell schematic-stage specs (``.kicad_sch``)
+    from layout-stage specs (``.kicad_pcb``) without binding to either file type.
+    """
+    try:
+        with open(spec_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, _, rhs = stripped.partition("=")
+                # Exact key match: `board`, not `board_rev` / `board_notes`.
+                if key.strip() != "board":
+                    continue
+                rhs = rhs.strip()
+                # Strip an inline comment, then surrounding quotes.
+                if "#" in rhs:
+                    rhs = rhs.split("#", 1)[0].strip()
+                return rhs.strip('"').strip("'")
+    except OSError:
+        return None
+    return None
+
+
+def spec_targets_schematic(spec_path: str) -> bool:
+    """True when a spec's board is a `.kicad_sch` (schematic-stage CI)."""
+    board = spec_board(spec_path)
+    return bool(board) and board.lower().endswith(".kicad_sch")
+
+
 def find_binary(explicit: Optional[str] = None) -> Optional[str]:
     """Locate the galvani-ci binary.
 
