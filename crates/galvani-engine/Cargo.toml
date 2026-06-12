@@ -23,9 +23,7 @@ galvani-ir = { version = "0.1.0", path = "../galvani-ir" }
 galvani-solve = { version = "0.1.0", path = "../galvani-solve" }
 galvani-mcu = { version = "0.1.0", path = "../galvani-mcu" }
 galvani-server = { version = "0.1.0", path = "../galvani-server" }
-tokio = { version = "1.52.3", features = ["full"] }
-toml = "0.8"
-
-[dev-dependencies]
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
+tokio = { version = "1.52.3", features = ["full"] }
+toml = "0.8"

@@ -20,6 +20,7 @@
 //! exposes the whole thing behind `galvani-server`'s `Engine` trait.
 
 pub mod binder;
+pub mod boardcode;
 pub mod digital;
 pub mod drivers;
 pub mod engine;
@@ -29,6 +30,10 @@ pub mod scheduler;
 pub mod stress;
 
 pub use binder::{bind_board, BoundBoard};
+pub use boardcode::{
+    check_board_text, check_code, code_to_board_text, decompile_board_to_code, load_code,
+    program_from_extracted, render_check_report, CheckOptions, CheckReport,
+};
 pub use engine::GalvaniEngine;
 pub use power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
