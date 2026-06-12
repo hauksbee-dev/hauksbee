@@ -71,7 +71,56 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "no_faults" => check_no_faults(out),
         "max_current" => check_max_current(a, out),
         "peripheral" => check_peripheral(a, out),
+        "boot-coverage" => check_boot_coverage(a, out),
         other => (false, format!("unknown assertion kind '{other}'")),
+    }
+}
+
+/// Boot-coverage: the control net named by `net` must be actively driven to its
+/// defined level (`min`, volts) by `deadline_ms` after reset, and no stress
+/// fault may fire during the boot window before it is first driven. This is the
+/// formerly-rejected "Hi-Z control input" class made decidable by running the
+/// firmware: instead of guessing the intended power-up default from the netlist
+/// (which is not encodable), we watch the firmware drive it.
+fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let net = a.net.clone().unwrap_or_default();
+    let level = a.min.unwrap_or(0.0);
+    let deadline = a.deadline_ms.unwrap_or(0.0);
+    let key = (net.clone(), level.to_bits());
+
+    let reached = out.first_reach_ms.get(&key).copied();
+    match reached {
+        None => (
+            false,
+            format!(
+                "control net '{net}' was NEVER driven to >= {level} V (firmware left it Hi-Z / undefined through the whole run)"
+            ),
+        ),
+        Some(t_ms) if t_ms > deadline + 1e-9 => (
+            false,
+            format!(
+                "control net '{net}' first reached {level} V at {t_ms:.2} ms, past the {deadline} ms boot deadline"
+            ),
+        ),
+        Some(t_ms) => {
+            // Driven in time. Now require no fault fired in the boot window
+            // *before* the net was first driven (rails must hold and nothing
+            // over-stresses while the control input is still undefined).
+            if let Some(ft) = out.first_fault_ms {
+                if ft < t_ms - 1e-9 {
+                    return (
+                        false,
+                        format!(
+                            "control net '{net}' was driven at {t_ms:.2} ms, but a stress fault fired earlier at {ft:.2} ms during the boot window"
+                        ),
+                    );
+                }
+            }
+            (
+                true,
+                format!("control net '{net}' driven to >= {level} V at {t_ms:.2} ms (<= {deadline} ms), boot window clean"),
+            )
+        }
     }
 }
 
