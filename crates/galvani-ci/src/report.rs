@@ -49,7 +49,7 @@ impl CiResult {
         let total = self.results.len();
         let passed = self.pass_count();
         out.push_str(&format!(
-            "\n{}/{} assertions passed in {:.2}s — {}\n",
+            "\n{}/{} assertions passed in {:.2}s - {}\n",
             passed,
             total,
             self.elapsed.as_secs_f64(),
@@ -111,13 +111,13 @@ impl CiResult {
         for r in &self.results {
             if r.passed {
                 out.push_str(&format!(
-                    "::notice title=galvani-ci PASS::{} — {}\n",
+                    "::notice title=galvani-ci PASS::{} - {}\n",
                     gh_escape(&r.label),
                     gh_escape(&r.detail)
                 ));
             } else {
                 out.push_str(&format!(
-                    "::error title=galvani-ci FAIL::{} — {}\n",
+                    "::error title=galvani-ci FAIL::{} - {}\n",
                     gh_escape(&r.label),
                     gh_escape(&r.detail)
                 ));
@@ -132,7 +132,7 @@ impl CiResult {
             ));
         } else {
             out.push_str(&format!(
-                "::error title=galvani-ci::{}/{} assertions passed — hardware check RED\n",
+                "::error title=galvani-ci::{}/{} assertions passed - hardware check RED\n",
                 self.pass_count(),
                 self.results.len()
             ));
