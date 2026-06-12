@@ -449,6 +449,69 @@ pub fn reconstruct(
         });
     }
 
+    // ── Per-net copper geometry (for the gerber trace-current surface) ───────
+    // A drawn copper track (`PrimKind::Track`) is a finite-width capsule whose
+    // width is exactly `2*r` (the aperture diameter). A pour (`PrimKind::Region`)
+    // is a plane: its true cross-section is not a discrete-segment width, so a
+    // net carrying any region is `Poured` and out of the discrete-width check's
+    // reach, exactly as in the native-CAD trace_current module. Flashes (pads)
+    // and vias are not conductor-length segments, so they do not set the
+    // bottleneck width. This is computed here, where `net_of_prim` and the
+    // primitive shapes are both in scope, and surfaced for the gerber
+    // trace-current sweep.
+    let net_name_of: HashMap<i64, String> =
+        nets.iter().map(|n| (n.id, n.name.clone())).collect();
+    let mut min_w: HashMap<i64, f64> = HashMap::new();
+    let mut max_w: HashMap<i64, f64> = HashMap::new();
+    let mut track_count: HashMap<i64, usize> = HashMap::new();
+    let mut region_count: HashMap<i64, usize> = HashMap::new();
+    for gi in 0..prims.len() {
+        let net = net_of_prim[gi];
+        if net == 0 {
+            continue;
+        }
+        match prims[gi].kind {
+            PrimKind::Track => {
+                if let Shape::Capsule(c) = &prims[gi].shape {
+                    let w = c.r * 2.0;
+                    if w > 0.0 {
+                        min_w.entry(net).and_modify(|m| *m = m.min(w)).or_insert(w);
+                        max_w.entry(net).and_modify(|m| *m = m.max(w)).or_insert(w);
+                        *track_count.entry(net).or_default() += 1;
+                    }
+                }
+            }
+            PrimKind::Region => {
+                *region_count.entry(net).or_default() += 1;
+            }
+            _ => {}
+        }
+    }
+    let mut net_copper: Vec<GerberNetCopper> = nets
+        .iter()
+        .map(|n| {
+            let rc = region_count.get(&n.id).copied().unwrap_or(0);
+            let tc = track_count.get(&n.id).copied().unwrap_or(0);
+            let kind = if rc > 0 {
+                GerberCopperKind::Poured
+            } else if tc > 0 {
+                GerberCopperKind::Traces
+            } else {
+                GerberCopperKind::None
+            };
+            GerberNetCopper {
+                net_id: n.id,
+                name: net_name_of.get(&n.id).cloned().unwrap_or_default(),
+                kind,
+                min_track_width_mm: min_w.get(&n.id).copied(),
+                max_track_width_mm: max_w.get(&n.id).copied(),
+                track_count: tc,
+                region_count: rc,
+            }
+        })
+        .collect();
+    net_copper.sort_by_key(|nc| nc.net_id);
+
     let stats = ReconStats {
         n_layers,
         n_nets: nets.len(),
@@ -458,6 +521,7 @@ pub fn reconstruct(
         assigned_flashes,
         unassigned_flashes: total_flashes.saturating_sub(assigned_flashes),
         gnd_detected: gnd_net.is_some(),
+        net_copper,
     };
 
     (
@@ -481,6 +545,40 @@ pub struct ReconStats {
     pub assigned_flashes: usize,
     pub unassigned_flashes: usize,
     pub gnd_detected: bool,
+    /// Per-net copper geometry reconstructed from the gerber primitives: the
+    /// narrowest drawn track width (the series bottleneck) and whether the net
+    /// carries a pour. Feeds the gerber trace-current surface, where copper
+    /// width is exact from the manufacturing files.
+    pub net_copper: Vec<GerberNetCopper>,
+}
+
+/// How a reconstructed net's copper is realised, mirroring
+/// [`crate::trace_current::CopperKind`] but sourced from gerber primitives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GerberCopperKind {
+    /// Only drawn tracks: the narrowest width is the conductor bottleneck.
+    Traces,
+    /// At least one pour region: the plane's true cross-section is not a
+    /// discrete-segment width, so the net is out of the width check's reach.
+    Poured,
+    /// No drawn track and no region (a net made only of pad flashes / vias).
+    None,
+}
+
+/// Per-net copper geometry from the gerber reconstruction.
+#[derive(Debug, Clone)]
+pub struct GerberNetCopper {
+    pub net_id: i64,
+    pub name: String,
+    pub kind: GerberCopperKind,
+    /// Narrowest drawn track on the net (mm), if any tracks exist.
+    pub min_track_width_mm: Option<f64>,
+    /// Widest drawn track on the net (mm).
+    pub max_track_width_mm: Option<f64>,
+    /// Number of drawn track primitives on the net.
+    pub track_count: usize,
+    /// Number of pour region primitives on the net.
+    pub region_count: usize,
 }
 
 /// Half the search window (mm) for a footprint's pads, inferred from the
