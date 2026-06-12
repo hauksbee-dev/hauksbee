@@ -1,14 +1,14 @@
 //! Two-sided validation of the behavioural power-IC models against the
 //! documented MNT Reform / ZSWatch DevKit revision faults
 //! (docs/KNOWN_FAULTS_VALIDATION.md). Each test flags the faulty revision for
-//! exactly the thing the next revision fixed, and goes clean on the fix — the
+//! exactly the thing the next revision fixed, and goes clean on the fix, the
 //! strongest calibration the tool can have.
 //!
 //! Corpus-gated like `galvani-extract/tests/known_faults.rs`: absent corpus
 //! skips, but `GALVANI_REQUIRE_CORPUS=1` turns absence into a hard fail so the
 //! calibration cannot vacuously green-out on a runner that should have it.
 //!
-//! Method: each fault is exercised on a FOCUSED subcircuit — the power IC plus
+//! Method: each fault is exercised on a FOCUSED subcircuit, the power IC plus
 //! its programming resistors extracted from the real board, with the operating
 //! condition (brick voltage, pack voltage, system load, sleep leak) applied in
 //! the test. The behavioural device itself is bound by the ordinary pipeline
@@ -303,7 +303,7 @@ fn npm1300_shphld_feeds_gpio_on_120_and_is_clean_on_121() {
 // Reform mb3.0, with the LTC4020 and LTC6803) must bind and run a normal solve
 // without the behavioural layer manufacturing faults. The fault checks are
 // opt-in (a brick budget must be configured explicitly), so an ordinary run is
-// silent — the behavioural models add physics, not findings, on a clean board.
+// silent, the behavioural models add physics, not findings, on a clean board.
 // ───────────────────────────────────────────────────────────────────────────
 
 #[test]

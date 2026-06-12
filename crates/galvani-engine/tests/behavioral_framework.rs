@@ -342,7 +342,7 @@ fn converter_harness(prog_ohms: f64, r_load: f64) -> Harness {
     // prog_ref_ohms = 400k, rsense = 0.01:
     //   prog = 200k => v_sense = 0.05*0.5 = 0.025 => iin = 2.5 A
     //   prog = 400k => v_sense = 0.05*1.0 = 0.05  => iin = 5.0 A (full scale)
-    // i.e. a LARGER programming resistor RAISES the limit — the LTC4020 ILIMIT
+    // i.e. a LARGER programming resistor RAISES the limit, the LTC4020 ILIMIT
     // direction the concrete model uses (100k over budget, 7.15k at budget).
     let toml = format!(
         r#"
@@ -409,7 +409,7 @@ fn program_resistor_changes_the_limit_with_no_model_edit() {
     // changes the input-current limit, read off the board at bind time, with no
     // model edit. With prog_ref_ohms = 400k: prog = 400k => 5 A (full scale);
     // prog = 200k => 2.5 A (half). A LARGER programming resistor RAISES the
-    // limit — exactly the LTC4020 ILIMIT direction (drop R8 to lower the limit).
+    // limit, exactly the LTC4020 ILIMIT direction (drop R8 to lower the limit).
     let lim_400k = converter_harness(400_000.0, 2.0).dev.converter_iin_limit().unwrap();
     let lim_200k = converter_harness(200_000.0, 2.0).dev.converter_iin_limit().unwrap();
     assert!((lim_400k - 5.0).abs() < 0.3, "prog=400k => ~5 A, got {lim_400k:.3}");
@@ -457,7 +457,7 @@ impl CustomBehavior for RunawaySink {
         dt: f64,
         _faults: &mut Vec<galvani_engine::FaultEvent>,
     ) {
-        // Ramp the sink current by 0.1 A per ms — arbitrary stateful logic.
+        // Ramp the sink current by 0.1 A per ms, arbitrary stateful logic.
         self.accum += 0.1 * (dt / 1e-3);
         if let Some(id) = self.isrc {
             if let Some(Device::Isource { kind, .. }) = circuit.devices.get_mut(id.0 as usize) {

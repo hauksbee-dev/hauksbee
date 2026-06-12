@@ -7,7 +7,7 @@
 //! sense resistors into the [`Circuit`] once, and the scheduler calls
 //! [`BehavioralDevice::update`] between solver chunks to recompute each leg's
 //! source value from the previous chunk's solved node voltages and branch
-//! currents. It does NOT add new device kinds to the inner Newton loop — every
+//! currents. It does NOT add new device kinds to the inner Newton loop, every
 //! behaviour is expressed in terms of the existing `Vsource` / `Isource` /
 //! `Resistor` primitives, so the partitioned solver is untouched.
 //!
@@ -50,7 +50,7 @@ use crate::stress::{FaultEvent, FaultKind};
 ///
 /// The declarative layer (pins/pulls, FSM, averaged converter, expression laws)
 /// covers the great majority of power ICs, but some parts have behaviour no
-/// finite declarative schema captures — a closed-loop controller with internal
+/// finite declarative schema captures, a closed-loop controller with internal
 /// state, a multi-phase sequencer with data-dependent timing, a part whose
 /// output depends on an I2C register the firmware wrote. For those, a user
 /// implements this trait in Rust and registers it under a part-match key
@@ -743,7 +743,7 @@ impl BehavioralDevice {
         // divided by its resistance. We read this from node voltages (always in
         // the solver's global x) rather than the output Vsource's branch current
         // unknown, because the partitioned solver's global x carries node
-        // voltages only — a branch read would silently return 0 whenever the
+        // voltages only, a branch read would silently return 0 whenever the
         // fast path is taken.
         let iout = ((node_v(c.out_drv_node) - node_v(c.out_node)) / c.out_r_ohms).abs();
         let vout = node_v(c.out_node).max(1e-6);
@@ -854,7 +854,7 @@ fn resolve_iin_limit(
 /// programming curve the two real board values straddle the 60 W brick budget
 /// (100k saturates well above 60 W, 7.15k lands at ~60 W). `rsense` and `prog`
 /// are read off the actual board (R49 and R8), so the limit moves when the board
-/// resistor moves, with no model edit — which is exactly the fix.
+/// resistor moves, with no model edit, which is exactly the fix.
 pub fn program_iin_limit(
     sp: &SenseProgram,
     board_resistor: &dyn Fn(&str) -> Option<f64>,

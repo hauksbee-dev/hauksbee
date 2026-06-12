@@ -12,13 +12,13 @@
 //! engine's behavioural runtime stamps and iterates between solver chunks (the
 //! same cadence the configurable power supplies already use):
 //!
-//! - **pins**: named pins with electrical semantics — an internal pull to a
+//! - **pins**: named pins with electrical semantics, an internal pull to a
 //!   named rail through a resistance (the nPM1300 SHPHLD case), an open-drain
 //!   output, an enable input with a threshold and polarity.
 //! - **states / transitions**: a finite state machine whose transitions are
 //!   guarded by pin-voltage / pin-current / time conditions, with per-state pin
 //!   behaviour overrides.
-//! - **converter**: an averaged buck / boost / buck-boost block — an output
+//! - **converter**: an averaged buck / boost / buck-boost block, an output
 //!   regulation setpoint, input/output current limits with foldback, an
 //!   efficiency, and a sense-resistor pin that programs a limit the way real
 //!   parts do (the LTC4020 ILIMIT/RSENSE case).
@@ -255,7 +255,7 @@ pub struct Converter {
 /// programmed threshold, clamped to `v_sense_full`), giving an input current
 /// limit `i = v_sense_max / rsense_ohms`. The resistor values are read off the
 /// board at bind time, so changing the board resistor changes the limit, with
-/// no model edit — which is precisely how the Reform mb2.5->3.0 fix (R8 100k ->
+/// no model edit, which is precisely how the Reform mb2.5->3.0 fix (R8 100k ->
 /// 7.15k) lands.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct SenseProgram {
@@ -306,7 +306,7 @@ pub enum LawKind {
 /// An expression-defined law: a current or voltage computed each chunk from an
 /// `evalexpr` expression over the device's pin voltages, active state, and
 /// params. Sandboxed: only arithmetic, comparison, and `if`/`min`/`max`/`abs`
-/// builtins are available — no variables the runtime did not bind, no I/O.
+/// builtins are available, no variables the runtime did not bind, no I/O.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct Law {
     /// Diagnostic name (e.g. "balancer_leak").

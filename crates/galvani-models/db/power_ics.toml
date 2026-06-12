@@ -1,7 +1,7 @@
 # Behavioural models for power ICs (chargers, balancers, PMICs).
 #
-# These parts carry internal logic — regulation loops, ship-mode pulls,
-# balancing FETs — that the SPICE-level kinds cannot express, so each entry has
+# These parts carry internal logic (regulation loops, ship-mode pulls,
+# balancing FETs) that the SPICE-level kinds cannot express, so each entry has
 # a [models.behavioral] block (pins/pulls, averaged converter, expression laws)
 # that the engine's behavioural runtime stamps and iterates between solver
 # chunks. Pin maps are the manufacturer pinout; cited inline.
@@ -10,7 +10,7 @@
 # docs/KNOWN_FAULTS_VALIDATION.md. Where a value is programmed by an on-board
 # resistor (the LTC4020 ILIMIT / RSENSE), the model reads the board reference
 # designator at bind time, so changing the board resistor changes the behaviour
-# with no model edit — exactly the way the real revision fixes landed.
+# with no model edit, exactly the way the real revision fixes landed.
 
 # ── LTC4020: 55V buck-boost battery charger controller ────────────────────────
 #
