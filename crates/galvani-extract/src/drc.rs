@@ -1928,17 +1928,27 @@ pub mod eagle_drc {
         copper_layers: &[i64],
         buckets: &mut LayerBuckets,
     ) {
-        let (esin, ecos) = el.rot_deg.to_radians().sin_cos();
         // Element transform: local (lx, ly) → world. Eagle is y-up, rotation CCW.
-        // A mirrored element (`MR<deg>`) reflects the package, then rotates. Eagle
-        // applies the mirror so the side-specific copper lands on the opposite
-        // board face; geometrically the reflection is across the local X axis
-        // (flip Y) followed by the CCW rotation. (Verified against SOIC8 pad
-        // placement on the QT Py: `MR90` puts pad 1 at its real coordinate only
-        // with flip-Y, not the flip-X the older pin extractor used.)
+        // A mirrored element (`MR<deg>`) is reflected about the Y axis (negate
+        // local X) and then rotated CLOCKWISE by `deg` (mirroring flips the sense
+        // of rotation). Equivalently: flip-X, then rotate by `-deg`.
+        //
+        // The earlier form used flip-Y with `+deg`. That is *identical* to
+        // flip-X/`-deg` only when the rotation is a non-trivial multiple that
+        // absorbs the sign (e.g. MR90), which is why it tested clean on the QT
+        // Py's `MR90` SOIC8. But for `MR0` / `MR180` (no rotation to absorb the
+        // sign) flip-Y and flip-X diverge, and flip-Y placed pads on the wrong
+        // side of the package origin. That manufactured false shorts on the
+        // SparkFun RP2040 Thing Plus, whose `MR0` micro-SD socket J6 then dropped
+        // its SCLK/VCC/GND pads ~23 mm away, on top of the V_USB / EN bottom
+        // traces. With flip-X/`-deg`, J6's SCLK pad lands at (10.51, 49.05),
+        // exactly on its own SPI_SCK1 net copper (verified), and the QT Py `MR90`
+        // placement is unchanged (the two transforms coincide there).
+        let eff_rot = if el.mirrored { -el.rot_deg } else { el.rot_deg };
+        let (esin, ecos) = eff_rot.to_radians().sin_cos();
         let to_world = |lx: f64, ly: f64| -> (f64, f64) {
-            let my = if el.mirrored { -ly } else { ly };
-            (el.x + lx * ecos - my * esin, el.y + lx * esin + my * ecos)
+            let mx = if el.mirrored { -lx } else { lx };
+            (el.x + mx * ecos - ly * esin, el.y + mx * esin + ly * ecos)
         };
         match item {
             PkgItem::Pad { x, y, diameter, drill, shape, rot_deg, .. } => {
