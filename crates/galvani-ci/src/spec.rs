@@ -386,6 +386,15 @@ pub struct Assertion {
     /// on a vcd_sink, "temp_c" on a sensor). Uses the assertion's min/max.
     #[serde(default)]
     pub field: Option<String>,
+
+    // boot-coverage: a control net (gate / enable / reset / CS) that the MCU
+    // firmware must actively drive to a defined level (`min`, in volts) within
+    // `deadline_ms` of reset, with no stress fault raised during the boot window
+    // before it is first driven. This turns "we cannot know the intended
+    // power-up default of a Hi-Z control input" into "watch what the firmware
+    // actually does".
+    #[serde(default)]
+    pub deadline_ms: Option<f64>,
 }
 
 impl Spec {
@@ -593,9 +602,28 @@ impl Assertion {
                     )));
                 }
             }
+            "boot-coverage" => {
+                if self.net.is_none() {
+                    return Err(SpecError::Invalid(
+                        "boot-coverage assertion needs a `net` (the control net to watch)".into(),
+                    ));
+                }
+                if self.min.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "boot-coverage assertion on '{}' needs a `min` (the driven level in volts the firmware must reach)",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+                if self.deadline_ms.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "boot-coverage assertion on '{}' needs a `deadline_ms` (the boot deadline)",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+            }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral|boot-coverage)"
                 )));
             }
         }
@@ -660,6 +688,14 @@ impl Assertion {
                 } else {
                     format!("peripheral {id}")
                 }
+            }
+            "boot-coverage" => {
+                let net = self.net.clone().unwrap_or_default();
+                format!(
+                    "{net} driven to >= {} V within {} ms of reset",
+                    self.min.unwrap_or(0.0),
+                    self.deadline_ms.unwrap_or(0.0)
+                )
             }
             other => other.to_string(),
         }
