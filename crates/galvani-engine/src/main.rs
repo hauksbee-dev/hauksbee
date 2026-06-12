@@ -2,19 +2,22 @@
 //!
 //! ```text
 //! galvani run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
-//!                                 [--port 3001] [--report]
+//!                                 [--port 3001] [--report] [--drc] [--apply-shorts]
 //! galvani to-code    <board-file> [--out <file.board>]
 //! galvani from-code  <code-file>  [--out <file.kicad_pcb>]
 //! galvani check-code <code-dir|file> [--seconds N] [--destructive]
 //! ```
 //!
-//! - `run --report`     : print the bind report table and exit.
-//! - `run --headless`   : run the co-sim for `--seconds` and print summary stats.
-//! - `run` (default)    : serve the live websocket (frontend/dist if present).
-//! - `to-code`          : decompile a board into editable Board-as-Code text.
-//! - `from-code`        : recompile Board-as-Code back into a `.kicad_pcb`.
-//! - `check-code`       : recompile, bind, co-sim with the stress monitor, and
-//!                        print a fault report (the edit -> simulate loop).
+//! - `run --report`       : print the bind report table and exit.
+//! - `run --drc`          : print the geometric short / clearance report and exit.
+//! - `run --apply-shorts` : apply every detected copper short (bridge the nets)
+//!                          before simulating, so the run shows the consequences.
+//! - `run --headless`     : run the co-sim for `--seconds` and print summary stats.
+//! - `run` (default)      : serve the live websocket (frontend/dist if present).
+//! - `to-code`            : decompile a board into editable Board-as-Code text.
+//! - `from-code`          : recompile Board-as-Code back into a `.kicad_pcb`.
+//! - `check-code`         : recompile, bind, co-sim with the stress monitor, and
+//!                          print a fault report (the edit -> simulate loop).
 
 use std::path::{Path, PathBuf};
 
@@ -34,6 +37,8 @@ struct Args {
     seconds: f64,
     headless: bool,
     report_only: bool,
+    drc_only: bool,
+    apply_shorts: bool,
     port: u16,
 }
 
@@ -45,6 +50,8 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
         seconds: 1.0,
         headless: false,
         report_only: false,
+        drc_only: false,
+        apply_shorts: false,
         port: 3001,
     };
     while let Some(flag) = it.next() {
@@ -61,6 +68,8 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
             }
             "--headless" => args.headless = true,
             "--report" => args.report_only = true,
+            "--drc" => args.drc_only = true,
+            "--apply-shorts" => args.apply_shorts = true,
             "--port" => {
                 args.port = it
                     .next()
@@ -76,7 +85,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
 
 fn usage() -> String {
     "usage:\n  \
-     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report]\n  \
+     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--apply-shorts]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
      galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
@@ -136,11 +145,29 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // --drc: run geometric short / clearance detection, print, exit.
+    if args.drc_only {
+        let report = ExtractedBoard::drc(&text)?;
+        print!("{}", render_drc(&report));
+        return Ok(());
+    }
+
     let mut engine = GalvaniEngine::from_board_file(
         &text,
         args.firmware.as_deref(),
         &format!("/boards/{}", file_name(&args.board)),
     )?;
+
+    // --apply-shorts: bridge every detected copper short before simulating.
+    if args.apply_shorts {
+        let report = ExtractedBoard::drc(&text)?;
+        let applied = engine.apply_drc_shorts(&report);
+        eprintln!(
+            "applied {applied} copper short(s) of {} detected ({} clearance violations)",
+            report.short_count(),
+            report.clearance_violations().count(),
+        );
+    }
 
     if args.headless {
         run_headless(&mut engine, args.seconds);
@@ -294,6 +321,45 @@ fn serve(engine: GalvaniEngine, port: u16) -> anyhow::Result<()> {
         let addr = format!("127.0.0.1:{port}");
         server.serve(&addr, dir.as_deref()).await
     })
+}
+
+/// Render a geometric DRC report as a Unicode table plus a summary line.
+fn render_drc(report: &galvani_extract::DrcReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "DRC: {} primitive(s), clearance rule {:.3} mm\n",
+        report.primitive_count, report.clearance_mm
+    ));
+    if report.findings.is_empty() {
+        out.push_str("no shorts or clearance violations.\n");
+        return out;
+    }
+    out.push_str(
+        "┌──────────┬──────────────────────────┬──────────────────────────┬────────┬──────────┬───────────────┐\n\
+         │ Kind     │ Net A                    │ Net B                    │ Layer  │ Gap (mm) │ Location      │\n\
+         ├──────────┼──────────────────────────┼──────────────────────────┼────────┼──────────┼───────────────┤\n",
+    );
+    for f in &report.findings {
+        out.push_str(&format!(
+            "│ {:<8} │ {:<24} │ {:<24} │ {:<6} │ {:>8.4} │ {:>5.1},{:<7.1} │\n",
+            f.kind.as_str(),
+            truncate(&f.net_a_name, 24),
+            truncate(&f.net_b_name, 24),
+            truncate(&f.layer, 6),
+            f.gap_mm,
+            f.x,
+            f.y,
+        ));
+    }
+    out.push_str(
+        "└──────────┴──────────────────────────┴──────────────────────────┴────────┴──────────┴───────────────┘\n",
+    );
+    out.push_str(&format!(
+        "\n{} short(s), {} clearance violation(s).\n",
+        report.short_count(),
+        report.clearance_violations().count(),
+    ));
+    out
 }
 
 fn file_name(p: &Path) -> String {

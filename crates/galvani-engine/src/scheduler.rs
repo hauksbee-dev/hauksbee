@@ -445,6 +445,55 @@ impl Scheduler {
     pub fn stress_states(&self) -> HashMap<String, f64> {
         self.stress.stress_by_ref().clone()
     }
+
+    /// Short two nets by name, bridging them with a small resistance so the
+    /// solver carries current between them and the stress monitor shows the
+    /// fallout. The what-if "solder bridge" API. Returns true if the bridge was
+    /// stamped (both nets exist, are distinct, and were not already bridged).
+    ///
+    /// A short to ground (one net is GND) bridges the live net straight to the
+    /// ground reference, exactly the destructive case worth simulating.
+    pub fn short_nets(&mut self, net_a: &str, net_b: &str) -> bool {
+        let node_a = self.net_nodes.get(net_a).copied();
+        let node_b = self.net_nodes.get(net_b).copied();
+        let (Some(a), Some(b)) = (node_a, node_b) else {
+            return false;
+        };
+        let Some(_name) = crate::shorts::stamp_bridge(&mut self.circuit, a, b, net_a, net_b) else {
+            return false;
+        };
+        // The new device may add a branch unknown; rebuild the MNA layout and
+        // resize the branch-current buffer so subsequent solves are consistent.
+        self.relayout();
+        self.faults_pending
+            .push(crate::shorts::short_fault(net_a, net_b, self.sim_time));
+        true
+    }
+
+    /// Apply every true overlap a DRC report found, bridging each shorted net
+    /// pair. Clearance-only violations are not applied (they are near-short
+    /// risks, not actual shorts). Returns the number of bridges stamped.
+    pub fn apply_drc_shorts(&mut self, report: &galvani_extract::DrcReport) -> usize {
+        let pairs = crate::shorts::shorted_name_pairs(report);
+        let mut applied = 0;
+        for (a, b) in pairs {
+            if self.short_nets(&a, &b) {
+                applied += 1;
+            }
+        }
+        applied
+    }
+
+    /// Rebuild the frozen MNA layout from the current circuit and resize the
+    /// node/branch state buffers to match. Called after structural edits (a
+    /// stamped short bridge) so the solver and fault monitor stay consistent.
+    fn relayout(&mut self) {
+        self.layout = Layout::new(&self.circuit);
+        let n_nodes = self.circuit.node_count();
+        self.node_volts.resize(n_nodes, 0.0);
+        let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
+        self.branch_x.resize(n_branch, 0.0);
+    }
 }
 
 /// What one `step` produced (beyond the in-place voltage/stat updates).
