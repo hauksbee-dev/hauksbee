@@ -176,7 +176,7 @@ fn is_clock_oscillator(c: &Component) -> bool {
     if connected < 3 {
         return false;
     }
-    let looks_osc = lib.contains("oscillator")
+    lib.contains("oscillator")
         || v.contains("OSCILLATOR")
         || v.contains("MHZ")
         || v.contains("OSC")
@@ -186,8 +186,7 @@ fn is_clock_oscillator(c: &Component) -> bool {
         || r.starts_with("OSC")
         || r.starts_with("CR")
         || (r.starts_with('X') && v.contains("MHZ"))
-        || (r.starts_with('Y') && v.contains("MHZ"));
-    looks_osc
+        || (r.starts_with('Y') && v.contains("MHZ"))
 }
 
 /// Find a free-running clock source whose *output* reaches `net_id` either
@@ -200,7 +199,7 @@ fn is_clock_oscillator(c: &Component) -> bool {
 /// "reach" the oscillator's VDD on the same rail and false-fire (the exact bug
 /// the GPIO15 pull-up exposed during calibration). So the oscillator must be
 /// reached on a *signal* net, via a pad that is not on a rail/ground.
-fn clock_source_reaching<'a>(board: &'a ExtractedBoard, net_id: i64) -> Option<&'a Component> {
+fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Component> {
     // The strap net itself must not be a rail/ground (it never is for a strap,
     // but guard anyway so the membership scan is meaningful).
     if let Some(n) = board.net(net_id) {
@@ -242,7 +241,7 @@ fn clock_source_reaching<'a>(board: &'a ExtractedBoard, net_id: i64) -> Option<&
 /// the net they sit on (rail/ground), since PCB-only inputs carry no pin
 /// functions. So: the oscillator drives this net iff one of its pads is on
 /// `net_id` and that net is not a rail/ground.
-fn oscillator_driving_net<'a>(board: &'a ExtractedBoard, net_id: i64) -> Option<&'a Component> {
+fn oscillator_driving_net(board: &ExtractedBoard, net_id: i64) -> Option<&Component> {
     let net = board.net(net_id)?;
     if is_ground_name(&net.name) || rail_voltage_name(&net.name).is_some() {
         return None;
