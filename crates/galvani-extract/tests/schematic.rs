@@ -218,40 +218,44 @@ fn complex_hierarchy_cross_validates() {
     );
 }
 
-/// A schematic with buses is *not* expected to match the PCB exactly yet
-/// (bus membership is unimplemented, see SCHEMATICS.md). What must still hold
-/// is that we never *over*-connect: every net we derive is a subset of a real
-/// PCB net, so the only discrepancies are bus nets split into their members.
+// ---------------------------------------------------------------------------
+// Cross-validation: bus-heavy corpus projects (now exact)
+// ---------------------------------------------------------------------------
+//
+// These three boards drive every bus feature: vector bus labels with per-member
+// wire labels, bus entries, buses crossing hierarchical sheet pins (under the
+// same name, and under a *different* name with positional member mapping), and
+// hidden power pins. They used to only "never over-merge"; with bus expansion
+// implemented they must now match their PCB partition exactly, like every other
+// validated project.
+
 #[test]
-fn interf_u_no_overmerge_despite_buses() {
-    let Some((sch, pcb)) = load_pair("kicad-demos-src/demos/interf_u", "interf_u") else {
-        eprintln!("corpus pair missing; skipping");
-        return;
-    };
-    let sch_net = pin_to_net(&sch);
-    let pcb_net = pin_to_net(&pcb);
-    let shared: Vec<_> = sch_net
-        .keys()
-        .filter(|k| pcb_net.contains_key(*k))
-        .cloned()
-        .collect();
-    // For every pair of shared pins that we put on the same schematic net,
-    // they must also share a PCB net. (No over-merge; bus splits are allowed
-    // in the other direction.)
-    let mut s2p: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
-    for k in &shared {
-        s2p.entry(sch_net[k]).or_default().insert(pcb_net[k]);
-    }
-    let overmerges: Vec<_> = s2p
-        .iter()
-        .filter(|(s, ps)| {
-            ps.len() > 1 && shared.iter().filter(|k| sch_net[*k] == **s).count() >= 2
-        })
-        .collect();
-    assert!(
-        overmerges.is_empty(),
-        "interf_u over-merged {} nets (should only ever under-connect on buses)",
-        overmerges.len()
+fn interf_u_cross_validates() {
+    // KiCad single sheet, two vector buses (PC-DB[0..7], PC-A[0..11]) with bus
+    // entries, plus hidden GND/VCC power pins on the PGA and RAM. Exact match.
+    assert_cross_validates("kicad-demos-src/demos/interf_u", "interf_u", 100);
+}
+
+#[test]
+fn video_cross_validates() {
+    // KiCad multi-sheet, heavy buses across hierarchical pins, including buses
+    // that cross a sheet boundary under a different name (DQ[0..31] feeding a
+    // DPC[0..31] sheet pin; TVRAM[..] feeding VRAM[..]) which map member-wise by
+    // index. Exact partition match over 189 components.
+    assert_cross_validates("kicad-demos-src/demos/video", "video", 300);
+}
+
+#[test]
+fn kit_dev_coldfire_cross_validates() {
+    // KiCad multi-sheet ColdFire/Xilinx dev board: bus sheet pins (AN[0..7],
+    // DTIN[0..3], IRQ-[1..7], GPT[0..3], QSPI_CS[0..3]) and many plain
+    // hierarchical signals where the named part lives on the parent sheet.
+    // Exercises rotate-then-mirror placement (R104/R115/LEDABRT101 at rot 90 +
+    // mirror x). Exact partition match over 160 components.
+    assert_cross_validates(
+        "kicad-demos-src/demos/kit-dev-coldfire-xilinx_5213",
+        "kit-dev-coldfire-xilinx_5213",
+        150,
     );
 }
 
@@ -323,6 +327,61 @@ fn fixture_unnamed_net_naming() {
     assert!(
         name.starts_with("Net-(") && name.contains("R1"),
         "unnamed net named {name:?}"
+    );
+}
+
+#[test]
+fn fixture_vector_bus_members() {
+    let Some(b) = fixture("bus_vector.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    // Three resistors. R1.1 and R3.1 both carry the member label D0 (far apart,
+    // each mid-span on its wire, both feeding the D[0..1] bus): they unify.
+    assert!(
+        same_net(&b, ("R1", "1"), ("R3", "1")),
+        "bus member D0 must unify R1 and R3"
+    );
+    // R2.1 is member D1: a different member, and the vector bus label D[0..1]
+    // must NOT merge D0 and D1 into one net.
+    assert!(
+        !same_net(&b, ("R1", "1"), ("R2", "1")),
+        "distinct bus members D0 and D1 must stay separate"
+    );
+    assert!(b.net_by_name("D0").is_some(), "D0 net present");
+    assert!(b.net_by_name("D1").is_some(), "D1 net present");
+    // The bus label itself must never become a net.
+    assert!(
+        b.net_by_name("D[0..1]").is_none(),
+        "bus label D[0..1] must not appear as a net"
+    );
+}
+
+#[test]
+fn fixture_hierarchical_bus() {
+    // A bus crossing a sheet pin: parent ADDR[0..1] sheet pin connects to a
+    // child ADDR[0..1] hierarchical label, member-wise. The parent's R-A0/R-A1
+    // and the child's RC-A0/RC-A1 must pair by member (A0 with A0, A1 with A1),
+    // never cross.
+    let Some(b) = fixture("bus_hier_top.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    assert!(
+        same_net(&b, ("RA", "1"), ("RC", "1")),
+        "ADDR member A0 must connect parent RA to child RC across the sheet"
+    );
+    assert!(
+        same_net(&b, ("RB", "1"), ("RD", "1")),
+        "ADDR member A1 must connect parent RB to child RD across the sheet"
+    );
+    assert!(
+        !same_net(&b, ("RA", "1"), ("RB", "1")),
+        "members A0 and A1 must not merge"
+    );
+    assert!(
+        !same_net(&b, ("RA", "1"), ("RD", "1")),
+        "member A0 must not cross to member A1's child net"
     );
 }
 
