@@ -464,6 +464,13 @@ impl Scheduler {
         self.behavioral.iter_mut().find(|d| d.reference == reference)
     }
 
+    /// Read the current value (A) of a named current-law on a behavioural device
+    /// (e.g. the LTC6803 balancer-leak current). `None` if absent.
+    pub fn behavioral_law_value(&self, reference: &str, law: &str) -> Option<f64> {
+        let d = self.behavioral.iter().find(|d| d.reference == reference)?;
+        d.law_value(&self.circuit, law)
+    }
+
     /// Evaluate the stress monitor over the chunk just solved.
     fn evaluate_faults(&mut self) {
         if self.stress.device_count() == 0 {
