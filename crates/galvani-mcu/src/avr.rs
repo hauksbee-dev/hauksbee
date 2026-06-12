@@ -212,7 +212,7 @@ unsafe extern "C" fn twi_hook(
             s.twi_active = true;
             s.twi_read = read_flag;
 
-            // Fire user callback and use its return value (if any) — for START
+            // Fire user callback and use its return value (if any); for START
             // events the return value is meaningless, but we keep the API uniform.
             if let Some(cb) = &mut s.callbacks.on_i2c {
                 let _ = cb(I2cEvent::Start { addr: addr7, read: read_flag });
@@ -547,7 +547,7 @@ impl Mcu for AvrMcu {
         match ext.as_str() {
             "hex" => self.load_hex(path)?,
             "elf" => self.load_elf(path)?,
-            other => bail!("unsupported firmware extension '.{}' — use .hex or .elf", other),
+            other => bail!("unsupported firmware extension '.{}'; use .hex or .elf", other),
         }
 
         self.firmware_loaded = true;

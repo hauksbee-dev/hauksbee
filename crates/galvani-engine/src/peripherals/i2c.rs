@@ -19,7 +19,7 @@
 //! model, not by sampling SCL/SDA edges. simavr clocks the whole TWI byte
 //! internally and raises one IRQ per byte/condition, so the achievable bus
 //! speed is whatever the firmware's TWI prescaler asks for (standard 100 kHz /
-//! fast 400 kHz both work) — it is not bounded by the analog chunk rate,
+//! fast 400 kHz both work); it is not bounded by the analog chunk rate,
 //! because the bytes are consumed inside a single `run_micros` call. A
 //! *bit-banged* I2C master (GPIO toggling SCL/SDA in software) is a different
 //! story: those edges alias at the chunk poll rate exactly like any other GPIO
@@ -269,7 +269,7 @@ impl I2cSlave for Eeprom24c {
 ///
 /// Register map (datasheet): a pointer register selects one of four registers.
 ///   0x00 Temp   (read-only, 2 bytes, 11-bit, 0.125 °C/LSB left-justified in
-///               the upper bits; classic LM75 is 9-bit 0.5 °C — we present the
+///               the upper bits; classic LM75 is 9-bit 0.5 °C, but we present the
 ///               LM75A 11-bit format which the 9-bit reads also accept)
 ///   0x01 Conf   (1 byte)
 ///   0x02 Thyst  (2 bytes)
