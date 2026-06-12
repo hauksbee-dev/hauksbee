@@ -476,7 +476,11 @@ impl BehavioralDevice {
                     continue;
                 }
             }
+            // Guard against a non-finite law value (e.g. a divide-by-zero when a
+            // programming resistor is a 0-ohm jumper): a NaN/Inf source would
+            // blow up the solve. Clamp to 0 rather than poison the matrix.
             let val = eval_number(&leg.program, &ctx).unwrap_or(0.0);
+            let val = if val.is_finite() { val } else { 0.0 };
             set_source_dc(circuit, leg.source, val);
         }
 
@@ -676,17 +680,24 @@ fn resolve_iin_limit(
 
 /// The programmed input-current limit for a [`SenseProgram`].
 ///
-/// The part regulates the sense voltage to a threshold set by the programming
-/// resistor ratio, clamped to the full-scale sense voltage, then divides by the
-/// sense resistor to get the current. A *smaller* programming resistor pulls the
-/// threshold ratio HIGHER (`prog_ref_ohms / prog_ohms`), so for the LTC4020 the
-/// ILIMIT pin works inversely: changing R8 from 100k to 7.15k drops the limit.
+/// The part regulates its input-shunt voltage to a current-sense threshold set
+/// by the external programming resistor, then the limit is that threshold over
+/// the sense resistor: `i = v_sense / rsense`. The threshold scales *linearly*
+/// with the programming resistor up to a full-scale ceiling:
 ///
-/// NOTE: the exact LTC4020 ILIMIT transfer function is captured by the model's
-/// `vprog_ref`, `prog_ref_ohms`, `v_sense_full` so that the two real board
-/// resistor values straddle the 60 W brick budget. The direction (bigger R8 =>
-/// higher limit => overdraw) is the load-bearing physics and is what the
-/// validation asserts.
+/// ```text
+/// v_sense = min(vprog_ref * prog / prog_ref_ohms, v_sense_full)
+/// i_limit = v_sense / rsense
+/// ```
+///
+/// so a LARGER programming resistor gives a HIGHER current limit (saturating at
+/// `v_sense_full`). This is the LTC4020 ILIMIT direction: the Reform handbook
+/// fix dropped R8 from 100k to 7.15k to LOWER the input-current limit, and with
+/// `prog_ref_ohms` / `vprog_ref` / `v_sense_full` chosen from the part's ILIMIT
+/// programming curve the two real board values straddle the 60 W brick budget
+/// (100k saturates well above 60 W, 7.15k lands at ~60 W). `rsense` and `prog`
+/// are read off the actual board (R49 and R8), so the limit moves when the board
+/// resistor moves, with no model edit — which is exactly the fix.
 pub fn program_iin_limit(
     sp: &SenseProgram,
     board_resistor: &dyn Fn(&str) -> Option<f64>,
@@ -705,11 +716,8 @@ pub fn program_iin_limit(
         .or(sp.prog_ohms)
         .unwrap_or(sp.prog_ref_ohms)
         .max(1.0);
-    // Threshold scales with the programming-resistor ratio, clamped to full
-    // scale, then scaled by the reference. A larger prog resistor => larger
-    // ratio => higher threshold => higher current limit.
-    let ratio = (sp.prog_ref_ohms / prog).clamp(0.0, 1.0);
-    let v_sense = (sp.vprog_ref * ratio).min(sp.v_sense_full).max(0.0);
+    let prog_ref = sp.prog_ref_ohms.max(1.0);
+    let v_sense = (sp.vprog_ref * prog / prog_ref).min(sp.v_sense_full).max(0.0);
     v_sense / rsense
 }
 

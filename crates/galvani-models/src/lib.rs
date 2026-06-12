@@ -53,6 +53,7 @@ static BUILTIN_TOML_FILES: &[(&str, &str)] = &[
     ("digital",           include_str!("../db/digital.toml")),
     ("dac_adc",           include_str!("../db/dac_adc.toml")),
     ("vreg",              include_str!("../db/vreg.toml")),
+    ("power_ics",         include_str!("../db/power_ics.toml")),
     ("mcu",               include_str!("../db/mcu.toml")),
     ("ignore",            include_str!("../db/ignore.toml")),
 ];

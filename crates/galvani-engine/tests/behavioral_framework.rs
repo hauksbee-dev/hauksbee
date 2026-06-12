@@ -335,13 +335,14 @@ fn converter_harness(prog_ohms: f64, r_load: f64) -> Harness {
     });
 
     // Converter: regulate BAT to 14.4 V, input limit programmed by R8/R49.
-    // The threshold scales as ratio = prog_ref_ohms/prog (clamped to 1), so
-    // v_sense = min(vprog_ref * ratio, v_sense_full), iin = v_sense / rsense.
-    // Here vprog_ref = v_sense_full = 0.05, rsense = 0.01:
-    //   prog = 200k => ratio = 1   => v_sense = 0.05  => iin = 5.0 A
-    //   prog = 400k => ratio = 0.5 => v_sense = 0.025 => iin = 2.5 A
-    // i.e. a programming resistor ABOVE prog_ref_ohms lowers the limit, which is
-    // the direction the concrete LTC4020 model uses for the 100k -> 7.15k fix.
+    // The threshold scales LINEARLY with the programming resistor up to a
+    // full-scale ceiling: v_sense = min(vprog_ref * prog/prog_ref_ohms,
+    // v_sense_full), iin = v_sense/rsense. Here vprog_ref = v_sense_full = 0.05,
+    // prog_ref_ohms = 400k, rsense = 0.01:
+    //   prog = 200k => v_sense = 0.05*0.5 = 0.025 => iin = 2.5 A
+    //   prog = 400k => v_sense = 0.05*1.0 = 0.05  => iin = 5.0 A (full scale)
+    // i.e. a LARGER programming resistor RAISES the limit — the LTC4020 ILIMIT
+    // direction the concrete model uses (100k over budget, 7.15k at budget).
     let toml = format!(
         r#"
 [converter]
@@ -355,7 +356,7 @@ efficiency = 0.9
 rsense_ohms = 0.01
 prog_ref = "R8"
 vprog_ref = 0.05
-prog_ref_ohms = 200000.0
+prog_ref_ohms = 400000.0
 v_sense_full = 0.05
 "#
     );
@@ -375,7 +376,7 @@ v_sense_full = 0.05
 fn converter_regulates_output_under_light_load() {
     // A light load (high resistance): the converter holds 14.4 V, input draw is
     // well under the limit.
-    let h = converter_harness(200_000.0, 100.0); // prog=200k => full-scale limit 5 A
+    let h = converter_harness(400_000.0, 100.0); // prog=400k => full-scale limit 5 A
     let v_bat = h.v("BAT");
     assert!(
         (14.0..=14.6).contains(&v_bat),
@@ -389,7 +390,7 @@ fn converter_regulates_output_under_light_load() {
 fn converter_input_limit_caps_the_draw() {
     // A heavy load (low resistance) demands more than the input limit allows:
     // the converter throttles so the input draw is held at the programmed limit.
-    let h = converter_harness(200_000.0, 2.0); // prog=200k => 5 A limit, heavy load
+    let h = converter_harness(400_000.0, 2.0); // prog=400k => 5 A limit, heavy load
     let iin = h.dev.converter_iin().unwrap();
     let limit = h.dev.converter_iin_limit().unwrap();
     assert!((limit - 5.0).abs() < 0.5, "programmed limit should be ~5 A, got {limit:.3}");
@@ -405,12 +406,12 @@ fn converter_input_limit_caps_the_draw() {
 fn program_resistor_changes_the_limit_with_no_model_edit() {
     // The load-bearing physics: a different on-board programming resistor
     // changes the input-current limit, read off the board at bind time, with no
-    // model edit. prog = 200k => 5 A (ratio 1.0); prog = 400k => 2.5 A
-    // (ratio 0.5). This is exactly how the LTC4020 fix lands: change one board
-    // resistor, the programmed limit moves.
-    let lim_200k = converter_harness(200_000.0, 2.0).dev.converter_iin_limit().unwrap();
+    // model edit. With prog_ref_ohms = 400k: prog = 400k => 5 A (full scale);
+    // prog = 200k => 2.5 A (half). A LARGER programming resistor RAISES the
+    // limit — exactly the LTC4020 ILIMIT direction (drop R8 to lower the limit).
     let lim_400k = converter_harness(400_000.0, 2.0).dev.converter_iin_limit().unwrap();
-    assert!((lim_200k - 5.0).abs() < 0.3, "prog=200k => ~5 A, got {lim_200k:.3}");
-    assert!((lim_400k - 2.5).abs() < 0.3, "prog=400k => ~2.5 A, got {lim_400k:.3}");
-    assert!(lim_400k < lim_200k, "a larger programming resistor lowers the limit here");
+    let lim_200k = converter_harness(200_000.0, 2.0).dev.converter_iin_limit().unwrap();
+    assert!((lim_400k - 5.0).abs() < 0.3, "prog=400k => ~5 A, got {lim_400k:.3}");
+    assert!((lim_200k - 2.5).abs() < 0.3, "prog=200k => ~2.5 A, got {lim_200k:.3}");
+    assert!(lim_200k < lim_400k, "a smaller programming resistor lowers the limit");
 }
