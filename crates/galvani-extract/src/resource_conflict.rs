@@ -265,7 +265,13 @@ fn function_for(target: &str, start_net: &str) -> Option<Function> {
             // I2S - that path IS PWM audio. The net being named PWM* (rev C/D
             // `/PWM_L`) or generically (rev B `/GPIO28`) does not change the
             // physics; the buffer+RC-to-jack topology is the evidence.
-            let _ = has; // net-name kept available for future discrimination
+            //
+            // BUT exclude a jack control/sense line - a headphone-detect,
+            // insertion, or sense net that reaches the jack but carries no audio
+            // - so such a pin is not mis-counted as a PWM-audio demand.
+            if has(&["DET", "SENSE", "SENS", "INS", "INSERT", "HPDET", "JACK_DET", "MIC_DET"]) {
+                return Some(Function { class: "jack sense (non-PWM)".into(), peripheral: Peripheral::Other });
+            }
             Some(Function { class: "PWM audio".into(), peripheral: Peripheral::Pwm })
         }
         "flash" => Some(Function { class: "SPI flash".into(), peripheral: Peripheral::SpiLike }),
