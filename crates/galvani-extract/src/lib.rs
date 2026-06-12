@@ -24,12 +24,17 @@ mod netlint;
 mod netlist;
 mod pcb;
 mod schematic;
+pub mod trace_current;
 
 pub use drc::{
     drc_from_text, eagle_drc_from_text, run_drc, DrcFinding, DrcReport, Item, ItemKind,
     ViolationKind, DEFAULT_CLEARANCE_MM,
 };
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
+pub use trace_current::{
+    audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root, CopperKind,
+    NetCopper, TraceAudit, TraceCurrentFinding,
+};
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
