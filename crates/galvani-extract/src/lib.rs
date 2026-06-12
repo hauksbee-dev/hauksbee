@@ -20,6 +20,7 @@
 pub mod drc;
 mod eagle;
 mod ipc356;
+mod netlint;
 mod netlist;
 mod pcb;
 mod schematic;
@@ -28,6 +29,7 @@ pub use drc::{
     drc_from_text, run_drc, DrcFinding, DrcReport, Item, ItemKind, ViolationKind,
     DEFAULT_CLEARANCE_MM,
 };
+pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
