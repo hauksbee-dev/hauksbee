@@ -24,6 +24,7 @@
 //! ```
 
 pub mod matcher;
+pub mod profile;
 pub mod schema;
 pub mod spice_input;
 pub mod validation;
@@ -36,6 +37,7 @@ use regex::Error as RegexError;
 use thiserror::Error;
 
 pub use matcher::ComponentQuery;
+pub use profile::{LoadProfile, Segment};
 pub use schema::{ComponentKind, ModelEntry, Params};
 pub use spice_input::SpiceCard;
 

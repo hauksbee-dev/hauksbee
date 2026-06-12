@@ -1,0 +1,178 @@
+# Dynamic load profiles: declarative chip-activity current models.
+#
+# A profile is a named, time-varying current draw a part presents on its supply
+# pin(s). It is consumed by the transient layer as a current sink (Isource)
+# stamped on the part's supply node, so the rail sees the same dI/dt a real chip
+# imposes. DC analysis cannot see these; transient analysis can.
+#
+# Schema (parsed by galvani_models::profile):
+#   id            stable key, referenced from a scenario spec.
+#   description   human text for reports.
+#   match.value_re / match.mpn_re   optional auto-binding to a part (a scenario
+#                 may also attach a profile to a ref explicitly, bypassing match).
+#   [[models.segment]]   ordered piecewise/periodic segments. Each segment:
+#       level_a     steady current (A) the segment holds.
+#       rise_s      linear ramp time from the previous level to level_a (s).
+#       duration_s  time held at level_a after the ramp (s). Omit/<=0 on the
+#                   LAST segment means "hold to end of window".
+#       period_s    if > 0, this segment repeats with this period (a burst train:
+#                   the segment fires for (rise+duration), idles at `idle_a` for
+#                   the remainder of the period, and repeats). Only meaningful on
+#                   a single periodic segment.
+#       idle_a      the between-bursts level for a periodic segment (default:
+#                   the profile's baseline = segment[0].level_a).
+#       jitter_s    optional deterministic jitter (s) added to the period,
+#                   seeded from (scenario seed, segment index). Default 0.
+#
+# All current numbers are cited to the part datasheet inline.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ESP32 (Espressif ESP32-WROOM-32 / ESP32-D0WD).
+#
+# Datasheet current figures (Espressif ESP32 Series Datasheet v4.3, "Current
+# Consumption" tables, and ESP32-WROOM-32 datasheet v3.4 Table "Current
+# Consumption Depending on RF Modes"):
+#   - Deep sleep:                ~10 uA (RTC only). We round to 0.01 mA.
+#   - Modem-sleep / CPU active:  ~30-50 mA typical (we use 40 mA baseline).
+#   - WiFi TX 802.11b, +19.5 dBm: 240 mA average, peaks to ~500 mA on packet
+#                                 bursts (datasheet lists 240 mA RF-TX average;
+#                                 the WROOM module note lists peak ~500 mA).
+#   - Cold-boot/RF-cal inrush:   the documented brownout culprit. WiFi cold start
+#                                 draws a burst train at the ~100 ms cadence of
+#                                 the association/DHCP handshake.
+# We model the boot WiFi-TX activity as a periodic 240 mA burst (10 ms wide)
+# repeating every 100 ms, on a 40 mA active baseline. A separate `esp32_wifi_tx`
+# profile models a sustained TX hammer at the 500 mA peak for worst-case inrush.
+[[models]]
+id = "esp32_boot_wifi"
+description = "ESP32 cold-boot with WiFi association bursts (240 mA TX over 40 mA active)"
+
+[models.match]
+value_re = "(?i)esp32"
+
+[[models.segment]]
+# Active baseline (CPU running, radio idle): ~40 mA.
+level_a = 0.040
+rise_s = 0.001
+duration_s = 0.0
+
+[[models.segment]]
+# WiFi TX association burst: 240 mA average, 10 ms wide, every 100 ms.
+# Source: ESP32 datasheet RF-TX average 240 mA; 100 ms ~ assoc/DHCP cadence.
+level_a = 0.240
+rise_s = 0.0005
+duration_s = 0.010
+period_s = 0.100
+idle_a = 0.040
+
+# ─────────────────────────────────────────────────────────────────────────────
+[[models]]
+id = "esp32_wifi_tx_peak"
+description = "ESP32 worst-case WiFi TX inrush (500 mA peak burst, cold boot)"
+
+[[models.segment]]
+level_a = 0.040
+rise_s = 0.0005
+duration_s = 0.0
+
+[[models.segment]]
+# Peak TX current per ESP32-WROOM-32 module note (~500 mA on packet bursts).
+# A short, hard burst is the inrush that trips an undersized BMS / regulator.
+level_a = 0.500
+rise_s = 0.0002
+duration_s = 0.006
+period_s = 0.050
+idle_a = 0.040
+
+# ─────────────────────────────────────────────────────────────────────────────
+[[models]]
+id = "esp32_deep_sleep"
+description = "ESP32 deep sleep (RTC only, ~10 uA)"
+
+[[models.segment]]
+# Datasheet deep-sleep current ~10 uA.
+level_a = 0.00001
+rise_s = 0.0001
+duration_s = 0.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic MCU (Cortex-M class: STM32F1/F4, SAMD, nRF52 are all in this band).
+#
+# Representative figures (e.g. STM32F405 datasheet IDD: Run ~ 38 mA @ 168 MHz;
+# Stop mode ~ tens of uA). We use a round generic: 20 mA active, 0.05 mA sleep.
+[[models]]
+id = "mcu_generic"
+description = "Generic MCU: 20 mA active with periodic 5 ms sleep dips to 50 uA"
+
+[[models.segment]]
+level_a = 0.020
+rise_s = 0.0005
+duration_s = 0.0
+
+[[models.segment]]
+# Periodic sleep window (low-power tick): drop to 50 uA for 5 ms every 20 ms.
+level_a = 0.00005
+rise_s = 0.0002
+duration_s = 0.005
+period_s = 0.020
+idle_a = 0.020
+
+# ─────────────────────────────────────────────────────────────────────────────
+[[models]]
+id = "mcu_active"
+description = "Generic MCU steady active draw (20 mA, no sleep)"
+
+[[models.segment]]
+level_a = 0.020
+rise_s = 0.0005
+duration_s = 0.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BLDC / servo class load (e.g. a small hobby servo or BLDC phase on a flight
+# controller ESC). The dynamic signature that DC misses: stall/start inrush and
+# the run-current ripple from commutation.
+#
+# Representative figures: a 9 g hobby servo idles ~10 mA, runs ~150-250 mA, and
+# stalls at ~700 mA-1 A (Tower Pro SG90 datasheet: stall ~ 650 mA at 4.8 V; many
+# clones spike higher). A small BLDC start inrush is several times run current.
+# We model a start inrush burst then a run-current band with commutation ripple
+# approximated as a fast periodic burst. `rise_s` gives the L/R phase character
+# cheaply (a finite current rise rather than a step).
+[[models]]
+id = "servo_sg90"
+description = "Hobby servo (SG90 class): 10 mA idle, 700 mA stall inrush at motion, ~200 mA run"
+
+[[models.segment]]
+# Idle / holding current.
+level_a = 0.010
+rise_s = 0.001
+duration_s = 0.020
+
+[[models.segment]]
+# Motion start: stall-level inrush (~700 mA), 20 ms, repeating every 200 ms as
+# the servo is commanded to step. Source: SG90 stall ~650 mA @ 4.8 V.
+level_a = 0.700
+rise_s = 0.002
+duration_s = 0.020
+period_s = 0.200
+idle_a = 0.200
+
+# ─────────────────────────────────────────────────────────────────────────────
+[[models]]
+id = "bldc_phase_burst"
+description = "Small BLDC phase: 1.5 A start inrush, 0.6 A run with commutation ripple"
+
+[[models.segment]]
+# Pre-spin idle.
+level_a = 0.050
+rise_s = 0.001
+duration_s = 0.005
+
+[[models.segment]]
+# Start inrush: several x run current. The L/R rise softens the leading edge.
+# Repeats fast (5 ms period) to approximate commutation-rate current pulses.
+level_a = 1.500
+rise_s = 0.0008
+duration_s = 0.002
+period_s = 0.005
+idle_a = 0.600
