@@ -161,20 +161,25 @@ impl QemuProcess {
     ///   - `-drive file=<flash>,if=mtd,format=raw`: the merged 4 MB flash image
     ///     (2nd-stage bootloader + partition table + app). The 1st-stage ROM
     ///     bootloader is baked into the QEMU binary.
-    ///   - `-icount shift=<n>`: deterministic virtual time. Each guest
-    ///     instruction advances the virtual clock by exactly `1 << n` ns, so a
-    ///     run is reproducible and the QMP-driven time stepping is exact. This is
-    ///     the determinism primitive (see the backend's lockstep notes).
     ///   - `-qmp tcp:127.0.0.1:<qmp_port>,server,nowait`: the control channel for
-    ///     memory reads/writes (GPIO registers) and run/stop stepping.
+    ///     memory reads/writes (GPIO mailbox) and run/stop stepping.
     ///   - `-serial tcp:127.0.0.1:<uart_port>,server,nowait`: UART0 as a raw
     ///     socket, bridged the same way the Renode backend bridges its UART.
-    ///   - watchdogs disabled so a paused, single-stepped guest is not reset.
+    ///   - watchdogs disabled so a paused guest is not reset out from under us.
+    ///
+    /// NOTE: deliberately NO `-icount`. We measured that `-icount` (any shift,
+    /// with or without `sleep=off`) prevents the Espressif esp32 / esp32s3
+    /// Xtensa machines from booting at all (15 s wall: zero UART output, vs ~1 s
+    /// to "hello" without icount). icount on these Xtensa machines is undocumented
+    /// and, empirically, broken. So the lockstep uses QMP stop/cont over the
+    /// free-running virtual clock instead (see the backend's lockstep notes). The
+    /// `_icount_shift` argument is retained in the signature for forward
+    /// compatibility but not passed to QEMU.
     pub fn spawn(
         arch: QemuArch,
         machine: &str,
         flash_image: &std::path::Path,
-        icount_shift: u8,
+        _icount_shift: u8,
         qmp_port: u16,
         uart_port: u16,
     ) -> Result<Self> {
@@ -189,17 +194,12 @@ impl QemuProcess {
             .arg(machine)
             .arg("-drive")
             .arg(format!("file={flash},if=mtd,format=raw"))
-            // Deterministic virtual time. `sleep=off` removes wall-clock pacing
-            // so the analog solver sets the pace, mirroring Renode's
-            // SetGlobalAdvanceImmediately.
-            .arg("-icount")
-            .arg(format!("shift={icount_shift},sleep=off"))
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
             .arg("-serial")
             .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait"))
-            // Disable the RTC and main watchdog timers so a paused/stepped guest
-            // is not reset out from under us.
+            // Disable the RTC and main watchdog timers so a paused guest is not
+            // reset out from under us.
             .arg("-global")
             .arg("driver=timer.esp32.timg,property=wdt_disable,value=true")
             .arg("-global")

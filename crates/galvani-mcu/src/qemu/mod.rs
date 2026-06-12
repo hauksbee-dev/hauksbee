@@ -17,44 +17,51 @@
 //! Renode config. (The RISC-V ESP32-C3 also has a Renode-less story here; see
 //! docs/MCU.md for the per-part status.)
 //!
-//! # Lockstep mechanism (the determinism primitive)
+//! # Lockstep mechanism (chosen empirically)
 //!
-//! The contract is: advance exactly a bounded amount of guest virtual time, then
-//! block until done so the analog solver can run the matching chunk. QEMU is
-//! launched with `-icount shift=N,sleep=off`:
+//! The contract is: advance a bounded amount of guest virtual time, then block
+//! until done so the analog solver can run the matching chunk. The mechanism is
+//! **QMP `cont` to run, a wall-time-bounded window, then QMP `stop` to pause**,
+//! followed by the GPIO/UART exchange. This is the QMP analogue of Renode's
+//! `RunFor`: it advances the guest a bounded amount and pauses.
 //!
-//!   - **`-icount`** makes guest virtual time a deterministic function of
-//!     executed guest instructions (each instruction = `1 << N` ns of virtual
-//!     time). With it, a run is reproducible: the same firmware against the same
-//!     image executes the same instruction stream and reaches the same state at
-//!     the same virtual time, independent of host load. This is the determinism
-//!     guarantee Renode's `RunFor` gives, obtained here through icount.
-//!   - **`sleep=off`** removes wall-clock pacing, so QEMU runs the icount clock
-//!     as fast as the host allows: the analog solver, not wall time, sets the
-//!     pace (the QEMU equivalent of Renode's `SetGlobalAdvanceImmediately`).
+//! ## Why not `-icount` (measured, not assumed)
 //!
-//! The bounded step itself is QMP `cont` to run and QMP `stop` to pause, gated by
-//! the guest virtual clock: run, poll virtual time, stop once the chunk's worth
-//! of virtual nanoseconds has elapsed. Because icount drives that clock from the
-//! instruction stream, every run advances through the identical guest states; the
-//! only run-to-run variation is which instruction boundary the `stop` lands on
-//! (a few instructions of overshoot), which does not change the GPIO *logic
-//! state* sampled at the boundary. We measured the GPIO/UART results stable
-//! across repeated runs (see the integration test, which asserts identical
-//! toggle counts and banner text run to run).
+//! The theoretically ideal primitive is `-icount shift=N`, which makes virtual
+//! time a deterministic function of executed instructions and gives bit-exact
+//! reproducibility (this is how the Renode-vs-QEMU note in docs/MCU.md framed
+//! it). We TESTED it against the Espressif fork's `esp32` machine and it does not
+//! work: with `-icount` at any shift (4/6/8/auto), with or without `sleep=off`,
+//! the Xtensa esp32 machine produces ZERO UART output in a 15 s wall window,
+//! versus ~1 s to the "hello from esp32" banner with no icount. icount on these
+//! Xtensa machines is undocumented by Espressif and, empirically, breaks boot.
+//! So icount is off, and determinism comes from the guest's own timers rather
+//! than an instruction-counted clock.
 //!
-//! Alternatives considered:
-//!   - **qtest `clock_step`**: gives an exact virtual-time advance and clean
+//! ## Determinism without icount
+//!
+//! Without icount the esp32 machine runs its virtual clock roughly at wall rate
+//! (like Renode's `RunFor` blocking for the interval). Run-to-run timing is not
+//! bit-exact, but the firmware's *logic behaviour* is reproducible because it is
+//! driven by the guest's deterministic peripheral timers (the FreeRTOS tick, the
+//! UART baud generator), which we sample only at chunk boundaries. The
+//! integration test asserts this directly: the boot banner is identical and the
+//! GPIO toggle count is stable (within a couple of chunks) across repeated runs.
+//! That is the same standard a logic-analyser sampling a real board at the chunk
+//! rate would meet.
+//!
+//! Alternatives considered and rejected:
+//!   - **`-icount` + QMP stepping**: the ideal, but breaks esp32 boot (measured
+//!     above). Rejected.
+//!   - **qtest `clock_step`**: gives exact virtual-time advance and clean
 //!     `readl`/`writel`, but qtest replaces the accelerator and gates all guest
-//!     execution on test-driven clock steps, which does not co-exist with the
-//!     normal icount/TCG boot of a real flash image. Rejected: it cannot boot the
-//!     app the way a product does.
+//!     execution on test-driven clock steps; it cannot boot a real flash image
+//!     through the normal TCG path. Rejected: it cannot boot the app the way a
+//!     product does.
 //!   - **gdbstub single-step budget**: exact, but stepping millions of
 //!     instructions per chunk over RSP is far too slow. We DO use the gdbstub,
-//!     but only for word-granular memory writes (GPIO inputs), never for
+//!     but only for word-granular memory writes (GPIO input mailbox), never for
 //!     stepping.
-//!   - **QMP stop/cont without icount**: bounded but non-deterministic (wall
-//!     clock), so rejected.
 //!
 //! # Coupling model (transplanted ODR-poll, via a RAM mailbox)
 //!
@@ -240,7 +247,10 @@ pub struct QemuBackend {
     config: QemuConfig,
     // Drop order: control channels and uart close before the process is killed.
     qmp: Qmp,
-    gdb: GdbStub,
+    /// gdbstub, used only for GPIO-input memory writes. Optional: if QEMU's
+    /// gdbserver could not be attached, input injection is disabled but the rest
+    /// of the backend (UART, GPIO output, stepping) still works.
+    gdb: Option<GdbStub>,
     uart: UartSocket,
     _process: QemuProcess,
 
@@ -302,14 +312,22 @@ impl QemuBackend {
 
         let mut qmp = Qmp::connect(("127.0.0.1", qmp_port), QemuProcess::startup_timeout())?;
         qmp.set_timeout(Duration::from_secs(20));
+        // The guest is running at boot; pause it so the first chunk starts from a
+        // known stopped state (the lockstep is cont -> window -> stop).
+        let _ = qmp.stop();
 
-        // Attach a gdbstub at our pre-allocated port via the human monitor, then
-        // connect to it. `gdbserver tcp::<port>` is the HMP form.
-        let resp = qmp.hmp(&format!("gdbserver tcp::{gdb_port}"))?;
-        if resp.to_lowercase().contains("could not") || resp.to_lowercase().contains("error") {
-            bail!("QEMU refused to start gdbserver on {gdb_port}: {resp}");
-        }
-        let gdb = GdbStub::connect(gdb_port, Duration::from_secs(10))?;
+        // Attach a gdbstub for GPIO-input memory writes. Best-effort: if it fails
+        // we keep going with input injection disabled (the common demo path
+        // drives no inputs). `gdbserver tcp::<port>` is the HMP form.
+        let gdb = match qmp.hmp(&format!("gdbserver tcp::{gdb_port}")) {
+            Ok(resp)
+                if !resp.to_lowercase().contains("could not")
+                    && !resp.to_lowercase().contains("error") =>
+            {
+                GdbStub::connect(gdb_port, Duration::from_secs(5)).ok()
+            }
+            _ => None,
+        };
 
         let uart = UartSocket::connect(uart_port, Duration::from_secs(10))?;
 
@@ -337,15 +355,16 @@ impl QemuBackend {
         Self::new(QemuConfig::esp32(), flash_image)
     }
 
-    /// Read one bank's OUT register, preferring QMP `xp`, falling back to the
-    /// gdbstub on a parse failure.
+    /// Read one bank's output-mirror word from the RAM mailbox, preferring QMP
+    /// `xp`, falling back to the gdbstub on a parse failure.
     fn read_out(&mut self, bank: &GpioBank) -> u32 {
         match self.qmp.read_u32(bank.out_reg) {
             Ok(v) => v,
             Err(_) => self
                 .gdb
-                .read_u32(bank.out_reg)
-                .unwrap_or_else(|_| *self.last_out.get(&bank.letter).unwrap_or(&0)),
+                .as_mut()
+                .and_then(|g| g.read_u32(bank.out_reg).ok())
+                .unwrap_or_else(|| *self.last_out.get(&bank.letter).unwrap_or(&0)),
         }
     }
 
@@ -390,28 +409,27 @@ impl QemuBackend {
         }
     }
 
-    /// Advance virtual time by `seconds` deterministically, then exchange state.
+    /// Advance the guest by ~`seconds` of virtual time, then exchange state.
     ///
-    /// Mechanism: resume the guest (`cont`), let it execute, pause (`stop`),
-    /// then read GPIO/UART. The amount run is bounded by a short wall-time budget
-    /// scaled from the requested virtual seconds; because `-icount` makes the
-    /// guest clock advance from the instruction stream, the firmware reaches the
-    /// same state every run regardless of exactly when `stop` lands. The engine
-    /// uses coarse chunks (a few ms) so a handful of cont/stop cycles cover a
-    /// blink period, matching the Renode backend's round-trip economy.
+    /// Mechanism (no icount; see the module lockstep notes): resume the guest
+    /// (`cont`), hold a bounded wall-time window during which the esp32 machine
+    /// advances its virtual clock at roughly wall rate, pause (`stop`), then read
+    /// the GPIO mailbox and drain UART. The window is the requested virtual
+    /// interval with a floor so the guest makes real progress each chunk (the
+    /// esp32 boot ROM + 2nd-stage bootloader take ~1-2 s of virtual time to reach
+    /// app_main, so the early chunks must let it run). This mirrors Renode's
+    /// `RunFor`, which also blocks for the interval, with the difference that the
+    /// pace is wall-bounded rather than instruction-counted.
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
         if !self.firmware_loaded {
             bail!("no firmware image booted in the QEMU machine");
         }
-        // Resume, sleep proportionally to the virtual interval (with sleep=off,
-        // icount runs fast, so a short real sleep covers a long virtual span),
-        // then pause. A floor keeps very small chunks from starving the guest.
         self.qmp.cont().context("qmp cont")?;
-        // With icount sleep=off and an ESP32 at ~240 MIPS virtual, the guest
-        // advances far faster than wall time; a 2 ms real window comfortably
-        // covers a multi-ms virtual chunk. Scale gently with the request.
-        let real_ms = ((seconds * 1000.0).clamp(1.0, 20.0)) as u64;
-        std::thread::sleep(Duration::from_millis(real_ms));
+        // Window: the requested virtual interval, floored at 8 ms so a chunk
+        // always advances the guest enough to clear boot within a reasonable
+        // number of chunks, and capped so a large step does not stall the co-sim.
+        let window_ms = ((seconds * 1000.0).max(8.0)).min(50.0) as u64;
+        std::thread::sleep(Duration::from_millis(window_ms));
         self.qmp.stop().context("qmp stop")?;
 
         self.cycles += (seconds * self.config.frequency_hz as f64).round() as u64;
@@ -455,8 +473,10 @@ impl Mcu for QemuBackend {
                 cur & !(1 << pin.bit)
             };
             if next != cur {
-                if self.gdb.write_u32(bank.in_reg, next).is_ok() {
-                    self.in_shadow.insert(bank.letter, next);
+                if let Some(g) = self.gdb.as_mut() {
+                    if g.write_u32(bank.in_reg, next).is_ok() {
+                        self.in_shadow.insert(bank.letter, next);
+                    }
                 }
             }
         }
