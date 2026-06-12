@@ -47,6 +47,12 @@ pub struct ModelEntry {
     /// power from footprint size).
     #[serde(default, skip_serializing_if = "Ratings::is_empty")]
     pub ratings: Ratings,
+
+    /// Optional declarative behavioural model (pins/pulls, FSM, averaged
+    /// converter, expression laws) for power ICs the SPICE-level kinds cannot
+    /// express. See [`crate::behavioral`].
+    #[serde(default, skip_serializing_if = "crate::behavioral::Behavioral::is_empty")]
+    pub behavioral: crate::behavioral::Behavioral,
 }
 
 /// Absolute maximum ratings, straight from the datasheet's table. The
