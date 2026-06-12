@@ -5,6 +5,7 @@
 //! faults, per-component peak current).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use galvani_engine::power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 use galvani_engine::{bind_board, BoundBoard, GalvaniEngine};
@@ -79,10 +80,7 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     // Read + extract the board once; clone per seed (binding mutates nothing on
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
-    let text = std::fs::read_to_string(&board_path)
-        .map_err(|e| SpecError::Io(format!("reading board {}: {e}", board_path.display())))?;
-    let base = ExtractedBoard::from_auto(&text)
-        .map_err(|e| SpecError::Invalid(format!("extracting board: {e}")))?;
+    let base = load_board(&board_path)?;
 
     // Validate referenced nets against the board's net names before running.
     let known: Vec<String> = base.nets.iter().map(|n| n.name.clone()).collect();
@@ -111,6 +109,141 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
         outcomes.push(outcome);
     }
     Ok(outcomes)
+}
+
+/// Load and extract the board file the spec points at, dispatching on file
+/// type. This is what makes a `board = "thing.kicad_sch"` spec just work.
+///
+/// A `.kicad_sch` is loaded *by path* (not from its text) so the sheet
+/// hierarchy resolves: a schematic's sub-sheets live in sibling files, and only
+/// the path-based entry point follows them. Loading the root text alone would
+/// silently drop every component on a sub-sheet, producing a partial netlist
+/// that passes vacuous checks. Everything else (`.kicad_pcb`, `.net`, Eagle
+/// `.brd`, IPC-D-356) carries full connectivity in one file and is sniffed from
+/// its content as before.
+fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
+    let is_sch = board_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("kicad_sch"))
+        .unwrap_or(false);
+
+    if is_sch {
+        // Guard against pointing the spec at a sub-sheet rather than the
+        // hierarchy root: a sub-sheet on its own is an incomplete board.
+        if let Some(root) = parent_schematic_of(board_path) {
+            return Err(SpecError::Invalid(format!(
+                "board {} is a sub-sheet of {}. Point the spec at the hierarchy \
+                 root ({}) so the whole design is loaded, not one page of it",
+                board_path.display(),
+                root.display(),
+                root.display(),
+            )));
+        }
+        ExtractedBoard::from_kicad_schematic_path(board_path)
+            .map_err(|e| SpecError::Invalid(format!("extracting schematic: {e}")))
+    } else {
+        let text = std::fs::read_to_string(board_path)
+            .map_err(|e| SpecError::Io(format!("reading board {}: {e}", board_path.display())))?;
+        ExtractedBoard::from_auto(&text)
+            .map_err(|e| SpecError::Invalid(format!("extracting board: {e}")))
+    }
+}
+
+/// Best-effort: is `sch` a sub-sheet referenced by another `.kicad_sch`? If so,
+/// return the referencing (parent) file. We scan candidate schematics for a
+/// `(property "Sheetfile" "<value>")` whose value's file name matches this
+/// file, comparing by *basename* so a project that organizes sub-sheets in a
+/// sub-directory (`"sheets/power.kicad_sch"`) is still caught. Candidates are
+/// the schematics in this file's directory and its parent directory, which
+/// covers flat and one-level-nested hierarchies (the layouts KiCad projects use
+/// in practice).
+///
+/// This is a heuristic, not a full hierarchy parse, which is exactly why
+/// pointing at a sub-sheet is reported as a clear error: the alternative is a
+/// silent partial board. A hierarchy nested more than one directory deep can
+/// slip past detection; that is a documented limitation, not a correctness bug
+/// in the extraction.
+fn parent_schematic_of(sch: &Path) -> Option<PathBuf> {
+    let file_name = sch.file_name()?.to_str()?.to_string();
+    // Normalize so the self-skip below is robust to `./` and similar.
+    let sch_norm = normalize_path(sch);
+
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(d) = sch.parent() {
+        dirs.push(d.to_path_buf());
+        if let Some(up) = d.parent() {
+            dirs.push(up.to_path_buf());
+        }
+    }
+
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if normalize_path(&p) == sch_norm {
+                continue;
+            }
+            let is_sch = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("kicad_sch"))
+                .unwrap_or(false);
+            if !is_sch {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                if references_sheetfile(&text, &file_name) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Does `text` contain a `(property "Sheetfile" "...")` whose value's file name
+/// equals `file_name`? Matches by basename so subdir-qualified Sheetfile values
+/// still match.
+fn references_sheetfile(text: &str, file_name: &str) -> bool {
+    let mut rest = text;
+    let marker = "\"Sheetfile\" \"";
+    while let Some(i) = rest.find(marker) {
+        let after = &rest[i + marker.len()..];
+        if let Some(end) = after.find('"') {
+            let value = &after[..end];
+            let base = Path::new(value)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(value);
+            if base == file_name {
+                return true;
+            }
+            rest = &after[end..];
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+/// Lexically normalize a path (resolve `.` / `..` segments, no IO) so two
+/// spellings of the same file compare equal.
+fn normalize_path(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Validate every component reference the spec names against the board, with
@@ -502,4 +635,38 @@ fn hash2(seed: u64, s: &str) -> u64 {
     x = x.wrapping_mul(0xBF58476D1CE4E5B9);
     x ^= x >> 27;
     x
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn references_sheetfile_matches_bare_and_subdir_values() {
+        // Bare name in the same directory.
+        let flat = r#"(property "Sheetfile" "pic_sockets.kicad_sch")"#;
+        assert!(references_sheetfile(flat, "pic_sockets.kicad_sch"));
+        assert!(!references_sheetfile(flat, "other.kicad_sch"));
+
+        // Subdir-qualified value still matches by basename.
+        let nested = r#"(property "Sheetfile" "sheets/power.kicad_sch")"#;
+        assert!(references_sheetfile(nested, "power.kicad_sch"));
+
+        // A different file that merely shares a prefix must not match.
+        let near = r#"(property "Sheetfile" "power_supply.kicad_sch")"#;
+        assert!(!references_sheetfile(near, "power.kicad_sch"));
+
+        // Multiple Sheetfile entries: any one matching is enough.
+        let many = r#"(property "Sheetfile" "a.kicad_sch") ... (property "Sheetfile" "b.kicad_sch")"#;
+        assert!(references_sheetfile(many, "b.kicad_sch"));
+        assert!(!references_sheetfile(many, "c.kicad_sch"));
+    }
+
+    #[test]
+    fn normalize_path_resolves_dot_segments() {
+        assert_eq!(
+            normalize_path(Path::new("a/./b/../c")),
+            PathBuf::from("a/c")
+        );
+    }
 }

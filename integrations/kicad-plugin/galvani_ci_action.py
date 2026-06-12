@@ -22,18 +22,15 @@ from . import galvani_ci_core as core
 def _spec_candidates(board_path: str):
     """Specs to offer for a given board file.
 
-    Looks for a sibling ``ci/`` directory of ``*.toml`` and any ``*.toml`` next
-    to the board, so a repo that keeps specs in ``ci/`` just works.
+    Looks in a sibling ``ci/`` directory and next to the board, so a repo that
+    keeps specs in ``ci/`` just works. A spec found here may target the layout
+    (``.kicad_pcb``) or, for the same project, the schematic (``.kicad_sch``):
+    running from pcbnew is the documented way to drive a schematic-stage check
+    too, since eeschema has no plugin API yet (see README).
     """
-    candidates = []
     board_dir = os.path.dirname(board_path)
     ci_dir = os.path.join(board_dir, "ci")
-    for d in (ci_dir, board_dir):
-        if os.path.isdir(d):
-            for name in sorted(os.listdir(d)):
-                if name.endswith(".toml"):
-                    candidates.append(os.path.join(d, name))
-    return candidates
+    return core.find_specs(ci_dir, board_dir)
 
 
 class GalvaniCiResultDialog(wx.Dialog):

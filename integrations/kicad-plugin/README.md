@@ -6,6 +6,23 @@ the UART say hello, does the LED blink. It is deliberately thin, it shells out
 to the `galvani-ci` binary and parses the JUnit XML, so all the simulation
 lives in the Rust runner.
 
+## Which editor?
+
+This is a **pcbnew** (PCB editor) plugin. KiCad's schematic editor (eeschema)
+has no equivalent plugin API yet: the new IPC plugin API in KiCad 9 and 10 is
+implemented for the PCB editor only, schematic-editor support is future work,
+and headless operation via `kicad-cli` arrives in KiCad 11. We do not ship a
+fake eeschema button.
+
+For **schematic-stage** CI (a spec whose `board` is a `.kicad_sch`), use the
+pre-commit hook in `../pre-commit` or the `galvani-ci` CLI; those are the natural
+gates for a schematic-level check. You can also run a schematic-stage spec from
+*this* pcbnew plugin while a project's PCB is open, because spec discovery offers
+every `*.toml` next to the board (and in a sibling `ci/`), including ones that
+target the project's schematic. The shared core (`galvani_ci_core.py`) is
+file-type-agnostic, so when eeschema gains an API the entry point drops in beside
+this one. See `docs/CI.md` (Schematic-stage CI).
+
 ## Prerequisites
 
 1. Build the runner and put it on your PATH (or note its path):
@@ -90,8 +107,11 @@ PY
 
 ## Files
 
-- `galvani_ci_core.py` - pcbnew-free logic: find binary, build command, run,
-  parse JUnit, format report. Hardened XML parsing (rejects DOCTYPE/entities).
+- `galvani_ci_core.py` - pcbnew-free, file-type-agnostic logic: find binary,
+  discover specs (`find_specs`), read a spec's board / detect schematic-stage
+  (`spec_board`, `spec_targets_schematic`), build command, run, parse JUnit,
+  format report. Hardened XML parsing (rejects DOCTYPE/entities). Shared with
+  the pre-commit hook in `../pre-commit`.
 - `galvani_ci_action.py` - the `pcbnew.ActionPlugin` + wx results dialog.
 - `__init__.py` - registers the plugin on import.
 - `test_galvani_ci_core.py` - core unit tests (no pcbnew/wx needed).

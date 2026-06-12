@@ -9,6 +9,7 @@ The pcbnew/wx wrapper is not imported here, so these run anywhere.
 
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -104,6 +105,58 @@ def test_format_report_readable():
     text = core.format_report(ci)
     assert "[FAIL]" in text and "[PASS]" in text
     assert "ANALOG_VDD comes up" in text
+
+
+def test_find_specs_collects_and_dedupes_toml():
+    with tempfile.TemporaryDirectory() as d:
+        ci = os.path.join(d, "ci")
+        os.makedirs(ci)
+        open(os.path.join(ci, "power-up.toml"), "w").close()
+        open(os.path.join(ci, "notes.txt"), "w").close()
+        open(os.path.join(d, "extra.toml"), "w").close()
+        # ci dir listed twice + the board dir: results de-duped, .txt ignored.
+        specs = core.find_specs(ci, ci, d, os.path.join(d, "missing"))
+        names = sorted(os.path.basename(s) for s in specs)
+        assert names == ["extra.toml", "power-up.toml"], names
+        # No duplicates despite ci being passed twice.
+        assert len(specs) == len(set(specs))
+
+
+def test_spec_board_reads_board_key():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "s.toml")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('# comment\nname = "x"\nboard = "hw/board.kicad_sch"  # inline\n')
+        assert core.spec_board(p) == "hw/board.kicad_sch"
+
+
+def test_spec_board_ignores_commented_board_line():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "s.toml")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('# board = "wrong.kicad_pcb"\nboard = "right.kicad_pcb"\n')
+        assert core.spec_board(p) == "right.kicad_pcb"
+
+
+def test_spec_board_ignores_prefix_collision_keys():
+    # A key that merely starts with "board" must not be mistaken for `board`.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "s.toml")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('board_rev = "v2"\nboard = "real.kicad_sch"\n')
+        assert core.spec_board(p) == "real.kicad_sch"
+
+
+def test_spec_targets_schematic():
+    with tempfile.TemporaryDirectory() as d:
+        sch = os.path.join(d, "sch.toml")
+        pcb = os.path.join(d, "pcb.toml")
+        with open(sch, "w", encoding="utf-8") as fh:
+            fh.write('board = "x.kicad_sch"\n')
+        with open(pcb, "w", encoding="utf-8") as fh:
+            fh.write('board = "x.kicad_pcb"\n')
+        assert core.spec_targets_schematic(sch) is True
+        assert core.spec_targets_schematic(pcb) is False
 
 
 def _run_all():

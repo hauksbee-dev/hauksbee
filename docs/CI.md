@@ -69,7 +69,7 @@ name lists its near-matches ("did you mean `ANALOG_VDD`?").
 | Key             | Type     | Default       | Meaning                                                       |
 | --------------- | -------- | ------------- | ------------------------------------------------------------- |
 | `name`          | string   | `"galvani-ci"`| Label shown in reports.                                       |
-| `board`         | path     | required      | Board file (`.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356).   |
+| `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356. |
 | `firmware`      | path     | none          | Firmware ELF/hex to boot on the detected MCU.                 |
 | `mcu`           | string   | none          | MCU-kind hint (informational; the binder auto-detects).       |
 | `duration_ms`   | float    | `100`         | Simulated time to run.                                        |
@@ -306,14 +306,123 @@ These two specs are also an integration test
 (`crates/galvani-ci/tests/flagship_brownout.rs`), so galvani's own CI proves the
 broken layout stays red and the fixed one stays green.
 
+## Schematic-stage CI
+
+**Catch it before you even lay out the board.** Point a spec's `board` at a
+`.kicad_sch` and galvani-ci runs the same headless co-simulation against the
+schematic, with no PCB in existence yet. The netlist is derived geometrically
+from the schematic the way eeschema derives it (wires, pins, junctions, labels,
+power symbols, hierarchy); see `docs/SCHEMATICS.md`. Everything else in this
+document, supplies, drives, fuzzing, every assertion kind, works unchanged.
+
+This is where the most expensive hardware bugs are cheapest to catch. They are
+schematic-level faults: the original Raspberry Pi 4's USB-C port that would not
+charge from compliant cables was a *schematic* mistake (the two CC pins shared
+one resistor instead of one each), shipped on millions of boards. A rail that
+browns out, a missing pull-up, a power pin on the wrong net, an interaction
+between a wrong value and a floating strap, these are all decidable from the
+schematic alone, weeks before a layout exists. Schematic-stage CI is the commit
+that turns "we found it on the bench" into "the build went red."
+
+```toml
+# A schematic-stage spec: board is a .kicad_sch hierarchy root.
+name = "power-up sanity (schematic)"
+board = "hardware/myboard.kicad_sch"
+duration_ms = 1
+
+[[supply]]
+net = "VCC"
+kind = "ideal"
+volts = 5.0
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 4.99
+max = 5.01
+
+[[assert]]
+kind = "no_faults"
+```
+
+A runnable example against KiCad's own `pic_programmer` demo (a 2-sheet
+hierarchy) ships at `crates/galvani-ci/examples/pic_programmer_schematic.toml`:
+
+```bash
+galvani-ci run crates/galvani-ci/examples/pic_programmer_schematic.toml
+```
+
+### Load the hierarchy root, not a sub-sheet
+
+A `.kicad_sch` board is loaded **by path** so its sheet hierarchy resolves:
+sub-sheets live in sibling files, and only the path-based loader follows them.
+Point the spec at the **hierarchy root**. If you point it at a sub-sheet (a file
+referenced by another `.kicad_sch` in the same or parent directory), galvani-ci
+stops with a clear error naming the root, rather than silently extracting one
+page and running a partial board:
+
+```
+invalid spec: board pic_sockets.kicad_sch is a sub-sheet of
+pic_programmer.kicad_sch. Point the spec at the hierarchy root
+(pic_programmer.kicad_sch) so the whole design is loaded, not one page of it
+```
+
+### The agreement guarantee
+
+For a project that has *both* a schematic and a layout, the same spec run at
+either stage returns the same verdict. The schematic netlist and the PCB netlist
+are validated to induce the identical partition of pins into nets (see
+galvani-extract's cross-validation tests), so a `voltage` / `no_faults` / blink
+check passes on the `.kicad_sch` exactly when it passes on the `.kicad_pcb`.
+
+That is a powerful property: the schematic-stage check is not a weaker
+approximation you re-do later, it is the *same* check, available earlier. It is
+enforced as an integration test
+(`crates/galvani-ci/tests/schematic_ci.rs`): the `pic_programmer` spec is run
+against both the schematic and the layout and the per-assertion results must
+agree.
+
+### Editor integration: the honest state
+
+KiCad's PCB editor (pcbnew) has an action-plugin API, and galvani-ci ships a
+plugin for it (`integrations/kicad-plugin`). The **schematic editor (eeschema)
+has no equivalent yet**: KiCad's new IPC plugin API is implemented for the PCB
+editor only in KiCad 9 and 10, schematic-editor support is explicitly future
+work, and headless operation through `kicad-cli` only arrives in KiCad 11. We do
+not fake an eeschema button that cannot exist.
+
+So drive schematic-stage CI the way it is actually natural to drive it:
+
+- **Pre-commit hook** (recommended): `integrations/pre-commit` runs the matching
+  spec whenever a staged `.kicad_sch` (or `.kicad_pcb`) changes and blocks the
+  commit if it goes RED. The commit, not the editor, is the right gate for a
+  schematic-level fault, and this is the most natural schematic-stage
+  integration anyway.
+- **CLI**: `galvani-ci run myboard-schematic.toml` from a Makefile, a watch
+  script, or by hand.
+- **From pcbnew, on the project**: the pcbnew plugin discovers every spec next to
+  the board (and in a sibling `ci/`), including specs whose `board` is the
+  project's `.kicad_sch`, so you can run a schematic-stage check from the PCB
+  editor on the same project today.
+
+When eeschema gains a plugin API, the entry point drops in next to the existing
+one: the shared core (`galvani_ci_core.py`) is already file-type-agnostic, it
+only handles the spec path and the binary does the rest.
+
 ## Wiring it into your repo
 
+- **Pre-commit (schematic or layout)**: copy the `repos:` entry from
+  `integrations/pre-commit/.pre-commit-config.yaml` into your repo and
+  `pre-commit install`. Hardware checks then run before a commit lands. See
+  `integrations/pre-commit/README.md`.
 - **GitHub Actions**: copy `integrations/github-action/example-workflow.yml`
   into `.github/workflows/`. It builds galvani-ci (with cargo caching), runs
   your spec on every board/firmware change, and publishes the JUnit results to
   the Checks tab. See `integrations/github-action/README.md`.
-- **KiCad**: install the pcbnew action plugin from `integrations/kicad-plugin`
-  to run a spec on the open board and see the verdict in a dialog.
+- **KiCad (pcbnew)**: install the pcbnew action plugin from
+  `integrations/kicad-plugin` to run a spec on the open board and see the
+  verdict in a dialog. eeschema has no plugin API yet (see above); use the
+  pre-commit hook or CLI for schematic-stage checks.
 - **Any CI**: call `galvani-ci run spec.toml --junit results.xml` and consume
   the exit code and the JUnit file.
 
@@ -326,6 +435,15 @@ broken layout stays red and the fixed one stays green.
   numeric ceiling.
 - Fuzzing perturbs the named nets' initial logic levels (the undefined power-up
   bits); it does not yet randomize internal MCU RAM.
+- Schematic-stage CI loads the hierarchy root and recurses its sub-sheets. The
+  "you pointed at a sub-sheet" guard is best-effort: it detects a sub-sheet
+  referenced from the same or parent directory (the layouts real projects use).
+  A hierarchy nested more than one directory deep can slip past the guard; the
+  fix is the same either way, point the spec at the root `.kicad_sch`.
+- Bus membership in schematics is not yet modelled, so a design that carries
+  nets over buses extracts those nets split into their members (it never
+  over-connects). Cross-validated corpus projects without buses match their
+  layout net-for-net; see `docs/SCHEMATICS.md`.
 - The flagship brownout fixture is a trimmed cell of the full Tarski board, so
   the regression runs in milliseconds. The full 3,442-component board extracts
   in ~0.3 s but is heavier to co-simulate; trim to the subcircuit a given check
