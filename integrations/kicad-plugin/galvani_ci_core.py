@@ -1,0 +1,201 @@
+"""Core logic for the galvani-ci KiCad plugin, kept free of any pcbnew or wx
+imports so it can be unit-tested with plain python.
+
+The plugin is deliberately thin: it shells out to the `galvani-ci` binary on
+the currently open board with a chosen spec, then parses the JUnit XML the
+binary writes. All the simulation lives in the Rust runner; this module only
+builds the command, runs it, and turns the results into something a dialog can
+show.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+
+@dataclass
+class AssertionResult:
+    """One assertion from the JUnit report."""
+
+    name: str
+    classname: str
+    passed: bool
+    detail: str
+
+
+@dataclass
+class CiRun:
+    """The parsed outcome of a galvani-ci invocation."""
+
+    passed: bool
+    results: List[AssertionResult] = field(default_factory=list)
+    # Raw stdout/stderr, for the dialog's detail pane and debugging.
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+    error: Optional[str] = None
+
+    @property
+    def pass_count(self) -> int:
+        return sum(1 for r in self.results if r.passed)
+
+    @property
+    def total(self) -> int:
+        return len(self.results)
+
+    def summary(self) -> str:
+        if self.error:
+            return f"galvani-ci could not run: {self.error}"
+        verdict = "GREEN" if self.passed else "RED"
+        return f"{self.pass_count}/{self.total} assertions passed — {verdict}"
+
+
+def find_binary(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate the galvani-ci binary.
+
+    Order: an explicit path, the GALVANI_CI_BIN env var, then PATH.
+    """
+    candidates = [explicit, os.environ.get("GALVANI_CI_BIN")]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return shutil.which("galvani-ci")
+
+
+def build_command(binary: str, spec: str, junit_path: str) -> List[str]:
+    """The argv galvani-ci is invoked with."""
+    return [binary, "run", spec, "--junit", junit_path]
+
+
+def _safe_fromstring(xml_text: str) -> "ET.Element":
+    """Parse XML defensively. galvani-ci writes this file itself (trusted, no
+    DOCTYPE), but we still refuse any DTD / external entities so a tampered
+    results file cannot trigger XXE or billion-laughs. Prefer defusedxml when
+    it is available in the KiCad Python environment, else harden the stdlib
+    parser by rejecting DOCTYPE declarations outright.
+    """
+    try:
+        import defusedxml.ElementTree as DET  # type: ignore
+
+        return DET.fromstring(xml_text)
+    except ImportError:
+        # No entity expansion happens without a DOCTYPE; reject any to be safe.
+        lowered = xml_text.lstrip()
+        if "<!DOCTYPE" in xml_text or "<!ENTITY" in xml_text:
+            raise ET.ParseError("refusing XML with a DOCTYPE/ENTITY declaration")
+        _ = lowered
+        return ET.fromstring(xml_text)
+
+
+def parse_junit(xml_text: str) -> List[AssertionResult]:
+    """Parse galvani-ci's JUnit XML into assertion results.
+
+    Each `<testcase>` is one assertion; a child `<failure>` means it failed and
+    carries the detail, otherwise `<system-out>` carries the passing detail.
+    """
+    results: List[AssertionResult] = []
+    root = _safe_fromstring(xml_text)
+    # <testsuites> wraps one <testsuite> wrapping <testcase>s.
+    for testcase in root.iter("testcase"):
+        name = testcase.get("name", "")
+        classname = testcase.get("classname", "")
+        failure = testcase.find("failure")
+        if failure is not None:
+            detail = (failure.get("message") or failure.text or "").strip()
+            results.append(
+                AssertionResult(name=name, classname=classname, passed=False, detail=detail)
+            )
+        else:
+            sysout = testcase.find("system-out")
+            detail = (sysout.text or "").strip() if sysout is not None else ""
+            results.append(
+                AssertionResult(name=name, classname=classname, passed=True, detail=detail)
+            )
+    return results
+
+
+def run_ci(
+    spec: str,
+    binary: Optional[str] = None,
+    cwd: Optional[str] = None,
+    runner=subprocess.run,
+) -> CiRun:
+    """Run galvani-ci on `spec` and parse its results.
+
+    `runner` is injectable so tests can run without a real binary or board.
+    """
+    # An explicitly supplied binary is trusted as-is (callers and tests may
+    # point at a path that is resolved differently, e.g. via a mocked runner);
+    # otherwise discover it from the env / PATH and require it to exist.
+    bin_path = binary if binary else find_binary(None)
+    if not bin_path:
+        return CiRun(
+            passed=False,
+            error=(
+                "galvani-ci binary not found. Build it with "
+                "`cargo build --release -p galvani-ci` and put it on PATH or set "
+                "GALVANI_CI_BIN."
+            ),
+        )
+
+    junit_fd, junit_path = tempfile.mkstemp(prefix="galvani-ci-", suffix=".xml")
+    os.close(junit_fd)
+    try:
+        cmd = build_command(bin_path, spec, junit_path)
+        proc = runner(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        code = proc.returncode
+
+        # A spec/board error (exit 2) writes no JUnit; surface stderr.
+        results: List[AssertionResult] = []
+        error: Optional[str] = None
+        try:
+            with open(junit_path, "r", encoding="utf-8") as fh:
+                xml_text = fh.read()
+            if xml_text.strip():
+                results = parse_junit(xml_text)
+        except (OSError, ET.ParseError):
+            results = []
+
+        if not results and code != 0:
+            error = stderr.strip() or stdout.strip() or f"galvani-ci exited {code}"
+
+        return CiRun(
+            passed=(code == 0),
+            results=results,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=code,
+            error=error,
+        )
+    finally:
+        try:
+            os.remove(junit_path)
+        except OSError:
+            pass
+
+
+def format_report(run: CiRun) -> str:
+    """A plain-text report for a dialog's text area."""
+    lines = [run.summary(), ""]
+    if run.error and not run.results:
+        lines.append(run.error)
+        return "\n".join(lines)
+    for r in run.results:
+        mark = "PASS" if r.passed else "FAIL"
+        lines.append(f"[{mark}] {r.name}")
+        if r.detail:
+            lines.append(f"       {r.detail}")
+    return "\n".join(lines)
