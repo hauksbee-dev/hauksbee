@@ -388,35 +388,8 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 ///
 /// Returns `None` if no receptacle with identifiable CC pins is found.
 pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTermination> {
-    // GND net: the one named GND (case-insensitive), else net 0 is not it.
-    let gnd_net = board
-        .nets
-        .iter()
-        .find(|n| n.name.eq_ignore_ascii_case("GND") || n.name.eq_ignore_ascii_case("GNDPWR"))
-        .map(|n| n.id);
-
-    // The receptacle: any component with a CC1/CC2 pin function, or a
-    // connector (lib_id contains "USB"/"Conn") carrying A5/B5 pads.
-    let mut cc1_net = None;
-    let mut cc2_net = None;
-    for comp in &board.components {
-        for pin in &comp.pins {
-            let f = pin.function.to_ascii_uppercase();
-            let n = pin.number.to_ascii_uppercase();
-            if f == "CC1" || f == "CC" || n == "A5" {
-                if cc1_net.is_none() {
-                    cc1_net = pin.net;
-                }
-            }
-            if f == "CC2" || n == "B5" {
-                if cc2_net.is_none() {
-                    cc2_net = pin.net;
-                }
-            }
-        }
-    }
-    let cc1_net = cc1_net?;
-    let cc2_net = cc2_net?;
+    let gnd_net = gnd_net_id(board);
+    let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
     let shared_net = cc1_net == cc2_net;
 
     let rd = |cc_net: i64| -> Option<f64> { net_resistance_to(board, cc_net, gnd_net) };
@@ -426,6 +399,60 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
         cc2_rd_ohms: if shared_net { rd(cc1_net) } else { rd(cc2_net) },
         shared_net,
     })
+}
+
+/// The GND net id (the net named GND / GNDPWR), if any.
+fn gnd_net_id(board: &ExtractedBoard) -> Option<i64> {
+    board
+        .nets
+        .iter()
+        .find(|n| n.name.eq_ignore_ascii_case("GND") || n.name.eq_ignore_ascii_case("GNDPWR"))
+        .map(|n| n.id)
+}
+
+/// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
+/// over any downstream CC controller / PMIC that also carries CC pin functions.
+fn receptacle_cc_nets(board: &ExtractedBoard) -> Option<(i64, i64)> {
+    // The receptacle's CC1/CC2 nets. A CC pin function (or the A5/B5 pad numbers)
+    // can appear on *several* components: the USB-C connector itself, AND any CC
+    // controller / PMIC the CC lines route into (e.g. the nPM1300 on ZSWatch,
+    // whose pads 23/24 carry CC1/CC2 functions on a *different* net than the
+    // receptacle). The sink termination we want to classify is the one at the
+    // *receptacle*, where the discrete Rd pulldowns live; reading the PMIC-side
+    // net instead misses those Rds and manufactures a false "no termination"
+    // (PoweredCableNoSink / Nothing) result on a correctly-designed board.
+    //
+    // So we score each component by how strongly it looks like the USB-C
+    // receptacle and prefer the best one. The A5/B5 pad-number fallback is
+    // *gated* on the component being a receptacle, because grid-array packages
+    // (the nRF5340 module's BGA) legitimately number pads "A5"/"B5" with
+    // unrelated functions.
+    let mut best_score = i32::MIN;
+    let mut cc1_net = None;
+    let mut cc2_net = None;
+    for comp in &board.components {
+        let score = receptacle_score(comp);
+        let mut c1 = None;
+        let mut c2 = None;
+        for pin in &comp.pins {
+            let f = pin.function.to_ascii_uppercase();
+            let n = pin.number.to_ascii_uppercase();
+            if f == "CC1" || f == "CC" || (score > 0 && n == "A5") {
+                c1 = c1.or(pin.net);
+            }
+            if f == "CC2" || (score > 0 && n == "B5") {
+                c2 = c2.or(pin.net);
+            }
+        }
+        // Only consider this component if it actually carries a CC1 (or shared CC)
+        // pin. Prefer the highest receptacle score; ties keep the first found.
+        if c1.is_some() && c2.is_some() && score > best_score {
+            best_score = score;
+            cc1_net = c1;
+            cc2_net = c2;
+        }
+    }
+    Some((cc1_net?, cc2_net?))
 }
 
 /// Parallel resistance (ohms) of every two-pin resistor that connects `from_net`
@@ -463,6 +490,200 @@ fn net_resistance_to(board: &ExtractedBoard, from_net: i64, gnd_net: Option<i64>
     } else {
         None
     }
+}
+
+// ---------------------------------------------------------------------------
+// CC double-termination audit
+// ---------------------------------------------------------------------------
+
+/// What a single CC pin presents at the receptacle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CcPinTermination {
+    /// The discrete external Rd-to-GND resistance found on the receptacle CC net
+    /// (parallel of every resistor that bridges the net to GND). `None` if the
+    /// CC pin has no external resistor to GND.
+    pub external_rd_ohms: Option<f64>,
+    /// True when the CC net reaches (directly, or through a 0 Ω / ferrite bridge)
+    /// a controller / PMIC that provides its own *internal* Rd of `internal_rd_ohms`.
+    pub internal_rd_ohms: Option<f64>,
+    /// The reference designator of that internal-Rd controller, when found.
+    pub controller_ref: Option<String>,
+}
+
+impl CcPinTermination {
+    /// The effective Rd a source sees: external Rd in parallel with the
+    /// controller's internal Rd (whichever are present).
+    pub fn effective_rd_ohms(&self) -> Option<f64> {
+        match (self.external_rd_ohms, self.internal_rd_ohms) {
+            (Some(e), Some(i)) => Some(1.0 / (1.0 / e + 1.0 / i)),
+            (Some(e), None) => Some(e),
+            (None, Some(i)) => Some(i),
+            (None, None) => None,
+        }
+    }
+
+    /// True when BOTH an external Rd and a controller's internal Rd terminate the
+    /// same CC line: the double-termination defect. The effective Rd is then well
+    /// below the nominal 5.1 kΩ a source expects, so the source under-reads the
+    /// CC voltage and mis-detects the advertised current.
+    pub fn is_double_terminated(&self) -> bool {
+        self.external_rd_ohms.is_some() && self.internal_rd_ohms.is_some()
+    }
+}
+
+/// The CC-termination audit for a board's USB-C receptacle.
+#[derive(Debug, Clone)]
+pub struct CcTerminationAudit {
+    pub cc1: CcPinTermination,
+    pub cc2: CcPinTermination,
+}
+
+impl CcTerminationAudit {
+    /// True when either CC pin carries both an external and an internal Rd.
+    pub fn has_double_termination(&self) -> bool {
+        self.cc1.is_double_terminated() || self.cc2.is_double_terminated()
+    }
+}
+
+/// Audit the receptacle's CC1/CC2 terminations for the double-Rd defect: a
+/// discrete external 5.1 kΩ Rd on a CC line that *also* routes into a PMIC /
+/// controller which already provides an internal Rd of its own (e.g. the Nordic
+/// nPM1300, whose datasheet states its CC pins "have internal pull-downs with
+/// resistance equal to Rd" = 5.1 kΩ). Both in parallel halve the effective Rd to
+/// ~2.55 kΩ, dragging the CC voltage out of spec.
+///
+/// Returns `None` if the board has no identifiable USB-C receptacle CC nets.
+pub fn audit_cc_termination(board: &ExtractedBoard) -> Option<CcTerminationAudit> {
+    let gnd = gnd_net_id(board);
+    let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
+    Some(CcTerminationAudit {
+        cc1: audit_one_cc(board, cc1_net, gnd),
+        cc2: audit_one_cc(board, cc2_net, gnd),
+    })
+}
+
+fn audit_one_cc(board: &ExtractedBoard, cc_net: i64, gnd: Option<i64>) -> CcPinTermination {
+    let external_rd_ohms = net_resistance_to(board, cc_net, gnd);
+    // Walk the CC net plus anything bridged to it by a 0 Ω resistor / ferrite,
+    // and see if it reaches a known internal-Rd controller's CC pin.
+    let reachable = nets_bridged_to(board, cc_net);
+    let mut internal_rd_ohms = None;
+    let mut controller_ref = None;
+    for comp in &board.components {
+        if let Some(internal) = internal_cc_rd_ohms(&comp.value) {
+            // Does this controller land a CC pin on one of the reachable nets?
+            let on_cc = comp.pins.iter().any(|p| {
+                let f = p.function.to_ascii_uppercase();
+                (f == "CC1" || f == "CC2" || f == "CC")
+                    && p.net.map(|n| reachable.contains(&n)).unwrap_or(false)
+            });
+            if on_cc {
+                internal_rd_ohms = Some(internal);
+                controller_ref = Some(comp.reference.clone());
+                break;
+            }
+        }
+    }
+    CcPinTermination { external_rd_ohms, internal_rd_ohms, controller_ref }
+}
+
+/// The set of net ids electrically continuous with `start` through 0 Ω resistors
+/// / ferrite beads (DC shorts). A CC line often reaches the controller through a
+/// 0 Ω "bridge" resistor placed on its own net, so the controller's CC pin is a
+/// different net id than the receptacle CC pin; this union re-joins them.
+fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::HashSet<i64> {
+    use std::collections::HashSet;
+    let mut set = HashSet::new();
+    set.insert(start);
+    // Iterate to a fixed point (bridges can chain).
+    loop {
+        let mut grew = false;
+        for comp in &board.components {
+            if !is_dc_bridge(comp) {
+                continue;
+            }
+            let nets: Vec<i64> = comp.pins.iter().filter_map(|p| p.net).collect();
+            // A 0 Ω / ferrite ties all its pins' nets together. If any is in the
+            // set, add the rest.
+            if nets.iter().any(|n| set.contains(n)) {
+                for n in nets {
+                    if set.insert(n) {
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    set
+}
+
+/// A component that is a DC short between its two terminals: a 0 Ω resistor or a
+/// ferrite bead / inductor (which is ~0 Ω at DC). Used to bridge CC nets.
+fn is_dc_bridge(comp: &galvani_extract::Component) -> bool {
+    let r = comp.reference.to_ascii_uppercase();
+    let v = comp.value.to_ascii_uppercase();
+    // 0 Ω resistor.
+    if is_resistor(comp) {
+        let v0 = v.trim_end_matches('R').trim_end_matches("OHM").trim();
+        if v0 == "0" || v == "0R" || v == "0" || v == "0OHM" || v == "0.0" {
+            return true;
+        }
+    }
+    // Ferrite bead (FB/L prefix) - a DC short.
+    r.starts_with("FB") || (r.starts_with('L') && r.len() <= 4)
+}
+
+/// The internal CC Rd (ohms) a controller provides, keyed on its value/part
+/// number. Only parts whose datasheet *states* an integrated Rd belong here; the
+/// discriminating citation is recorded in the doc. Returns `None` for parts that
+/// present no internal CC termination (so an external Rd on their CC line is
+/// correct, not doubled).
+fn internal_cc_rd_ohms(value: &str) -> Option<f64> {
+    let v = value.to_ascii_uppercase();
+    // Nordic nPM1300: "These pins [CC1, CC2] have internal pull-downs with
+    // resistance equal to Rd" and the electrical table gives Rd = 5.1 kΩ
+    // (nPM1300 Product Specification v1.1, sections 6.1.3 and the Rd parameter).
+    if v.contains("NPM1300") {
+        return Some(5100.0);
+    }
+    None
+}
+
+/// Score how strongly a component looks like the USB-C *receptacle* (the
+/// connector), so the CC termination is read at the receptacle and not at a
+/// downstream CC controller / PMIC that also carries CC1/CC2 pin functions.
+///
+/// Higher is more receptacle-like. A score > 0 also gates the A5/B5 pad-number
+/// fallback (grid-array packages number pads "A5"/"B5" with unrelated
+/// functions, so the fallback must only fire on something that really is a
+/// connector).
+fn receptacle_score(comp: &galvani_extract::Component) -> i32 {
+    let fp = comp.footprint.to_ascii_lowercase();
+    let lib = comp.lib_id.to_ascii_lowercase();
+    let val = comp.value.to_ascii_lowercase();
+    let r = comp.reference.to_ascii_uppercase();
+    let mut s = 0;
+    // Strongest signal: a footprint that names a USB-C / Type-C receptacle.
+    if fp.contains("usb_c") || fp.contains("type_c") || fp.contains("type-c") || fp.contains("usb-c")
+    {
+        s += 100;
+    }
+    if fp.contains("receptacle") {
+        s += 40;
+    }
+    // A connector library or value.
+    if lib.contains("connector") || lib.contains("conn:") || val.contains("usb") {
+        s += 10;
+    }
+    // A connector reference prefix (J / CN / CON / X / P). These are the
+    // designators boards give the receptacle; a PMIC/controller is U/IC.
+    if r.starts_with('J') || r.starts_with("CN") || r.starts_with("CON") || r.starts_with('X') {
+        s += 5;
+    }
+    s
 }
 
 /// Heuristic: is this component a resistor?
