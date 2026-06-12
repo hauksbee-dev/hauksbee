@@ -107,6 +107,77 @@ CLI surfaces it: `galvani run <board> --drc` prints the table and exits, and
 `ExtractedBoard::drc(text)` is the library entry point, alongside the existing
 `lint()`.
 
+## Eagle `.brd` detection (`galvani-extract/src/drc.rs`, `eagle_drc`)
+
+The most famous open-hardware boards (Arduino Uno, five Adafruit, two SparkFun)
+are Eagle, not KiCad, so they used to get `n/a` for DRC. The Eagle path closes
+that gap: it reads copper *geometry* per net out of the `.brd` XML and feeds it
+to the same `sweep_buckets` engine the KiCad path uses. There is one detection /
+classification core; only the front-end geometry reader differs.
+`ExtractedBoard::drc(text)` dispatches on content (`(kicad_pcb` vs `<eagle`), so
+`galvani run <board.brd> --drc` works.
+
+Geometry is kept in Eagle's native frame (millimetres, y-up). The DRC is
+self-consistent, so the y orientation never matters; only relative positions do.
+Layer model: copper layers are numbered, 1 = Top (`F.Cu`), 16 = Bottom (`B.Cu`),
+2..15 inner. A mirrored element (`rot="MR<deg>"`) is flipped onto the opposite
+face, swapping its side-specific copper 1↔16.
+
+### Geometry kinds covered
+
+| Source primitive | Modelled as | Notes |
+|------------------|-------------|-------|
+| Signal wire (`<wire>`) | Capsule (width-aware "stadium") | distance subtracts both half-widths; a `curve="<deg>"` attribute is flattened into 8 capsule links |
+| Via (`<via>`) | Disc on every copper layer it spans | `extent="1-16"` → all copper; outer diameter taken from `diameter` if present, else derived from the drill and the board's `rvViaOuter` / `rl*ViaOuter` restring rule; `shape="octagon"` modelled as an octagon polygon |
+| Through-hole pad (`<pad>` in a package) | shape on every copper layer | `round`→disc, `square`→rect, `octagon`→octagon polygon, `long`→stadium capsule, `offset`→capsule offset to one end |
+| SMD pad (`<smd>` in a package) | Rect polygon (+ corner radius) | single layer (1 by default, flipped by mirror); `roundness` (0..100 %) carried as a corner-radius inflation on an inset rect, like KiCad roundrect; `rot` honoured |
+| Board rectangle (`<rectangle>` on copper) | Rect polygon | rotated by `rot` |
+| Board circle (`<circle>` on copper) | Disc | conservative solid disc of the outer radius (`radius + width/2`) |
+| Signal polygon / pour (`<polygon>`) | **excluded from the short test** | see the honesty caveat below |
+
+Package copper is placed with the full element transform: position rotated by the
+element's `rot` (CCW, y-up), and a mirrored (`MR`) element reflected across its
+local X axis (flip Y) before the rotation. (Verified against the QT Py's SOIC8:
+only flip-Y puts `MR90`-placed pad 1 at its real coordinate; the older flip-X
+convention scrambled every mirrored package and manufactured thousands of false
+shorts.)
+
+### Rule source
+
+The clearance is read from the board's embedded `<designrules>` rather than
+assumed: the tightest of the copper-to-copper spacing rules (`mdWireWire`,
+`mdWirePad`, `mdWireVia`, `mdPadPad`, `mdPadVia`, `mdViaVia`, `mdSmdPad`,
+`mdSmdVia`, `mdSmdSmd`), parsed with their unit suffix (`mil` / `mm` / `mic` /
+`inch`). The `0.2 mm` default is used only when no design rules are present.
+Reporting against the board's own (often tighter) rule avoids manufacturing
+clearance noise on densely-routed boards.
+
+### Honest polygon (copper pour) fidelity caveat
+
+A `.brd` stores only a signal polygon's **requested outline**, not the copper
+Eagle actually pours. The real fill carves an `isolate` antipad gap around every
+foreign-net wire / pad / via inside the outline, and arbitrates overlapping pours
+by `rank`. Neither the antipads nor the rank are in the file. Treating the drawn
+outline as solid copper turns every trace that legitimately crosses into a pour
+(and every foreign pad the pour isolates around) into a false short, so the pour
+is **excluded from the short / clearance test entirely** rather than reported
+dishonestly. The outline is still parsed (with its per-vertex curves) so the
+limitation is explicit, not silent. Checking pour-to-copper shorts honestly would
+need the board re-poured in Eagle and the computed polygons (with antipads)
+exported; that data is not in the source `.brd`.
+
+### Deliberate ties exempted
+
+Two nets that both land a pad in the *same* component are deliberately tied there
+(a solder jumper `SJ` / `SMT-JUMPER`, a star-ground point, a 0-ohm / ferrite
+bridge). The component places their pads a hair apart by design and the traces
+feeding it abut, which the EDA does not flag. So copper of two nets sharing a
+footprint is exempt. This generalises the KiCad pad-vs-pad same-owner rule to the
+track-vs-pad and track-vs-track forms Eagle's jumpers produce (Eagle traces carry
+no owner of their own, so the exemption keys on shared net membership in a
+footprint). On the Uno this correctly clears `GND`↔`UGND`, joined through the
+`GROUND` SJ jumper.
+
 ## Simulation (`galvani-engine/src/shorts.rs`)
 
 A detected (or hypothetical) short is applied by bridging the two nets' circuit
@@ -150,6 +221,27 @@ upstream by `forge-sexpr`) reports **zero true shorts**, correct, since these
 are all shipped, working boards. Clearance violations remain on tightly-routed
 boards and are expected.
 
+### Eagle famous-board sweep (release build, warm; the board's own rule)
+
+All eight famous Eagle boards report **zero true shorts**, each judged against
+its own embedded design-rule clearance.
+
+| Board | Rule | Copper primitives | Shorts | Clearance | Time |
+|-------|------|-------------------|--------|-----------|------|
+| Arduino Uno R3 (official) | 0.2032 mm | 1,407 | 0 | 0 | ~13 ms |
+| Adafruit Circuit Playground Express | 0.1778 mm | 1,252 | 0 | 1 | ~36 ms |
+| Adafruit Feather M0 Basic | 0.2032 mm | 873 | 0 | 0 | ~7 ms |
+| Adafruit Metro M4 Express | 0.2032 mm | 1,430 | 0 | 0 | ~48 ms |
+| Adafruit QT Py | 0.1524 mm | 637 | 0 | 0 | ~10 ms |
+| Adafruit Trinket M0 | 0.2032 mm | 369 | 0 | 0 | ~12 ms |
+| SparkFun RedBoard | 0.2032 mm | 851 | 0 | 1 | ~32 ms |
+| SparkFun Pro Micro | 0.1016 mm | 868 | 0 | 0 | ~7 ms |
+
+The two residual clearance violations (one on Circuit Playground Express, one on
+RedBoard) are genuine sub-rule near-misses on densely-routed copper, not shorts.
+Time is dominated by the XML parse (the Eagle reader streams the file twice: once
+for copper geometry, once for the `contactref` net map).
+
 ### A documented corpus finding
 
 An earlier sweep surfaced 2 "shorts" on several Olimex ESP32-EVB revisions
@@ -169,6 +261,16 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
 - `galvani-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
   shorts across the parseable boards (skipped gracefully if the corpus is
   absent).
+- `galvani-extract/tests/eagle_drc.rs`: 16 synthetic minimal `.brd` fixtures, one
+  per Eagle geometry kind (wire-wire short, wire-smd, smd-smd, via-wire,
+  via-spans-layers, octagon pad, curved wire) plus the clearance-only, no-rule
+  fallback, cross-layer non-short, shared-footprint (jumper) abutment, mirrored
+  package placed on the bottom, via-restring derivation, and the design-rule
+  clearance respected / overridden cases.
+- `galvani-extract/tests/eagle_drc_corpus.rs`: the famous-Eagle sweep over all
+  eight boards (Arduino Uno, five Adafruit, two SparkFun), asserting zero true
+  shorts and recording per-board clearance counts, rule, primitive count and
+  timing (skipped gracefully if the corpus is absent).
 - `galvani-engine/tests/shorts.rs`: end-to-end, detect a copper short from a
   layout, apply it, and assert a `short` fault is raised and the bridged nets are
   pulled together; the what-if `short_nets` rail-to-ground case raising an
@@ -189,7 +291,20 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
   plus a corner radius; custom pads by their first polygon primitive or bounding
   rect). This is conservative for overlap and tight for clearance to within the
   corner radius.
+- **Eagle signal pours.** A `.brd` stores only a pour's requested outline, not
+  the poured copper with its `isolate` antipads or `rank` arbitration, so pours
+  are excluded from the Eagle short / clearance test entirely (see the fidelity
+  caveat above). A short *into* a pour is therefore not detected on Eagle boards;
+  wires, vias and pads against each other are fully covered. KiCad pours, which
+  do carry the computed fill, are covered.
+- **Eagle multilayer.** The Eagle reader spans through-hole pads and vias over a
+  two-layer (`1`/`16`) copper stack, which matches the entire famous-board
+  corpus. A genuinely multilayer Eagle `.brd` with inner-layer copper would need
+  its inner layers added to that stack.
+- **Eagle curve flattening.** Wire `curve` arcs and per-vertex polygon curves are
+  flattened into 8 capsule links, with the circumcircle centre chosen so the
+  sweep lands on the stated endpoint; the chord error is sub-micron for typical
+  radii.
 - The bridge model is a fixed small resistance; it does not model the bridge's
   own current-dependent fusing. Destructive-mode faulting still applies to the
   parts the short over-drives.
-```

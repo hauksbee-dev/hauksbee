@@ -1369,6 +1369,10 @@ pub mod eagle_drc {
 
     type Attrs = HashMap<String, String>;
 
+    /// A polygon being streamed: (signal index, outline stroke width, copper
+    /// layer number, vertices as (x, y, curve-to-next-degrees)).
+    type PartialPoly = (usize, f64, i64, Vec<(f64, f64, f64)>);
+
     fn attrs_of(e: &quick_xml::events::BytesStart) -> Attrs {
         e.attributes()
             .flatten()
@@ -1578,7 +1582,7 @@ pub mod eagle_drc {
         let mut cur_package: Option<String> = None;
         let mut cur_signal: Option<usize> = None;
         // The polygon currently being read (signal index, partial Polygon).
-        let mut cur_poly: Option<(usize, f64, i64, Vec<(f64, f64, f64)>)> = None;
+        let mut cur_poly: Option<PartialPoly> = None;
         // Pending raw param values, resolved after the stream.
         let mut params: HashMap<String, String> = HashMap::new();
         // Depth nesting so we know when a polygon's vertices end.
