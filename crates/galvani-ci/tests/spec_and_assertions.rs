@@ -80,6 +80,33 @@ fn unknown_net_lists_near_matches() {
 }
 
 #[test]
+fn typoed_max_current_ref_is_rejected_not_silently_green() {
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/tarski_brownout_cell.net");
+    let p = write_tmp(
+        "typoref.toml",
+        &format!(
+            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"R_Shnt15301\"\namps=0.1\n",
+            board.display()
+        ),
+    );
+    let err = run(&RunConfig { spec: p }).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("unknown component"), "got: {msg}");
+    assert!(msg.contains("R_Shunt15301"), "should suggest the real ref: {msg}");
+}
+
+#[test]
+fn after_ms_on_toggle_is_rejected() {
+    let p = write_tmp(
+        "toggleafter.toml",
+        "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\nfreq_hz=5.0\nafter_ms=50\n",
+    );
+    let err = Spec::load(&p).unwrap_err();
+    assert!(err.to_string().contains("after_ms"), "got: {err}");
+}
+
+#[test]
 fn junit_xml_is_well_formed_and_escaped() {
     let result = run(&RunConfig {
         spec: example("tarski_brownout_repaired.toml"),
