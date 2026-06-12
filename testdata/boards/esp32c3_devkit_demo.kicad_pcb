@@ -1,0 +1,49 @@
+(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "GPIO2_OUT")
+  (net 4 "LED_A")
+  (net 5 "GPIO4_BLINK")
+
+  ; ESP32-C3 (RISC-V) devkit demo, mirroring the ESP32 (Xtensa) demo so the QEMU
+  ; riscv32 backend is exercised against the identical co-sim contract. GPIO2
+  ; drives an LED through a real 330R resistor (the analog current path the MNA
+  ; solver computes); GPIO4 drives a 4k7 to ground for the observable blink.
+  ; UART0 (GPIO21 TX / GPIO20 RX) is the serial bridge. The part runs at 3.3 V.
+  (module RF_Module:ESP32-C3-MINI-1 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP32-C3-MINI-1 (at 0 2) (layer F.Fab))
+    (pad 1  smd rect (at -3 0) (net 1 "GND"))
+    (pad 2  smd rect (at -3 1) (net 2 "+3V3"))
+    (pad 12 smd rect (at 3 0) (net 3 "GPIO2_OUT"))
+    (pad 13 smd rect (at 3 1) (net 5 "GPIO4_BLINK"))
+    (pad 30 smd rect (at 3 2) (net 0 ""))
+    (pad 31 smd rect (at 3 3) (net 0 ""))
+  )
+
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 330 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 3 "GPIO2_OUT"))
+    (pad 2 thru_hole circle (at 2 0) (net 4 "LED_A"))
+  )
+
+  (module LED_THT:LED_D5.0mm (layer F.Cu)
+    (at 112 100)
+    (fp_text reference D1 (at 0 0) (layer F.SilkS))
+    (fp_text value RED_LED (at 0 2) (layer F.Fab))
+    (pad A thru_hole circle (at 0 0) (net 4 "LED_A"))
+    (pad K thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 105 110)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 4k7 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 5 "GPIO4_BLINK"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+)
