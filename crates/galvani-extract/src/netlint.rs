@@ -41,6 +41,11 @@ pub enum LintCheck {
     /// An LED + series resistor whose computed forward current is outside the
     /// sane indicator band.
     LedCurrentSanity,
+    /// Two push-pull output (or power-output) pins of different parts tied
+    /// directly on one net with nothing to resolve the contention - both can
+    /// drive the net to opposite levels and fight. A schematic-stage ERC check
+    /// built from extracted pin electrical types.
+    OutputContention,
 }
 
 impl LintCheck {
@@ -49,6 +54,7 @@ impl LintCheck {
             LintCheck::MissingI2cPullup => "missing_i2c_pullup",
             LintCheck::FloatingControlPin => "floating_control_pin",
             LintCheck::LedCurrentSanity => "led_current_sanity",
+            LintCheck::OutputContention => "output_contention",
         }
     }
 }
@@ -98,6 +104,7 @@ impl ExtractedBoard {
         check_i2c_pullups(self, &mut report);
         check_floating_control_pins(self, &mut report);
         check_led_current(self, &mut report);
+        check_output_contention(self, &mut report);
         report
     }
 }
@@ -693,6 +700,130 @@ fn resistor_to_rail(
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Check 4: output-vs-output contention (schematic-stage ERC).
+// ---------------------------------------------------------------------------
+//
+// Two distinct parts each driving the same net with a *push-pull* output, with
+// nothing on the net that can resolve the fight (no series resistor, no
+// tri-state/open-drain/bidirectional pin, no input that reframes the net as a
+// driven-input), is a wiring error: at any instant the two outputs can command
+// opposite levels and source/sink destructive cross-current.
+//
+// This is built purely from the KiCad pin electrical type (`Pin.kind`), which
+// only the schematic / netlist extraction paths populate. It is calibrated to be
+// SILENT on the full known-good schematic corpus (ZSWatch x4, Watchy, LumenPnP
+// x2, Olimex EVB, Corne, Lily58, RP2040-minimal, Reform x2, Olimex Pico-PC):
+// the single raw fire on that corpus (Reform `EDP_IRQ`) is an open-drain
+// interrupt line whose pins a symbol author typed `output`, and it is excluded
+// by the open-drain-name and tiebreaker rules below. See `docs/FAMOUS_SWEEP.md`
+// Round 4 for the calibration evidence and for why the sibling "undriven input"
+// check was REJECTED (it could not reach zero false positives).
+
+/// A push-pull driver type. `tri_state` / `open_collector` / `open_emitter` are
+/// deliberately NOT here: those are wired-OR safe and resolve contention.
+fn is_pushpull_output(kind: &str) -> bool {
+    matches!(kind.trim().to_ascii_lowercase().as_str(), "output" | "power_out")
+}
+
+/// A member that can legitimately resolve two outputs sharing a net: a passive
+/// (series R / mux), a tri-state / open-drain / open-emitter pin, or an input/
+/// bidirectional pin (which reframes the net as a driven input the symbol author
+/// modelled as also-output, the common IRQ / shared-IO case). Its presence means
+/// "do not fire" - we only flag a net whose ONLY drivers are bare push-pull
+/// outputs of different parts.
+fn resolves_contention(kind: &str) -> bool {
+    matches!(
+        kind.trim().to_ascii_lowercase().as_str(),
+        "passive" | "tri_state" | "open_collector" | "open_emitter" | "input" | "bidirectional"
+    )
+}
+
+/// A net whose name marks it as an open-drain / wired-OR line (interrupt, alert,
+/// ready/busy, NMI). Symbol authors routinely type these pins `output` though
+/// they are open-drain pulled high; two such pins on one net is the intended
+/// wired-OR, not contention. Excluded by name so the check stays at zero false
+/// positives.
+fn is_wired_or_name(name: &str) -> bool {
+    let n = norm(name);
+    ["IRQ", "INT", "ALERT", "RDY", "READY", "BUSY", "NMI", "PG", "PGOOD", "FAULT", "NFLT"]
+        .iter()
+        .any(|k| n.contains(k))
+}
+
+fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
+    for net in &board.nets {
+        if net.id == 0 || is_unconnected_net(&net.name) || is_ground(&net.name) {
+            continue;
+        }
+        // Wired-OR / interrupt nets carry multiple open-drain "outputs" by design.
+        if is_wired_or_name(&net.name) {
+            continue;
+        }
+        let mem = members(board, net.id);
+
+        // Collect push-pull output pins on non-connector parts. A connector pin
+        // is an off-board interface, never an on-board push-pull driver.
+        let mut drivers: Vec<(&Component, &Pin)> = Vec::new();
+        let mut any_resolver = false;
+        for (c, p) in &mem {
+            if is_pushpull_output(&p.kind) && !is_connector_like(c) {
+                drivers.push((c, p));
+            }
+            if resolves_contention(&p.kind)
+                || c.reference.to_ascii_uppercase().starts_with('R')
+                || is_connector_like(c)
+            {
+                any_resolver = true;
+            }
+        }
+        // Need >= 2 *distinct* driver parts (two pins of one chip on a net is an
+        // internal short the symbol expresses, not an inter-part fight).
+        let distinct: std::collections::HashSet<&str> =
+            drivers.iter().map(|(c, _)| c.reference.as_str()).collect();
+        if distinct.len() < 2 {
+            continue;
+        }
+        // Any resolver on the net (series R, tri-state, input, connector) means
+        // the contention is or can be resolved: do not fire.
+        if any_resolver {
+            continue;
+        }
+
+        // Severity: if two power_out pins of *different* nominal voltage are tied
+        // (a hard rail-vs-rail short), that is High. Otherwise (two signal
+        // outputs) Medium.
+        let pwr_voltages: Vec<f64> = drivers
+            .iter()
+            .filter(|(_, p)| p.kind.eq_ignore_ascii_case("power_out"))
+            .filter_map(|_| rail_voltage(&net.name))
+            .collect();
+        let _ = pwr_voltages; // net name rarely encodes the source rail; kept for clarity
+        let power_out = drivers
+            .iter()
+            .filter(|(_, p)| p.kind.eq_ignore_ascii_case("power_out"))
+            .count();
+        let sev = if power_out >= 2 { Severity::High } else { Severity::Medium };
+
+        let drv_desc: Vec<String> = drivers
+            .iter()
+            .map(|(c, p)| format!("{}.{} ({})", c.reference, p.number, p.kind))
+            .collect();
+        report.findings.push(LintFinding {
+            check: LintCheck::OutputContention,
+            severity: sev,
+            message: format!(
+                "net '{}' is driven by {} push-pull outputs with no series resistor or tri-state to resolve them: {}",
+                net.name,
+                drivers.len(),
+                drv_desc.join(", ")
+            ),
+            refs: distinct.iter().map(|s| s.to_string()).collect(),
+            nets: vec![net.name.clone()],
+        });
+    }
 }
 
 /// Render a lint report as a Unicode table.
