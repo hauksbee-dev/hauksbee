@@ -1,0 +1,110 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-000000000020")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~")
+					(number "1")
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~")
+					(number "2")
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a21")
+		(property "Reference" "RA"
+			(at 102 100 90)
+		)
+		(property "Value" "10k"
+			(at 102 100 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b21"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b22"))
+		(instances
+			(project "bus_hier_top"
+				(path "/00000000-0000-0000-0000-000000000020"
+					(reference "RA")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 110 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a22")
+		(property "Reference" "RB"
+			(at 112 100 90)
+		)
+		(property "Value" "10k"
+			(at 112 100 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b31"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b32"))
+		(instances
+			(project "bus_hier_top"
+				(path "/00000000-0000-0000-0000-000000000020"
+					(reference "RB")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 100 96.19) (xy 100 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c21")
+	)
+	(wire
+		(pts
+			(xy 110 96.19) (xy 110 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c22")
+	)
+	(label "ADDR0"
+		(at 100 93 0)
+	)
+	(label "ADDR1"
+		(at 110 93 0)
+	)
+	(sheet
+		(at 140 90)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-0000000000f1")
+		(property "Sheetname" "child")
+		(property "Sheetfile" "bus_hier_child.kicad_sch")
+		(pin "ADDR[0..1]" bidirectional
+			(at 140 95 180)
+			(uuid "00000000-0000-0000-0000-0000000000f2")
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

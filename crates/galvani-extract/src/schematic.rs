@@ -1414,3 +1414,90 @@ fn synth_name(components: &[Component], sites: &[PinSite], pin_idxs: &[usize]) -
 fn ps_pin_number(components: &[Component], ps: &PinSite) -> String {
     components[ps.comp].pins[ps.pin_idx].number.clone()
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests for the pure helpers (bus expansion, segment incidence)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::{expand_bus, point_strictly_inside};
+
+    #[test]
+    fn vector_bus_ascending() {
+        assert_eq!(
+            expand_bus("D[0..3]"),
+            Some(vec!["D0".into(), "D1".into(), "D2".into(), "D3".into()])
+        );
+    }
+
+    #[test]
+    fn vector_bus_descending() {
+        // KiCad allows n..m with n > m; members run high to low.
+        assert_eq!(
+            expand_bus("A[2..0]"),
+            Some(vec!["A2".into(), "A1".into(), "A0".into()])
+        );
+    }
+
+    #[test]
+    fn vector_bus_keeps_prefix_punctuation() {
+        // A trailing '-' (active-low) or other punctuation in the prefix is
+        // preserved: IRQ-[1..3] -> IRQ-1, IRQ-2, IRQ-3.
+        assert_eq!(
+            expand_bus("IRQ-[1..3]"),
+            Some(vec!["IRQ-1".into(), "IRQ-2".into(), "IRQ-3".into()])
+        );
+    }
+
+    #[test]
+    fn group_bus_named_qualifies_members() {
+        // USB{DP DM} -> USB.DP, USB.DM (KiCad qualifies named-group members).
+        assert_eq!(
+            expand_bus("USB{DP DM}"),
+            Some(vec!["USB.DP".into(), "USB.DM".into()])
+        );
+    }
+
+    #[test]
+    fn group_bus_anonymous_keeps_bare_members() {
+        // {A B[0..1]} -> A, B0, B1 (anonymous group, no prefix qualification).
+        assert_eq!(
+            expand_bus("{A B[0..1]}"),
+            Some(vec!["A".into(), "B0".into(), "B1".into()])
+        );
+    }
+
+    #[test]
+    fn group_bus_mixes_vectors_and_plain() {
+        assert_eq!(
+            expand_bus("MEM{A[1..0] WE}"),
+            Some(vec!["MEM.A1".into(), "MEM.A0".into(), "MEM.WE".into()])
+        );
+    }
+
+    #[test]
+    fn plain_label_is_not_a_bus() {
+        assert_eq!(expand_bus("VCC"), None);
+        assert_eq!(expand_bus("PC-A0"), None);
+        assert_eq!(expand_bus("AUTOFD-"), None);
+        // A '[' that does not close, or a non-numeric range, is not a vector.
+        assert_eq!(expand_bus("D[0..]"), None);
+        assert_eq!(expand_bus("D[x..y]"), None);
+    }
+
+    #[test]
+    fn incidence_interior_and_endpoints() {
+        let a = (0, 0);
+        let b = (0, 10_000);
+        // Strictly inside.
+        assert!(point_strictly_inside((0, 5_000), a, b));
+        // Endpoints are not "strictly inside".
+        assert!(!point_strictly_inside(a, a, b));
+        assert!(!point_strictly_inside(b, a, b));
+        // Off the line.
+        assert!(!point_strictly_inside((1, 5_000), a, b));
+        // Past the end (collinear but outside).
+        assert!(!point_strictly_inside((0, 11_000), a, b));
+    }
+}
