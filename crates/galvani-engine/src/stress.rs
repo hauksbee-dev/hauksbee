@@ -66,6 +66,18 @@ impl FaultKind {
             FaultKind::PinOvercurrent => "pin_overcurrent",
         }
     }
+
+    /// Inverse of [`Self::as_str`]; unknown strings map to `Overcurrent`.
+    pub fn from_str(s: &str) -> FaultKind {
+        match s {
+            "surge_current" => FaultKind::SurgeCurrent,
+            "overpower" => FaultKind::Overpower,
+            "overvoltage" => FaultKind::Overvoltage,
+            "reverse_bias" => FaultKind::ReverseBias,
+            "pin_overcurrent" => FaultKind::PinOvercurrent,
+            _ => FaultKind::Overcurrent,
+        }
+    }
 }
 
 /// One raised fault.
