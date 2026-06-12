@@ -254,14 +254,28 @@ description = "Espressif ESP32-PICO-D4 SiP (Watchy v1.x/v2.x)"
 [models.match]
 value_re = "(?i)^ESP32[- ]?PICO[- ]?D4$"
 
+[models.params]
+# Same ESP32 die as esp32_wroom, so the same QEMU machine (esp32) boots it. With
+# no firmware given the scheduler skips the MCU entirely (lint/report-only runs
+# never need QEMU); with firmware it boots the merged flash image and bridges
+# GPIO (via the RAM mailbox) / UART. The boot-coverage execution of the Watchy
+# RES# row (docs/KNOWN_FAULTS_VALIDATION.md) runs through this.
+backend = "qemu:esp32"
+
 [models.pins]
 # ESP32-PICO-D4 LGA-48 (KiCad RF_Module:ESP32-PICO-D4). Same ESP32 die, same
 # strap GPIOs; on the SiP the flash straps (GPIO12/GPIO15) are bonded internally
 # to the in-package flash, so only GPIO0/GPIO2/GPIO5 are board-exposed. Pad
 # numbers from the KiCad symbol; GPIO0 = pad 23 (verified on Watchy v1.5/v2.0).
+# The display + UART pads are verified against the Watchy v1.5 corpus board file
+# (net_probe): RES = U1 pad 28 = GPIO9, TX = pad 41 = GPIO1/U0TXD, RX = pad 40 =
+# GPIO3/U0RXD. GPIO9 is the e-paper DISPLAY_RES the boot-coverage check watches.
 "23" = "gpio0"
 "24" = "gpio2"
 "34" = "gpio5"
+"28" = "gpio9"      # DISPLAY_RES (board net RES); driven high by display init
+"41" = "p01_txd"    # U0TXD (UART0 TX)
+"40" = "p03_rxd"    # U0RXD (UART0 RX)
 
 # Ref: ESP32-PICO-D4 datasheet v1.7, sec "Strapping Pins" (inherits ESP32 TRM
 # v5.1 strap table). The package-internal flash straps are not listed (fixed by
