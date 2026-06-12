@@ -151,12 +151,23 @@ impl RailWindow {
     /// over the sampled window (rectangular integration on the sample grid).
     pub fn dip_duration_s(&self, threshold: f64) -> f64 {
         let mut total = 0.0;
+        let mut last_dt = 0.0;
         for w in self.samples.windows(2) {
             let (t0, v0) = w[0];
             let (t1, _v1) = w[1];
             // Count the interval as "dipped" when its leading sample is below.
+            let dt = (t1 - t0).max(0.0);
+            last_dt = dt;
             if v0 < threshold {
-                total += (t1 - t0).max(0.0);
+                total += dt;
+            }
+        }
+        // The trailing sample owns one more frame interval; if it is still below
+        // the threshold at the window end, count that dwell too (otherwise a dip
+        // that runs to the last frame is reported one frame short).
+        if let Some(&(_, vlast)) = self.samples.last() {
+            if vlast < threshold {
+                total += last_dt;
             }
         }
         total
@@ -216,6 +227,26 @@ mod tests {
         // Recovery: first dip at 2 ms, last below 3.2 at 4 ms => 2 ms recovery.
         let rec = w.recovery_s(3.0, 3.2);
         assert!((rec - 0.002).abs() < 1e-9, "recovery {rec}");
+    }
+
+    #[test]
+    fn dip_duration_counts_trailing_dwell_at_window_end() {
+        // A dip that runs to the last sample must count that final frame, not be
+        // reported one frame short.
+        let mut w = RailWindow::new();
+        for (t, v) in [
+            (0.000, 3.30),
+            (0.001, 3.30),
+            (0.002, 2.80), // dip starts and never recovers within the window
+            (0.003, 2.80),
+            (0.004, 2.80), // last sample, still below threshold
+        ] {
+            w.observe(t, v);
+        }
+        // Samples at 2,3 ms each own a 1 ms forward interval; the trailing 4 ms
+        // sample owns one more 1 ms frame => 3 ms total below 3.0 V.
+        let dip = w.dip_duration_s(3.0);
+        assert!((dip - 0.003).abs() < 1e-9, "trailing-dwell dip duration {dip}");
     }
 
     #[test]

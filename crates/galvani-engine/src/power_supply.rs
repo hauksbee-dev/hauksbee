@@ -160,6 +160,12 @@ pub struct BatteryProtection {
     /// Runtime latch state: true once tripped (open). Starts armed (false).
     #[serde(default)]
     pub tripped: bool,
+    /// Sticky flag: set true the moment the cutoff latches, and stays true until
+    /// explicitly cleared by a reader. This survives a trip-then-rearm that both
+    /// happen inside a single coarse frame, so a CI sampler that only reads
+    /// `tripped` once per frame cannot alias the event away.
+    #[serde(default)]
+    pub ever_tripped: bool,
     /// Internal: accumulated time the over/under-current condition has held (s).
     #[serde(default)]
     pub accum_s: f64,
@@ -173,6 +179,7 @@ impl BatteryProtection {
             delay_s,
             reset_a: trip_a,
             tripped: false,
+            ever_tripped: false,
             accum_s: 0.0,
         }
     }
@@ -186,6 +193,7 @@ impl BatteryProtection {
                 self.accum_s += dt;
                 if self.accum_s >= self.delay_s {
                     self.tripped = true;
+                    self.ever_tripped = true;
                     self.accum_s = 0.0;
                 }
             } else {
@@ -281,14 +289,27 @@ impl PowerSupply {
         }
     }
 
-    /// Whether this supply's protection has latched open. False for supplies
-    /// without protection (or unprotected batteries).
+    /// Whether this supply's protection has latched open *right now*. False for
+    /// supplies without protection (or unprotected batteries).
     pub fn protection_tripped(&self) -> bool {
         match self {
             PowerSupply::Battery {
                 protection: Some(p),
                 ..
             } => p.tripped,
+            _ => false,
+        }
+    }
+
+    /// Whether this supply's protection has tripped at *any* point so far
+    /// (sticky). This is what a coarse-frame CI sampler should read, so a
+    /// trip-then-rearm inside one frame is not aliased away.
+    pub fn protection_ever_tripped(&self) -> bool {
+        match self {
+            PowerSupply::Battery {
+                protection: Some(p),
+                ..
+            } => p.ever_tripped,
             _ => false,
         }
     }
