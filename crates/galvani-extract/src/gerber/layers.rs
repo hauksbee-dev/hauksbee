@@ -100,6 +100,13 @@ pub fn classify(path: &Path) -> LayerRole {
     if n.has("drill") || n.has("-pth") || n.has("-npth") || n.has(".pth") || n.has(".npth") {
         return LayerRole::Drill;
     }
+    // Allegro gerber-format drill film, e.g. `drill-1-6.art`: drilling drawn as
+    // flashes on a gerber layer rather than as a separate Excellon file. The
+    // `drill` substring above already catches the common names; this keeps the
+    // `.art` ones routed to the drill role explicitly.
+    if n.ext_is("art") && n.has("drill") {
+        return LayerRole::Drill;
+    }
 
     // ── Things that are explicitly NOT copper (check before generic copper) ──
     // Order matters: paste/mask/silk often also contain "top"/"bottom".
@@ -164,7 +171,80 @@ pub fn classify(path: &Path) -> LayerRole {
         };
     }
 
+    // ── Allegro / Cadence `.art` exports (e.g. uConsole) ────────────────────
+    // The copper films are named by role: `top.art`, `bottom.art`, and inner
+    // plane layers `gnd02.art`, `pwr04.art`, `gnd05.art` where the number is the
+    // stack position. The mask/silk/paste films (`solder_*`, `silk_*`,
+    // `paste_*`) were already caught above; the assembly films (`adt`, `adb`)
+    // and `art03` / `art_aper` are not copper.
+    if n.ext_is("art") {
+        let stem = &n.full;
+        if stem.starts_with("top") {
+            return LayerRole::Copper { index: 0, name: "TOP".to_string() };
+        }
+        if stem.starts_with("bottom") || stem.starts_with("bot.") {
+            return LayerRole::Copper { index: usize::MAX, name: "BOTTOM".to_string() };
+        }
+        // Inner plane with an embedded stack number: gnd02, pwr04, gnd05, l3 …
+        if stem.starts_with("gnd") || stem.starts_with("pwr") || stem.starts_with("pgnd")
+            || stem.starts_with("power") || stem.starts_with("plane")
+        {
+            let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(k) = digits.parse::<usize>() {
+                if k >= 1 {
+                    return LayerRole::Copper { index: k, name: n.original.to_string() };
+                }
+            }
+            // No number: still a copper plane, drop it after top, before bottom.
+            return LayerRole::Copper { index: 1, name: n.original.to_string() };
+        }
+    }
+
     LayerRole::Unknown
+}
+
+/// An explicit layer-role mapping file: the escape hatch for exotic jobs whose
+/// file names defeat the conventions. Format is one `filename = role` per line
+/// (`#` comments allowed), where role is `copper:<index>` (0 = top, larger =
+/// deeper, `bottom` for the bottom layer), `drill`, `outline`, or `ignore`:
+///
+/// ```text
+/// top.art    = copper:0
+/// gnd02.art  = copper:1
+/// pwr04.art  = copper:2
+/// bottom.art = copper:bottom
+/// drill-1-6.art = drill
+/// ```
+pub fn parse_mapping(text: &str) -> std::collections::HashMap<String, LayerRole> {
+    let mut map = std::collections::HashMap::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, role)) = line.split_once('=') else { continue };
+        let name = name.trim().to_string();
+        let role = role.trim().to_ascii_lowercase();
+        let parsed = if let Some(idx) = role.strip_prefix("copper:") {
+            let idx = idx.trim();
+            if idx == "bottom" {
+                LayerRole::Copper { index: usize::MAX, name: name.clone() }
+            } else if let Ok(k) = idx.parse::<usize>() {
+                LayerRole::Copper { index: k, name: name.clone() }
+            } else {
+                continue;
+            }
+        } else {
+            match role.as_str() {
+                "drill" => LayerRole::Drill,
+                "outline" => LayerRole::Outline,
+                "ignore" => LayerRole::Ignored,
+                _ => continue,
+            }
+        };
+        map.insert(name, parsed);
+    }
+    map
 }
 
 fn top_label(orig: &str) -> String {
@@ -288,6 +368,38 @@ mod tests {
     fn generic_words() {
         assert!(matches!(role("TopLayer.gbr"), LayerRole::Copper { index: 0, .. }));
         assert!(matches!(role("Bottom Copper.gbr"), LayerRole::Copper { index: usize::MAX, .. }));
+    }
+
+    #[test]
+    fn allegro_art_names() {
+        assert!(matches!(role("top.art"), LayerRole::Copper { index: 0, .. }));
+        assert!(matches!(role("bottom.art"), LayerRole::Copper { index: usize::MAX, .. }));
+        assert!(matches!(role("gnd02.art"), LayerRole::Copper { index: 2, .. }));
+        assert!(matches!(role("pwr04.art"), LayerRole::Copper { index: 4, .. }));
+        assert_eq!(role("drill-1-6.art"), LayerRole::Drill);
+        assert_eq!(role("silk_top.art"), LayerRole::Ignored);
+        assert_eq!(role("solder_bot.art"), LayerRole::Ignored);
+        assert_eq!(role("paste_top.art"), LayerRole::Ignored);
+    }
+
+    #[test]
+    fn mapping_file() {
+        let text = "\
+# explicit overrides\n\
+weird_top.gbr = copper:0\n\
+weird_in1.gbr = copper:1\n\
+weird_bot.gbr = copper:bottom\n\
+holes.txt = drill\n\
+edge.gbr = outline\n";
+        let m = parse_mapping(text);
+        assert!(matches!(m.get("weird_top.gbr"), Some(LayerRole::Copper { index: 0, .. })));
+        assert!(matches!(m.get("weird_in1.gbr"), Some(LayerRole::Copper { index: 1, .. })));
+        assert!(matches!(
+            m.get("weird_bot.gbr"),
+            Some(LayerRole::Copper { index: usize::MAX, .. })
+        ));
+        assert_eq!(m.get("holes.txt"), Some(&LayerRole::Drill));
+        assert_eq!(m.get("edge.gbr"), Some(&LayerRole::Outline));
     }
 
     #[test]

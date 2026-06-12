@@ -49,31 +49,69 @@ pub struct GerberExtraction {
     pub stats: ReconStats,
 }
 
+/// Recursively collect every file under `dir` (fab jobs sometimes nest the
+/// copper / drill / assembly films in sub-directories, e.g. Allegro's
+/// `*_CAM` / `*_SMT` / `*_ASM` split).
+fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_files(&p, out);
+        } else if p.is_file() {
+            out.push(p);
+        }
+    }
+}
+
 /// Reverse-extract from a directory of gerber/drill/P&P files.
 ///
-/// Detection is by file name (see [`layers::classify`]). The board name is the
-/// directory's file name. P&P and BOM are picked up automatically if a `.csv`
-/// (or `.pos`) file in the directory parses as one.
+/// Detection is by file name (see [`layers::classify`]), recursing into
+/// sub-directories. An optional `layer_map.txt` / `*.map` mapping file in the
+/// directory overrides the name-based role guess for exotic jobs. The board
+/// name is the directory's file name. The pick-and-place is picked up from a
+/// `.csv`/`.pos` that parses as one, or an Allegro `smt_loc.txt`.
 pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| ExtractError::Xml(format!("read dir {}: {e}", dir.display())))?;
+    let mut all_files = Vec::new();
+    collect_files(dir, &mut all_files);
+
+    // Optional mapping-file escape hatch: `layer_map.txt` or any `*.map`.
+    let mut mapping: std::collections::HashMap<String, LayerRole> =
+        std::collections::HashMap::new();
+    for p in &all_files {
+        let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let is_map = n.eq_ignore_ascii_case("layer_map.txt")
+            || p.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("map")).unwrap_or(false);
+        if is_map {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                mapping.extend(layers::parse_mapping(&text));
+            }
+        }
+    }
 
     let mut copper: Vec<(LayerRole, std::path::PathBuf)> = Vec::new();
     let mut drills: Vec<std::path::PathBuf> = Vec::new();
     let mut csvs: Vec<std::path::PathBuf> = Vec::new();
+    let mut loc_files: Vec<std::path::PathBuf> = Vec::new();
 
-    for e in entries.flatten() {
-        let path = e.path();
-        if !path.is_file() {
-            continue;
-        }
-        match layers::classify(&path) {
+    for path in all_files {
+        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        // Mapping override first, else name-based classification.
+        let role = mapping
+            .get(&fname)
+            .cloned()
+            .unwrap_or_else(|| layers::classify(&path));
+        match role {
             r @ LayerRole::Copper { .. } => copper.push((r, path)),
             LayerRole::Drill => drills.push(path),
             _ => {
-                // CSVs (P&P / BOM) aren't a layer role; pick them up separately.
-                if path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("csv") || s.eq_ignore_ascii_case("pos")).unwrap_or(false) {
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+                let lname = fname.to_ascii_lowercase();
+                if ext == "csv" || ext == "pos" {
                     csvs.push(path);
+                } else if lname.contains("loc") || lname.contains("place") || lname.contains("pos") || lname.contains("pnp") || lname.contains("xy") {
+                    // Allegro `smt_loc.txt` and similar component-location files.
+                    loc_files.push(path);
                 }
             }
         }
@@ -112,23 +150,47 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
     }
 
-    // Parse drills -> plated holes only (NPTH are mechanical).
+    // Parse drills -> plated holes only (NPTH are mechanical). A drill is
+    // usually Excellon, but some tools (Allegro `.art`) emit it as a *gerber*
+    // film with the holes drawn as flashes. We sniff: a gerber drill carries
+    // RS-274X markers (`%FS`/`%MO`/`G04`), in which case the flash centres are
+    // the hole locations; otherwise it is Excellon.
     let mut holes: Vec<PlatedHole> = Vec::new();
     for d in &drills {
         let text = std::fs::read_to_string(d)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", d.display())))?;
-        let drill = excellon::parse(&text);
-        // Plated if the file says so; if unknown, infer from the file name.
-        let plated = drill.plated.unwrap_or_else(|| {
-            let n = d.file_name().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-            !(n.contains("npth") || n.contains("non-plated") || n.contains("nonplated"))
-        });
-        if plated {
-            holes.extend(drill.holes.into_iter().map(|h| PlatedHole {
-                x: h.x,
-                y: h.y,
-                diameter: h.diameter,
-            }));
+        let n = d.file_name().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+        let plated = !(n.contains("npth") || n.contains("non-plated") || n.contains("nonplated"));
+        if !plated {
+            continue;
+        }
+        let head: String = text.chars().take(256).collect();
+        let is_gerber = head.contains("%FS") || head.contains("Gerber") || d.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("art")).unwrap_or(false);
+        if is_gerber {
+            // Gerber-format drill: each flash is a hole; its disc radius is the
+            // drill radius. Tracks/regions on a drill film are legend art.
+            if let Ok(prims) = rs274x::parse_layer(&text) {
+                for p in prims {
+                    if p.kind == rs274x::PrimKind::Flash {
+                        let (x, y) = p.shape.center();
+                        let dia = match &p.shape {
+                            geo::Shape::Capsule(c) => c.r * 2.0,
+                            geo::Shape::Polygon { .. } => 0.3,
+                        };
+                        holes.push(PlatedHole { x, y, diameter: dia });
+                    }
+                }
+            }
+        } else {
+            let drill = excellon::parse(&text);
+            let plated = drill.plated.unwrap_or(true);
+            if plated {
+                holes.extend(drill.holes.into_iter().map(|h| PlatedHole {
+                    x: h.x,
+                    y: h.y,
+                    diameter: h.diameter,
+                }));
+            }
         }
     }
 
@@ -145,6 +207,18 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             let b = placement::parse_bom(&text);
             if !b.is_empty() {
                 bom.extend(b);
+            }
+        }
+    }
+    // Allegro-style component-location files (`smt_loc.txt`): tried when no CSV
+    // P&P was found, or when a `*loc*`/`*place*` text file exists.
+    if placements.is_empty() {
+        for l in &loc_files {
+            let Ok(text) = std::fs::read_to_string(l) else { continue };
+            let pnp = placement::parse_allegro_loc(&text);
+            if !pnp.is_empty() {
+                placements = pnp;
+                break;
             }
         }
     }
