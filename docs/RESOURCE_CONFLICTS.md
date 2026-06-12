@@ -50,9 +50,21 @@ Resource kinds modelled:
   (SCK), PB11 (CS) (SAM D5x/E5x Data Sheet, Table 6-1 function "H", section 36).
   Those pads also carry SERCOM/other functions in the mux, so a designer *can*
   wire an ordinary SPI device to them, but then the pad is committed to whichever
-  peripheral is selected - a flash on these pads over SERCOM blocks QSPI. The
-  pads form one resource group (`qspi_data`); any non-QSPI use of >= 2 group pads
-  conflicts with QSPI use.
+  peripheral is selected - a flash on these pads over SERCOM blocks QSPI.
+
+  **The discriminator (this is the load-bearing subtlety).** Putting a flash on
+  PA08..PA11 is ALSO exactly how you wire a flash you *intend* to drive over the
+  QSPI controller - the normal, correct SAMD51 design (Adafruit Metro/Feather M4
+  do this). So "flash on the QSPI data pads" alone is NOT the bug. The bug is
+  wiring the flash as a 4-wire SERCOM SPI device on those pads. The physical
+  discriminator, read from the net names: a CORRECT QSPI flash drives PA08..PA11
+  as the quad-IO data lanes (`IO0..IO3` / `D0..D3`) with SCK/CS on the dedicated
+  PB10/PB11; the SparkFun BUG wires 4-wire SPI (`MOSI`/`MISO`/`SCK`/`CS`) onto the
+  PA08..PA11 data pads. The check fires ONLY when a 4-wire-SPI-role net
+  (MOSI/MISO/SCK/CS) lands on a QSPI DATA pad (`data = true` in the table, and
+  `net_role_is_4wire_spi`), so the Metro/Feather-M4 quad-IO flash stays silent.
+  Verified against the corpus: SparkFun SAMD51 fires, Adafruit Metro M4 (same
+  pads, IO0..IO3 naming) is silent.
 
 - **ESP32 - recorded honestly as having no fixed conflicts of this class.** The
   ESP32 GPIO matrix routes almost every digital peripheral to almost any GPIO,
@@ -212,6 +224,8 @@ check is **silent on all of them**:
 | Olimex ESP32-EVB REV-L / REV-K1 | ESP32 (fully routable) | silent |
 | ZSWatch mainboard, Watchy, LumenPnP mobo, Lily58, MNT Reform mobo 3.0 | various | silent (no table match) |
 | Adafruit Feather M0 | ATSAMD21 (NOT a D5x J-variant) | silent (correctly does not match) |
+| **Adafruit Metro M4** | **ATSAMD51J (QSPI flash on PA08..PA11)** | **silent (correct QSPI flash: quad-IO naming, the discriminator)** |
+| Adafruit QT Py | ATSAMD21 + flash | silent |
 | SparkFun RedBoard | ATmega328 | silent |
 
 **Total false positives on known-good boards: 0.** The two RP2040 boards and the

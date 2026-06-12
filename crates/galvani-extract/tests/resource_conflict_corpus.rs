@@ -132,6 +132,14 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
         "adafruit_feather_m0/Adafruit Feather M0 Basic rev C.brd",
         "sparkfun_redboard/RedBoard.brd",
     ];
+    // SAMD51 boards that wire the flash to the SAME QSPI pads as the SparkFun
+    // bug, but CORRECTLY (driven over the QSPI controller, quad-IO net naming).
+    // These are the false-positive case the discriminator must reject; they live
+    // in a separate list because their .brd filenames carry the board name.
+    let clean_qspi_flash: &[&str] = &[
+        "adafruit_metro_m4",
+        "adafruit_qtpy",
+    ];
     let mut fires = Vec::new();
     for rel in clean {
         let path = c.join(rel);
@@ -143,6 +151,32 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
         let msgs = conflicts(&c, rel);
         if !msgs.is_empty() {
             fires.push(format!("{rel}: {msgs:#?}"));
+        }
+    }
+    // The correct-QSPI-flash boards: find the .brd by glob (filename carries the
+    // board name) and assert silence. This guards the discriminator that keeps
+    // a correctly-wired QSPI flash (Metro/Feather M4 class) from firing.
+    for dir in clean_qspi_flash {
+        let d = c.join(dir);
+        if !d.exists() {
+            continue;
+        }
+        let brd = std::fs::read_dir(&d)
+            .ok()
+            .and_then(|rd| {
+                rd.filter_map(|e| e.ok().map(|e| e.path()))
+                    .find(|p| p.extension().and_then(|e| e.to_str()) == Some("brd"))
+            });
+        if let Some(brd) = brd {
+            let board = load(&brd);
+            let msgs: Vec<_> = board
+                .resource_conflicts()
+                .of_check(LintCheck::McuResourceConflict)
+                .map(|f| f.message.clone())
+                .collect();
+            if !msgs.is_empty() {
+                fires.push(format!("{}: {msgs:#?}", brd.display()));
+            }
         }
     }
     assert!(

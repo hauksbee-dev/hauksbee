@@ -162,15 +162,22 @@ value_re = "(?i)^ATSAM(D|E)5(1|3|4)J.*"
 lib_re   = "(?i)(SAMD51|ATSAMD5)"
 
 # Each QSPI pad: its port name, the QSPI signal it carries, and the resource
-# *group* it belongs to. A pad in a group used for a non-QSPI function conflicts
-# with using the QSPI controller at all.
+# *group* it belongs to. The `qspi_data` rows (PA08..PA11) are the four QSPI
+# DATA lines: these are the discriminator pads. A CORRECTLY-wired QSPI flash
+# drives them as IO0..IO3 (quad data) with SCK/CS on the dedicated PB10/PB11;
+# the SparkFun BUG instead wires a 4-wire SERCOM SPI flash (MOSI/MISO/SCK/CS)
+# ONTO these data pads. So the conflict is only real when an SPI control/2-wire
+# signal (SCK / CS / MOSI / MISO by net role) lands on a DATA pad - that proves
+# SERCOM-SPI use of the QSPI data bus, not QSPI use. `data = true` marks the
+# discriminator pads; `sck`/`cs` mark the dedicated QSPI clock/select pads (a
+# signal on those alone is normal QSPI and must NOT fire).
 [mcu.pins]
-"17" = { port = "PA08", qspi = "DATA0", group = "qspi_data" }
-"18" = { port = "PA09", qspi = "DATA1", group = "qspi_data" }
-"19" = { port = "PA10", qspi = "DATA2", group = "qspi_data" }
-"20" = { port = "PA11", qspi = "DATA3", group = "qspi_data" }
-"23" = { port = "PB10", qspi = "SCK",   group = "qspi_data" }
-"24" = { port = "PB11", qspi = "CS",    group = "qspi_data" }
+"17" = { port = "PA08", qspi = "DATA0", group = "qspi_data", data = true }
+"18" = { port = "PA09", qspi = "DATA1", group = "qspi_data", data = true }
+"19" = { port = "PA10", qspi = "DATA2", group = "qspi_data", data = true }
+"20" = { port = "PA11", qspi = "DATA3", group = "qspi_data", data = true }
+"23" = { port = "PB10", qspi = "SCK",   group = "qspi_sck" }
+"24" = { port = "PB11", qspi = "CS",    group = "qspi_cs" }
 
 # ===========================================================================
 # ESP32 (original). Recorded HONESTLY as having no fixed peripheral-pin
