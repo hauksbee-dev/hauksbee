@@ -183,7 +183,8 @@ description = "Espressif ESP32 classic (WROOM-32 / WROVER module, or bare ESP32-
 # "ESP32-WROOM-32E-N4" on the Olimex EVB rev L) must all match the same strap
 # table, so the suffix is left open after "32".
 value_re = "(?i)^(ESP[- ]?WROOM[- ]?32|ESP32[- ]?WRO(OM|VER)[- ]?32?.*|ESP32(-D0WD.*)?)$"
-mpn_re   = "(?i)^ESP32-?WROOM"
+# No mpn_re: match rules are ANDed, so an mpn_re would reject the common case
+# of a board whose ESP32 carries no MPN property (Olimex EVB, most KiCad libs).
 
 [models.params]
 # galvani-mcu backend identifier: the QEMU backend boots the matching Espressif
@@ -358,7 +359,6 @@ description = "Espressif ESP32-C3 (RISC-V RV32IMC; WROOM-02 / MINI-1 module or b
 
 [models.match]
 value_re = "(?i)^ESP32[- ]?C3([- ]?(WROOM|MINI).*)?$"
-mpn_re   = "(?i)^ESP32-?C3"
 
 [models.params]
 backend = "qemu:esp32c3"
