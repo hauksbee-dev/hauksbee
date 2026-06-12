@@ -21,6 +21,7 @@
 
 pub mod binder;
 pub mod boardcode;
+pub mod checks;
 pub mod digital;
 pub mod drivers;
 pub mod engine;
@@ -31,6 +32,10 @@ pub mod shorts;
 pub mod stress;
 
 pub use binder::{bind_board, BoundBoard};
+pub use checks::usb_c::{
+    classify_attach, classify_board, extract_sink_termination, Attach, Cable, CcResult,
+    CcThresholds, PinState, Rp, SinkTermination,
+};
 pub use boardcode::{
     check_board_text, check_code, code_to_board_text, decompile_board_to_code, load_code,
     program_from_extracted, render_check_report, CheckOptions, CheckReport,
