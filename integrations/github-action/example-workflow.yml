@@ -1,0 +1,59 @@
+# Copy this into your HARDWARE repo as .github/workflows/galvani-ci.yml
+#
+# It runs galvani-ci on every push and pull request that touches the board or
+# firmware, so a layout change that would brown out the rail (or break the
+# blink, or silence the UART) turns the build red before anyone touches a
+# soldering iron.
+
+name: hardware-ci
+
+on:
+  push:
+    paths:
+      - "hardware/**"
+      - "firmware/**"
+      - "ci/**.toml"
+  pull_request:
+    paths:
+      - "hardware/**"
+      - "firmware/**"
+      - "ci/**.toml"
+
+jobs:
+  power-up:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Check out YOUR hardware repo (board + firmware + spec).
+      - uses: actions/checkout@v4
+
+      # 2. (Optional) build your firmware here, so the ELF the spec points at
+      #    exists. For an AVR project that is usually a `make` in firmware/.
+      # - name: Build firmware
+      #   run: make -C firmware
+
+      # 3. Run the hardware check. The action builds galvani-ci, runs your
+      #    spec, writes JUnit XML, and emits inline annotations.
+      - name: galvani-ci power-up check
+        uses: galvani/galvani/integrations/github-action@main
+        with:
+          spec: ci/power-up.toml
+          junit: galvani-ci-results.xml
+          galvani-ref: main
+
+  # A matrix is the natural way to run several specs (power-up, blink,
+  # brown-out across supplies) in parallel.
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        spec:
+          - ci/power-up.toml
+          - ci/blink.toml
+          - ci/brownout.toml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: galvani/galvani/integrations/github-action@main
+        with:
+          spec: ${{ matrix.spec }}
+          junit: results-${{ strategy.job-index }}.xml
