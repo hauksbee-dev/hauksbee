@@ -1,0 +1,35 @@
+[[mcu]]
+id = "rp2040_extracted"
+description = "RP2040 PWM pad table, machine-extracted"
+
+[mcu.pins]
+"GP0"  = { pwm = "0A" }
+"GP1"  = { pwm = "0B" }
+"GP2"  = { pwm = "1A" }
+"GP3"  = { pwm = "1B" }
+"GP4"  = { pwm = "2A" }
+"GP5"  = { pwm = "2B" }
+"GP6"  = { pwm = "3A" }
+"GP7"  = { pwm = "3B" }
+"GP8"  = { pwm = "4A" }
+"GP9"  = { pwm = "4B" }
+"GP10" = { pwm = "5A" }
+"GP11" = { pwm = "5B" }
+"GP12" = { pwm = "6A" }
+"GP13" = { pwm = "6B" }
+"GP14" = { pwm = "7A" }
+"GP15" = { pwm = "7B" }
+"GP16" = { pwm = "0A" }
+"GP17" = { pwm = "0B" }
+"GP18" = { pwm = "1A" }
+"GP19" = { pwm = "1B" }
+"GP20" = { pwm = "2A" }
+"GP21" = { pwm = "2B" }
+"GP22" = { pwm = "3A" }
+"GP23" = { pwm = "3B" }
+"GP24" = { pwm = "4A" }
+"GP25" = { pwm = "4B" }
+"GP26" = { pwm = "5A" }
+"GP27" = { pwm = "5B" }
+"GP28" = { pwm = "6A" }
+"GP29" = { pwm = "6B" }

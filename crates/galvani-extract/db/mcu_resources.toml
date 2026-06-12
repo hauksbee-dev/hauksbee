@@ -1,0 +1,208 @@
+# MCU internal resource map: per-MCU, per-pin assignment of the *shared silicon
+# resources* whose contention is invisible at the netlist level but real inside
+# the die. The resource-conflict check (`resource_conflict.rs`) reads this to
+# decide whether two board-level functions that the netlist routes to different
+# pins can actually be served at the same time by the MCU's peripherals.
+#
+# The unit of conflict is a "resource instance": a PWM slice+channel, a SERCOM
+# instance, a QSPI pin group, a timer channel, an ADC instance. Two demanded
+# functions that need the *same* instance, in incompatible ways, cannot both be
+# satisfied. That is the class this table makes checkable.
+#
+# Keys are PIN/PAD NUMBERS exactly as they appear in the extracted board
+# (`Pin.number`), because the netlist/PCB paths carry pad numbers reliably but
+# NOT pin functions (the KiCad-5 `.net` and the Eagle `.brd` both drop
+# `pinfunction`). So this is the source of truth for "pad N of this part is GPIO
+# X, on PWM slice S channel C", authored by hand from the reference manual with
+# the section cited per block, and (for RP2040) cross-checked against an
+# automated datasheet extraction (see docs/RESOURCE_CONFLICTS.md).
+#
+# `match.value_re` / `match.lib_re` identify the part the same way the model DB
+# does. The first table whose match hits a component owns that component's pins.
+
+# ===========================================================================
+# RP2040 as the Raspberry-Pi-Pico-form module ("RP2040_PLATFORM" on the Olimex
+# RP2040-PICO-PC, and the genuine Pico). 40-pin module; pad numbers are the
+# module's castellated-pad numbers (pad 1 = GP0 ... the Pico pinout), NOT the
+# bare QFN pin numbers.
+#
+# PWM mapping rule (RP2040 datasheet, section 4.5.2 "Programmer's Model", and
+# Table 525 "GPIO functions": each GPIO n is hardwired to PWM slice = (n>>1)&7,
+# channel A when n is even, channel B when n is odd). There are 8 slices (0..7),
+# each with channels A and B. The resource instance the check models is the pair
+# {slice, channel}: only ONE GPIO can drive a given {slice, channel} as a PWM
+# output at a time, so two PWM functions on the same {slice, channel} is a hard,
+# no-valid-assignment conflict. (The two channels of a slice also share the
+# slice counter/TOP - RP2040 4.5.2.1 "both channels share the same counter" - so
+# two functions on different channels of one slice cannot have independent
+# frequencies. That weaker, same-slice/different-channel constraint is NOT
+# flagged here; the check models only the hard same-{slice,channel} collision,
+# which both known bugs are.)
+# ---------------------------------------------------------------------------
+[[mcu]]
+id = "rp2040_pico_module"
+description = "RP2040 on a Raspberry-Pi-Pico-form 40-pin carrier module"
+# A real Pico-form module is a 40-pin part. The guard stops a loose name match on
+# a small part (e.g. a buffer carrying a `...RP2040-PICO-PC...-rescue` library id,
+# or a 1-pin mounting hole) from being mistaken for the module.
+min_pins = 30
+
+[mcu.match]
+# Match the carrier's symbol part name or a genuine Raspberry Pi Pico symbol.
+# The Olimex carrier symbol was renamed across revisions: `RP_pico2040` (rev B)
+# then `RP2040_PLATFORM` (rev C/D) - both are the same 40-pin Pico-form module
+# (footprint RP_Pico2040). Deliberately NOT a bare "Pico" substring: that would
+# match the `RP2040-PICO-PC...-rescue` rescue-library id on every part.
+value_re = "(?i)^(RP2040_PLATFORM|RP_pico2040|RaspberryPi[-_ ]?Pico|Raspberry[-_ ]?Pi[-_ ]?Pico)$"
+lib_re   = "(?i)(:RP2040_PLATFORM$|:RP_pico2040$|MCU_RaspberryPi:Pico|RaspberryPi_Pico)"
+
+# pad -> "GPnn" and the PWM slice/channel that GPnn is hardwired to. Only the
+# pads that carry a GPIO are listed (power/GND/RUN/debug pads are not resources
+# in this class). Derived from the Pico pad map x the (n>>1)&7 / A|B rule.
+# Format: pad = { gpio = "GPnn", pwm = "Ns" } where N is the slice 0..7 and the
+# trailing letter is the channel. adc = "ADCk" added where the pad is an ADC pin.
+[mcu.pins]
+"1"  = { gpio = "GP0",  pwm = "0A" }
+"2"  = { gpio = "GP1",  pwm = "0B" }
+"4"  = { gpio = "GP2",  pwm = "1A" }
+"5"  = { gpio = "GP3",  pwm = "1B" }
+"6"  = { gpio = "GP4",  pwm = "2A" }
+"7"  = { gpio = "GP5",  pwm = "2B" }
+"9"  = { gpio = "GP6",  pwm = "3A" }
+"10" = { gpio = "GP7",  pwm = "3B" }
+"11" = { gpio = "GP8",  pwm = "4A" }
+"12" = { gpio = "GP9",  pwm = "4B" }
+"14" = { gpio = "GP10", pwm = "5A" }
+"15" = { gpio = "GP11", pwm = "5B" }
+"16" = { gpio = "GP12", pwm = "6A" }
+"17" = { gpio = "GP13", pwm = "6B" }
+"19" = { gpio = "GP14", pwm = "7A" }
+"20" = { gpio = "GP15", pwm = "7B" }
+"21" = { gpio = "GP16", pwm = "0A" }
+"22" = { gpio = "GP17", pwm = "0B" }
+"24" = { gpio = "GP18", pwm = "1A" }
+"25" = { gpio = "GP19", pwm = "1B" }
+"26" = { gpio = "GP20", pwm = "2A" }
+"27" = { gpio = "GP21", pwm = "2B" }
+"29" = { gpio = "GP22", pwm = "3A" }
+"31" = { gpio = "GP26", pwm = "5A", adc = "ADC0" }
+"32" = { gpio = "GP27", pwm = "5B", adc = "ADC1" }
+"34" = { gpio = "GP28", pwm = "6A", adc = "ADC2" }
+
+# ===========================================================================
+# RP2040 as the bare QFN-56 chip (e.g. the official RP2040-minimal KiCad board).
+# Here the GPIO function lands on the chip pad whose number is the QFN pin, so
+# the pad->GPIO map is the datasheet's pin table (RP2040 datasheet Table 2,
+# "Pin Locations", QFN-56). Same PWM (n>>1)&7 / A|B rule.
+# ---------------------------------------------------------------------------
+[[mcu]]
+id = "rp2040_qfn56"
+description = "RP2040 bare QFN-56 chip"
+min_pins = 30
+
+[mcu.match]
+value_re = "(?i)^RP2040$"
+lib_re   = "(?i):RP2040$"
+
+[mcu.pins]
+# QFN-56 GPIO pins (datasheet Table 2). IOVDD/DVDD/GND/QSPI/USB/XIN pins omitted.
+"2"  = { gpio = "GP0",  pwm = "0A" }
+"3"  = { gpio = "GP1",  pwm = "0B" }
+"4"  = { gpio = "GP2",  pwm = "1A" }
+"5"  = { gpio = "GP3",  pwm = "1B" }
+"6"  = { gpio = "GP4",  pwm = "2A" }
+"7"  = { gpio = "GP5",  pwm = "2B" }
+"8"  = { gpio = "GP6",  pwm = "3A" }
+"9"  = { gpio = "GP7",  pwm = "3B" }
+"11" = { gpio = "GP8",  pwm = "4A" }
+"12" = { gpio = "GP9",  pwm = "4B" }
+"13" = { gpio = "GP10", pwm = "5A" }
+"14" = { gpio = "GP11", pwm = "5B" }
+"15" = { gpio = "GP12", pwm = "6A" }
+"16" = { gpio = "GP13", pwm = "6B" }
+"17" = { gpio = "GP14", pwm = "7A" }
+"18" = { gpio = "GP15", pwm = "7B" }
+"27" = { gpio = "GP16", pwm = "0A" }
+"28" = { gpio = "GP17", pwm = "0B" }
+"29" = { gpio = "GP18", pwm = "1A" }
+"30" = { gpio = "GP19", pwm = "1B" }
+"31" = { gpio = "GP20", pwm = "2A" }
+"32" = { gpio = "GP21", pwm = "2B" }
+"33" = { gpio = "GP22", pwm = "3A" }
+"34" = { gpio = "GP23", pwm = "3B" }
+"35" = { gpio = "GP24", pwm = "4A" }
+"36" = { gpio = "GP25", pwm = "4B" }
+"37" = { gpio = "GP26", pwm = "5A", adc = "ADC0" }
+"38" = { gpio = "GP27", pwm = "5B", adc = "ADC1" }
+"39" = { gpio = "GP28", pwm = "6A", adc = "ADC2" }
+"40" = { gpio = "GP29", pwm = "6B", adc = "ADC3" }
+
+# ===========================================================================
+# Microchip SAM D5x / E5x, J variant, 64-pin TQFP (ATSAMD51J*).
+#
+# The conflict class for this part is the QSPI pin group. The QSPI peripheral on
+# SAM D5x is NOT routable through the PORT mux to arbitrary pins: its six signals
+# are fixed to PA08..PA11 (DATA0..3), PB10 (SCK), PB11 (CS) [SAM D5x/E5x Family
+# Data Sheet, Table 6-1 "PORT Function Multiplexing", peripheral function "H"
+# (QSPI), and section 36 "QSPI"]. Those same PA08..PA11 pads also carry SERCOM
+# and other PORT functions in the mux, so a designer CAN wire an ordinary SPI
+# device to them, but then the four pads are committed to whichever peripheral
+# is selected: a device on PA08..PA11 driven over SERCOM (bit-banged / SPI host)
+# blocks the QSPI controller, and vice-versa. The pads form ONE resource group
+# ("qspi_data"); any non-QSPI use of a member pad conflicts with QSPI use of the
+# group.
+#
+# Pad numbers are the TQFP64 datasheet pin numbers (= the Eagle package pad
+# names on the SparkFun board). PA08=pin17, PA09=pin18, PA10=pin19, PA11=pin20,
+# PB10=pin23, PB11=pin24 (SAM D5x/E5x Data Sheet, Table 5-1 "Pinout, 64-pin").
+# ---------------------------------------------------------------------------
+[[mcu]]
+id = "samd51j_tqfp64"
+description = "Microchip SAM D51 J-variant, 64-pin TQFP (ATSAMD51J20A etc)"
+min_pins = 40
+
+[mcu.match]
+value_re = "(?i)^ATSAM(D|E)5(1|3|4)J.*"
+lib_re   = "(?i)(SAMD51|ATSAMD5)"
+
+# Each QSPI pad: its port name, the QSPI signal it carries, and the resource
+# *group* it belongs to. The `qspi_data` rows (PA08..PA11) are the four QSPI
+# DATA lines: these are the discriminator pads. A CORRECTLY-wired QSPI flash
+# drives them as IO0..IO3 (quad data) with SCK/CS on the dedicated PB10/PB11;
+# the SparkFun BUG instead wires a 4-wire SERCOM SPI flash (MOSI/MISO/SCK/CS)
+# ONTO these data pads. So the conflict is only real when an SPI control/2-wire
+# signal (SCK / CS / MOSI / MISO by net role) lands on a DATA pad - that proves
+# SERCOM-SPI use of the QSPI data bus, not QSPI use. `data = true` marks the
+# discriminator pads; `sck`/`cs` mark the dedicated QSPI clock/select pads (a
+# signal on those alone is normal QSPI and must NOT fire).
+[mcu.pins]
+"17" = { port = "PA08", qspi = "DATA0", group = "qspi_data", data = true }
+"18" = { port = "PA09", qspi = "DATA1", group = "qspi_data", data = true }
+"19" = { port = "PA10", qspi = "DATA2", group = "qspi_data", data = true }
+"20" = { port = "PA11", qspi = "DATA3", group = "qspi_data", data = true }
+"23" = { port = "PB10", qspi = "SCK",   group = "qspi_sck" }
+"24" = { port = "PB11", qspi = "CS",    group = "qspi_cs" }
+
+# ===========================================================================
+# ESP32 (original). Recorded HONESTLY as having no fixed peripheral-pin
+# conflicts of this class: the ESP32 GPIO matrix routes almost every digital
+# peripheral (SPI host, I2C, UART, LEDC/PWM, PCNT, ...) to almost any GPIO, so
+# two functions never fight over a fixed silicon instance the way RP2040 PWM
+# slices or SAMD51 QSPI pins do. The only true pin-bound constraints are the
+# strapping pins (boot mode) and the ADC2 / WiFi mutual-exclusion and the
+# input-only GPIO34..39 - and those are a DIFFERENT class (boot-strap /
+# analog), handled elsewhere, not "two functions want one peripheral instance".
+# This block exists so the check can state, for an ESP32 board, "no fixed
+# resource conflicts in this class" rather than silently having no opinion.
+# ---------------------------------------------------------------------------
+[[mcu]]
+id = "esp32_gpio_matrix"
+description = "Espressif ESP32 (GPIO matrix: digital peripherals fully routable)"
+fully_routable = true   # no fixed peripheral-pin conflicts; see comment above
+
+[mcu.match]
+value_re = "(?i)^ESP32(-?WROOM|-?WROVER|-?PICO)?.*"
+lib_re   = "(?i)ESP32"
+
+# No [mcu.pins]: a fully_routable MCU has no fixed {pin->instance} bindings in
+# this class. The check must NOT manufacture a conflict for it.
