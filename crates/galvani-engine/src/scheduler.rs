@@ -132,6 +132,18 @@ impl Scheduler {
 
         let mut live = Vec::new();
         for binding in mcus {
+            // External emulator backends (renode/qemu) boot from a program
+            // image; with no firmware given there is nothing to run, so the
+            // MCU sits out and the board solves as a passive circuit (its pins
+            // stay high-impedance). This keeps firmware-less analyses (lint,
+            // DRC, stress, transient scenarios) working on boards whose MCU
+            // happens to have an external backend mapping. The in-process AVR
+            // core keeps its historical always-instantiated behaviour.
+            let external = binding.backend.starts_with("renode:")
+                || binding.backend.starts_with("qemu:");
+            if external && firmware.is_none() {
+                continue;
+            }
             let core = instantiate_mcu(&binding, firmware)?;
             live.push(core_with_hooks(core, binding));
         }
