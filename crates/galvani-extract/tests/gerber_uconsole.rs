@@ -141,3 +141,49 @@ fn uconsole_per_net_copper_is_reconstructed_and_planes_are_poured() {
     let amp = galvani_extract::ipc2221_ampacity(0.122, 1.0, 10.0, true);
     assert!((amp - 0.52).abs() < 0.1, "0.122 mm ampacity was {amp:.2} A");
 }
+
+/// The uConsole/DevTerm CM4 adapter (Round 5 addition): a second Allegro-dialect
+/// board, 4-layer, with a gerber-format drill. No P&P ships in the zip, so no
+/// components bind (the documented honest limit); the connectivity and per-net
+/// copper still reconstruct, and the planes are correctly Poured.
+#[test]
+fn cm4_adapter_reconstructs_and_planes_are_poured() {
+    use galvani_extract::gerber::connect::GerberCopperKind;
+
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+    if !dir.exists() {
+        if std::env::var("GALVANI_REQUIRE_CORPUS").is_ok() {
+            panic!("corpus required but uconsole_cm4_adapter_gerber missing");
+        }
+        eprintln!("skipping CM4 adapter (corpus absent)");
+        return;
+    }
+
+    let g = from_gerber_dir(&dir).expect("CM4 adapter gerbers must reverse-extract");
+    let s = &g.stats;
+    eprintln!(
+        "CM4 adapter: {} layers, {} holes, {} nets, GND={}",
+        s.n_layers, s.n_holes, s.n_nets, s.gnd_detected
+    );
+    assert_eq!(s.n_layers, 4, "TOP, GND02, PWR03, BOTTOM");
+    assert!(s.n_holes > 500, "gerber-format drill must stitch, got {}", s.n_holes);
+    assert!(s.n_nets > 100, "nets reconstructed: {}", s.n_nets);
+    assert!(s.gnd_detected, "a GND-class net should be labelled");
+    assert_eq!(s.n_components, 0, "no P&P ships in the adapter zip");
+
+    // The plane films (GND02 / PWR03) must surface as Poured nets, and the
+    // routed traces carry plausible widths.
+    let poured = s.net_copper.iter().filter(|c| c.kind == GerberCopperKind::Poured).count();
+    assert!(poured > 5, "plane nets should be Poured, got {poured}");
+    let narrowest = s
+        .net_copper
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Traces)
+        .filter_map(|c| c.min_track_width_mm)
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        narrowest.is_finite() && (0.05..0.6).contains(&narrowest),
+        "narrowest routed track {narrowest:.3} mm out of plausible range"
+    );
+}
