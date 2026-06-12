@@ -203,6 +203,20 @@ ref = "R1"
 amps = 0.02
 ```
 
+**`boot-coverage`**: a control net (a gate / enable / reset / chip-select) that
+the firmware must *actively drive* to a defined level within a deadline of
+reset, with no stress fault during the boot window before it is first driven.
+
+```toml
+[[assert]]
+kind = "boot-coverage"
+net = "GATE_CTRL"     # the control net to watch
+min = 3.0             # the driven level (V) the firmware must reach
+deadline_ms = 20.0    # by this long after reset
+```
+
+See [the boot-coverage section](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) for what problem this solves and the two-sided demo.
+
 ## Output
 
 - **Human report** to stdout: each assertion `PASS`/`FAIL` with the measured
@@ -305,6 +319,63 @@ never be silently lost.
 These two specs are also an integration test
 (`crates/galvani-ci/tests/flagship_brownout.rs`), so galvani's own CI proves the
 broken layout stays red and the fixed one stays green.
+
+## Boot-coverage: watching the firmware define a Hi-Z control net
+
+There is a class of fault the *netlist alone cannot adjudicate*. A control net
+(a MOSFET gate, a level-translator enable, a display reset, a chip-select) is
+driven only by an MCU GPIO that goes high-impedance at reset. Its power-up
+default is therefore undefined. Whether that is a *bug* depends on the intended
+default state of the controlled load, which the netlist does not encode: a
+display that must be on by default and a haptic motor that must be off by default
+have byte-identical netlist topology. `docs/KNOWN_FAULTS_VALIDATION.md` records
+two real such faults (Watchy e-paper RES#, ZSWatch DISPLAY-EN) as honest misses
+for exactly this reason - a static check firing there would be a confident false
+positive on a shipped board, on the very same topology that is correct elsewhere.
+
+The `boot-coverage` assertion makes the class decidable by running the firmware:
+instead of guessing the intended default, **watch what the firmware actually
+does**. It runs the co-sim from reset and requires the MCU to drive the named
+control net to a defined level within a deadline, and that no stress fault fires
+during the boot window before it is first driven (rails hold while the input is
+still undefined).
+
+### The two-sided demo
+
+One constructed board, `crates/galvani-ci/examples/boards/boot_gate.kicad_pcb`:
+an ATmega328P whose PB0 drives a 2N7002 N-MOSFET gate, with **no pull resistor on
+the gate net** - so at reset the gate floats (Hi-Z), exactly the undefined-default
+shape. Two real AVR firmware variants (built with `avr-gcc`,
+`testdata/firmware/boot_gate_{a,b}/`):
+
+```bash
+# variant A configures PB0 promptly and drives the gate HIGH -> PASS
+galvani-ci run crates/galvani-ci/examples/boot_gate_pass.toml
+#   [PASS] GATE_CTRL driven to >= 3 V within 20 ms of reset
+#          control net 'GATE_CTRL' driven to >= 3 V at 1.00 ms (<= 20 ms), boot window clean
+
+# variant B never touches PB0; the gate floats the whole run -> FAIL
+galvani-ci run crates/galvani-ci/examples/boot_gate_fail.toml
+#   [FAIL] GATE_CTRL driven to >= 3 V within 20 ms of reset
+#          control net 'GATE_CTRL' was NEVER driven to >= 3 V
+#          (firmware left it Hi-Z / undefined through the whole run)
+```
+
+The check has teeth only because variant B goes RED: the same board, the same
+assertion, two firmwares, opposite verdicts. Pinned as an integration test,
+`crates/galvani-ci/tests/boot_coverage.rs`.
+
+### Backend reach (stated honestly)
+
+This proof uses the **AVR (simavr)** backend, one of galvani's two co-sim
+backends; the mechanism is backend-agnostic, so it is ready for the **STM32
+(Renode)** backend as well. The corpus boards that carry the *real* misses are
+**not yet co-simmable**: Watchy is ESP32 and ZSWatch is nRF52, and neither has a
+turnkey backend (ESP32 is not modelled in Renode; see `docs/MCU.md`). So the
+boards' own MCUs cannot run this check today - the mechanism is recorded as
+ready-for-backends, and `docs/KNOWN_FAULTS_VALIDATION.md` keeps those rows as
+honest misses with a "decidable with firmware co-sim where the backend exists"
+note, **not** a flipped verdict.
 
 ## Schematic-stage CI
 
