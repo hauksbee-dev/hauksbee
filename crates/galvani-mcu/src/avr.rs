@@ -48,6 +48,7 @@ const TWI_COND_STOP: u32 = 1 << 1;
 const TWI_COND_ADDR: u32 = 1 << 2;
 const TWI_COND_ACK: u32 = 1 << 3;
 const TWI_COND_WRITE: u32 = 1 << 4;
+const TWI_COND_READ: u32 = 1 << 5;
 
 // ---------------------------------------------------------------------------
 // Callback state (written inside C callbacks, read from Rust)
@@ -83,6 +84,9 @@ struct SharedState {
     /// Active I2C transaction accumulator.
     twi_addr: u8,
     twi_active: bool,
+    /// True once the current transaction's address byte carried the R/W=read
+    /// bit, so subsequent master-read clocks pull bytes from the slave.
+    twi_read: bool,
 
     /// User-installed callbacks.
     callbacks: Callbacks,
@@ -206,6 +210,7 @@ unsafe extern "C" fn twi_hook(
             let read_flag = (addr_byte & 1) != 0;
             s.twi_addr = addr7;
             s.twi_active = true;
+            s.twi_read = read_flag;
 
             // Fire user callback and use its return value (if any) — for START
             // events the return value is meaningless, but we keep the API uniform.
@@ -221,10 +226,31 @@ unsafe extern "C" fn twi_hook(
                     ffi::avr_raise_irq(twi_in, ack);
                 }
             }
+        } else if msg_flags & TWI_COND_READ != 0 && s.twi_active {
+            // Master-read clock: the firmware wants a byte from the slave. Ask
+            // the handler for the reply and inject it back into the TWI receiver
+            // with READ|ACK so the firmware's Wire library completes the read.
+            let addr7 = s.twi_addr;
+            let reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
+                cb(I2cEvent::Read { addr: addr7 }).unwrap_or(0xFF)
+            } else {
+                0xFF
+            };
+            if !avr.is_null() {
+                let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
+                if !twi_in.is_null() {
+                    let reply = ffi::avr_twi_irq_msg(
+                        (TWI_COND_READ | TWI_COND_ACK) as u8,
+                        addr7,
+                        reply_byte,
+                    );
+                    ffi::avr_raise_irq(twi_in, reply);
+                }
+            }
         } else if msg_flags & TWI_COND_WRITE != 0 && s.twi_active {
             // Data byte written by firmware.
             let addr7 = s.twi_addr;
-            let reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
+            let _reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
                 cb(I2cEvent::Write { addr: addr7, data: data_byte }).unwrap_or(0)
             } else {
                 0
@@ -238,9 +264,9 @@ unsafe extern "C" fn twi_hook(
                     ffi::avr_raise_irq(twi_in, ack);
                 }
             }
-            let _ = reply_byte; // ACK path; READ path would inject a byte differently
         } else if msg_flags & TWI_COND_STOP != 0 && s.twi_active {
             s.twi_active = false;
+            s.twi_read = false;
             let addr7 = s.twi_addr;
             if let Some(cb) = &mut s.callbacks.on_i2c {
                 let _ = cb(I2cEvent::Stop { addr: addr7 });
@@ -344,6 +370,7 @@ impl AvrMcu {
             port_state: std::collections::HashMap::new(),
             twi_addr: 0,
             twi_active: false,
+            twi_read: false,
             callbacks: Callbacks {
                 on_pin_change: None,
                 on_uart: None,
