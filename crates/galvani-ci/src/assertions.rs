@@ -70,8 +70,79 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "toggle" => check_toggle(a, out),
         "no_faults" => check_no_faults(out),
         "max_current" => check_max_current(a, out),
+        "peripheral" => check_peripheral(a, out),
         other => (false, format!("unknown assertion kind '{other}'")),
     }
+}
+
+/// Parse a hex byte string like "48 69" / "4869" / "0x48,0x69" into bytes.
+fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
+    let cleaned: String = s
+        .replace("0x", " ")
+        .replace("0X", " ")
+        .replace([',', ':'], " ");
+    let toks: Vec<&str> = cleaned.split_whitespace().collect();
+    if toks.len() > 1 && toks.iter().all(|t| t.len() <= 2 && !t.is_empty()) {
+        toks.iter()
+            .map(|t| u8::from_str_radix(t, 16).ok())
+            .collect()
+    } else {
+        let h: String = cleaned.split_whitespace().collect();
+        if h.len() % 2 != 0 || h.is_empty() {
+            return None;
+        }
+        (0..h.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).ok())
+            .collect()
+    }
+}
+
+fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let id = a.id.clone().unwrap_or_default();
+    let Some(snap) = out.peripherals.get(&id) else {
+        return (false, format!("peripheral '{id}' not found in run"));
+    };
+
+    // Byte-contains check (EEPROM contents).
+    if let Some(spec_bytes) = &a.bytes {
+        let needle = parse_hex_bytes(spec_bytes)
+            .unwrap_or_else(|| spec_bytes.as_bytes().to_vec());
+        let found = !needle.is_empty()
+            && snap.bytes.windows(needle.len()).any(|w| w == needle.as_slice());
+        let ascii = String::from_utf8_lossy(&needle);
+        return (
+            found,
+            format!(
+                "{id} memory {} bytes {spec_bytes} ({ascii:?})",
+                if found { "contains" } else { "does NOT contain" }
+            ),
+        );
+    }
+
+    // Field range check.
+    if let Some(field) = &a.field {
+        let Some(&v) = snap.fields.get(field) else {
+            let known: Vec<&String> = snap.fields.keys().collect();
+            return (
+                false,
+                format!("{id} has no state field '{field}' (have: {known:?})"),
+            );
+        };
+        let mut ok = true;
+        let mut parts = Vec::new();
+        if let Some(lo) = a.min {
+            ok &= v >= lo - 1e-9;
+            parts.push(format!(">= {lo}"));
+        }
+        if let Some(hi) = a.max {
+            ok &= v <= hi + 1e-9;
+            parts.push(format!("<= {hi}"));
+        }
+        return (ok, format!("{id}.{field} = {v} ({})", parts.join(", ")));
+    }
+
+    (false, format!("peripheral '{id}' assertion incomplete"))
 }
 
 fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String) {

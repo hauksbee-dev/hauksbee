@@ -45,6 +45,11 @@ pub enum I2cEvent {
     },
     /// Data byte written by the firmware.
     Write { addr: u8, data: u8 },
+    /// The master (firmware) is reading a byte from the peripheral. The
+    /// handler's returned byte is clocked back to the firmware. This is the
+    /// path that lets a slave reply with register data (e.g. a sensor read);
+    /// it was the gap that left I2C slaves write-only.
+    Read { addr: u8 },
     /// STOP condition.
     Stop { addr: u8 },
 }
