@@ -155,16 +155,28 @@ pub fn reconstruct(
         per_layer_members[prim_layer[gi]].push(gi);
     }
 
-    for members in &per_layer_members {
+    for (li, members) in per_layer_members.iter().enumerate() {
         if members.is_empty() {
             continue;
         }
-        let leaves: Vec<Leaf> = members
+        // Edge-touch sweep over NON-region copper (tracks, flashes, vias). A
+        // copper pour (region) is handled by a separate containment pass below,
+        // never by edge proximity: a real pour weaves a single keyholed contour
+        // whose boundary passes microns from every antipad-isolated pad, so
+        // edge-distance to the pour boundary would falsely bridge unrelated
+        // nets. Membership in a pour is "the copper sits *inside* the filled
+        // area", which is a containment fact, not a proximity one.
+        let solids: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|&gi| prims[gi].kind != PrimKind::Region)
+            .collect();
+        let leaves: Vec<Leaf> = solids
             .iter()
             .map(|&gi| Leaf { bounds: prims[gi].bounds, idx: gi })
             .collect();
         let tree = RTree::bulk_load(leaves);
-        for &gi in members {
+        for &gi in &solids {
             let p = &prims[gi];
             let query = AABB::from_corners(
                 [p.bounds[0] - TOUCH_EPS, p.bounds[1] - TOUCH_EPS],
@@ -177,6 +189,131 @@ pub fn reconstruct(
                 }
                 if shape_gap(&prims[gi].shape, &prims[gj].shape) <= TOUCH_EPS {
                     dsu.union(gi, gj);
+                }
+            }
+        }
+
+        // Region overlap pass: a non-region primitive joins a pour when its
+        // copper genuinely *overlaps* the filled area, not merely runs near the
+        // boundary. We test the primitive's representative point AND (for
+        // tracks) its endpoints for containment inside the keyholed contour. A
+        // thermal spoke or a pad that the pour floods up to has a point inside
+        // the fill; an antipad-isolated pad sits in a pocket the even-odd test
+        // puts *outside*, and a track merely skirting the keyhole boundary has
+        // no point inside. This keeps legitimate pour connections (GND flood +
+        // thermal spokes) while never bridging the nets a pour weaves around.
+        let regions: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|&gi| prims[gi].kind == PrimKind::Region)
+            .collect();
+        if !regions.is_empty() {
+            let _ = li;
+            // Index regions by bbox so each primitive only tests the (usually
+            // one or two) pours that actually cover its location, not all of a
+            // board's hundreds of separate pour islands.
+            let region_tree = RTree::bulk_load(
+                regions
+                    .iter()
+                    .map(|&rgi| Leaf { bounds: prims[rgi].bounds, idx: rgi })
+                    .collect(),
+            );
+            // Grid-accelerate containment only for *large* pours: a board-
+            // spanning plane carries tens of thousands of vertices and is tested
+            // against every primitive, so a raw even-odd test there is
+            // quadratic; the grid makes each query O(1) outside the boundary
+            // band. Small pours (the common case: a few hundred separate fill
+            // islands) are cheaper tested directly than gridded, so they are
+            // left to plain `point_in_polygon` and skip the build cost.
+            const GRID_VERT_THRESHOLD: usize = 2000;
+            let region_grids: HashMap<usize, super::geo::PolyGrid> = regions
+                .iter()
+                .filter_map(|&rgi| {
+                    if let Shape::Polygon { pts, .. } = &prims[rgi].shape {
+                        if pts.len() >= GRID_VERT_THRESHOLD {
+                            let cells = (pts.len() / 4).clamp(64, 512);
+                            return Some((rgi, super::geo::PolyGrid::new(pts, cells)));
+                        }
+                    }
+                    None
+                })
+                .collect();
+            for &gi in members {
+                if prims[gi].kind == PrimKind::Region {
+                    continue;
+                }
+                let pb = prims[gi].bounds;
+                let near_regions: Vec<usize> = region_tree
+                    .locate_in_envelope_intersecting(AABB::from_corners(
+                        [pb[0], pb[1]],
+                        [pb[2], pb[3]],
+                    ))
+                    .map(|l| l.idx)
+                    .collect();
+                if near_regions.is_empty() {
+                    continue;
+                }
+                // Test points: the centre, capsule endpoints, and (for a track)
+                // a few interior samples along the segment. A pour that floods
+                // onto a pad/spoke contains at least one of these points inside
+                // its filled outline; an antipad-isolated pad has none inside
+                // (the even-odd keyhole puts the pocket outside); a track merely
+                // skirting the boundary also has none inside. Pure point-in-
+                // polygon (no poly-poly distance) keeps this near-linear in the
+                // pour's vertex count, so big copper pours stay cheap.
+                let mut test_pts = vec![prims[gi].shape.center()];
+                if let Shape::Capsule(c) = &prims[gi].shape {
+                    test_pts.push((c.ax, c.ay));
+                    test_pts.push((c.bx, c.by));
+                    // Sample the segment so a long track that dips into a pour
+                    // mid-span is caught even if both ends are outside.
+                    for k in 1..4 {
+                        let t = k as f64 / 4.0;
+                        test_pts.push((c.ax + (c.bx - c.ax) * t, c.ay + (c.by - c.ay) * t));
+                    }
+                }
+                for &rgi in &near_regions {
+                    let b = prims[rgi].bounds;
+                    if let Shape::Polygon { pts, .. } = &prims[rgi].shape {
+                        let grid = region_grids.get(&rgi);
+                        // (a) Containment: a sample point inside the filled
+                        // outline means the pour copper is *on* that primitive.
+                        // Large pours use the grid; small ones test directly.
+                        let inside = test_pts.iter().any(|&(px, py)| {
+                            if px < b[0] || px > b[2] || py < b[1] || py > b[3] {
+                                return false;
+                            }
+                            match grid {
+                                Some(g) => g.contains(px, py),
+                                None => super::geo::point_in_polygon(px, py, pts),
+                            }
+                        });
+                        // (b) Edge penetration: a pad/track whose finite-width
+                        // copper laps onto the pour but whose centre-line stays
+                        // just outside the outline (thermal-relief pads, pour
+                        // edge feathering). The pour boundary genuinely cuts
+                        // *through* the primitive's copper, so the signed gap is
+                        // clearly negative. An antipad-isolated pad keeps the
+                        // drawn clearance (~0.2 mm) to the boundary, so its gap
+                        // stays positive and it is NOT joined. We only pay this
+                        // poly distance when the cheap containment missed and the
+                        // bounding boxes actually overlap.
+                        // Only pads (flashes) pay this poly distance: a track
+                        // long enough to reach a pour lands a sample point inside
+                        // it (caught by containment), so the costly poly-poly is
+                        // confined to the comparatively few pad primitives, which
+                        // keeps board-sized pours from making this quadratic.
+                        let penetrates = !inside
+                            && prims[gi].kind == PrimKind::Flash
+                            && {
+                                let bp = prims[gi].bounds;
+                                !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
+                                    && shape_gap(&prims[gi].shape, &prims[rgi].shape) < -0.04
+                            };
+                        if inside || penetrates {
+                            dsu.union(gi, rgi);
+                        }
+                    }
                 }
             }
         }
