@@ -6,6 +6,10 @@
 //!   - [`RenodeBackend`] (feature `renode`): STM32 / nRF52 / RISC-V (and more)
 //!     by driving an external headless Renode process over its Monitor TCP
 //!     protocol and a UART socket terminal.
+//!   - [`QemuBackend`] (feature `qemu`): ESP32 family (Xtensa ESP32/S3 and
+//!     RISC-V ESP32-C3) by driving an external Espressif QEMU process over QMP +
+//!     gdbstub control channels and a UART socket. Renode ships no ESP32
+//!     platform, so this is the ESP32 path.
 //!
 //! Both backends present the identical lockstep surface (`run_micros`, GPIO/
 //! ADC/UART exchange via [`PinId`] and byte streams), so the engine scheduler
@@ -39,6 +43,9 @@ pub mod traits;
 #[cfg(feature = "renode")]
 pub mod renode;
 
+#[cfg(feature = "qemu")]
+pub mod qemu;
+
 pub use traits::{I2cEvent, McuState, Mcu, PinId, SpiEvent};
 
 #[cfg(feature = "avr")]
@@ -46,3 +53,6 @@ pub use avr::AvrMcu;
 
 #[cfg(feature = "renode")]
 pub use renode::{RenodeBackend, RenodeConfig};
+
+#[cfg(feature = "qemu")]
+pub use qemu::{QemuBackend, QemuConfig};
