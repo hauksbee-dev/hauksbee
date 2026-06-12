@@ -644,10 +644,15 @@ pub struct StepResult {
 /// The backend string (from the model db) selects the emulator:
 ///   - `simavr:<part>`  -> in-process AVR via libsimavr.
 ///   - `renode:<part>`  -> external headless Renode (STM32 / nRF52 / RISC-V).
+///   - `qemu:<part>`    -> external Espressif QEMU (ESP32 / ESP32-S3 / ESP32-C3).
 ///
-/// A `renode:` backend on a build without the `renode` feature, or on a host
-/// without Renode installed, is a clear error rather than a silent AVR fallback
-/// (that would run the wrong firmware against the circuit).
+/// A `renode:` / `qemu:` backend on a build without the matching feature, or on
+/// a host without the emulator installed, is a clear error rather than a silent
+/// AVR fallback (that would run the wrong firmware against the circuit).
+///
+/// For the QEMU backend the firmware path is the merged flash image, which QEMU
+/// boots from at spawn; there is no separate load step (the trait's
+/// `load_firmware` is a no-op for QEMU).
 fn instantiate_mcu(
     binding: &McuBinding,
     firmware: Option<&std::path::Path>,
@@ -656,6 +661,8 @@ fn instantiate_mcu(
 
     let mut core: Box<dyn Mcu + Send> = if let Some(part) = backend.strip_prefix("renode:") {
         instantiate_renode(part)?
+    } else if let Some(part) = backend.strip_prefix("qemu:") {
+        instantiate_qemu(part, firmware)?
     } else {
         instantiate_avr(backend)?
     };
@@ -663,6 +670,40 @@ fn instantiate_mcu(
         core.load_firmware(fw)?;
     }
     Ok(core)
+}
+
+/// Build an Espressif-QEMU-backed core for a `qemu:<part>` backend string. The
+/// firmware path is the merged flash image and is required (QEMU boots from it).
+#[cfg(feature = "qemu")]
+fn instantiate_qemu(
+    part: &str,
+    firmware: Option<&std::path::Path>,
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    use galvani_mcu::{QemuBackend, QemuConfig};
+    let config = match part {
+        "esp32" => QemuConfig::esp32(),
+        "esp32s3" => QemuConfig::esp32s3(),
+        "esp32c3" => QemuConfig::esp32c3(),
+        other => anyhow::bail!("unknown qemu backend part '{other}'"),
+    };
+    let flash = firmware.ok_or_else(|| {
+        anyhow::anyhow!(
+            "the qemu:{part} backend needs a merged flash image as the firmware \
+             path (build it with esp-idf + esptool merge_bin)"
+        )
+    })?;
+    Ok(Box::new(QemuBackend::new(config, flash)?))
+}
+
+#[cfg(not(feature = "qemu"))]
+fn instantiate_qemu(
+    _part: &str,
+    _firmware: Option<&std::path::Path>,
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    anyhow::bail!(
+        "this build of galvani-engine was compiled without the `qemu` feature; \
+         rebuild with --features qemu to run ESP32 firmware"
+    )
 }
 
 /// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
@@ -748,10 +789,10 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     }
 }
 
-/// GPIO logic-high voltage by backend: STM32-class parts are 3.3 V rails, the
-/// classic AVR parts are 5 V.
+/// GPIO logic-high voltage by backend: STM32-class parts and the ESP32 family
+/// are 3.3 V rails, the classic AVR parts are 5 V.
 fn logic_high_for_backend(backend: &str) -> f64 {
-    if backend.starts_with("renode:") {
+    if backend.starts_with("renode:") || backend.starts_with("qemu:") {
         3.3
     } else {
         5.0

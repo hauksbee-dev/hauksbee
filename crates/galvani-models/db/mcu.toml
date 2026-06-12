@@ -148,3 +148,127 @@ backend = "renode:stm32f103"
 max_pin_current_a = 0.025  # 25 mA abs max per I/O pin
 max_current_a = 0.15
 max_voltage_v = 3.6
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "esp32_wroom"
+kind = "mcu"
+description = "Espressif ESP32-WROOM-32 module (Xtensa LX6 dual-core), 38-pin"
+
+[models.match]
+value_re = "(?i)^(ESP32|ESP32-?WROOM(-32)?|ESP-?WROOM-32)$"
+mpn_re   = "(?i)^ESP32-?WROOM"
+
+[models.params]
+# galvani-mcu backend identifier: the QEMU backend boots the matching Espressif
+# QEMU machine (esp32) from the merged flash image and bridges GPIO (via the RAM
+# mailbox) / UART through QMP + gdbstub + the serial socket. The ESP32 is a 3.3 V
+# part; the scheduler drives its GPIO outputs at 3.3 V (the qemu: prefix selects
+# the rail, same as renode:).
+backend = "qemu:esp32"
+
+[models.pins]
+# ESP32-WROOM-32 module header (38-pin). Only the pads the galvani demo board
+# wires carry GPIO roles; the rest carry power/role so the binder can stamp
+# drivers when wired. ESP32 GPIO is a flat 0..39 space mapped to port '0'
+# (bits 0..31); roles use the "p0<bit>" convention the binder's gpio_of_role
+# parses (e.g. "p02" = GPIO2, "p04" = GPIO4).
+"1"  = "vss"        # GND
+"2"  = "vdd"        # 3V3
+"24" = "p02"        # GPIO2: alive indicator into the analog circuit (LED path)
+"26" = "p04"        # GPIO4: ~5 Hz blink, observable through the solved circuit
+"34" = "p01_txd"    # U0TXD (UART0 TX)
+"33" = "p03_rxd"    # U0RXD (UART0 RX)
+
+[models.ratings]
+max_pin_current_a = 0.04   # ~40 mA abs max source/sink per pad (datasheet)
+max_current_a = 0.5
+max_voltage_v = 3.6
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "esp32c3"
+kind = "mcu"
+description = "Espressif ESP32-C3 (RISC-V RV32IMC) module"
+
+[models.match]
+value_re = "(?i)^(ESP32-?C3|ESP32-?C3-?(MINI|WROOM).*)$"
+mpn_re   = "(?i)^ESP32-?C3"
+
+[models.params]
+backend = "qemu:esp32c3"
+
+[models.pins]
+"1"  = "vss"
+"2"  = "vdd"
+"12" = "p02"        # GPIO2
+"13" = "p04"        # GPIO4
+"30" = "p021_txd"   # U0TXD on GPIO21
+"31" = "p020_rxd"   # U0RXD on GPIO20
+
+[models.ratings]
+max_pin_current_a = 0.04
+max_current_a = 0.4
+max_voltage_v = 3.6
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "nrf52840"
+kind = "mcu"
+description = "Nordic nRF52840 (Cortex-M4F) SoC"
+
+[models.match]
+value_re = "(?i)^nRF52840"
+mpn_re   = "(?i)^nRF52840"
+
+[models.params]
+# Renode backend: brings up nrf52840.repl. nRF GPIO is two 32-bit ports
+# (gpio0/gpio1); roles "p0<bit>" map port '0', "p1<bit>" map port '1'.
+backend = "renode:nrf52840"
+
+[models.pins]
+# Minimal demo map; only the wired pads carry roles. P0.13 is the nRF52840-DK
+# LED1; UART on P0.06 (TXD) / P0.08 (RXD).
+"1"  = "vss"
+"2"  = "vdd"
+"3"  = "p013"       # LED / alive indicator into the analog circuit
+"4"  = "p014"       # blink
+"5"  = "p006_txd"   # UART TXD
+"6"  = "p008_rxd"   # UART RXD
+
+[models.ratings]
+max_pin_current_a = 0.015
+max_current_a = 0.1
+max_voltage_v = 3.6
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "fe310"
+kind = "mcu"
+description = "SiFive FE310-G002 (RISC-V RV32IMAC, HiFive1)"
+
+[models.match]
+value_re = "(?i)^(FE310|FE310-G00[0-9]|HiFive1)"
+mpn_re   = "(?i)^FE310"
+
+[models.params]
+# Renode backend: brings up sifive-fe310.repl. One 32-bit gpio0 port; roles
+# "p0<bit>".
+backend = "renode:sifive_fe310"
+
+[models.pins]
+"1"  = "vss"
+"2"  = "vdd"
+"3"  = "p019"       # HiFive1 LED is on GPIO 19
+"4"  = "p021"       # second GPIO for blink
+"5"  = "p017_txd"   # uart0 TX
+"6"  = "p016_rxd"   # uart0 RX
+
+[models.ratings]
+max_pin_current_a = 0.02
+max_current_a = 0.1
+max_voltage_v = 3.6
