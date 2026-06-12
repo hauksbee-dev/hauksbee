@@ -289,6 +289,13 @@ fn wrong_pull(
     members: &[(&Component, &galvani_extract::Pin)],
     want_high: bool,
 ) -> Option<(String, bool)> {
+    // Collect the strong (<= 20 kOhm) pulls on the net, in each direction. A net
+    // can carry both (a divider); we only fire on a wrong-direction pull when
+    // there is NO opposing correct-direction pull to net it out (a divider that
+    // resolves the strap to its correct level, plus the part's internal pull, is
+    // not a fault). This is the split-divider guard.
+    let mut wrong: Option<(String, bool)> = None; // (ref, to_ground)
+    let mut has_correct = false;
     for (c, _p) in members {
         if !is_assembled_resistor(c) {
             continue;
@@ -296,7 +303,7 @@ fn wrong_pull(
         // A pull only counts if it is a *strong* bias relative to the part's
         // internal pull (~45 kOhm on ESP32). A weak/large series resistor into a
         // load is not a bias. Treat <= 20 kOhm as a real pull. Unknown value:
-        // be conservative and do not fire.
+        // be conservative and do not count it.
         let ohms = parse_value(&c.value).map(|p| p.si).unwrap_or(f64::INFINITY);
         if !(ohms.is_finite() && ohms <= 20_000.0) {
             continue;
@@ -309,15 +316,21 @@ fn wrong_pull(
             let Some(on) = board.net(oid) else { continue };
             let to_ground = is_ground_name(&on.name);
             let to_rail = rail_voltage_name(&on.name).is_some();
-            if to_ground && want_high {
-                return Some((c.reference.clone(), true)); // pull-down, want high
+            // A pull toward the level the strap needs is "correct".
+            let correct = (want_high && to_rail) || (!want_high && to_ground);
+            let is_wrong = (want_high && to_ground) || (!want_high && to_rail);
+            if correct {
+                has_correct = true;
             }
-            if to_rail && !want_high {
-                return Some((c.reference.clone(), false)); // pull-up, want low
+            if is_wrong && wrong.is_none() {
+                wrong = Some((c.reference.clone(), to_ground));
             }
         }
     }
-    None
+    if has_correct {
+        return None; // an opposing correct pull resolves the strap; not a fault
+    }
+    wrong
 }
 
 // ── Small net-name helpers (local copies; the extract versions are private) ──
@@ -529,6 +542,47 @@ mod tests {
             r.of_check(LintCheck::StrapPin).count(),
             0,
             "BOOT0 pulled low is correct, no finding"
+        );
+    }
+
+    #[test]
+    fn boot0_with_an_opposing_correct_pull_does_not_fire() {
+        // Split-divider guard: BOOT0 (needs low) with BOTH a pull-up and a
+        // pull-down. The wrong-direction pull (the pull-up) must NOT fire,
+        // because the pull-down is present to resolve the strap correctly.
+        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "/BOOT0")
+  (module Package_QFP:LQFP-48 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
+    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 8  smd rect (at 0 1) (net 1 "GND"))
+    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
+    (pad 2 smd rect (at 2 0) (net 2 "+3V3"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 110 105)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 4k7 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)"#;
+        let r = strap_findings(text);
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "an opposing correct pull resolves the strap; not a fault"
         );
     }
 
