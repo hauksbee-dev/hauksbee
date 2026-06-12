@@ -866,6 +866,20 @@ fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
             capacity_mah: s.capacity_mah.unwrap_or(1000.0),
             soc: s.soc.unwrap_or(1.0),
             r_internal_ohms: s.r_internal_ohms.unwrap_or(0.1),
+            protection: match (s.protection_trip_a, s.protection_delay_ms) {
+                (Some(trip_a), delay_ms) => {
+                    let mut p =
+                        galvani_engine::power_supply::BatteryProtection::new(
+                            trip_a,
+                            delay_ms.unwrap_or(0.0) / 1000.0,
+                        );
+                    if let Some(reset) = s.protection_reset_a {
+                        p.reset_a = reset;
+                    }
+                    Some(p)
+                }
+                (None, _) => None,
+            },
         },
         other => {
             return Err(SpecError::Invalid(format!(

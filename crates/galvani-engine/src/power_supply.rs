@@ -122,13 +122,90 @@ pub enum PowerSupply {
     Usb { spec: UsbSpec },
     /// Battery pack: `cells` in series of `chemistry`, draining a `capacity_mah`
     /// charge store from initial `soc`, behind `r_internal_ohms` per pack.
+    ///
+    /// `protection` is an optional BMS-style over-current cutoff. Real protected
+    /// LiPo cells (and the DW01/FS312-class protection ICs on bare cells) trip a
+    /// MOSFET open when the pack current stays above a threshold for a short
+    /// delay. This is exactly the dynamic that DC misses and that the Inkplate
+    /// WiFi cold-boot inrush hits: the pack is fine at steady state but the TX
+    /// burst trips protection.
     Battery {
         chemistry: Chemistry,
         cells: u32,
         capacity_mah: f64,
         soc: f64,
         r_internal_ohms: f64,
+        /// Optional over-current protection (BMS). `None` = unprotected pack.
+        protection: Option<BatteryProtection>,
     },
+}
+
+/// A simple BMS over-current cutoff, modelling a protection IC + MOSFET.
+///
+/// When the pack current exceeds `trip_a` continuously for `delay_s`, the
+/// protection latches open: the pack commands ~0 V (the MOSFET is off) until the
+/// load drops below `reset_a` for `delay_s`, at which point it re-arms. Real
+/// protection ICs (e.g. Seiko S-8261, Fortune DW01) work this way: an
+/// over-current comparator with a fixed delay and an auto-recover on load
+/// removal. Numbers are per-spec, supplied by the scenario.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BatteryProtection {
+    /// Over-current trip threshold (A).
+    pub trip_a: f64,
+    /// Sustained time above `trip_a` before the cutoff latches (s).
+    pub delay_s: f64,
+    /// Current the load must drop below to begin re-arming (A). Defaults to
+    /// `trip_a` when not given.
+    pub reset_a: f64,
+    /// Runtime latch state: true once tripped (open). Starts armed (false).
+    #[serde(default)]
+    pub tripped: bool,
+    /// Internal: accumulated time the over/under-current condition has held (s).
+    #[serde(default)]
+    pub accum_s: f64,
+}
+
+impl BatteryProtection {
+    /// New protection with a trip threshold and delay; reset threshold = trip.
+    pub fn new(trip_a: f64, delay_s: f64) -> Self {
+        BatteryProtection {
+            trip_a,
+            delay_s,
+            reset_a: trip_a,
+            tripped: false,
+            accum_s: 0.0,
+        }
+    }
+
+    /// Advance the protection state machine by `dt` seconds given the measured
+    /// pack current `i_a`. Returns `true` if the cutoff is open (no output).
+    fn update(&mut self, i_a: f64, dt: f64) -> bool {
+        if !self.tripped {
+            // Armed: integrate time spent above the trip threshold.
+            if i_a > self.trip_a {
+                self.accum_s += dt;
+                if self.accum_s >= self.delay_s {
+                    self.tripped = true;
+                    self.accum_s = 0.0;
+                }
+            } else {
+                // Drop the accumulator; brief spikes below the delay don't trip.
+                self.accum_s = 0.0;
+            }
+        } else {
+            // Tripped: integrate time spent below the reset threshold to re-arm.
+            if i_a < self.reset_a {
+                self.accum_s += dt;
+                if self.accum_s >= self.delay_s {
+                    self.tripped = false;
+                    self.accum_s = 0.0;
+                }
+            } else {
+                self.accum_s = 0.0;
+            }
+        }
+        self.tripped
+    }
 }
 
 /// USB power-profile current limits and nominal droop.
@@ -204,6 +281,18 @@ impl PowerSupply {
         }
     }
 
+    /// Whether this supply's protection has latched open. False for supplies
+    /// without protection (or unprotected batteries).
+    pub fn protection_tripped(&self) -> bool {
+        match self {
+            PowerSupply::Battery {
+                protection: Some(p),
+                ..
+            } => p.tripped,
+            _ => false,
+        }
+    }
+
     /// Compute the `Vsource` target voltage for the *next* chunk, given the
     /// rail current `i_a` (A, positive = sourced into the net) measured over
     /// the chunk just solved, the simulation time `t` (s, for ripple phase),
@@ -247,18 +336,30 @@ impl PowerSupply {
 
             // Drain charge and recompute the open-circuit stack voltage. The
             // internal resistance drop is the series resistor (solver-applied).
+            // An optional BMS protection cutoff can latch the output to ~0 V when
+            // the pack current trips it (the inrush-vs-protection interaction).
             PowerSupply::Battery {
                 chemistry,
                 cells,
                 capacity_mah,
                 soc,
+                protection,
                 ..
             } => {
                 // Integrate charge out: ΔAh = I·dt / 3600; ΔSoC = ΔAh / cap_Ah.
                 let cap_ah = (*capacity_mah / 1000.0).max(1e-9);
                 let d_soc = (i * dt / 3600.0) / cap_ah;
                 *soc = (*soc - d_soc).clamp(0.0, 1.0);
-                chemistry.ocv_per_cell(*soc) * (*cells as f64)
+                let ocv = chemistry.ocv_per_cell(*soc) * (*cells as f64);
+                if let Some(prot) = protection {
+                    // Advance the cutoff state machine on the measured current.
+                    if prot.update(i, dt) {
+                        // Open: command ~0 V so the rail collapses behind the
+                        // series resistor (the protection MOSFET is off).
+                        return 0.0;
+                    }
+                }
+                ocv
             }
         }
     }
@@ -433,6 +534,7 @@ mod tests {
             capacity_mah: 100.0, // 0.1 Ah
             soc: 1.0,
             r_internal_ohms: 0.1,
+            protection: None,
         };
         // Draw 1 A for 36 s = 0.01 Ah = 10% of 0.1 Ah.
         let dt = 0.1;
@@ -441,5 +543,48 @@ mod tests {
         }
         // 360 * 0.1 s = 36 s at 1 A → 0.01 Ah drained → SoC ≈ 0.90.
         assert!((s.soc() - 0.90).abs() < 0.02, "soc {} not ~0.90", s.soc());
+    }
+
+    #[test]
+    fn protection_trips_on_sustained_overcurrent_and_holds_under_brief_spike() {
+        // 1 A trip, 5 ms delay. A 2 ms spike must NOT trip; a sustained 10 ms
+        // over-current MUST trip and collapse the output to 0 V.
+        let mut prot = BatteryProtection::new(1.0, 5e-3);
+        let dt = 1e-3;
+
+        // 2 ms over-current: below the delay, no trip.
+        for _ in 0..2 {
+            assert!(!prot.update(2.0, dt), "tripped too early on a brief spike");
+        }
+        // Back below threshold: accumulator resets.
+        prot.update(0.2, dt);
+        assert!(!prot.tripped);
+
+        // Sustained over-current: trips once the 5 ms delay elapses.
+        let mut tripped = false;
+        for _ in 0..10 {
+            tripped = prot.update(2.0, dt);
+        }
+        assert!(tripped, "sustained over-current did not trip protection");
+
+        // With protection latched, the battery commands 0 V regardless of OCV.
+        let mut s = PowerSupply::Battery {
+            chemistry: Chemistry::LiIon,
+            cells: 1,
+            capacity_mah: 1000.0,
+            soc: 1.0,
+            r_internal_ohms: 0.1,
+            protection: Some(prot),
+        };
+        // Keep drawing over the trip current: output stays at 0 V (open).
+        let v = s.update(2.0, 4.2, 0.0, dt);
+        assert_eq!(v, 0.0, "tripped pack should command 0 V, got {v}");
+        assert!(s.protection_tripped());
+
+        // Remove the load (below reset) for longer than the delay: re-arms.
+        for _ in 0..10 {
+            s.update(0.0, 0.0, 0.0, dt);
+        }
+        assert!(!s.protection_tripped(), "protection should re-arm on load removal");
     }
 }
