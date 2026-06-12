@@ -1,0 +1,31 @@
+[[models]]
+id = "bc847"
+kind = "bjt_npn"
+description = "NPN general-purpose transistor, 100 mA class"
+
+[models.match]
+mpn_re = "(?i)^BC847[A-Z]?$"
+
+[models.params]
+is = 1.63e-14 # Source: Table 8, VBE typ 660 mV at IC = 2 mA, VCE = 5 V; derived with nf = 1 at 25 C
+bf = 180 # Source: Table 8, hFE group A typ at VCE = 5 V, IC = 2 mA
+nf = 1.0 # estimated
+vaf = 100 # estimated
+br = 1.0 # estimated
+rb = 10 # estimated
+rc = 1.0 # estimated
+re = 0.5 # estimated
+cje = 11e-12 # Source: Table 8, Ce typ at VEB = 0.5 V, f = 1 MHz
+cjc = 2e-12 # Source: Table 8, Cc typ at VCB = 10 V, f = 1 MHz
+tf = 1.59e-9 # Source: Table 8, fT min 100 MHz; derived as 1/(2*pi*fT)
+
+[models.ratings]
+max_current_a = 0.1 # Source: Table 6, IC max 100 mA
+max_surge_current_a = 0.2 # Source: Table 6, ICM max 200 mA
+max_power_w = 0.25 # Source: Table 6, Ptot max 250 mW for SOT23 at Tamb <= 25 C
+max_voltage_v = 65 # Source: Table 6, VCEO max 65 V open base
+
+[models.pins]
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"

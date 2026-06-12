@@ -1,0 +1,26 @@
+[[models]]
+id = "1n4148"
+kind = "diode"
+description = "High-speed switching diode in SOD27/DO-35 glass package"
+
+[models.match]
+mpn_re = "(?i)^1N4148(?:PH)?$"
+value_re = "(?i)^1N4148$"
+
+[models.params]
+is = 2.52e-9 # estimated; datasheet gives VF <= 1 V at IF = 10 mA for 1N4148 but no SPICE saturation current
+n = 1.75 # estimated; datasheet gives forward-voltage characteristics in Fig.3 but no emission coefficient
+rs = 0.568 # estimated; datasheet gives forward-voltage characteristics in Fig.3 but no series resistance
+cjo = 4e-12 # Source: Electrical characteristics, Cd diode capacitance, f = 1 MHz, VR = 0 V, max 4 pF
+vj = 0.75 # estimated; datasheet does not state junction potential
+m = 0.333 # estimated; datasheet does not state grading coefficient
+bv = 100 # Source: Limiting values, VRRM repetitive peak reverse voltage, max 100 V
+
+[models.ratings]
+max_current_a = 0.2 # Source: Limiting values, IF continuous forward current, max 200 mA
+max_surge_current_a = 4 # Source: Limiting values, IFSM non-repetitive peak forward current, t = 1 us, max 4 A
+max_voltage_v = 100 # Source: Limiting values, VRRM repetitive peak reverse voltage, max 100 V
+
+[models.pins]
+"1" = "cathode" # Source: Fig.1 diode symbol labels k/a and package outline note marking band indicates cathode
+"2" = "anode" # Source: Fig.1 diode symbol labels k/a and SOD27 package has 2 leads

@@ -1,0 +1,23 @@
+[[models]]
+id = "ams1117-3.3"
+kind = "vreg"
+description = "AMS1117-3.3 fixed 3.3 V 1 A low-dropout linear regulator"
+
+[models.match]
+mpn_re = "(?i)^AMS1117(?:CD|CS)?-?3[._]?3$"
+value_re = "(?i)^AMS1117-?3[._]?3$"
+
+[models.params]
+vout = 3.3 # Source: Electrical Characteristics, Output Voltage, AMS1117-3.3 typ column
+dropout_v = 1.3 # Source: Electrical Characteristics, Dropout Voltage, max column at IOUT = 0.8 A
+iq_a = 0.005 # Source: Electrical Characteristics, Quiescent Current, typ column, converted from 5 mA
+
+[models.ratings]
+max_current_a = 1.0 # Source: Features, Output Current of 1A
+max_voltage_v = 15.0 # Source: Absolute Maximum Ratings, Input Voltage
+max_junction_temp_c = 125.0 # Source: Absolute Maximum Ratings, Operating Junction Temperature Range maximum
+
+[models.pins]
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
