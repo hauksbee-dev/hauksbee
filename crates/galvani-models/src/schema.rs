@@ -69,6 +69,16 @@ pub struct StrapPin {
     pub role: String,
     /// Required level at the reset latch for normal boot.
     pub level: StrapLevel,
+    /// True only for a *boot-select* strap whose wrong static level is
+    /// unrecoverable: it latches which boot source / mode the part enters, and
+    /// firmware cannot undo it (BOOT0, GPIO0/GPIO9 boot pin, QSPI_SS/BOOTSEL).
+    /// The wrong-bias lint arm fires only on these. Cosmetic or flash-voltage
+    /// straps that a board may legitimately repurpose as ordinary GPIO with a
+    /// pull (ESP32 GPIO15 boot-log, GPIO2, GPIO12/GPIO45 flash-voltage) leave
+    /// this false, so the lint never asserts a wrong-level fault on a board that
+    /// merely reuses the pin.
+    #[serde(default)]
+    pub boot_select: bool,
     /// Free-text sampling semantics / what the strap selects (for the finding
     /// message). E.g. "SPI boot when high; download mode when low".
     #[serde(default)]

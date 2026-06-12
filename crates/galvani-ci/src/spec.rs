@@ -387,12 +387,15 @@ pub struct Assertion {
     #[serde(default)]
     pub field: Option<String>,
 
-    // boot-coverage: a control net (gate / enable / reset / CS) that the MCU
-    // firmware must actively drive to a defined level (`min`, in volts) within
-    // `deadline_ms` of reset, with no stress fault raised during the boot window
-    // before it is first driven. This turns "we cannot know the intended
-    // power-up default of a Hi-Z control input" into "watch what the firmware
-    // actually does".
+    // boot-coverage: a control net (gate / enable / reset / CS) that must reach
+    // and hold a defined level (`min`, in volts) within `deadline_ms` of reset,
+    // with no stress fault raised during the boot window before it does. On a
+    // board with no static bias on the net (a genuinely Hi-Z control input, the
+    // case this is for) the only thing that can bring it to level is the
+    // firmware, so this measures "the firmware drives it in time". If the board
+    // statically biases the net it reads at level from t=0 and trivially passes:
+    // such a board is out of scope, the assertion exists to adjudicate the
+    // undefined-default case the netlist cannot.
     #[serde(default)]
     pub deadline_ms: Option<f64>,
 }
