@@ -86,6 +86,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             position: None,
             layer: String::new(),
             properties: Vec::new(),
+            dnp: false,
         })
         .collect();
 

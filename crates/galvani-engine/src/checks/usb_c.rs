@@ -462,6 +462,12 @@ fn net_resistance_to(board: &ExtractedBoard, from_net: i64, gnd_net: Option<i64>
     let mut inv_sum = 0.0f64;
     let mut found = false;
     for comp in &board.components {
+        // A Do-Not-Populate resistor is on the layout but not assembled, so it
+        // presents no resistance: skip it (counting it manufactures a phantom
+        // termination, the very false-positive shape this audit must avoid).
+        if comp.dnp {
+            continue;
+        }
         // Only resistors (Device:R or a value that parses to ohms with a
         // resistor-ish reference).
         if !is_resistor(comp) {
@@ -570,6 +576,9 @@ fn audit_one_cc(board: &ExtractedBoard, cc_net: i64, gnd: Option<i64>) -> CcPinT
     let mut internal_rd_ohms = None;
     let mut controller_ref = None;
     for comp in &board.components {
+        if comp.dnp {
+            continue;
+        }
         if let Some(internal) = internal_cc_rd_ohms(&comp.value) {
             // Does this controller land a CC pin on one of the reachable nets?
             let on_cc = comp.pins.iter().any(|p| {
@@ -599,7 +608,7 @@ fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::Hash
     loop {
         let mut grew = false;
         for comp in &board.components {
-            if !is_dc_bridge(comp) {
+            if comp.dnp || !is_dc_bridge(comp) {
                 continue;
             }
             let nets: Vec<i64> = comp.pins.iter().filter_map(|p| p.net).collect();

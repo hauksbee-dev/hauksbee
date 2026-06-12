@@ -583,6 +583,14 @@ impl NetlistBuilder {
             }
         }
 
+        // Do-Not-Populate: KiCad schematics carry `(dnp yes)` on the symbol when
+        // the part is on the layout but not assembled, so it is electrically
+        // absent and checks reasoning about populated parts must skip it.
+        let dnp = sym
+            .find_value("dnp")
+            .map(|v| v.eq_ignore_ascii_case("yes") || v == "true")
+            .unwrap_or(false);
+
         self.components.push(Component {
             reference,
             value,
@@ -591,6 +599,7 @@ impl NetlistBuilder {
             position: Some((sx, sy, srot)),
             layer: String::new(),
             properties,
+            dnp,
             pins,
         });
     }

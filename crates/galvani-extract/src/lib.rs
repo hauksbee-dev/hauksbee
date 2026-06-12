@@ -85,6 +85,13 @@ pub struct Component {
     pub layer: String,
     /// Extra properties (part number, datasheet, ...).
     pub properties: Vec<(String, String)>,
+    /// True when the component is marked Do-Not-Populate / excluded from the BOM
+    /// (KiCad `(dnp yes)` on a schematic symbol, or `(attr ... dnp)` on a PCB
+    /// footprint). A DNP footprint is on the layout but not assembled, so it is
+    /// electrically absent: checks that reason about populated parts (e.g. the
+    /// USB-C CC termination audit) must skip these.
+    #[serde(default)]
+    pub dnp: bool,
     pub pins: Vec<Pin>,
 }
 

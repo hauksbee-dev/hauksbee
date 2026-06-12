@@ -150,6 +150,11 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
         });
     }
 
+    // Do-Not-Populate: KiCad writes a `dnp` flag inside the footprint's
+    // `(attr ...)` list (e.g. `(attr smd exclude_from_bom dnp)`). A DNP footprint
+    // is on the layout but not assembled, so it is electrically absent.
+    let dnp = fp.find("attr").map(|a| a.has_flag("dnp")).unwrap_or(false);
+
     Component {
         reference,
         value,
@@ -158,6 +163,7 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
         position: Some((fx, fy, frot)),
         layer,
         properties,
+        dnp,
         pins,
     }
 }

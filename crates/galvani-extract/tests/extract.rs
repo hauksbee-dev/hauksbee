@@ -9,6 +9,31 @@ fn corpus(rel: &str) -> Option<String> {
 }
 
 #[test]
+fn dnp_flag_parsed_from_pcb_attr_and_schematic_symbol() {
+    // PCB footprint: `(attr ... dnp)` marks Do-Not-Populate; a plain `(attr smd)`
+    // does not. A minimal two-footprint board.
+    let pcb = r#"(kicad_pcb (version 20240108)
+  (net 0 "")
+  (net 1 "N1")
+  (footprint "Resistor_SMD:R_0402_1005Metric" (layer "F.Cu")
+    (attr smd exclude_from_bom dnp)
+    (property "Reference" "R1")
+    (property "Value" "5k1")
+    (pad "1" smd roundrect (at 0 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "N1")))
+  (footprint "Resistor_SMD:R_0402_1005Metric" (layer "F.Cu")
+    (attr smd)
+    (property "Reference" "R2")
+    (property "Value" "10k")
+    (pad "1" smd roundrect (at 5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "N1"))))
+"#;
+    let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
+    let r1 = board.components.iter().find(|c| c.reference == "R1").unwrap();
+    let r2 = board.components.iter().find(|c| c.reference == "R2").unwrap();
+    assert!(r1.dnp, "R1 has `(attr ... dnp)`, must be DNP");
+    assert!(!r2.dnp, "R2 has `(attr smd)` only, must not be DNP");
+}
+
+#[test]
 fn pic_programmer_pcb() {
     let Some(src) = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb")
     else {

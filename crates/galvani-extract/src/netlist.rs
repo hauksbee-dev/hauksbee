@@ -54,6 +54,10 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 position: None,
                 layer: String::new(),
                 properties,
+                // KiCad netlists encode DNP as a property field; not threaded
+                // here yet (the corpus's DNP-sensitive boards parse from the PCB
+                // / schematic paths, which do set this).
+                dnp: false,
                 pins: Vec::new(),
             });
         }
