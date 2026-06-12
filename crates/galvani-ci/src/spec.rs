@@ -4,7 +4,7 @@
 //!
 //! ```toml
 //! name = "power-up sanity"
-//! board = "hardware/board.kicad_pcb"        # .kicad_pcb / .net / .brd / .d356
+//! board = "hardware/board.kicad_pcb"        # .kicad_pcb / .kicad_sch / .net / .brd / .d356
 //! firmware = "firmware/build/app.elf"        # optional ELF/hex
 //! mcu = "atmega328p"                          # optional MCU kind hint
 //! duration_ms = 200                           # simulated time
@@ -50,7 +50,10 @@ pub struct Spec {
     /// Human-readable name for the check (appears in reports).
     #[serde(default = "default_name")]
     pub name: String,
-    /// Path to the board file, relative to the spec file's directory.
+    /// Path to the board file, relative to the spec file's directory. A
+    /// `.kicad_sch` (schematic-stage CI) is loaded by path so its sheet
+    /// hierarchy resolves; `.kicad_pcb` / `.net` / `.brd` / `.d356` are sniffed
+    /// from content.
     pub board: PathBuf,
     /// Optional firmware ELF/hex, relative to the spec file's directory.
     #[serde(default)]

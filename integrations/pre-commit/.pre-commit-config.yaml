@@ -1,0 +1,22 @@
+# Example .pre-commit-config.yaml for running galvani-ci as a local pre-commit
+# hook. Copy the `repos:` entry into the .pre-commit-config.yaml at your repo
+# root, then `pre-commit install`.
+#
+# This catches schematic-level and layout-level faults at commit time, which is
+# the natural integration point for schematic-stage CI: eeschema has no in-editor
+# plugin API yet, so the commit (not the editor) is where a `.kicad_sch` check
+# runs. See ./README.md.
+repos:
+  - repo: local
+    hooks:
+      - id: galvani-ci
+        name: galvani-ci hardware check
+        entry: integrations/pre-commit/galvani_ci_precommit.py
+        language: python
+        # Trigger when a board or a spec changes; the hook itself then runs
+        # only the specs whose board was actually staged.
+        files: '\.(kicad_sch|kicad_pcb|net|brd|d356)$|/ci/.*\.toml$'
+        pass_filenames: false
+        # Point at your built binary if it is not on PATH:
+        # env:
+        #   GALVANI_CI_BIN: target/release/galvani-ci
