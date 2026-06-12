@@ -24,7 +24,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use galvani_ir::{Circuit, Device, DeviceId, NodeId};
-use galvani_mcu::{AvrMcu, Mcu, PinId};
+#[cfg(feature = "avr")]
+use galvani_mcu::AvrMcu;
+use galvani_mcu::{Mcu, PinId};
 use galvani_solve::{Layout, SolverOptions, Transient};
 
 use crate::binder::{BoundBoard, McuBinding};
@@ -51,6 +53,9 @@ struct LiveMcu {
     shared: Arc<Mutex<McuShared>>,
     /// Last known GPIO output levels, for diagnostics / frame state.
     last_levels: HashMap<(char, u8), bool>,
+    /// Logic-high output voltage for this MCU's GPIO drivers (rail-dependent:
+    /// 5 V for classic AVR, 3.3 V for STM32-class parts).
+    logic_high_v: f64,
 }
 
 /// The scheduler driving one bound board.
@@ -185,7 +190,7 @@ impl Scheduler {
             let _ = m.core.run_micros(micros);
 
             let (edges, bytes) = {
-                let mut sh = m.shared.lock().unwrap();
+                let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
                 (
                     std::mem::take(&mut sh.pin_edges),
                     std::mem::take(&mut sh.uart_out),
@@ -203,7 +208,7 @@ impl Scheduler {
                 m.last_levels.insert((port, bit), level);
                 if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
                     drv.set_enabled(&mut self.circuit, true);
-                    let v = if level { 5.0 } else { 0.0 };
+                    let v = if level { m.logic_high_v } else { 0.0 };
                     drv.set_volts(&mut self.circuit, v);
                 }
             }
@@ -503,20 +508,24 @@ pub struct StepResult {
 }
 
 /// Instantiate an MCU core for a binding and load firmware if given.
+///
+/// The backend string (from the model db) selects the emulator:
+///   - `simavr:<part>`  -> in-process AVR via libsimavr.
+///   - `renode:<part>`  -> external headless Renode (STM32 / nRF52 / RISC-V).
+///
+/// A `renode:` backend on a build without the `renode` feature, or on a host
+/// without Renode installed, is a clear error rather than a silent AVR fallback
+/// (that would run the wrong firmware against the circuit).
 fn instantiate_mcu(
     binding: &McuBinding,
     firmware: Option<&std::path::Path>,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
     let backend = binding.backend.as_str();
-    let mut core: Box<dyn Mcu + Send> = if backend.contains("atmega328p") {
-        let mut avr = AvrMcu::atmega328p_16mhz()?;
-        avr.register_port_hooks(&['B', 'C', 'D']);
-        Box::new(avr)
+
+    let mut core: Box<dyn Mcu + Send> = if let Some(part) = backend.strip_prefix("renode:") {
+        instantiate_renode(part)?
     } else {
-        // Unknown backend: fall back to atmega328p so the co-sim still runs.
-        let mut avr = AvrMcu::new("atmega328p", 16_000_000)?;
-        avr.register_port_hooks(&['B', 'C', 'D']);
-        Box::new(avr)
+        instantiate_avr(backend)?
     };
     if let Some(fw) = firmware {
         core.load_firmware(fw)?;
@@ -524,25 +533,95 @@ fn instantiate_mcu(
     Ok(core)
 }
 
+/// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
+#[cfg(feature = "avr")]
+fn instantiate_avr(backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    let mut avr = if backend.contains("atmega328p") {
+        AvrMcu::atmega328p_16mhz()?
+    } else {
+        // Unknown simavr backend: fall back to atmega328p so the co-sim runs.
+        AvrMcu::new("atmega328p", 16_000_000)?
+    };
+    avr.register_port_hooks(&['B', 'C', 'D']);
+    Ok(Box::new(avr))
+}
+
+#[cfg(not(feature = "avr"))]
+fn instantiate_avr(_backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    anyhow::bail!(
+        "this build of galvani-engine was compiled without the `avr` feature; \
+         rebuild with --features avr to run AVR firmware"
+    )
+}
+
+/// Build a Renode-backed core for a `renode:<part>` backend string.
+#[cfg(feature = "renode")]
+fn instantiate_renode(part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    use galvani_mcu::{RenodeBackend, RenodeConfig};
+    let config = match part {
+        "stm32f103" => RenodeConfig::stm32f103(),
+        "stm32f4_discovery" | "stm32f4" => RenodeConfig::stm32f4_discovery(),
+        "nrf52840" | "nrf52" => RenodeConfig::nrf52840(),
+        "sifive_fe310" | "fe310" => RenodeConfig::sifive_fe310(),
+        other => anyhow::bail!("unknown renode backend part '{other}'"),
+    };
+    Ok(Box::new(RenodeBackend::new(config)?))
+}
+
+#[cfg(not(feature = "renode"))]
+fn instantiate_renode(_part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+    anyhow::bail!(
+        "this build of galvani-engine was compiled without the `renode` feature; \
+         rebuild with --features renode to run non-AVR firmware"
+    )
+}
+
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
 fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMcu {
     let shared = Arc::new(Mutex::new(McuShared::default()));
     let pin_sink = shared.clone();
+    // These callbacks fire from inside the MCU core's run loop, which for the
+    // simavr backend is across an `extern "C"` FFI boundary where an unwind is
+    // UB. So never panic on a poisoned lock: recover the guard and keep going
+    // (the captured data is a simple accumulation buffer).
     core.on_pin_change(Box::new(move |pin: PinId, high: bool| {
         pin_sink
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .pin_edges
             .insert((pin.port, pin.bit), high);
     }));
     let uart_sink = shared.clone();
     core.on_uart(Box::new(move |b: u8| {
-        uart_sink.lock().unwrap().uart_out.push(b);
+        uart_sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .uart_out
+            .push(b);
     }));
+    // Tell a polling backend which ports the board actually wired, so it only
+    // reads those output registers each chunk (no effect on push backends).
+    let mut active_ports: Vec<char> =
+        binding.gpio_drivers.keys().map(|(p, _)| *p).collect();
+    active_ports.sort_unstable();
+    active_ports.dedup();
+    core.set_active_ports(&active_ports);
+    let logic_high_v = logic_high_for_backend(&binding.backend);
     LiveMcu {
         core,
         binding,
         shared,
         last_levels: HashMap::new(),
+        logic_high_v,
+    }
+}
+
+/// GPIO logic-high voltage by backend: STM32-class parts are 3.3 V rails, the
+/// classic AVR parts are 5 V.
+fn logic_high_for_backend(backend: &str) -> f64 {
+    if backend.starts_with("renode:") {
+        3.3
+    } else {
+        5.0
     }
 }

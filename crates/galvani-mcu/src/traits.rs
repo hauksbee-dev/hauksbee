@@ -130,4 +130,14 @@ pub trait Mcu {
 
     /// Sample the current execution state without advancing the simulation.
     fn state(&self) -> McuState;
+
+    // ---- Optional performance hint ----
+
+    /// Hint which GPIO ports the engine actually wired, so a polling backend
+    /// can avoid querying ports no component is attached to.
+    ///
+    /// The default is a no-op: backends that push edges (e.g. simavr) ignore
+    /// this. The Renode backend uses it to read only the relevant ports' output
+    /// registers each chunk instead of every port the platform defines.
+    fn set_active_ports(&mut self, _ports: &[char]) {}
 }

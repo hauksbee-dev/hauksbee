@@ -103,3 +103,48 @@ module  = true        # flag: pin map is at the module header level
 [models.ratings]
 max_pin_current_a = 0.04
 max_current_a = 0.2
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "stm32f103c8"
+kind = "mcu"
+description = "STM32F103C8 Cortex-M3 MCU (blue pill), LQFP-48"
+
+[models.match]
+value_re = "(?i)^STM32F103C[8B]?(T6)?$"
+mpn_re   = "(?i)^STM32F103C[8B]"
+
+[models.params]
+# galvani-mcu backend identifier: the Renode backend brings up the matching
+# Renode platform (stm32f103.repl) and bridges GPIO/UART through its monitor.
+backend = "renode:stm32f103"
+
+[models.pins]
+# LQFP-48 pin map (KiCad MCU_ST_STM32F1:STM32F103C8Tx default symbol). Only the
+# pins the galvani demo board wires are named with GPIO/ADC roles; power and
+# the rest carry their port role so the binder can stamp drivers when wired.
+# Roles use the "p<port><bit>" convention the binder's gpio_of_role parses.
+"1"  = "pc13"      # onboard LED (blue pill), active-low to 3V3 in HW
+"2"  = "pc14"
+"3"  = "pc15"
+"8"  = "vss"
+"9"  = "vdd"
+"10" = "pa0_adc0"
+"11" = "pa1_adc1"
+"12" = "pa2_adc2"
+"14" = "pa4_adc4"
+"15" = "pa5"       # alive indicator into the analog circuit (GPIO output)
+"23" = "vss2"
+"24" = "vdd2"
+"30" = "pa9"       # USART1 TX
+"31" = "pa10"      # USART1 RX
+"35" = "vss3"
+"36" = "vdd3"
+"44" = "vss4"      # VSSA
+"48" = "vdd4"      # VDDA
+
+[models.ratings]
+max_pin_current_a = 0.025  # 25 mA abs max per I/O pin
+max_current_a = 0.15
+max_voltage_v = 3.6
