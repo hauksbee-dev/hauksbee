@@ -92,7 +92,13 @@ pub fn classify(path: &Path) -> LayerRole {
     // ── Drill first: extension is the strongest signal ──────────────────────
     if n.ext_is("drl") || n.ext_is("txt") || n.ext_is("xln") || n.ext_is("nc") || n.ext_is("tap") {
         // `.txt` is sometimes a readme; require a drill-ish hint when ambiguous.
-        if n.ext_is("txt") && !(n.has("drill") || n.has("drl") || n.has("nc") || n.has("pth")) {
+        // Altium exports the drill as `<board>-RoundHoles.TXT` /
+        // `-RectHoles.TXT` / `-SlotHoles.TXT` (the Inkplate 6 set), so `holes`
+        // is a drill hint too. A plain `README.TXT` has none of these tokens
+        // and is still ignored.
+        if n.ext_is("txt")
+            && !(n.has("drill") || n.has("drl") || n.has("nc") || n.has("pth") || n.has("holes"))
+        {
             return LayerRole::Ignored;
         }
         return LayerRole::Drill;
