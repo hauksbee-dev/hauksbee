@@ -104,14 +104,17 @@ fn extract_pdf_text(path: &Path) -> Result<String, String> {
 /// reads the right table, not 600 pages of the whole manual.
 fn focus_on_pwm(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
-    // Anchor on the GPIO-function table or the PWM chapter.
-    let anchor = ["gpio function", "function select", "pwm", "bank 0"]
+    // Anchor on the GPIO-function table or the PWM chapter. `find` gives a BYTE
+    // offset; convert it to a CHAR index so the window is sliced char-safely.
+    let anchor_byte = ["gpio function", "function select", "pwm", "bank 0"]
         .iter()
         .filter_map(|k| lower.find(k))
         .min();
-    let start = anchor.map(|a| a.saturating_sub(2_000)).unwrap_or(0);
-    let slice: String = text.chars().skip(start).take(48_000).collect();
-    slice
+    let start = match anchor_byte {
+        Some(b) => text[..b].chars().count().saturating_sub(2_000),
+        None => 0,
+    };
+    text.chars().skip(start).take(48_000).collect()
 }
 
 // -- Prompt -------------------------------------------------------------------
@@ -155,8 +158,15 @@ Rules:
 3. Output the TOML only, starting with [[mcu]].
 "#,
         part = part,
-        text = &pdf_text[..pdf_text.len().min(40_000)],
+        text = take_chars(pdf_text, 40_000),
     )
+}
+
+/// Char-safe truncation: take at most `n` characters (never slices mid-char,
+/// which a byte-index `&s[..n]` would panic on for multi-byte UTF-8 such as the
+/// U+FFFD replacement chars `from_utf8_lossy` emits on a binary-ish PDF dump).
+fn take_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
 }
 
 // -- Backend ------------------------------------------------------------------

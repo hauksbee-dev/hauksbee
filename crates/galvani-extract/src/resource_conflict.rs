@@ -54,6 +54,10 @@ struct PinResources {
     /// QSPI pin-group id like "qspi_data" (SAMD51): a *group* of pads that the
     /// QSPI controller owns together.
     qspi_group: Option<String>,
+    /// True for a QSPI DATA pad (PA08..PA11): the discriminator pads. A 4-wire
+    /// SERCOM-SPI signal landing here proves the bug; a quad-IO data signal here
+    /// is a correct QSPI flash.
+    qspi_data_pad: bool,
 }
 
 /// One MCU's resource table.
@@ -143,7 +147,8 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
                     .to_string();
                 let pwm = v.get("pwm").and_then(|x| x.as_str()).map(str::to_string);
                 let qspi_group = v.get("group").and_then(|x| x.as_str()).map(str::to_string);
-                pins.insert(pad.clone(), PinResources { label, pwm, qspi_group });
+                let qspi_data_pad = v.get("data").and_then(|x| x.as_bool()).unwrap_or(false);
+                pins.insert(pad.clone(), PinResources { label, pwm, qspi_group, qspi_data_pad });
             }
         }
         out.push(McuResources { id, value_re, lib_re, fully_routable, min_pins, pins });
@@ -266,6 +271,32 @@ fn function_for(target: &str, start_net: &str) -> Option<Function> {
         "flash" => Some(Function { class: "SPI flash".into(), peripheral: Peripheral::SpiLike }),
         _ => None,
     }
+}
+
+/// Does this net name carry a 4-wire (single-data-lane) SPI signal role -
+/// MOSI / MISO / SCK / CS / SI / SO / SDI / SDO - as opposed to a quad-IO data
+/// lane (IO0..IO3 / D0..D3 / DAT0..3 / SD0..3)? This is the discriminator
+/// between the SparkFun SERCOM-SPI-on-QSPI-pins bug (4-wire SPI naming on the
+/// QSPI data pads) and a correctly-wired QSPI flash (quad-IO naming). Returns
+/// true ONLY for an unambiguous 4-wire-SPI role and false for quad-IO or
+/// anything else, so a flash net we cannot read does not fire.
+fn net_role_is_4wire_spi(name: &str) -> bool {
+    let n = name.trim().rsplit('/').next().unwrap_or(name).to_ascii_uppercase();
+    // Tokenise on non-alphanumerics so "FLASH_MOSI" -> ["FLASH","MOSI"].
+    let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    // A quad-IO data lane is NOT a 4-wire SPI role (it is correct QSPI).
+    let is_quad_io = toks.iter().any(|t| {
+        matches!(*t, "IO0" | "IO1" | "IO2" | "IO3" | "DAT0" | "DAT1" | "DAT2" | "DAT3"
+            | "SD0" | "SD1" | "SD2" | "SD3" | "D0" | "D1" | "D2" | "D3"
+            | "QSPI" | "QIO")
+    });
+    if is_quad_io {
+        return false;
+    }
+    toks.iter().any(|t| {
+        matches!(*t, "MOSI" | "MISO" | "SCK" | "SCLK" | "CS" | "NCS" | "SSEL" | "SS"
+            | "SI" | "SO" | "SDI" | "SDO" | "COPI" | "CIPO" | "CLK")
+    })
 }
 
 /// Is this net a power rail or ground? The inference must NEVER traverse such a
@@ -458,10 +489,17 @@ fn check_resource_conflicts(
                 }
             }
             if let Some(group) = &res.qspi_group {
-                // A non-QSPI serial function (SPI flash over SERCOM) on a
-                // QSPI-owned pad commits the group to a non-QSPI peripheral and
-                // blocks the QSPI controller. Only a SpiLike demand counts.
-                if func.peripheral == Peripheral::SpiLike {
+                // The QSPI conflict is ONLY real when a 4-wire SERCOM-SPI signal
+                // (MOSI / MISO / SCK / CS by net role) lands on a QSPI DATA pad
+                // (PA08..PA11). That is the SparkFun bug: the flash is wired as
+                // SERCOM SPI on the QSPI data bus. A flash whose data pads carry
+                // quad-IO signals (IO0..IO3 / D0..D3) is a CORRECTLY-wired QSPI
+                // flash (e.g. Adafruit Metro/Feather M4) and must NOT fire - the
+                // discriminator that keeps the check at zero false positives.
+                if func.peripheral == Peripheral::SpiLike
+                    && res.qspi_data_pad
+                    && net_role_is_4wire_spi(&net_name)
+                {
                     demands.push(PinDemand {
                         pad: pin.number.clone(),
                         label: res.label.clone(),
@@ -691,6 +729,58 @@ mod tests {
         let no_dvi = conflict_net()
             .replace("(net (code 1) (name /CK) (node (ref U1) (pin 16)) (node (ref HDMI1) (pin 12)))", "");
         assert!(msgs(&no_dvi).is_empty(), "a single PWM demand must not fire");
+    }
+
+    #[test]
+    fn net_role_4wire_spi_discriminates_from_quad_io() {
+        // 4-wire SPI roles (the bug's naming on the QSPI data pads): fire.
+        for n in ["FLASH_MOSI", "FLASH_MISO", "/FLASH_SCK", "FLASH_CS", "SDI", "COPI"] {
+            assert!(net_role_is_4wire_spi(n), "{n} should be a 4-wire SPI role");
+        }
+        // Quad-IO data lanes (a correct QSPI flash): do NOT fire.
+        for n in ["FLASH_IO0", "FLASH_IO3", "QSPI_D2", "FLASH_DAT1", "FLASH_SD0"] {
+            assert!(!net_role_is_4wire_spi(n), "{n} is quad-IO, not a 4-wire SPI role");
+        }
+        // Unrelated nets: do not fire.
+        assert!(!net_role_is_4wire_spi("/PWM_L"));
+        assert!(!net_role_is_4wire_spi("GND"));
+    }
+
+    /// A SAMD51 with a flash on the QSPI DATA pads. With 4-wire SPI net naming
+    /// (MOSI/MISO/SCK/CS) it is the SparkFun SERCOM-SPI bug -> fires. With
+    /// quad-IO naming (IO0..IO3) it is a correct QSPI flash -> silent.
+    fn samd51_flash_net(data_names: [&str; 4]) -> String {
+        format!(
+            r#"(export (version D)
+  (components
+    (comp (ref U1) (value ATSAMD51J20A-A) (libsource (lib mcu) (part ATSAMD51J20A)))
+    (comp (ref U2) (value SPI Flash) (libsource (lib Memory) (part AT25SF041)))
+    (comp (ref FILL) (value pad) (libsource (lib x) (part p))))
+  (nets
+    (net (code 1) (name {d0}) (node (ref U1) (pin 17)) (node (ref U2) (pin 5)))
+    (net (code 2) (name {d1}) (node (ref U1) (pin 18)) (node (ref U2) (pin 6)))
+    (net (code 3) (name {d2}) (node (ref U1) (pin 19)) (node (ref U2) (pin 1)))
+    (net (code 4) (name {d3}) (node (ref U1) (pin 20)) (node (ref U2) (pin 2)))
+{fill}  ))"#,
+            d0 = data_names[0], d1 = data_names[1], d2 = data_names[2], d3 = data_names[3],
+            fill = (5..=44)
+                .map(|p| format!("    (net (code {}) (name f{p}) (node (ref U1) (pin {p})) (node (ref FILL) (pin 1)))\n", 100 + p))
+                .collect::<String>(),
+        )
+    }
+
+    #[test]
+    fn synthetic_samd51_sercom_spi_flash_on_qspi_pads_fires() {
+        let m = msgs(&samd51_flash_net(["FLASH_MOSI", "FLASH_SCK", "FLASH_CS", "FLASH_MISO"]));
+        assert_eq!(m.len(), 1, "the SERCOM-SPI-on-QSPI bug must fire, got {m:#?}");
+        assert!(m[0].contains("qspi_data") && m[0].contains("SPI flash"), "{}", m[0]);
+    }
+
+    #[test]
+    fn synthetic_samd51_correct_qspi_flash_is_silent() {
+        // Same flash, same pads, but quad-IO naming: a correct QSPI flash.
+        let m = msgs(&samd51_flash_net(["FLASH_IO0", "FLASH_IO1", "FLASH_IO2", "FLASH_IO3"]));
+        assert!(m.is_empty(), "a correctly-wired QSPI flash must NOT fire, got {m:#?}");
     }
 }
 
