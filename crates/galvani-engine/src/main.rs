@@ -85,7 +85,14 @@ fn main() -> anyhow::Result<()> {
 
     let text = std::fs::read_to_string(&args.board)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", args.board.display()))?;
-    let board = ExtractedBoard::from_auto(&text)?;
+    // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
+    // it must be loaded by path to recurse the hierarchy; everything else is
+    // self-contained and sniffed from its content.
+    let board = if args.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
+        ExtractedBoard::from_kicad_schematic_path(&args.board)?
+    } else {
+        ExtractedBoard::from_auto(&text)?
+    };
     let lib = ModelLibrary::builtin();
 
     // --report: bind, print the table, exit.
