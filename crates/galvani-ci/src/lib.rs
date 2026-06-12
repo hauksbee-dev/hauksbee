@@ -25,6 +25,7 @@ pub mod assertions;
 pub mod error;
 pub mod report;
 pub mod runner;
+pub mod scenarios;
 pub mod spec;
 
 pub use error::SpecError;

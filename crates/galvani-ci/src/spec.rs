@@ -91,6 +91,19 @@ pub struct Spec {
     /// undefined-state seeds. An assertion must hold across *all* seeds.
     #[serde(default)]
     pub fuzz: Option<FuzzSpec>,
+    /// Transient scenarios: dynamic load profiles attached to parts (drawn as
+    /// current sinks on supply nets), exercising inrush / sag / brownout that DC
+    /// cannot see.
+    #[serde(default, rename = "scenario")]
+    pub scenarios: Vec<crate::scenarios::Scenario>,
+    /// Inline (spec-local) load-profile definitions, referenced by a scenario's
+    /// `profile` field in addition to the built-in profile database.
+    #[serde(default, rename = "profile")]
+    pub profiles: Vec<crate::scenarios::InlineProfile>,
+    /// Opt-in capacitor parasitics (ESR/ESL) for this run. Off by default, so a
+    /// board's decoupling stays ideal unless realism is explicitly requested.
+    #[serde(default)]
+    pub decoupling: Option<crate::scenarios::Decoupling>,
     /// The assertions, all of which must pass.
     #[serde(default, rename = "assert")]
     pub asserts: Vec<Assertion>,
@@ -396,6 +409,35 @@ pub struct Assertion {
     /// on a vcd_sink, "temp_c" on a sensor). Uses the assertion's min/max.
     #[serde(default)]
     pub field: Option<String>,
+
+    // ── transient-window assertions (rail_window / protection_trip) ──────────
+    /// Scope the assertion to one scenario's window by its `id`. When unset, the
+    /// assertion spans the whole run.
+    #[serde(default)]
+    pub scenario: Option<String>,
+    /// rail_window: the rail is considered "dipped" while it is below this
+    /// voltage. Combined with `for_max_ms` to bound dip duration, and with
+    /// `recover_to` / `recover_within_ms` to bound recovery.
+    #[serde(default)]
+    pub dip_below: Option<f64>,
+    /// rail_window: the rail must not stay below `dip_below` for longer than
+    /// this many milliseconds (total, summed over the window).
+    #[serde(default)]
+    pub for_max_ms: Option<f64>,
+    /// rail_window: the voltage the rail must climb back to for "recovered".
+    #[serde(default)]
+    pub recover_to: Option<f64>,
+    /// rail_window: the rail must recover (reach `recover_to`) within this many
+    /// milliseconds of first dipping below `dip_below`.
+    #[serde(default)]
+    pub recover_within_ms: Option<f64>,
+    /// protection_trip: the supply net whose battery protection is checked.
+    #[serde(default)]
+    pub supply_net: Option<String>,
+    /// protection_trip: whether a protection trip is expected (true) or must NOT
+    /// occur (false).
+    #[serde(default)]
+    pub expect_trip: Option<bool>,
 }
 
 impl Spec {
@@ -496,6 +538,14 @@ impl Spec {
         for a in &self.asserts {
             if let Some(n) = &a.net {
                 out.push((n.clone(), "assert"));
+            }
+            if let Some(n) = &a.supply_net {
+                out.push((n.clone(), "assert"));
+            }
+        }
+        for s in &self.scenarios {
+            if let Some(n) = &s.supply_net {
+                out.push((n.clone(), "scenario"));
             }
         }
         out
@@ -603,9 +653,45 @@ impl Assertion {
                     )));
                 }
             }
+            "rail_window" => {
+                if self.net.is_none() {
+                    return Err(SpecError::Invalid(
+                        "rail_window assertion needs a `net`".into(),
+                    ));
+                }
+                let has_check = self.min.is_some()
+                    || self.max.is_some()
+                    || (self.dip_below.is_some()
+                        && (self.for_max_ms.is_some() || self.recover_within_ms.is_some()));
+                if !has_check {
+                    return Err(SpecError::Invalid(format!(
+                        "rail_window on '{}' needs at least one of: `min`, `max`, or `dip_below` with `for_max_ms`/`recover_within_ms`",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+                if self.recover_within_ms.is_some()
+                    && (self.dip_below.is_none() || self.recover_to.is_none())
+                {
+                    return Err(SpecError::Invalid(
+                        "rail_window `recover_within_ms` needs both `dip_below` and `recover_to`".into(),
+                    ));
+                }
+            }
+            "protection_trip" => {
+                if self.supply_net.is_none() {
+                    return Err(SpecError::Invalid(
+                        "protection_trip assertion needs a `supply_net`".into(),
+                    ));
+                }
+                if self.expect_trip.is_none() {
+                    return Err(SpecError::Invalid(
+                        "protection_trip assertion needs `expect_trip = true|false`".into(),
+                    ));
+                }
+            }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral|rail_window|protection_trip)"
                 )));
             }
         }
@@ -670,6 +756,39 @@ impl Assertion {
                 } else {
                     format!("peripheral {id}")
                 }
+            }
+            "rail_window" => {
+                let net = self.net.clone().unwrap_or_default();
+                let mut parts = Vec::new();
+                if let Some(lo) = self.min {
+                    parts.push(format!("min >= {lo} V"));
+                }
+                if let Some(hi) = self.max {
+                    parts.push(format!("max <= {hi} V"));
+                }
+                if let (Some(d), Some(ms)) = (self.dip_below, self.for_max_ms) {
+                    parts.push(format!("dip <{d}V for <= {ms} ms"));
+                }
+                if let (Some(d), Some(r), Some(ms)) =
+                    (self.dip_below, self.recover_to, self.recover_within_ms)
+                {
+                    parts.push(format!("recover to {r}V within {ms} ms of dipping <{d}V"));
+                }
+                let scope = self
+                    .scenario
+                    .as_ref()
+                    .map(|s| format!(" [{s}]"))
+                    .unwrap_or_default();
+                format!("{net} window: {}{scope}", parts.join(", "))
+            }
+            "protection_trip" => {
+                let net = self.supply_net.clone().unwrap_or_default();
+                let want = if self.expect_trip.unwrap_or(false) {
+                    "trips"
+                } else {
+                    "does NOT trip"
+                };
+                format!("{net} protection {want}")
             }
             other => other.to_string(),
         }
