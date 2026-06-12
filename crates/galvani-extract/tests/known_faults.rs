@@ -18,9 +18,27 @@ use std::path::PathBuf;
 use galvani_extract::{ExtractedBoard, LintCheck};
 
 /// Locate board-corpus/famous relative to this crate, if present.
+///
+/// Corpus-gated skip; `GALVANI_REQUIRE_CORPUS=1` turns absence into a hard
+/// fail, so the gold-row calibration cannot vacuously green-out on a runner
+/// that is supposed to have the corpus. (Matches the convention in
+/// `galvani-engine/tests/boardcode_miswire.rs`.)
 fn famous_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
-    p.exists().then_some(p)
+    if p.exists() {
+        return Some(p);
+    }
+    require_corpus(&p.display().to_string());
+    None
+}
+
+/// A required corpus file is missing: skip, unless GALVANI_REQUIRE_CORPUS is set,
+/// in which case fail loudly so the calibration is genuinely CI-enforced.
+fn require_corpus(what: &str) {
+    if std::env::var("GALVANI_REQUIRE_CORPUS").is_ok() {
+        panic!("GALVANI_REQUIRE_CORPUS set but required corpus path is missing: {what}");
+    }
+    eprintln!("corpus path absent ({what}); skipping (set GALVANI_REQUIRE_CORPUS=1 to fail)");
 }
 
 fn lint_pcb(path: &PathBuf) -> galvani_extract::NetLintReport {
@@ -63,7 +81,7 @@ fn zswatch_devkit_i2c_pullup_flagged_in_faulty_clean_in_fixed() {
     let faulty = root.join("zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb");
     let fixed = root.join("zswatch_devkit/v1.2.1/ZSWatch-Watch-DevKit.kicad_pcb");
     if !faulty.exists() || !fixed.exists() {
-        eprintln!("ZSWatch DevKit revisions absent; skipping");
+        require_corpus("zswatch_devkit v1.2.0/v1.2.1");
         return;
     }
 
@@ -102,7 +120,7 @@ fn zswatch_mainboard_rtc_i2c_is_clean() {
     };
     let board = root.join("zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb");
     if !board.exists() {
-        eprintln!("ZSWatch mainboard absent; skipping");
+        require_corpus("zswatch_mainboard");
         return;
     }
     let r = lint_pcb(&board);
@@ -146,7 +164,7 @@ fn fixed_control_pull_revisions_are_lint_clean() {
     let devkit_fixed = root.join("zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb");
     for b in [watchy_fixed, devkit_fixed] {
         if !b.exists() {
-            eprintln!("{} absent; skipping", b.display());
+            require_corpus(&b.display().to_string());
             continue;
         }
         let r = lint_pcb(&b);
