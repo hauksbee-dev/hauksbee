@@ -73,7 +73,13 @@ fn main() -> ExitCode {
             // Spec / board errors: surface as a GitHub error too, then exit 2.
             eprintln!("galvani-ci: {e}");
             if std::env::var_os("GITHUB_ACTIONS").is_some() {
-                let msg = e.to_string().replace('\n', "%0A").replace('%', "%25");
+                // Percent first, then control chars (else the %0A/%0D we insert
+                // get their own % re-encoded to %25, garbling the annotation).
+                let msg = e
+                    .to_string()
+                    .replace('%', "%25")
+                    .replace('\r', "%0D")
+                    .replace('\n', "%0A");
                 println!("::error title=galvani-ci spec error::{msg}");
             }
             return ExitCode::from(2);

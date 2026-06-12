@@ -88,6 +88,12 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     let known: Vec<String> = base.nets.iter().map(|n| n.name.clone()).collect();
     spec.check_nets(&known)?;
 
+    // Validate any component reference the spec names (overrides + max_current
+    // assertions) against the board, so a typo'd ref is a loud error rather
+    // than a silently-green protection check.
+    let known_refs: Vec<String> = base.components.iter().map(|c| c.reference.clone()).collect();
+    check_component_refs(spec, &known_refs)?;
+
     // Distinct after_ms thresholds (plus 0) that windows are bucketed by.
     let mut thresholds: Vec<f64> = spec
         .asserts
@@ -105,6 +111,40 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
         outcomes.push(outcome);
     }
     Ok(outcomes)
+}
+
+/// Validate every component reference the spec names against the board, with
+/// near-match suggestions. Covers `[[override]]` refs and `max_current` assert
+/// refs (overrides are also checked again in `apply_overrides`, but doing it
+/// here means a typo'd `max_current` ref fails loudly instead of passing as an
+/// untracked component).
+fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecError> {
+    let set: std::collections::HashSet<&str> = known_refs.iter().map(String::as_str).collect();
+    let mut named: Vec<(&str, &str)> = Vec::new();
+    for ov in &spec.overrides {
+        named.push((ov.reference.as_str(), "override"));
+    }
+    for a in &spec.asserts {
+        if a.kind == "max_current" {
+            if let Some(r) = &a.reference {
+                named.push((r.as_str(), "max_current assert"));
+            }
+        }
+    }
+    for (reference, ctx) in named {
+        if !set.contains(reference) {
+            let near = crate::error::near_matches(reference, known_refs, 5);
+            let hint = if near.is_empty() {
+                String::new()
+            } else {
+                format!(" — did you mean: {}?", near.join(", "))
+            };
+            return Err(SpecError::Invalid(format!(
+                "{ctx} references unknown component '{reference}'{hint}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Apply overrides for this run to a fresh copy of the extracted board.

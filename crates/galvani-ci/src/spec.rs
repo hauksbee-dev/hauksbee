@@ -372,6 +372,15 @@ impl Assertion {
                         self.net.as_deref().unwrap_or("?")
                     )));
                 }
+                if self.after_ms.is_some() {
+                    // Toggle counts accumulate from t=0 (scheduler stats), so an
+                    // `after_ms` window would be silently ignored. Reject it
+                    // rather than mislead.
+                    return Err(SpecError::Invalid(format!(
+                        "toggle assertion on '{}' does not support `after_ms` (toggles are counted over the whole run)",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
             }
             "no_faults" => {}
             "max_current" => {
