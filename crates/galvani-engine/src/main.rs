@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! galvani run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
-//!                                 [--port 3001] [--report] [--drc] [--lint] [--apply-shorts]
+//!                                 [--port 3001] [--report] [--drc] [--lint] [--resources] [--apply-shorts]
 //! galvani to-code    <board-file> [--out <file.board>]
 //! galvani from-code  <code-file>  [--out <file.kicad_pcb>]
 //! galvani check-code <code-dir|file> [--seconds N] [--destructive]
@@ -39,6 +39,7 @@ struct Args {
     report_only: bool,
     drc_only: bool,
     lint_only: bool,
+    resources_only: bool,
     apply_shorts: bool,
     port: u16,
 }
@@ -53,6 +54,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
         report_only: false,
         drc_only: false,
         lint_only: false,
+        resources_only: false,
         apply_shorts: false,
         port: 3001,
     };
@@ -72,6 +74,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
             "--report" => args.report_only = true,
             "--drc" => args.drc_only = true,
             "--lint" => args.lint_only = true,
+            "--resources" => args.resources_only = true,
             "--apply-shorts" => args.apply_shorts = true,
             "--port" => {
                 args.port = it
@@ -88,7 +91,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
 
 fn usage() -> String {
     "usage:\n  \
-     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--apply-shorts]\n  \
+     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--resources] [--apply-shorts]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
      galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
@@ -155,9 +158,19 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // --lint: run the connectivity lint-class checks, print, exit.
+    // --lint: run the connectivity lint-class checks AND the MCU internal
+    // resource-conflict check (the latter is a lint-class structural check too),
+    // print, exit.
     if args.lint_only {
-        let report = board.net_lint();
+        let mut report = board.net_lint();
+        report.findings.extend(board.resource_conflicts().findings);
+        print!("{}", galvani_extract::render_netlint(&report));
+        return Ok(());
+    }
+
+    // --resources: run only the MCU internal resource-conflict check, print, exit.
+    if args.resources_only {
+        let report = board.resource_conflicts();
         print!("{}", galvani_extract::render_netlint(&report));
         return Ok(());
     }
