@@ -438,6 +438,18 @@ pub struct Assertion {
     /// occur (false).
     #[serde(default)]
     pub expect_trip: Option<bool>,
+
+    // boot-coverage: a control net (gate / enable / reset / CS) that must reach
+    // and hold a defined level (`min`, in volts) within `deadline_ms` of reset,
+    // with no stress fault raised during the boot window before it does. On a
+    // board with no static bias on the net (a genuinely Hi-Z control input, the
+    // case this is for) the only thing that can bring it to level is the
+    // firmware, so this measures "the firmware drives it in time". If the board
+    // statically biases the net it reads at level from t=0 and trivially passes:
+    // such a board is out of scope, the assertion exists to adjudicate the
+    // undefined-default case the netlist cannot.
+    #[serde(default)]
+    pub deadline_ms: Option<f64>,
 }
 
 impl Spec {
@@ -689,9 +701,28 @@ impl Assertion {
                     ));
                 }
             }
+            "boot-coverage" => {
+                if self.net.is_none() {
+                    return Err(SpecError::Invalid(
+                        "boot-coverage assertion needs a `net` (the control net to watch)".into(),
+                    ));
+                }
+                if self.min.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "boot-coverage assertion on '{}' needs a `min` (the driven level in volts the firmware must reach)",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+                if self.deadline_ms.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "boot-coverage assertion on '{}' needs a `deadline_ms` (the boot deadline)",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+            }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral|rail_window|protection_trip)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral|rail_window|protection_trip|boot-coverage)"
                 )));
             }
         }
@@ -789,6 +820,14 @@ impl Assertion {
                     "does NOT trip"
                 };
                 format!("{net} protection {want}")
+            }
+            "boot-coverage" => {
+                let net = self.net.clone().unwrap_or_default();
+                format!(
+                    "{net} driven to >= {} V within {} ms of reset",
+                    self.min.unwrap_or(0.0),
+                    self.deadline_ms.unwrap_or(0.0)
+                )
             }
             other => other.to_string(),
         }

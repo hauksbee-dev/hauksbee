@@ -90,6 +90,12 @@ pub struct RunOutcome {
     pub protection_tripped: HashMap<String, bool>,
     /// Total simulated time (ms).
     pub sim_ms: f64,
+    /// Boot-coverage tracking: first time (ms) each watched (net, level-bits)
+    /// pair was seen at or above its level, i.e. when the firmware first drove
+    /// the control net to its defined level. Absent = never driven.
+    pub first_reach_ms: HashMap<(String, u64), f64>,
+    /// Time (ms) of the first stress fault this run, if any.
+    pub first_fault_ms: Option<f64>,
 }
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
@@ -392,6 +398,17 @@ fn run_one(
     let mut rail_windows: HashMap<(String, String), crate::scenarios::RailWindow> = HashMap::new();
     let mut protection_tripped: HashMap<String, bool> = HashMap::new();
 
+    // Boot-coverage watch list: every (net, required-level) a boot-coverage
+    // assertion names. We record the first frame each net reaches its level.
+    let boot_watch: Vec<(String, f64)> = spec
+        .asserts
+        .iter()
+        .filter(|a| a.kind == "boot-coverage")
+        .filter_map(|a| Some((a.net.clone()?, a.min?)))
+        .collect();
+    let mut first_reach_ms: HashMap<(String, u64), f64> = HashMap::new();
+    let mut first_fault_ms: Option<f64> = None;
+
     while t < total_s - 1e-12 {
         let frame = engine.step(frame_dt);
         let t_ms = frame.t * 1000.0;
@@ -404,13 +421,28 @@ fn run_one(
         }
         // Faults.
         for f in &frame.faults {
+            let ft_ms = f.t * 1000.0;
+            first_fault_ms = Some(first_fault_ms.map_or(ft_ms, |e| e.min(ft_ms)));
             faults.push(RunFault {
                 component: f.component.clone(),
                 kind: f.kind.clone(),
                 value: f.value,
                 limit: f.limit,
-                t_ms: f.t * 1000.0,
+                t_ms: ft_ms,
             });
+        }
+        // Boot-coverage: record the first time each watched net reaches its
+        // required driven level (the firmware actively driving the control net).
+        for (net, level) in &boot_watch {
+            let key = (net.clone(), level.to_bits());
+            if first_reach_ms.contains_key(&key) {
+                continue;
+            }
+            if let Some(&v) = frame.net_voltages.get(net) {
+                if v >= *level - 1e-6 {
+                    first_reach_ms.insert(key, t_ms);
+                }
+            }
         }
         // Per-net windows for every threshold this frame has passed.
         for &thr in thresholds {
@@ -476,6 +508,8 @@ fn run_one(
         rail_windows,
         protection_tripped,
         sim_ms: engine.scheduler().sim_time * 1000.0,
+        first_reach_ms,
+        first_fault_ms,
     })
 }
 

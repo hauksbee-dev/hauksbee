@@ -47,6 +47,67 @@ pub struct ModelEntry {
     /// power from footprint size).
     #[serde(default, skip_serializing_if = "Ratings::is_empty")]
     pub ratings: Ratings,
+
+    /// Boot strapping pins: the pins this part samples at reset to choose a
+    /// boot/configuration mode, and the level each requires for normal boot.
+    /// Only populated for MCU-kind entries whose reference manual documents
+    /// strapping. Drives the strap-pin lint (`galvani-engine` boot checks).
+    /// Empty for parts with no documented strapping (e.g. AVR).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub straps: Vec<StrapPin>,
+}
+
+/// One boot strapping pin, straight from the part's reference manual.
+///
+/// The `role` matches a value in [`ModelEntry::pins`] (the pad->role map), so
+/// the lint can find which pad/net carries the strap. `level` is what the pin
+/// must read at the reset latch window for *normal* boot. Cite the RM in the
+/// TOML comment next to each entry.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct StrapPin {
+    /// Pin role, matching an entry in [`ModelEntry::pins`] (e.g. "gpio0").
+    pub role: String,
+    /// Required level at the reset latch for normal boot.
+    pub level: StrapLevel,
+    /// True only for a *boot-select* strap whose wrong static level is
+    /// unrecoverable: it latches which boot source / mode the part enters, and
+    /// firmware cannot undo it (BOOT0, GPIO0/GPIO9 boot pin, QSPI_SS/BOOTSEL).
+    /// The wrong-bias lint arm fires only on these. Cosmetic or flash-voltage
+    /// straps that a board may legitimately repurpose as ordinary GPIO with a
+    /// pull (ESP32 GPIO15 boot-log, GPIO2, GPIO12/GPIO45 flash-voltage) leave
+    /// this false, so the lint never asserts a wrong-level fault on a board that
+    /// merely reuses the pin.
+    #[serde(default)]
+    pub boot_select: bool,
+    /// Free-text sampling semantics / what the strap selects (for the finding
+    /// message). E.g. "SPI boot when high; download mode when low".
+    #[serde(default)]
+    pub note: String,
+}
+
+/// The level a strap pin must hold at reset for normal boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrapLevel {
+    /// Must be high (pulled/driven to the I/O rail) at the latch window.
+    High,
+    /// Must be low (pulled/driven to ground) at the latch window.
+    Low,
+    /// A defined static level is required but either polarity is acceptable
+    /// for *this* lint's purpose (the fault we catch is a free-running driver
+    /// or no bias at all, not the wrong static polarity). Used where the
+    /// correct polarity depends on a co-strap (e.g. flash voltage select).
+    Defined,
+}
+
+impl StrapLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StrapLevel::High => "high",
+            StrapLevel::Low => "low",
+            StrapLevel::Defined => "a defined level",
+        }
+    }
 }
 
 /// Absolute maximum ratings, straight from the datasheet's table. The

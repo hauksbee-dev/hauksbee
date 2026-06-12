@@ -149,3 +149,19 @@ fn demo_firmware_blink_uart_and_rail_all_pass() {
     );
     assert_eq!(result.results.len(), 4);
 }
+
+#[test]
+fn boot_coverage_requires_net_min_and_deadline() {
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/tarski_brownout_cell.net");
+    // Missing deadline_ms.
+    let p = write_tmp(
+        "bootcov_bad.toml",
+        &format!(
+            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"boot-coverage\"\nnet=\"FOO\"\nmin=3.0\n",
+            board.display()
+        ),
+    );
+    let err = run(&RunConfig { spec: p }).unwrap_err();
+    assert!(err.to_string().contains("deadline_ms"), "got: {err}");
+}

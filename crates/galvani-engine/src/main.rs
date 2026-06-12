@@ -158,9 +158,12 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // --lint: run the connectivity lint-class checks, print, exit.
+    // --lint: run the connectivity lint-class checks plus the boot strap-pin
+    // lint (which needs the model db's per-part strap tables), print, exit.
     if args.lint_only {
-        let report = board.net_lint();
+        let mut report = board.net_lint();
+        let straps = galvani_engine::checks::straps::strap_lint(&board, &lib);
+        report.findings.extend(straps.findings);
         print!("{}", galvani_extract::render_netlint(&report));
         return Ok(());
     }
