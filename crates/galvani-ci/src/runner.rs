@@ -390,6 +390,18 @@ fn run_one(
     let total_s = spec.duration_ms / 1000.0;
     let mut t = 0.0;
 
+    // On an external, wall-bounded emulator backend (QEMU/Renode), the analog
+    // chunk must be coarse or the run drowns in TCP round-trips: the 100 us
+    // default that suits the in-process AVR core would sub-divide each frame
+    // into dozens of QMP cont/stop pairs, each with a wall-time floor. Match the
+    // chunk to the frame (a few ms) the way the proven QEMU co-sim tests do; the
+    // analog LED/RC settling on these boards is sub-microsecond, so a frame-sized
+    // chunk still resolves the operating point each sample. The in-process AVR
+    // path keeps its fine default.
+    if engine.scheduler().has_external_backend() {
+        engine.scheduler_mut().chunk_s = frame_dt.clamp(1e-3, 10e-3);
+    }
+
     let mut windows: HashMap<(String, u64), NetWindow> = HashMap::new();
     let mut uart: HashMap<String, String> = HashMap::new();
     let mut faults: Vec<RunFault> = Vec::new();

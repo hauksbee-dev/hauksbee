@@ -283,6 +283,20 @@ impl Scheduler {
         self.mcus.iter().map(|m| m.binding.reference.clone()).collect()
     }
 
+    /// True if any live MCU runs on an external, wall-time-bounded emulator
+    /// (Renode or QEMU). Those backends advance the guest clock over a TCP
+    /// control socket with a per-chunk wall-time floor, so a fine analog
+    /// `chunk_s` (the 100 us default that suits the in-process AVR core)
+    /// multiplies into thousands of slow round-trips. A caller driving such a
+    /// co-sim should coarsen `chunk_s` to a few milliseconds, the way the proven
+    /// QEMU integration tests do, so the wall cost is the emulator's, not the
+    /// chunk count's.
+    pub fn has_external_backend(&self) -> bool {
+        self.mcus.iter().any(|m| {
+            m.binding.backend.starts_with("renode:") || m.binding.backend.starts_with("qemu:")
+        })
+    }
+
     /// Advance the co-sim by `dt` seconds in fixed chunks.
     pub fn step(&mut self, dt: f64) -> StepResult {
         let mut uart: HashMap<String, Vec<u8>> = HashMap::new();

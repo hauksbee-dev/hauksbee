@@ -113,3 +113,110 @@ fn gate_left_floating_fails_naming_the_net() {
         bc.detail
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Watchy v1.5 e-paper RES# boot-coverage on the REAL board, ESP32 QEMU backend.
+//
+// This executes the formerly-MISSED Watchy display-RES# validation row
+// (docs/KNOWN_FAULTS_VALIDATION.md) end-to-end: the unmodified corpus Watchy
+// v1.5 layout, its RES net (no pull in v1.5, U1 ESP32-PICO-D4 pad 28 = GPIO9),
+// the Espressif QEMU esp32 machine booting a reduced display-init firmware that
+// drives GPIO9 HIGH. Two-sided: the display-init firmware PASSES (drives RES in
+// time), the esp32_blinky firmware (drives GPIO2/4, never GPIO9) FAILS.
+//
+// Gated twice: skip when the corpus is absent (hard-fail under
+// GALVANI_REQUIRE_CORPUS=1), and skip when the Espressif QEMU binary is not
+// installed (QEMU is an environmental dependency, not part of the corpus, so its
+// absence is always a skip - the proven backend tests gate the same way).
+
+fn watchy_v15_board() -> Option<PathBuf> {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb");
+    p.exists().then_some(p)
+}
+
+fn qemu_xtensa_available() -> bool {
+    // Same discovery order the backend uses: explicit env, then the default
+    // install dir. We only need to know whether to skip, so a path check is
+    // enough (the backend does the real -machine help validation).
+    if let Ok(p) = std::env::var("GALVANI_QEMU_XTENSA") {
+        if std::path::Path::new(&p).exists() {
+            return true;
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home)
+        .join(".galvani-qemu-esp/qemu/bin/qemu-system-xtensa")
+        .exists()
+}
+
+fn corpus_or_skip(what: &str) -> Option<PathBuf> {
+    match watchy_v15_board() {
+        Some(p) => Some(p),
+        None => {
+            if std::env::var("GALVANI_REQUIRE_CORPUS").is_ok() {
+                panic!("corpus required but Watchy v1.5 board missing ({what})");
+            }
+            eprintln!("skipping {what} (corpus absent)");
+            None
+        }
+    }
+}
+
+/// PASS: the reduced display-init firmware drives the Watchy e-paper RES# net
+/// (GPIO9) HIGH within the boot window on the real v1.5 board under QEMU.
+#[test]
+fn watchy_v15_display_res_driven_passes() {
+    if corpus_or_skip("watchy_v15_display_res PASS").is_none() {
+        return;
+    }
+    if !qemu_xtensa_available() {
+        eprintln!("skipping watchy_v15 boot-coverage (Espressif QEMU not installed)");
+        return;
+    }
+    let result = run(&RunConfig { spec: example("watchy_v15_display_res.toml") })
+        .expect("Watchy PASS spec runs");
+    let bc = result
+        .results
+        .iter()
+        .find(|r| r.kind == "boot-coverage")
+        .expect("boot-coverage assertion present");
+    assert!(
+        bc.passed,
+        "display-init firmware must drive RES in time on the real Watchy board:\n{}",
+        result.render_human()
+    );
+    assert!(bc.detail.contains("RES"), "names the RES net: {}", bc.detail);
+}
+
+/// FAIL (negative control): firmware that drives GPIO2/4 but never GPIO9 leaves
+/// the RES net Hi-Z on the same board, so boot-coverage goes RED. This is the
+/// teeth - the check passes above only because it genuinely watches the firmware
+/// drive the net.
+#[test]
+fn watchy_v15_display_res_undriven_fails() {
+    if corpus_or_skip("watchy_v15_display_res FAIL").is_none() {
+        return;
+    }
+    if !qemu_xtensa_available() {
+        eprintln!("skipping watchy_v15 boot-coverage negative (Espressif QEMU not installed)");
+        return;
+    }
+    let result = run(&RunConfig { spec: example("watchy_v15_display_res_undriven.toml") })
+        .expect("Watchy FAIL spec runs");
+    let bc = result
+        .results
+        .iter()
+        .find(|r| r.kind == "boot-coverage")
+        .expect("boot-coverage assertion present");
+    assert!(
+        !bc.passed,
+        "a firmware that never drives RES must make boot-coverage FAIL:\n{}",
+        result.render_human()
+    );
+    assert!(
+        bc.detail.contains("RES") && bc.detail.to_uppercase().contains("NEVER"),
+        "the failure names the undriven RES net: {}",
+        bc.detail
+    );
+}
