@@ -1342,24 +1342,41 @@ fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
         }
         return None;
     }
-    // Port-pin roles like "pb5_sck" (AVR) or "pc13", "pa9" (STM32 / Cortex-M).
-    // Form: 'p' <port letter A-G> <bit, 1-2 digits> [ '_' suffix ].
+    // Port-pin roles, two conventions sharing the `p` prefix:
+    //
+    //   - Lettered ports (AVR / STM32 / Cortex-M): 'p' <port letter A-G>
+    //     <bit, 1-2 digits> [ '_' suffix ], e.g. "pb5_sck", "pc13", "pa9".
+    //   - Numeric ports (nRF52 gpio0/gpio1, SiFive FE310 gpio0, ESP32 GPIO
+    //     matrix): 'p' <port digit 0-1> <bit, 1-2 digits> [ '_' suffix ], e.g.
+    //     "p013" = port '0' bit 13 (nRF52840-DK LED1), "p02" = port '0' bit 2
+    //     (ESP32 GPIO2), "p119" = port '1' bit 19. This matches the renode
+    //     PortMap letters '0'/'1' and the QEMU GpioBank letter '0'.
     if let Some(rest) = r.strip_prefix('p') {
         let mut chars = rest.chars();
         if let Some(port_c) = chars.next() {
-            let port = port_c.to_ascii_uppercase();
-            if ('A'..='G').contains(&port) {
-                // Collect the leading digits as the bit index (supports
-                // two-digit STM32 pins like PC13).
+            // Lettered port A-G.
+            let port_upper = port_c.to_ascii_uppercase();
+            if ('A'..='G').contains(&port_upper) {
                 let digits: String = rest[1..]
                     .chars()
                     .take_while(|c| c.is_ascii_digit())
                     .collect();
-                if !digits.is_empty() {
-                    if let Ok(bit) = digits.parse::<u8>() {
-                        if bit < 32 {
-                            return Some((port, bit));
-                        }
+                if let Ok(bit) = digits.parse::<u8>() {
+                    if bit < 32 {
+                        return Some((port_upper, bit));
+                    }
+                }
+            }
+            // Numeric port 0 or 1: the first digit is the port, the remaining
+            // leading digits are the bit index.
+            if port_c == '0' || port_c == '1' {
+                let digits: String = rest[1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(bit) = digits.parse::<u8>() {
+                    if bit < 32 {
+                        return Some((port_c, bit));
                     }
                 }
             }
