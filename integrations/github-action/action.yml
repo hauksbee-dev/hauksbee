@@ -1,0 +1,96 @@
+name: "galvani-ci"
+description: "CI for hardware: boot your firmware on the emulated PCB and assert rails, UART, and blink on every layout change."
+author: "galvani"
+branding:
+  icon: "cpu"
+  color: "green"
+
+inputs:
+  spec:
+    description: "Path to the galvani-ci TOML spec to run (relative to the repo root)."
+    required: true
+  junit:
+    description: "Path to write JUnit XML to. Empty to skip."
+    required: false
+    default: "galvani-ci-results.xml"
+  galvani-ref:
+    description: "git ref of the galvani repo to build galvani-ci from (branch, tag, or SHA)."
+    required: false
+    default: "main"
+  galvani-repo:
+    description: "owner/name of the galvani repo to build from."
+    required: false
+    default: "galvani/galvani"
+
+outputs:
+  passed:
+    description: "true if every assertion passed, false otherwise."
+    value: ${{ steps.run.outputs.passed }}
+  junit:
+    description: "Path to the JUnit XML that was written."
+    value: ${{ steps.run.outputs.junit }}
+
+runs:
+  using: "composite"
+  steps:
+    # The hardware repo's own checkout is assumed to have already happened in
+    # the calling workflow (so the spec + board + firmware are on disk).
+
+    - name: Checkout galvani
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.galvani-repo }}
+        ref: ${{ inputs.galvani-ref }}
+        path: .galvani
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    # Cache the cargo registry, git index, and the galvani build so only the
+    # first run pays the compile cost. Keyed on the galvani ref + lockfile.
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          .galvani/target
+        key: galvani-ci-${{ runner.os }}-${{ inputs.galvani-ref }}-${{ hashFiles('.galvani/Cargo.lock') }}
+        restore-keys: |
+          galvani-ci-${{ runner.os }}-${{ inputs.galvani-ref }}-
+          galvani-ci-${{ runner.os }}-
+
+    - name: Build galvani-ci
+      shell: bash
+      run: cargo build --release -p galvani-ci --manifest-path .galvani/Cargo.toml
+
+    - name: Run galvani-ci
+      id: run
+      shell: bash
+      run: |
+        set +e
+        BIN=.galvani/target/release/galvani-ci
+        ARGS=(run "${{ inputs.spec }}")
+        if [ -n "${{ inputs.junit }}" ]; then
+          ARGS+=(--junit "${{ inputs.junit }}")
+        fi
+        "$BIN" "${ARGS[@]}"
+        code=$?
+        if [ "$code" -eq 0 ]; then
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "passed=false" >> "$GITHUB_OUTPUT"
+        fi
+        echo "junit=${{ inputs.junit }}" >> "$GITHUB_OUTPUT"
+        exit $code
+
+    # Always publish the JUnit results, even when the hardware check failed, so
+    # the assertions show up in the PR's Checks tab.
+    - name: Publish test report
+      if: ${{ always() && inputs.junit != '' }}
+      uses: mikepenz/action-junit-report@v4
+      with:
+        report_paths: ${{ inputs.junit }}
+        check_name: "galvani-ci (hardware)"
+        fail_on_failure: false
