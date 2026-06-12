@@ -243,11 +243,45 @@ fab-only board in an unfamiliar dialect.
 
 - **No pick-and-place**: nets and geometry (DRC) still reconstruct from copper
   alone, but components cannot be bound — there is nothing to say which pads form
-  which part. `from_gerber_dir` returns the nets with zero components.
+  which part. `from_gerber_dir` returns the nets with zero components. (The
+  Inkplate 6 gerber set is exactly this case; see FAMOUS_SWEEP.md Round 5.)
 - **No BOM**: components still bind; their value/part-number is only the P&P
   `Val`/`Package` field rather than an enriched MPN.
 - **No drill**: single-layer boards are fine; on multi-layer boards each layer's
   copper fragments into separate nets without via stitching.
+
+## Per-net copper geometry (the trace-current surface)
+
+The reconstruction surfaces, per reconstructed net, the copper geometry a
+trace-current check needs: `ReconStats::net_copper` is a `Vec<GerberNetCopper>`
+giving each net's narrowest drawn-track width (the series bottleneck), widest
+width, track/region counts, and a `GerberCopperKind` (`Traces` / `Poured` /
+`None`). A drawn track is a finite-width capsule (`width = 2*r`), so **copper
+width is exact from the manufacturing files** — the one quantity gerbers give more
+directly than a netlist. A net carrying any pour region is `Poured` and never
+given a discrete width (a plane's true cross-section is not a segment width),
+mirroring the native-CAD `trace_current` `Poured` exemption exactly. The probe is
+`cargo run -p galvani-extract --example gerber_trace_current -- <dir>`.
+
+This makes the IPC-2221 trace-current surface runnable on a gerber-only board.
+Its reach is honest: it needs a *cited current attributed to a net*, and gerber
+reconstruction recovers no net names or BOM-bound identity, so it runs but finds
+nothing unless a current can be tied to a specific reconstructed net. And a board
+whose fab draws traces as G36/G37 filled regions (some Altium exports, e.g. the
+Inkplate 6) reads every net as `Poured`, so the check is inert there — the safe
+failure direction (a `Poured` net is never flagged). See FAMOUS_SWEEP.md Round 5.
+
+## Excellon dialects
+
+The drill reader handles the KiCad/decimal form and the **Altium dialect** the
+Inkplate 6 ships: `;FILE_FORMAT=2:5` (integer:decimal), `INCH,LZ`,
+`T<idx>F..S..C<dia>` tool defs (feed/speed before the diameter), **modal
+single-axis coordinate lines** (`X..` keeps the last Y, `Y..` keeps the last X),
+and `;TYPE=PLATED` / `;TYPE=NON_PLATED` sections (NPTH tools dropped from
+connectivity). The Altium drill is named `<board>-RoundHoles.TXT` /
+`-RectHoles.TXT` / `-SlotHoles.TXT`, recognised by the `holes` token. Before
+these were handled the Inkplate drill parsed to zero holes; tests in
+`gerber::excellon` and `gerber_inkplate.rs`.
 
 ## Performance
 
