@@ -9,10 +9,16 @@
 //!   netlist --format kicadsexpr` export. Richer (pin names/types), used
 //!   when the schematic is available.
 
+pub mod drc;
 mod eagle;
 mod ipc356;
 mod netlist;
 mod pcb;
+
+pub use drc::{
+    drc_from_text, run_drc, DrcFinding, DrcReport, Item, ItemKind, ViolationKind,
+    DEFAULT_CLEARANCE_MM,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +92,20 @@ impl ExtractedBoard {
 
     pub fn from_kicad_netlist(text: &str) -> Result<Self, ExtractError> {
         netlist::extract(text)
+    }
+
+    /// Geometric copper short / clearance check on the raw `.kicad_pcb` text.
+    ///
+    /// Connectivity extraction works off pad nets alone, but a *short* is a
+    /// geometric fact (two nets' copper touching) that only the layout carries.
+    /// This runs [`drc::run_drc`] over the same text the board was extracted
+    /// from. KiCad layouts only; other formats return an empty report.
+    pub fn drc(text: &str) -> Result<drc::DrcReport, ExtractError> {
+        let head: String = text.chars().take(512).collect();
+        if !head.contains("(kicad_pcb") {
+            return Ok(drc::DrcReport::default());
+        }
+        Ok(drc::drc_from_text(text)?)
     }
 
     /// Eagle `.brd` (XML, Eagle 6+): Arduino, Adafruit, SparkFun designs.
