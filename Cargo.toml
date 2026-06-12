@@ -8,6 +8,7 @@ members = [
     "crates/galvani-mcu",
     "crates/galvani-server",
     "crates/galvani-engine",
+    "crates/galvani-ci",
 ]
 
 [workspace.package]
