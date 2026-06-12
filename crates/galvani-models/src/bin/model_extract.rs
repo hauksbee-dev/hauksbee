@@ -128,7 +128,8 @@ OPTIONS:
     --kind <kind>         Component kind hint (default: bjt_npn)
                           passive|diode|bjt_npn|bjt_pnp|nmos|pmos|
                           vreg|opamp|comparator|analog_switch|digital|
-                          dac|adc|shift_register|mcu|connector|ignore
+                          dac|adc|shift_register|mcu|connector|ignore|
+                          charger|pmic|balancer  (behavioural families)
     --out-dir <dir>       Output directory (default: ~/.galvani/models/)
 
 ENVIRONMENT:
@@ -240,7 +241,7 @@ IMPORTANT RULES:
    - vout (LDO): 0.5 to 30
    - ron (switch): 0.01 to 10000
    - roff (switch): 1e3 to 1e12
-
+{behavioral_hint}
 OUTPUT (TOML only, starting with [[models]]):
 "#,
         part = part,
@@ -249,7 +250,90 @@ OUTPUT (TOML only, starting with [[models]]):
         pdf_text = &pdf_text[..pdf_text.len().min(40_000)],
         required_params = required_params_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
+        behavioral_hint = behavioral_hint_for_kind(kind),
     )
+}
+
+/// A behavioural-family kind (charger / pmic / balancer) maps to a base
+/// `ComponentKind` for the TOML `kind = "..."` line, and triggers the extra
+/// `[models.behavioral]` prompt section. Returns `None` for ordinary kinds.
+fn behavioral_family_base_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "charger" => Some("vreg"),
+        "pmic" => Some("vreg"),
+        "balancer" => Some("digital"),
+        _ => None,
+    }
+}
+
+/// The `[models.behavioral]` schema guidance appended to the prompt for the
+/// behavioural families. Empty for ordinary kinds. Per-family so the model is
+/// asked for the right declarative facts (a charger's input-current limit and
+/// sense pins; a PMIC's internal pin pulls; a balancer's leak law).
+fn behavioral_hint_for_kind(kind: &str) -> String {
+    let Some(base) = behavioral_family_base_kind(kind) else {
+        return String::new();
+    };
+    let common = format!(
+        r#"
+BEHAVIOURAL MODEL — this is a "{kind}" power IC. In ADDITION to the above, set
+`kind = "{base}"` (the base kind) and add a `[models.behavioral]` block that
+captures the part's internal behaviour the SPICE kinds cannot. The schema:
+
+  [models.behavioral.pins.<role>]   # one per pin with internal semantics
+  pull_to = "<rail role>"           # internal pull to another named pin's rail
+  pull_ohms = <ohms>                # resistance of that internal pull
+  open_drain = true                 # open-drain output (optional)
+  enable_threshold_v = <volts>      # enable-input threshold (optional)
+
+  [models.behavioral.converter]     # for a switching converter / charger
+  topology = "buck" | "boost" | "buck_boost"
+  out_pin = "<role>"                # the regulated output pin role
+  in_pin  = "<role>"                # the input pin role
+  vout_setpoint = <volts>           # regulated output voltage
+  efficiency = <0..1>
+  [models.behavioral.converter.iin_program]   # programmable input-current limit
+  rsense_ref = "<board refdes>"     # the input sense resistor on the board
+  prog_ref   = "<board refdes>"     # the limit-programming resistor on the board
+  vprog_ref = <volts>               # sense threshold at prog = prog_ref_ohms
+  prog_ref_ohms = <ohms>            # programming resistor at the threshold point
+  v_sense_full = <volts>            # full-scale current-sense voltage
+
+  [[models.behavioral.laws]]        # an expression law (current/voltage)
+  name = "<name>"
+  kind = "current" | "voltage"
+  a = "<pin role>"  ; b = "<pin role>"
+  expr = "<arithmetic over v_<role>, params>"   # e.g. "v_vplus / tie_ohms"
+
+Only include the blocks the datasheet supports. Cite the datasheet for each
+number (pin functions table, electrical characteristics, typical application).
+"#
+    );
+    let specific = match kind {
+        "charger" => {
+            "\nFor a CHARGER specifically: identify the input pin (PVIN/VIN), the \
+             battery/charge-output pin (BAT/VBAT), the input current-sense pins and \
+             the ILIMIT / current-limit programming pin. Fill \
+             [models.behavioral.converter] with topology and the regulated charge \
+             voltage, and [models.behavioral.converter.iin_program] with the \
+             current-sense and ILIMIT resistor relationship if the datasheet gives \
+             the input-current-limit programming equation."
+        }
+        "pmic" => {
+            "\nFor a PMIC specifically: identify any pin with an INTERNAL pull \
+             (e.g. a ship-hold / SHPHLD pin with a pull-up to the system rail \
+             VSYS) and encode it as [models.behavioral.pins.<role>] pull_to + \
+             pull_ohms. List the buck/LDO output pins in [models.pins]."
+        }
+        "balancer" => {
+            "\nFor a BALANCER / cell monitor specifically: identify the cell-input \
+             pins and any tie/bleed network. If unused cell inputs are tied to a \
+             rail through a resistor, encode the leak as a current [[law]] from the \
+             top-of-stack pin to the bottom over a `tie_ohms` param."
+        }
+        _ => "",
+    };
+    format!("{common}{specific}\n")
 }
 
 /// Which absolute-maximum ratings fields are worth asking for, per kind. The
@@ -292,6 +376,9 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "digital" | "shift_register" => "voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin",
         "dac"                => "bits, vref_int, i2c_addr (or spi mode)",
         "mcu"                => "backend (e.g. simavr:atmega328p)",
+        "charger"            => "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral])",
+        "pmic"               => "vout, dropout_v, iq_a  (the pin pulls are in [models.behavioral])",
+        "balancer"           => "(the leak law is in [models.behavioral]; no required numeric params)",
         _                    => "(see db/README.md for kind-specific requirements)",
     }
 }
@@ -558,15 +645,28 @@ fn parse_and_validate_reply(
         .with_context(|| format!("no [[models]] entry in reply for {part}"))?;
 
     // Guard against the backend returning the wrong device kind, which would
-    // bind nonsense (e.g. a diode card stamped as a BJT).
+    // bind nonsense (e.g. a diode card stamped as a BJT). A behavioural family
+    // kind (charger/pmic/balancer) is satisfied by its BASE kind in the TOML
+    // (vreg/digital), since the family lives in the [models.behavioral] block.
     let want = kind_str.trim();
     if !want.is_empty() {
         let got = kind_discriminant(entry.kind);
-        if got != want {
+        let want_base = behavioral_family_base_kind(want).unwrap_or(want);
+        if got != want_base {
             bail!(
-                "kind mismatch for {part}: requested '{want}' but the reply is '{got}'"
+                "kind mismatch for {part}: requested '{want}' (base '{want_base}') \
+                 but the reply is '{got}'"
             );
         }
+    }
+
+    // A behavioural-family extraction must carry a non-empty behavioural block,
+    // or it is just an ordinary kind mislabelled.
+    if behavioral_family_base_kind(want).is_some() && entry.behavioral.is_empty() {
+        bail!(
+            "behavioural extraction for {part} (kind '{want}') produced no \
+             [models.behavioral] block; the prompt asked for one"
+        );
     }
 
     // Validate physical ranges.
@@ -646,6 +746,97 @@ mod tests {
         let prompt = build_prompt("BC847", "bjt_npn", "...datasheet text...");
         assert!(prompt.contains("is, bf, nf"));
         assert!(prompt.contains("BC847"));
+    }
+
+    #[test]
+    fn behavioral_family_prompt_includes_schema() {
+        // A charger prompt must teach the [models.behavioral.converter] schema
+        // and the input-current-limit programming block.
+        let charger = build_prompt("LTC4020", "charger", "datasheet");
+        assert!(charger.contains("[models.behavioral.converter]"), "charger prompt missing converter schema");
+        assert!(charger.contains("iin_program"), "charger prompt missing current-limit program");
+        assert!(charger.contains("CHARGER specifically"));
+        // A PMIC prompt must teach the internal-pull pin schema.
+        let pmic = build_prompt("nPM1300", "pmic", "datasheet");
+        assert!(pmic.contains("pull_to"), "pmic prompt missing internal-pull schema");
+        assert!(pmic.contains("SHPHLD"), "pmic prompt should mention the ship-hold case");
+        // A balancer prompt must teach the leak-law schema.
+        let bal = build_prompt("LTC6803", "balancer", "datasheet");
+        assert!(bal.contains("[[models.behavioral.laws]]"));
+        assert!(bal.contains("tie_ohms"));
+        // An ordinary kind must NOT get the behavioural section.
+        let bjt = build_prompt("BC847", "bjt_npn", "x");
+        assert!(!bjt.contains("[models.behavioral.converter]"));
+    }
+
+    #[test]
+    fn behavioral_family_kind_base_check() {
+        // A charger reply carries kind = "vreg" (the base) plus a behavioural
+        // block; the validator must accept it against the requested "charger".
+        assert_eq!(behavioral_family_base_kind("charger"), Some("vreg"));
+        assert_eq!(behavioral_family_base_kind("pmic"), Some("vreg"));
+        assert_eq!(behavioral_family_base_kind("balancer"), Some("digital"));
+        assert_eq!(behavioral_family_base_kind("bjt_npn"), None);
+    }
+
+    /// Offline end-to-end for a behavioural extraction: a canned charger reply
+    /// (kind = "vreg" + a converter behavioural block) must pass the full
+    /// parse + validate path under --kind charger.
+    #[test]
+    fn offline_behavioral_charger_pipeline() {
+        let reply = r#"```toml
+[[models]]
+id = "ltc4020_x"
+kind = "vreg"
+description = "extracted charger"
+[models.match]
+value_re = "(?i)LTC4020"
+[models.params]
+vout = 14.4
+dropout_v = 0.5
+iq_a = 0.001
+[models.ratings]
+max_voltage_v = 55.0
+[models.pins]
+"36" = "pvin"
+"20" = "bat"
+"25" = "ilimit"
+[models.behavioral.converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 28.8
+efficiency = 0.92
+[models.behavioral.converter.iin_program]
+rsense_ref = "R49"
+prog_ref = "R8"
+vprog_ref = 0.0316
+prog_ref_ohms = 7150.0
+v_sense_full = 0.0463
+```"#;
+        let raw = extract_toml_block(reply);
+        let entry = parse_and_validate_reply(&raw, "LTC4020", "charger")
+            .expect("behavioural charger reply should validate under --kind charger");
+        assert_eq!(entry.kind, galvani_models::ComponentKind::Vreg);
+        assert!(!entry.behavioral.is_empty());
+        assert!(entry.behavioral.converter.is_some());
+    }
+
+    /// A behavioural-family extraction with NO behavioural block must be
+    /// rejected (it would just be an ordinary kind mislabelled).
+    #[test]
+    fn behavioral_family_without_block_rejected() {
+        let reply = r#"
+[[models]]
+id = "x"
+kind = "vreg"
+[models.params]
+vout = 5.0
+dropout_v = 1.0
+iq_a = 0.001
+"#;
+        let err = parse_and_validate_reply(reply, "X", "charger").unwrap_err();
+        assert!(err.to_string().contains("no [models.behavioral]"), "got: {err}");
     }
 
     #[test]
@@ -763,6 +954,43 @@ max_current_a = 0.1\n\
             "VCEO must be extracted into ratings"
         );
         println!("live BC847: bf={bf} ratings={:?}", entry.ratings);
+    }
+
+    /// Live integration: run the REAL codex backend with `--kind charger`
+    /// against the LTC4020 datasheet excerpt in testdata, then assert the
+    /// extracted behavioural model is structurally sound. Marked #[ignore]
+    /// (shells out to codex, ~30-60s). Run with:
+    ///   cargo test -p galvani-models --bin model-extract -- \
+    ///       extract_ltc4020_charger_live --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn extract_ltc4020_charger_live() {
+        let src = testdata("datasheets/LTC4020_excerpt.txt");
+        if !src.exists() {
+            eprintln!("LTC4020 excerpt not found at {src:?}; skipping");
+            return;
+        }
+        if !which("codex") && std::env::var("GALVANI_LLM_API_KEY").is_err() {
+            eprintln!("neither codex nor GALVANI_LLM_API_KEY available; skipping live test");
+            return;
+        }
+        let text = extract_pdf_text(&src).expect("text");
+        let prompt = build_prompt("LTC4020", "charger", &text);
+        let args = Args {
+            pdf: src.clone(),
+            part: "LTC4020".to_string(),
+            kind_str: "charger".to_string(),
+            out_dir: Some(std::env::temp_dir()),
+            retries: 1,
+        };
+        let raw = call_backend(&prompt, &args).expect("codex backend call");
+        let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").expect("parse + validate");
+        assert_eq!(entry.kind, galvani_models::ComponentKind::Vreg);
+        let c = entry.behavioral.converter.expect("converter block");
+        assert_eq!(c.in_pin, "pvin");
+        assert_eq!(c.out_pin, "bat");
+        assert!(c.iin_program.is_some(), "ILIMIT current-limit program present");
+        println!("live LTC4020 charger: vout={} eff={:?}", c.vout_setpoint, c.efficiency);
     }
 
     /// Test the validation path with a mocked LLM reply.
