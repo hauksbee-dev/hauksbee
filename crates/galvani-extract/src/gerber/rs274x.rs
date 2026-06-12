@@ -64,12 +64,13 @@ pub enum PrimKind {
 
 /// Parse one RS-274X copper layer's text into solid copper primitives.
 pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
+    let normalized = normalize_rs274x(text);
     // `parse` returns the partially-built document even on a hard error (the
     // error and the doc-so-far are paired). Per-command parse errors are kept
     // inside `doc.commands` as `Err` and skipped by `doc.commands()`. We want
     // every primitive we *can* recover, so we take the doc in both cases; a
     // truly empty/garbage file simply yields no primitives.
-    let doc = match gerber_parser::parse(BufReader::new(text.as_bytes())) {
+    let doc = match gerber_parser::parse(BufReader::new(normalized.as_bytes())) {
         Ok(doc) => doc,
         Err((doc, _err)) => doc,
     };
@@ -79,6 +80,67 @@ pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
         plotter.run(cmd);
     }
     Ok(plotter.out)
+}
+
+/// Normalise older / vendor RS-274X dialects into the strict form the
+/// `gerber_parser` regexes accept. Real fab gerbers (e.g. Allegro `.art`
+/// exports like the uConsole mainboard) differ from the textbook form in two
+/// ways the parser rejects outright, which otherwise drops the *entire* layer:
+///
+///   1. **Multi-statement extended blocks.** A single `%...%` may pack several
+///      statements: `%FSAX55Y55*MOIN*%` or
+///      `%IR0*IPPOS*OFA0B0*MIA0B0*SFA1B1*%`. The parser expects one statement
+///      per `%...%`. We split each inner `...*` into its own `%...*%`.
+///   2. **FS without a zero-omission char.** Allegro writes `%FSAX55Y55*`
+///      (absolute, 5.5) with no leading `L`/`T`; the parser's regex requires
+///      one. Coordinates in these files are zero-padded to the full width, so
+///      inserting `L` (omit-leading, a no-op on full-width numbers) is exact.
+///
+/// Everything else is passed through untouched, so well-formed KiCad/JLCPCB
+/// gerbers are unaffected (their `%...%` blocks are already single-statement
+/// and their FS already carries the zero char).
+fn normalize_rs274x(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Only extended-code lines (start and end with %) can need splitting.
+        if trimmed.starts_with('%') && trimmed.ends_with('%') && trimmed.len() > 2 {
+            let inner = &trimmed[1..trimmed.len() - 1];
+            // Count statements (each ends with '*'). One is the normal case.
+            let stmts: Vec<&str> = inner.split('*').filter(|s| !s.is_empty()).collect();
+            if stmts.len() > 1 {
+                for s in stmts {
+                    out.push('%');
+                    out.push_str(&patch_fs(s));
+                    out.push_str("*%\n");
+                }
+                continue;
+            } else if stmts.len() == 1 {
+                out.push('%');
+                out.push_str(&patch_fs(stmts[0]));
+                out.push_str("*%\n");
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Insert the leading-zero-omission char into a bare `FSA…`/`FSI…` statement.
+fn patch_fs(stmt: &str) -> String {
+    if let Some(rest) = stmt.strip_prefix("FS") {
+        // Already `FSL…`/`FST…`? leave it.
+        if rest.starts_with('L') || rest.starts_with('T') {
+            return stmt.to_string();
+        }
+        // `FSA…` / `FSI…` (absolute/incremental with no zero char): add `L`.
+        if rest.starts_with('A') || rest.starts_with('I') {
+            return format!("FSL{rest}");
+        }
+    }
+    stmt.to_string()
 }
 
 fn num(c: &CoordinateNumber) -> f64 {
@@ -385,6 +447,29 @@ M02*
             assert!((cx - 10.0).abs() < 1e-6, "pad centre at {cx}");
         } else {
             panic!("rect flash should be a polygon");
+        }
+    }
+
+    #[test]
+    fn normalizes_allegro_fs_and_combined_blocks() {
+        // Allegro dialect: FS without zero char, FS+MO combined in one block.
+        let g = "\
+%FSAX55Y55*MOIN*%
+%IR0*IPPOS*OFA0.00000B0.00000*%
+%ADD10C,0.040000*%
+D10*
+X0000050000Y0000050000D03*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        // The flash must survive: FS was patched and the combined block split,
+        // so the format spec is set and the coordinate op is honoured.
+        let f = prims.iter().find(|p| p.kind == PrimKind::Flash).unwrap();
+        if let Shape::Capsule(c) = &f.shape {
+            // 5.5 inch format: 0000050000 = 0.5 inch = 12.7 mm.
+            assert!((c.ax - 12.7).abs() < 1e-3, "x was {}", c.ax);
+        } else {
+            panic!("round flash should be a disc");
         }
     }
 

@@ -160,6 +160,61 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
     out
 }
 
+/// Parse an Allegro/Cadence component-location file (`smt_loc.txt`): a
+/// `!`-delimited table with a `UUNITS = MILS|MM` header and columns
+/// `refdes ! symbol_x ! symbol_y ! rotation ! mirror ! symbol_name`. The
+/// `mirror` flag (`m`) marks the bottom side. This is the pick-and-place the
+/// uConsole mainboard (and other Allegro `.art` jobs) ships instead of a CSV.
+pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
+    let mut mils = false; // default to mm unless the header says MILS
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let up = line.to_ascii_uppercase();
+        if up.starts_with("UUNITS") {
+            mils = up.contains("MIL");
+            continue;
+        }
+        if up.starts_with("VERSION") || up.starts_with("UNITS") && !line.contains('!') {
+            continue;
+        }
+        if !line.contains('!') {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('!').map(str::trim).collect();
+        if cells.len() < 5 {
+            continue;
+        }
+        let reference = cells[0].to_string();
+        if reference.is_empty() {
+            continue;
+        }
+        let (Ok(mut x), Ok(mut y)) = (cells[1].parse::<f64>(), cells[2].parse::<f64>()) else {
+            continue;
+        };
+        if mils {
+            x *= 0.0254;
+            y *= 0.0254;
+        }
+        let rotation = cells[3].parse().unwrap_or(0.0);
+        let mirror = cells.get(4).map(|s| s.eq_ignore_ascii_case("m")).unwrap_or(false);
+        let package = cells.get(5).map(|s| s.to_string()).unwrap_or_default();
+        out.push(Placement {
+            reference,
+            value: String::new(),
+            package,
+            x,
+            y,
+            rotation,
+            top: !mirror,
+        });
+    }
+    out
+}
+
 /// Parse a BOM CSV into `reference -> (value, part_number)` enrichment. Handles
 /// the common "Designator/Comment" and "Reference(s)/Value/MPN" layouts; a
 /// single BOM row often lists many refs ("R1,R2,R3").
@@ -222,6 +277,23 @@ R2,5.0,5.0,Bottom,180\n";
         assert_eq!(p[0].reference, "R1");
         assert!((p[0].x - 10.5).abs() < 1e-6);
         assert!(!p[1].top);
+    }
+
+    #[test]
+    fn allegro_loc_mils() {
+        let txt = "VERSION = 2.0\n\
+UUNITS = MILS\n\
+#  refdes ! symbol_x ! symbol_y ! rotation ! mirror ! symbol_name\n\
+C1     !  1243.63 !   461.51 !  180 ! m ! C0603 !\n\
+U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
+        let p = parse_allegro_loc(txt);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].reference, "C1");
+        // 1243.63 mil = 31.588 mm
+        assert!((p[0].x - 1243.63 * 0.0254).abs() < 1e-6);
+        assert!(!p[0].top, "mirror 'm' marks bottom side");
+        assert!(p[1].top);
+        assert_eq!(p[1].package, "QFN56");
     }
 
     #[test]

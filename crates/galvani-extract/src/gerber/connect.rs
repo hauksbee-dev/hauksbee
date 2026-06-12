@@ -114,17 +114,13 @@ pub fn reconstruct(
     let mut prims: Vec<LayerPrim> = Vec::new();
     // global prim index -> layer
     let mut prim_layer: Vec<usize> = Vec::new();
-    // For each layer, the slice [start, end) of its own primitives in `prims`.
-    let mut layer_ranges: Vec<(usize, usize)> = Vec::new();
 
     for (li, layer) in layers.into_iter().enumerate() {
-        let start = prims.len();
         for cp in layer {
             let bounds = cp.shape.bounds();
             prims.push(LayerPrim { shape: cp.shape, kind: cp.kind, bounds });
             prim_layer.push(li);
         }
-        layer_ranges.push((start, prims.len()));
     }
 
     // Hole discs: one per layer, recorded so we can stitch them together after.
@@ -642,7 +638,7 @@ mod tests {
             cap(0.0, 0.0, 5.0, 0.0, 0.1, PrimKind::Track),
             cap(5.0, 0.0, 5.0, 0.0, 0.5, PrimKind::Flash),
         ];
-        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        let (_board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(stats.n_nets, 1, "all copper is one conductor");
         assert_eq!(stats.total_flashes, 2);
     }
