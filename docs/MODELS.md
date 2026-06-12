@@ -135,3 +135,240 @@ Measured results from real codex extractions of the three reference datasheets:
 - **Live (manual)**: `galvani-models` `extract_bc847_live` is `#[ignore]`d and
   runs real codex against `testdata/datasheets/BC847.pdf`. See
   `crates/galvani-models/README_DATASHEET.md`.
+
+# Behavioural device models (power ICs)
+
+The SPICE-level kinds (R/C/L, diode, BJT, MOSFET, switches, simple regulators)
+cannot capture the *internal logic* of power ICs: a charger's input-current
+limit servo, a PMIC's ship-mode pull to a rail, a balancer's bleed FETs, a
+sequencer's state machine. For those, a model entry carries a declarative
+`[models.behavioral]` block, parsed by `crates/galvani-models/src/behavioral.rs`
+and realised at run time by `crates/galvani-engine/src/behavioral.rs`.
+
+A behavioural device participates in the solve loop exactly the way the
+configurable power supplies do: it stamps controllable Thevenin legs and sense
+resistors into the circuit once, and the scheduler calls its `update` between
+solver chunks to recompute each leg from the previous chunk's solved node
+voltages (iterate-to-consistency per chunk). It never adds device kinds to the
+inner Newton loop — every behaviour is expressed with the existing
+`Vsource` / `Isource` / `Resistor` primitives, so the partitioned solver is
+untouched.
+
+## The four declarative facts
+
+A `[models.behavioral]` block is a bag of optional facts:
+
+1. **Pins with semantics** — `[models.behavioral.pins.<role>]`:
+   - `pull_to = "<rail role>"` + `pull_ohms = <ohms>`: an internal pull to
+     another named pin's rail (the nPM1300 SHPHLD pull to VSYS). The runtime
+     stamps a resistor from the pin to the rail node.
+   - `open_drain = true` + `od_ohms = <ohms>`: an open-drain output the FSM can
+     assert (a charger STAT pin).
+   - `enable_threshold_v` / `enable_active_high`: an enable input read against a
+     threshold.
+
+2. **Finite state machine** — `[models.behavioral.fsm]`:
+   - `states = [...]`, optional `initial`.
+   - `[[models.behavioral.fsm.transitions]]` with `from`, `to`, an `evalexpr`
+     `guard` over `v_<pin>` / `t` / `t_in_state` / params, and optional
+     `min_dwell_s`.
+   - `[models.behavioral.fsm.state_pins.<state>.<pin>]` overrides: drive a pin
+     (`drive_volts`), assert its open drain (`od_assert`), or tri-state it
+     (`hi_z`) while that state is active.
+
+3. **Averaged converter** — `[models.behavioral.converter]`:
+   - `topology` (`buck`/`boost`/`buck_boost`), `out_pin`, `in_pin`,
+     `vout_setpoint`, `efficiency`, optional `iout_limit_a`.
+   - `[models.behavioral.converter.iin_program]`: a programmable input-current
+     limit set by a sense resistor and a programming resistor, both read off the
+     board by reference designator (`rsense_ref`, `prog_ref`). The limit is
+     `v_sense / rsense`, where `v_sense` scales linearly with the programming
+     resistor up to `v_sense_full`. The runtime regulates the output, folds it
+     back under the output limit, and throttles so the reflected input draw never
+     exceeds the input limit.
+
+4. **Expression laws** — `[[models.behavioral.laws]]`:
+   - A `current` (from pin `a` to `b`) or `voltage` (forced on pin `a` behind
+     `r_ohms`) whose value is an `evalexpr` `expr` over `v_<pin>`, `t`, the param
+     keys, and `state_<name>` booleans. Optional `only_in_state`.
+
+### Why `evalexpr` (and not `rhai`)
+
+The laws and FSM guards are pure arithmetic / boolean expressions over a bound
+context (pin voltages, the active state, params). `evalexpr` is a small,
+dependency-light evaluator that does exactly that and **nothing else**: no
+functions, loops, closures, filesystem, or network. `rhai` is a full embedded
+scripting language — more power than these declarative laws need and a much
+larger surface to sandbox. We pin `evalexpr` with `default-features = false`
+(dropping its optional rand/regex/serde), compile each expression once at stamp
+time, and evaluate it against a fresh per-chunk context, so a law is sandboxed
+arithmetic with no side effects.
+
+## Board-programmable resistors
+
+A power IC's behaviour is often set by an external resistor (the LTC4020 ILIMIT
+pin, the LTC6803 cell-tie network). The binder reads those resistor *values* off
+the actual board:
+
+- A converter's `iin_program` names `rsense_ref` / `prog_ref` (e.g. `"R49"`,
+  `"R8"`); the binder substitutes the on-board value.
+- Any param `<name>_from_ref = "Rxx"` is rewritten to `<name> = ohms(Rxx)`. If
+  the resistor is *absent* (the revision replaced it, e.g. the LTC6803 tie R52
+  replaced by a blocking diode), the binder substitutes a large open resistance,
+  so a law dividing by it contributes ~0.
+
+This is what lets one model produce different behaviour on two board revisions
+with no model edit — the basis of the two-sided fault validations in
+`docs/KNOWN_FAULTS_VALIDATION.md`.
+
+## Adding a custom part without recompiling
+
+Models layer `builtin < datasheet-extracted < user` (later wins). A custom
+behavioural part is just a TOML file dropped into a user directory:
+
+- `~/.galvani/models/` — where datasheet extraction writes.
+- `~/.config/galvani/models/` — your own custom models.
+- any `--models-dir <dir>` passed to `galvani run` (highest priority).
+
+### Worked example: a "crazy" custom charger
+
+Suppose you have a part `ACME-BUCK-9000`, a buck charger whose input-current
+limit is programmed by a resistor `R42` against a 0.005 ohm shunt `R43`, with a
+STAT open-drain pin that pulls low while charging. Drop this into
+`~/.config/galvani/models/acme.toml`:
+
+```toml
+[[models]]
+id = "acme_buck_9000"
+kind = "vreg"
+description = "ACME BUCK-9000 buck charger (custom behavioural)"
+
+[models.match]
+value_re = "(?i)ACME.?BUCK.?9000"
+
+[models.params]
+vout = 8.4
+dropout_v = 0.3
+iq_a = 0.001
+
+[models.pins]
+"1" = "pvin"     # power input
+"2" = "bat"      # charge output
+"3" = "ilimit"   # input-current-limit program pin (R42)
+"4" = "stat"     # open-drain status
+
+[models.behavioral.converter]
+topology = "buck"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 8.4        # 2S Li-ion
+efficiency = 0.90
+
+[models.behavioral.converter.iin_program]
+rsense_ref = "R43"         # 0.005 ohm input shunt, read off the board
+prog_ref = "R42"           # the ILIMIT resistor, read off the board
+vprog_ref = 0.05           # sense threshold at prog = prog_ref_ohms
+prog_ref_ohms = 50000.0
+v_sense_full = 0.05        # full-scale sense voltage
+
+[models.behavioral.pins.stat]
+open_drain = true
+od_ohms = 50.0
+
+[models.behavioral.fsm]
+states = ["idle", "charging"]
+
+[[models.behavioral.fsm.transitions]]
+from = "idle"
+to = "charging"
+guard = "v_pvin > 4.0"     # input present -> start charging
+
+[models.behavioral.fsm.state_pins.charging.stat]
+od_assert = true           # pull STAT low while charging
+```
+
+Then:
+
+```bash
+galvani run my_board.kicad_pcb --models-dir ~/.config/galvani/models
+```
+
+The part binds with no recompile: the converter regulates `bat` to 8.4 V with an
+input-current limit read from `R42`/`R43`, and the STAT pin pulls low once the
+FSM enters `charging`.
+
+## The escape hatch: a custom Rust behaviour
+
+Some parts have behaviour no finite declarative schema captures — a closed-loop
+controller with internal state, a sequencer with data-dependent timing, a part
+whose output depends on an I2C register the firmware wrote. For those, implement
+the `CustomBehavior` trait (`crates/galvani-engine/src/behavioral.rs`) in Rust
+and register it before binding:
+
+```rust
+use galvani_engine::{CustomBehavior, CustomRegistry, bind_board_with};
+use galvani_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use galvani_models::{ModelLibrary, Params};
+use std::collections::BTreeMap;
+
+struct MyController { isrc: Option<DeviceId>, integ: f64 }
+
+impl CustomBehavior for MyController {
+    fn stamp(&mut self, circuit: &mut Circuit, reference: &str,
+             _params: &Params, role_nodes: &BTreeMap<String, NodeId>) {
+        if let Some(&out) = role_nodes.get("out") {
+            self.isrc = Some(circuit.add(Device::Isource {
+                name: format!("Icustom_{reference}"),
+                p: out, n: NodeId::GROUND, kind: SourceKind::Dc(0.0),
+            }));
+        }
+    }
+    fn update(&mut self, circuit: &mut Circuit,
+              node_v: &dyn Fn(NodeId) -> f64, _t: f64, dt: f64,
+              _faults: &mut Vec<galvani_engine::FaultEvent>) {
+        // Arbitrary stateful Rust: e.g. an integrating controller.
+        self.integ += dt * (5.0 - node_v(NodeId(1)));
+        if let Some(id) = self.isrc {
+            if let Some(Device::Isource { kind, .. }) =
+                circuit.devices.get_mut(id.0 as usize) {
+                *kind = SourceKind::Dc(self.integ.clamp(0.0, 2.0));
+            }
+        }
+    }
+    fn state(&self) -> &str { "controlling" }
+}
+
+let mut reg = CustomRegistry::new();
+reg.register("ACME-CTRL-X", || Box::new(MyController { isrc: None, integ: 0.0 }));
+let bound = bind_board_with(&board, &ModelLibrary::builtin(), &reg);
+```
+
+The factory is matched against the component's resolved model id, value, or MPN.
+On a hit the binder builds the custom device instead of the declarative one; the
+scheduler then drives it each chunk exactly like a declarative behavioural
+device. You only ever mutate source values between chunks — the same
+convergence-per-chunk pattern the supplies and declarative devices use — so the
+inner Newton loop is untouched.
+
+## Extracting a behavioural model from a datasheet
+
+`model-extract` accepts the behavioural families `charger`, `pmic`, `balancer`
+as `--kind`. Each emits the base kind in the TOML (`vreg` / `digital`) plus a
+`[models.behavioral]` block, and the prompt is engineered per family (a charger
+is asked for its converter and the ILIMIT/RSENSE programming; a PMIC for its
+internal pin pulls; a balancer for its leak law):
+
+```bash
+model-extract --pdf testdata/datasheets/LTC4020.pdf --part LTC4020 --kind charger
+```
+
+A live codex run against the LTC4020 datasheet produced a model that agreed with
+the hand-written one on the load-bearing structure — base kind `vreg`, the exact
+pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`, `vout_setpoint = 28.8`
+(8S LiFePO4), `efficiency = 0.92`, and a populated `iin_program` block — and
+honestly left the ILIMIT transfer-function constants at zero because the
+datasheet excerpt did not state the programming equation (those were calibrated
+in the hand model from the documented 60 W/88 W revision evidence, which the
+datasheet alone does not contain). The captured output is regression-locked
+offline in `crates/galvani-models/tests/codex_behavioral_fixture.rs`; the live
+run is the `#[ignore]`d `extract_ltc4020_charger_live`.
