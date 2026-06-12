@@ -85,6 +85,44 @@ period_s = 0.050
 idle_a = 0.040
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ESP32 cold-boot inrush: the documented brownout culprit.
+#
+# At cold boot the ESP32 brings up the RF front end and runs RF calibration
+# while the firmware kicks off WiFi association. The leading surge is the worst
+# transient the supply ever sees: the bulk decoupling charges, the PA biases up,
+# and the first TX bursts land, all within the first ~50 ms. Espressif's own
+# brownout-detector guidance and the Inkplate field reports (#7/#10) attribute
+# the cold-boot failures to this surge exceeding what an undersized cell /
+# protection / regulator can deliver. The ESP32-WROOM note lists ~500 mA TX
+# peaks; a cold-boot surge with bulk-cap inrush stacks above that for a few ms,
+# which is what trips a ~1 A-class LiPo protection on a small pack. We model a
+# ~1.2 A leading surge (6 ms) settling into a 240 mA TX burst train.
+[[models]]
+id = "esp32_cold_boot_inrush"
+description = "ESP32 cold-boot RF surge: ~1.2 A leading inrush settling to 240 mA TX bursts"
+
+[[models.segment]]
+# Pre-boot quiescent (regulator up, CPU in reset release): ~20 mA.
+level_a = 0.020
+rise_s = 0.0005
+duration_s = 0.002
+
+[[models.segment]]
+# Cold-boot RF surge: bulk-cap inrush + PA bias + first TX, ~1.2 A for 6 ms.
+# This is the transient that trips a 1 A-class protection on a small pack.
+level_a = 1.200
+rise_s = 0.0005
+duration_s = 0.006
+
+[[models.segment]]
+# Settle into the normal WiFi association burst train (240 mA, 100 ms cadence).
+level_a = 0.240
+rise_s = 0.001
+duration_s = 0.010
+period_s = 0.100
+idle_a = 0.040
+
+# ─────────────────────────────────────────────────────────────────────────────
 [[models]]
 id = "esp32_deep_sleep"
 description = "ESP32 deep sleep (RTC only, ~10 uA)"
