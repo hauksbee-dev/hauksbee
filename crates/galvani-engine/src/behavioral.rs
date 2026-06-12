@@ -435,6 +435,18 @@ impl BehavioralDevice {
         self.converter.as_ref().map(|c| c.last_iin_a)
     }
 
+    /// The current value (A) of a named current-law source, read from the
+    /// circuit (the value the runtime last wrote). `None` if no such law. Used by
+    /// the balancer-leak validation to read the leak magnitude directly.
+    pub fn law_value(&self, circuit: &Circuit, name: &str) -> Option<f64> {
+        let leg = self.laws.iter().find(|l| l.law.name == name)?;
+        match circuit.devices.get(leg.source.0 as usize) {
+            Some(Device::Isource { kind: SourceKind::Dc(v), .. })
+            | Some(Device::Vsource { kind: SourceKind::Dc(v), .. }) => Some(*v),
+            _ => None,
+        }
+    }
+
     /// Drain faults raised since the last call.
     pub fn drain_faults(&mut self) -> Vec<FaultEvent> {
         std::mem::take(&mut self.pending_faults)
