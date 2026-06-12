@@ -36,7 +36,7 @@ use regex::Error as RegexError;
 use thiserror::Error;
 
 pub use matcher::ComponentQuery;
-pub use schema::{ComponentKind, ModelEntry, Params};
+pub use schema::{ComponentKind, ModelEntry, Params, StrapLevel, StrapPin};
 pub use spice_input::SpiceCard;
 
 // ── Embedded database files ───────────────────────────────────────────────────
@@ -334,6 +334,7 @@ impl ModelLibrary {
             params,
             pins,
             ratings: Default::default(),
+            straps: Vec::new(),
         };
 
         Resolution {

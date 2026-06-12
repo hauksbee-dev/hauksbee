@@ -12,5 +12,9 @@
 //!   source + cable model to a board's CC termination and classifies the result
 //!   against the USB Type-C spec windows (Sink / AudioAccessory / ...). This is
 //!   what re-derives the RPi 4 shared-CC-pulldown fault cold.
+//! - [`straps`]: the boot strapping-pin lint. It reads each MCU's strap table
+//!   from the model db and flags a strap net that cannot hold the level the part
+//!   needs at reset (a free-running clock on it, or a pull to the wrong rail).
 
+pub mod straps;
 pub mod usb_c;
