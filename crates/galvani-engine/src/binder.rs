@@ -329,7 +329,7 @@ fn gather_device_meta(
 }
 
 /// Resolve one component into a model entry.
-fn resolve(lib: &ModelLibrary, comp: &Component) -> galvani_models::Resolution {
+pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> galvani_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
         non_empty(&comp.value),
