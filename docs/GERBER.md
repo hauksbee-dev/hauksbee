@@ -189,6 +189,19 @@ pads we located", not "99.7% of the board".
 Timings are a representative run on one laptop (Apple Silicon), not a guaranteed
 bound; the reform motherboard varies 15–41 s with machine load.
 
+**What the closed loop does and does not cover.** The ground-truth gerbers are
+exported with `--no-protel-ext`, so they carry KiCad long layer names
+(`*-F_Cu.gbr`). The sweep therefore validates the **connectivity engine** (the
+union-find, pour rule, via stitching, pad assignment) on the strongest layer-
+classification path. It does *not* stress the Protel-extension or Allegro
+`.art`-digit layer inference, nor the gerber-format-drill reader — those paths
+are exercised only by the uConsole, which has no ground truth to score against.
+So "near-exact connectivity" is proven for the engine; the exotic-dialect
+*ingestion* paths are proven only to parse and bind, not to a measured partition
+accuracy. The "comps" column in the table is the *native* count, not how many
+the reconstruction recovered (component recovery is materially lower than net
+agreement — see Limitations).
+
 Per the Tarski meta-lesson, every closed-loop disagreement was treated as our
 bug and chased to the primitive. The two that mattered: a Y-axis sign convention
 (KiCad pcb Y-down vs gerber Y-up) and the pour-containment rule above (which
@@ -276,6 +289,11 @@ sweep on the densest signal layers.
   connected within that fill. KiCad emits separate dark regions per island, so
   this is rarely wrong in practice; an exotic single-region split-plane could
   mis-merge.
+- **Gerber-format drill diameter is partly guessed.** When a hole on a gerber
+  drill film is flashed with a non-circular aperture, its barrel diameter falls
+  back to 0.3 mm (a circular flash gives the true size). This feeds via stitching
+  on exactly the multi-layer Allegro boards (uConsole) that have no ground truth,
+  so it is an unverified assumption on that path.
 - **Clear polarity (LPC)** is skipped for connectivity: a thermal relief or
   antipad clearing copper inside a pour does not disconnect a net the way it
   changes a rendered image, so treating the board as additive is correct for
