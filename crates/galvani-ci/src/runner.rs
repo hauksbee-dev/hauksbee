@@ -55,6 +55,15 @@ pub struct RunFault {
     pub t_ms: f64,
 }
 
+/// A peripheral's end-of-run state, for `peripheral` assertions.
+#[derive(Debug, Clone, Default)]
+pub struct PeripheralSnapshot {
+    /// Numeric state fields (temp_c, transitions, position, ...).
+    pub fields: HashMap<String, f64>,
+    /// Raw memory bytes for an EEPROM (empty otherwise), for `bytes` checks.
+    pub bytes: Vec<u8>,
+}
+
 /// Everything one seed's run produced, indexed for assertion evaluation.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
@@ -71,6 +80,8 @@ pub struct RunOutcome {
     pub toggles: HashMap<String, u64>,
     /// Per-component peak through-current magnitude (A), best-effort.
     pub peak_current: HashMap<String, f64>,
+    /// Per-peripheral end-of-run snapshot, keyed by peripheral id.
+    pub peripherals: HashMap<String, PeripheralSnapshot>,
     /// Total simulated time (ms).
     pub sim_ms: f64,
 }
@@ -350,6 +361,10 @@ fn run_one(
     let mut engine = GalvaniEngine::from_bound(bound, firmware.as_deref(), "/ci")
         .map_err(|e| SpecError::Invalid(format!("building engine: {e}")))?;
 
+    // Attach this spec's peripherals (controls, bus slaves, sinks) and their
+    // timeline events to the engine's scheduler.
+    let vcd_targets = attach_peripherals(spec, &board, &net_node, engine.scheduler_mut())?;
+
     // Run the co-sim, sampling each frame.
     let frame_dt = (spec.frame_ms / 1000.0).max(1e-6);
     let total_s = spec.duration_ms / 1000.0;
@@ -406,6 +421,9 @@ fn run_one(
         .map(|(n, st)| (n.clone(), st.toggles))
         .collect();
 
+    // Snapshot peripheral state for assertions, and dump any VCD sinks.
+    let peripherals = snapshot_peripherals(spec, &engine, &vcd_targets);
+
     Ok(RunOutcome {
         seed,
         windows,
@@ -413,8 +431,279 @@ fn run_one(
         faults,
         toggles,
         peak_current,
+        peripherals,
         sim_ms: engine.scheduler().sim_time * 1000.0,
     })
+}
+
+/// Resolve a peripheral's attachment net by net name or connector ref+pin.
+fn resolve_net(
+    spec: &crate::spec::PeripheralSpec,
+    board: &ExtractedBoard,
+    net_node: &HashMap<String, NodeId>,
+    which: Option<&str>,
+) -> Option<NodeId> {
+    // Explicit net name (or named alternate terminal) wins.
+    if let Some(name) = which {
+        if let Some(&n) = net_node.get(name) {
+            return Some(n);
+        }
+    }
+    if which.is_none() {
+        if let Some(name) = &spec.net {
+            if let Some(&n) = net_node.get(name) {
+                return Some(n);
+            }
+        }
+        // Connector ref+pin: find the component, then the pin's net name.
+        if let (Some(reference), Some(pin)) = (&spec.reference, &spec.pin) {
+            if let Some(comp) = board.components.iter().find(|c| &c.reference == reference) {
+                if let Some(p) = comp.pins.iter().find(|p| &p.number == pin) {
+                    if let Some(net_id) = p.net {
+                        if let Some(net) =
+                            board.nets.iter().find(|n| n.id == net_id).map(|n| n.name.clone())
+                        {
+                            return net_node.get(&net).copied();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Attach every peripheral in the spec to the scheduler. Returns the list of
+/// (sink id, output path) for VCD sinks so they can be dumped after the run.
+fn attach_peripherals(
+    spec: &Spec,
+    board: &ExtractedBoard,
+    net_node: &HashMap<String, NodeId>,
+    sched: &mut galvani_engine::scheduler::Scheduler,
+) -> Result<Vec<(String, std::path::PathBuf)>, SpecError> {
+    use std::sync::{Arc, Mutex};
+
+    use galvani_engine::peripherals::controls::{pwl as pwl_source, StimulusKind};
+    use galvani_engine::{
+        Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch, VcdSink,
+    };
+    use galvani_engine::{Eeprom24c, I2cBus, Lm75, Mcp3008, Spi25Eeprom, SpiBus};
+    use galvani_ir::{NodeId as N, SourceKind};
+
+    let mut vcd_targets = Vec::new();
+
+    for p in &spec.peripherals {
+        let err = |m: String| SpecError::Invalid(format!("peripheral '{}': {m}", p.id));
+        match p.kind.as_str() {
+            "pushbutton" => {
+                let net = resolve_net(p, board, net_node, None)
+                    .ok_or_else(|| err("net not found".into()))?;
+                let to = p
+                    .to
+                    .as_ref()
+                    .and_then(|t| net_node.get(t).copied())
+                    .unwrap_or(N::GROUND);
+                let b = Pushbutton::new(
+                    sched.circuit_mut(),
+                    &p.id,
+                    net,
+                    to,
+                    p.bounce_ms.unwrap_or(0.0),
+                );
+                sched.attach_peripheral(Box::new(b));
+            }
+            "toggle" => {
+                let net = resolve_net(p, board, net_node, None)
+                    .ok_or_else(|| err("net not found".into()))?;
+                let to = p
+                    .to
+                    .as_ref()
+                    .and_then(|t| net_node.get(t).copied())
+                    .unwrap_or(N::GROUND);
+                let t = ToggleSwitch::new(
+                    sched.circuit_mut(),
+                    &p.id,
+                    net,
+                    to,
+                    p.initial.map(|v| v >= 0.5).unwrap_or(false),
+                );
+                sched.attach_peripheral(Box::new(t));
+            }
+            "potentiometer" => {
+                let w = resolve_net(p, board, net_node, p.wiper.as_deref())
+                    .or_else(|| resolve_net(p, board, net_node, None))
+                    .ok_or_else(|| err("wiper net not found".into()))?;
+                let a = p
+                    .a
+                    .as_ref()
+                    .and_then(|n| net_node.get(n).copied())
+                    .ok_or_else(|| err("pot terminal `a` net not found".into()))?;
+                let b = p
+                    .b
+                    .as_ref()
+                    .and_then(|n| net_node.get(n).copied())
+                    .unwrap_or(N::GROUND);
+                let pot = Potentiometer::new(
+                    sched.circuit_mut(),
+                    &p.id,
+                    a,
+                    w,
+                    b,
+                    p.r_total.unwrap_or(10_000.0),
+                    p.initial.unwrap_or(0.5),
+                );
+                sched.attach_peripheral(Box::new(pot));
+            }
+            "encoder" => {
+                let a = resolve_net(p, board, net_node, p.net_a.as_deref())
+                    .ok_or_else(|| err("encoder net_a not found".into()))?;
+                let b = resolve_net(p, board, net_node, p.net_b.as_deref())
+                    .ok_or_else(|| err("encoder net_b not found".into()))?;
+                let enc = Encoder::new(sched.circuit_mut(), &p.id, a, b, p.vhigh.unwrap_or(5.0));
+                sched.attach_peripheral(Box::new(enc));
+            }
+            "stimulus" => {
+                let net = resolve_net(p, board, net_node, None)
+                    .ok_or_else(|| err("net not found".into()))?;
+                let kind = match p.waveform.as_deref().unwrap_or("dc") {
+                    "dc" => StimulusKind::Wave(SourceKind::Dc(p.offset.unwrap_or(0.0))),
+                    "sine" => StimulusKind::Wave(SourceKind::Sin {
+                        offset: p.offset.unwrap_or(0.0),
+                        amplitude: p.amplitude.unwrap_or(1.0),
+                        freq: p.freq_hz.unwrap_or(1000.0),
+                        delay: 0.0,
+                        theta: 0.0,
+                        phase: 0.0,
+                    }),
+                    "pwl" => {
+                        let pts = p
+                            .pwl
+                            .as_ref()
+                            .map(|v| v.iter().map(|[t, val]| (t / 1000.0, *val)).collect())
+                            .unwrap_or_default();
+                        StimulusKind::Wave(pwl_source(pts))
+                    }
+                    "noise" => StimulusKind::Noise {
+                        offset: p.offset.unwrap_or(0.0),
+                        amplitude: p.amplitude.unwrap_or(0.1),
+                        seed: 0xC0FFEE,
+                    },
+                    other => return Err(err(format!("unknown waveform '{other}'"))),
+                };
+                let s = Stimulus::voltage(sched.circuit_mut(), &p.id, net, kind);
+                sched.attach_peripheral(Box::new(s));
+            }
+            "i2c_eeprom" => {
+                let bus = I2cBus::new(&p.id).with_slave(Box::new(Eeprom24c::new(
+                    p.address.unwrap_or(0x50),
+                    p.size.unwrap_or(256),
+                )));
+                sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
+            }
+            "i2c_lm75" => {
+                let bus = I2cBus::new(&p.id).with_slave(Box::new(Lm75::new(
+                    p.address.unwrap_or(Lm75::DEFAULT_ADDR),
+                    p.temp_c.unwrap_or(25.0),
+                )));
+                sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
+            }
+            "spi_eeprom" => {
+                let bus = SpiBus::new(&p.id, Box::new(Spi25Eeprom::new(p.size.unwrap_or(256))));
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)));
+            }
+            "spi_mcp3008" => {
+                let bus = SpiBus::new(&p.id, Box::new(Mcp3008::new(p.vref.unwrap_or(5.0))));
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)));
+            }
+            "vcd_sink" => {
+                let names = p.nets.clone().unwrap_or_default();
+                let mut logged = Vec::new();
+                for name in &names {
+                    if let Some(&n) = net_node.get(name) {
+                        logged.push((name.clone(), n));
+                    } else {
+                        return Err(err(format!("vcd net '{name}' not found")));
+                    }
+                }
+                let path = p.vcd_path.as_ref().map(|s| spec.base_dir.join(s));
+                if let Some(path) = &path {
+                    vcd_targets.push((p.id.clone(), path.clone()));
+                }
+                let sink = VcdSink::new(&p.id, logged, path);
+                sched.attach_peripheral(Box::new(sink));
+            }
+            other => return Err(err(format!("unknown type '{other}'"))),
+        }
+
+        // Register the peripheral's timeline events.
+        if !p.events.is_empty() {
+            let events = p
+                .events
+                .iter()
+                .map(|e| galvani_engine::TimelineEvent {
+                    target: p.id.clone(),
+                    t_s: e.t_ms / 1000.0,
+                    value: e.value,
+                })
+                .collect();
+            sched.add_timeline(events);
+        }
+    }
+
+    Ok(vcd_targets)
+}
+
+/// Snapshot every peripheral's end-of-run state and dump VCD files.
+fn snapshot_peripherals(
+    spec: &Spec,
+    engine: &GalvaniEngine,
+    vcd_targets: &[(String, std::path::PathBuf)],
+) -> HashMap<String, PeripheralSnapshot> {
+    use galvani_engine::{Eeprom24c, Spi25Eeprom, VcdSink};
+
+    let sched = engine.scheduler();
+    let mut out: HashMap<String, PeripheralSnapshot> = HashMap::new();
+
+    // Numeric state for every peripheral and bus.
+    for (id, fields) in sched.peripheral_states() {
+        out.entry(id).or_default().fields = fields;
+    }
+
+    // EEPROM bytes (I2C 24Cxx and SPI 25xx), and VCD dumps.
+    for p in &spec.peripherals {
+        match p.kind.as_str() {
+            "i2c_eeprom" => {
+                for bus in sched.i2c_buses() {
+                    let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+                    if galvani_engine::Peripheral::id(&*b) == p.id {
+                        if let Some(ee) = b.slave::<Eeprom24c>(p.address.unwrap_or(0x50)) {
+                            out.entry(p.id.clone()).or_default().bytes = ee.contents().to_vec();
+                        }
+                    }
+                }
+            }
+            "spi_eeprom" => {
+                for bus in sched.spi_buses() {
+                    let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+                    if galvani_engine::Peripheral::id(&*b) == p.id {
+                        if let Some(ee) = b.slave::<Spi25Eeprom>() {
+                            out.entry(p.id.clone()).or_default().bytes = ee.contents().to_vec();
+                        }
+                    }
+                }
+            }
+            "vcd_sink" => {
+                if let Some((_, path)) = vcd_targets.iter().find(|(id, _)| id == &p.id) {
+                    if let Some(sink) = sched.peripherals.get::<VcdSink>(&p.id) {
+                        let _ = sink.write_to(path);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    out
 }
 
 /// Compute per-component peak through-current from the latest node voltages.

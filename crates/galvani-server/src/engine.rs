@@ -18,6 +18,11 @@ pub trait Engine: Send + 'static {
     /// Configure the power supply on a supply net (Feature 1). Default no-op
     /// for engines without configurable supplies.
     fn set_power_supply(&mut self, _net: &str, _supply: PowerSupplyConfig) {}
+    /// Live-control a peripheral by id. Returns true if a peripheral matched.
+    /// Default no-op for engines without peripherals.
+    fn set_peripheral(&mut self, _id: &str, _value: f64) -> bool {
+        false
+    }
 }
 
 /// Demo engine: an emulated AVR running real firmware with a synthetic
@@ -76,6 +81,7 @@ impl Engine for McuDemoEngine {
             component_kinds: [("U1".to_string(), "mcu".to_string())].into(),
             mcus: vec![("U1".into(), "simavr:atmega328p".into())],
             power_supplies: Default::default(),
+            peripherals: Default::default(),
         }
     }
 

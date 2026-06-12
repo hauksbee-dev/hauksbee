@@ -31,6 +31,7 @@ use galvani_solve::{Layout, SolverOptions, Transient};
 
 use crate::binder::{BoundBoard, McuBinding};
 use crate::digital::DigitalComponent;
+use crate::peripherals::{I2cBus, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
 
@@ -82,6 +83,13 @@ pub struct Scheduler {
     pub sim_time: f64,
     /// Per-net toggle counters and min/max, for headless stats.
     pub stats: HashMap<String, NetStat>,
+    /// Net-attached / output peripherals (controls, VCD sinks), ticked each
+    /// chunk around the analog solve.
+    pub peripherals: PeripheralSet,
+    /// I2C bus slaves, shared with each MCU's `on_i2c` callback.
+    i2c_buses: Vec<Arc<Mutex<I2cBus>>>,
+    /// SPI bus slaves, shared with each MCU's `on_spi` callback.
+    spi_buses: Vec<Arc<Mutex<SpiBus>>>,
 }
 
 /// Running statistics for one net across a run.
@@ -146,7 +154,105 @@ impl Scheduler {
             opts,
             sim_time: 0.0,
             stats: HashMap::new(),
+            peripherals: PeripheralSet::new(),
+            i2c_buses: Vec::new(),
+            spi_buses: Vec::new(),
         })
+    }
+
+    /// Attach an I2C bus and register it as every live MCU's `on_i2c` handler.
+    /// The bus is shared (Arc) so the same instance is both driven by the
+    /// firmware's TWI activity and readable for assertions (EEPROM contents,
+    /// sensor temperature).
+    pub fn attach_i2c_bus(&mut self, bus: Arc<Mutex<I2cBus>>) {
+        for m in &mut self.mcus {
+            let b = bus.clone();
+            m.core.on_i2c(Box::new(move |ev| {
+                b.lock().unwrap_or_else(|e| e.into_inner()).dispatch(ev)
+            }));
+        }
+        self.i2c_buses.push(bus);
+    }
+
+    /// Attach a SPI bus and register it as every live MCU's `on_spi` handler.
+    pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>) {
+        for m in &mut self.mcus {
+            let b = bus.clone();
+            m.core.on_spi(Box::new(move |ev| {
+                b.lock().unwrap_or_else(|e| e.into_inner()).transfer(ev.mosi)
+            }));
+        }
+        self.spi_buses.push(bus);
+    }
+
+    /// Mutable access to the circuit so a caller can stamp a control's devices
+    /// before attaching it. Call [`Scheduler::attach_peripheral`] afterwards,
+    /// which relayouts the MNA system to pick up any new nodes/devices.
+    pub fn circuit_mut(&mut self) -> &mut Circuit {
+        &mut self.circuit
+    }
+
+    /// Attach a net/output peripheral (control, VCD sink). Relayouts the solver
+    /// in case the peripheral stamped new circuit nodes or devices.
+    pub fn attach_peripheral(&mut self, p: Box<dyn crate::peripherals::Peripheral>) {
+        self.peripherals.push(p);
+        self.relayout();
+    }
+
+    /// Schedule timeline events (press/release/set at time T).
+    pub fn add_timeline(&mut self, events: Vec<TimelineEvent>) {
+        self.peripherals.add_events(events);
+    }
+
+    /// Borrow the attached I2C buses (for assertions / sweeps).
+    pub fn i2c_buses(&self) -> &[Arc<Mutex<I2cBus>>] {
+        &self.i2c_buses
+    }
+
+    /// Borrow the attached SPI buses.
+    pub fn spi_buses(&self) -> &[Arc<Mutex<SpiBus>>] {
+        &self.spi_buses
+    }
+
+    /// Apply a live peripheral command (websocket SetInput onto a peripheral).
+    /// Returns true if a peripheral with that id existed.
+    pub fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
+        self.peripherals.set_value(id, value)
+    }
+
+    /// (id, kind) of every attached peripheral and bus, for board_info.
+    pub fn peripheral_infos(&self) -> Vec<(String, String)> {
+        use crate::peripherals::Peripheral as _;
+        let mut out: Vec<(String, String)> = self
+            .peripherals
+            .peripherals
+            .iter()
+            .map(|p| (p.id().to_string(), p.kind().to_string()))
+            .collect();
+        for bus in &self.i2c_buses {
+            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            out.push((b.id().to_string(), b.kind().to_string()));
+        }
+        for bus in &self.spi_buses {
+            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            out.push((b.id().to_string(), b.kind().to_string()));
+        }
+        out
+    }
+
+    /// Peripheral state map, keyed by id, for component-state frames.
+    pub fn peripheral_states(&self) -> HashMap<String, HashMap<String, f64>> {
+        let mut m = self.peripherals.states();
+        use crate::peripherals::Peripheral as _;
+        for bus in &self.i2c_buses {
+            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            m.insert(b.id().to_string(), b.state());
+        }
+        for bus in &self.spi_buses {
+            let b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            m.insert(b.id().to_string(), b.state());
+        }
+        m
     }
 
     /// Number of live MCU cores.
@@ -229,9 +335,35 @@ impl Scheduler {
         // PinDriver pattern: behavioral source updated between solver chunks).
         self.update_supplies(chunk);
 
+        // 2c. Peripherals: fire any timeline events due by now, then let each
+        // control push its commanded level onto its net before the solve.
+        if !self.peripherals.is_empty() {
+            self.peripherals.fire_due_events(self.sim_time);
+            let volts = self.node_volts.clone();
+            let mut ctx = TickCtx {
+                circuit: &mut self.circuit,
+                node_volts: &volts,
+                t: self.sim_time,
+                dt: chunk,
+            };
+            self.peripherals.pre_solve(&mut ctx);
+        }
+
         // 3. Analog: solve a transient over the chunk; read final voltages and
         // branch currents.
         self.solve_chunk(chunk);
+
+        // 3b. Peripherals: output sinks sample the freshly-solved voltages.
+        if !self.peripherals.is_empty() {
+            let volts = self.node_volts.clone();
+            let mut ctx = TickCtx {
+                circuit: &mut self.circuit,
+                node_volts: &volts,
+                t: self.sim_time,
+                dt: chunk,
+            };
+            self.peripherals.post_solve(&mut ctx);
+        }
 
         // 4. Update running stats and advance time.
         self.sim_time += chunk;
