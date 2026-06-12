@@ -2,6 +2,8 @@
 # The committed deliverables are the source (main/, CMakeLists.txt), the merged
 # flash image (flash.bin), and the app ELF (esp32_blinky.elf).
 /build/
+/build_c3/
+.cache/
 sdkconfig
 sdkconfig.old
 dependencies.lock

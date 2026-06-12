@@ -112,26 +112,10 @@ impl Qmp {
             .with_context(|| format!("parsing xp output for 0x{addr:08x}: {out:?}"))
     }
 
-    /// Write one 32-bit word to guest physical memory. The human monitor has no
-    /// physical-word-poke, but it can write via the `gpa`-addressed `memset`?
-    /// No - QEMU HMP lacks a poke. We instead drive it through the GPIO
-    /// peripheral's W1TS/W1TC set/clear registers, which ARE plain stores the
-    /// model honours, by writing each via the dedicated set/clear path. That is
-    /// done in the backend; this helper writes a full word using QEMU's
-    /// `human-monitor-command` `writeb` loop is not available either.
-    ///
-    /// The portable physical-memory write that the human monitor *does* provide
-    /// is none; so [`Qmp`] exposes only reads, and the backend writes GPIO
-    /// inputs through the gdbstub `M` packet (see `gdb.rs`). This method is kept
-    /// unimplemented on purpose to make that separation explicit.
-    pub fn read_clock_ns(&mut self) -> Result<u64> {
-        // QMP `query-clock`-style virtual time is not a stable command across
-        // versions; the human monitor's `info jit`/`info registers` are noisy.
-        // The deterministic time source we rely on is icount, which the backend
-        // advances by a fixed instruction budget, so a wall-clock query is not
-        // needed. This returns 0 as an explicit "not used" sentinel.
-        Ok(0)
-    }
+    // NOTE on memory WRITES: the QEMU human monitor has no portable
+    // physical-word poke, so [`Qmp`] exposes reads only. The backend writes GPIO
+    // inputs through the gdbstub `M` packet (see `gdb.rs`). Keeping that split
+    // explicit avoids a half-working HMP write path.
 
     /// Send a request and collect the matching `return`/`error` reply, skipping
     /// any asynchronous events that arrive first.
