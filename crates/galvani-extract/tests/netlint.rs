@@ -253,3 +253,133 @@ fn led_sane_current_is_clean() {
     let r = lint(comps, nets);
     assert_eq!(count(&r, LintCheck::LedCurrentSanity), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Output-vs-output contention check (Round-4 schematic ERC).
+//
+// True-positive plus every false-positive shape the Round-4 calibration hit on
+// the known-good corpus: a series resistor between two outputs, an input/
+// bidirectional member reframing the net, an IRQ/wired-OR name, two pins of a
+// single part, and an off-board connector. The check must fire ONLY on the bare
+// two-part push-pull short.
+// ---------------------------------------------------------------------------
+
+/// Two distinct ICs each driving one net with a push-pull `output` pin, nothing
+/// to resolve them: a real bus fight. Fires at medium.
+#[test]
+fn two_outputs_tied_directly_fires_medium() {
+    let comps = r#"
+    (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
+    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))"#;
+    let nets = r#"
+    (net (code 1) (name "DRIVE")
+      (node (ref U1) (pin 1) (pinfunction OUT) (pintype output))
+      (node (ref U2) (pin 1) (pinfunction OUT) (pintype output)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(
+        count(&r, LintCheck::OutputContention),
+        1,
+        "two bare push-pull outputs on one net must fire"
+    );
+    let f = r.of_check(LintCheck::OutputContention).next().unwrap();
+    assert_eq!(f.severity, Severity::Medium);
+}
+
+/// Two `power_out` pins of different supplies tied together: a hard rail-vs-rail
+/// short. Fires at HIGH.
+#[test]
+fn two_power_outputs_tied_directly_fires_high() {
+    let comps = r#"
+    (comp (ref U1) (value REG_A) (footprint Package:SOT23))
+    (comp (ref U2) (value REG_B) (footprint Package:SOT23))"#;
+    let nets = r#"
+    (net (code 1) (name "RAILX")
+      (node (ref U1) (pin 1) (pinfunction VOUT) (pintype power_out))
+      (node (ref U2) (pin 1) (pinfunction VOUT) (pintype power_out)))"#;
+    let r = lint(comps, nets);
+    let fs: Vec<_> = r.of_check(LintCheck::OutputContention).collect();
+    assert_eq!(fs.len(), 1, "two power_out pins shorted must fire");
+    assert_eq!(fs[0].severity, Severity::High);
+}
+
+/// A series resistor between the two outputs resolves the contention: clean.
+/// (This is the dominant benign shape: a wired-OR through series R.)
+#[test]
+fn series_resistor_between_outputs_is_clean() {
+    let comps = r#"
+    (comp (ref U1) (value DRIVER_A) (footprint Package:SOT23))
+    (comp (ref U2) (value DRIVER_B) (footprint Package:SOT23))
+    (comp (ref R1) (value 100) (footprint Resistor_SMD:R_0402))"#;
+    let nets = r#"
+    (net (code 1) (name "DRIVE_A")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref R1) (pin 1) (pintype passive)))
+    (net (code 2) (name "DRIVE_B")
+      (node (ref U2) (pin 1) (pintype output))
+      (node (ref R1) (pin 2) (pintype passive)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(count(&r, LintCheck::OutputContention), 0);
+}
+
+/// An `input` member on the net reframes it as a driven input the symbol author
+/// also typed `output` (the shared-IO / repurposed-pin case, e.g. Reform's
+/// EDP_IRQ where a SoM pin is typed output): do not fire.
+#[test]
+fn output_with_input_member_is_clean() {
+    let comps = r#"
+    (comp (ref U1) (value SOM) (footprint Package:BGA))
+    (comp (ref U2) (value BRIDGE) (footprint Package:QFP))
+    (comp (ref U3) (value MCU) (footprint Package:QFN))"#;
+    let nets = r#"
+    (net (code 1) (name "SHARED_IO")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref U2) (pin 1) (pintype output))
+      (node (ref U3) (pin 1) (pintype input)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(count(&r, LintCheck::OutputContention), 0);
+}
+
+/// An IRQ-named net carries open-drain "outputs" by convention: excluded by name.
+#[test]
+fn irq_named_net_is_excluded() {
+    let comps = r#"
+    (comp (ref U1) (value SOM) (footprint Package:BGA))
+    (comp (ref U2) (value BRIDGE) (footprint Package:QFP))"#;
+    let nets = r#"
+    (net (code 1) (name "EDP_IRQ")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref U2) (pin 1) (pintype output)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(count(&r, LintCheck::OutputContention), 0);
+}
+
+/// Two output pins of a SINGLE part on one net is internal to that part's
+/// symbol, not an inter-part fight: do not fire.
+#[test]
+fn two_outputs_of_one_part_is_clean() {
+    let comps = r#"
+    (comp (ref U1) (value DUAL) (footprint Package:QFP))"#;
+    let nets = r#"
+    (net (code 1) (name "DRIVE")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref U1) (pin 2) (pintype output)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(count(&r, LintCheck::OutputContention), 0);
+}
+
+/// An off-board connector on the net is a potential external sink/driver, not an
+/// on-board contention: do not fire.
+#[test]
+fn output_to_connector_is_clean() {
+    let comps = r#"
+    (comp (ref U1) (value DRIVER) (footprint Package:SOT23))
+    (comp (ref U2) (value DRIVER) (footprint Package:SOT23))
+    (comp (ref J1) (value HEADER) (footprint Connector:PinHeader_1x03))"#;
+    let nets = r#"
+    (net (code 1) (name "OUT_TO_J1")
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref U2) (pin 1) (pintype output))
+      (node (ref J1) (pin 1) (pintype passive)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(count(&r, LintCheck::OutputContention), 0);
+}
