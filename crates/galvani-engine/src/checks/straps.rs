@@ -331,3 +331,147 @@ fn rail_voltage_name(name: &str) -> Option<f64> {
 fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use galvani_extract::LintCheck;
+
+    /// A constructed ESP32 board whose GPIO0 strap (ESP-WROOM-32 pad 25) carries
+    /// a 50 MHz oscillator through a 10R series resistor - the Olimex fault shape
+    /// in miniature. `clean` swaps the oscillator for a plain 10k pull-up to
+    /// +3V3 (the correct strap bias).
+    fn esp32_strap_board(clean: bool) -> String {
+        // GPIO0 net = 3. Oscillator output net = 4 (faulty) bridged by R36 (10R).
+        let driver = if clean {
+            // 10k pull-up R36 from GPIO0 (net 3) to +3V3 (net 5): correct bias.
+            r#"
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R36 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/GPIO0"))
+    (pad 2 smd rect (at 2 0) (net 5 "+3V3"))
+  )"#
+        } else {
+            // CR1 50 MHz oscillator: out(net 4)/gnd/oe/vdd(+3V3), out -> R36 10R
+            // -> GPIO0 (net 3). Free-running clock on the strap pin.
+            r#"
+  (module Oscillator:Oscillator_SMD_4Pin (layer F.Cu)
+    (at 130 100)
+    (fp_text reference CR1 (at 0 0) (layer F.SilkS))
+    (fp_text value Q50MHz/25ppm/3V/4P (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 6 "/OSC_EN"))
+    (pad 2 smd rect (at 1 0) (net 1 "GND"))
+    (pad 3 smd rect (at 2 0) (net 4 "Net-(CR1-OUT)"))
+    (pad 4 smd rect (at 3 0) (net 5 "+3V3"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R36 (at 0 0) (layer F.SilkS))
+    (fp_text value 10R (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 4 "Net-(CR1-OUT)"))
+    (pad 2 smd rect (at 2 0) (net 3 "/GPIO0"))
+  )"#
+        };
+        format!(
+            r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "/GPIO0")
+  (net 4 "Net-(CR1-OUT)")
+  (net 5 "+3V3")
+  (net 6 "/OSC_EN")
+  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U3 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 5 "+3V3"))
+    (pad 25 smd rect (at 0 5) (net 3 "/GPIO0"))
+  ){driver}
+)"#
+        )
+    }
+
+    fn strap_findings(text: &str) -> NetLintReport {
+        let board = ExtractedBoard::from_kicad_pcb(text).expect("parse synthetic board");
+        let lib = ModelLibrary::builtin();
+        strap_lint(&board, &lib)
+    }
+
+    #[test]
+    fn clock_on_gpio0_strap_fires_high() {
+        let r = strap_findings(&esp32_strap_board(false));
+        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(strap.len(), 1, "exactly the GPIO0 clock finding");
+        assert!(matches!(strap[0].severity, Severity::High));
+        assert!(strap[0].message.contains("gpio0"));
+        assert!(strap[0].message.contains("CR1"));
+        assert!(strap[0].nets.iter().any(|n| n.contains("GPIO0")));
+    }
+
+    #[test]
+    fn pulled_gpio0_strap_is_clean() {
+        // The fixed shape: a 10k pull-up to +3V3, no oscillator. Must be silent.
+        let r = strap_findings(&esp32_strap_board(true));
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "a correctly-pulled strap raises no strap finding"
+        );
+    }
+
+    #[test]
+    fn strap_pullup_to_rail_does_not_reach_oscillator_vdd() {
+        // Regression for the GPIO15 false fire: a strap with a pull-up to +3V3
+        // must NOT "reach" an oscillator that merely shares the +3V3 rail via its
+        // VDD pin. The clean board has the pull-up to +3V3 and (here) we add an
+        // oscillator on an unrelated net sharing only +3V3. Still clean.
+        let mut text = esp32_strap_board(true);
+        // Insert an oscillator powered from +3V3 (net 5) but whose OUTPUT goes to
+        // an unrelated net 7, not the strap. Sharing only the rail must not fire.
+        let osc = r#"
+  (module Oscillator:Oscillator_SMD_4Pin (layer F.Cu)
+    (at 140 100)
+    (fp_text reference CR2 (at 0 0) (layer F.SilkS))
+    (fp_text value Q25MHz/25ppm/3V/4P (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 6 "/OSC_EN"))
+    (pad 2 smd rect (at 1 0) (net 1 "GND"))
+    (pad 3 smd rect (at 2 0) (net 7 "Net-(CR2-OUT)"))
+    (pad 4 smd rect (at 3 0) (net 5 "+3V3"))
+  )
+)"#;
+        // Replace the trailing ")" with the oscillator block + ")".
+        text = text.trim_end().trim_end_matches(')').to_string();
+        text.push_str(osc);
+        let r = strap_findings(&text);
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "sharing only the +3V3 rail with an oscillator must not fire"
+        );
+    }
+
+    #[test]
+    fn avr_has_no_straps_examined() {
+        // An ATmega328P board: the AVR entry carries no strap table, so the
+        // strap lint must examine nothing and stay silent.
+        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "PC6_RESET")
+  (module Package_QFP:TQFP-32_7x7mm_P0.8mm (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value ATmega328P (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "PC6_RESET"))
+    (pad 7 smd rect (at 0 5) (net 2 "+5V"))
+    (pad 8 smd rect (at 0 6) (net 1 "GND"))
+  )
+)"#;
+        let r = strap_findings(text);
+        assert_eq!(r.of_check(LintCheck::StrapPin).count(), 0);
+    }
+}
