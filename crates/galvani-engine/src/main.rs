@@ -1,17 +1,28 @@
 //! `galvani` CLI: bind a board and bring it to life.
 //!
 //! ```text
-//! galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless]
-//!                          [--port 3001] [--report]
+//! galvani run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
+//!                                 [--port 3001] [--report]
+//! galvani to-code    <board-file> [--out <file.board>]
+//! galvani from-code  <code-file>  [--out <file.kicad_pcb>]
+//! galvani check-code <code-dir|file> [--seconds N] [--destructive]
 //! ```
 //!
-//! - `--report`   : print the bind report table and exit.
-//! - `--headless` : run the co-sim for `--seconds` and print summary stats.
-//! - default      : serve the live websocket (frontend/dist if present).
+//! - `run --report`     : print the bind report table and exit.
+//! - `run --headless`   : run the co-sim for `--seconds` and print summary stats.
+//! - `run` (default)    : serve the live websocket (frontend/dist if present).
+//! - `to-code`          : decompile a board into editable Board-as-Code text.
+//! - `from-code`        : recompile Board-as-Code back into a `.kicad_pcb`.
+//! - `check-code`       : recompile, bind, co-sim with the stress monitor, and
+//!                        print a fault report (the edit -> simulate loop).
 
 use std::path::{Path, PathBuf};
 
 use galvani_engine::binder::bind_board;
+use galvani_engine::boardcode::{
+    check_code, code_to_board_text, decompile_board_to_code, load_code, render_check_report,
+    CheckOptions,
+};
 use galvani_engine::GalvaniEngine;
 use galvani_extract::ExtractedBoard;
 use galvani_models::ModelLibrary;
@@ -26,12 +37,7 @@ struct Args {
     port: u16,
 }
 
-fn parse_args() -> Result<Args, String> {
-    let mut it = std::env::args().skip(1);
-    let cmd = it.next().ok_or_else(usage)?;
-    if cmd != "run" {
-        return Err(format!("unknown command '{cmd}'\n{}", usage()));
-    }
+fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     let board = it.next().map(PathBuf::from).ok_or_else(usage)?;
     let mut args = Args {
         board,
@@ -69,13 +75,42 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> String {
-    "usage: galvani run <board-file> [--firmware <hex>] [--seconds N] \
-     [--headless] [--port 3001] [--report]"
+    "usage:\n  \
+     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report]\n  \
+     galvani to-code <board-file> [--out <file.board>]\n  \
+     galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
+     galvani check-code <code-dir|file> [--seconds N] [--destructive]"
         .to_string()
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = match parse_args() {
+    let mut it = std::env::args().skip(1);
+    let cmd = match it.next() {
+        Some(c) => c,
+        None => {
+            eprintln!("{}", usage());
+            std::process::exit(2);
+        }
+    };
+    let result = match cmd.as_str() {
+        "run" => cmd_run(it),
+        "to-code" => cmd_to_code(it),
+        "from-code" => cmd_from_code(it),
+        "check-code" => cmd_check_code(it),
+        other => {
+            eprintln!("unknown command '{other}'\n{}", usage());
+            std::process::exit(2);
+        }
+    };
+    if let Err(e) = &result {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+    result
+}
+
+fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let args = match parse_run_args(it) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{e}");
@@ -95,7 +130,6 @@ fn main() -> anyhow::Result<()> {
     };
     let lib = ModelLibrary::builtin();
 
-    // --report: bind, print the table, exit.
     if args.report_only {
         let bound = bind_board(&board, &lib);
         print!("{}", bound.report.render_table());
@@ -113,8 +147,94 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Default: serve the websocket.
     serve(engine, args.port)
+}
+
+/// `galvani to-code <board-file> [--out <file.board>]`
+fn cmd_to_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let board = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
+    let mut out: Option<PathBuf> = None;
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--out" => out = Some(PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--out needs a path"))?)),
+            other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
+        }
+    }
+    let text = std::fs::read_to_string(&board)?;
+    let code = decompile_board_to_code(&text)?;
+    match out {
+        Some(p) => {
+            std::fs::write(&p, &code)?;
+            eprintln!("wrote {}", p.display());
+        }
+        None => print!("{code}"),
+    }
+    Ok(())
+}
+
+/// `galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]`
+fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    use forge_codegen::{relayout, LayoutConfig, Program};
+    let code_path = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
+    let mut out: Option<PathBuf> = None;
+    let mut layout: Option<LayoutConfig> = None;
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--out" => out = Some(PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--out needs a path"))?)),
+            "--relayout" => layout = Some(LayoutConfig::full()),
+            "--incremental" => layout = Some(LayoutConfig::incremental()),
+            other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
+        }
+    }
+    let code = load_code(Path::new(&code_path))?;
+    let board_text = if let Some(cfg) = layout {
+        let base = Program::parse(&code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
+        let mut prog = base.clone();
+        let report = relayout(&mut prog, &base, &cfg);
+        eprintln!(
+            "re-layout: {} groups, {} moved, {} kept",
+            report.groups,
+            report.moved.len(),
+            report.kept
+        );
+        prog.build().emit()
+    } else {
+        code_to_board_text(&code)?
+    };
+    match out {
+        Some(p) => {
+            std::fs::write(&p, &board_text)?;
+            eprintln!("wrote {}", p.display());
+        }
+        None => print!("{board_text}"),
+    }
+    Ok(())
+}
+
+/// `galvani check-code <code-dir|file> [--seconds N] [--destructive]`
+fn cmd_check_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let code_path = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
+    let mut opts = CheckOptions::default();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--seconds" => {
+                opts.seconds = it
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--seconds needs a number"))?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --seconds"))?
+            }
+            "--destructive" => opts.destructive = true,
+            other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
+        }
+    }
+    let code = load_code(Path::new(&code_path))?;
+    let report = check_code(&code, &opts)?;
+    print!("{}", render_check_report(&report));
+    if !report.healthy() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn run_headless(engine: &mut GalvaniEngine, seconds: f64) {
