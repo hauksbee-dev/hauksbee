@@ -44,6 +44,9 @@ struct Args {
     resources_only: bool,
     apply_shorts: bool,
     port: u16,
+    /// Extra user model directory (highest priority), layered over the built-in
+    /// DB and the default `~/.galvani/models` / `~/.config/galvani/models` dirs.
+    models_dir: Option<PathBuf>,
 }
 
 fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -60,9 +63,13 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
         resources_only: false,
         apply_shorts: false,
         port: 3001,
+        models_dir: None,
     };
     while let Some(flag) = it.next() {
         match flag.as_str() {
+            "--models-dir" => {
+                args.models_dir = Some(PathBuf::from(it.next().ok_or("--models-dir needs a path")?))
+            }
             "--firmware" => {
                 args.firmware = Some(PathBuf::from(it.next().ok_or("--firmware needs a path")?))
             }
@@ -95,7 +102,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
 
 fn usage() -> String {
     "usage:\n  \
-     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--resources] [--apply-shorts]\n  \
+     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--resources] [--apply-shorts] [--models-dir <dir>]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
      galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
@@ -147,7 +154,11 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     } else {
         ExtractedBoard::from_auto(&text)?
     };
-    let lib = ModelLibrary::builtin();
+    // Layered model library: builtin < ~/.galvani/models (datasheet-extracted)
+    // < ~/.config/galvani/models (user) < --models-dir (highest). A custom
+    // behavioural part dropped in any of these loads with no recompile.
+    let extra: Vec<&std::path::Path> = args.models_dir.as_deref().into_iter().collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
 
     if args.report_only {
         let bound = bind_board(&board, &lib);
@@ -190,8 +201,11 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut engine = GalvaniEngine::from_board_file(
-        &text,
+    // Bind with the layered library (so a --models-dir / user-dir custom part is
+    // in scope), then build the engine from the bound board.
+    let bound = bind_board(&board, &lib);
+    let mut engine = GalvaniEngine::from_bound(
+        bound,
         args.firmware.as_deref(),
         &format!("/boards/{}", file_name(&args.board)),
     )?;
