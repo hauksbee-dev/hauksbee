@@ -19,7 +19,7 @@ use super::{Peripheral, TickCtx};
 
 /// Default contact resistance of a closed switch / pressed button (ohms).
 pub const CONTACT_RON: f64 = 1.0;
-/// Open contact resistance (ohms) — effectively an open circuit.
+/// Open contact resistance (ohms); effectively an open circuit.
 pub const CONTACT_ROFF: f64 = 1e9;
 
 /// Stamp a controllable resistor between two nodes and return its device id.
