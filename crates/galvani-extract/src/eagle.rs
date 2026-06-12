@@ -169,6 +169,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 position: Some((el.x, el.y, el.rot_deg)),
                 layer: if el.mirrored { "B.Cu" } else { "F.Cu" }.to_string(),
                 properties: Vec::new(),
+                dnp: false,
                 pins,
             }
         })
