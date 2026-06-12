@@ -297,3 +297,129 @@ fn npm1300_shphld_feeds_gpio_on_120_and_is_clean_on_121() {
         "1.2.1 should have removed the MCU GPIO from SHPHLD (the fix), members: {members_121:?}"
     );
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// CLEANLINESS GUARD: a clean board carrying a behavioural part (the FIXED
+// Reform mb3.0, with the LTC4020 and LTC6803) must bind and run a normal solve
+// without the behavioural layer manufacturing faults. The fault checks are
+// opt-in (a brick budget must be configured explicitly), so an ordinary run is
+// silent — the behavioural models add physics, not findings, on a clean board.
+// ───────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn behavioral_parts_do_not_manufacture_faults_on_clean_board() {
+    use galvani_engine::GalvaniEngine;
+    use galvani_server::engine::Engine;
+    let Some(root) = famous_root() else {
+        return;
+    };
+    let mb30 = root.join("mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb");
+    if !mb30.exists() {
+        require_corpus("reform mb3.0");
+        return;
+    }
+    let text = std::fs::read_to_string(&mb30).unwrap();
+    // Full-board bind + a short normal headless run (NO budget configured).
+    let mut eng = GalvaniEngine::from_board_file(&text, None, "test").expect("bind+build mb3.0");
+    // The behavioural parts must have bound (U2 charger, U4 balancer).
+    let refs: Vec<String> = eng
+        .scheduler()
+        .behavioral_states()
+        .into_iter()
+        .map(|(r, ..)| r)
+        .collect();
+    assert!(refs.iter().any(|r| r == "U2"), "LTC4020 (U2) should bind on mb3.0");
+
+    let mut total_faults = 0usize;
+    for _ in 0..20 {
+        let frame = eng.step(1e-3);
+        // No behavioural overdraw/overpower fault should fire without a budget.
+        total_faults += frame.faults.iter().filter(|f| f.component == "U2" || f.component == "U4").count();
+    }
+    assert_eq!(
+        total_faults, 0,
+        "behavioural parts must not manufacture faults on a clean board with no budget configured"
+    );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// FAULT 1b: LTC4020 RNG/SS dual-role destabilisation (Reform mb2.0 -> mb2.5).
+//
+// On mb2.0 the RNG/SS pin (which sets the soft-start and frequency range) is
+// DRIVEN by an LPC GPIO (CHG_RNG) so firmware can gate the charge current;
+// toggling it mid-operation destabilises the same IC's system DC/DC. On mb2.5
+// the pin is left unconnected (NC), the datasheet default. The model's FSM
+// destabilises only when RNG/SS is genuinely pulled low: on mb2.0 (driven) we
+// can pull it low and trip the FSM; on mb2.5 (NC) the pin is unbound, so the
+// guard never fires and the converter stays stable.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// True if the LTC4020's RNG/SS pin (pad 15) is on a real (non-unconnected)
+/// net, i.e. externally driven (the mb2.0 fault). Returns (driven, net_name).
+fn rng_ss_driven(path: &PathBuf) -> Option<(bool, String)> {
+    let name = pin_net_name(path, "U2", "15")?;
+    Some((!name.starts_with("unconnected-"), name))
+}
+
+#[test]
+fn ltc4020_rng_ss_destabilises_only_when_driven() {
+    let Some(root) = famous_root() else {
+        return;
+    };
+    let mb20 = root.join("mnt_reform/reform2-motherboard-pcb/reform2-motherboard.kicad_pcb");
+    let mb25 = root.join("mnt_reform/reform2-motherboard25-pcb/reform2-motherboard25.kicad_pcb");
+
+    // Structural ground truth: mb2.0 drives RNG/SS, mb2.5 leaves it NC.
+    let Some((driven20, rng_net)) = rng_ss_driven(&mb20) else {
+        return;
+    };
+    let Some((driven25, _)) = rng_ss_driven(&mb25) else {
+        return;
+    };
+    eprintln!("RNG/SS driven: mb2.0 = {driven20}, mb2.5 = {driven25}");
+    assert!(driven20, "mb2.0 should drive RNG/SS (the CHG_RNG GPIO)");
+    assert!(!driven25, "mb2.5 should leave RNG/SS unconnected (the fix)");
+
+    // Behavioural ground truth on mb2.0: pulling the DRIVEN RNG/SS net low (a
+    // firmware toggle) destabilises the converter FSM.
+    let mut bound = focused(&mb20, &["U2", "R8", "R49"]).unwrap();
+    let rng = *bound.net_nodes.get(&rng_net).unwrap();
+    // Drive RNG/SS low (a GPIO pulling the charge-range pin down).
+    bound.circuit.add(Device::Vsource {
+        name: "Vrng_test".into(),
+        p: rng,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    let mut sched = Scheduler::new(bound, None, SolverOptions::default()).unwrap();
+    for _ in 0..10 {
+        let _ = sched.step(1e-3);
+    }
+    let state = sched
+        .behavioral_states()
+        .into_iter()
+        .find(|(r, ..)| r == "U2")
+        .map(|(_, st, ..)| st)
+        .unwrap_or_default();
+    assert_eq!(
+        state, "destabilised",
+        "mb2.0: a GPIO pulling the driven RNG/SS low should destabilise the converter FSM"
+    );
+
+    // mb2.5: RNG/SS is NC, so v_rng_ss is unbound and the FSM cannot destabilise.
+    let bound25 = focused(&mb25, &["U2", "R8", "R49"]).unwrap();
+    let mut sched25 = Scheduler::new(bound25, None, SolverOptions::default()).unwrap();
+    for _ in 0..10 {
+        let _ = sched25.step(1e-3);
+    }
+    let state25 = sched25
+        .behavioral_states()
+        .into_iter()
+        .find(|(r, ..)| r == "U2")
+        .map(|(_, st, ..)| st)
+        .unwrap_or_default();
+    assert_eq!(
+        state25, "stable",
+        "mb2.5: RNG/SS is NC, the converter FSM must stay stable"
+    );
+}
