@@ -16,7 +16,9 @@ placements instead.
 
 A `.kicad_pcb` hands us connectivity for free: every pad already carries its
 net number. A schematic does not store nets at all. eeschema *computes* them
-geometrically every time, and so must we. The derivation has four stages.
+geometrically every time, and so must we. The derivation runs in stages:
+geometry, then names, then hierarchy, then wire incidence and implicit power,
+with bus expansion layered on top.
 
 ### 1. Geometric connectivity
 
@@ -43,8 +45,11 @@ plausible-but-wrong:
 - **The placement angle rotates counter-clockwise on screen**, which on a
   y-down canvas is the matrix `(x cosθ + y sinθ, −x sinθ + y cosθ)`.
 
-`mirror x` negates the local y, `mirror y` negates the local x, applied before
-rotation, matching eeschema's transform order.
+`mirror x` negates y, `mirror y` negates x, applied *after* rotation in the
+placed frame, matching eeschema's transform order (rotate the symbol, then flip
+it). The order is load-bearing only when a symbol is both rotated and mirrored:
+apply the mirror first and the two pins of such a part swap (e.g. a resistor
+placed at rot 90 + mirror x), which again yields a plausible-but-wrong netlist.
 
 ### 3. Named unification
 
@@ -52,7 +57,7 @@ Names then merge nodes that never touch geometrically:
 
 - **Local labels** unify nets carrying the same text *within one sheet*.
 - **Global labels** and **power symbols** unify across the whole design. A
-  power symbol names its net after its `Value` (`GND`, `+5V`, `VPP`) — but only
+  power symbol names its net after its `Value` (`GND`, `+5V`, `VPP`), but only
   when its pin is `power_in`. A power symbol with a `power_out` pin is an ERC
   flag (`PWR_FLAG`): it marks a net as driven and must **not** name it, or
   every flagged net collapses into one.
@@ -76,11 +81,65 @@ reason symbols carry an `(instances (project .. (path "/uuid/uuid"
 (reference "R201"))))` block. Each instantiation gets its own designators. We
 expand every instance separately (its own geometry scope, its own references
 resolved from the path), so `ampli_ht` instantiated twice becomes RV201… and
-RV301… with identical topology — exactly KiCad's behaviour.
+RV301… with identical topology, exactly KiCad's behaviour.
 
 Multi-unit parts (a quad gate drawn as four symbols sharing one reference) are
 folded into one component with the union of every unit's pins, deduping the
 common unit-0 pins (VCC/GND) that appear on every gate.
+
+### 5. Wire incidence (anything on a wire is on the net)
+
+KiCad joins anything lying *along* a wire, not only at its two endpoints: a net
+label or a pin placed mid-span on a wire is electrically on that wire. This is
+not a detail. In real boards almost every net label sits mid-span (eeschema
+drops the label a grid step inside the wire), so without an incidence pass
+nearly every label floats free of its wire and the netlist shatters into
+single-pin fragments. After the geometric pass we union every anchored point
+that lies strictly inside a wire segment into that segment. Bus segments are
+skipped (see below).
+
+### 6. Implicit power pins
+
+A logic chip's GND/VCC pins are usually drawn as *hidden* `power_in` pins with
+no wire. KiCad auto-connects each such pin to the global power net named after
+the pin's own name (`GND`, `VCC`, `+3.3V`). We do the same: a hidden `power_in`
+pin on an ordinary device imposes its pin name as a global net. Visible
+`power_in` pins are wired normally and are not auto-named (two chips' visible
+supply pins sharing a pin name must not merge through the name alone).
+
+### Buses
+
+A bus is a thick wire that carries several member nets at once. Crucially, a bus
+is **electrically cosmetic**: members travel by *name*, not through the bus
+geometry. KiCad will not let you connect a pin to a bus without a label, and a
+wire entering a bus through a 45-degree *bus entry* carries its own member label
+(`D0`, `PC-A7`). So on a single sheet, bus members unify exactly like ordinary
+local labels, and the bus, its entries and its bus label add no connectivity of
+their own. We therefore record bus segments and entries but make them contribute
+no union-find edges; if they did, every member landing on the bus would short
+into one net.
+
+Bus *labels* and *pins* are still parsed and expanded into their members:
+
+- **Vector**: `D[0..7]` → `D0`, `D1`, … `D7` (ascending or descending; the
+  prefix keeps any punctuation, so `IRQ-[1..7]` → `IRQ-1` … `IRQ-7`).
+- **Group**: `USB{DP DM}` → `USB.DP`, `USB.DM` (named group members are
+  qualified with the prefix and a dot); an anonymous group `{A B[0..1]}` →
+  `A`, `B0`, `B1`. Vector tokens inside a group expand in place.
+
+Expansion matters at two places connectivity actually crosses:
+
+- **Hierarchical sheet pins.** A bus passing through a `(sheet (pin "ADDR[0..7]"))`
+  connects member-wise to the child's `(hierarchical_label "ADDR[0..7]")`: each
+  member `ADDR0`…`ADDR7` crosses the boundary on its own, never the literal
+  `ADDR[0..7]`.
+- **A bus crossing a sheet pin under a different name.** A bus labelled
+  `DQ[0..31]` can feed a sheet pin named `DPC[0..31]`; KiCad maps the members
+  *positionally by index* (`DQ7` ↔ `DPC7`). We resolve this by finding the bus
+  the pin sits on (a flood over the sheet's bus segments to the bus's label) and
+  pairing the bus's member `i` with the pin's member `i`.
+
+Bus aliases (`(bus_alias "NAME" (members …))`) are parsed and recorded.
 
 ### Net naming
 
@@ -97,18 +156,23 @@ derive from the schematic must induce the **same partition** of component pins
 into nets as the layout does. Net names and ids differ; the partition must be
 identical over the pins the two share.
 
-`tests/schematic.rs` runs this. Three real projects cross-validate **exactly**
-(zero split nets, zero merged nets, full component-set agreement):
+`tests/schematic.rs` runs this. Six real projects cross-validate **exactly**
+(zero split nets, zero merged nets, full component-set agreement over the shared
+pins; the PCB may carry mounting holes / fiducials the schematic never models):
 
-| Project | KiCad | Hierarchy | Result |
-|---|---|---|---|
-| `pic_programmer` | 10 (20260101) | 2 sheets | 63/63 components, exact partition |
-| `ecc83-pp` | 9 (20250114) | 2 sheets | 15/15 components, exact partition |
-| `complex_hierarchy` | 9 (20250114) | reused sub-sheet ×2 | 68/68 components, exact partition |
+| Project | KiCad | Hierarchy | What it exercises | Result |
+|---|---|---|---|---|
+| `pic_programmer` | 10 (20260101) | 2 sheets | baseline hierarchy | 63/63 comps, 34 multi-pin nets |
+| `ecc83-pp` | 9 (20250114) | 2 sheets | tube preamp | 15/15 comps, 9 multi-pin nets |
+| `complex_hierarchy` | 9 (20250114) | reused sub-sheet ×2 | per-instance references | 68/68 comps, 50 multi-pin nets |
+| `interf_u` | 9 (20250114) | single sheet | vector buses, bus entries, hidden power pins | 24 comps, 110 multi-pin nets |
+| `kit-dev-coldfire` | 9 (20250114) | multi-sheet | bus sheet pins, parent-side named parts, rot+mirror placement | 160/160 comps, 209 multi-pin nets |
+| `video` | 9 (20250114) | multi-sheet | buses across sheet pins, incl. cross-named (`DQ` to `DPC`) positional mapping | 189/189 comps, 371 multi-pin nets |
 
-`complex_hierarchy` is the strongest case: the same sub-sheet instantiated
-twice must expand to distinct designators yet identical topology, which
-exercises per-instance reference resolution.
+`complex_hierarchy` is the strongest hierarchy case: the same sub-sheet
+instantiated twice must expand to distinct designators yet identical topology.
+`video` is the strongest bus case: a 32-bit data bus crosses a sheet boundary
+under a different name and must map member-wise by index.
 
 The `sch_diag` example is the tool behind these tests:
 
@@ -137,13 +201,15 @@ schematic is out of scope. Adding the legacy parser is future work.
 
 ## Known limitations
 
-- **Buses are not expanded.** Bus wires, bus entries and bus labels
-  (`DATA[0..7]`) are parsed structurally but bus *membership* is not resolved,
-  so a bus net appears split into its individual members rather than unified.
-  This only ever *under*-connects (we never wrongly merge nets); the
-  `interf_u`, `video` and `kit-dev-coldfire` corpus boards use buses heavily
-  and consequently do not match exactly. `tests/schematic.rs` asserts that
-  `interf_u` still never over-merges. Bus expansion is the main remaining work.
+- **Bus aliases referenced as `{ALIAS}` are not expanded.** A `(bus_alias …)`
+  definition is parsed and recorded, but a group bus that *references* it,
+  `MEM{ADDR}`, is expanded only for the tokens written inline; the alias name is
+  not substituted for its member list. No corpus board uses an alias reference,
+  so this is untested rather than known-broken. Vector and inline group buses
+  are fully supported.
+- **Group-bus member qualification** follows KiCad's `PREFIX.member` form for
+  named groups. The corpus exercises only vector buses, so group qualification
+  is covered by unit tests on the expander, not by an end-to-end board.
 - **Net-tie footprints** (two pads tied only in copper) have no schematic
   counterpart; a board relying on them would show a split that is correct for
   the schematic. None of the exactly-validated projects use them.

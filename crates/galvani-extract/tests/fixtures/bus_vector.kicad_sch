@@ -1,0 +1,161 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-000000000010")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~")
+					(number "1")
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~")
+					(number "2")
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a01")
+		(property "Reference" "R1"
+			(at 102 100 90)
+		)
+		(property "Value" "10k"
+			(at 102 100 90)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b11")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-000000000b12")
+		)
+		(instances
+			(project "bus_vector"
+				(path "/00000000-0000-0000-0000-000000000010"
+					(reference "R1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 110 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a02")
+		(property "Reference" "R2"
+			(at 112 100 90)
+		)
+		(property "Value" "10k"
+			(at 112 100 90)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b21")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-000000000b22")
+		)
+		(instances
+			(project "bus_vector"
+				(path "/00000000-0000-0000-0000-000000000010"
+					(reference "R2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 150 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a03")
+		(property "Reference" "R3"
+			(at 152 100 90)
+		)
+		(property "Value" "10k"
+			(at 152 100 90)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-000000000b31")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-000000000b32")
+		)
+		(instances
+			(project "bus_vector"
+				(path "/00000000-0000-0000-0000-000000000010"
+					(reference "R3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 100 96.19) (xy 100 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c01")
+	)
+	(wire
+		(pts
+			(xy 110 96.19) (xy 110 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c02")
+	)
+	(wire
+		(pts
+			(xy 150 96.19) (xy 150 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c03")
+	)
+	(label "D0"
+		(at 100 93 0)
+	)
+	(label "D1"
+		(at 110 93 0)
+	)
+	(label "D0"
+		(at 150 93 0)
+	)
+	(bus
+		(pts
+			(xy 90 80) (xy 160 80)
+		)
+		(stroke (width 0) (type solid))
+		(uuid "00000000-0000-0000-0000-000000000e01")
+	)
+	(label "D[0..1]"
+		(at 120 80 0)
+	)
+	(bus_entry
+		(at 100 80)
+		(size 2.54 2.54)
+	)
+	(bus_entry
+		(at 110 80)
+		(size 2.54 2.54)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
