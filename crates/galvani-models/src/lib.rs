@@ -23,6 +23,7 @@
 //! println!("{}", res);
 //! ```
 
+pub mod behavioral;
 pub mod matcher;
 pub mod schema;
 pub mod spice_input;
@@ -334,6 +335,7 @@ impl ModelLibrary {
             params,
             pins,
             ratings: Default::default(),
+            behavioral: Default::default(),
         };
 
         Resolution {
