@@ -71,7 +71,77 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "no_faults" => check_no_faults(out),
         "max_current" => check_max_current(a, out),
         "peripheral" => check_peripheral(a, out),
+        "rail_window" => check_rail_window(a, out),
+        "protection_trip" => check_protection_trip(a, out),
         other => (false, format!("unknown assertion kind '{other}'")),
+    }
+}
+
+/// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
+/// dip duration below a threshold, and recovery time.
+fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
+    let net = a.net.clone().unwrap_or_default();
+    let scope = a.scenario.clone().unwrap_or_default();
+    let Some(win) = out.rail_windows.get(&(scope.clone(), net.clone())) else {
+        return (
+            false,
+            format!("net '{net}' was never sampled in scenario window '{scope}'"),
+        );
+    };
+    if win.samples.is_empty() {
+        return (false, format!("net '{net}' had no samples in the window"));
+    }
+
+    let mut ok = true;
+    let mut parts = Vec::new();
+    if let Some(lo) = a.min {
+        ok &= win.min_v >= lo - 1e-6;
+        parts.push(format!("min={:.3}V (>= {lo}V)", win.min_v));
+    }
+    if let Some(hi) = a.max {
+        ok &= win.max_v <= hi + 1e-6;
+        parts.push(format!("max={:.3}V (<= {hi}V)", win.max_v));
+    }
+    if let (Some(d), Some(for_ms)) = (a.dip_below, a.for_max_ms) {
+        let dip_ms = win.dip_duration_s(d) * 1000.0;
+        ok &= dip_ms <= for_ms + 1e-6;
+        parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
+    }
+    if let (Some(d), Some(r), Some(within_ms)) =
+        (a.dip_below, a.recover_to, a.recover_within_ms)
+    {
+        let rec_ms = win.recovery_s(d, r) * 1000.0;
+        ok &= rec_ms <= within_ms + 1e-6;
+        parts.push(format!("recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"));
+    }
+
+    (
+        ok,
+        format!("{net} window: {} [min={:.3}V max={:.3}V]", parts.join(", "), win.min_v, win.max_v),
+    )
+}
+
+/// protection_trip: whether a supply net's battery protection latched.
+fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
+    let net = a.supply_net.clone().unwrap_or_default();
+    let want = a.expect_trip.unwrap_or(false);
+    let tripped = out.protection_tripped.get(&net).copied();
+    match tripped {
+        Some(t) => {
+            let ok = t == want;
+            (
+                ok,
+                format!(
+                    "{net} protection {} (expected {})",
+                    if t { "TRIPPED" } else { "held" },
+                    if want { "trip" } else { "no trip" }
+                ),
+            )
+        }
+        None => (
+            false,
+            format!("{net} has no battery protection supply leg (nothing to trip)"),
+        ),
     }
 }
 

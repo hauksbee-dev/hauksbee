@@ -278,6 +278,9 @@ pub fn config_to_supply(c: PowerSupplyConfig) -> PowerSupply {
             capacity_mah,
             soc,
             r_internal_ohms,
+            // The wire protocol does not (yet) carry BMS protection settings;
+            // protection is configured by the scenario layer (galvani-ci).
+            protection: None,
         },
     }
 }
@@ -317,6 +320,7 @@ pub fn supply_to_config(s: &PowerSupply) -> PowerSupplyConfig {
             capacity_mah,
             soc,
             r_internal_ohms,
+            ..
         } => PowerSupplyConfig::Battery {
             chemistry: match chemistry {
                 Chemistry::LiIon => ChemistryConfig::LiIon,
