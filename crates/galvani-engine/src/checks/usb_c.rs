@@ -817,6 +817,51 @@ mod tests {
         assert!((r.cc1_v - want).abs() < 1e-4, "got {} want {}", r.cc1_v, want);
     }
 
+    // --- CC double-termination audit (pure-logic) --------------------------
+
+    #[test]
+    fn effective_rd_is_parallel_when_doubled() {
+        let t = CcPinTermination {
+            external_rd_ohms: Some(5100.0),
+            internal_rd_ohms: Some(5100.0),
+            controller_ref: Some("IC401".into()),
+        };
+        assert!(t.is_double_terminated());
+        // 5.1k || 5.1k = 2.55k exactly.
+        assert!((t.effective_rd_ohms().unwrap() - 2550.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn external_only_or_internal_only_is_not_doubled() {
+        let ext = CcPinTermination {
+            external_rd_ohms: Some(5100.0),
+            internal_rd_ohms: None,
+            controller_ref: None,
+        };
+        assert!(!ext.is_double_terminated());
+        assert_eq!(ext.effective_rd_ohms(), Some(5100.0));
+
+        let int = CcPinTermination {
+            external_rd_ohms: None,
+            internal_rd_ohms: Some(5100.0),
+            controller_ref: Some("IC401".into()),
+        };
+        assert!(!int.is_double_terminated());
+        assert_eq!(int.effective_rd_ohms(), Some(5100.0));
+    }
+
+    #[test]
+    fn internal_cc_rd_table_only_knows_cited_parts() {
+        // nPM1300: datasheet states internal Rd = 5.1k on CC pins.
+        assert_eq!(internal_cc_rd_ohms("nPM1300-QEXX"), Some(5100.0));
+        assert_eq!(internal_cc_rd_ohms("NPM1300"), Some(5100.0));
+        // Anything not on the cited list must return None, so an external Rd on
+        // its CC line is treated as the *only* termination, not a double.
+        assert_eq!(internal_cc_rd_ohms("TUSB320"), None);
+        assert_eq!(internal_cc_rd_ohms("STUSB4500"), None);
+        assert_eq!(internal_cc_rd_ohms("5k1"), None);
+    }
+
     #[test]
     fn shared_node_parallel_resistance_is_exact() {
         // As-designed + e-marked: two 80 µA sources into 5.1k || 1k.
