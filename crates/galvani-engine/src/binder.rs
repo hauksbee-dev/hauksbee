@@ -1342,13 +1342,27 @@ fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
         }
         return None;
     }
-    // Bare ATmega328P roles like "pb5_sck", "pd0_rxd", "pc0_adc0".
-    if r.starts_with('p') && r.len() >= 3 {
-        let bytes = r.as_bytes();
-        let port = (bytes[1] as char).to_ascii_uppercase();
-        if ('A'..='D').contains(&port) {
-            let bit = (bytes[2] as char).to_digit(10)? as u8;
-            return Some((port, bit));
+    // Port-pin roles like "pb5_sck" (AVR) or "pc13", "pa9" (STM32 / Cortex-M).
+    // Form: 'p' <port letter A-G> <bit, 1-2 digits> [ '_' suffix ].
+    if let Some(rest) = r.strip_prefix('p') {
+        let mut chars = rest.chars();
+        if let Some(port_c) = chars.next() {
+            let port = port_c.to_ascii_uppercase();
+            if ('A'..='G').contains(&port) {
+                // Collect the leading digits as the bit index (supports
+                // two-digit STM32 pins like PC13).
+                let digits: String = rest[1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if !digits.is_empty() {
+                    if let Ok(bit) = digits.parse::<u8>() {
+                        if bit < 32 {
+                            return Some((port, bit));
+                        }
+                    }
+                }
+            }
         }
     }
     None

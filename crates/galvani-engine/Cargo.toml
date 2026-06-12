@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Integration heart: binds an extracted board to models and co-simulates analog + MCU + digital"
 
+[features]
+# Propagate the MCU backend choices. Both on by default so the engine runs
+# AVR and non-AVR (Renode) firmware out of the box. A `--no-default-features
+# --features renode` build is GPL-free (no libsimavr link).
+default = ["avr", "renode"]
+avr = ["galvani-mcu/avr"]
+renode = ["galvani-mcu/renode"]
+
 [[bin]]
 name = "galvani"
 path = "src/main.rs"
@@ -21,7 +29,7 @@ galvani-extract = { version = "0.1.0", path = "../galvani-extract" }
 galvani-models = { version = "0.1.0", path = "../galvani-models" }
 galvani-ir = { version = "0.1.0", path = "../galvani-ir" }
 galvani-solve = { version = "0.1.0", path = "../galvani-solve" }
-galvani-mcu = { version = "0.1.0", path = "../galvani-mcu" }
+galvani-mcu = { version = "0.1.0", path = "../galvani-mcu", default-features = false }
 galvani-server = { version = "0.1.0", path = "../galvani-server" }
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "0.8"
