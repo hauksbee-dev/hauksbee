@@ -24,6 +24,7 @@ pub mod boardcode;
 pub mod digital;
 pub mod drivers;
 pub mod engine;
+pub mod peripherals;
 pub mod power_supply;
 pub mod report;
 pub mod scheduler;
@@ -36,6 +37,13 @@ pub use boardcode::{
     program_from_extracted, render_check_report, CheckOptions, CheckReport,
 };
 pub use engine::GalvaniEngine;
+pub use peripherals::{
+    controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},
+    i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75},
+    sink::VcdSink,
+    spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave},
+    Peripheral, PeripheralSet, TickCtx, TimelineEvent,
+};
 pub use power_supply::{Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};
