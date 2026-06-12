@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! galvani run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
-//!                                 [--port 3001] [--report] [--drc] [--lint] [--apply-shorts]
+//!                                 [--port 3001] [--report] [--drc] [--lint] [--si] [--apply-shorts]
 //! galvani to-code    <board-file> [--out <file.board>]
 //! galvani from-code  <code-file>  [--out <file.kicad_pcb>]
 //! galvani check-code <code-dir|file> [--seconds N] [--destructive]
@@ -39,6 +39,7 @@ struct Args {
     report_only: bool,
     drc_only: bool,
     lint_only: bool,
+    si_only: bool,
     apply_shorts: bool,
     port: u16,
 }
@@ -53,6 +54,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
         report_only: false,
         drc_only: false,
         lint_only: false,
+        si_only: false,
         apply_shorts: false,
         port: 3001,
     };
@@ -72,6 +74,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
             "--report" => args.report_only = true,
             "--drc" => args.drc_only = true,
             "--lint" => args.lint_only = true,
+            "--si" => args.si_only = true,
             "--apply-shorts" => args.apply_shorts = true,
             "--port" => {
                 args.port = it
@@ -88,7 +91,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
 
 fn usage() -> String {
     "usage:\n  \
-     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--apply-shorts]\n  \
+     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--apply-shorts]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
      galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
@@ -159,6 +162,15 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     if args.lint_only {
         let report = board.net_lint();
         print!("{}", galvani_extract::render_netlint(&report));
+        return Ok(());
+    }
+
+    // --si: run the signal-integrity / physics static checks, print, exit. The
+    // geometry-bearing checks (antenna keepout, USB length skew) need the raw
+    // KiCad layout text, so it is passed through.
+    if args.si_only {
+        let report = board.si_checks(Some(&text));
+        print!("{}", galvani_extract::render_si(&report));
         return Ok(());
     }
 
