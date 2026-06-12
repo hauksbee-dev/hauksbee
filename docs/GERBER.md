@@ -257,8 +257,8 @@ trace-current check needs: `ReconStats::net_copper` is a `Vec<GerberNetCopper>`
 giving each net's narrowest drawn-track width (the series bottleneck), widest
 width, track/region counts, and a `GerberCopperKind` (`Traces` / `Poured` /
 `None`). A drawn track is a finite-width capsule (`width = 2*r`), so **copper
-width is exact from the manufacturing files** — the one quantity gerbers give more
-directly than a netlist. A net carrying any pour region is `Poured` and never
+width is exact from the manufacturing files** (the one quantity gerbers give more
+directly than a netlist). A net carrying any pour region is `Poured` and never
 given a discrete width (a plane's true cross-section is not a segment width),
 mirroring the native-CAD `trace_current` `Poured` exemption exactly. The probe is
 `cargo run -p galvani-extract --example gerber_trace_current -- <dir>`.
@@ -268,7 +268,7 @@ Its reach is honest: it needs a *cited current attributed to a net*, and gerber
 reconstruction recovers no net names or BOM-bound identity, so it runs but finds
 nothing unless a current can be tied to a specific reconstructed net. And a board
 whose fab draws traces as G36/G37 filled regions (some Altium exports, e.g. the
-Inkplate 6) reads every net as `Poured`, so the check is inert there — the safe
+Inkplate 6) reads every net as `Poured`, so the check is inert there, the safe
 failure direction (a `Poured` net is never flagged). See FAMOUS_SWEEP.md Round 5.
 
 ## Excellon dialects
