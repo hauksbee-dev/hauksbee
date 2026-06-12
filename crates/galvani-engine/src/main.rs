@@ -78,7 +78,7 @@ fn usage() -> String {
     "usage:\n  \
      galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
-     galvani from-code <code-file> [--out <file.kicad_pcb>]\n  \
+     galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
         .to_string()
 }
@@ -165,18 +165,35 @@ fn cmd_to_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `galvani from-code <code-file> [--out <file.kicad_pcb>]`
+/// `galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]`
 fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    use forge_codegen::{relayout, LayoutConfig, Program};
     let code_path = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
     let mut out: Option<PathBuf> = None;
+    let mut layout: Option<LayoutConfig> = None;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--out" => out = Some(PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--out needs a path"))?)),
+            "--relayout" => layout = Some(LayoutConfig::full()),
+            "--incremental" => layout = Some(LayoutConfig::incremental()),
             other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
         }
     }
     let code = load_code(Path::new(&code_path))?;
-    let board_text = code_to_board_text(&code)?;
+    let board_text = if let Some(cfg) = layout {
+        let base = Program::parse(&code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
+        let mut prog = base.clone();
+        let report = relayout(&mut prog, &base, &cfg);
+        eprintln!(
+            "re-layout: {} groups, {} moved, {} kept",
+            report.groups,
+            report.moved.len(),
+            report.kept
+        );
+        prog.build().emit()
+    } else {
+        code_to_board_text(&code)?
+    };
     match out {
         Some(p) => {
             std::fs::write(&p, &board_text)?;
