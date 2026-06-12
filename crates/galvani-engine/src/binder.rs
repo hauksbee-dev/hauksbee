@@ -279,14 +279,34 @@ fn bind_behavioral(
     let mut out = Vec::new();
     for comp in &board.components {
         let res = resolve(lib, comp);
-        let Some(model) = res.model else { continue };
+        let Some(mut model) = res.model else { continue };
         if model.behavioral.is_empty() {
             continue;
         }
+        // Resolve board-programmable params: any `<name>_from_ref = "Rxx"`
+        // param is rewritten to `<name> = ohms(Rxx)`, reading the value off the
+        // board. A missing board resistor means the part it programmed is gone
+        // (e.g. the Reform mb2.5 fix replaced the LTC6803 tie resistor R52 with a
+        // blocking diode); we substitute a large open resistance so a law that
+        // divides by it contributes ~0. This is how a leak/limit set by an
+        // on-board resistor tracks the actual board, with no model edit.
+        resolve_from_ref_params(&mut model.params, &board_resistor);
+
         // role -> node for this component's connected pins (functions then pads).
+        // Drop roles whose pin sits on an `unconnected-*` placeholder net: such a
+        // pin is electrically no-connect, so the behavioural model must treat it
+        // as absent (an FSM guard or law referencing `v_<role>` then stays
+        // false / unbound). This is what makes the LTC4020 RNG/SS destabilise
+        // only when the pin is genuinely DRIVEN (mb2.0's GPIO), not merely left
+        // floating at 0 V (mb2.5+ NC).
         let role_nets = role_node_map(comp, &model, node_of);
-        let role_map: std::collections::BTreeMap<String, NodeId> =
-            role_nets.into_iter().collect();
+        let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
+            .into_iter()
+            .filter(|(_role, node)| {
+                let name = circuit.node_name(*node);
+                !name.starts_with("unconnected-")
+            })
+            .collect();
         if let Some(dev) = crate::behavioral::BehavioralDevice::stamp(
             circuit,
             &comp.reference,
@@ -299,6 +319,34 @@ fn bind_behavioral(
         }
     }
     out
+}
+
+/// Rewrite every `<name>_from_ref = "Rxx"` param into `<name> = ohms(Rxx)`,
+/// reading the referenced resistor off the board. A missing resistor resolves to
+/// a large open resistance (the part it programmed has been removed). The marker
+/// `*_from_ref` keys are dropped afterwards.
+fn resolve_from_ref_params(
+    params: &mut galvani_models::Params,
+    board_resistor: &dyn Fn(&str) -> Option<f64>,
+) {
+    /// Stand-in for an absent programming resistor (open circuit).
+    const OPEN_OHMS: f64 = 1e12;
+    let refs: Vec<(String, String)> = params
+        .0
+        .iter()
+        .filter_map(|(k, v)| {
+            let stem = k.strip_suffix("_from_ref")?;
+            let refdes = v.as_str()?;
+            Some((stem.to_string(), refdes.to_string()))
+        })
+        .collect();
+    for (stem, refdes) in &refs {
+        let ohms = board_resistor(refdes).unwrap_or(OPEN_OHMS);
+        params.set_f64(stem.clone(), ohms);
+    }
+    for (stem, _) in &refs {
+        params.0.remove(&format!("{stem}_from_ref"));
+    }
 }
 
 /// Build the per-device metadata the stress monitor needs. Walks the bound

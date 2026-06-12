@@ -1,0 +1,198 @@
+# Behavioural models for power ICs (chargers, balancers, PMICs).
+#
+# These parts carry internal logic — regulation loops, ship-mode pulls,
+# balancing FETs — that the SPICE-level kinds cannot express, so each entry has
+# a [models.behavioral] block (pins/pulls, averaged converter, expression laws)
+# that the engine's behavioural runtime stamps and iterates between solver
+# chunks. Pin maps are the manufacturer pinout; cited inline.
+#
+# Calibrated against the MNT Reform and ZSWatch DevKit revision faults in
+# docs/KNOWN_FAULTS_VALIDATION.md. Where a value is programmed by an on-board
+# resistor (the LTC4020 ILIMIT / RSENSE), the model reads the board reference
+# designator at bind time, so changing the board resistor changes the behaviour
+# with no model edit — exactly the way the real revision fixes landed.
+
+# ── LTC4020: 55V buck-boost battery charger controller ────────────────────────
+#
+# MNT Reform motherboard U2. The averaged buck-boost block charges the 8S
+# LiFePO4 pack (BAT) from the laptop brick (PVIN) with an input-current limit
+# programmed by the ILIMIT resistor R8 against the input sense shunt R49. The
+# documented mb2.5->3.0 fault: R8 = 100k programs the input limit too high, so
+# the charger over-draws (~88 W from a 60 W brick); the fix is R8 = 7.15k, which
+# drops the limit to ~60 W. The model reads R8 and R49 off the board, so the two
+# revisions diverge with no model change.
+[[models]]
+id = "ltc4020"
+kind = "vreg"
+description = "LTC4020 buck-boost battery charger (behavioural: input-current-limited buck-boost)"
+
+[models.match]
+value_re = "(?i)LTC4020"
+
+[models.params]
+# vreg liveness params (the binder's vreg path also stamps an output rail); the
+# real behaviour is in [models.behavioral.converter] below.
+vout = 14.4        # nominal charge-rail seed (overridden by the converter setpoint)
+dropout_v = 0.5
+iq_a = 0.001
+
+[models.pins]
+# Manufacturer pinout (QFN-38), the subset the behaviour needs.
+# Source: LTC4020 datasheet pin functions; cross-checked against the Reform
+# reform2-power schematic symbol pin list.
+"5"  = "sensbot"   # SENSBOT, input current sense (bottom)
+"6"  = "senstop"   # SENSTOP, input current sense (top)
+"7"  = "sensvin"   # SENSVIN, input supply sense
+"15" = "rng_ss"    # RNG/SS, frequency range + soft-start (the mb2.0->2.5 pin)
+"20" = "bat"       # BAT, battery / charge output
+"22" = "csn"       # CSN, battery current sense (-)
+"23" = "csp"       # CSP, battery current sense (+)
+"25" = "ilimit"    # ILIMIT, input-current-limit program pin (R8)
+"36" = "pvin"      # PVIN, power input
+
+[models.ratings]
+max_voltage_v = 55.0      # VIN abs max (datasheet)
+max_junction_temp_c = 125.0
+
+[models.behavioral.converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+# 8S LiFePO4 charge voltage: 8 * 3.6 V = 28.8 V CV target.
+vout_setpoint = 28.8
+efficiency = 0.92          # datasheet high-efficiency buck-boost
+out_r_ohms = 0.01
+
+# Input-current limit programmed by the ILIMIT resistor (R8) against the input
+# sense shunt (R49). Linear-in-R8 up to a full-scale ceiling, then i = vsense /
+# rsense. Calibrated so the two real board values straddle a 60 W brick at a
+# ~19 V laptop adapter:
+#   R8 = 7.15k (mb3.0 fix): vsense = 0.0316 V -> 3.16 A -> ~60 W  (in budget)
+#   R8 = 100k  (mb2.5 fault): saturates at 0.0463 V -> 4.63 A -> ~88 W (overdraw)
+# rsense reads R49 (0.01 ohm) off the board; prog reads R8.
+[models.behavioral.converter.iin_program]
+rsense_ref = "R49"
+rsense_ohms = 0.01         # fallback if R49 is not found on the board
+prog_ref = "R8"
+prog_ohms = 100000.0       # fallback (the faulty value) if R8 is not found
+vprog_ref = 0.0316         # sense threshold at prog = prog_ref_ohms
+prog_ref_ohms = 7150.0     # the resistor that programs the 60 W (~3.16 A) point
+v_sense_full = 0.0463      # full-scale sense voltage (~4.63 A / ~88 W ceiling)
+
+# RNG/SS dual role (the mb2.0->2.5 fault): when the RNG/SS pin is driven by an
+# external GPIO (mb2.0 wired CHG_RNG to the LPC), toggling it mid-operation
+# disturbs the converter's soft-start/frequency and destabilises the system
+# DC/DC. Modelled as an FSM: the converter is "stable" while RNG/SS sits at its
+# fixed bias, but a GPIO that pulls RNG/SS low (below 0.4 V) trips it to
+# "destabilised" until RNG/SS returns. On mb2.5+ the pin is left unconnected, so
+# v_rng_ss floats at the internal bias and the guard never fires.
+[models.behavioral.fsm]
+states = ["stable", "destabilised"]
+
+[[models.behavioral.fsm.transitions]]
+from = "stable"
+to = "destabilised"
+guard = "v_rng_ss < 0.4"
+
+[[models.behavioral.fsm.transitions]]
+from = "destabilised"
+to = "stable"
+guard = "v_rng_ss > 0.8"
+min_dwell_s = 0.001
+
+# ── LTC6803-4: multicell battery stack monitor / balancer ─────────────────────
+#
+# MNT Reform motherboard U4. Monitors the 8S LiFePO4 stack and balances cells by
+# switching internal FETs that bleed a cell through its external series resistor.
+# The documented mb2.0->2.5 fault: the four UNUSED upper cell inputs (C9..C12)
+# were tied to the top-of-pack rail (BAT1FUSED) through a single 100 ohm resistor
+# (R52). When the balancing logic fires on an absent cell position, current
+# leaks through that 100 ohm path. The mb2.5 fix replaces R52 with a Schottky
+# diode (D30) that blocks the reverse leak. We model the leak as an expression
+# law: a current from the tied upper-cell node to ground proportional to the node
+# voltage over the tie resistance, active while balancing. The board's tie
+# resistance (R52) is read in; when it is absent (replaced by the diode) the
+# leak path is gone and the law contributes nothing.
+[[models]]
+id = "ltc6803_4"
+kind = "digital"
+description = "LTC6803-4 cell-stack monitor/balancer (behavioural: absent-cell balancer leak)"
+
+[models.match]
+value_re = "(?i)LTC6803"
+
+[models.pins]
+# 44-pin SSOP; the subset the leak needs. The unused upper cell inputs C9..C12
+# are commoned on the Reform; we bind the C9 pad as the representative node of
+# that commoned net.
+# Source: LTC6803-4 datasheet pin functions; Reform reform2-motherboard cache lib.
+"1"  = "vplus"     # V+, top of stack
+"8"  = "c9"        # C9 (representative of the commoned unused C9..C12 inputs)
+"27" = "vminus"    # V-, stack bottom = GND
+
+[models.params]
+# The external tie resistance from the commoned upper-cell inputs to the
+# top-of-pack rail. The `_from_ref` convention tells the binder to read the named
+# board resistor (R52) into `tie_ohms` at bind time. When the board has no such
+# resistor (the mb2.5 fix replaced R52 with a blocking Schottky diode), the
+# binder substitutes a large open resistance, so the leak law contributes ~0.
+# `tie_ohms` itself is the fallback (the faulty mb2.0 value) if neither the ref
+# nor the override is found.
+tie_ohms = 100.0
+tie_ohms_from_ref = "R52"
+
+# Balancer leak through the absent-cell tie network: a continuous current bled
+# from the top-of-pack rail (V+) to the stack bottom (V-) equal to
+# v_vplus / tie_ohms. This is the wasted current the unused-cell tie network
+# draws. With the 100 ohm mb2.0 tie (R52) and the ~28 V pack top this is a large
+# continuous leak; the mb2.5 fix replaces R52 with a blocking Schottky (D30), so
+# the binder sets tie_ohms to a huge open resistance and the leak is ~0.
+[[models.behavioral.laws]]
+name = "absent_cell_leak"
+kind = "current"
+a = "vplus"
+b = "vminus"
+expr = "v_vplus / tie_ohms"
+
+# ── nPM1300: Nordic PMIC ──────────────────────────────────────────────────────
+#
+# ZSWatch DevKit IC401. Two bucks, two LDO/loadswitches, USB-C charger. The
+# documented 1.2.0->1.2.1 fault (#155): the SHPHLD (ship-hold) pin has an
+# INTERNAL pull-up to VSYS, and 1.2.0 also wired SHPHLD to an MCU GPIO. In sleep
+# the GPIO goes high-Z and VSYS back-drives it through the internal pull. The fix
+# (1.2.1) disconnects the GPIO from SHPHLD. The model carries the internal pull
+# to VSYS so the engine sees the GPIO being pulled to a rail; on 1.2.0 (GPIO on
+# the SHPHLD net) the pull reaches the GPIO, on 1.2.1 (GPIO removed) it does not.
+[[models]]
+id = "npm1300"
+kind = "vreg"
+description = "Nordic nPM1300 PMIC (behavioural: SHPHLD internal pull-up to VSYS + bucks)"
+
+[models.match]
+value_re = "(?i)nPM1300"
+
+[models.params]
+vout = 1.8          # liveness seed for the vreg path (BUCK1)
+dropout_v = 0.2
+iq_a = 0.001
+
+[models.pins]
+# QFN-32 (+EP). Source: nPM1300 datasheet pin functions; ZSWatch DevKit Power
+# schematic symbol pin list.
+"4"  = "vdd_core"  # V_DD, PMIC core supply (from VSYS)
+"13" = "sda"       # I2C SDA
+"14" = "scl"       # I2C SCL
+"15" = "shphld"    # SHPHLD, ship-hold (internal pull-up to VSYS) -- the fault pin
+"19" = "vbat"      # V_BAT, battery
+"20" = "vsys"      # V_SYS, system rail
+"21" = "vbus"      # V_BUS, USB input
+
+[models.ratings]
+max_voltage_v = 5.5       # VBUS abs max (datasheet)
+
+[models.behavioral.pins.shphld]
+# The internal pull-up from SHPHLD to VSYS. Nordic specs a strong ship-hold pull
+# (on the order of a few hundred kohm). When SHPHLD is on a net that also carries
+# an MCU GPIO (the 1.2.0 fault), this pull feeds VSYS into the GPIO in sleep.
+pull_to = "vsys"
+pull_ohms = 100000.0
