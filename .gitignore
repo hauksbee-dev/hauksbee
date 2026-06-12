@@ -1,3 +1,7 @@
 target/
 node_modules/
 dist/
+
+# Intermediate firmware artifacts (the .elf is committed for testing on hosts
+# without arm-none-eabi-gcc; the raw .bin is regenerable and not needed).
+testdata/firmware/stm32_blinky/blinky.bin

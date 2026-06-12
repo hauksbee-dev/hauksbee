@@ -1,0 +1,60 @@
+(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "PA5_OUT")
+  (net 4 "LED_A")
+  (net 5 "PC13_LED")
+
+  ; STM32F103C8 "blue pill". PA5 drives an LED through a real 330R resistor
+  ; (the analog current path the solver computes); PC13 drives the onboard LED
+  ; net through its own resistor to ground so the blink is observable in the
+  ; solved circuit as well as via the GPIO bridge. USART1 (PA9/PA10) is the
+  ; serial bridge. The part runs at 3.3 V.
+  (module Package_QFP:LQFP-48_7x7mm_P0.5mm (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
+    (pad 1  smd rect (at -3 0) (net 5 "PC13_LED"))
+    (pad 8  smd rect (at -3 1) (net 1 "GND"))
+    (pad 9  smd rect (at -3 2) (net 2 "+3V3"))
+    (pad 15 smd rect (at 3 0) (net 3 "PA5_OUT"))
+    (pad 23 smd rect (at 3 1) (net 1 "GND"))
+    (pad 24 smd rect (at 3 2) (net 2 "+3V3"))
+    (pad 30 smd rect (at 3 3) (net 0 ""))
+    (pad 31 smd rect (at 3 4) (net 0 ""))
+    (pad 35 smd rect (at -3 3) (net 1 "GND"))
+    (pad 36 smd rect (at -3 4) (net 2 "+3V3"))
+    (pad 44 smd rect (at -3 5) (net 1 "GND"))
+    (pad 48 smd rect (at -3 6) (net 2 "+3V3"))
+  )
+
+  ; PA5 -> 330R -> LED anode. This resistor's current is what the solver must
+  ; compute when PA5 is driven HIGH (3.3 V) at boot.
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 330 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 3 "PA5_OUT"))
+    (pad 2 thru_hole circle (at 2 0) (net 4 "LED_A"))
+  )
+
+  (module LED_THT:LED_D5.0mm (layer F.Cu)
+    (at 112 100)
+    (fp_text reference D1 (at 0 0) (layer F.SilkS))
+    (fp_text value RED_LED (at 0 2) (layer F.Fab))
+    (pad A thru_hole circle (at 0 0) (net 4 "LED_A"))
+    (pad K thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+
+  ; PC13 -> 4k7 pulldown to ground so the blink net sits at a clean logic level
+  ; the solver resolves each chunk (the onboard LED on a real blue pill is
+  ; active-low to 3V3; here we keep a simple observable indicator).
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 105 110)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 4k7 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 5 "PC13_LED"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+)
