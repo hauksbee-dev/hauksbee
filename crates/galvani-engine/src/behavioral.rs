@@ -44,6 +44,103 @@ use galvani_models::Params;
 
 use crate::stress::{FaultEvent, FaultKind};
 
+// ── Escape-hatch trait for custom behaviours ────────────────────────────────
+
+/// The escape hatch for behaviours the declarative TOML layer cannot express.
+///
+/// The declarative layer (pins/pulls, FSM, averaged converter, expression laws)
+/// covers the great majority of power ICs, but some parts have behaviour no
+/// finite declarative schema captures — a closed-loop controller with internal
+/// state, a multi-phase sequencer with data-dependent timing, a part whose
+/// output depends on an I2C register the firmware wrote. For those, a user
+/// implements this trait in Rust and registers it under a part-match key
+/// ([`CustomRegistry`]); the scheduler then drives it each chunk exactly like a
+/// declarative [`BehavioralDevice`].
+///
+/// The contract mirrors the declarative device's lifecycle:
+///   - [`Self::stamp`] runs once at bind time: stamp whatever `Vsource` /
+///     `Isource` / `Resistor` legs you need onto the circuit and remember their
+///     [`DeviceId`]s.
+///   - [`Self::update`] runs once per solver chunk with the previous chunk's
+///     solved node voltages: recompute your legs and write them back.
+///
+/// You never touch the inner Newton loop; you only mutate source values between
+/// chunks, the same convergence-per-chunk pattern the supplies and the
+/// declarative devices use, so the solver is untouched.
+pub trait CustomBehavior: Send {
+    /// Stamp this device's legs onto the circuit once. `role_nodes` maps the
+    /// component's pin roles to nodes (from `[models.pins]`). `params` carries
+    /// the model's params. Store any device ids you will update.
+    fn stamp(
+        &mut self,
+        circuit: &mut Circuit,
+        reference: &str,
+        params: &Params,
+        role_nodes: &BTreeMap<String, NodeId>,
+    );
+
+    /// Advance one chunk: recompute and write your source values from the
+    /// previous chunk's solved `node_v`. `t` is sim time (s), `dt` the chunk.
+    /// Push any faults you raise into `faults`.
+    fn update(
+        &mut self,
+        circuit: &mut Circuit,
+        node_v: &dyn Fn(NodeId) -> f64,
+        t: f64,
+        dt: f64,
+        faults: &mut Vec<FaultEvent>,
+    );
+
+    /// A short state label for diagnostics / frames (default empty).
+    fn state(&self) -> &str {
+        ""
+    }
+}
+
+/// Registry of custom-behaviour factories, keyed by an exact match string
+/// tested against a component's resolved model id, value, or MPN. A user (or a
+/// downstream crate) registers a factory before binding; the binder consults the
+/// registry for every component and, on a hit, instantiates the custom device
+/// instead of (or alongside) the declarative one.
+#[derive(Default)]
+pub struct CustomRegistry {
+    factories: Vec<(String, Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>)>,
+}
+
+impl CustomRegistry {
+    /// An empty registry.
+    pub fn new() -> Self {
+        CustomRegistry::default()
+    }
+
+    /// Register a factory under a match `key` (matched against model id / value /
+    /// MPN, case-insensitively). The factory is called once per matching
+    /// component to build a fresh device instance.
+    pub fn register(
+        &mut self,
+        key: impl Into<String>,
+        factory: impl Fn() -> Box<dyn CustomBehavior> + Send + Sync + 'static,
+    ) {
+        self.factories.push((key.into().to_ascii_lowercase(), Box::new(factory)));
+    }
+
+    /// Build a custom device for `keys` (any of the component's id/value/MPN), or
+    /// `None` if nothing is registered for it.
+    pub fn build_for(&self, keys: &[&str]) -> Option<Box<dyn CustomBehavior>> {
+        for (k, factory) in &self.factories {
+            if keys.iter().any(|key| key.to_ascii_lowercase() == *k) {
+                return Some(factory());
+            }
+        }
+        None
+    }
+
+    /// True when no factories are registered (the common case).
+    pub fn is_empty(&self) -> bool {
+        self.factories.is_empty()
+    }
+}
+
 /// Tiny output impedance for behavioural sources so the source branch current
 /// is well defined (mirrors `power_supply::STIFF_R_OHMS`).
 const STIFF_R_OHMS: f64 = 1e-3;
@@ -151,9 +248,46 @@ pub struct BehavioralDevice {
     pending_faults: Vec<FaultEvent>,
     /// Latch so a sustained-condition fault is reported once, not every chunk.
     overdraw_latched: bool,
+
+    /// Escape-hatch custom behaviour (set when this device wraps a
+    /// [`CustomBehavior`] instead of the declarative legs). When present, the
+    /// declarative legs are empty and all lifecycle calls route to it.
+    custom: Option<Box<dyn CustomBehavior>>,
 }
 
 impl BehavioralDevice {
+    /// Wrap a user-supplied [`CustomBehavior`] as a behavioural device, stamping
+    /// it onto the circuit. The scheduler then drives it each chunk exactly like
+    /// a declarative device.
+    pub fn from_custom(
+        circuit: &mut Circuit,
+        reference: &str,
+        params: &Params,
+        role_nodes: &BTreeMap<String, NodeId>,
+        mut custom: Box<dyn CustomBehavior>,
+    ) -> BehavioralDevice {
+        custom.stamp(circuit, reference, params, role_nodes);
+        BehavioralDevice {
+            reference: reference.to_string(),
+            role_nodes: role_nodes.clone(),
+            params: params.clone(),
+            pulls: Vec::new(),
+            open_drains: Vec::new(),
+            drives: Vec::new(),
+            converter: None,
+            laws: Vec::new(),
+            fsm_states: Vec::new(),
+            fsm_transitions: Vec::new(),
+            state_pins: BTreeMap::new(),
+            state_idx: 0,
+            t_in_state: 0.0,
+            input_budget: None,
+            pending_faults: Vec::new(),
+            overdraw_latched: false,
+            custom: Some(custom),
+        }
+    }
+
     /// Stamp a behavioural model onto the circuit and return the live device.
     ///
     /// `role_nodes` maps every connected pin role of the component to its node.
@@ -187,6 +321,7 @@ impl BehavioralDevice {
             input_budget: None,
             pending_faults: Vec::new(),
             overdraw_latched: false,
+            custom: None,
         };
 
         // ── Pins: internal pulls and open-drain sinks ──────────────────────
@@ -406,17 +541,21 @@ impl BehavioralDevice {
         }
     }
 
-    /// True when nothing was stamped (no legs / FSM): the device is inert.
+    /// True when nothing was stamped (no legs / FSM / custom): inert.
     fn is_inert(&self) -> bool {
-        self.pulls.is_empty()
+        self.custom.is_none()
+            && self.pulls.is_empty()
             && self.open_drains.is_empty()
             && self.drives.is_empty()
             && self.converter.is_none()
             && self.laws.is_empty()
     }
 
-    /// Current FSM state name (empty string when the device has no FSM).
+    /// Current state label: the FSM state, or a custom device's own label.
     pub fn state(&self) -> &str {
+        if let Some(c) = &self.custom {
+            return c.state();
+        }
         self.fsm_states.get(self.state_idx).map(String::as_str).unwrap_or("")
     }
 
@@ -464,6 +603,12 @@ impl BehavioralDevice {
         t: f64,
         dt: f64,
     ) {
+        // Escape hatch: a custom-behaviour device owns its whole update.
+        if let Some(custom) = &mut self.custom {
+            custom.update(circuit, node_v, t, dt, &mut self.pending_faults);
+            return;
+        }
+
         // 1. Build the evaluation context from current pin voltages + params +
         //    state booleans.
         let ctx = self.build_context(node_v, t);

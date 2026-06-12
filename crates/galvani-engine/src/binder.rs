@@ -88,8 +88,20 @@ impl BoundBoard {
     }
 }
 
-/// Bind an extracted board against a model library.
+/// Bind an extracted board against a model library (no custom behaviours).
 pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
+    bind_board_with(board, lib, &crate::behavioral::CustomRegistry::new())
+}
+
+/// Bind an extracted board, consulting `custom` for escape-hatch Rust
+/// behaviours. A component whose resolved model id / value / MPN matches a
+/// registered factory is realised by that [`CustomBehavior`](crate::behavioral::CustomBehavior)
+/// instead of the declarative layer.
+pub fn bind_board_with(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    custom: &crate::behavioral::CustomRegistry,
+) -> BoundBoard {
     let mut circuit = Circuit::new();
     let mut net_nodes: HashMap<String, NodeId> = HashMap::new();
     let mut net_names: Vec<String> = Vec::new();
@@ -226,7 +238,7 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
     // behavioural device: controllable Thevenin legs + sense resistors the
     // scheduler iterates each chunk. Programmable limits read board resistor
     // values through `board_resistor`.
-    let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of);
+    let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of, custom);
 
     // ── Pass 4: gather fault-monitor metadata ───────────────────────────────
     // Match each monitorable IR device back to its component (device name ==
@@ -262,6 +274,7 @@ fn bind_behavioral(
     lib: &ModelLibrary,
     circuit: &mut Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+    custom: &crate::behavioral::CustomRegistry,
 ) -> Vec<crate::behavioral::BehavioralDevice> {
     // Board resistor lookup: reference designator -> ohms, parsed from the
     // component value. Used by programmable current limits (e.g. LTC4020 ILIMIT
@@ -279,18 +292,18 @@ fn bind_behavioral(
     let mut out = Vec::new();
     for comp in &board.components {
         let res = resolve(lib, comp);
-        let Some(mut model) = res.model else { continue };
-        if model.behavioral.is_empty() {
-            continue;
+        let model = res.model;
+
+        // Escape-hatch keys: the resolved model id, the component value, and the
+        // MPN, any of which a custom factory may be registered under.
+        let model_id = model.as_ref().map(|m| m.id.clone());
+        let mut keys: Vec<&str> = Vec::new();
+        if let Some(id) = &model_id {
+            keys.push(id.as_str());
         }
-        // Resolve board-programmable params: any `<name>_from_ref = "Rxx"`
-        // param is rewritten to `<name> = ohms(Rxx)`, reading the value off the
-        // board. A missing board resistor means the part it programmed is gone
-        // (e.g. the Reform mb2.5 fix replaced the LTC6803 tie resistor R52 with a
-        // blocking diode); we substitute a large open resistance so a law that
-        // divides by it contributes ~0. This is how a leak/limit set by an
-        // on-board resistor tracks the actual board, with no model edit.
-        resolve_from_ref_params(&mut model.params, &board_resistor);
+        if !comp.value.trim().is_empty() {
+            keys.push(comp.value.as_str());
+        }
 
         // role -> node for this component's connected pins (functions then pads).
         // Drop roles whose pin sits on an `unconnected-*` placeholder net: such a
@@ -299,14 +312,41 @@ fn bind_behavioral(
         // false / unbound). This is what makes the LTC4020 RNG/SS destabilise
         // only when the pin is genuinely DRIVEN (mb2.0's GPIO), not merely left
         // floating at 0 V (mb2.5+ NC).
-        let role_nets = role_node_map(comp, &model, node_of);
+        let empty_pins = std::collections::BTreeMap::new();
+        let model_pins = model.as_ref().map(|m| &m.pins).unwrap_or(&empty_pins);
+        let role_nets = role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
         let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
             .into_iter()
-            .filter(|(_role, node)| {
-                let name = circuit.node_name(*node);
-                !name.starts_with("unconnected-")
-            })
+            .filter(|(_role, node)| !circuit.node_name(*node).starts_with("unconnected-"))
             .collect();
+
+        // 1. A registered custom behaviour wins (the escape hatch). It can bind
+        //    even for a part with no declarative block / no DB model at all.
+        if !custom.is_empty() {
+            if let Some(boxed) = custom.build_for(&keys) {
+                let params = model.as_ref().map(|m| m.params.clone()).unwrap_or_default();
+                out.push(crate::behavioral::BehavioralDevice::from_custom(
+                    circuit,
+                    &comp.reference,
+                    &params,
+                    &role_map,
+                    boxed,
+                ));
+                continue;
+            }
+        }
+
+        // 2. Otherwise the declarative behavioural block, if the model has one.
+        let Some(mut model) = model else { continue };
+        if model.behavioral.is_empty() {
+            continue;
+        }
+        // Resolve board-programmable params: any `<name>_from_ref = "Rxx"` param
+        // is rewritten to `<name> = ohms(Rxx)`, reading the value off the board.
+        // A missing board resistor means the part it programmed is gone (the
+        // Reform mb2.5 fix replaced the LTC6803 tie R52 with a diode); we
+        // substitute a large open resistance so a law dividing by it gives ~0.
+        resolve_from_ref_params(&mut model.params, &board_resistor);
         if let Some(dev) = crate::behavioral::BehavioralDevice::stamp(
             circuit,
             &comp.reference,
@@ -765,18 +805,32 @@ fn role_node_map(
     model: &ModelEntry,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> HashMap<String, NodeId> {
+    role_node_map_pins(comp, &model.pins, Some(model.kind), node_of)
+}
+
+/// As [`role_node_map`] but taking the pad->role map and (optional) kind
+/// directly, so a custom behaviour with no full [`ModelEntry`] can still build a
+/// role map from a model's `[models.pins]`.
+fn role_node_map_pins(
+    comp: &Component,
+    pins: &std::collections::BTreeMap<String, String>,
+    kind: Option<ComponentKind>,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> HashMap<String, NodeId> {
     let mut m = HashMap::new();
-    for pin in &comp.pins {
-        let Some(node) = node_of(pin.net) else { continue };
-        if let Some(role) = role_from_pinfunction(model.kind, &pin.function) {
-            m.entry(role).or_insert(node);
+    if let Some(kind) = kind {
+        for pin in &comp.pins {
+            let Some(node) = node_of(pin.net) else { continue };
+            if let Some(role) = role_from_pinfunction(kind, &pin.function) {
+                m.entry(role).or_insert(node);
+            }
         }
     }
     // The db's by-pin-number map fills any role the functions did not cover
     // (and is the only source for PCB-only extraction, where functions are
     // empty).
     for pin in &comp.pins {
-        if let (Some(role), Some(node)) = (model.pins.get(&pin.number), node_of(pin.net)) {
+        if let (Some(role), Some(node)) = (pins.get(&pin.number), node_of(pin.net)) {
             m.entry(role.clone()).or_insert(node);
         }
     }

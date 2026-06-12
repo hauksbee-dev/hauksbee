@@ -30,7 +30,7 @@ pub mod spice_input;
 pub mod validation;
 pub mod value;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use once_cell::sync::Lazy;
 use regex::Error as RegexError;
@@ -179,18 +179,59 @@ impl ModelLibrary {
         &LIB
     }
 
-    /// Append entries from a user TOML directory at runtime.
+    /// Built-in library plus the user model directories, layered
+    /// `builtin < datasheet-extracted < user` (later wins). The standard user
+    /// directories, in increasing priority, are:
+    ///   1. `~/.galvani/models`        — where datasheet extraction writes.
+    ///   2. `~/.config/galvani/models` — the user's own custom models.
+    ///   3. each `extra_dirs` entry    — e.g. a `--models-dir` flag, highest.
+    /// A custom behavioural part dropped into one of these loads without
+    /// recompiling. Directory load errors are warned to stderr, not fatal, so a
+    /// single malformed user file never breaks the whole library.
+    pub fn builtin_with_user_dirs(extra_dirs: &[&Path]) -> ModelLibrary {
+        let mut lib = ModelLibrary::builtin();
+        let home = std::env::var("HOME").ok().map(PathBuf::from);
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        if let Some(h) = &home {
+            dirs.push(h.join(".galvani").join("models"));
+            dirs.push(h.join(".config").join("galvani").join("models"));
+        }
+        dirs.extend(extra_dirs.iter().map(|p| p.to_path_buf()));
+        for dir in dirs {
+            // Load each dir's entries into the `user` bucket (highest priority
+            // after SPICE). Later dirs are loaded last; on a specificity tie the
+            // first-inserted wins, so we rely on user entries being more specific
+            // than builtin, which they are (an exact MPN/value match).
+            for e in lib.load_user_dir(&dir) {
+                eprintln!("[models] user dir {}: {e}", dir.display());
+            }
+        }
+        lib
+    }
+
+    /// Append entries from a user TOML directory at runtime (consuming form).
     ///
     /// Every `.toml` file in `dir` is parsed and validated. Files that fail
     /// are reported but do not prevent other files from loading.
     pub fn with_user_dir(mut self, dir: &Path) -> Result<Self, Vec<ModelError>> {
+        match self.load_user_dir(dir) {
+            errs if errs.is_empty() => Ok(self),
+            errs => Err(errs),
+        }
+    }
+
+    /// Append entries from a user TOML directory in place, returning any
+    /// per-file errors (an empty vec on success). Loading order: later dirs win
+    /// on a specificity tie, which is the basis for the
+    /// `builtin < datasheet-extracted < user` layering.
+    pub fn load_user_dir(&mut self, dir: &Path) -> Vec<ModelError> {
         let mut errors = Vec::new();
         if !dir.exists() {
-            return Ok(self);
+            return errors;
         }
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
-            Err(e) => return Err(vec![ModelError::Io(e)]),
+            Err(e) => return vec![ModelError::Io(e)],
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -209,11 +250,7 @@ impl ModelLibrary {
                 errors.push(e);
             }
         }
-        if errors.is_empty() {
-            Ok(self)
-        } else {
-            Err(errors)
-        }
+        errors
     }
 
     /// Add all `.model` and `.subckt` cards from a SPICE file.
