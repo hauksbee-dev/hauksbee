@@ -55,6 +55,12 @@ pub struct ModelEntry {
     /// Empty for parts with no documented strapping (e.g. AVR).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub straps: Vec<StrapPin>,
+
+    /// Optional declarative behavioural model (pins/pulls, FSM, averaged
+    /// converter, expression laws) for power ICs the SPICE-level kinds cannot
+    /// express. See [`crate::behavioral`].
+    #[serde(default, skip_serializing_if = "crate::behavioral::Behavioral::is_empty")]
+    pub behavioral: crate::behavioral::Behavioral,
 }
 
 /// One boot strapping pin, straight from the part's reference manual.

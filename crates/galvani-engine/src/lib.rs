@@ -19,6 +19,7 @@
 //! (generalizing the Tarski-Emulator pattern), and [`engine::GalvaniEngine`]
 //! exposes the whole thing behind `galvani-server`'s `Engine` trait.
 
+pub mod behavioral;
 pub mod binder;
 pub mod boardcode;
 pub mod checks;
@@ -33,7 +34,8 @@ pub mod scheduler;
 pub mod shorts;
 pub mod stress;
 
-pub use binder::{bind_board, BoundBoard};
+pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
+pub use binder::{bind_board, bind_board_with, BoundBoard};
 pub use checks::usb_c::{
     classify_attach, classify_board, extract_sink_termination, Attach, Cable, CcResult,
     CcThresholds, PinState, Rp, SinkTermination,

@@ -1,0 +1,54 @@
+LTC4020 — 55V Buck-Boost Multi-Chemistry Battery Charger
+Analog Devices / Linear Technology. 38-Pin 5mm x 7mm QFN.
+
+DESCRIPTION
+The LTC4020 is a high voltage, synchronous, current-mode buck-boost
+DC/DC controller with a constant-current / constant-voltage (CC/CV) battery
+charger. The buck-boost converter accepts an input from 4.5V to 55V (60V
+absolute maximum) and charges a battery whose voltage may be above, below or
+equal to the input. PowerPath control prioritizes the system load over the
+charge current. The float (CV) voltage is set by a feedback divider on VFB; the
+charge (CC) current is set by the battery sense resistor across CSP/CSN. An
+input current limit is programmed at the ILIMIT pin against the input sense
+resistor connected across SENSVIN/SENSTOP.
+
+ABSOLUTE MAXIMUM RATINGS
+PVIN, SENSVIN .......................... -0.3V to 60V
+Operating Junction Temperature ......... -40C to 125C
+
+PIN FUNCTIONS (subset)
+Pin 5   SENSBOT  Input current-sense amplifier bottom (low) Kelvin input.
+Pin 6   SENSTOP  Input current-sense amplifier top (high) Kelvin input. A sense
+                 resistor (RSENSE) is connected between SENSVIN/SENSTOP and the
+                 input; the voltage across it is regulated to the input current
+                 limit threshold.
+Pin 7   SENSVIN  Kelvin connection to the input supply (VIN) for the input
+                 current-sense reference.
+Pin 10  VIN_REG  Input voltage regulation reference; charge current is reduced
+                 when the voltage on this pin falls below 2.5V.
+Pin 15  RNG/SS   Switching frequency range and soft-start. A capacitor sets the
+                 soft-start time. Driving this pin disturbs the soft-start and
+                 the operating frequency.
+Pin 20  BAT      Battery charge output / battery sense.
+Pin 22  CSN      Battery current-sense amplifier negative input.
+Pin 23  CSP      Battery current-sense amplifier positive input. The charge
+                 current is (VCSP - VCSN) / RSNSB.
+Pin 25  ILIMIT   Input current-limit program pin. A resistor from ILIMIT to GND
+                 programs the maximum average input current. The maximum input
+                 current sense threshold (the SENSVIN-to-SENSTOP voltage that the
+                 input-current servo regulates to) increases with the ILIMIT
+                 resistor value, up to a full-scale internal limit. The maximum
+                 average input current is then this sense threshold divided by
+                 the input sense resistor RSENSE.
+Pin 36  PVIN     Power input to the buck-boost power stage.
+
+TYPICAL APPLICATION
+Buck-boost charger for an 8-cell LiFePO4 pack. Input from a 12V-to-24V adapter.
+Input sense resistor RSENSE = 0.01 ohm across SENSVIN/SENSTOP. ILIMIT resistor
+to GND sets the input current ceiling (a smaller ILIMIT resistor sets a lower
+input current limit). Float voltage 3.6V per cell.
+
+ELECTRICAL CHARACTERISTICS (typical)
+Buck-boost conversion efficiency: up to 92%.
+Float voltage accuracy: +/-0.5%.
+Charge current accuracy: +/-5%.

@@ -1,0 +1,51 @@
+[[models]]
+id = "ltc4020"
+kind = "vreg"
+description = "55V synchronous buck-boost multi-chemistry CC/CV battery charger"
+
+[models.match]
+mpn_re = "LTC4020"
+
+[models.params]
+vout = 28.8 # Source: Typical Application, 8-cell LiFePO4 pack at 3.6V per cell
+dropout_v = 0.0 # estimated; buck-boost charger can regulate with battery voltage above, below, or equal to input per Description
+iq_a = 0.001 # estimated; quiescent current not stated in provided excerpt
+
+[models.ratings]
+max_voltage_v = 60.0 # Source: Absolute Maximum Ratings, PVIN and SENSVIN -0.3V to 60V
+
+[models.pins]
+"5" = "sensbot"
+"6" = "senstop"
+"7" = "sensvin"
+"10" = "vin_reg"
+"15" = "rng_ss"
+"20" = "bat"
+"22" = "csn"
+"23" = "csp"
+"25" = "ilimit"
+"36" = "pvin"
+
+[models.behavioral.pins.vin_reg]
+enable_threshold_v = 2.5 # Source: Pin Functions, VIN_REG reduces charge current when pin falls below 2.5V
+
+[models.behavioral.converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 28.8 # Source: Typical Application, 8-cell LiFePO4 pack at 3.6V per cell
+efficiency = 0.92 # Source: Electrical Characteristics typical, buck-boost conversion efficiency up to 92%
+
+[models.behavioral.converter.iin_program]
+rsense_ref = "RSENSE" # Source: Typical Application, input sense resistor RSENSE = 0.01 ohm across SENSVIN/SENSTOP
+prog_ref = "RILIMIT" # Source: Pin Functions, resistor from ILIMIT to GND programs maximum average input current
+vprog_ref = 0.0 # estimated; ILIMIT programming voltage not stated in provided excerpt
+prog_ref_ohms = 0.0 # estimated; ILIMIT resistor equation/value not stated in provided excerpt
+v_sense_full = 0.0 # estimated; full-scale input current sense voltage not stated in provided excerpt
+
+[[models.behavioral.laws]]
+name = "battery_charge_current_sense"
+kind = "current"
+a = "csp"
+b = "csn"
+expr = "(v_csp - v_csn) / rsnsb_ohms" # Source: Pin Functions, charge current is (VCSP - VCSN) / RSNSB
