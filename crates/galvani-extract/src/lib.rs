@@ -19,6 +19,7 @@
 
 pub mod drc;
 mod eagle;
+pub mod gerber;
 mod ipc356;
 mod netlint;
 mod netlist;
