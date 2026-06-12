@@ -305,22 +305,44 @@ fn net_role_is_4wire_spi(name: &str) -> bool {
 /// exposed). Mirrors the netlint rail/ground name conventions.
 fn is_rail_or_ground(name: &str) -> bool {
     let leaf = name.trim().rsplit('/').next().unwrap_or(name).to_ascii_uppercase();
-    if leaf.starts_with("GND") || leaf == "VSS" || leaf == "0" || leaf == "AGND" || leaf == "DGND" {
+    // A leading '+' is unambiguously a rail (+3V3, +5V, +VBAT).
+    if leaf.starts_with('+') {
         return true;
     }
-    // Rail names: a leading '+', or a recognised supply token, or an "nVm"
-    // voltage code (3V3, 1V8, 5V0) or trailing 'V'.
-    if leaf.starts_with('+')
-        || matches!(leaf.as_str(), "VCC" | "VDD" | "VBUS" | "VBAT" | "VSYS" | "VIN" | "VDDA" | "VDDIO" | "VREF")
-        || leaf.contains("3V3")
-        || leaf.contains("1V8")
-        || leaf.contains("5V")
-        || leaf.contains("VCC")
-        || leaf.contains("VDD")
+    // Token-match (not substring) so a signal net whose name merely embeds a
+    // supply token - "5V_EN", "VDD_SENSE", "PWR_3V3_OK" - is NOT mistaken for a
+    // rail (which would wrongly stop the signal trace). A leg of a divider on
+    // such a net would otherwise be a silent false negative.
+    let toks: Vec<&str> = leaf.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    // A pure voltage-code token like "3V3" / "1V8" / "5V0" / "5V" (digit V digit*).
+    let is_voltage_code = |t: &str| {
+        let b = t.as_bytes();
+        b.len() >= 2
+            && b[0].is_ascii_digit()
+            && b.iter().any(|&c| c == b'V')
+            && b.iter().all(|&c| c.is_ascii_digit() || c == b'V')
+    };
+    let is_supply_token = |t: &str| {
+        t.starts_with("GND")
+            || matches!(
+                t,
+                "AGND" | "DGND" | "PGND" | "VSS" | "VCC" | "VDD" | "VBUS" | "VBAT" | "VSYS"
+                    | "VIN" | "VDDA" | "VDDIO" | "VREF" | "VCC3V3" | "VCC5V"
+            )
+    };
+    // A standalone supply token is a rail. A voltage code (5V, 3V3) is a rail
+    // ONLY when it is the whole name (every token is a voltage code or supply
+    // token, possibly with a "VCC"/"VDD" prefix), so a signal like "5V_EN" or
+    // "PG_5V" - which carries a non-supply word - is correctly NOT a rail.
+    if toks.iter().any(|t| is_supply_token(t)) {
+        return true;
+    }
+    if toks.iter().all(|t| is_voltage_code(t) || is_supply_token(t) || *t == "0")
+        && toks.iter().any(|t| is_voltage_code(t))
     {
         return true;
     }
-    false
+    leaf == "0"
 }
 
 /// Walk the signal net a used MCU pin is on and, if a single unambiguous
@@ -372,6 +394,14 @@ fn infer_target(
         if is_mcu(c) || !is_series_bridge(c) {
             continue;
         }
+        // A multi-pin bridge (a quad line buffer like the 74LVC125, or a FET)
+        // has several channels and would otherwise let the walk jump from this
+        // signal to an UNRELATED channel's net on the same part. To stay on the
+        // intended path, when crossing such a part only continue to a net that
+        // carries a *continuing* series passive (the filtered output direction
+        // of the PWM-audio reconstruction path), not a bare parallel input. A
+        // genuine two-terminal R/L/C bridge has no such ambiguity.
+        let multi_channel = c.pins.iter().filter(|p| p.net.is_some()).count() > 2;
         for op in &c.pins {
             let Some(oid) = op.net else { continue };
             if oid == net_id {
@@ -384,12 +414,36 @@ fn infer_target(
                     continue;
                 }
             }
+            if multi_channel && !net_has_series_passive(board, oid, &c.reference) {
+                continue;
+            }
             if let Some((target, chain)) = infer_target(board, is_mcu, oid, depth + 1, seen) {
                 return Some((target, format!("net '{net_name}' -> {} -> {chain}", c.reference)));
             }
         }
     }
     None
+}
+
+/// Does `net_id` carry a two-terminal series passive (R/L/C) other than
+/// `exclude_ref`? Used to gate a hop through a multi-channel buffer/FET: the
+/// signal continues out of the channel whose net feeds the next filter element,
+/// not a net that merely parallels another input.
+fn net_has_series_passive(board: &ExtractedBoard, net_id: i64, exclude_ref: &str) -> bool {
+    board
+        .net_members(net_id)
+        .iter()
+        .any(|(c, _)| c.reference != exclude_ref && is_two_terminal_passive(c))
+}
+
+/// A plain two-terminal R / L / C (the series elements of a filter / divider).
+fn is_two_terminal_passive(c: &Component) -> bool {
+    let r = c.reference.to_ascii_uppercase();
+    let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
+    connected == 2
+        && ((r.starts_with('R') && !r.starts_with("RV") && !r.starts_with("RN") && !r.starts_with("RM") && !r.starts_with("RP"))
+            || r.starts_with('L')
+            || (r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON")))
 }
 
 /// A part we follow ONE hop through while tracing a signal: a two-terminal
@@ -729,6 +783,22 @@ mod tests {
         let no_dvi = conflict_net()
             .replace("(net (code 1) (name /CK) (node (ref U1) (pin 16)) (node (ref HDMI1) (pin 12)))", "");
         assert!(msgs(&no_dvi).is_empty(), "a single PWM demand must not fire");
+    }
+
+    #[test]
+    fn rail_or_ground_is_token_matched_not_substring() {
+        // True rails / grounds.
+        for n in ["GND", "+3V3", "/Power/+5V", "VBUS", "3V3", "1V8", "AGND", "VDDA", "GNDPWR"] {
+            assert!(is_rail_or_ground(n), "{n} should be a rail/ground");
+        }
+        // Signal nets that merely EMBED a *voltage code* must NOT be treated as
+        // rails: with a non-supply word present (EN/OK/PG), the voltage code is
+        // part of a signal name, not the rail itself. (A bare VCC/VDD/GND token
+        // stays classed as a rail even in a compound - the safe direction, since
+        // misclassifying a rail-ish net only ever yields a false negative.)
+        for n in ["5V_EN", "PWR_3V3_OK", "FLASH_MISO", "/PWM_L", "PG_5V", "CK_5V0_OK"] {
+            assert!(!is_rail_or_ground(n), "{n} is a signal, not a rail");
+        }
     }
 
     #[test]

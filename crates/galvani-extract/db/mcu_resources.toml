@@ -29,11 +29,15 @@
 # PWM mapping rule (RP2040 datasheet, section 4.5.2 "Programmer's Model", and
 # Table 525 "GPIO functions": each GPIO n is hardwired to PWM slice = (n>>1)&7,
 # channel A when n is even, channel B when n is odd). There are 8 slices (0..7),
-# each with channels A and B, so the pair {slice, channel} is the resource
-# instance: only ONE GPIO can drive a given {slice,channel} as a PWM output at a
-# time, and the two channels of a slice share the slice's counter/TOP, so they
-# cannot run at independent frequencies (RP2040 datasheet 4.5.2.1: "Both channels
-# ... share the same counter").
+# each with channels A and B. The resource instance the check models is the pair
+# {slice, channel}: only ONE GPIO can drive a given {slice, channel} as a PWM
+# output at a time, so two PWM functions on the same {slice, channel} is a hard,
+# no-valid-assignment conflict. (The two channels of a slice also share the
+# slice counter/TOP - RP2040 4.5.2.1 "both channels share the same counter" - so
+# two functions on different channels of one slice cannot have independent
+# frequencies. That weaker, same-slice/different-channel constraint is NOT
+# flagged here; the check models only the hard same-{slice,channel} collision,
+# which both known bugs are.)
 # ---------------------------------------------------------------------------
 [[mcu]]
 id = "rp2040_pico_module"

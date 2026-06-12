@@ -130,7 +130,7 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
         "lily58/Pro_V2/Pro_V2.kicad_sch",
         "mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
         "adafruit_feather_m0/Adafruit Feather M0 Basic rev C.brd",
-        "sparkfun_redboard/RedBoard.brd",
+        "sparkfun_redboard/Hardware/RedBoard.brd",
     ];
     // SAMD51 boards that wire the flash to the SAME QSPI pads as the SparkFun
     // bug, but CORRECTLY (driven over the QSPI controller, quad-IO net naming).
@@ -140,14 +140,22 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
         "adafruit_metro_m4",
         "adafruit_qtpy",
     ];
+    // Under GALVANI_REQUIRE_CORPUS=1, a board that should be present but is not
+    // is a HARD failure, not a silent skip: the calibration gate cannot pass
+    // vacuously by missing the very boards (esp. the Metro M4 QSPI discriminator)
+    // it is meant to guard.
+    let require = std::env::var("GALVANI_REQUIRE_CORPUS").is_ok();
     let mut fires = Vec::new();
+    let mut exercised = 0usize;
     for rel in clean {
         let path = c.join(rel);
         if !path.exists() {
-            // A board added/renamed since: skip rather than fail the calibration
-            // on a path drift (the validation tests above carry the load).
+            if require {
+                panic!("GALVANI_REQUIRE_CORPUS=1 but known-good board missing: {rel}");
+            }
             continue;
         }
+        exercised += 1;
         let msgs = conflicts(&c, rel);
         if !msgs.is_empty() {
             fires.push(format!("{rel}: {msgs:#?}"));
@@ -155,29 +163,45 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     }
     // The correct-QSPI-flash boards: find the .brd by glob (filename carries the
     // board name) and assert silence. This guards the discriminator that keeps
-    // a correctly-wired QSPI flash (Metro/Feather M4 class) from firing.
+    // a correctly-wired QSPI flash (Metro/Feather M4 class) from firing - the
+    // single most important false-positive case, so under REQUIRE_CORPUS it must
+    // actually run.
+    let mut qspi_exercised = 0usize;
     for dir in clean_qspi_flash {
         let d = c.join(dir);
         if !d.exists() {
+            if require {
+                panic!("GALVANI_REQUIRE_CORPUS=1 but correct-QSPI-flash board missing: {dir}");
+            }
             continue;
         }
-        let brd = std::fs::read_dir(&d)
-            .ok()
-            .and_then(|rd| {
-                rd.filter_map(|e| e.ok().map(|e| e.path()))
-                    .find(|p| p.extension().and_then(|e| e.to_str()) == Some("brd"))
-            });
-        if let Some(brd) = brd {
-            let board = load(&brd);
-            let msgs: Vec<_> = board
-                .resource_conflicts()
-                .of_check(LintCheck::McuResourceConflict)
-                .map(|f| f.message.clone())
-                .collect();
-            if !msgs.is_empty() {
-                fires.push(format!("{}: {msgs:#?}", brd.display()));
-            }
+        let brd = std::fs::read_dir(&d).ok().and_then(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .find(|p| p.extension().and_then(|e| e.to_str()) == Some("brd"))
+        });
+        let brd = match brd {
+            Some(b) => b,
+            None if require => panic!("GALVANI_REQUIRE_CORPUS=1 but no .brd in {dir}"),
+            None => continue,
+        };
+        qspi_exercised += 1;
+        let board = load(&brd);
+        let msgs: Vec<_> = board
+            .resource_conflicts()
+            .of_check(LintCheck::McuResourceConflict)
+            .map(|f| f.message.clone())
+            .collect();
+        if !msgs.is_empty() {
+            fires.push(format!("{}: {msgs:#?}", brd.display()));
         }
+    }
+    if require {
+        assert!(exercised > 0, "no known-good boards were exercised");
+        assert!(
+            qspi_exercised > 0,
+            "the Metro/Feather-M4 correct-QSPI-flash discriminator board was not exercised; \
+             the false-positive guard would pass vacuously"
+        );
     }
     assert!(
         fires.is_empty(),
