@@ -19,6 +19,7 @@ without giving up the speed that made it many times faster than ngspice.
 
 ```
 .kicad_pcb ──forge-sexpr/model──▶ typed board
+.kicad_sch ──forge-sexpr────────▶ derived netlist   (see docs/SCHEMATICS.md)
         │
         ▼
 galvani-extract: pads ⇒ nets ⇒ connectivity graph ⇒ component instances

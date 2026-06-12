@@ -1,20 +1,30 @@
 //! Circuit extraction: turn a KiCad design into the connectivity graph the
 //! simulator binds models onto.
 //!
-//! Two sources, one output shape:
+//! Several sources, one output shape:
 //! - [`ExtractedBoard::from_kicad_pcb`] — layout only. Every pad in a
 //!   `.kicad_pcb` carries its net, so the board file alone fully describes
 //!   connectivity. This is the "hand us any PCB" path.
 //! - [`ExtractedBoard::from_kicad_netlist`] — a `kicad-cli sch export
 //!   netlist --format kicadsexpr` export. Richer (pin names/types), used
 //!   when the schematic is available.
+//! - [`ExtractedBoard::from_kicad_schematic`] /
+//!   [`ExtractedBoard::from_kicad_schematic_path`] — a `.kicad_sch` directly.
+//!   The schematic carries no nets, so connectivity is *derived* geometrically
+//!   the way eeschema derives it (wires, pins, junctions, labels, power
+//!   symbols, hierarchy). This is the "simulate before there's a layout" path;
+//!   see `docs/SCHEMATICS.md`.
+//! - [`ExtractedBoard::from_eagle_brd`] / [`ExtractedBoard::from_ipc_d356`] —
+//!   other EDA formats.
 
 mod eagle;
 mod ipc356;
 mod netlist;
 mod pcb;
+mod schematic;
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
@@ -88,6 +98,21 @@ impl ExtractedBoard {
         netlist::extract(text)
     }
 
+    /// KiCad s-expression schematic (`.kicad_sch`, KiCad 6 through 10). The
+    /// netlist is derived geometrically from wires, pins, junctions, labels
+    /// and power symbols, since a schematic carries no copper. Sub-sheets are
+    /// not followed (single sheet only); use [`Self::from_kicad_schematic_path`]
+    /// to recurse a hierarchy that lives in sibling files.
+    pub fn from_kicad_schematic(text: &str) -> Result<Self, ExtractError> {
+        schematic::extract(text)
+    }
+
+    /// KiCad schematic from a file path, recursing into the sheet hierarchy
+    /// (sub-sheets resolved relative to the file's directory).
+    pub fn from_kicad_schematic_path(path: &Path) -> Result<Self, ExtractError> {
+        schematic::extract_from_path(path)
+    }
+
     /// Eagle `.brd` (XML, Eagle 6+): Arduino, Adafruit, SparkFun designs.
     pub fn from_eagle_brd(text: &str) -> Result<Self, ExtractError> {
         eagle::extract(text)
@@ -108,8 +133,11 @@ impl ExtractedBoard {
         match doc.root().and_then(|r| r.name()) {
             Some("kicad_pcb") | Some("module") => pcb::extract_from_doc(doc),
             Some("export") => netlist::extract_from_doc(doc),
+            // Schematic: single sheet only here (no directory to find
+            // sub-sheets from). The path-based entry point recurses.
+            Some("kicad_sch") => schematic::extract_from_doc(doc, None),
             other => Err(ExtractError::WrongRoot {
-                expected: "kicad_pcb or export",
+                expected: "kicad_pcb, export or kicad_sch",
                 found: other.map(str::to_string),
             }),
         }
@@ -122,6 +150,8 @@ impl ExtractedBoard {
             Self::from_eagle_brd(text)
         } else if head.trim_start().starts_with("(export") {
             Self::from_kicad_netlist(text)
+        } else if head.contains("(kicad_sch") {
+            Self::from_kicad_schematic(text)
         } else if head.contains("(kicad_pcb") {
             Self::from_kicad_pcb(text)
         } else {
