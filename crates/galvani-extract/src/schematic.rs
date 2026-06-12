@@ -151,13 +151,13 @@ struct NamedAnchor {
 
 #[derive(Clone, Copy, PartialEq)]
 enum NameScope {
-    /// Local label: unifies only within its own sheet.
+    /// Local label: unifies only within its own sheet. Hierarchical labels and
+    /// sheet pins are also Local for *naming/within-sheet* purposes; their
+    /// cross-sheet connection is carried separately by the hierarchical join
+    /// (`hier_parent`/`hier_child`), not by this scope.
     Local,
     /// Global label or power net: unifies across the whole design.
     Global,
-    /// Hierarchical label (child side) or sheet pin (parent side): unifies
-    /// within the sheet, and connects to the matching pin one level up.
-    Hierarchical,
 }
 
 struct NetlistBuilder {
@@ -171,15 +171,50 @@ struct NetlistBuilder {
     /// Wire endpoints / junctions / no-connects, keyed by coordinate, so any
     /// two things at the same coordinate end up unioned.
     point_node: HashMap<(SheetId, Pt), usize>,
+    /// Every wire / bus segment, per sheet, as an (a, b) endpoint pair tagged
+    /// with whether it is a bus (thick) segment. KiCad connects anything lying
+    /// *along* a segment, not only at its two endpoints: a label or pin placed
+    /// mid-span on a wire joins that wire. We record the segments and run an
+    /// incidence pass in `finish` that unions every point sitting on a
+    /// segment's interior into it. (Most net labels in real boards sit
+    /// mid-span, so without this almost every label floats free of its wire.)
+    segments: Vec<(SheetId, Pt, Pt, bool)>,
+    /// Bus alias definitions per sheet: alias name -> member tokens. Referenced
+    /// from group buses as `{ALIAS}`. Recorded for completeness; resolved when
+    /// a group bus references `{NAME}`.
+    bus_aliases: HashMap<(SheetId, String), Vec<String>>,
     /// Hierarchical wiring: (sheet instance path, pin name) → union-find node,
     /// recorded for both the parent sheet-pin and the child hierarchical-label
     /// so the two sides can be joined.
     hier_parent: Vec<(String, String, usize)>,
     hier_child: Vec<(String, String, usize)>,
+    /// Bus labels placed on a sheet: the coordinate they sit at and the member
+    /// names that bus carries. Used to resolve a bus that crosses a sheet
+    /// boundary under a *different* name (a bus `DQ[0..31]` feeding a sheet pin
+    /// `DPC[0..31]`): the members map positionally by index, so we need the
+    /// bus's own member list at the pin's location.
+    bus_labels: Vec<(SheetId, Pt, Vec<String>)>,
+    /// Bus boundary anchors: a bus-valued sheet pin (parent side) or bus-valued
+    /// hierarchical label (child side) that must connect member-wise. Resolved
+    /// in `finish`, once every bus and bus label is known.
+    bus_boundaries: Vec<BusBoundary>,
     next_sheet: SheetId,
 }
 
 type SheetId = u32;
+
+/// One side of a bus crossing a sheet boundary.
+struct BusBoundary {
+    sheet: SheetId,
+    at: Pt,
+    /// The pin/label's own member names (`DPC0..DPC31`). These key the
+    /// cross-boundary join so they match the other side by name.
+    own_members: Vec<String>,
+    /// Hierarchy key path (the child instance path).
+    path: String,
+    /// Parent (sheet pin) or child (hierarchical label) side.
+    parent_side: bool,
+}
 
 impl NetlistBuilder {
     fn new() -> Self {
@@ -190,8 +225,12 @@ impl NetlistBuilder {
             anchors: Vec::new(),
             anchor_sheet: Vec::new(),
             point_node: HashMap::new(),
+            segments: Vec::new(),
+            bus_aliases: HashMap::new(),
             hier_parent: Vec::new(),
             hier_child: Vec::new(),
+            bus_labels: Vec::new(),
+            bus_boundaries: Vec::new(),
             next_sheet: 0,
         }
     }
@@ -269,7 +308,8 @@ impl NetlistBuilder {
             self.add_symbol(sheet, sym, &lib_id, &lib, inst_path);
         }
 
-        // -- Wires: union their two endpoints --------------------------------
+        // -- Wires: union their two endpoints and record each segment so the
+        //    mid-span incidence pass can attach labels/pins lying along it.
         for wire in root.find_all("wire") {
             let mut pts = Vec::new();
             if let Some(p) = wire.find("pts") {
@@ -283,6 +323,68 @@ impl NetlistBuilder {
                 let a = self.node_at(sheet, win[0]);
                 let b = self.node_at(sheet, win[1]);
                 self.uf.union(a, b);
+                self.segments.push((sheet, win[0], win[1], false));
+            }
+        }
+
+        // -- Buses: a bus is a thick wire that carries several member nets at
+        //    once. It is electrically *cosmetic*: members travel by name
+        //    (every member wire entering a bus carries its own label, and a bus
+        //    cannot be connected to a pin without one — KiCad's rule). We must
+        //    therefore NOT union anything through bus geometry: if we did,
+        //    every member's bus-entry landing point would collapse into one
+        //    node and the whole bus would short into a single net. We record
+        //    bus segments only so the incidence pass knows which segments are
+        //    buses (and skips them).
+        for bus in root.find_all("bus") {
+            let mut pts = Vec::new();
+            if let Some(p) = bus.find("pts") {
+                for xy in p.find_all("xy") {
+                    if let (Some(x), Some(y)) = (xy.arg_f64(0), xy.arg_f64(1)) {
+                        pts.push(snap(x, y));
+                    }
+                }
+            }
+            for win in pts.windows(2) {
+                self.segments.push((sheet, win[0], win[1], true));
+            }
+        }
+
+        // -- Bus entries: the 45-degree stroke joining a member wire to a bus.
+        //    Only the *wire* side carries electrical meaning (it is the end of
+        //    the member wire, which carries the member's label). The bus side
+        //    lands on the cosmetic bus and must stay electrically inert, or all
+        //    members short together. We materialise both endpoint nodes (so the
+        //    member wire's endpoint is anchored for the incidence pass) but do
+        //    NOT union them across the bus.
+        for be in root.find_all("bus_entry") {
+            if let (Some(at), Some(size)) = (be.find("at"), be.find("size")) {
+                if let (Some(x), Some(y), Some(dx), Some(dy)) = (
+                    at.arg_f64(0),
+                    at.arg_f64(1),
+                    size.arg_f64(0),
+                    size.arg_f64(1),
+                ) {
+                    self.node_at(sheet, snap(x, y));
+                    self.node_at(sheet, snap(x + dx, y + dy));
+                }
+            }
+        }
+
+        // -- Bus aliases: `(bus_alias "NAME" (members "A" "B" ...))`. Recorded
+        //    per sheet so a group bus referencing `{NAME}` can expand it.
+        for ba in root.find_all("bus_alias") {
+            if let Some(name) = ba.arg_value(0) {
+                let mut members = Vec::new();
+                if let Some(ms) = ba.find("members") {
+                    for i in 0.. {
+                        match ms.arg_value(i) {
+                            Some(m) => members.push(m),
+                            None => break,
+                        }
+                    }
+                }
+                self.bus_aliases.insert((sheet, name), members);
             }
         }
 
@@ -316,17 +418,39 @@ impl NetlistBuilder {
             if let (Some(name), Some(at)) = (lbl.arg_value(0), at_xy(lbl)) {
                 let node = self.node_at(sheet, at);
                 let name = normalize_label(&name);
-                self.push_anchor(
-                    sheet,
-                    NamedAnchor {
-                        name: name.clone(),
-                        scope: NameScope::Hierarchical,
-                        node,
-                    },
-                );
-                // Child side of a hierarchical connection: keyed by this
-                // sheet's own instance path.
-                self.hier_child.push((inst_path.to_string(), name, node));
+                if let Some(members) = expand_bus(&name) {
+                    // A bus passing through a hierarchical label connects
+                    // member-wise one level up. Recorded and resolved in
+                    // `finish` (child side), where the bus this label sits on is
+                    // known so member nets bind positionally.
+                    self.bus_boundaries.push(BusBoundary {
+                        sheet,
+                        at,
+                        own_members: members,
+                        path: inst_path.to_string(),
+                        parent_side: false,
+                    });
+                } else {
+                    // A hierarchical label is a labelled net on its own sheet:
+                    // it unifies with any same-named local label or wire on the
+                    // sheet (Local scope), and additionally connects one level
+                    // up via the hierarchical join (hier_child key). Using
+                    // Local scope here is what links the boundary net to the
+                    // pins it actually serves on this sheet; without it the
+                    // hier-label node floats free of the local net of the same
+                    // name and the cross-sheet join connects nothing useful.
+                    self.push_anchor(
+                        sheet,
+                        NamedAnchor {
+                            name: name.clone(),
+                            scope: NameScope::Local,
+                            node,
+                        },
+                    );
+                    // Child side of a hierarchical connection: keyed by this
+                    // sheet's own instance path.
+                    self.hier_child.push((inst_path.to_string(), name, node));
+                }
             }
         }
 
@@ -438,6 +562,24 @@ impl NetlistBuilder {
                         },
                     );
                 }
+
+                // Implicit power connection: a *hidden* `power_in` pin on an
+                // ordinary device (not a power symbol) auto-connects to the
+                // global power net named after the pin's *name*, with no wire
+                // drawn. This is how KiCad ties a logic chip's hidden GND/VCC
+                // pins to the rails. Visible power_in pins are wired normally
+                // and must NOT be auto-named, or two different chips' visible
+                // supply pins sharing a pin name would wrongly merge.
+                if !is_power && lp.etype == "power_in" && lp.hidden && !lp.name.is_empty() {
+                    self.push_anchor(
+                        sheet,
+                        NamedAnchor {
+                            name: normalize_label(&lp.name),
+                            scope: NameScope::Global,
+                            node,
+                        },
+                    );
+                }
             }
         }
 
@@ -457,7 +599,18 @@ impl NetlistBuilder {
         if let (Some(name), Some(at)) = (lbl.arg_value(0), at_xy(lbl)) {
             let node = self.node_at(sheet, at);
             let name = normalize_label(&name);
-            self.push_anchor(sheet, NamedAnchor { name, scope, node });
+            // A label whose text is a bus expression (vector `D[0..7]` or group
+            // `NAME{...}`) names a *bus*, not a single net. On a flat sheet the
+            // bus is cosmetic: every member already reaches the bus via its own
+            // labelled wire, and those member labels (`D0`, `D1`, …) unify by
+            // name on their own. So a bus label imposes no single net name (it
+            // must not, or `D[0..7]` would become one giant net). We record the
+            // bus label's members and position so a sheet pin sitting on this
+            // bus under a different name can map its members positionally.
+            match expand_bus(&name) {
+                Some(members) => self.bus_labels.push((sheet, at, members)),
+                None => self.push_anchor(sheet, NamedAnchor { name, scope, node }),
+            }
         }
     }
 
@@ -483,8 +636,32 @@ impl NetlistBuilder {
         for pin in sub.find_all("pin") {
             if let (Some(name), Some(at)) = (pin.arg_value(0), at_xy(pin)) {
                 let node = self.node_at(sheet, at);
-                self.hier_parent
-                    .push((child_path.clone(), normalize_label(&name), node));
+                let name = normalize_label(&name);
+                if let Some(members) = expand_bus(&name) {
+                    // A bus sheet pin connects member-wise to the child's
+                    // matching bus hierarchical label. Recorded and resolved in
+                    // `finish` (parent side): the pin may sit on a parent bus
+                    // carrying *differently-named* members (`DQ[0..31]` feeding
+                    // a `DPC[0..31]` pin), which map positionally by index.
+                    let _ = node;
+                    self.bus_boundaries.push(BusBoundary {
+                        sheet,
+                        at,
+                        own_members: members,
+                        path: child_path.clone(),
+                        parent_side: true,
+                    });
+                } else {
+                    // A sheet pin's net on the parent is established
+                    // geometrically: the wire touching the pin (which carries
+                    // the parent-side label) reaches this node. We do NOT also
+                    // register the pin *name* as a parent local label, because
+                    // two instances of the same sub-sheet placed on one page
+                    // would then wrongly merge through their identical pin
+                    // names. The cross-boundary link is keyed by the unique
+                    // child instance path instead.
+                    self.hier_parent.push((child_path.clone(), name, node));
+                }
             }
         }
 
@@ -510,9 +687,183 @@ impl NetlistBuilder {
         Ok(())
     }
 
+    /// Union every anchored point that lies strictly inside a *wire* segment
+    /// into that segment, matching KiCad's "anything on a wire is on the net"
+    /// rule. Bus segments are skipped (a bus is cosmetic; its members travel by
+    /// name). Endpoints are already unioned when the segment was recorded, so
+    /// only interior incidence is handled here.
+    fn incidence_pass(&mut self) {
+        // Index anchored points per sheet for a cheap interior test. We bucket
+        // points by sheet so a segment only scans its own sheet's points.
+        let mut pts_by_sheet: HashMap<SheetId, Vec<(Pt, usize)>> = HashMap::new();
+        for (&(sheet, pt), &node) in &self.point_node {
+            pts_by_sheet.entry(sheet).or_default().push((pt, node));
+        }
+
+        for &(sheet, a, b, is_bus) in &self.segments {
+            if is_bus {
+                continue;
+            }
+            let Some(points) = pts_by_sheet.get(&sheet) else {
+                continue;
+            };
+            let seg_node = self.point_node[&(sheet, a)];
+            // Only axis-aligned segments occur in KiCad schematics; handle the
+            // general collinear case anyway for robustness.
+            for &(p, node) in points {
+                if p == a || p == b {
+                    continue;
+                }
+                if point_strictly_inside(p, a, b) {
+                    self.uf.union(seg_node, node);
+                }
+            }
+        }
+    }
+
+    /// Resolve bus-valued sheet pins / hierarchical labels into member-wise
+    /// hierarchical connections, handling buses that cross a sheet boundary
+    /// under a different name by mapping members positionally by index.
+    fn resolve_bus_boundaries(&mut self) {
+        // Per sheet, group bus segments into connected subgraphs and record,
+        // for each subgraph, the member list of any bus label sitting on it.
+        // A query point is matched to a subgraph by lying on one of its
+        // segments (endpoint or interior). We keep it simple: a flat list of
+        // (sheet, points-of-subgraph, members) is overkill; instead, for each
+        // boundary we directly search bus labels whose subgraph reaches the
+        // boundary point. To connect a label to a boundary we test reachability
+        // over the sheet's bus segments.
+        let boundaries = std::mem::take(&mut self.bus_boundaries);
+        for b in &boundaries {
+            // Find the bus member list at this boundary: a bus label on the
+            // same bus subgraph as the boundary point. If none, fall back to
+            // the boundary's own member names (same-named bus both sides).
+            let bus_members = self
+                .bus_label_on_same_bus(b.sheet, b.at)
+                .unwrap_or_else(|| b.own_members.clone());
+
+            // Pair positionally. Lengths normally match; if they differ (a
+            // malformed schematic) we connect the common prefix and leave the
+            // rest as their own-named members.
+            let n = b.own_members.len().min(bus_members.len());
+            for i in 0..b.own_members.len() {
+                let local_name = if i < n {
+                    bus_members[i].clone()
+                } else {
+                    b.own_members[i].clone()
+                };
+                let mnode = self.uf.make();
+                // Bind the fresh node to the member's net on this sheet via a
+                // local label of the *local* (bus) member name.
+                self.push_anchor(
+                    b.sheet,
+                    NamedAnchor {
+                        name: local_name,
+                        scope: NameScope::Local,
+                        node: mnode,
+                    },
+                );
+                // Key the hierarchical join under the boundary's OWN member
+                // name so it matches the other side.
+                let key = b.own_members[i].clone();
+                if b.parent_side {
+                    self.hier_parent.push((b.path.clone(), key, mnode));
+                } else {
+                    self.hier_child.push((b.path.clone(), key, mnode));
+                }
+            }
+        }
+    }
+
+    /// Member list of a bus label sitting on the same bus subgraph as `at`, if
+    /// any. Bus segments on the sheet are walked from `at` to discover the
+    /// subgraph; a bus label whose coordinate lies on a reached segment names
+    /// the bus.
+    fn bus_label_on_same_bus(&self, sheet: SheetId, at: Pt) -> Option<Vec<String>> {
+        // Collect this sheet's bus segments.
+        let segs: Vec<(Pt, Pt)> = self
+            .segments
+            .iter()
+            .filter(|(s, _, _, is_bus)| *s == sheet && *is_bus)
+            .map(|(_, a, b, _)| (*a, *b))
+            .collect();
+        if segs.is_empty() {
+            return None;
+        }
+        // Flood the bus subgraph reachable from `at` (which lies on some bus
+        // segment, being the sheet-pin / hierarchical-label connection point).
+        let mut reached: BTreeSet<Pt> = BTreeSet::new();
+        let mut frontier: Vec<Pt> = Vec::new();
+        // Seed: any segment endpoint coincident with `at`, or, if `at` lies on
+        // a segment interior, both its endpoints.
+        for &(a, b) in &segs {
+            if a == at || b == at || point_strictly_inside(at, a, b) {
+                for p in [a, b] {
+                    if reached.insert(p) {
+                        frontier.push(p);
+                    }
+                }
+            }
+        }
+        if reached.is_empty() {
+            return None;
+        }
+        while let Some(p) = frontier.pop() {
+            for &(a, b) in &segs {
+                let touch = a == p || b == p || point_strictly_inside(p, a, b);
+                if touch {
+                    for q in [a, b] {
+                        if reached.insert(q) {
+                            frontier.push(q);
+                        }
+                    }
+                }
+            }
+        }
+        // A bus label on this sheet whose coordinate lies on a reached segment.
+        for (s, lpt, members) in &self.bus_labels {
+            if *s != sheet {
+                continue;
+            }
+            let on_bus = reached.contains(lpt)
+                || segs.iter().any(|&(a, b)| {
+                    (reached.contains(&a) || reached.contains(&b))
+                        && (point_strictly_inside(*lpt, a, b) || a == *lpt || b == *lpt)
+                });
+            if on_bus {
+                return Some(members.clone());
+            }
+        }
+        None
+    }
+
     /// Resolve the union-find into nets, name them KiCad-style, and assign net
     /// ids to component pins.
     fn finish(mut self, name: String) -> Result<ExtractedBoard, ExtractError> {
+        // 0. Mid-span incidence. KiCad joins anything lying *on* a wire (or
+        //    bus) segment, not only at its endpoints: a net label or a pin
+        //    placed mid-span on a wire is electrically on that wire. Almost
+        //    every net label in a real board sits mid-span, so without this
+        //    nearly all labels float free of their wire and the netlist
+        //    shatters. For each *wire* segment, union every same-sheet anchored
+        //    point that lies strictly inside it into the segment. Bus segments
+        //    are skipped: a bus is cosmetic and carries members by name, so
+        //    unioning points along it would short every member together.
+        self.incidence_pass();
+
+        // 0b. Resolve bus boundaries (bus-valued sheet pins and hierarchical
+        //     labels). Each member i gets one fresh union-find node that is
+        //     - bound, as a local label, to the member's net on this sheet, and
+        //     - keyed for the hierarchical join under the pin/label's OWN member
+        //       name (so it matches the other side by name).
+        //     The local member name is the bus's member name when the boundary
+        //     sits on a bus carrying differently-named members (`DQ[0..31]`
+        //     feeding a `DPC[0..31]` pin: index i is `DQi` locally, keyed
+        //     `DPCi` across the boundary); otherwise it is the pin's own member
+        //     name. Done before the hierarchical join, which then unifies the
+        //     two sides through these keyed nodes.
+        self.resolve_bus_boundaries();
+
         // 1. Hierarchical join: parent sheet-pin node ↔ child hierarchical
         //    label node sharing the same (child path, pin name).
         let parent_index: HashMap<(String, String), usize> = self
@@ -592,7 +943,6 @@ impl NetlistBuilder {
             let r = self.uf.find(a.node);
             let prio = match a.scope {
                 NameScope::Global => 3,
-                NameScope::Hierarchical => 2,
                 NameScope::Local => 1,
             };
             anchor_name_of_root
@@ -767,6 +1117,10 @@ struct LibPin {
     name: String,
     etype: String,
     unit: u32,
+    /// Hidden pin. A hidden `power_in` pin auto-connects to the global power
+    /// net named after the pin's *name* (KiCad's implicit power connection),
+    /// even with no wire drawn to it.
+    hidden: bool,
 }
 
 struct LibDef {
@@ -851,7 +1205,8 @@ fn lib_pin(p: &List) -> Option<LibPin> {
         .find("number")
         .and_then(|n| n.arg_value(0))
         .unwrap_or_default();
-    Some(LibPin { at, number, name, etype, unit: 0 })
+    let hidden = p.has_flag("hide");
+    Some(LibPin { at, number, name, etype, unit: 0, hidden })
 }
 
 // ---------------------------------------------------------------------------
@@ -869,25 +1224,28 @@ fn lib_pin(p: &List) -> Option<LibPin> {
 /// "2"'s spot, which is the difference between a correct netlist and a
 /// scrambled one.
 ///
-/// Mirroring is applied to the local point *before* rotation, matching
-/// eeschema's transform order: `mirror x` flips across the x axis (negate y),
-/// `mirror y` flips across the y axis (negate x).
+/// Mirroring is applied *after* rotation, in the placed frame, matching
+/// eeschema's transform order (rotate the symbol, then flip it): `mirror x`
+/// flips across the x axis (negate the rotated y), `mirror y` flips across the
+/// y axis (negate the rotated x). The order is load-bearing only when a symbol
+/// is both rotated and mirrored: applying the mirror first instead swaps the
+/// two pins of such a part (e.g. a resistor placed at rot 90 + mirror x), which
+/// is exactly the kind of error that yields a plausible-but-wrong netlist.
 fn place_pin(local: (f64, f64, f64), inst: (f64, f64, f64), mirror: Option<&str>) -> Pt {
     // Library symbols are drawn in a y-*up* frame; the schematic canvas is
     // y-*down*. Flip the pin's local y first so "top of symbol" stays at the
     // top once placed. (Skipping this silently swaps the two pins of every
-    // vertical 2-pin part, which is exactly the kind of error that produces a
-    // plausible-but-wrong netlist.)
-    let (mut lx, mut ly) = (local.0, -local.1);
-    match mirror {
-        Some("x") => ly = -ly,
-        Some("y") => lx = -lx,
-        _ => {}
-    }
+    // vertical 2-pin part.)
+    let (lx, ly) = (local.0, -local.1);
     let theta = inst.2.to_radians();
     let (s, c) = theta.sin_cos();
-    let rx = lx * c + ly * s;
-    let ry = -lx * s + ly * c;
+    let mut rx = lx * c + ly * s;
+    let mut ry = -lx * s + ly * c;
+    match mirror {
+        Some("x") => ry = -ry,
+        Some("y") => rx = -rx,
+        _ => {}
+    }
     snap(inst.0 + rx, inst.1 + ry)
 }
 
@@ -907,6 +1265,79 @@ fn at_of(list: &List) -> (f64, f64, f64) {
 fn at_xy(list: &List) -> Option<Pt> {
     let at = list.find("at")?;
     Some(snap(at.arg_f64(0)?, at.arg_f64(1)?))
+}
+
+/// True if `p` lies strictly between `a` and `b` on the segment a–b (collinear,
+/// excluding the endpoints). Coordinates are integer micrometres, so the cross
+/// product is exact.
+fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
+    let cross = (b.0 - a.0) as i128 * (p.1 - a.1) as i128
+        - (b.1 - a.1) as i128 * (p.0 - a.0) as i128;
+    if cross != 0 {
+        return false; // not collinear
+    }
+    let dot = (p.0 - a.0) as i128 * (b.0 - a.0) as i128
+        + (p.1 - a.1) as i128 * (b.1 - a.1) as i128;
+    let len2 = (b.0 - a.0) as i128 * (b.0 - a.0) as i128
+        + (b.1 - a.1) as i128 * (b.1 - a.1) as i128;
+    dot > 0 && dot < len2
+}
+
+// ---------------------------------------------------------------------------
+// Bus syntax
+// ---------------------------------------------------------------------------
+
+/// Expand a bus label/pin name into its member net names, or `None` if the
+/// name is not a bus expression (a plain net).
+///
+/// KiCad bus syntax (6+):
+/// - **Vector**: `PREFIX[m..n]` → `PREFIXm`, `PREFIXm±1`, … `PREFIXn`
+///   (ascending or descending). `D[0..7]` → `D0`…`D7`.
+/// - **Group**: `[NAME]{ tok tok … }` → each token expanded; a vector token is
+///   expanded in place, a plain token is taken as is. With a `NAME` prefix the
+///   members are qualified `NAME.member`; anonymous groups keep bare member
+///   names. `USB{DP DM}` → `USB.DP`, `USB.DM`; `{A B[0..1]}` → `A`, `B0`, `B1`.
+///
+/// The names returned are already `normalize_label`-d (the input should be).
+fn expand_bus(name: &str) -> Option<Vec<String>> {
+    // Group bus: optional prefix then `{ ... }`.
+    if let Some(open) = name.find('{') {
+        if name.ends_with('}') {
+            let prefix = &name[..open];
+            let inner = &name[open + 1..name.len() - 1];
+            let mut out = Vec::new();
+            for tok in inner.split_whitespace() {
+                let expanded = expand_bus(tok).unwrap_or_else(|| vec![tok.to_string()]);
+                for m in expanded {
+                    if prefix.is_empty() {
+                        out.push(m);
+                    } else {
+                        out.push(format!("{prefix}.{m}"));
+                    }
+                }
+            }
+            if out.is_empty() {
+                return None;
+            }
+            return Some(out);
+        }
+    }
+    // Vector bus: `PREFIX[m..n]`.
+    let open = name.find('[')?;
+    if !name.ends_with(']') {
+        return None;
+    }
+    let prefix = &name[..open];
+    let inner = &name[open + 1..name.len() - 1];
+    let (lo, hi) = inner.split_once("..")?;
+    let lo: i64 = lo.trim().parse().ok()?;
+    let hi: i64 = hi.trim().parse().ok()?;
+    let range: Vec<i64> = if lo <= hi {
+        (lo..=hi).collect()
+    } else {
+        (hi..=lo).rev().collect()
+    };
+    Some(range.into_iter().map(|i| format!("{prefix}{i}")).collect())
 }
 
 /// Normalise a label / net name the way KiCad does before comparing nets.
