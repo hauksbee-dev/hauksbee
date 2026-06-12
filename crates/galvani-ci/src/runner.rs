@@ -441,10 +441,10 @@ fn run_one(
                 }
             }
         }
-        // Protection-trip tracking: latch true if any supply's protection has
-        // tripped this frame (it stays recorded even if it later re-arms).
+        // Protection-trip tracking: read the sticky "ever tripped" flag so a
+        // trip that occurs and re-arms within one coarse frame is still caught.
         for leg in &engine.scheduler().supplies {
-            if leg.supply.protection_tripped() {
+            if leg.supply.protection_ever_tripped() {
                 protection_tripped.insert(leg.net_name.clone(), true);
             } else {
                 protection_tripped.entry(leg.net_name.clone()).or_insert(false);
@@ -553,13 +553,17 @@ fn attach_scenarios(
         }
         let Some(net) = &a.net else { continue };
         let scope = a.scenario.clone().unwrap_or_default();
-        // The window start is the scenario's start_ms (0 for run-wide).
-        let start_s = spec
-            .scenarios
-            .iter()
-            .find(|s| s.id.as_deref() == Some(scope.as_str()) || (scope.is_empty()))
-            .map(|s| s.start_ms / 1000.0)
-            .unwrap_or(0.0);
+        // The window start is the scoped scenario's start_ms; a run-wide window
+        // (no scope) starts at 0 and must not borrow the first scenario's start.
+        let start_s = if scope.is_empty() {
+            0.0
+        } else {
+            spec.scenarios
+                .iter()
+                .find(|s| s.id.as_deref() == Some(scope.as_str()))
+                .map(|s| s.start_ms / 1000.0)
+                .unwrap_or(0.0)
+        };
         match windows.iter_mut().find(|w| w.id == scope) {
             Some(w) => {
                 if !w.nets.contains(net) {
