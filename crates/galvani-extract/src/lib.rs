@@ -23,6 +23,7 @@ mod ipc356;
 mod netlint;
 mod netlist;
 mod pcb;
+pub mod resource_conflict;
 mod schematic;
 pub mod si;
 pub mod trace_current;

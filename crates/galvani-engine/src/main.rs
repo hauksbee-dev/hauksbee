@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! galvani run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
-//!                                 [--port 3001] [--report] [--drc] [--lint] [--si] [--apply-shorts]
+//!                                 [--port 3001] [--report] [--drc] [--lint] [--si]
+//!                                 [--resources] [--apply-shorts]
 //! galvani to-code    <board-file> [--out <file.board>]
 //! galvani from-code  <code-file>  [--out <file.kicad_pcb>]
 //! galvani check-code <code-dir|file> [--seconds N] [--destructive]
@@ -40,6 +41,7 @@ struct Args {
     drc_only: bool,
     lint_only: bool,
     si_only: bool,
+    resources_only: bool,
     apply_shorts: bool,
     port: u16,
 }
@@ -55,6 +57,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
         drc_only: false,
         lint_only: false,
         si_only: false,
+        resources_only: false,
         apply_shorts: false,
         port: 3001,
     };
@@ -75,6 +78,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
             "--drc" => args.drc_only = true,
             "--lint" => args.lint_only = true,
             "--si" => args.si_only = true,
+            "--resources" => args.resources_only = true,
             "--apply-shorts" => args.apply_shorts = true,
             "--port" => {
                 args.port = it
@@ -91,7 +95,7 @@ fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> 
 
 fn usage() -> String {
     "usage:\n  \
-     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--apply-shorts]\n  \
+     galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--resources] [--apply-shorts]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
      galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
@@ -158,12 +162,21 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // --lint: run the connectivity lint-class checks plus the boot strap-pin
-    // lint (which needs the model db's per-part strap tables), print, exit.
+    // --lint: run the connectivity lint-class checks, the boot strap-pin lint
+    // (which needs the model db's per-part strap tables), and the MCU internal
+    // resource-conflict check (a lint-class structural check too), print, exit.
     if args.lint_only {
         let mut report = board.net_lint();
         let straps = galvani_engine::checks::straps::strap_lint(&board, &lib);
         report.findings.extend(straps.findings);
+        report.findings.extend(board.resource_conflicts().findings);
+        print!("{}", galvani_extract::render_netlint(&report));
+        return Ok(());
+    }
+
+    // --resources: run only the MCU internal resource-conflict check, print, exit.
+    if args.resources_only {
+        let report = board.resource_conflicts();
         print!("{}", galvani_extract::render_netlint(&report));
         return Ok(());
     }

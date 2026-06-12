@@ -51,6 +51,12 @@ pub enum LintCheck {
     /// free-running clock source on it, a pull to the wrong rail, or no defined
     /// level where one is required. Produced by the engine-layer strap lint.
     StrapPin,
+    /// Two board-level functions are routed to different MCU pins, but those
+    /// pins map to the same shared silicon resource instance inside the MCU (a
+    /// PWM slice/channel, a QSPI pin group), so the MCU cannot serve both at
+    /// once. Produced by `resource_conflict.rs`, reported through this same
+    /// `NetLintReport` shape.
+    McuResourceConflict,
 }
 
 impl LintCheck {
@@ -61,6 +67,7 @@ impl LintCheck {
             LintCheck::LedCurrentSanity => "led_current_sanity",
             LintCheck::OutputContention => "output_contention",
             LintCheck::StrapPin => "strap_pin",
+            LintCheck::McuResourceConflict => "mcu_resource_conflict",
         }
     }
 }
