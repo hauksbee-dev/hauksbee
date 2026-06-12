@@ -197,14 +197,13 @@ impl QemuProcess {
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
             .arg("-serial")
-            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait"))
-            // Disable the RTC and main watchdog timers so a paused guest is not
-            // reset out from under us.
-            .arg("-global")
-            .arg("driver=timer.esp32.timg,property=wdt_disable,value=true")
-            .arg("-global")
-            .arg("driver=timer.esp32.rtc_cntl,property=wdt_disable,value=true")
-            .stdin(Stdio::null())
+            .arg(format!("tcp:127.0.0.1:{uart_port},server,nowait"));
+        // Disable the main timer-group watchdog so a paused guest is not reset
+        // out from under us. The driver name is per-SoC (timer.<machine>.timg).
+        cmd.arg("-global").arg(format!(
+            "driver=timer.{machine}.timg,property=wdt_disable,value=true"
+        ));
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 

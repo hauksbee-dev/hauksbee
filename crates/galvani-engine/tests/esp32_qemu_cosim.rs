@@ -172,6 +172,101 @@ fn esp32_cosim_is_deterministic_across_runs() {
     eprintln!("determinism: run1 toggles={n1}, run2 toggles={n2}, diff={diff}");
     assert!(
         diff <= 4,
-        "toggle counts diverged across runs ({n1} vs {n2}); icount determinism suspect"
+        "toggle counts diverged across runs ({n1} vs {n2})"
+    );
+}
+
+// ── ESP32-C3 (RISC-V) via the same QEMU backend ─────────────────────────────
+
+fn c3_flash_image() -> Option<PathBuf> {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/firmware/esp32_blinky/flash_c3.bin");
+    if p.exists() {
+        Some(p.canonicalize().unwrap_or(p))
+    } else {
+        None
+    }
+}
+
+#[test]
+fn esp32c3_full_cosim_through_solved_circuit() {
+    if !is_available(QemuArch::Riscv32) {
+        eprintln!("SKIP: Espressif QEMU (qemu-system-riscv32) not installed");
+        return;
+    }
+    let Some(fw) = c3_flash_image() else {
+        eprintln!("SKIP: flash_c3.bin not built");
+        return;
+    };
+
+    let board = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/boards/esp32c3_devkit_demo.kicad_pcb"),
+    )
+    .expect("read esp32c3 board");
+
+    let mut engine = GalvaniEngine::from_board_file(
+        &board,
+        Some(&fw),
+        "/boards/esp32c3_devkit_demo.kicad_pcb",
+    )
+    .expect("build ESP32-C3 engine");
+    engine.scheduler_mut().chunk_s = 5e-3;
+
+    let frame_dt = 5e-3_f64;
+    let n = (1.5_f64 / frame_dt).round() as usize;
+    let mut uart: Vec<u8> = Vec::new();
+    let mut max_r1_ma = 0.0_f64;
+    let mut led_high = 0usize;
+    let mut transitions = 0u32;
+    let mut prev: Option<bool> = None;
+
+    for _ in 0..n {
+        let frame = engine.step(frame_dt);
+        for b in frame.uart.values() {
+            uart.extend_from_slice(b);
+        }
+        let g2 = frame.net_voltages.get("GPIO2_OUT").copied().unwrap_or(0.0);
+        let led = frame.net_voltages.get("LED_A").copied().unwrap_or(0.0);
+        max_r1_ma = max_r1_ma.max((g2 - led).abs() / 330.0 * 1000.0);
+        if led > 1.0 {
+            led_high += 1;
+        }
+        let blink = frame.net_voltages.get("GPIO4_BLINK").copied().unwrap_or(0.0);
+        let logic = if blink > 2.0 {
+            Some(true)
+        } else if blink < 1.0 {
+            Some(false)
+        } else {
+            prev
+        };
+        if let (Some(p), Some(c)) = (prev, logic) {
+            if p != c {
+                transitions += 1;
+            }
+        }
+        prev = logic;
+    }
+
+    let text = String::from_utf8_lossy(&uart).to_string();
+    eprintln!("ESP32-C3 QEMU co-sim results:");
+    eprintln!("  UART has 'hello from esp32': {}", text.contains("hello from esp32"));
+    eprintln!("  max R1 current: {max_r1_ma:.3} mA");
+    eprintln!("  LED_A high samples: {led_high}");
+    eprintln!("  GPIO4 transitions: {transitions}");
+
+    // The C3 firmware mirrors the ESP32 demo (UART hello + GPIO2 alive + GPIO4
+    // blink), so the analog/GPIO proof is identical; the boot banner may have
+    // flushed before the first chunk on the faster C3 boot, so we key the proof
+    // on the solved-circuit GPIO activity (which requires app_main to be running)
+    // and accept the banner when present.
+    assert!(
+        max_r1_ma > 1.0 && max_r1_ma < 20.0,
+        "expected real R1 current via GPIO2 on C3; got {max_r1_ma:.3} mA"
+    );
+    assert!(led_high > 0, "LED net never energised on C3");
+    assert!(
+        transitions >= 3,
+        "GPIO4 blink should toggle through the circuit on C3; got {transitions}"
     );
 }

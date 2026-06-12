@@ -75,6 +75,12 @@ pub struct RenodeConfig {
     /// firmware is started (e.g. attaching a button so a GPIO input has a
     /// receiver). Each string is one Monitor command.
     pub extra_setup: Vec<String>,
+    /// Extra Monitor commands run verbatim AFTER the firmware ELF is loaded
+    /// (e.g. setting the CPU PC to a boot symbol the ELF entry does not point
+    /// at, as the SiFive FE310 Zephyr demo needs `cpu PC vinit`). Empty for the
+    /// common case where the ELF entry is correct. The literal `{cpu}` token is
+    /// substituted with this config's `cpu` path so commands can be SoC-generic.
+    pub post_load_setup: Vec<String>,
 }
 
 impl RenodeConfig {
@@ -100,6 +106,7 @@ impl RenodeConfig {
             ports,
             frequency_hz: 8_000_000,
             extra_setup: Vec::new(),
+            post_load_setup: Vec::new(),
         }
     }
 
@@ -123,6 +130,7 @@ impl RenodeConfig {
             ports,
             frequency_hz: 16_000_000,
             extra_setup: Vec::new(),
+            post_load_setup: Vec::new(),
         }
     }
 
@@ -151,6 +159,7 @@ impl RenodeConfig {
             ports,
             frequency_hz: 64_000_000,
             extra_setup: Vec::new(),
+            post_load_setup: Vec::new(),
         }
     }
 
@@ -171,6 +180,14 @@ impl RenodeConfig {
             ports,
             frequency_hz: 16_000_000,
             extra_setup: Vec::new(),
+            // The FE310 Zephyr shell demo's ELF entry does not point at the
+            // bring-up code; the upstream Renode resc sets PC to `vinit` and
+            // tags the PRCI clock regs so the HFROSC/PLL config reads as ready.
+            post_load_setup: vec![
+                r#"sysbus Tag <0x10008000 4> "PRCI_HFROSCCFG" 0xFFFFFFFF"#.to_string(),
+                r#"sysbus Tag <0x10008008 4> "PRCI_PLLCFG" 0xFFFFFFFF"#.to_string(),
+                "{cpu} PC `sysbus GetSymbolAddress \"vinit\"`".to_string(),
+            ],
         }
     }
 }
@@ -366,6 +383,18 @@ impl Mcu for RenodeBackend {
             || resp.to_lowercase().contains("exception")
         {
             bail!("Renode failed to load firmware {p}: {resp}");
+        }
+        // Post-load Monitor commands (e.g. FE310 needs `cpu PC vinit` and PRCI
+        // clock tags after the ELF is loaded). `{cpu}` is substituted with the
+        // configured CPU path so commands stay SoC-generic.
+        let cpu = self.config.cpu.clone();
+        let post = self.config.post_load_setup.clone();
+        for cmd in &post {
+            let cmd = cmd.replace("{cpu}", &cpu);
+            let r = self.monitor.command(&cmd)?;
+            if r.to_lowercase().contains("error") {
+                bail!("Renode post-load command failed ({cmd}): {r}");
+            }
         }
         self.firmware_loaded = true;
         Ok(())
