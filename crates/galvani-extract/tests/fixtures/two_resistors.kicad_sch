@@ -1,0 +1,150 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-000000000001")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "R"
+				(at 2.032 0 90)
+			)
+			(property "Value" "R"
+				(at 0 0 90)
+			)
+			(symbol "R_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+				)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-0000000000a1")
+		(property "Reference" "R1"
+			(at 102 100 90)
+		)
+		(property "Value" "10k"
+			(at 102 100 90)
+		)
+		(property "Footprint" ""
+			(at 100 100 90)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-0000000000b1")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-0000000000b2")
+		)
+		(instances
+			(project "two_resistors"
+				(path "/00000000-0000-0000-0000-000000000001"
+					(reference "R1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 110 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-0000000000a2")
+		(property "Reference" "R2"
+			(at 102 110 90)
+		)
+		(property "Value" "22k"
+			(at 102 110 90)
+		)
+		(property "Footprint" ""
+			(at 100 110 90)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-0000000000c1")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-0000000000c2")
+		)
+		(instances
+			(project "two_resistors"
+				(path "/00000000-0000-0000-0000-000000000001"
+					(reference "R2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 100 103.81) (xy 100 106.19)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "00000000-0000-0000-0000-0000000000d1")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
