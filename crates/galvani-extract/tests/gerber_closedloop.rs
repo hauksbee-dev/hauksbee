@@ -208,28 +208,45 @@ fn rp2040_minimal_exact_nets() {
     assert!(pct(&a) >= 99.0, "net partition only {:.2}% on rp2040_minimal", pct(&a));
 }
 
-/// A sweep of small-to-medium boards that `kicad-cli` can round-trip. Each must
-/// clear a high partition-agreement floor; the boards are KiCad 7/8/9-era so
-/// the installed CLI (9.x) can export them (KiCad-10-format demos like
-/// pic_programmer / stickhub are skipped, not failed, since this CLI version
-/// cannot load them to make ground-truth gerbers).
+/// The full sweep of boards that `kicad-cli` can round-trip, small to large.
+/// Every board listed in `docs/GERBER.md`'s accuracy table is gated here, so
+/// the documented numbers are reproducible (run `GALVANI_REQUIRE_CORPUS=1
+/// cargo test --test gerber_closedloop -- --nocapture`). KiCad-10-format demos
+/// (pic_programmer / stickhub) are skipped, not failed: the installed CLI 9.x
+/// cannot load them to make ground-truth gerbers.
+///
+/// Each board gates two things, because net-partition alone is computed only
+/// over pads the reconstruction *located* and would flatter a run that lost
+/// pads: `part_floor` is the partition-agreement floor over located pads, and
+/// `loc_floor` is the fraction of native pads the reconstruction must locate.
 #[test]
 fn corpus_sweep_partition_floor() {
+    // (path, tag, partition-floor %, located-pad floor)
     let boards = [
-        ("famous/lumenpnp/ring-light/ringLight.kicad_pcb", "ringlight", 99.0),
-        ("famous/watchy/Watchy.kicad_pcb", "watchy", 99.0),
-        ("famous/mnt_reform/reform2-oled-pcb/reform2-oled.kicad_pcb", "reform_oled", 99.0),
-        ("famous/crkbd/pcbs/corne-cherry.kicad_pcb", "corne", 98.0),
+        ("famous/mnt_reform/reform2-oled-pcb/reform2-oled.kicad_pcb", "reform_oled", 99.0, 0.85),
+        ("famous/lumenpnp/ring-light/ringLight.kicad_pcb", "ringlight", 99.0, 0.80),
+        ("famous/watchy/Watchy.kicad_pcb", "watchy", 99.0, 0.80),
+        ("famous/mnt_reform/reform2-trackball2-pcb/reform2-trackball2.kicad_pcb", "reform_trackball2", 99.0, 0.75),
+        ("famous/crkbd/pcbs/corne-cherry.kicad_pcb", "corne", 99.0, 0.45),
+        ("famous/lily58/Pro_V2/Pro_V2.kicad_pcb", "lily58prov2", 98.5, 0.50),
+        ("famous/mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb", "reform_mobo", 99.0, 0.85),
     ];
     let mut ran = 0;
-    for (rel, tag, floor) in boards {
+    for (rel, tag, part_floor, loc_floor) in boards {
         match run_board(rel, tag) {
             Some(a) => {
                 ran += 1;
                 assert!(
-                    pct(&a) >= floor,
-                    "net partition {:.2}% < floor {floor}% on {tag}",
+                    pct(&a) >= part_floor,
+                    "net partition {:.2}% < floor {part_floor}% on {tag}",
                     pct(&a)
+                );
+                let loc = a.pads_located as f64 / a.native_pads.max(1) as f64;
+                assert!(
+                    loc >= loc_floor,
+                    "located only {:.0}% of native pads (< {:.0}% floor) on {tag}",
+                    loc * 100.0,
+                    loc_floor * 100.0
                 );
             }
             None => eprintln!("skipping {tag} (kicad-cli could not round-trip it)"),
