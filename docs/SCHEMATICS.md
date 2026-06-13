@@ -139,7 +139,10 @@ Expansion matters at two places connectivity actually crosses:
   the pin sits on (a flood over the sheet's bus segments to the bus's label) and
   pairing the bus's member `i` with the pin's member `i`.
 
-Bus aliases (`(bus_alias "NAME" (members …))`) are parsed and recorded.
+Bus aliases (`(bus_alias "NAME" (members …))`) are parsed, recorded per sheet,
+and **expanded when referenced**: a group bus `MEM{ADDR}` whose `ADDR` token is
+a bus alias expands to the alias's member list (each member itself expanded, so
+an alias member can be a vector like `A[7..0]`), qualified by the group prefix.
 
 ### Net naming
 
@@ -201,15 +204,17 @@ schematic is out of scope. Adding the legacy parser is future work.
 
 ## Known limitations
 
-- **Bus aliases referenced as `{ALIAS}` are not expanded.** A `(bus_alias …)`
-  definition is parsed and recorded, but a group bus that *references* it,
-  `MEM{ADDR}`, is expanded only for the tokens written inline; the alias name is
-  not substituted for its member list. No corpus board uses an alias reference,
-  so this is untested rather than known-broken. Vector and inline group buses
-  are fully supported.
+- **Bus aliases referenced as `{ALIAS}` are now expanded.** A `(bus_alias …)`
+  definition is recorded per sheet and substituted for its member list when a
+  group bus references it (`MEM{ADDR}`). Covered end-to-end by the
+  `bus_alias_top` / `bus_alias_child` fixture pair (a `MEM{ADDR}` reference
+  crossing a sheet boundary) plus expander unit tests. No *corpus* board uses an
+  alias reference, so the corpus cross-validations do not exercise this path; the
+  synthetic fixture does, and would fail if the alias were left unexpanded.
 - **Group-bus member qualification** follows KiCad's `PREFIX.member` form for
   named groups. The corpus exercises only vector buses, so group qualification
-  is covered by unit tests on the expander, not by an end-to-end board.
+  is covered by unit tests on the expander and the `bus_alias_*` fixtures
+  (`MEM{ADDR}` -> `MEM.A1`, `MEM.A0`), not by a corpus board.
 - **Net-tie footprints** (two pads tied only in copper) have no schematic
   counterpart; a board relying on them would show a split that is correct for
   the schematic. None of the exactly-validated projects use them.
