@@ -196,3 +196,129 @@ max_voltage_v = 5.5       # VBUS abs max (datasheet)
 # an MCU GPIO (the 1.2.0 fault), this pull feeds VSYS into the GPIO in sleep.
 pull_to = "vsys"
 pull_ohms = 100000.0
+
+# ── bq76952: TI battery AFE / stack monitor ───────────────────────────────────
+#
+# Source: Texas Instruments bq76952 datasheet, SLUSDX9C (Rev C, 2021).
+# 16-series battery monitor and protector with integrated AFE, coulomb counter,
+# and I2C/SPI interface.
+#
+# NOTE: The internal AFE behaviour (voltage measurement, protection FET control,
+# coulomb counter, I2C register map) is NOT fully modeled here. This is a
+# MINIMAL RESOLVING ENTRY: the part binds with correct ratings and a pin subset
+# so dissipation / Tj / supply-voltage checking become possible. An extracted
+# or hand-written behavioral block would be needed for pack-level simulation.
+# This entry is honest about what it does and does not model.
+#
+# Key absolute maximum ratings (bq76952 datasheet Table 7.1):
+#   VPACK (battery stack input) abs max = 85V
+#   VREGx digital supply abs max = 3.8V
+#   Tj max = 125C
+[[models]]
+id = "bq76952"
+kind = "digital"
+description = "TI bq76952 battery AFE / monitor (minimal-resolve; internal AFE not modeled)"
+
+[models.match]
+value_re = "(?i)^bq76952"
+
+[models.pins]
+# TQFP-64 / VQFN-64. Subset required for supply / voltage checking.
+# Source: bq76952 datasheet SLUSDX9C, Table 8.1 Pin Functions.
+"1"  = "pack_p"   # PACK+ (battery pack positive input)
+"2"  = "pack_n"   # PACK- / REGSRC (battery pack negative / regulator source)
+"27" = "vreg1"    # VREG1 (3.3V regulated supply output)
+"28" = "vreg2"    # VREG2 (3.3V regulated supply for AFE)
+"33" = "sda"      # I2C SDA
+"34" = "scl"      # I2C SCL
+"57" = "dsg"      # DSG (discharge FET drive)
+"58" = "chg"      # CHG (charge FET drive)
+"64" = "ts1"      # TS1 (temperature sense 1)
+
+[models.ratings]
+# Source: bq76952 datasheet SLUSDX9C, Table 7.1 Absolute Maximum Ratings
+max_voltage_v       = 85.0    # VPACK abs max (V), datasheet — stack voltage limit
+max_junction_temp_c = 125.0   # Tj max (C), datasheet
+
+# ── LM5107 / LM5109: TI half-bridge gate drivers ─────────────────────────────
+#
+# Source: Texas Instruments LM5107 datasheet, SNVSA29B (Rev B, 2015).
+#         Texas Instruments LM5109 datasheet, SNVSA31C (Rev C, 2017).
+#
+# LM5107: 3A/3A half-bridge gate driver, non-inverting (HIN/LIN both active high).
+#   VDD abs max = 15V; bootstrap / HB high-side supply abs max = 120V.
+# LM5109: 3A/3A half-bridge gate driver, LIN active-low (inverted low-side input).
+#   Same pin map and ratings as LM5107 with inverted LIN polarity.
+#
+# Application: mppt-1210 board U1=LM5109BMA (WSON-8 package).
+# NOTE: The internal dead-time / level-shift behaviour is NOT modeled.
+# These are MINIMAL RESOLVING ENTRIES providing supply/bootstrap ratings so
+# the gate-drive rails are checked for over-voltage.
+[[models]]
+id = "lm5107"
+kind = "digital"
+description = "TI LM5107 half-bridge gate driver 3A, non-inverting (minimal-resolve)"
+
+[models.match]
+# Matches LM5107 variants (LM5107SD, LM5107SDX, etc.)
+value_re = "(?i)^LM5107"
+
+[models.params]
+# Source: LM5107 datasheet SNVSA29B, Table 7.5 Electrical Characteristics.
+voh       = 11.5   # HO/LO output high (V) approx at VDD=12V (representative)
+vol       = 0.3    # HO/LO output low (V) typ
+vih       = 2.5    # HIN/LIN high threshold (V) typ
+vil       = 0.8    # HIN/LIN low threshold (V) typ
+
+[models.pins]
+# WSON-8 / SOIC-8. Source: LM5107 datasheet SNVSA29B, Section 7.1 Pin Functions.
+"1" = "hin"   # High-side input (active high)
+"2" = "lin"   # Low-side input (active high for LM5107)
+"3" = "vdd"   # Supply (VDD, 8-15V range)
+"4" = "gnd"   # Ground
+"5" = "lo"    # Low-side gate drive output
+"6" = "hs"    # High-side source / bootstrap ground
+"7" = "ho"    # High-side gate drive output
+"8" = "hb"    # Bootstrap supply (VDD + boost diode; high abs max)
+
+[models.ratings]
+# Source: LM5107 datasheet SNVSA29B, Table 7.1 Absolute Maximum Ratings.
+# VDD abs max = 15V; HB (bootstrap) abs max = 120V (HB-to-GND).
+max_voltage_v       = 15.0    # VDD abs max (V), datasheet
+max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm5109"
+kind = "digital"
+description = "TI LM5109 half-bridge gate driver 3A, LIN active-low (minimal-resolve)"
+
+[models.match]
+# Matches LM5109 variants (LM5109BMA, LM5109BSDx, LM5109SDx, etc.)
+value_re = "(?i)^LM5109"
+
+[models.params]
+# Source: LM5109 datasheet SNVSA31C, Table 7.5 Electrical Characteristics.
+# Identical to LM5107 except LIN polarity is inverted (active-low).
+voh       = 11.5
+vol       = 0.3
+vih       = 2.5
+vil       = 0.8
+
+[models.pins]
+# WSON-8 / SOIC-8. Source: LM5109 datasheet SNVSA31C, Section 7.1 Pin Functions.
+# Same physical pin map as LM5107; LIN is active-low in this variant.
+"1" = "hin"   # High-side input (active high)
+"2" = "lin"   # Low-side input (active LOW for LM5109 — inverted vs LM5107)
+"3" = "vdd"   # Supply
+"4" = "gnd"   # Ground
+"5" = "lo"    # Low-side gate drive output
+"6" = "hs"    # High-side source / bootstrap ground
+"7" = "ho"    # High-side gate drive output
+"8" = "hb"    # Bootstrap supply
+
+[models.ratings]
+# Source: LM5109 datasheet SNVSA31C, Table 7.1 Absolute Maximum Ratings.
+max_voltage_v       = 15.0    # VDD abs max (V), datasheet
+max_junction_temp_c = 150.0   # Tj max (C), datasheet
