@@ -1488,11 +1488,59 @@ fn is_power_role(role: &str) -> bool {
 
 fn device_label(d: &Device) -> String {
     match d {
-        Device::Resistor { ohms, .. } => format!("R {ohms:.0}Ω"),
-        Device::Capacitor { farads, .. } => format!("C {:.3}µF", farads * 1e6),
-        Device::Inductor { henries, .. } => format!("L {:.3}µH", henries * 1e6),
+        Device::Resistor { ohms, .. } => format!("R {}", fmt_eng(*ohms, "Ω")),
+        Device::Capacitor { farads, .. } => format!("C {}", fmt_eng(*farads, "F")),
+        Device::Inductor { henries, .. } => format!("L {}", fmt_eng(*henries, "H")),
         other => other.name().to_string(),
     }
+}
+
+/// Format a physical quantity with an SI prefix scaled to its magnitude, so a
+/// 390 pF cap reads "390 pF" rather than "0.000 µF". Picks the prefix that puts
+/// the mantissa in [1, 1000) and prints a sensible number of significant digits.
+/// `unit` is the bare unit symbol ("F", "H", "Ω").
+pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
+    if value == 0.0 || !value.is_finite() {
+        return format!("0 {unit}");
+    }
+    let neg = value < 0.0;
+    let v = value.abs();
+    // Prefix table from pico to mega; covers caps (pF..mF), inductors (nH..H),
+    // resistors (mΩ..MΩ). Each entry is (10^exponent, prefix).
+    const PREFIXES: &[(f64, &str)] = &[
+        (1e6, "M"),
+        (1e3, "k"),
+        (1e0, ""),
+        (1e-3, "m"),
+        (1e-6, "µ"),
+        (1e-9, "n"),
+        (1e-12, "p"),
+    ];
+    // Pick the largest prefix whose scale leaves a mantissa >= 1 (so 390 pF uses
+    // "p", 1.5 kΩ uses "k"). Fall back to the smallest prefix for tiny values.
+    let (scale, prefix) = PREFIXES
+        .iter()
+        .find(|(s, _)| v >= *s)
+        .copied()
+        .unwrap_or(*PREFIXES.last().unwrap());
+    let mantissa = v / scale;
+    // 3 significant figures: more decimals for small mantissas, fewer for large.
+    let s = if mantissa >= 100.0 {
+        format!("{mantissa:.0}")
+    } else if mantissa >= 10.0 {
+        format!("{mantissa:.1}")
+    } else {
+        format!("{mantissa:.2}")
+    };
+    // Trim trailing fractional zeros for a clean read ("4.70" -> "4.7"), but
+    // only when a decimal point is present, so "390" is never stripped to "39".
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    };
+    let sign = if neg { "-" } else { "" };
+    format!("{sign}{s} {prefix}{unit}")
 }
 
 /// Map an ATmega328P / Arduino-Nano role string to a `(port, bit)` GPIO id.
@@ -1625,5 +1673,37 @@ fn power_rail_voltage(name: &str) -> Option<f64> {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fmt_tests {
+    use super::fmt_eng;
+
+    #[test]
+    fn capacitor_scales_to_pico_nano_micro() {
+        // The reported bug: 390 pF used to print as "0.000 µF".
+        assert_eq!(fmt_eng(390e-12, "F"), "390 pF");
+        assert_eq!(fmt_eng(1e-9, "F"), "1 nF");
+        assert_eq!(fmt_eng(4.7e-9, "F"), "4.7 nF");
+        assert_eq!(fmt_eng(100e-9, "F"), "100 nF");
+        assert_eq!(fmt_eng(0.1e-6, "F"), "100 nF");
+        assert_eq!(fmt_eng(10e-6, "F"), "10 µF");
+        assert_eq!(fmt_eng(1200e-6, "F"), "1.2 mF");
+    }
+
+    #[test]
+    fn inductor_and_resistor_scale_too() {
+        assert_eq!(fmt_eng(2.2e-6, "H"), "2.2 µH");
+        assert_eq!(fmt_eng(10e-9, "H"), "10 nH");
+        assert_eq!(fmt_eng(4700.0, "Ω"), "4.7 kΩ");
+        assert_eq!(fmt_eng(1_000_000.0, "Ω"), "1 MΩ");
+        assert_eq!(fmt_eng(0.05, "Ω"), "50 mΩ");
+    }
+
+    #[test]
+    fn zero_and_nonfinite_are_safe() {
+        assert_eq!(fmt_eng(0.0, "F"), "0 F");
+        assert_eq!(fmt_eng(f64::NAN, "Ω"), "0 Ω");
     }
 }
