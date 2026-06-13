@@ -41,6 +41,10 @@ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc
 # -> a table with two GND/+5V shorts and a "2 short(s)" summary
 ```
 
+These `hauksbee run` reports are informational: they print findings but always
+exit 0. To actually FAIL a build on a defect, gate on `hauksbee-ci` (or
+`hauksbee check-code`), which exit non-zero when an assertion or fault hits.
+
 `hauksbee --help` lists every command, and `hauksbee run --help` (or any
 `<command> --help`) shows that command's flags with an example. Swap in your own
 `.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or a folder of gerbers.
