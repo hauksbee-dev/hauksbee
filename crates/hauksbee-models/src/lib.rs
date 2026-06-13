@@ -1,12 +1,15 @@
 //! `hauksbee-models` — PCB component model library.
 //!
 //! Given a component identified by lib_id, value, footprint, or part-number,
-//! this crate resolves a simulation model definition. Three sources, in
-//! priority order:
+//! this crate resolves a simulation model definition. Physics arrives by four
+//! authoring routes (built-in DB, codex datasheet extraction, hand-written
+//! behavioural models, user SPICE) that collapse into three resolution tiers,
+//! in priority order:
 //!
 //! 1. User-supplied SPICE models / `.subckt` cards.
-//! 2. Built-in defaults database (TOML files embedded at compile time).
-//! 3. Datasheet extraction via the `model-extract` binary (external).
+//! 2. User TOML (this is also where datasheet-extracted and hand-written
+//!    behavioural models land, via the user/extracted model directories).
+//! 3. Built-in defaults database (TOML files embedded at compile time).
 //!
 //! # Quick start
 //!
