@@ -165,7 +165,9 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
         <span style={{ color: connected ? '#86efac' : '#fca5a5' }}>
           {connected ? 'connected' : 'offline'}
         </span>
-        <span style={{ color: '#334155' }}>· :3001</span>
+        <span style={{ color: '#334155' }}>
+          · :{window.location.port || (window.location.protocol === 'https:' ? '443' : '80')}
+        </span>
       </div>
     </div>
   )

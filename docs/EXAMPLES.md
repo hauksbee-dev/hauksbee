@@ -19,6 +19,35 @@ scripts/ci.sh crates/hauksbee-ci/examples/blinky.toml
 
 See the [scripts reference](#distribution-scripts) below for the full set.
 
+## First useful result, in a minute
+
+After `scripts/install.sh`, point hauksbee at the bundled blinky board. Each of
+these prints one report and exits, so they are the fastest way to see it work:
+
+```bash
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report   # what each part bound to
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --drc       # copper shorts / clearance
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --lint      # connectivity + strap-pin lint
+```
+
+`hauksbee --help` lists every command, and `hauksbee run --help` (or any
+`<command> --help`) shows that command's flags with an example. Swap in your own
+`.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or a folder of gerbers.
+
+## See a board live (the 2D/3D viewer)
+
+`hauksbee run <board>` with no report flag serves the interactive viewer. The
+frontend is a build artifact and is not checked in, so build it once:
+
+```bash
+cd frontend && bun install && bun run build && cd ..
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb
+```
+
+It prints the URL to open (`http://127.0.0.1:3001` by default; change with
+`--port`). If you run it before building the frontend, hauksbee still starts the
+websocket and tells you exactly this build step rather than serving a blank page.
+
 ## Board-as-Code examples
 
 [`examples/board-as-code/`](../examples/board-as-code). Decompile a real
