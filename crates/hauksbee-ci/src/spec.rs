@@ -67,6 +67,10 @@ pub struct Spec {
     /// Co-sim frame cadence in milliseconds (how often nets are sampled).
     #[serde(default = "default_frame_ms")]
     pub frame_ms: f64,
+    /// Ambient temperature (C) for the steady-state junction-temperature
+    /// estimate (`max_temp` assertions). Default 25 C.
+    #[serde(default = "default_ambient_c")]
+    pub ambient_c: f64,
     /// Power-supply legs to attach to named supply nets.
     #[serde(default, rename = "supply")]
     pub supplies: Vec<SupplySpec>,
@@ -122,6 +126,9 @@ fn default_duration_ms() -> f64 {
 }
 fn default_frame_ms() -> f64 {
     1.0
+}
+fn default_ambient_c() -> f64 {
+    25.0
 }
 
 /// A power-supply leg attached to a supply net. Mirrors the engine's
@@ -398,6 +405,12 @@ pub struct Assertion {
     #[serde(default)]
     pub amps: Option<f64>,
 
+    // max_temp: ceiling in C for the steady-state junction temperature of the
+    // component named by `ref`. When omitted, the device's own max junction
+    // temperature (from the model DB, or the per-package-class default) is used.
+    #[serde(default)]
+    pub celsius: Option<f64>,
+
     // peripheral: reference a peripheral by `id`.
     #[serde(default)]
     pub id: Option<String>,
@@ -659,6 +672,15 @@ impl Assertion {
                     ));
                 }
             }
+            "max_temp" => {
+                if self.reference.is_none() {
+                    return Err(SpecError::Invalid(
+                        "max_temp assertion needs a `ref` (the component to check)".into(),
+                    ));
+                }
+                // `celsius` is optional: absent means "use the device's own max
+                // junction temperature".
+            }
             "peripheral" => {
                 if self.id.is_none() {
                     return Err(SpecError::Invalid(
@@ -731,7 +753,7 @@ impl Assertion {
             }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|peripheral|rail_window|protection_trip|boot-coverage)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage)"
                 )));
             }
         }
@@ -781,6 +803,13 @@ impl Assertion {
                 self.reference.clone().unwrap_or_default(),
                 self.amps.unwrap_or(0.0)
             ),
+            "max_temp" => {
+                let reference = self.reference.clone().unwrap_or_default();
+                match self.celsius {
+                    Some(c) => format!("Tj({reference}) <= {c} C"),
+                    None => format!("Tj({reference}) <= device max"),
+                }
+            }
             "peripheral" => {
                 let id = self.id.clone().unwrap_or_default();
                 if let Some(b) = &self.bytes {

@@ -57,6 +57,10 @@ pub enum FaultKind {
     /// as a what-if solder-bridge scenario). Surfaced so the frontend highlights
     /// the bridge through the same fault channel as electrical-limit faults.
     Short,
+    /// Steady-state junction temperature `Tj = Tamb + P*theta_JA` over the
+    /// device's max junction temperature. Treated as a continuous (sustained)
+    /// rating: a single switching-edge power spike does not heat a junction.
+    Overtemperature,
 }
 
 impl FaultKind {
@@ -69,6 +73,7 @@ impl FaultKind {
             FaultKind::ReverseBias => "reverse_bias",
             FaultKind::PinOvercurrent => "pin_overcurrent",
             FaultKind::Short => "short",
+            FaultKind::Overtemperature => "overtemperature",
         }
     }
 
@@ -80,6 +85,8 @@ impl FaultKind {
             "overvoltage" => FaultKind::Overvoltage,
             "reverse_bias" => FaultKind::ReverseBias,
             "pin_overcurrent" => FaultKind::PinOvercurrent,
+            "overtemperature" => FaultKind::Overtemperature,
+            "short" => FaultKind::Short,
             _ => FaultKind::Overcurrent,
         }
     }
@@ -129,6 +136,25 @@ impl DeviceMeta {
         }
         None
     }
+
+    /// Effective junction-to-ambient thermal resistance (C/W): explicit
+    /// `theta_ja_c_per_w` from the model, else derived from the footprint
+    /// package class. Always returns a value (the footprint default is the
+    /// conservative fallback), so every dissipating device gets a temperature.
+    pub fn theta_ja_c_per_w(&self) -> f64 {
+        self.ratings
+            .theta_ja_c_per_w
+            .unwrap_or_else(|| crate::thermal::theta_ja_from_footprint(&self.footprint, self.kind))
+    }
+
+    /// Effective maximum junction temperature (C): explicit
+    /// `max_junction_temp_c` from the model, else the per-package-class default
+    /// (150 C for power packages, 125 C otherwise).
+    pub fn tj_max_c(&self) -> f64 {
+        self.ratings
+            .max_junction_temp_c
+            .unwrap_or_else(|| crate::thermal::default_tj_max(&self.footprint))
+    }
 }
 
 /// Derive a resistor's power rating from its footprint package size. Standard
@@ -173,14 +199,26 @@ struct DeviceTrack {
 
 /// The stress monitor: holds device metadata and per-device tracking, evaluates
 /// one chunk at a time.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StressMonitor {
     metas: Vec<DeviceMeta>,
     tracks: Vec<DeviceTrack>,
     /// Destructive mode: mutate the circuit on fault.
     pub destructive: bool,
+    /// Ambient temperature (C) the steady-state junction estimate sits on top
+    /// of. Defaults to [`crate::thermal::DEFAULT_AMBIENT_C`] (25 C).
+    pub ambient_c: f64,
     /// reference -> live stress fraction (0..1), for component-state frames.
     stress_by_ref: HashMap<String, f64>,
+    /// reference -> live estimated junction temperature (C), for the thermal
+    /// view / component-state frames. Only populated for dissipating devices.
+    temp_by_ref: HashMap<String, f64>,
+}
+
+impl Default for StressMonitor {
+    fn default() -> Self {
+        StressMonitor::new(Vec::new())
+    }
 }
 
 impl StressMonitor {
@@ -191,7 +229,9 @@ impl StressMonitor {
             metas,
             tracks: vec![DeviceTrack::default(); n],
             destructive: false,
+            ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
             stress_by_ref: HashMap::new(),
+            temp_by_ref: HashMap::new(),
         }
     }
 
@@ -203,6 +243,12 @@ impl StressMonitor {
     /// Live stress fraction per component reference (0..1).
     pub fn stress_by_ref(&self) -> &HashMap<String, f64> {
         &self.stress_by_ref
+    }
+
+    /// Live estimated steady-state junction temperature (C) per component
+    /// reference, for dissipating devices.
+    pub fn temp_by_ref(&self) -> &HashMap<String, f64> {
+        &self.temp_by_ref
     }
 
     /// Evaluate every monitored device for the chunk just solved.
@@ -227,7 +273,26 @@ impl StressMonitor {
                 continue;
             }
             let op = operating_point(circuit, &meta, node_v, branch_current);
-            let checks = build_checks(&meta, &op);
+            let mut checks = build_checks(&meta, &op);
+
+            // Thermal: turn this chunk's dissipation into a steady-state junction
+            // temperature and check it against the device's max Tj. Applies to
+            // any device that dissipates (op.power_w > 0). Treated as a
+            // continuous rating so a switching-edge power spike does not trip it.
+            if op.power_w > 0.0 {
+                let tj = crate::thermal::junction_temp_c(
+                    self.ambient_c,
+                    op.power_w,
+                    meta.theta_ja_c_per_w(),
+                );
+                self.temp_by_ref.insert(meta.reference.clone(), tj);
+                checks.push(Check {
+                    kind: FaultKind::Overtemperature,
+                    value: tj,
+                    limit: meta.tj_max_c(),
+                    surge: false,
+                });
+            }
 
             let mut worst_stress = 0.0f64;
             for chk in &checks {

@@ -80,6 +80,9 @@ pub struct RunOutcome {
     pub toggles: HashMap<String, u64>,
     /// Per-component peak through-current magnitude (A), best-effort.
     pub peak_current: HashMap<String, f64>,
+    /// Per-component peak steady-state junction temperature (C) over the run.
+    /// Only dissipating devices appear.
+    pub peak_temp_c: HashMap<String, f64>,
     /// Per-peripheral end-of-run snapshot, keyed by peripheral id.
     pub peripherals: HashMap<String, PeripheralSnapshot>,
     /// Per-scenario, per-net rail-window timeseries, keyed by (scenario id, net).
@@ -295,6 +298,11 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
                 named.push((r.as_str(), "max_current assert"));
             }
         }
+        if a.kind == "max_temp" {
+            if let Some(r) = &a.reference {
+                named.push((r.as_str(), "max_temp assert"));
+            }
+        }
     }
     for (reference, ctx) in named {
         if !set.contains(reference) {
@@ -386,6 +394,9 @@ fn run_one(
     let mut engine = HauksbeeEngine::from_bound(bound, firmware.as_deref(), "/ci")
         .map_err(|e| SpecError::Invalid(format!("building engine: {e}")))?;
 
+    // Ambient for the steady-state junction-temperature estimate (max_temp).
+    engine.scheduler_mut().set_ambient_c(spec.ambient_c);
+
     // Attach this spec's peripherals (controls, bus slaves, sinks) and their
     // timeline events to the engine's scheduler.
     let vcd_targets = attach_peripherals(spec, &board, &net_node, engine.scheduler_mut())?;
@@ -415,6 +426,7 @@ fn run_one(
     let mut uart: HashMap<String, String> = HashMap::new();
     let mut faults: Vec<RunFault> = Vec::new();
     let mut peak_current: HashMap<String, f64> = HashMap::new();
+    let mut peak_temp_c: HashMap<String, f64> = HashMap::new();
     // Per-scenario rail-window timeseries and protection-trip tracking.
     let mut rail_windows: HashMap<(String, String), crate::scenarios::RailWindow> = HashMap::new();
     let mut protection_tripped: HashMap<String, bool> = HashMap::new();
@@ -480,6 +492,14 @@ fn run_one(
         // Peak current for monitored components.
         update_peak_currents(&engine, &net_node, &mut peak_current);
 
+        // Peak steady-state junction temperature for dissipating components.
+        for (reference, tj) in engine.scheduler().temp_states() {
+            let e = peak_temp_c.entry(reference).or_insert(f64::NEG_INFINITY);
+            if tj.is_finite() && tj > *e {
+                *e = tj;
+            }
+        }
+
         // Scenario rail windows: for each scenario window active at this time,
         // record the referenced rails' voltages into the window timeseries.
         for sw in &scenario_windows {
@@ -525,6 +545,7 @@ fn run_one(
         faults,
         toggles,
         peak_current,
+        peak_temp_c,
         peripherals,
         rail_windows,
         protection_tripped,
