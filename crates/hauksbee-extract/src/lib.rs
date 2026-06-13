@@ -16,7 +16,11 @@
 //!   see `docs/SCHEMATICS.md`.
 //! - [`ExtractedBoard::from_eagle_brd`] / [`ExtractedBoard::from_ipc_d356`] —
 //!   other EDA formats.
+//! - [`ExtractedBoard::from_altium_pcb`] — Altium Designer `.PcbDoc` (binary
+//!   OLE2). This unlocks the professional / enterprise / regulated tier; see
+//!   `docs/ALTIUM.md`.
 
+pub mod altium;
 pub mod drc;
 mod eagle;
 pub mod gerber;
@@ -52,8 +56,13 @@ pub enum ExtractError {
     Parse(#[from] forge_sexpr::ParseError),
     #[error("xml: {0}")]
     Xml(String),
+    #[error("altium: {0}")]
+    Altium(String),
     #[error("not a {expected} file (root is {found:?})")]
-    WrongRoot { expected: &'static str, found: Option<String> },
+    WrongRoot {
+        expected: &'static str,
+        found: Option<String>,
+    },
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
@@ -169,6 +178,35 @@ impl ExtractedBoard {
         ipc356::extract(text)
     }
 
+    /// Altium Designer `.PcbDoc` (binary OLE2 / Compound File Binary). Reads the
+    /// nets, components and pads (with their net assignment) straight out of the
+    /// `Nets6` / `Components6` / `Pads6` record streams. The layout carries full
+    /// net connectivity, so the board file alone fully describes the circuit,
+    /// the same way a `.kicad_pcb` does. See [`altium`] and `docs/ALTIUM.md`.
+    pub fn from_altium_pcb(bytes: &[u8]) -> Result<Self, ExtractError> {
+        altium::extract(bytes)
+    }
+
+    /// Altium `.PcbDoc` geometric short / clearance DRC, the binary-format twin
+    /// of [`Self::drc`]. Reads copper geometry (tracks, arcs, vias, pads,
+    /// polygons) per net and feeds the same detection engine the KiCad and Eagle
+    /// paths use.
+    pub fn altium_drc(bytes: &[u8]) -> Result<drc::DrcReport, ExtractError> {
+        drc::altium_drc_from_bytes(bytes)
+    }
+
+    /// Sniff a *binary* board file and extract. Currently this is the Altium
+    /// `.PcbDoc` path (OLE2 magic + Altium streams); everything else is text and
+    /// goes through [`Self::from_auto`]. Returns `None` when the bytes are not a
+    /// recognised binary board, so the caller can fall back to the text sniffer.
+    pub fn from_auto_bytes(bytes: &[u8]) -> Option<Result<Self, ExtractError>> {
+        if altium::looks_like_pcbdoc(bytes) {
+            Some(Self::from_altium_pcb(bytes))
+        } else {
+            None
+        }
+    }
+
     /// Extract from an already-parsed forge-sexpr [`Document`], avoiding a
     /// re-parse when the caller has already built the CST (e.g. for lossless
     /// editing). Dispatches on the root keyword: `kicad_pcb` → layout
@@ -233,10 +271,8 @@ impl ExtractedBoard {
     /// Consistency report: problems worth surfacing before simulation.
     pub fn lint(&self) -> Lint {
         let mut lint = Lint::default();
-        let net_ids: std::collections::HashSet<i64> =
-            self.nets.iter().map(|n| n.id).collect();
-        let mut degree: std::collections::HashMap<i64, usize> =
-            std::collections::HashMap::new();
+        let net_ids: std::collections::HashSet<i64> = self.nets.iter().map(|n| n.id).collect();
+        let mut degree: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
         for c in &self.components {
             let mut connected = 0usize;
             for p in &c.pins {
@@ -244,11 +280,8 @@ impl ExtractedBoard {
                     Some(id) => {
                         connected += 1;
                         if !net_ids.contains(&id) {
-                            lint.undeclared_nets.push((
-                                c.reference.clone(),
-                                p.number.clone(),
-                                id,
-                            ));
+                            lint.undeclared_nets
+                                .push((c.reference.clone(), p.number.clone(), id));
                         }
                         *degree.entry(id).or_default() += 1;
                     }

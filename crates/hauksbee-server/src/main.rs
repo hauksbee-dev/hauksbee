@@ -12,7 +12,11 @@ async fn main() -> anyhow::Result<()> {
     // one), so we direct the user to the dedicated `hauksbee` binary instead.
     if let Some(a) = &arg {
         let lower = a.to_ascii_lowercase();
-        if lower.ends_with(".kicad_pcb") || lower.ends_with(".net") || lower.ends_with(".brd") {
+        if lower.ends_with(".kicad_pcb")
+            || lower.ends_with(".net")
+            || lower.ends_with(".brd")
+            || lower.ends_with(".pcbdoc")
+        {
             eprintln!(
                 "hauksbee-server is the demo MCU server. To bring a real board to life run:\n  \
                  hauksbee run {a} [--firmware <hex>] [--port 3001]\n(the `hauksbee` binary is built \

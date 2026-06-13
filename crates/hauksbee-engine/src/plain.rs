@@ -287,6 +287,11 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
                 "USB D+ and D- carry the same signal mirror-imaged, and the receiver compares them. If the two traces are different lengths (skew) or routed differently, the timing between them drifts and high-speed USB can become unreliable or fail to enumerate.".to_string(),
                 "Route D+ and D- as a matched pair: same length (length-match / add a small serpentine to the shorter one), same width, kept close together and parallel, with a consistent reference ground beneath.".to_string(),
             ),
+            SiCheck::ControlledImpedance => (
+                format!("A trace that should be a controlled impedance is out of range ({}).", short_msg(&f.message)),
+                "Fast signals like USB or Ethernet need their traces to present a specific impedance (for example 90 ohm differential for USB) so the signal does not reflect off the wire. If the trace width / spacing for your board stackup gives the wrong impedance, you get reflections, and the link can be marginal or fail at speed.".to_string(),
+                "Adjust the trace width and pair spacing for your actual layer stackup so the estimated impedance hits the target (tools and the formulas in docs/SI_CHECKS.md give the geometry); or have the fab build a controlled-impedance stackup to your spec.".to_string(),
+            ),
         };
         out.push(level, what, why, fix);
     }
@@ -370,6 +375,14 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
                 format!("{c} is involved in a short (two nets bridged together)."),
                 "Two connections that should be separate are tied together, so they are forced to the same voltage. If one is a power rail this can dump large current through the short and overheat parts.".to_string(),
                 "Find and remove the bridge (see the copper-spacing / DRC report for the exact spot), or, if the connection is intended, make them one named net deliberately.".to_string(),
+            ),
+            FaultKind::Overtemperature => (
+                format!(
+                    "{c} reaches about {:.0} C, past its {:.0} C junction-temperature limit.",
+                    f.value, f.limit,
+                ),
+                "The power this part dissipates raises its internal (junction) temperature above ambient. Past its rated junction temperature it degrades fast, drifts out of spec, and eventually fails; a hot part also heats its neighbours.".to_string(),
+                "Reduce the power it dissipates, move to a package with lower thermal resistance, add copper pour / a heatsink to carry heat away, or improve airflow / lower the ambient. The estimate assumes still air, so real cooling helps.".to_string(),
             ),
         };
         let why = if f.destroyed {
