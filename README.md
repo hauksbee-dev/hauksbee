@@ -16,7 +16,7 @@ No other tool does this from the layout. Schematic simulators never see the boar
 
 Point it at any PCB design and it will:
 
-- **Ingest** it: KiCad, Eagle, IPC-D-356, and gerber-only boards that ship no CAD at all, reverse-extracted from copper geometry alone ([`docs/GERBER.md`](docs/GERBER.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
+- **Ingest** it: KiCad, Eagle, Altium `.PcbDoc` ([`docs/ALTIUM.md`](docs/ALTIUM.md)), IPC-D-356, and gerber-only boards that ship no CAD at all, reverse-extracted from copper geometry alone ([`docs/GERBER.md`](docs/GERBER.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
 - **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU across AVR, STM32, ESP32/-C3, nRF52840 and SiFive RISC-V ([`docs/MCU.md`](docs/MCU.md)).
 - **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, signal integrity, trace ampacity, behavioural power-IC models and transient brownouts, each tuned against a known-good corpus so it does not cry wolf ([`docs/SHORTS.md`](docs/SHORTS.md), [`docs/RESOURCE_CONFLICTS.md`](docs/RESOURCE_CONFLICTS.md), [`docs/SI_CHECKS.md`](docs/SI_CHECKS.md), [`docs/TRANSIENTS.md`](docs/TRANSIENTS.md)).
 - **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin and a pre-commit hook ([`docs/CI.md`](docs/CI.md)), with runnable examples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
@@ -58,7 +58,7 @@ Hauksbee's matrix-exponential fast path wins in the PCB regime, many small RC is
 ## Architecture
 
 ```
-.kicad_pcb / .brd / .d356 / gerber ──▶ extract: pads ⇒ nets ⇒ connectivity ⇒ components
+.kicad_pcb / .brd / .PcbDoc / .d356 / gerber ──▶ extract: pads ⇒ nets ⇒ connectivity ⇒ components
         │                                          ▲ model binding
         ▼                                          │ (built-in │ user SPICE │ datasheet via codex)
    Circuit IR ──▶ partitioned hybrid solver  ◀──▶  MCU backends (AVR/STM32/ESP32/nRF/RISC-V)

@@ -59,7 +59,10 @@ pub enum ExtractError {
     #[error("altium: {0}")]
     Altium(String),
     #[error("not a {expected} file (root is {found:?})")]
-    WrongRoot { expected: &'static str, found: Option<String> },
+    WrongRoot {
+        expected: &'static str,
+        found: Option<String>,
+    },
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
@@ -268,10 +271,8 @@ impl ExtractedBoard {
     /// Consistency report: problems worth surfacing before simulation.
     pub fn lint(&self) -> Lint {
         let mut lint = Lint::default();
-        let net_ids: std::collections::HashSet<i64> =
-            self.nets.iter().map(|n| n.id).collect();
-        let mut degree: std::collections::HashMap<i64, usize> =
-            std::collections::HashMap::new();
+        let net_ids: std::collections::HashSet<i64> = self.nets.iter().map(|n| n.id).collect();
+        let mut degree: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
         for c in &self.components {
             let mut connected = 0usize;
             for p in &c.pins {
@@ -279,11 +280,8 @@ impl ExtractedBoard {
                     Some(id) => {
                         connected += 1;
                         if !net_ids.contains(&id) {
-                            lint.undeclared_nets.push((
-                                c.reference.clone(),
-                                p.number.clone(),
-                                id,
-                            ));
+                            lint.undeclared_nets
+                                .push((c.reference.clone(), p.number.clone(), id));
                         }
                         *degree.entry(id).or_default() += 1;
                     }

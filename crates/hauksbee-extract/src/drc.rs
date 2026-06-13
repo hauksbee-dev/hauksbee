@@ -2269,8 +2269,7 @@ pub mod altium_drc {
         DEFAULT_CLEARANCE_MM,
     };
     use crate::altium::{
-        self, is_copper_layer, layer_name, parse_pads, ALTIUM_BOTTOM_LAYER, ALTIUM_MULTI_LAYER,
-        ALTIUM_TOP_LAYER, MM_PER_UNIT, NONE_U16,
+        self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16,
     };
     use crate::ExtractError;
     use std::collections::{HashMap, HashSet};
@@ -2300,8 +2299,7 @@ pub mod altium_drc {
         let mut doc = altium::PcbDoc::open(bytes)?;
         let clearance = clearance_override.unwrap_or(DEFAULT_CLEARANCE_MM);
 
-        // Net count, for net-index bounds checks (names not needed here; the
-        // connectivity extractor owns naming). We re-derive names for the report.
+        // Net names (for the report); a primitive's net field indexes this list.
         let net_names: Vec<String> = doc
             .data("Nets")
             .map(|b| altium::parse_net_names(&b))
@@ -2311,10 +2309,7 @@ pub mod altium_drc {
             if id == 0 {
                 String::new()
             } else {
-                net_names
-                    .get((id - 1) as usize)
-                    .cloned()
-                    .unwrap_or_default()
+                net_names.get((id - 1) as usize).cloned().unwrap_or_default()
             }
         };
 
@@ -2423,7 +2418,7 @@ pub mod altium_drc {
                 }
                 // Through-hole pads sit on the multi-layer slot; SMD pads on one
                 // copper side.
-                let layers: Vec<String> = if p.layer == ALTIUM_MULTI_LAYER {
+                let layers: Vec<String> = if p.layer == crate::altium::ALTIUM_MULTI_LAYER {
                     multi.clone()
                 } else if is_copper_layer(p.layer) {
                     vec![layer_name(p.layer)]
@@ -2443,10 +2438,9 @@ pub mod altium_drc {
 
         // ── Polygon (copper-pour) outlines ──────────────────────────────────
         // Altium stores the requested outline; the filled copper with its
-        // antipads lives in Regions6 which we do not model. So, like the Eagle
-        // path treats `<polygon>` outlines, we push the outline edges for
-        // clearance pruning but mark it NOT filled, so it never engulfs a pad in
-        // the containment short-test (which would manufacture false shorts).
+        // antipads lives in Regions6 which we do not model. Push the outline as a
+        // containment-only, edge-less zone (see `push_zone_opts`) so a foreign
+        // via passing through a split-plane antipad does not read as a short.
         if let Some(b) = doc.data("Polygons") {
             for poly in parse_polygons(&b) {
                 if !is_copper_layer(poly.layer) || poly.pts.len() < 3 {
@@ -2455,9 +2449,6 @@ pub mod altium_drc {
                 let layer = layer_name(poly.layer);
                 copper.insert(layer.clone());
                 let net = net_id(poly.net, n_nets);
-                // Unfilled outline with no antipad model: contribute no edges to
-                // the sweep (see `push_zone_opts`). Otherwise every foreign via
-                // passing through a split-plane antipad reads as a short.
                 buckets.push_zone_opts(&layer, poly.pts, net, false, false);
             }
         }
@@ -2594,10 +2585,7 @@ pub mod altium_drc {
         let start = a.start_deg.to_radians();
         let sweep = sweep.to_radians();
         let mut caps = Vec::with_capacity(ARC_SEGMENTS);
-        let mut prev = (
-            a.cx + a.radius * start.cos(),
-            a.cy + a.radius * start.sin(),
-        );
+        let mut prev = (a.cx + a.radius * start.cos(), a.cy + a.radius * start.sin());
         for i in 1..=ARC_SEGMENTS {
             let t = i as f64 / ARC_SEGMENTS as f64;
             let ang = start + sweep * t;
@@ -2645,8 +2633,7 @@ pub mod altium_drc {
     }
 
     /// Per-pad geometry (size + shape) read from sub-record 5, parallel to the
-    /// connectivity `parse_pads`. Sizes are top-layer copper; through-hole pads
-    /// use the same on every layer for the conservative short test.
+    /// connectivity `parse_pads`.
     pub(crate) struct PadGeo {
         pub size_x: f64,
         pub size_y: f64,
@@ -2686,28 +2673,29 @@ pub mod altium_drc {
     }
 
     /// Build the solid copper shape for a pad. Shape codes: 1 = circle/oval,
-    /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). A round pad is a
-    /// disc / capsule; rect / oct are modelled as the bounding rectangle (a
-    /// conservative superset for short detection).
+    /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). Rect / oct are
+    /// modelled as the bounding rectangle (a conservative superset for short
+    /// detection).
     fn pad_shape(cx: f64, cy: f64, g: &PadGeo) -> Shape {
         let rot = g.rotation.to_radians();
         let (w, h) = (g.size_x, g.size_y);
         match g.shape {
-            1 if (w - h).abs() < 1e-6 => {
-                // Round pad: a disc.
-                Shape::Capsule(Capsule {
-                    ax: cx,
-                    ay: cy,
-                    bx: cx,
-                    by: cy,
-                    r: w.max(h) / 2.0,
-                })
-            }
+            1 if (w - h).abs() < 1e-6 => Shape::Capsule(Capsule {
+                ax: cx,
+                ay: cy,
+                bx: cx,
+                by: cy,
+                r: w.max(h) / 2.0,
+            }),
             1 => {
                 // Oval / stadium: a capsule along the long axis.
                 let (long, short) = if w >= h { (w, h) } else { (h, w) };
                 let half = (long - short) / 2.0;
-                let along = if w >= h { rot } else { rot + std::f64::consts::FRAC_PI_2 };
+                let along = if w >= h {
+                    rot
+                } else {
+                    rot + std::f64::consts::FRAC_PI_2
+                };
                 let (rs, rc) = along.sin_cos();
                 Shape::Capsule(Capsule {
                     ax: cx - half * rc,
@@ -2741,7 +2729,8 @@ pub mod altium_drc {
     fn parse_polygons(b: &[u8]) -> Vec<Polygon> {
         let mut out = Vec::new();
         for m in altium::properties_records(b) {
-            let layer = altium::layer_id_from_name(m.get("LAYER").map(String::as_str).unwrap_or(""));
+            let layer =
+                altium::layer_id_from_name(m.get("LAYER").map(String::as_str).unwrap_or(""));
             let net = m
                 .get("NET")
                 .and_then(|s| s.trim().parse::<i64>().ok())
@@ -2768,9 +2757,4 @@ pub mod altium_drc {
         }
         out
     }
-
-    // Re-export the layer-name constants used in matches above so the names are
-    // not flagged unused on builds where pad geometry takes other branches.
-    #[allow(dead_code)]
-    const _USED: (u8, u8, u8) = (ALTIUM_TOP_LAYER, ALTIUM_BOTTOM_LAYER, ALTIUM_MULTI_LAYER);
 }
