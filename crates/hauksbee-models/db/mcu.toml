@@ -379,18 +379,26 @@ backend = "qemu:esp32c3"
 
 [models.pins]
 # Demo-board pads (the QEMU C3 proof board) use the "p0<bit>" convention; the
-# strap pads ("gpio<n>", from the KiCad RF_Module:ESP32-C3-WROOM-02 / MINI-1
-# symbol) are matched by the strap lint by exact role string. Both spellings
-# parse to the same flat GPIO space in the binder.
+# strap pads ("gpio<n>") are matched by the strap lint by exact role string.
+# Both spellings parse to the same flat GPIO space in the binder.
+#
+# Strap pad numbers below are the ESP32-C3-MINI-1 module pad numbering (Espressif
+# ESP32-C3-MINI-1 datasheet v2.x, Table "Pin Definitions": IO2=pad5, IO8=pad22,
+# IO9=pad23). NOTE: the ESP32-C3-WROOM-02 module uses DIFFERENT pad numbers for
+# the same straps (IO2=pad16, IO8=pad7, IO9=pad8), so this single map is correct
+# for MINI-1 (and the synthetic demo, which reuses MINI-1) but would mis-locate
+# the straps on a real WROOM-02; split the model by footprint if WROOM-02 support
+# is needed. (Previously these were 16/5/6, which matched neither module and fired
+# a false "GPIO9 mis-strapped" lint on MINI-1 boards whose pad 6 is GPIO3.)
 "1"  = "vss"
 "2"  = "vdd"
 "12" = "p02"        # GPIO2 (demo board)
 "13" = "p04"        # GPIO4 (demo board)
 "30" = "p021_txd"   # U0TXD on GPIO21
 "31" = "p020_rxd"   # U0RXD on GPIO20
-"16" = "gpio2"      # strap (WROOM-02/MINI-1 pad numbering)
-"5"  = "gpio8"      # strap
-"6"  = "gpio9"      # strap (BOOT)
+"5"  = "gpio2"      # strap (ESP32-C3-MINI-1 pad numbering)
+"22" = "gpio8"      # strap
+"23" = "gpio9"      # strap (BOOT)
 
 [models.ratings]
 max_pin_current_a = 0.04
