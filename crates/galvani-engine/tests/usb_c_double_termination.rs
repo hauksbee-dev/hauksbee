@@ -107,6 +107,45 @@ fn mainboard_internal_rd_only_is_clean() {
 }
 
 #[test]
+fn lily58_dual_receptacle_both_halves_terminated() {
+    // Round 3 recorded an honest tool limitation: the CC audit under-read the
+    // device-side Rd on a board with two USB-C receptacles (the Lily58's two
+    // halves J1 and J6). Chased to ground truth, the under-read was a galvani
+    // defect with two compounding causes, not a board fault:
+    //   1. the audit resolved a single best-scoring receptacle, so the second
+    //      receptacle's independent Rd was never read; and
+    //   2. J6's two 5.1k Rd resistors (R11/R12) return to GNDA, a secondary
+    //      analog ground, which the audit's GND lookup did not recognise, so
+    //      even J6 alone read as un-terminated.
+    // The fix audits every receptacle and credits any recognised ground. Both
+    // halves now present an independent, correct 5.1k Rd on each CC pin (R2/R3
+    // on J1 to GND, R11/R12 on J6 to GNDA), verified against the .kicad_pcb.
+    let Some(root) = famous_root() else { return };
+    let board = load(&root, "lily58/Pro_V2/Pro_V2.kicad_pcb");
+    let audit = audit_cc_termination(&board).expect("lily58 CC termination found");
+
+    // Two distinct receptacles, both credited.
+    let refs: Vec<&str> = audit.receptacles.iter().map(|r| r.reference.as_str()).collect();
+    assert!(refs.contains(&"J1"), "J1 receptacle must be audited, got {refs:?}");
+    assert!(refs.contains(&"J6"), "J6 receptacle must be audited, got {refs:?}");
+
+    for rec in &audit.receptacles {
+        for (name, t) in [("CC1", &rec.cc1), ("CC2", &rec.cc2)] {
+            assert_eq!(
+                t.external_rd_ohms,
+                Some(5100.0),
+                "{} {name}: independent 5.1k Rd expected",
+                rec.reference
+            );
+            assert!(!t.is_double_terminated(), "{} {name}: no PMIC, must not double", rec.reference);
+        }
+    }
+    // Both halves terminated, and clean of any double-termination.
+    assert!(audit.all_receptacles_terminated(), "both Lily58 halves must be terminated");
+    assert!(!audit.has_double_termination(), "Lily58 is clean");
+}
+
+#[test]
 fn rpi4_external_rd_without_integrated_pmic_is_not_doubled() {
     // The RPi 4 reconstruction has a populated external 5.1k Rd but no
     // integrated-Rd PMIC, so that Rd is the sole, correct termination - and it is
