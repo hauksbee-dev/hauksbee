@@ -179,9 +179,11 @@ struct NetlistBuilder {
     /// segment's interior into it. (Most net labels in real boards sit
     /// mid-span, so without this almost every label floats free of its wire.)
     segments: Vec<(SheetId, Pt, Pt, bool)>,
-    /// Bus alias definitions per sheet: alias name -> member tokens. Referenced
-    /// from group buses as `{ALIAS}`. Recorded for completeness; resolved when
-    /// a group bus references `{NAME}`.
+    /// Bus alias definitions per sheet: alias name -> member tokens. A group bus
+    /// `PREFIX{ALIAS}` referencing one is resolved by `expand_bus_on_sheet`,
+    /// which substitutes the alias's (themselves-expanded) members. An alias that
+    /// names another alias is left as a literal member (KiCad does not chain
+    /// aliases either), so resolution cannot recurse through this map.
     bus_aliases: HashMap<(SheetId, String), Vec<String>>,
     /// Hierarchical wiring: (sheet instance path, pin name) → union-find node,
     /// recorded for both the parent sheet-pin and the child hierarchical-label
