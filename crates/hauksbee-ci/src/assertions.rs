@@ -70,6 +70,7 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "toggle" => check_toggle(a, out),
         "no_faults" => check_no_faults(out),
         "max_current" => check_max_current(a, out),
+        "max_temp" => check_max_temp(a, out),
         "peripheral" => check_peripheral(a, out),
         "rail_window" => check_rail_window(a, out),
         "protection_trip" => check_protection_trip(a, out),
@@ -411,6 +412,53 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             true,
             format!("I({reference}): no current data (only R/D tracked); skipped"),
         ),
+    }
+}
+
+/// max_temp: the steady-state junction temperature of `ref` must stay at or
+/// below `celsius` (if given) or below the device's own max junction temp (if
+/// not, in which case we lean on whether an overtemperature fault fired).
+fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let reference = a.reference.clone().unwrap_or_default();
+    let peak = out.peak_temp_c.get(&reference).copied();
+
+    // Explicit ceiling: compare the peak junction temperature against it.
+    if let Some(limit) = a.celsius {
+        return match peak {
+            Some(tj) => {
+                let ok = tj <= limit + 1e-6;
+                (ok, format!("Tj({reference}) peak {tj:.1}C (<= {limit}C)"))
+            }
+            None => (
+                // No thermal data: the part never dissipated measurably, so it
+                // cannot have exceeded the ceiling. Pass, but say so.
+                true,
+                format!("Tj({reference}): no dissipation measured (idle/non-dissipating); skipped"),
+            ),
+        };
+    }
+
+    // No explicit ceiling: pass unless an overtemperature fault fired for this
+    // component (the monitor compares Tj against the device's own max Tj).
+    let over = out
+        .faults
+        .iter()
+        .find(|f| f.component == reference && f.kind == "overtemperature");
+    match over {
+        Some(f) => (
+            false,
+            format!(
+                "Tj({reference}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
+                f.value, f.limit, f.t_ms
+            ),
+        ),
+        None => {
+            let detail = match peak {
+                Some(tj) => format!("Tj({reference}) peak {tj:.1}C, within device max"),
+                None => format!("Tj({reference}): no dissipation measured; within device max"),
+            };
+            (true, detail)
+        }
     }
 }
 

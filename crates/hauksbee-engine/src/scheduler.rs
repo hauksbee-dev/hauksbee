@@ -686,6 +686,23 @@ impl Scheduler {
         self.stress.stress_by_ref().clone()
     }
 
+    /// Live per-component estimated junction temperature (C) for the thermal
+    /// view. Only populated for dissipating devices.
+    pub fn temp_states(&self) -> HashMap<String, f64> {
+        self.stress.temp_by_ref().clone()
+    }
+
+    /// Set the ambient temperature (C) the thermal monitor's steady-state
+    /// junction estimate sits on top of.
+    pub fn set_ambient_c(&mut self, ambient_c: f64) {
+        self.stress.ambient_c = ambient_c;
+    }
+
+    /// The configured ambient temperature (C).
+    pub fn ambient_c(&self) -> f64 {
+        self.stress.ambient_c
+    }
+
     /// Short two nets by name, bridging them with a small resistance so the
     /// solver carries current between them and the stress monitor shows the
     /// fallout. The what-if "solder bridge" API. Returns true if the bridge was
