@@ -38,6 +38,35 @@ A `--no-default-features --features renode,qemu` build is GPL-free: both the
 Renode and QEMU backends talk to their emulator over TCP and spawn it as a child
 process, so they link no GPL code.
 
+### Peripheral-coupling coverage (what each backend actually implements)
+
+The `Mcu` trait above is the full contract, but the three backends do not all
+implement every coupling yet. GPIO (both directions) and UART co-sim work on all
+three; **ADC injection and I2C/SPI peripheral-slave interception are implemented
+only on the in-process AVR backend today.**
+
+| Coupling | AVR (`simavr`) | Renode (STM32/nRF/RISC-V) | QEMU (ESP32/-S3/-C3) |
+|----------|----------------|---------------------------|----------------------|
+| GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
+| GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
+| UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
+| ADC inject (`set_analog_in`) | yes | **no-op** | **no-op** |
+| I2C slave models (`on_i2c`) | yes | **no-op** | **no-op** |
+| SPI slave models (`on_spi`) | yes | **no-op** | **no-op** |
+
+On Renode and QEMU the `set_analog_in` / `on_i2c` / `on_spi` methods are explicit,
+commented no-ops (`renode/mod.rs`, `qemu/mod.rs`). The engine still *binds* I2C/SPI
+device models and ADC nets for a board on those backends, but the firmware running
+on the external emulator does not yet see them: an on-bus EEPROM/sensor/DAC gets no
+ACK, and an ADC read returns the core's own default. Why the asymmetry: `simavr`
+runs in-process over FFI and exposes cycle-accurate TWI/SPI/ADC IRQ callbacks, so
+intercepting bus traffic and injecting ADC voltages is natural; Renode and QEMU are
+driven over TCP (Monitor / QMP / gdbstub) and would each need per-platform
+peripheral interception plus an ADC feed path, which is future work. So a non-AVR
+board co-sims its GPIO and UART against the analog solve, but its on-bus peripherals
+and ADC feedback are not modelled yet. AVR-class boards (e.g. the ATmega328P) have
+the full stack.
+
 ### Why QEMU (the Espressif fork) for the ESP32 family
 
 Renode (as of 1.16.1) ships **no** `esp32.repl` / `esp32c3.repl` (verified: the
