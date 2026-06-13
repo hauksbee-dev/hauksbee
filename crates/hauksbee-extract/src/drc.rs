@@ -542,21 +542,42 @@ impl LayerBuckets {
     /// is real fill copper (eligible for the containment short-test) or only a
     /// drawn outline.
     fn push_zone(&mut self, layer: &str, pts: Vec<(f64, f64)>, net: i64, filled: bool) {
+        self.push_zone_opts(layer, pts, net, filled, true)
+    }
+
+    /// As [`Self::push_zone`], but `edges` controls whether the boundary edges
+    /// are pushed as indexed capsules. A pour whose true fill (with antipads /
+    /// thermal reliefs) is not modelled cannot be short-tested against same-layer
+    /// foreign copper without manufacturing false shorts where a via legitimately
+    /// passes through an antipad void; for such pours pass `edges = false` so the
+    /// outline contributes nothing to the sweep. This is the Altium split-plane
+    /// case (the real fill lives in `Regions6`, which the extractor does not
+    /// parse), and is the principled analogue of the Eagle `filled = false` rule.
+    fn push_zone_opts(
+        &mut self,
+        layer: &str,
+        pts: Vec<(f64, f64)>,
+        net: i64,
+        filled: bool,
+        edges: bool,
+    ) {
         if pts.len() < 3 {
             return;
         }
-        let n = pts.len();
-        let mut j = n - 1;
-        for i in 0..n {
-            let cap = Capsule {
-                ax: pts[j].0,
-                ay: pts[j].1,
-                bx: pts[i].0,
-                by: pts[i].1,
-                r: 0.0,
-            };
-            self.push(layer, make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()));
-            j = i;
+        if edges {
+            let n = pts.len();
+            let mut j = n - 1;
+            for i in 0..n {
+                let cap = Capsule {
+                    ax: pts[j].0,
+                    ay: pts[j].1,
+                    bx: pts[i].0,
+                    by: pts[i].1,
+                    r: 0.0,
+                };
+                self.push(layer, make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()));
+                j = i;
+            }
         }
         let bounds = polygon_bounds(&pts);
         self.zones
@@ -1344,6 +1365,12 @@ pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
 /// board's own design-rule clearance (falling back to [`DEFAULT_CLEARANCE_MM`]).
 pub fn eagle_drc_from_text(text: &str) -> DrcReport {
     eagle_drc::run(text, None)
+}
+
+/// Convenience: run the geometric DRC on Altium `.PcbDoc` raw bytes, using the
+/// default clearance rule.
+pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractError> {
+    altium_drc::run(bytes, None)
 }
 
 // ── Eagle .brd geometry → the same engine ────────────────────────────────────
@@ -2221,4 +2248,529 @@ pub mod eagle_drc {
         }
         map
     }
+}
+
+// ── Altium .PcbDoc geometry → the same engine ─────────────────────────────────
+
+/// Altium `.PcbDoc` copper-geometry extraction for the DRC. The connectivity
+/// extractor in `altium.rs` reads pad nets; this reads *copper geometry per net*
+/// (tracks, arcs, vias, pads, polygon outlines) straight from the binary record
+/// streams and feeds it to [`sweep_buckets`], the exact same short / clearance
+/// engine the KiCad and Eagle paths use.
+///
+/// Geometry is kept in Altium's native frame (millimetres, y-up); the DRC is
+/// self-consistent so the y orientation never matters, only relative positions.
+///
+/// Record layouts ported from KiCad's `altium_parser_pcb.cpp` (`ATRACK6`,
+/// `AARC6`, `AVIA6`, `APAD6`); see `altium.rs` for the field-by-field citation.
+pub mod altium_drc {
+    use super::{
+        make_prim, sweep_buckets, Capsule, DrcReport, ItemKind, LayerBuckets, Shape, ARC_SEGMENTS,
+        DEFAULT_CLEARANCE_MM,
+    };
+    use crate::altium::{
+        self, is_copper_layer, layer_name, parse_pads, ALTIUM_BOTTOM_LAYER, ALTIUM_MULTI_LAYER,
+        ALTIUM_TOP_LAYER, MM_PER_UNIT, NONE_U16,
+    };
+    use crate::ExtractError;
+    use std::collections::{HashMap, HashSet};
+
+    /// Map an Altium primitive's net field to the hauksbee net id (index + 1, so
+    /// id 0 stays the "no net" bucket), or 0 when unattached / out of range.
+    fn net_id(field: u16, n_nets: usize) -> i64 {
+        if field == NONE_U16 || (field as usize) >= n_nets {
+            0
+        } else {
+            field as i64 + 1
+        }
+    }
+
+    /// The copper layers a through-hole (multi-layer) primitive occupies: front,
+    /// back, and every inner layer the board declares. For a two-layer board this
+    /// is just F.Cu + B.Cu.
+    fn multi_layers(copper: &HashSet<String>) -> Vec<String> {
+        let mut v: Vec<String> = copper.iter().cloned().collect();
+        if v.is_empty() {
+            v = vec!["F.Cu".to_string(), "B.Cu".to_string()];
+        }
+        v
+    }
+
+    pub fn run(bytes: &[u8], clearance_override: Option<f64>) -> Result<DrcReport, ExtractError> {
+        let mut doc = altium::PcbDoc::open(bytes)?;
+        let clearance = clearance_override.unwrap_or(DEFAULT_CLEARANCE_MM);
+
+        // Net count, for net-index bounds checks (names not needed here; the
+        // connectivity extractor owns naming). We re-derive names for the report.
+        let net_names: Vec<String> = doc
+            .data("Nets")
+            .map(|b| altium::parse_net_names(&b))
+            .unwrap_or_default();
+        let n_nets = net_names.len();
+        let name_of = |id: i64| -> String {
+            if id == 0 {
+                String::new()
+            } else {
+                net_names
+                    .get((id - 1) as usize)
+                    .cloned()
+                    .unwrap_or_default()
+            }
+        };
+
+        // Component refdes by index, so geometry can carry an owner (feeds the
+        // jumper / star-ground escape-routing exemption in the sweep).
+        let comp_refs: Vec<String> = doc
+            .data("Components")
+            .map(|b| altium::parse_component_refs(&b))
+            .unwrap_or_default();
+        let owner_of = |idx: u16| -> String {
+            if idx == NONE_U16 {
+                String::new()
+            } else {
+                comp_refs.get(idx as usize).cloned().unwrap_or_default()
+            }
+        };
+
+        let mut buckets = LayerBuckets::default();
+        let mut copper: HashSet<String> = HashSet::new();
+        copper.insert("F.Cu".to_string());
+        copper.insert("B.Cu".to_string());
+
+        // ── Tracks ──────────────────────────────────────────────────────────
+        if let Some(b) = doc.data("Tracks") {
+            for t in parse_tracks(&b) {
+                if !is_copper_layer(t.layer) {
+                    continue;
+                }
+                let layer = layer_name(t.layer);
+                copper.insert(layer.clone());
+                let net = net_id(t.net, n_nets);
+                buckets.push(
+                    &layer,
+                    make_prim(
+                        Shape::Capsule(Capsule {
+                            ax: t.x1,
+                            ay: t.y1,
+                            bx: t.x2,
+                            by: t.y2,
+                            r: t.width / 2.0,
+                        }),
+                        net,
+                        ItemKind::Track,
+                        owner_of(t.component),
+                    ),
+                );
+            }
+        }
+
+        // ── Arcs ────────────────────────────────────────────────────────────
+        if let Some(b) = doc.data("Arcs") {
+            for a in parse_arcs(&b) {
+                if !is_copper_layer(a.layer) {
+                    continue;
+                }
+                let layer = layer_name(a.layer);
+                copper.insert(layer.clone());
+                let net = net_id(a.net, n_nets);
+                let owner = owner_of(a.component);
+                for cap in flatten_altium_arc(&a) {
+                    buckets.push(
+                        &layer,
+                        make_prim(Shape::Capsule(cap), net, ItemKind::Arc, owner.clone()),
+                    );
+                }
+            }
+        }
+
+        // ── Vias (through-hole: present on every copper layer) ──────────────
+        if let Some(b) = doc.data("Vias") {
+            let layers = multi_layers(&copper);
+            for v in parse_vias(&b) {
+                let net = net_id(v.net, n_nets);
+                for layer in &layers {
+                    buckets.push(
+                        layer,
+                        make_prim(
+                            Shape::Capsule(Capsule {
+                                ax: v.x,
+                                ay: v.y,
+                                bx: v.x,
+                                by: v.y,
+                                r: v.diameter / 2.0,
+                            }),
+                            net,
+                            ItemKind::Via,
+                            String::new(),
+                        ),
+                    );
+                }
+            }
+        }
+
+        // ── Pads ────────────────────────────────────────────────────────────
+        // net id -> set of component refs it has a pad inside, for the exemption.
+        let mut net_owners: HashMap<i64, HashSet<String>> = HashMap::new();
+        if let Some(b) = doc.data("Pads") {
+            let pads = parse_pads(&b);
+            let pad_geo = parse_pad_geometry(&b);
+            let multi = multi_layers(&copper);
+            for (p, g) in pads.iter().zip(pad_geo.iter()) {
+                let net = net_id(p.net, n_nets);
+                let owner = owner_of(p.component);
+                if net != 0 && !owner.is_empty() {
+                    net_owners.entry(net).or_default().insert(owner.clone());
+                }
+                // Through-hole pads sit on the multi-layer slot; SMD pads on one
+                // copper side.
+                let layers: Vec<String> = if p.layer == ALTIUM_MULTI_LAYER {
+                    multi.clone()
+                } else if is_copper_layer(p.layer) {
+                    vec![layer_name(p.layer)]
+                } else {
+                    continue;
+                };
+                let shape = pad_shape(p.x_mm, p.y_mm, g);
+                for layer in &layers {
+                    copper.insert(layer.clone());
+                    buckets.push(
+                        layer,
+                        make_prim(shape.clone(), net, ItemKind::Pad, owner.clone()),
+                    );
+                }
+            }
+        }
+
+        // ── Polygon (copper-pour) outlines ──────────────────────────────────
+        // Altium stores the requested outline; the filled copper with its
+        // antipads lives in Regions6 which we do not model. So, like the Eagle
+        // path treats `<polygon>` outlines, we push the outline edges for
+        // clearance pruning but mark it NOT filled, so it never engulfs a pad in
+        // the containment short-test (which would manufacture false shorts).
+        if let Some(b) = doc.data("Polygons") {
+            for poly in parse_polygons(&b) {
+                if !is_copper_layer(poly.layer) || poly.pts.len() < 3 {
+                    continue;
+                }
+                let layer = layer_name(poly.layer);
+                copper.insert(layer.clone());
+                let net = net_id(poly.net, n_nets);
+                // Unfilled outline with no antipad model: contribute no edges to
+                // the sweep (see `push_zone_opts`). Otherwise every foreign via
+                // passing through a split-plane antipad reads as a short.
+                buckets.push_zone_opts(&layer, poly.pts, net, false, false);
+            }
+        }
+
+        // Net 0 carries no connectivity, so it is never a short (KiCad net 0).
+        let no_net: HashSet<i64> = std::iter::once(0).collect();
+
+        Ok(sweep_buckets(buckets, clearance, &no_net, &net_owners, name_of))
+    }
+
+    // ── Binary record parsers (fixed layout, little-endian) ───────────────────
+
+    fn u8_at(b: &[u8], o: usize) -> u8 {
+        b.get(o).copied().unwrap_or(0)
+    }
+    fn u16_at(b: &[u8], o: usize) -> u16 {
+        if o + 2 <= b.len() {
+            u16::from_le_bytes([b[o], b[o + 1]])
+        } else {
+            0
+        }
+    }
+    fn u32_at(b: &[u8], o: usize) -> u32 {
+        if o + 4 <= b.len() {
+            u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+        } else {
+            0
+        }
+    }
+    fn coord_mm(b: &[u8], o: usize) -> f64 {
+        (u32_at(b, o) as i32) as f64 * MM_PER_UNIT
+    }
+    fn f64_at(b: &[u8], o: usize) -> f64 {
+        if o + 8 <= b.len() {
+            let mut a = [0u8; 8];
+            a.copy_from_slice(&b[o..o + 8]);
+            f64::from_le_bytes(a)
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) struct Track {
+        pub layer: u8,
+        pub net: u16,
+        pub component: u16,
+        pub x1: f64,
+        pub y1: f64,
+        pub x2: f64,
+        pub y2: f64,
+        pub width: f64,
+    }
+
+    /// TRACKS6: 1-byte marker (4) then one sub-record.
+    fn parse_tracks(b: &[u8]) -> Vec<Track> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < b.len() {
+            if u8_at(b, pos) != 4 {
+                break;
+            }
+            pos += 1;
+            let len = u32_at(b, pos) as usize;
+            pos += 4;
+            let s = pos;
+            out.push(Track {
+                layer: u8_at(b, s),
+                net: u16_at(b, s + 3),
+                component: u16_at(b, s + 7),
+                x1: coord_mm(b, s + 13),
+                y1: coord_mm(b, s + 17),
+                x2: coord_mm(b, s + 21),
+                y2: coord_mm(b, s + 25),
+                width: coord_mm(b, s + 29),
+            });
+            pos = (s + len).min(b.len());
+        }
+        out
+    }
+
+    pub(crate) struct Arc {
+        pub layer: u8,
+        pub net: u16,
+        pub component: u16,
+        pub cx: f64,
+        pub cy: f64,
+        pub radius: f64,
+        pub start_deg: f64,
+        pub end_deg: f64,
+        pub width: f64,
+    }
+
+    /// ARCS6: 1-byte marker (1) then one sub-record.
+    fn parse_arcs(b: &[u8]) -> Vec<Arc> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < b.len() {
+            if u8_at(b, pos) != 1 {
+                break;
+            }
+            pos += 1;
+            let len = u32_at(b, pos) as usize;
+            pos += 4;
+            let s = pos;
+            out.push(Arc {
+                layer: u8_at(b, s),
+                net: u16_at(b, s + 3),
+                component: u16_at(b, s + 7),
+                cx: coord_mm(b, s + 13),
+                cy: coord_mm(b, s + 17),
+                radius: coord_mm(b, s + 21),
+                start_deg: f64_at(b, s + 25),
+                end_deg: f64_at(b, s + 33),
+                width: coord_mm(b, s + 41),
+            });
+            pos = (s + len).min(b.len());
+        }
+        out
+    }
+
+    /// Flatten an Altium arc (centre, radius, start/end angle in degrees) into a
+    /// chain of capsule links of half-width radius.
+    fn flatten_altium_arc(a: &Arc) -> Vec<Capsule> {
+        let r = a.width / 2.0;
+        let mut sweep = a.end_deg - a.start_deg;
+        // Altium arcs go counter-clockwise from start to end; normalise to a
+        // positive sweep.
+        while sweep <= 0.0 {
+            sweep += 360.0;
+        }
+        while sweep > 360.0 {
+            sweep -= 360.0;
+        }
+        let start = a.start_deg.to_radians();
+        let sweep = sweep.to_radians();
+        let mut caps = Vec::with_capacity(ARC_SEGMENTS);
+        let mut prev = (
+            a.cx + a.radius * start.cos(),
+            a.cy + a.radius * start.sin(),
+        );
+        for i in 1..=ARC_SEGMENTS {
+            let t = i as f64 / ARC_SEGMENTS as f64;
+            let ang = start + sweep * t;
+            let p = (a.cx + a.radius * ang.cos(), a.cy + a.radius * ang.sin());
+            caps.push(Capsule {
+                ax: prev.0,
+                ay: prev.1,
+                bx: p.0,
+                by: p.1,
+                r,
+            });
+            prev = p;
+        }
+        caps
+    }
+
+    pub(crate) struct Via {
+        pub net: u16,
+        pub x: f64,
+        pub y: f64,
+        pub diameter: f64,
+    }
+
+    /// VIAS6: 1-byte marker (3) then one sub-record. Vias carry no component.
+    fn parse_vias(b: &[u8]) -> Vec<Via> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < b.len() {
+            if u8_at(b, pos) != 3 {
+                break;
+            }
+            pos += 1;
+            let len = u32_at(b, pos) as usize;
+            pos += 4;
+            let s = pos;
+            out.push(Via {
+                net: u16_at(b, s + 3),
+                x: coord_mm(b, s + 13),
+                y: coord_mm(b, s + 17),
+                diameter: coord_mm(b, s + 21),
+            });
+            pos = (s + len).min(b.len());
+        }
+        out
+    }
+
+    /// Per-pad geometry (size + shape) read from sub-record 5, parallel to the
+    /// connectivity `parse_pads`. Sizes are top-layer copper; through-hole pads
+    /// use the same on every layer for the conservative short test.
+    pub(crate) struct PadGeo {
+        pub size_x: f64,
+        pub size_y: f64,
+        pub shape: u8,
+        pub rotation: f64,
+    }
+
+    fn parse_pad_geometry(b: &[u8]) -> Vec<PadGeo> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < b.len() {
+            if u8_at(b, pos) != 2 {
+                break;
+            }
+            pos += 1;
+            // sub1 (name)..sub4 skipped
+            for _ in 0..4 {
+                let len = u32_at(b, pos) as usize;
+                pos += 4 + len;
+            }
+            // sub5 geometry
+            let sr5 = u32_at(b, pos) as usize;
+            pos += 4;
+            let s = pos;
+            out.push(PadGeo {
+                size_x: coord_mm(b, s + 21),
+                size_y: coord_mm(b, s + 25),
+                shape: u8_at(b, s + 49),
+                rotation: f64_at(b, s + 52),
+            });
+            pos = s + sr5;
+            // sub6 stack skipped
+            let sr6 = u32_at(b, pos) as usize;
+            pos += 4 + sr6;
+        }
+        out
+    }
+
+    /// Build the solid copper shape for a pad. Shape codes: 1 = circle/oval,
+    /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). A round pad is a
+    /// disc / capsule; rect / oct are modelled as the bounding rectangle (a
+    /// conservative superset for short detection).
+    fn pad_shape(cx: f64, cy: f64, g: &PadGeo) -> Shape {
+        let rot = g.rotation.to_radians();
+        let (w, h) = (g.size_x, g.size_y);
+        match g.shape {
+            1 if (w - h).abs() < 1e-6 => {
+                // Round pad: a disc.
+                Shape::Capsule(Capsule {
+                    ax: cx,
+                    ay: cy,
+                    bx: cx,
+                    by: cy,
+                    r: w.max(h) / 2.0,
+                })
+            }
+            1 => {
+                // Oval / stadium: a capsule along the long axis.
+                let (long, short) = if w >= h { (w, h) } else { (h, w) };
+                let half = (long - short) / 2.0;
+                let along = if w >= h { rot } else { rot + std::f64::consts::FRAC_PI_2 };
+                let (rs, rc) = along.sin_cos();
+                Shape::Capsule(Capsule {
+                    ax: cx - half * rc,
+                    ay: cy - half * rs,
+                    bx: cx + half * rc,
+                    by: cy + half * rs,
+                    r: short / 2.0,
+                })
+            }
+            _ => {
+                // Rectangle / octagon: bounding rectangle.
+                let hw = w / 2.0;
+                let hh = h / 2.0;
+                let (rs, rc) = rot.sin_cos();
+                let pts = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+                    .into_iter()
+                    .map(|(lx, ly)| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc))
+                    .collect();
+                Shape::Polygon { pts, r: 0.0 }
+            }
+        }
+    }
+
+    pub(crate) struct Polygon {
+        pub layer: u8,
+        pub net: u16,
+        pub pts: Vec<(f64, f64)>,
+    }
+
+    /// POLYGONS6: properties records; the outline is VX<i>/VY<i> vertices.
+    fn parse_polygons(b: &[u8]) -> Vec<Polygon> {
+        let mut out = Vec::new();
+        for m in altium::properties_records(b) {
+            let layer = altium::layer_id_from_name(m.get("LAYER").map(String::as_str).unwrap_or(""));
+            let net = m
+                .get("NET")
+                .and_then(|s| s.trim().parse::<i64>().ok())
+                .map(|v| if v < 0 { NONE_U16 } else { v as u16 })
+                .unwrap_or(NONE_U16);
+            let mut pts = Vec::new();
+            let mut i = 0;
+            loop {
+                let vx = m.get(&format!("VX{i}"));
+                let vy = m.get(&format!("VY{i}"));
+                match (vx, vy) {
+                    (Some(x), Some(y)) => {
+                        if let (Some(x), Some(y)) =
+                            (altium::parse_len_mm(x), altium::parse_len_mm(y))
+                        {
+                            pts.push((x, y));
+                        }
+                        i += 1;
+                    }
+                    _ => break,
+                }
+            }
+            out.push(Polygon { layer, net, pts });
+        }
+        out
+    }
+
+    // Re-export the layer-name constants used in matches above so the names are
+    // not flagged unused on builds where pad geometry takes other branches.
+    #[allow(dead_code)]
+    const _USED: (u8, u8, u8) = (ALTIUM_TOP_LAYER, ALTIUM_BOTTOM_LAYER, ALTIUM_MULTI_LAYER);
 }
