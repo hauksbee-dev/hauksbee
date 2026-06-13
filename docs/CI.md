@@ -232,6 +232,13 @@ deadline_ms = 20.0    # by this long after reset
 
 See [the boot-coverage section](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) for what problem this solves and the two-sided demo.
 
+**`phase_margin` / `ac_gain`**: small-signal loop-stability and frequency-response
+gates, driven by an `[ac]` sweep block on the spec. `phase_margin` bounds the
+feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude
+(dB) at a frequency. The spec format and worked assertions live in
+[AC_ANALYSIS.md](AC_ANALYSIS.md#ci), since the sweep block is documented
+alongside the analysis it drives.
+
 ## Output
 
 - **Human report** to stdout: each assertion `PASS`/`FAIL` with the measured

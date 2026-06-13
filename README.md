@@ -14,12 +14,15 @@ No other tool does this from the layout. Schematic simulators never see the boar
 
 ## What it does
 
+The fastest way in needs no terminal at all: run `hauksbee serve`, open the page it prints, drop a board on it, and read a plain-language report with a 2D map of the parts. Everything below is the same engine, from the command line.
+
 Point it at any PCB design and it will:
 
 - **Ingest** it: KiCad, Eagle, IPC-D-356, and gerber-only boards that ship no CAD at all, reverse-extracted from copper geometry alone ([`docs/GERBER.md`](docs/GERBER.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
 - **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU across AVR, STM32, ESP32/-C3, nRF52840 and SiFive RISC-V ([`docs/MCU.md`](docs/MCU.md)).
-- **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, signal integrity, trace ampacity, behavioural power-IC models and transient brownouts, each tuned against a known-good corpus so it does not cry wolf ([`docs/SHORTS.md`](docs/SHORTS.md), [`docs/RESOURCE_CONFLICTS.md`](docs/RESOURCE_CONFLICTS.md), [`docs/SI_CHECKS.md`](docs/SI_CHECKS.md), [`docs/TRANSIENTS.md`](docs/TRANSIENTS.md)).
-- **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin and a pre-commit hook ([`docs/CI.md`](docs/CI.md)), with runnable examples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
+- **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, signal integrity (now including a controlled-impedance estimate for USB and Ethernet from trace geometry and stackup, quasi-static closed-form, not a field solve), trace ampacity, behavioural power-IC models and transient brownouts, each tuned against a known-good corpus so it does not cry wolf ([`docs/SHORTS.md`](docs/SHORTS.md), [`docs/RESOURCE_CONFLICTS.md`](docs/RESOURCE_CONFLICTS.md), [`docs/SI_CHECKS.md`](docs/SI_CHECKS.md), [`docs/TRANSIENTS.md`](docs/TRANSIENTS.md)).
+- **Analyse** it past the static checks: a small-signal AC sweep for Bode plots, phase margin and gain crossover (averaged about the DC operating point, not cycle-by-cycle switching) ([`docs/AC_ANALYSIS.md`](docs/AC_ANALYSIS.md)), and a steady-state thermal pass that turns each part's dissipation into a junction temperature and flags the ones that run too hot (per-device `Tj = Tambient + P * theta_JA`, not a board thermal field solve) ([`docs/THERMAL.md`](docs/THERMAL.md)).
+- **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin and a pre-commit hook, with assertions for rails, faults, temperature and loop stability ([`docs/CI.md`](docs/CI.md)), and runnable examples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
 
 ![Fault state: a part exceeds its rating and the log explains why](frontend/screenshots/beauty/faults.png)
 
@@ -37,11 +40,14 @@ Point it at any PCB design and it will:
 
 ```bash
 scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
+hauksbee serve                                       # web front door: open the page, drop a board, read the report
 hauksbee run my_board.kicad_pcb --report             # extract, bind, and report on any board
+hauksbee run my_board.kicad_pcb --drc --plain        # the copper-short report, in plain language
+hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
 hauksbee-ci run ci/power-up.toml                      # run a CI spec the way a pipeline would
 ```
 
-Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/TEST_CAMPAIGN.md`](docs/TEST_CAMPAIGN.md).
+Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/TEST_CAMPAIGN.md`](docs/TEST_CAMPAIGN.md).
 
 ---
 
@@ -65,6 +71,7 @@ Hauksbee's matrix-exponential fast path wins in the PCB regime, many small RC is
         │            linear → matrix exponential       pin/ADC/UART/I2C/SPI lockstep co-sim
         ▼            nonlinear → MNA + Newton
    server (websocket) ──▶ frontend: 2D/3D render, signal flow, probes, scope
+                      └─▶ front door (`serve`): drop a board, get a plain report
 ```
 
 Partition the circuit at device boundaries and give every island the cheapest solver that is exactly right for it: linear islands get matrix exponentials (exact at any step size), nonlinear islands get MNA + Newton, digital is event-driven. Full write-up in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

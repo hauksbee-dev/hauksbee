@@ -41,8 +41,8 @@ hauksbee-solve: partitioned hybrid solver           hauksbee-mcu: MCU backends
         │
         ▼
 hauksbee-server: websocket protocol (frames, probes, controls)
-        │
-        ▼
+        │                         └─ front door: drop a board, get a report
+        ▼                            (`hauksbee serve`, browser, no CLI)
 frontend: board-accurate 2D/3D render, live signal flow, probes, controls
 ```
 
@@ -67,6 +67,19 @@ Unlike Tarski-Emulator's bespoke behavioral models, device models are real:
 SPICE-level diode/BJT/MOSFET equations, temperature-dependent, validated
 against ngspice on reference circuits to tight tolerances. Behavioral models
 remain available for digital ICs and for speed toggles.
+
+## Checks and analyses
+
+The static checks and the dynamic analyses each have their own write-up:
+
+- **DRC / copper shorts**: [SHORTS.md](SHORTS.md).
+- **Connectivity lint, strap-pins, resource conflicts**: [RESOURCE_CONFLICTS.md](RESOURCE_CONFLICTS.md).
+- **Signal integrity** (crystal load caps, decoupling, antenna keepout, USB skew, and controlled-impedance from trace geometry + stackup, a quasi-static closed-form estimate, not a field solve): [SI_CHECKS.md](SI_CHECKS.md).
+- **Transients and brownouts**: [TRANSIENTS.md](TRANSIENTS.md).
+- **AC / small-signal** (Bode, phase margin, gain crossover; averaged small-signal about the DC operating point, not cycle-by-cycle switching): [AC_ANALYSIS.md](AC_ANALYSIS.md).
+- **Steady-state thermal** (per-device junction temperature `Tj = Tambient + P * theta_JA`, not a board thermal field solve): [THERMAL.md](THERMAL.md).
+
+Each report runs from `hauksbee run <board> --drc/--lint/--si/--resources/--thermal` or `--ac`. They are informational and exit 0 by default; add `--plain` (alias `--explain`) for a non-engineer verdict, or `--strict` (alias `--fail-on-findings`) to fail a pipeline directly. For the full assertion flow, including `phase_margin` / `ac_gain` / `max_temp`, see [CI.md](CI.md). Runnable examples, including the `hauksbee serve` web front door, are in [EXAMPLES.md](EXAMPLES.md).
 
 ## Repos
 
