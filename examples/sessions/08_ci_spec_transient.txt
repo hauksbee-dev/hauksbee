@@ -1,0 +1,12 @@
+$ galvani-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
+galvani-ci: Olimex ESP32-EVB: WiFi burst on robust supply (transient)
+  board: ../../../board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch
+  seeds: 1
+
+  [PASS] 3V3 holds through WiFi burst on a robust supply
+        +3.3V window: min=3.266V (>= 3V), dip<3.1V for 0.00ms (<= 5ms) [min=3.266V max=3.306V]
+  [PASS] no stress faults raised
+        no stress faults
+
+2/2 assertions passed in 4.07s - GREEN
+[exit 0]

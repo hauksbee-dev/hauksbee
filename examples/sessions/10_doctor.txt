@@ -1,0 +1,28 @@
+$ scripts/doctor.sh
+==> galvani environment doctor
+
+==> Required (the toolchain that builds galvani)
+  ok cargo  /Users/hauksbee-user/.cargo/bin/cargo
+         unlocks: build + install the galvani / galvani-ci binaries (https://rustup.rs)
+  ok rustc  /Users/hauksbee-user/.cargo/bin/rustc
+         unlocks: the Rust compiler cargo drives
+      galvani not yet on PATH (run scripts/install.sh)
+      galvani-ci not yet on PATH (run scripts/install.sh)
+
+==> Optional (each unlocks a backend or export)
+  absent kicad-cli
+         would unlock: SVG/Gerber export of re-laid-out boards (board-as-code --relayout visuals); KiCad 11 headless schematic ops
+  ok simavr  /opt/homebrew/bin/simavr
+         unlocks: (also built in) external AVR backend cross-check for ATmega/ATtiny firmware co-sim
+  ok qemu-system-xtensa  /opt/homebrew/bin/qemu-system-xtensa
+         unlocks: ESP32 (Xtensa) firmware co-sim, e.g. the Watchy boot-coverage examples
+  ok qemu-system-arm  /opt/homebrew/bin/qemu-system-arm
+         unlocks: ARM Cortex-M (STM32 etc.) firmware co-sim backend
+  absent renode
+         would unlock: Renode backend for multi-node / richer peripheral firmware co-sim
+         set GALVANI_RENODE if not on PATH
+  absent freerouting
+         would unlock: production autorouting of recompiled boards over Specctra DSN (board-as-code routing)
+
+==> 5 present, 3 optional/absent. Core galvani (static checks, board-as-code, built-in AVR co-sim) works now.
+[exit 0]

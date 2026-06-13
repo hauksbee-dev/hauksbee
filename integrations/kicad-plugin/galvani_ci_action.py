@@ -111,8 +111,33 @@ class GalvaniCiPlugin(pcbnew.ActionPlugin):
                 return
             spec = specs[choice.GetSelection()]
 
+        # Prefer a ready-to-run binary (PATH / prebuilt bundle / local build).
+        # Only offer to compile if none is found, so users are not forced to
+        # build when a prebuilt binary is already available.
+        binary = core.find_binary(os.environ.get("GALVANI_CI_BIN"))
+        if not binary:
+            ans = wx.MessageBox(
+                "No galvani-ci binary found (not on PATH, no release bundle, no "
+                "local build). Build it now with cargo? This compiles the runner "
+                "and may take a few minutes the first time.",
+                "galvani-ci",
+                wx.YES_NO | wx.ICON_QUESTION,
+            )
+            if ans != wx.YES:
+                return
+            binary = core.ensure_binary(build=True)
+            if not binary:
+                wx.MessageBox(
+                    "Could not build galvani-ci (is cargo installed?). Install "
+                    "Rust from https://rustup.rs or set GALVANI_CI_BIN to a "
+                    "prebuilt binary.",
+                    "galvani-ci",
+                    wx.OK | wx.ICON_ERROR,
+                )
+                return
+
         # Run from the board's directory so relative spec paths resolve.
-        run = core.run_ci(spec, cwd=os.path.dirname(board_path))
+        run = core.run_ci(spec, binary=binary, cwd=os.path.dirname(board_path))
         GalvaniCiResultDialog(None, run).ShowModal()
 
 

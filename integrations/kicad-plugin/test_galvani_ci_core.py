@@ -159,6 +159,58 @@ def test_spec_targets_schematic():
         assert core.spec_targets_schematic(pcb) is False
 
 
+def test_find_binary_finds_prebuilt_bundle():
+    # With no explicit path, no env, and nothing on PATH, find_binary should
+    # discover a binary in a prebuilt-bundle location.
+    with tempfile.TemporaryDirectory() as d:
+        bindir = os.path.join(d, "bin")
+        os.makedirs(bindir)
+        fake = os.path.join(bindir, "galvani-ci")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\n")
+        os.chmod(fake, 0o755)
+
+        orig_which = core.shutil.which
+        orig_env = os.environ.pop("GALVANI_CI_BIN", None)
+        orig_cands = core._prebuilt_candidates
+        try:
+            core.shutil.which = lambda _name: None  # nothing on PATH
+            core._prebuilt_candidates = lambda: [fake]
+            assert core.find_binary() == fake
+        finally:
+            core.shutil.which = orig_which
+            core._prebuilt_candidates = orig_cands
+            if orig_env is not None:
+                os.environ["GALVANI_CI_BIN"] = orig_env
+
+
+def test_ensure_binary_returns_found_without_building():
+    # When a binary is already found, ensure_binary must not attempt a build.
+    orig_find = core.find_binary
+    called = {"runner": False}
+
+    def _runner(*_a, **_k):
+        called["runner"] = True
+        raise AssertionError("runner must not run when a binary exists")
+
+    try:
+        core.find_binary = lambda explicit=None: "/usr/local/bin/galvani-ci"
+        got = core.ensure_binary(build=True, runner=_runner)
+        assert got == "/usr/local/bin/galvani-ci"
+        assert called["runner"] is False
+    finally:
+        core.find_binary = orig_find
+
+
+def test_ensure_binary_no_build_returns_none_when_missing():
+    orig_find = core.find_binary
+    try:
+        core.find_binary = lambda explicit=None: None
+        assert core.ensure_binary(build=False) is None
+    finally:
+        core.find_binary = orig_find
+
+
 def _run_all():
     failures = 0
     for name, fn in sorted(globals().items()):

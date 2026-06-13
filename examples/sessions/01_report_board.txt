@@ -1,0 +1,13 @@
+$ galvani run crates/galvani-ci/examples/boards/blinky.kicad_pcb --report
+┌──────────┬────────────┬──────────────┬─────────┬───────────────────────┐
+│ Ref      │ Value      │ Model        │ Conf    │ Became                │
+├──────────┼────────────┼──────────────┼─────────┼───────────────────────┤
+│ U1       │ ATmega328P │ atmega328p   │ exact   │ mcu simavr:atmega328p │
+│ R1       │ 330        │ resistor_tht │ guessed │ analog R 330Ω         │
+│ D1       │ RED_LED    │ led_red      │ family  │ analog diode          │
+│ R2       │ 10k        │ resistor_tht │ guessed │ analog R 10000Ω       │
+│ R3       │ 10k        │ resistor_tht │ guessed │ analog R 10000Ω       │
+│ RAIL:+5V │ 5.00V      │ -            │ exact   │ rail 5.00V            │
+└──────────┴────────────┴──────────────┴─────────┴───────────────────────┘
+
+6 of 6 non-ignored components resolved (100%); 1 mcu(s), 0 digital, 0 warnings

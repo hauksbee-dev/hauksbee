@@ -112,16 +112,94 @@ def spec_targets_schematic(spec_path: str) -> bool:
     return bool(board) and board.lower().endswith(".kicad_sch")
 
 
-def find_binary(explicit: Optional[str] = None) -> Optional[str]:
-    """Locate the galvani-ci binary.
+def _prebuilt_candidates() -> List[str]:
+    """Likely locations of a prebuilt / locally-built galvani-ci binary.
 
-    Order: an explicit path, the GALVANI_CI_BIN env var, then PATH.
+    Covers the two ways a user gets a binary without compiling on the spot:
+    an unpacked release bundle (``bin/galvani-ci`` next to where this plugin or
+    a sibling ``galvani`` checkout lives), and a prior ``cargo build --release``
+    in a nearby workspace (``target/release/galvani-ci``). Order is most- to
+    least-specific; non-existent paths are skipped by the caller.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    # integrations/kicad-plugin -> repo root is two levels up.
+    repo_root = os.path.normpath(os.path.join(here, "..", ".."))
+    home = os.path.expanduser("~")
+    rel = [
+        # Unpacked release bundle layouts.
+        os.path.join(repo_root, "bin", "galvani-ci"),
+        os.path.join(here, "bin", "galvani-ci"),
+        os.path.join(home, ".galvani", "bin", "galvani-ci"),
+        # A local cargo build of the workspace.
+        os.path.join(repo_root, "target", "release", "galvani-ci"),
+    ]
+    return rel
+
+
+def find_binary(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate the galvani-ci binary, preferring a ready-to-run one.
+
+    Order: an explicit path, the GALVANI_CI_BIN env var, then PATH, then a
+    prebuilt release bundle or a local ``target/release`` build. This means a
+    user who downloaded a release tarball (or built once) is found without any
+    PATH setup; compiling is only needed when none of these exist (see
+    :func:`ensure_binary`).
     """
     candidates = [explicit, os.environ.get("GALVANI_CI_BIN")]
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
-    return shutil.which("galvani-ci")
+    on_path = shutil.which("galvani-ci")
+    if on_path:
+        return on_path
+    for c in _prebuilt_candidates():
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def ensure_binary(
+    explicit: Optional[str] = None,
+    build: bool = False,
+    runner=subprocess.run,
+) -> Optional[str]:
+    """Return a usable galvani-ci binary, optionally building one as a fallback.
+
+    First tries :func:`find_binary` (prebuilt / PATH / local build). If nothing
+    is found and ``build`` is True and cargo is available, runs
+    ``cargo build --release -p galvani-ci`` in the workspace and returns the
+    freshly built binary. Returns None if no binary could be obtained.
+
+    The build is the explicit, opt-in fallback so a prebuilt binary is always
+    preferred and a user is never forced to compile silently.
+    """
+    found = find_binary(explicit)
+    if found:
+        return found
+    if not build:
+        return None
+    cargo = shutil.which("cargo")
+    if not cargo:
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.normpath(os.path.join(here, "..", ".."))
+    manifest = os.path.join(repo_root, "Cargo.toml")
+    if not os.path.isfile(manifest):
+        return None
+    try:
+        proc = runner(
+            [cargo, "build", "--release", "-p", "galvani-ci", "--manifest-path", manifest],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if getattr(proc, "returncode", 1) != 0:
+        return None
+    built = os.path.join(repo_root, "target", "release", "galvani-ci")
+    if os.path.isfile(built) and os.access(built, os.X_OK):
+        return built
+    return None
 
 
 def build_command(binary: str, spec: str, junit_path: str) -> List[str]:

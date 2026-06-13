@@ -18,9 +18,17 @@ inputs:
     required: false
     default: "main"
   galvani-repo:
-    description: "owner/name of the galvani repo to build from."
+    description: "owner/name of the galvani repo to download/build galvani-ci from."
     required: false
-    default: "galvani/galvani"
+    default: "ETM-Code/galvani"
+  galvani-version:
+    description: "Release version to download a prebuilt galvani-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty = try the release matching galvani-ref's tag, else build from source."
+    required: false
+    default: ""
+  prefer-prebuilt:
+    description: "Download a prebuilt release binary when one exists, instead of compiling. Falls back to cargo build automatically."
+    required: false
+    default: "true"
 
 outputs:
   passed:
@@ -36,19 +44,79 @@ runs:
     # The hardware repo's own checkout is assumed to have already happened in
     # the calling workflow (so the spec + board + firmware are on disk).
 
-    - name: Checkout galvani
+    # 1. Try to download a prebuilt galvani-ci from a GitHub Release, so most
+    #    users never compile. Sets steps.prebuilt.outputs.bin on success, and
+    #    leaves it empty (without failing) when no matching asset exists.
+    - name: Fetch prebuilt galvani-ci
+      id: prebuilt
+      if: ${{ inputs.prefer-prebuilt == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ inputs.galvani-repo }}
+        REF: ${{ inputs.galvani-ref }}
+        VERSION: ${{ inputs.galvani-version }}
+        RUNNER_OS: ${{ runner.os }}
+        RUNNER_ARCH: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+        # Map the runner to the bundle's os-arch label (see scripts/bundle.sh).
+        case "$RUNNER_OS" in
+          Linux)  os=linux ;;
+          macOS)  os=darwin ;;
+          *) echo "no prebuilt for $RUNNER_OS; will build from source"; exit 0 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   arch=x86_64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "no prebuilt for $RUNNER_ARCH; will build from source"; exit 0 ;;
+        esac
+        # Choose the release tag: explicit version, else the ref if it is a tag.
+        tag=""
+        if [ -n "$VERSION" ]; then
+          case "$VERSION" in v*) tag="$VERSION" ;; *) tag="v$VERSION" ;; esac
+        elif printf '%s' "$REF" | grep -Eq '^v[0-9]'; then
+          tag="$REF"
+        fi
+        asset_glob="galvani-*-${os}-${arch}.tar.gz"
+        dl=".galvani-prebuilt"
+        mkdir -p "$dl"
+        if [ -n "$tag" ]; then
+          gh release download "$tag" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+        else
+          gh release download --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+        fi
+        tarball="$(ls "$dl"/galvani-*-"${os}"-"${arch}".tar.gz 2>/dev/null | head -n1 || true)"
+        if [ -z "$tarball" ]; then
+          echo "no prebuilt asset ($asset_glob) found; will build from source"
+          exit 0
+        fi
+        tar -xzf "$tarball" -C "$dl"
+        bin="$(ls "$dl"/galvani-*/bin/galvani-ci 2>/dev/null | head -n1 || true)"
+        if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+          echo "prebuilt tarball had no usable binary; will build from source"
+          exit 0
+        fi
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        echo "Using prebuilt galvani-ci: $bin"
+
+    # 2. Fallback: build from source only when no prebuilt binary was obtained.
+    - name: Checkout galvani (fallback build)
+      if: ${{ steps.prebuilt.outputs.bin == '' }}
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.galvani-repo }}
         ref: ${{ inputs.galvani-ref }}
         path: .galvani
 
-    - name: Install Rust toolchain
+    - name: Install Rust toolchain (fallback build)
+      if: ${{ steps.prebuilt.outputs.bin == '' }}
       uses: dtolnay/rust-toolchain@stable
 
     # Cache the cargo registry, git index, and the galvani build so only the
     # first run pays the compile cost. Keyed on the galvani ref + lockfile.
-    - name: Cache cargo
+    - name: Cache cargo (fallback build)
+      if: ${{ steps.prebuilt.outputs.bin == '' }}
       uses: actions/cache@v4
       with:
         path: |
@@ -61,19 +129,28 @@ runs:
           galvani-ci-${{ runner.os }}-${{ inputs.galvani-ref }}-
           galvani-ci-${{ runner.os }}-
 
-    - name: Build galvani-ci
+    - name: Build galvani-ci (fallback build)
+      if: ${{ steps.prebuilt.outputs.bin == '' }}
       shell: bash
       run: cargo build --release -p galvani-ci --manifest-path .galvani/Cargo.toml
 
     - name: Run galvani-ci
       id: run
       shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        JUNIT: ${{ inputs.junit }}
+        PREBUILT_BIN: ${{ steps.prebuilt.outputs.bin }}
       run: |
         set +e
-        BIN=.galvani/target/release/galvani-ci
-        ARGS=(run "${{ inputs.spec }}")
-        if [ -n "${{ inputs.junit }}" ]; then
-          ARGS+=(--junit "${{ inputs.junit }}")
+        if [ -n "$PREBUILT_BIN" ]; then
+          BIN="$PREBUILT_BIN"
+        else
+          BIN=.galvani/target/release/galvani-ci
+        fi
+        ARGS=(run "$SPEC")
+        if [ -n "$JUNIT" ]; then
+          ARGS+=(--junit "$JUNIT")
         fi
         "$BIN" "${ARGS[@]}"
         code=$?
@@ -82,7 +159,7 @@ runs:
         else
           echo "passed=false" >> "$GITHUB_OUTPUT"
         fi
-        echo "junit=${{ inputs.junit }}" >> "$GITHUB_OUTPUT"
+        echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
         exit $code
 
     # Always publish the JUnit results, even when the hardware check failed, so
