@@ -28,7 +28,7 @@ Three CLI verbs, alongside the existing `galvani run`:
 | command | what it does |
 |---|---|
 | `galvani to-code <board>` | decompile a board into Board-as-Code text |
-| `galvani from-code <code>` | recompile code back into a `.kicad_pcb` (optionally re-laid-out) |
+| `galvani from-code <code>` | recompile code back into a `.kicad_pcb` (optionally re-laid-out with `--relayout`/`--incremental` and routed with `--route`) |
 | `galvani check-code <code>` | recompile, bind, simulate with the stress monitor, print a fault report |
 
 ## The DSL
@@ -128,15 +128,49 @@ consequence of the one-line wiring edit.
 ## Logical re-layout
 
 `from-code --relayout` recompiles the code to a board arranged by function:
-components are grouped by the cluster/function they belong to, then a
-force-directed relaxation pulls net-connected parts together and pushes
-overlapping parts apart. Global power/ground rails are excluded from the
-attraction so they do not collapse the whole board into one blob.
+components are grouped by the cluster/function they belong to, the groups tile
+the board outline so each function occupies its own region, then a
+force-directed relaxation pulls net-connected parts together while a hard
+de-overlap pass guarantees no two courtyards (plus their clearances) intersect.
+Global power/ground rails are excluded from the attraction so they do not
+collapse the whole board into one blob.
+
+The placer respects four real constraints, so the output is something a human
+would accept rather than a scramble:
+
+* **Board outline.** The outline is read from the source board's `Edge.Cuts`
+  geometry on decompile (and re-emitted as `Edge.Cuts` lines on recompile), or
+  set in the DSL with `board size W H` / `board outline X0 Y0 X1 Y1`. Every
+  component, courtyard included, is kept inside it; nothing is placed off-board.
+* **Courtyards, not points.** Overlap is computed from each footprint's
+  rotation-aware pad bounding box, so large parts (a DIP, a connector) genuinely
+  reserve their area instead of being treated as a point.
+* **Hard clearances.** `space` / `space fn` are enforced as minimum clear
+  distances by the de-overlap pass, not soft hints: a test point with `space 3`
+  actually gets 3 mm of clear room around it.
+* **User position constraints.** `pin <ref> edge <left|right|top|bottom>` holds
+  a component against a board edge (the edge-normal coordinate is fixed, the
+  along-edge coordinate relaxes), and `lock <ref>` freezes a component at its
+  exact coordinates and makes it a fixed keep-out for everything else.
+
+### Constraints in the DSL
+
+```text
+board size 60 45                 # constrain the board to 60 x 45 mm
+
+fn main {
+    pin J1 edge left             # hold connector J1 against the left edge
+    pin J2 edge right
+    lock U5                       # never move the MCU; keep its placement
+    space fn block_synapse 8     # every synapse instance gets 8 mm clear
+    ...
+}
+```
 
 ### Distance fields
 
-Components and whole functions can carry a `space` clearance field that inflates
-their keep-out radius, so the placer holds neighbours clear:
+Components and whole functions can carry a `space` clearance field that the
+placer enforces as a hard minimum clear distance:
 
 ```text
 comp TP1 lib "TestPoint:TestPoint_Pad_D1" val "TP" layer "F.Cu" at 0 0 rot 0 {
@@ -153,21 +187,29 @@ fn main {
 ### Before / after
 
 Full re-layout of stormduino, exported with `kicad-cli pcb export svg`
-(`assets/storm_before.svg`, `assets/storm_after.svg`, side-by-side
-`assets/storm_relayout_compare.png`):
+(`assets/storm_before.svg`, `assets/storm_after.svg`):
 
-![stormduino re-layout, before vs after](assets/storm_relayout_compare.png)
+| before | after |
+|---|---|
+| ![before](assets/storm_before.png) | ![after](assets/storm_after.png) |
 
-Left is the original placement; right is the function-grouped force-directed
-re-layout. Connectivity is identical (the recompiled board passes the same
+Left is the original placement; right is the function-grouped re-layout, with
+every part inside the board outline, courtyards non-overlapping, and clearances
+respected. Connectivity is identical (the recompiled board passes the same
 connectivity check); only the placement changed.
+
+Regenerate both, the routed board, and the incremental diff with one command:
+
+```bash
+galvani/scripts/board_as_code_assets.sh
+```
 
 ## Incremental recompile (the preferred default)
 
 Full re-layout throws away the existing placement. Incremental recompile keeps
 it: the *original* board is the base, components whose identity and placement are
 unchanged keep their exact coordinates, and only new, moved or value-changed
-parts are re-placed — into free space near their net neighbours, without
+parts are re-placed, into free space near their net neighbours, without
 disturbing the settled board.
 
 ```bash
@@ -184,29 +226,75 @@ and the connectivity is preserved.
 (The `4 moved` on the unedited stormduino above is an honest artifact of that
 board carrying duplicate reference designators: the base index is keyed by
 reference, so the colliding duplicates read as changed. Boards with unique
-references report `0 moved` on an unedited round-trip. The test board uses
-unique references and shows exactly one move for one edit.)
+references report `0 moved` on an unedited round-trip.)
+
+### Before / after / diff
+
+The visualisation below uses `pic_programmer` (which has unique references for a
+clean diff): the original board, the board after one textual edit (move a single
+resistor) recompiled incrementally, and a diff that highlights the moved part in
+orange (with a dashed ghost at its old position and an arrow to the new one),
+new parts in green, and the 62 untouched parts in grey.
+
+![incremental recompile before/after/diff](assets/incremental_recompile.png)
+
+The middle and diff panels are identical to the original except for that one
+part: incremental recompile keeps every untouched component exactly where it
+was. Regenerate with `galvani/scripts/board_as_code_assets.sh` (renderer:
+`scripts/make_incremental_viz.py`).
 
 ## Routing
 
-Placement is the hard part; routing here is a deliberately thin v1 and is
-documented honestly as such.
+Routing is a hard, well-solved problem, so the production path hands the placed
+board to **freerouting** (the standard open-source autorouter, Java) over the
+Specctra DSN/SES interchange format rather than growing a bespoke router.
 
-The canonical way to autoroute a KiCad board from outside KiCad is
-**freerouting** (Java), driven over the Specctra DSN interchange format. That is
-the intended production path: emit DSN from the recompiled board, hand it to
-freerouting, import the routed result. It is the right tool because it is
-battle-tested, handles multi-layer rip-up-and-retry, and is what the KiCad
-ecosystem already uses.
+```bash
+# route with freerouting (the default when it is installed)
+$BIN from-code storm.board --relayout --route --out storm_routed.kicad_pcb
+# routed: 49/50 nets (98%), 678 segments, 45 vias, 39.1s (freerouting)
+```
 
-As an in-tree fallback, `forge-codegen` ships a simple grid A* router
-(`route_grid`). It connects each net's pads with Manhattan paths on a single
-layer, treats component bodies as keep-outs, and **reports any net it cannot
-complete rather than silently dropping it**. Its honest limitations: one layer,
-no vias, no rip-up-and-retry, and it bails on boards whose bounding grid would
-exceed a few million cells. It is enough to prove the placement is routable in
-the small and to visualise tracks; it is not a production autorouter. Use
-freerouting for real boards.
+The hand-off, in `forge-codegen`'s `route_freerouting` module:
+
+1. **DSN export** (`write_dsn`): serialise the placed board to Specctra DSN, the
+   board boundary (from `Edge.Cuts`), one image per footprint, a padstack per
+   distinct pad/via geometry, the net list, and a default width/clearance rule.
+2. **Invoke freerouting headless** (`run_freerouting`): spawn `java -jar
+   freerouting -de board.dsn -do board.ses -mp <passes>` as a child process,
+   poll it, and **kill it if it exceeds a wall-clock budget** (autorouting a
+   large board can otherwise run for minutes).
+3. **SES import** (`parse_ses` + `merge_ses_into_pcb`): read the routed wires and
+   vias back and write them onto the board as copper segments and vias on the
+   correct nets.
+
+![routed stormduino (freerouting)](assets/storm_routed.png)
+
+### Installing freerouting
+
+Download a release jar from
+[github.com/freerouting/freerouting](https://github.com/freerouting/freerouting/releases)
+and either point `FREEROUTING_JAR` at it or drop it in a `tools/` directory up
+the tree (the engine auto-discovers it). A JRE (`java`) must be on `PATH`.
+
+**Use the 1.9.0 jar** (`freerouting-1.9.0.jar`). Its headless batch mode
+reliably writes the SES and exits even on a partially-routed board. The 2.x line
+(tested with 2.2.4) parses and routes correctly but **stalls without writing the
+SES unless the board is 100% routed**, which is unworkable for a batch handoff;
+the engine prefers a 1.x jar when both are present and passes `-da` only to 2.x.
+(The DSN/SES writer was validated against both; the 10x output-resolution quirk
+of 1.9.0's SES is handled by detecting the coordinate scale empirically.)
+
+### Grid A* fallback
+
+When freerouting (or a JRE) is absent, `--route` transparently falls back to the
+in-tree grid A* router (`route_grid`); `--route-grid` forces it. It connects each
+net's pads with Manhattan paths on a single layer, treats component bodies as
+keep-outs, and **reports any net it cannot complete rather than silently dropping
+it**. Its honest limitations: one layer, no vias, no rip-up-and-retry, and it
+bails on boards whose bounding grid would exceed a few million cells. It is
+enough to prove a placement is routable in the small and to visualise tracks; it
+is not a production autorouter. Use freerouting for real boards.
 
 ## Where the code lives
 
@@ -214,6 +302,8 @@ freerouting for real boards.
 |---|---|
 | executable DSL (emit / parse / build) | `kicad-forge/crates/forge-codegen/src/dsl/` |
 | re-layout + incremental + grid router | `kicad-forge/crates/forge-codegen/src/layout.rs` |
+| freerouting handoff (DSN / invoke / SES) | `kicad-forge/crates/forge-codegen/src/route_freerouting.rs` |
+| re-runnable asset/export script | `galvani/scripts/board_as_code_assets.sh`, `scripts/make_incremental_viz.py` |
 | connectivity-only board comparison | `kicad-forge/crates/forge-codegen/src/rebuild.rs` (`compare_connectivity`) |
 | edit -> simulate loop + CLI glue | `galvani/crates/galvani-engine/src/boardcode.rs` |
 | CLI subcommands | `galvani/crates/galvani-engine/src/main.rs` |
