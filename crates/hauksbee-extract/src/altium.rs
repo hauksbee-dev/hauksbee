@@ -421,7 +421,10 @@ pub(crate) fn parse_net_names(buf: &[u8]) -> Vec<String> {
 /// Component reference designators in stream order (index = component field on a
 /// primitive). Used by the DRC geometry path to attach an owner to each pad.
 pub(crate) fn parse_component_refs(buf: &[u8]) -> Vec<String> {
-    parse_components(buf).into_iter().map(|c| c.refdes).collect()
+    parse_components(buf)
+        .into_iter()
+        .map(|c| c.refdes)
+        .collect()
 }
 
 /// Read every properties record in a `Data` stream into uppercased-key maps.
@@ -515,10 +518,7 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
         .data("Components")
         .map(|b| parse_components(&b))
         .unwrap_or_default();
-    let pads = doc
-        .data("Pads")
-        .map(|b| parse_pads(&b))
-        .unwrap_or_default();
+    let pads = doc.data("Pads").map(|b| parse_pads(&b)).unwrap_or_default();
     let comments = doc
         .data("Texts")
         .map(|b| parse_comment_texts(&b))
