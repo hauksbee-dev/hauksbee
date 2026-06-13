@@ -14,15 +14,14 @@
 //! require the MCU to actively drive the control net to a defined level within a
 //! deadline, with no stress fault during the boot window before it.
 //!
-//! This is a constructed, two-sided proof on the same board with two real AVR
-//! firmware variants: variant A drives a floating MOSFET gate promptly (PASS),
-//! variant B never touches it (FAIL, naming the net). The AVR backend is one of
-//! the two co-sim backends (simavr); the mechanism is backend-agnostic, so it is
-//! ready for the STM32 (Renode) backend too. The boards in the corpus that carry
-//! the real misses (Watchy ESP32, ZSWatch nRF52) are NOT yet co-simmable (no
-//! ESP32 / nRF backend, see docs/MCU.md), so this proof uses a supported MCU and
-//! the doc records the mechanism as ready-for-backends rather than flipping those
-//! verdicts.
+//! Two proofs run here. First, a constructed two-sided proof on a synthetic
+//! board with two real AVR firmware variants: variant A drives a floating
+//! MOSFET gate promptly (PASS), variant B never touches it (FAIL, naming the
+//! net). Second, the real Watchy v1.5 board under the Espressif QEMU ESP32
+//! backend (the e-paper RES# net, GPIO9), also two-sided. The mechanism is
+//! backend-agnostic across simavr (AVR), Renode (STM32/nRF/RISC-V) and the
+//! Espressif QEMU fork (ESP32/ESP32-C3); see docs/MCU.md for the matrix. The
+//! ESP32 tests skip cleanly when the deterministic fork is absent.
 
 use std::path::PathBuf;
 
