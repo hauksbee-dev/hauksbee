@@ -1,0 +1,119 @@
+# hauksbee full image: slim plus the heavy external backends.
+#
+# Everything the slim image has, plus:
+#   Renode                  STM32 / nRF52 / RISC-V firmware co-sim (.repl boards)
+#   Espressif QEMU fork     ESP32 / ESP32-S3 / ESP32-C3 firmware co-sim
+#   freerouting 1.9.0       production autorouting of recompiled boards (DSN->SES)
+#   default-jre-headless    the JRE freerouting runs on
+#
+# It does NOT install esp-idf. esp-idf is only needed to BUILD ESP32 firmware;
+# at RUNTIME the Espressif QEMU binary plus a merged flash image are enough, and
+# esp-idf is gigabytes. Likewise the ARM/RISC-V firmware toolchains are not here:
+# the image RUNS firmware, it does not compile it.
+#
+# The backends are discovered at runtime via the HAUKSBEE_* env vars set below
+# (see crates/hauksbee-mcu and forge-codegen), so they work out of the box.
+#
+# BUILD CONTEXT and multi-arch: identical to Dockerfile.slim. Build from the
+# parent dir holding hauksbee/ and kicad-forge/ siblings:
+#   docker build -f hauksbee/docker/Dockerfile.full -t hauksbee:full parent/
+# buildx produces linux/amd64 + linux/arm64; the Renode and ESP-QEMU downloads
+# select the right per-arch asset from TARGETARCH.
+
+# The slim image is the base. In CI both are built in the same workflow and the
+# full build references the slim build by its local stage / image tag.
+ARG SLIM_IMAGE=hauksbee:slim
+FROM ${SLIM_IMAGE} AS full
+
+# Versions are pinned as build args so a release is reproducible and a bump is a
+# one-line change. The Renode and ESP-QEMU asset filenames bake in the version
+# (and, for ESP-QEMU, the build date), so both knobs are separated out.
+ARG RENODE_VERSION=1.16.1
+ARG ESP_QEMU_TAG=esp-develop-9.2.2-20260417
+ARG ESP_QEMU_FILE=esp_develop_9.2.2_20260417
+ARG FREEROUTING_VERSION=1.9.0
+
+# buildx provides TARGETARCH automatically; declaring it lets us consume it to
+# pick the amd64 vs arm64 release asset for the prebuilt backends.
+ARG TARGETARCH
+
+# Root for the install steps; the runtime user is restored at the end.
+USER root
+
+# Runtime libraries the prebuilt backends need:
+#   Renode (-dotnet portable)  libicu72, libgssapi-krb5-2 (bundles its runtime)
+#   Espressif QEMU             libglib2.0-0, libpixman-1-0, libgcrypt20, libslirp0
+#   freerouting                default-jre-headless (OpenJDK 17)
+#   curl + xz-utils            fetch + unpack the release tarballs
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        default-jre-headless \
+        libgcrypt20 \
+        libglib2.0-0 \
+        libgssapi-krb5-2 \
+        libicu72 \
+        libpixman-1-0 \
+        libslirp0 \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Renode: the self-contained -dotnet portable bundles its own .NET runtime, so
+# no system mono is needed, and it has both amd64 and arm64 builds.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      arm64) rslug="linux-arm64-portable-dotnet" ;; \
+      amd64) rslug="linux-portable-dotnet" ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}' for Renode" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/renode.tar.gz \
+      "https://github.com/renode/renode/releases/download/v${RENODE_VERSION}/renode-${RENODE_VERSION}.${rslug}.tar.gz"; \
+    mkdir -p /opt/renode; \
+    tar -xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1; \
+    ln -s /opt/renode/renode /usr/local/bin/renode; \
+    rm /tmp/renode.tar.gz
+
+# Espressif QEMU fork: both the Xtensa (esp32 / esp32-s3) and RISC-V32 (esp32-c3)
+# system binaries. Both tarballs unpack under a shared qemu/ prefix into
+# /opt/qemu/bin, which HAUKSBEE_QEMU_DIR points the backend at.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      arm64) qslug="aarch64-linux-gnu" ;; \
+      amd64) qslug="x86_64-linux-gnu" ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}' for Espressif QEMU" >&2; exit 1 ;; \
+    esac; \
+    for soc in xtensa riscv32; do \
+      curl -fsSL -o /tmp/qemu.tar.xz \
+        "https://github.com/espressif/qemu/releases/download/${ESP_QEMU_TAG}/qemu-${soc}-softmmu-${ESP_QEMU_FILE}-${qslug}.tar.xz"; \
+      tar -xJf /tmp/qemu.tar.xz -C /opt; \
+      rm /tmp/qemu.tar.xz; \
+    done; \
+    test -x /opt/qemu/bin/qemu-system-xtensa; \
+    test -x /opt/qemu/bin/qemu-system-riscv32
+
+# freerouting 1.9.0: the arch-independent jar. 1.9.0's headless batch reliably
+# writes the SES and exits, which is why it is pinned (newer 2.x stalls).
+RUN curl -fsSL -o /opt/freerouting-${FREEROUTING_VERSION}.jar \
+      "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
+    && ln -s /opt/freerouting-${FREEROUTING_VERSION}.jar /opt/freerouting.jar
+
+LABEL org.opencontainers.image.title="hauksbee (full)" \
+      org.opencontainers.image.description="hauksbee slim plus Renode, the Espressif QEMU fork, and freerouting: STM32 / ESP32 co-sim and production autorouting." \
+      org.opencontainers.image.source="https://github.com/ETM-Code/hauksbee" \
+      org.opencontainers.image.licenses="MIT"
+
+# Wire the backend discovery env vars so the tools are found with no setup:
+#   HAUKSBEE_RENODE       full path to the renode launcher
+#   HAUKSBEE_QEMU_DIR     dir holding qemu-system-xtensa / qemu-system-riscv32
+#   FREEROUTING_JAR       the freerouting jar forge-codegen routes through
+ENV HAUKSBEE_RENODE=/usr/local/bin/renode \
+    HAUKSBEE_QEMU_DIR=/opt/qemu/bin \
+    HAUKSBEE_QEMU_XTENSA=/opt/qemu/bin/qemu-system-xtensa \
+    HAUKSBEE_QEMU_RISCV32=/opt/qemu/bin/qemu-system-riscv32 \
+    FREEROUTING_JAR=/opt/freerouting.jar
+
+USER hauksbee
+WORKDIR /work
+# As in the slim image: no fixed ENTRYPOINT; the command names the binary.
+CMD ["hauksbee-ci", "--help"]

@@ -29,14 +29,23 @@ inputs:
     description: "Download a prebuilt release binary when one exists, instead of compiling. Falls back to cargo build automatically."
     required: false
     default: "true"
+  use-image:
+    description: "Run hauksbee-ci from the published Docker image instead of downloading a binary or compiling. When true, the prebuilt-download and cargo-build paths are skipped."
+    required: false
+    default: "false"
+  image:
+    description: "Docker image to run when use-image is true. Use the full image (ghcr.io/etm-code/hauksbee:full) for STM32 / ESP32 co-sim or autorouting; the slim image covers static checks, board-as-code, and AVR co-sim."
+    required: false
+    default: "ghcr.io/etm-code/hauksbee:slim"
 
 outputs:
   passed:
     description: "true if every assertion passed, false otherwise."
-    value: ${{ steps.run.outputs.passed }}
+    # When use-image is true the image step ran; otherwise the binary step did.
+    value: ${{ inputs.use-image == 'true' && steps.run-image.outputs.passed != '' && steps.run-image.outputs.passed || steps.run.outputs.passed }}
   junit:
     description: "Path to the JUnit XML that was written."
-    value: ${{ steps.run.outputs.junit }}
+    value: ${{ inputs.use-image == 'true' && steps.run-image.outputs.junit || steps.run.outputs.junit }}
 
 runs:
   using: "composite"
@@ -44,12 +53,17 @@ runs:
     # The hardware repo's own checkout is assumed to have already happened in
     # the calling workflow (so the spec + board + firmware are on disk).
 
+    # When use-image is true, all the binary-acquisition steps below are
+    # skipped: hauksbee-ci runs inside the published Docker image instead (see
+    # the "Run hauksbee-ci (image)" step). The image already carries the binary,
+    # the model db, and (in the full image) the co-sim backends.
+
     # 1. Try to download a prebuilt hauksbee-ci from a GitHub Release, so most
     #    users never compile. Sets steps.prebuilt.outputs.bin on success, and
     #    leaves it empty (without failing) when no matching asset exists.
     - name: Fetch prebuilt hauksbee-ci
       id: prebuilt
-      if: ${{ inputs.prefer-prebuilt == 'true' }}
+      if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -102,7 +116,7 @@ runs:
 
     # 2. Fallback: build from source only when no prebuilt binary was obtained.
     - name: Checkout hauksbee (fallback build)
-      if: ${{ steps.prebuilt.outputs.bin == '' }}
+      if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.hauksbee-repo }}
@@ -110,13 +124,13 @@ runs:
         path: .hauksbee
 
     - name: Install Rust toolchain (fallback build)
-      if: ${{ steps.prebuilt.outputs.bin == '' }}
+      if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       uses: dtolnay/rust-toolchain@stable
 
     # Cache the cargo registry, git index, and the hauksbee build so only the
     # first run pays the compile cost. Keyed on the hauksbee ref + lockfile.
     - name: Cache cargo (fallback build)
-      if: ${{ steps.prebuilt.outputs.bin == '' }}
+      if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       uses: actions/cache@v4
       with:
         path: |
@@ -130,12 +144,13 @@ runs:
           hauksbee-ci-${{ runner.os }}-
 
     - name: Build hauksbee-ci (fallback build)
-      if: ${{ steps.prebuilt.outputs.bin == '' }}
+      if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       shell: bash
       run: cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml
 
     - name: Run hauksbee-ci
       id: run
+      if: ${{ inputs.use-image != 'true' }}
       shell: bash
       env:
         SPEC: ${{ inputs.spec }}
@@ -153,6 +168,39 @@ runs:
           ARGS+=(--junit "$JUNIT")
         fi
         "$BIN" "${ARGS[@]}"
+        code=$?
+        if [ "$code" -eq 0 ]; then
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "passed=false" >> "$GITHUB_OUTPUT"
+        fi
+        echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
+        exit $code
+
+    # 3. Image path: run hauksbee-ci inside the published Docker image. The
+    #    calling repo's checkout (spec + board + firmware) is the runner
+    #    workspace, mounted read-write at /work so the JUnit XML lands back in
+    #    the workspace for the publish step. Run as the host user so that file is
+    #    writable by the runner (the image's default user is uid 1000).
+    - name: Run hauksbee-ci (image)
+      id: run-image
+      if: ${{ inputs.use-image == 'true' }}
+      shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        JUNIT: ${{ inputs.junit }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set +e
+        ARGS=(hauksbee-ci run "$SPEC")
+        if [ -n "$JUNIT" ]; then
+          ARGS+=(--junit "$JUNIT")
+        fi
+        docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          -v "$GITHUB_WORKSPACE:/work" \
+          -w /work \
+          "$IMAGE" "${ARGS[@]}"
         code=$?
         if [ "$code" -eq 0 ]; then
           echo "passed=true" >> "$GITHUB_OUTPUT"

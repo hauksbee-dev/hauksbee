@@ -1,0 +1,167 @@
+# Build and push the hauksbee Docker images to GHCR on a release tag.
+#
+# Trigger: push a tag like `v0.1.0` (same tag that drives release.yml), or run
+# manually. Produces two multi-arch (linux/amd64 + linux/arm64) images:
+#
+#   ghcr.io/etm-code/hauksbee:slim     prebuilt binaries + model db + kicad-cli
+#                                      + simavr; the everyday CI image.
+#   ghcr.io/etm-code/hauksbee:full     slim plus Renode, the Espressif QEMU fork,
+#                                      and freerouting; STM32 / ESP32 co-sim and
+#                                      autorouting.
+#
+# Each is also tagged with the version (e.g. :slim-0.1.0, :full-0.1.0) and, on a
+# tag push, :latest / :full-latest. The full image builds FROM the slim image,
+# so slim is built and pushed first, then full pulls it per-platform.
+#
+# BUILD CONTEXT: the workspace Cargo.toml depends on the sibling kicad-forge repo
+# via `path = "../kicad-forge/..."`. Both repos are checked out into a shared
+# parent dir (`ctx/`) so the Dockerfiles can COPY hauksbee/ and kicad-forge/ with
+# that relative path intact. A .dockerignore is written into ctx/ to keep the
+# 85 MB frontend and other build-irrelevant trees out of the build context.
+
+name: docker
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.1.0). Used as the image version tag."
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/etm-code/hauksbee
+  # The kicad-forge sibling the workspace path-depends on. Override the ref via a
+  # dispatch if forge and hauksbee need to move together.
+  FORGE_REPO: ETM-Code/kicad-forge
+  FORGE_REF: main
+
+permissions:
+  contents: read
+  packages: write   # push to GHCR
+
+jobs:
+  build:
+    name: build and push images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hauksbee
+        uses: actions/checkout@v4
+        with:
+          path: ctx/hauksbee
+
+      - name: Checkout kicad-forge sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FORGE_REPO }}
+          ref: ${{ env.FORGE_REF }}
+          path: ctx/kicad-forge
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Tag push -> strip the leading v; manual dispatch -> the provided tag.
+          raw="${INPUT_TAG:-$REF_NAME}"
+          if ! printf '%s' "$raw" | grep -Eq '^v?[0-9A-Za-z._-]+$'; then
+            echo "refusing suspicious version string: $raw" >&2
+            exit 1
+          fi
+          version="${raw#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Move the floating :latest / :full-latest tags only on an actual tag
+          # push. Emit them as their own outputs so the tag lists never carry a
+          # blank line (an empty tag would be rejected by the registry).
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            echo "slim_latest=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+            echo "full_latest=${IMAGE}:full-latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "slim_latest=" >> "$GITHUB_OUTPUT"
+            echo "full_latest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write .dockerignore for the context
+        shell: bash
+        run: |
+          # Paths are relative to the context root (ctx/). Keep the heavy,
+          # build-irrelevant trees out so the daemon does not ship them. The
+          # heredoc body is left-aligned so the written file has no stray
+          # leading whitespace.
+          cat > ctx/.dockerignore <<'EOF'
+          **/.git
+          **/target
+          **/node_modules
+          **/dist
+          hauksbee/frontend
+          hauksbee/logs
+          hauksbee/testdata/datasheets
+          **/__pycache__
+          **/*.pyc
+          EOF
+          # Strip the YAML-block indentation that the shell preserved above, so
+          # the patterns sit at column 0 (Docker would strip it anyway, but this
+          # keeps the file honest).
+          sed -i 's/^[[:space:]]*//' ctx/.dockerignore
+
+      - name: Set up QEMU (for arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 1. Slim first: full builds FROM it. Tag :slim, :slim-<version>, and
+      #    (on a tag push) :latest.
+      - name: Build and push slim
+        uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: ctx/hauksbee/docker/Dockerfile.slim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          # build-push-action trims blank lines, so an empty slim_latest output
+          # (non-tag builds) simply drops the floating tag.
+          tags: |
+            ${{ env.IMAGE }}:slim
+            ${{ env.IMAGE }}:slim-${{ steps.ver.outputs.version }}
+            ${{ steps.ver.outputs.slim_latest }}
+          cache-from: type=gha,scope=hauksbee-slim
+          cache-to: type=gha,mode=max,scope=hauksbee-slim
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+
+      # 2. Full builds FROM the just-pushed multi-arch slim. buildx pulls the
+      #    matching per-platform slim image for each target arch.
+      - name: Build and push full
+        uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: ctx/hauksbee/docker/Dockerfile.full
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          build-args: |
+            SLIM_IMAGE=${{ env.IMAGE }}:slim-${{ steps.ver.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:full
+            ${{ env.IMAGE }}:full-${{ steps.ver.outputs.version }}
+            ${{ steps.ver.outputs.full_latest }}
+          cache-from: type=gha,scope=hauksbee-full
+          cache-to: type=gha,mode=max,scope=hauksbee-full
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
