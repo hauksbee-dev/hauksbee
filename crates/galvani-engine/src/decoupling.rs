@@ -72,6 +72,7 @@ impl EsrEsl {
     /// are deliberately representative, not a per-MPN table.
     pub fn for_class(class: CapClass) -> EsrEsl {
         match class {
+            CapClass::Mlcc0201 => EsrEsl { esr_ohms: 0.080, esl_henries: 0.3e-9 },
             CapClass::Mlcc0402 => EsrEsl { esr_ohms: 0.050, esl_henries: 0.4e-9 },
             CapClass::Mlcc0603 => EsrEsl { esr_ohms: 0.030, esl_henries: 0.6e-9 },
             CapClass::Mlcc0805 => EsrEsl { esr_ohms: 0.020, esl_henries: 0.8e-9 },
@@ -83,38 +84,78 @@ impl EsrEsl {
 
     /// Infer a capacitor class from a KiCad footprint string and value, then
     /// return its default parasitics. Electrolytic/tantalum footprints (CP_*,
-    /// large can / EIA tant codes) get the electrolytic/tantalum row; an MLCC
-    /// footprint is bucketed by its imperial size code. Falls back to 0603 MLCC.
+    /// large can / EIA tant case codes) get the electrolytic/tantalum row; an
+    /// MLCC footprint is bucketed by its size code (imperial or the equivalent
+    /// metric code). Falls back to 0603 MLCC.
     pub fn from_footprint(footprint: &str, value_farads: f64) -> EsrEsl {
-        let fp = footprint.to_ascii_uppercase();
-        // Polarised / bulk classes first.
-        if fp.contains("CP_") || fp.contains("ELECTROLYTIC") || fp.contains("CASE-") {
-            // Big aluminium-can footprints and large values are electrolytic;
-            // small EIA tant case codes (A/B/C/D) are tantalum.
-            if value_farads >= 47e-6 || fp.contains("RADIAL") || fp.contains("AXIAL") {
-                return EsrEsl::for_class(CapClass::Electrolytic);
-            }
-            return EsrEsl::for_class(CapClass::Tantalum);
+        if let Some(class) = Self::class_from_footprint(footprint, value_farads) {
+            return EsrEsl::for_class(class);
         }
-        // MLCC by imperial size code in the footprint name.
-        let class = if fp.contains("0402") {
+        EsrEsl::for_class(CapClass::Mlcc0603)
+    }
+
+    /// The inferred [`CapClass`] for a footprint + value, or `None` when nothing
+    /// in the name is recognised (the caller then falls back to a default MLCC).
+    /// Split out so the inference is unit-testable on its own.
+    pub fn class_from_footprint(footprint: &str, value_farads: f64) -> Option<CapClass> {
+        let fp = footprint.to_ascii_uppercase();
+
+        // Polarised / bulk classes first. An explicit tantalum marker is
+        // unambiguous; otherwise large aluminium-can footprints and large
+        // values are electrolytic, and the small EIA case-code parts are
+        // tantalum.
+        let tantalum_marker = fp.contains("TANTALUM")
+            || fp.contains("TANT")
+            // KiCad's tantalum library footprints: CP_EIA-3216-18_..., CASE-A..D.
+            || fp.contains("EIA-3216")
+            || fp.contains("EIA-3528")
+            || fp.contains("EIA-6032")
+            || fp.contains("EIA-7343")
+            || (fp.contains("CASE-")
+                && (fp.contains("CASE-A")
+                    || fp.contains("CASE-B")
+                    || fp.contains("CASE-C")
+                    || fp.contains("CASE-D")));
+        if tantalum_marker {
+            return Some(CapClass::Tantalum);
+        }
+        if fp.contains("CP_") || fp.contains("ELECTROLYTIC") || fp.contains("CASE-") {
+            if value_farads >= 47e-6 || fp.contains("RADIAL") || fp.contains("AXIAL") {
+                return Some(CapClass::Electrolytic);
+            }
+            return Some(CapClass::Tantalum);
+        }
+
+        // MLCC by size code. Recognise both the imperial code (0402) and its
+        // metric equivalent (1005 = 0402, 1608 = 0603, 2012 = 0805, 3216/3225 =
+        // 1206/1210). KiCad C_0402_1005Metric names carry both; match either.
+        let class = if fp.contains("0201") || fp.contains("0603METRIC") {
+            // 0201 imperial == 0603 metric; the metric token here is the small
+            // part, not the 0603 imperial body.
+            CapClass::Mlcc0201
+        } else if fp.contains("0402") || fp.contains("1005METRIC") {
             CapClass::Mlcc0402
-        } else if fp.contains("0603") {
+        } else if fp.contains("0603") || fp.contains("1608METRIC") {
             CapClass::Mlcc0603
-        } else if fp.contains("0805") {
+        } else if fp.contains("0805") || fp.contains("2012METRIC") {
             CapClass::Mlcc0805
-        } else if fp.contains("1206") || fp.contains("1210") {
+        } else if fp.contains("1206")
+            || fp.contains("1210")
+            || fp.contains("3216METRIC")
+            || fp.contains("3225METRIC")
+        {
             CapClass::Mlcc1206
         } else {
-            CapClass::Mlcc0603
+            return None;
         };
-        EsrEsl::for_class(class)
+        Some(class)
     }
 }
 
 /// Coarse capacitor class buckets for default parasitics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapClass {
+    Mlcc0201,
     Mlcc0402,
     Mlcc0603,
     Mlcc0805,
@@ -211,6 +252,65 @@ mod tests {
         assert_eq!(mlcc, EsrEsl::for_class(CapClass::Mlcc0402));
         let elec = EsrEsl::from_footprint("Capacitor_THT:CP_Radial_D6.3mm_P2.50mm", 100e-6);
         assert_eq!(elec, EsrEsl::for_class(CapClass::Electrolytic));
+    }
+
+    #[test]
+    fn footprint_inference_handles_metric_codes_and_0201() {
+        // Metric size codes map to the same class as their imperial equivalent.
+        assert_eq!(
+            EsrEsl::class_from_footprint("Capacitor_SMD:C_0603_1608Metric", 100e-9),
+            Some(CapClass::Mlcc0603)
+        );
+        assert_eq!(
+            EsrEsl::class_from_footprint("Capacitor_SMD:C_0805_2012Metric", 1e-6),
+            Some(CapClass::Mlcc0805)
+        );
+        assert_eq!(
+            EsrEsl::class_from_footprint("Capacitor_SMD:C_1206_3216Metric", 10e-6),
+            Some(CapClass::Mlcc1206)
+        );
+        // 0201 imperial (== 0603 metric) is its own small class.
+        assert_eq!(
+            EsrEsl::class_from_footprint("Capacitor_SMD:C_0201_0603Metric", 10e-9),
+            Some(CapClass::Mlcc0201)
+        );
+        // Its ESR is the highest of the MLCC ladder (smallest body).
+        let c0201 = EsrEsl::for_class(CapClass::Mlcc0201);
+        let c0402 = EsrEsl::for_class(CapClass::Mlcc0402);
+        assert!(c0201.esr_ohms > c0402.esr_ohms);
+    }
+
+    #[test]
+    fn footprint_inference_distinguishes_tantalum_from_electrolytic() {
+        // An explicit tantalum case-code footprint is tantalum regardless of value.
+        assert_eq!(
+            EsrEsl::class_from_footprint("Capacitor_Tantalum_SMD:CP_EIA-3216-18_Kemet-A", 10e-6),
+            Some(CapClass::Tantalum)
+        );
+        assert_eq!(
+            EsrEsl::class_from_footprint("CP_CASE-B_Tantalum", 22e-6),
+            Some(CapClass::Tantalum)
+        );
+        // A big aluminium can with a large value is electrolytic.
+        assert_eq!(
+            EsrEsl::class_from_footprint("CP_Radial_D10.0mm_P5.00mm", 470e-6),
+            Some(CapClass::Electrolytic)
+        );
+        // Tantalum and electrolytic ESR differ (tant is the lower-ESR bulk class).
+        let tant = EsrEsl::for_class(CapClass::Tantalum);
+        let elec = EsrEsl::for_class(CapClass::Electrolytic);
+        assert!(tant.esr_ohms < elec.esr_ohms);
+    }
+
+    #[test]
+    fn footprint_inference_falls_back_to_default_mlcc() {
+        // An unrecognised footprint string yields no class; from_footprint then
+        // uses the documented 0603 MLCC default (behaviour preserved).
+        assert_eq!(EsrEsl::class_from_footprint("MysteryPackage", 100e-9), None);
+        assert_eq!(
+            EsrEsl::from_footprint("MysteryPackage", 100e-9),
+            EsrEsl::for_class(CapClass::Mlcc0603)
+        );
     }
 
     #[test]
