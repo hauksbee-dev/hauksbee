@@ -135,19 +135,24 @@ fn resistor_overpower_faults() {
     );
 
     let mut engine = engine_for(&board, false);
-    let mut got: Option<(String, String, f64)> = None;
+    // A 1 W 0402 is simultaneously over its 62.5 mW power rating *and* its
+    // junction-temperature limit (Tj = 25 + 1*600 = 625 C), so the monitor
+    // raises both an `overpower` and an `overtemperature` fault. Collect all
+    // faults and assert the over-power one specifically is present.
+    let mut overpower: Option<(String, f64)> = None;
     for _ in 0..50 {
         let frame = engine.step(1e-4);
         for f in &frame.faults {
-            got = Some((f.component.clone(), f.kind.clone(), f.value));
+            if f.kind == "overpower" {
+                overpower = Some((f.component.clone(), f.value));
+            }
         }
-        if got.is_some() {
+        if overpower.is_some() {
             break;
         }
     }
-    let (component, kind, power) = got.expect("0402 resistor at 1 W should fault");
+    let (component, power) = overpower.expect("0402 resistor at 1 W should raise overpower");
     assert_eq!(component, "R1");
-    assert_eq!(kind, "overpower");
     assert!(power > 0.5, "reported power {power:.3} W is the real dissipation");
 }
 
