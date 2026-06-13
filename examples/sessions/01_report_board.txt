@@ -11,3 +11,4 @@ $ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
 └──────────┴────────────┴──────────────┴─────────┴───────────────────────┘
 
 6 of 6 non-ignored components resolved (100%); 1 mcu(s), 0 digital, 0 warnings
+Conf: exact = matched a specific model; family = matched its part family; guessed = value/kind inferred (usually fine for passives).

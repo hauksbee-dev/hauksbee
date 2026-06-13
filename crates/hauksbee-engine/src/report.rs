@@ -220,6 +220,18 @@ impl BindReport {
         for (r, w) in self.warnings() {
             out.push_str(&format!("  ⚠ {r}: {w}\n"));
         }
+        // Legend for the Conf column, shown only when a row is not `exact` so a
+        // first-timer knows whether to worry about a `guessed`/`family` row.
+        let any_inexact = self
+            .rows
+            .iter()
+            .any(|r| r.confidence.to_string() != "exact");
+        if any_inexact {
+            out.push_str(
+                "Conf: exact = matched a specific model; family = matched its part \
+                 family; guessed = value/kind inferred (usually fine for passives).\n",
+            );
+        }
         out
     }
 }

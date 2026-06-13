@@ -66,6 +66,10 @@ enum Command {
     /// `--report`/`--drc`/`--lint`/`--si`/`--resources` flags each print one
     /// static report and exit; `--headless` runs the co-sim for `--seconds`.
     ///
+    /// These reports are informational and always exit 0, even when they list
+    /// findings. To FAIL a pipeline on a defect, gate on `hauksbee-ci` (or
+    /// `hauksbee check-code`), which exit non-zero when an assertion or fault hits.
+    ///
     /// Example:
     ///   hauksbee run my_board.kicad_pcb --report
     Run(RunArgs),
