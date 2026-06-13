@@ -57,6 +57,12 @@ pub enum LintCheck {
     /// once. Produced by `resource_conflict.rs`, reported through this same
     /// `NetLintReport` shape.
     McuResourceConflict,
+    /// A configurable controller whose strap / divider resistors select a
+    /// documented operating mode decodes (against the part's datasheet bands) to
+    /// the WRONG mode, or to an internally-inconsistent configuration. Per-part,
+    /// grows incrementally; seeded with the CYPD3177 USB-C PD sink. Produced by
+    /// the engine-layer `device_decode` check.
+    DeviceDecode,
 }
 
 impl LintCheck {
@@ -68,6 +74,7 @@ impl LintCheck {
             LintCheck::OutputContention => "output_contention",
             LintCheck::StrapPin => "strap_pin",
             LintCheck::McuResourceConflict => "mcu_resource_conflict",
+            LintCheck::DeviceDecode => "device_decode",
         }
     }
 }
