@@ -200,6 +200,29 @@ struct RunArgs {
     /// Extra model directory (highest priority), layered over the built-in DB.
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
+
+    /// Small-signal AC sweep: `<fstart>:<fstop>:<points>[:lin]` (Hz; points per
+    /// decade unless `:lin`). Linearises about the DC operating point and prints
+    /// a Bode (magnitude dB + phase) table for `--ac-node`, then exits. Drive is
+    /// a unit AC source on every independent source in the circuit.
+    ///
+    /// Example: hauksbee run board.kicad_pcb --ac 10:1e6:20 --ac-node OUT
+    #[arg(long, value_name = "FSTART:FSTOP:POINTS")]
+    ac: Option<String>,
+
+    /// Output net(s) to report for `--ac` (repeatable). Defaults to every net.
+    #[arg(long = "ac-node", value_name = "NET")]
+    ac_node: Vec<String>,
+
+    /// Write the full AC sweep (all reported nets) to this CSV file.
+    #[arg(long, value_name = "FILE")]
+    ac_csv: Option<PathBuf>,
+
+    /// Measure loop stability at this break/output net: report gain crossover
+    /// and phase margin. Use with `--ac`. The net is the far side of a loop
+    /// broken by an injection `Vsource` (see docs/AC_ANALYSIS.md).
+    #[arg(long = "ac-loop", value_name = "NET")]
+    ac_loop: Option<String>,
 }
 
 #[derive(Parser)]
@@ -386,6 +409,13 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
+    // loop-stability margins, then exit. Informational like the other reports.
+    if let Some(ac_arg) = &args.ac {
+        let bound = bind_board(&board, &lib);
+        return cmd_ac(&bound, ac_arg, &args.ac_node, args.ac_csv.as_deref(), args.ac_loop.as_deref());
+    }
+
     // Bind with the layered library (so a --models-dir / user-dir custom part is
     // in scope), then build the engine from the bound board.
     let bound = bind_board(&board, &lib);
@@ -432,6 +462,94 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // board, not just the demo boards baked into dist/.
     let board_url = format!("/boards/{}", file_name(&args.board));
     serve(engine, args.port, Some((board_url, text)))
+}
+
+/// `hauksbee run <board> --ac <fstart>:<fstop>:<points> [--ac-node NET ...]
+/// [--ac-csv FILE] [--ac-loop NET]`
+///
+/// Runs the small-signal AC analysis on the bound circuit and prints a Bode
+/// table (magnitude in dB, phase in degrees) for the requested net(s). With
+/// `--ac-loop`, also reports gain crossover and phase margin for that net.
+fn cmd_ac(
+    bound: &hauksbee_engine::BoundBoard,
+    ac_arg: &str,
+    ac_nodes: &[String],
+    csv: Option<&Path>,
+    ac_loop: Option<&str>,
+) -> anyhow::Result<()> {
+    use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions};
+
+    let spec = AcSpec::parse(ac_arg).map_err(|e| anyhow::anyhow!("--ac: {e}"))?;
+    let circuit = &bound.circuit;
+
+    // Default to every non-ground node if no --ac-node given.
+    let nodes: Vec<String> = if ac_nodes.is_empty() {
+        (1..circuit.node_count())
+            .map(|i| circuit.node_name(hauksbee_ir::NodeId(i as u32)).to_string())
+            .collect()
+    } else {
+        ac_nodes.to_vec()
+    };
+
+    let resp = AcAnalysis::new(SolverOptions::default())
+        .run(circuit, &spec)
+        .map_err(|e| anyhow::anyhow!("AC analysis: {e}"))?;
+
+    // Print a Bode table per requested node.
+    for net in &nodes {
+        let bode = resp.bode(circuit, net);
+        if bode.is_empty() {
+            eprintln!("warning: net '{net}' not found in circuit; skipping");
+            continue;
+        }
+        println!("\nAC sweep: net '{net}' ({} points)", bode.len());
+        println!(
+            "┌────────────────┬───────────────┬───────────────┐\n\
+             │ Freq (Hz)      │ Mag (dB)      │ Phase (deg)   │\n\
+             ├────────────────┼───────────────┼───────────────┤"
+        );
+        for (f, db, ph) in &bode {
+            println!("│ {f:>14.4} │ {db:>13.4} │ {ph:>13.3} │");
+        }
+        println!("└────────────────┴───────────────┴───────────────┘");
+    }
+
+    // Optional loop-stability report.
+    if let Some(loop_net) = ac_loop {
+        let st = LoopStability::from_response(&resp, circuit, loop_net)
+            .map_err(|e| anyhow::anyhow!("--ac-loop: {e}"))?;
+        let m = st.margins();
+        println!("\nLoop stability at net '{loop_net}':");
+        println!("  DC/low-f loop gain : {:.2} dB", m.dc_gain_db);
+        match (m.gain_crossover_hz, m.phase_margin_deg) {
+            (Some(fc), Some(pm)) => {
+                println!("  gain crossover     : {fc:.4} Hz (|T| = 0 dB)");
+                println!("  phase margin       : {pm:.2} deg");
+            }
+            _ => println!("  gain crossover     : none in band (loop never reaches 0 dB)"),
+        }
+        match (m.phase_crossover_hz, m.gain_margin_db) {
+            (Some(fp), Some(gm)) => {
+                println!("  phase crossover    : {fp:.4} Hz (phase = -180 deg)");
+                println!("  gain margin        : {gm:.2} dB");
+            }
+            _ => println!("  phase crossover    : none in band (phase never reaches -180 deg)"),
+        }
+    }
+
+    // Optional CSV of the full sweep.
+    if let Some(path) = csv {
+        let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
+        for net in &nodes {
+            for (f, db, ph) in resp.bode(circuit, net) {
+                out.push_str(&format!("{net},{f},{db},{ph}\n"));
+            }
+        }
+        std::fs::write(path, out)?;
+        eprintln!("wrote {}", path.display());
+    }
+
+    Ok(())
 }
 
 /// `hauksbee to-code <board-file> [--out <file.board>]`

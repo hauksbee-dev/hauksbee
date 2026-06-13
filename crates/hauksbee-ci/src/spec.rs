@@ -108,6 +108,12 @@ pub struct Spec {
     /// board's decoupling stays ideal unless realism is explicitly requested.
     #[serde(default)]
     pub decoupling: Option<crate::scenarios::Decoupling>,
+    /// Optional small-signal AC analysis: a frequency sweep run once on the
+    /// biased circuit, feeding the `phase_margin` / `ac_gain` assertions. The
+    /// analysis is seed-independent (it linearises about the DC operating point),
+    /// so it is computed once and shared across fuzz seeds.
+    #[serde(default)]
+    pub ac: Option<AcConfig>,
     /// The assertions, all of which must pass.
     #[serde(default, rename = "assert")]
     pub asserts: Vec<Assertion>,
@@ -173,6 +179,54 @@ pub struct SupplySpec {
     /// Current the load must fall below to re-arm the cutoff (A). Default: trip.
     #[serde(default)]
     pub protection_reset_a: Option<f64>,
+}
+
+/// Small-signal AC analysis configuration.
+///
+/// ```toml
+/// [ac]
+/// fstart = 10.0        # Hz
+/// fstop  = 1e6         # Hz
+/// points = 20          # per decade (dec) or total (lin)
+/// sweep  = "dec"       # "dec" | "lin"  (default "dec")
+/// ```
+///
+/// Every independent source in the circuit is driven with unit AC amplitude, so
+/// node phasors are the transfer function from that stimulus. A `phase_margin`
+/// assertion names the loop break/output net; an `ac_gain` assertion names a net
+/// and bounds its magnitude (dB) at an optional `freq_hz`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcConfig {
+    pub fstart: f64,
+    pub fstop: f64,
+    pub points: usize,
+    /// "dec" (per-decade, log) or "lin" (linear). Default "dec".
+    #[serde(default = "default_sweep")]
+    pub sweep: String,
+}
+
+fn default_sweep() -> String {
+    "dec".to_string()
+}
+
+impl AcConfig {
+    fn validate(&self) -> Result<(), SpecError> {
+        if self.fstart <= 0.0 || self.fstop <= self.fstart {
+            return Err(SpecError::Invalid(
+                "[ac] needs 0 < fstart < fstop".into(),
+            ));
+        }
+        if self.points == 0 {
+            return Err(SpecError::Invalid("[ac] points must be >= 1".into()));
+        }
+        match self.sweep.as_str() {
+            "dec" | "lin" => Ok(()),
+            other => Err(SpecError::Invalid(format!(
+                "[ac] sweep must be 'dec' or 'lin', got '{other}'"
+            ))),
+        }
+    }
 }
 
 /// A net forced to a fixed DC voltage for the run.
@@ -530,6 +584,19 @@ impl Spec {
         for a in &self.asserts {
             a.validate()?;
         }
+        if let Some(ac) = &self.ac {
+            ac.validate()?;
+        }
+        // AC assertions need the [ac] sweep block to drive them.
+        let needs_ac = self
+            .asserts
+            .iter()
+            .any(|a| matches!(a.kind.as_str(), "phase_margin" | "ac_gain"));
+        if needs_ac && self.ac.is_none() {
+            return Err(SpecError::Invalid(
+                "a phase_margin / ac_gain assertion needs an [ac] sweep block (fstart, fstop, points)".into(),
+            ));
+        }
         if let Some(f) = &self.fuzz {
             if f.seeds == 0 {
                 return Err(SpecError::Invalid("[fuzz] seeds must be >= 1".into()));
@@ -732,6 +799,32 @@ impl Assertion {
                     ));
                 }
             }
+            "phase_margin" => {
+                if self.net.is_none() {
+                    return Err(SpecError::Invalid(
+                        "phase_margin assertion needs a `net` (the loop break/output net)".into(),
+                    ));
+                }
+                if self.min.is_none() && self.max.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "phase_margin on '{}' needs a `min` (and/or `max`) in degrees, e.g. min = 45",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+            }
+            "ac_gain" => {
+                if self.net.is_none() {
+                    return Err(SpecError::Invalid(
+                        "ac_gain assertion needs a `net`".into(),
+                    ));
+                }
+                if self.min.is_none() && self.max.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "ac_gain on '{}' needs a `min` and/or `max` in dB",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
+            }
             "boot-coverage" => {
                 if self.net.is_none() {
                     return Err(SpecError::Invalid(
@@ -753,7 +846,7 @@ impl Assertion {
             }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage|phase_margin|ac_gain)"
                 )));
             }
         }
@@ -866,6 +959,30 @@ impl Assertion {
                     self.min.unwrap_or(0.0),
                     self.deadline_ms.unwrap_or(0.0)
                 )
+            }
+            "phase_margin" => {
+                let net = self.net.clone().unwrap_or_default();
+                let bound = match (self.min, self.max) {
+                    (Some(lo), Some(hi)) => format!("in [{lo}, {hi}] deg"),
+                    (Some(lo), None) => format!(">= {lo} deg"),
+                    (None, Some(hi)) => format!("<= {hi} deg"),
+                    (None, None) => "phase margin".into(),
+                };
+                format!("loop {net} phase margin {bound}")
+            }
+            "ac_gain" => {
+                let net = self.net.clone().unwrap_or_default();
+                let bound = match (self.min, self.max) {
+                    (Some(lo), Some(hi)) => format!("in [{lo}, {hi}] dB"),
+                    (Some(lo), None) => format!(">= {lo} dB"),
+                    (None, Some(hi)) => format!("<= {hi} dB"),
+                    (None, None) => "gain".into(),
+                };
+                let at = self
+                    .freq_hz
+                    .map(|f| format!(" at {f} Hz"))
+                    .unwrap_or_default();
+                format!("{net} gain {bound}{at}")
             }
             other => other.to_string(),
         }

@@ -25,6 +25,7 @@ serde_json = "1"
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+num-complex = "0.4"
 
 [profile.release]
 lto = "thin"
