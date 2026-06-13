@@ -1,0 +1,141 @@
+# hauksbee slim/core image: the everyday CI image.
+#
+# Contains the prebuilt `hauksbee` + `hauksbee-ci` binaries (built here from
+# source, default features so simavr is linked in), the reference model db,
+# kicad-cli for SVG/Gerber export, and the simavr runtime libraries. This is
+# everything the static checks (DRC, netlint, SI, resource conflicts),
+# board-as-code, and the built-in AVR co-simulation need. It deliberately does
+# NOT carry Renode, the Espressif QEMU fork, or freerouting; reach for the
+# `full` image when you need STM32 / ESP32 co-sim or production autorouting.
+#
+# BUILD CONTEXT: the workspace Cargo.toml depends on the sibling kicad-forge
+# repo via `path = "../kicad-forge/..."`, so the build context must be the
+# PARENT directory that holds both repos as siblings:
+#
+#   parent/
+#     hauksbee/        (this repo)
+#     kicad-forge/     (the forge crates)
+#
+# Build from that parent with:
+#   docker build -f hauksbee/docker/Dockerfile.slim -t hauksbee:slim parent/
+#
+# Multi-arch (linux/amd64 + linux/arm64) is produced by buildx in CI; see
+# .github/workflows/docker.yml. simavr is built natively per arch (no
+# cross-compile), which is why the image builds simavr from a versioned source
+# tag rather than trusting a distro package that may lag.
+
+# ---------------------------------------------------------------------------
+# Stage 1: build simavr (static lib) so the `avr` feature can link it.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS simavr-build
+
+ARG SIMAVR_VERSION=v1.8
+
+# build-essential + gcc, libelf-dev (libelf.pc, the only hard simavr dep), git
+# (simavr derives its version from `git describe`, so the clone must carry tags).
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+        libelf-dev \
+        pkg-config \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build from the repo ROOT: `build-simavr` and `install-simavr` are top-level
+# targets (they recurse into simavr/). PREFIX and DESTDIR are the same knob in
+# simavr's Makefile, so set them equal to land lib + headers under /usr/local.
+# RELEASE=1 sets the runtime rpath to ${PREFIX}/lib. Use gcc (clang is not
+# installed here). The install produces libsimavr.a (what the Rust build links),
+# the headers in /usr/local/include/simavr, and simavr.pc.
+WORKDIR /src
+RUN git clone https://github.com/buserror/simavr.git \
+    && git -C simavr checkout "${SIMAVR_VERSION}" \
+    && make -C simavr CC=gcc RELEASE=1 build-simavr \
+    && make -C simavr CC=gcc RELEASE=1 DESTDIR=/usr/local PREFIX=/usr/local install-simavr \
+    && ldconfig
+
+# ---------------------------------------------------------------------------
+# Stage 2: build the hauksbee binaries against that simavr.
+# ---------------------------------------------------------------------------
+ARG RUST_TAG=1.85.1-bookworm
+FROM rust:${RUST_TAG} AS rust-build
+
+# clang/libclang are needed by bindgen (the simavr build.rs generates bindings);
+# libelf + zlib are simavr's link dependencies; pkg-config resolves both.
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        clang \
+        libclang-dev \
+        libelf-dev \
+        pkg-config \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bring the simavr static lib + headers in so the build.rs link step resolves.
+COPY --from=simavr-build /usr/local/lib /usr/local/lib
+COPY --from=simavr-build /usr/local/include /usr/local/include
+RUN ldconfig
+
+# The build.rs hardcodes the homebrew search path /opt/homebrew/lib for macOS;
+# on Linux the lib lives in /usr/local/lib, so make that discoverable to the
+# linker and to pkg-config without patching the build script.
+ENV LIBRARY_PATH=/usr/local/lib \
+    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+    BINDGEN_EXTRA_CLANG_ARGS="-I/usr/local/include -I/usr/local/include/simavr"
+
+WORKDIR /build
+# Copy both sibling repos, preserving the ../kicad-forge relative path the
+# workspace Cargo.toml expects.
+COPY hauksbee/ ./hauksbee/
+COPY kicad-forge/ ./kicad-forge/
+
+WORKDIR /build/hauksbee
+# Build the two release binaries with default features (avr + renode + qemu):
+# renode and qemu are pure-process backends, so they add no link deps here and
+# the slim image simply ships without those external tools installed.
+RUN cargo build --release -p hauksbee-engine -p hauksbee-ci \
+    && strip target/release/hauksbee target/release/hauksbee-ci
+
+# ---------------------------------------------------------------------------
+# Stage 3: slim runtime.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+LABEL org.opencontainers.image.title="hauksbee (slim)" \
+      org.opencontainers.image.description="Universal PCB emulator: static checks, board-as-code, AVR co-sim. Prebuilt hauksbee + hauksbee-ci with kicad-cli and simavr." \
+      org.opencontainers.image.source="https://github.com/ETM-Code/hauksbee" \
+      org.opencontainers.image.licenses="MIT"
+
+# Runtime libraries only:
+#   libelf1 + zlib1g  the shared libs the statically-linked simavr still needs
+#   kicad-cli         SVG/Gerber export for board-as-code relayout visuals
+#   ca-certificates   TLS for anything that fetches over HTTPS
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        kicad-cli \
+        libelf1 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user; CI mounts the checkout read-write so keep a stable uid.
+RUN useradd --create-home --uid 1000 hauksbee
+
+# The binaries embed the model db; the on-disk copy under db/ supports the
+# layered ~/.hauksbee/models override and is handy documentation.
+COPY --from=rust-build /build/hauksbee/target/release/hauksbee    /usr/local/bin/hauksbee
+COPY --from=rust-build /build/hauksbee/target/release/hauksbee-ci /usr/local/bin/hauksbee-ci
+COPY --from=rust-build /build/hauksbee/crates/hauksbee-models/db  /opt/hauksbee/db
+
+USER hauksbee
+WORKDIR /work
+
+# No fixed ENTRYPOINT: both binaries are on PATH, so the command names the tool,
+# e.g. `docker run hauksbee:slim hauksbee run board.kicad_pcb --report` or
+# `... hauksbee-ci run spec.toml`. Mount your repo at /work (see docs/DOCKER.md).
+CMD ["hauksbee-ci", "--help"]
