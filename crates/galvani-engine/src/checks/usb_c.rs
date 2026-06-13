@@ -401,13 +401,62 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
     })
 }
 
-/// The GND net id (the net named GND / GNDPWR), if any.
+/// The primary GND net id (the net named GND / GNDPWR), if any.
+///
+/// Kept for the single-ground classifier path. The CC Rd audit uses
+/// [`ground_net_ids`] instead, because a USB-C Rd can legitimately return to a
+/// secondary ground (GNDA / DGND / a split shield ground) rather than the one
+/// net literally named "GND".
 fn gnd_net_id(board: &ExtractedBoard) -> Option<i64> {
     board
         .nets
         .iter()
         .find(|n| n.name.eq_ignore_ascii_case("GND") || n.name.eq_ignore_ascii_case("GNDPWR"))
         .map(|n| n.id)
+}
+
+/// Whether a net name denotes a ground reference. Recognises the common
+/// ground-family names a USB-C Rd can return to: GND, the analog/digital splits
+/// (GNDA/AGND, GNDD/DGND), power/earth grounds (GNDPWR/PGND/EGND), shield/USB
+/// grounds, and numbered grounds (GND1, GND2, ...). Deliberately conservative:
+/// it matches only names whose alphabetic-only core is exactly a ground token,
+/// so a signal like "GND_SENSE" or "GNDLED" (an LED return that is *not* the
+/// system ground) does not masquerade as ground and credit a phantom Rd.
+fn is_ground_name(name: &str) -> bool {
+    // Drop digits and separators so "GND1", "GNDA_2", "GND-3" all reduce to
+    // their alphabetic core ("GND", "GNDA", "GND").
+    let core: String = name
+        .to_ascii_uppercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect();
+    matches!(
+        core.as_str(),
+        "GND"
+            | "GNDA"
+            | "AGND"
+            | "GNDD"
+            | "DGND"
+            | "GNDPWR"
+            | "PGND"
+            | "EGND"
+            | "GNDREF"
+            | "SGND"
+            | "GNDUSB"
+            | "USBGND"
+            | "VSS"
+            | "VSSA"
+    )
+}
+
+/// All net ids that are ground references on the board (see [`is_ground_name`]).
+fn ground_net_ids(board: &ExtractedBoard) -> std::collections::HashSet<i64> {
+    board
+        .nets
+        .iter()
+        .filter(|n| is_ground_name(&n.name))
+        .map(|n| n.id)
+        .collect()
 }
 
 /// Resolve the receptacle's CC1 and CC2 net ids, preferring the USB-C connector
@@ -455,10 +504,79 @@ fn receptacle_cc_nets(board: &ExtractedBoard) -> Option<(i64, i64)> {
     Some((cc1_net?, cc2_net?))
 }
 
+/// One USB-C receptacle's CC nets, with the component reference that carries
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceptacleNets {
+    reference: String,
+    cc1_net: i64,
+    cc2_net: i64,
+}
+
+/// Every distinct USB-C *receptacle* on the board, each with its own CC1/CC2
+/// nets. A board with two USB-C halves (e.g. a split keyboard's two MCU
+/// receptacles) has two independent receptacles, each with its own discrete Rd;
+/// the single-best [`receptacle_cc_nets`] credits only one, so the audit walks
+/// all of them.
+///
+/// "Receptacle" here is gated on a positive [`receptacle_score`]: a downstream
+/// CC controller / PMIC that merely carries CC pin functions (score 0) is
+/// excluded, exactly as in `receptacle_cc_nets`, so we never read the PMIC-side
+/// net as if it were the connector.
+fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
+    let mut out: Vec<ReceptacleNets> = Vec::new();
+    for comp in &board.components {
+        let score = receptacle_score(comp);
+        if score <= 0 {
+            continue;
+        }
+        let mut c1 = None;
+        let mut c2 = None;
+        for pin in &comp.pins {
+            let f = pin.function.to_ascii_uppercase();
+            let n = pin.number.to_ascii_uppercase();
+            if f == "CC1" || f == "CC" || n == "A5" {
+                c1 = c1.or(pin.net);
+            }
+            if f == "CC2" || n == "B5" {
+                c2 = c2.or(pin.net);
+            }
+        }
+        if let (Some(cc1_net), Some(cc2_net)) = (c1, c2) {
+            let rec = ReceptacleNets { reference: comp.reference.clone(), cc1_net, cc2_net };
+            // De-dupe by the (cc1, cc2) net pair: two receptacles wired to the
+            // *same* CC nets (a mirrored footprint of one logical port) count
+            // once, so we do not double-report.
+            if !out.iter().any(|r| r.cc1_net == rec.cc1_net && r.cc2_net == rec.cc2_net) {
+                out.push(rec);
+            }
+        }
+    }
+    out
+}
+
 /// Parallel resistance (ohms) of every two-pin resistor that connects `from_net`
 /// to `gnd_net`. `None` if no such resistor exists (or GND is unknown).
 fn net_resistance_to(board: &ExtractedBoard, from_net: i64, gnd_net: Option<i64>) -> Option<f64> {
     let gnd = gnd_net?;
+    let mut set = std::collections::HashSet::new();
+    set.insert(gnd);
+    net_resistance_to_grounds(board, from_net, &set)
+}
+
+/// Parallel resistance (ohms) of every two-pin resistor that bridges `from_net`
+/// to *any* recognised ground net (see [`ground_net_ids`]). `None` if no such
+/// resistor exists or the ground set is empty. This is the audit's Rd reader: a
+/// CC Rd that returns to a secondary ground (GNDA, DGND, shield ground) is still
+/// a valid sink termination and must be credited.
+fn net_resistance_to_grounds(
+    board: &ExtractedBoard,
+    from_net: i64,
+    grounds: &std::collections::HashSet<i64>,
+) -> Option<f64> {
+    if grounds.is_empty() {
+        return None;
+    }
     let mut inv_sum = 0.0f64;
     let mut found = false;
     for comp in &board.components {
@@ -478,7 +596,7 @@ fn net_resistance_to(board: &ExtractedBoard, from_net: i64, gnd_net: Option<i64>
         for pin in &comp.pins {
             match pin.net {
                 Some(id) if id == from_net => on_from = true,
-                Some(id) if id == gnd => on_gnd = true,
+                Some(id) if grounds.contains(&id) => on_gnd = true,
                 _ => {}
             }
         }
@@ -537,17 +655,55 @@ impl CcPinTermination {
     }
 }
 
-/// The CC-termination audit for a board's USB-C receptacle.
+/// One USB-C receptacle's CC-termination audit, tagged with its reference.
 #[derive(Debug, Clone)]
-pub struct CcTerminationAudit {
+pub struct ReceptacleCc {
+    /// The receptacle's reference designator (e.g. "J1").
+    pub reference: String,
     pub cc1: CcPinTermination,
     pub cc2: CcPinTermination,
 }
 
-impl CcTerminationAudit {
-    /// True when either CC pin carries both an external and an internal Rd.
+impl ReceptacleCc {
+    /// True when either CC pin of this receptacle is double-terminated.
     pub fn has_double_termination(&self) -> bool {
         self.cc1.is_double_terminated() || self.cc2.is_double_terminated()
+    }
+}
+
+/// The CC-termination audit for a board's USB-C receptacle(s).
+///
+/// `cc1`/`cc2` are the *primary* receptacle (the highest-scoring one, first on
+/// ties) and are retained for single-receptacle callers. `receptacles` lists
+/// every distinct USB-C receptacle on the board, each with its own CC
+/// terminations: on a dual-receptacle board (e.g. a split keyboard's two
+/// halves) this is where the second receptacle's independent Rd is credited,
+/// which the single `cc1`/`cc2` pair cannot represent.
+#[derive(Debug, Clone)]
+pub struct CcTerminationAudit {
+    pub cc1: CcPinTermination,
+    pub cc2: CcPinTermination,
+    /// Every distinct receptacle audited (at least one; the first is the
+    /// primary, mirrored into `cc1`/`cc2`).
+    pub receptacles: Vec<ReceptacleCc>,
+}
+
+impl CcTerminationAudit {
+    /// True when *any* receptacle's CC pin carries both an external and an
+    /// internal Rd (the double-termination defect, on any half of the board).
+    pub fn has_double_termination(&self) -> bool {
+        self.receptacles.iter().any(|r| r.has_double_termination())
+    }
+
+    /// True when *every* receptacle presents a credited Rd on at least one CC
+    /// pin (external or internal). A receptacle with no Rd at all is either a
+    /// power-only / debug receptacle or an under-read; this lets a caller
+    /// distinguish "all halves terminated" from "primary terminated only".
+    pub fn all_receptacles_terminated(&self) -> bool {
+        !self.receptacles.is_empty()
+            && self.receptacles.iter().all(|r| {
+                r.cc1.effective_rd_ohms().is_some() || r.cc2.effective_rd_ohms().is_some()
+            })
     }
 }
 
@@ -560,16 +716,41 @@ impl CcTerminationAudit {
 ///
 /// Returns `None` if the board has no identifiable USB-C receptacle CC nets.
 pub fn audit_cc_termination(board: &ExtractedBoard) -> Option<CcTerminationAudit> {
-    let gnd = gnd_net_id(board);
-    let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
-    Some(CcTerminationAudit {
-        cc1: audit_one_cc(board, cc1_net, gnd),
-        cc2: audit_one_cc(board, cc2_net, gnd),
-    })
+    let grounds = ground_net_ids(board);
+
+    // Audit every distinct receptacle. Fall back to the single-best resolver
+    // when the multi-receptacle walk finds none (it gates strictly on a
+    // positive receptacle score; the single resolver is more permissive about
+    // shared-CC parts, which preserves the RPi 4 schematic-reconstruction case
+    // whose CC pins live on a symbol that scores 0).
+    let mut receptacles: Vec<ReceptacleCc> = all_receptacle_cc_nets(board)
+        .into_iter()
+        .map(|r| ReceptacleCc {
+            reference: r.reference,
+            cc1: audit_one_cc(board, r.cc1_net, &grounds),
+            cc2: audit_one_cc(board, r.cc2_net, &grounds),
+        })
+        .collect();
+
+    if receptacles.is_empty() {
+        let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
+        receptacles.push(ReceptacleCc {
+            reference: String::new(),
+            cc1: audit_one_cc(board, cc1_net, &grounds),
+            cc2: audit_one_cc(board, cc2_net, &grounds),
+        });
+    }
+
+    let primary = receptacles[0].clone();
+    Some(CcTerminationAudit { cc1: primary.cc1, cc2: primary.cc2, receptacles })
 }
 
-fn audit_one_cc(board: &ExtractedBoard, cc_net: i64, gnd: Option<i64>) -> CcPinTermination {
-    let external_rd_ohms = net_resistance_to(board, cc_net, gnd);
+fn audit_one_cc(
+    board: &ExtractedBoard,
+    cc_net: i64,
+    grounds: &std::collections::HashSet<i64>,
+) -> CcPinTermination {
+    let external_rd_ohms = net_resistance_to_grounds(board, cc_net, grounds);
     // Walk the CC net plus anything bridged to it by a 0 Ω resistor / ferrite,
     // and see if it reaches a known internal-Rd controller's CC pin.
     let reachable = nets_bridged_to(board, cc_net);
@@ -869,6 +1050,23 @@ mod tests {
         assert_eq!(internal_cc_rd_ohms("TUSB320"), None);
         assert_eq!(internal_cc_rd_ohms("STUSB4500"), None);
         assert_eq!(internal_cc_rd_ohms("5k1"), None);
+    }
+
+    #[test]
+    fn ground_names_recognise_the_gnd_family_only() {
+        // The system grounds a USB-C Rd can legitimately return to.
+        for g in ["GND", "GNDA", "AGND", "GNDD", "DGND", "GNDPWR", "PGND", "VSS", "VSSA"] {
+            assert!(is_ground_name(g), "{g} should be a ground");
+        }
+        // Numeric / separated suffixes still reduce to a ground core.
+        for g in ["GND1", "GND2", "GNDA_2", "GND-3", "gnda"] {
+            assert!(is_ground_name(g), "{g} should be a ground");
+        }
+        // Things that merely *contain* "GND" but are not the system ground must
+        // not be credited as a Rd return (the false-positive shape to avoid).
+        for n in ["GND_SENSE", "GNDLED", "VBUS", "CC1", "USB_DP", "EARTH", "GNDSW"] {
+            assert!(!is_ground_name(n), "{n} must not be treated as ground");
+        }
     }
 
     #[test]

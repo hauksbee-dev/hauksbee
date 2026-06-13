@@ -386,6 +386,44 @@ fn fixture_hierarchical_bus() {
 }
 
 #[test]
+fn fixture_bus_alias_crosses_sheet() {
+    // End-to-end exercise of a bus-alias *reference* across a sheet boundary
+    // (the gap docs/SCHEMATICS.md previously recorded as untested). Both sheets
+    // define `(bus_alias "ADDR" (members "A[1..0]"))`. The parent sheet pin and
+    // the child hierarchical label are both written `MEM{ADDR}`, which must
+    // expand through the alias to the qualified members `MEM.A1`, `MEM.A0`. The
+    // member labels on the resistors (`MEM.A1` on RA/RC, `MEM.A0` on RB/RD) then
+    // unify member-wise across the boundary. If the alias were *not* expanded,
+    // the pin would carry a single literal member `MEM.ADDR` and nothing would
+    // cross - the symptom the fix removes.
+    let Some(b) = fixture("bus_alias_top.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    assert!(
+        same_net(&b, ("RA", "1"), ("RC", "1")),
+        "alias member MEM.A1 must connect parent RA to child RC across the sheet"
+    );
+    assert!(
+        same_net(&b, ("RB", "1"), ("RD", "1")),
+        "alias member MEM.A0 must connect parent RB to child RD across the sheet"
+    );
+    assert!(
+        !same_net(&b, ("RA", "1"), ("RB", "1")),
+        "distinct alias members MEM.A1 and MEM.A0 must not merge"
+    );
+    assert!(
+        !same_net(&b, ("RA", "1"), ("RD", "1")),
+        "member MEM.A1 must not cross to member MEM.A0's net"
+    );
+    // The qualified member nets exist; the bus/alias expression never becomes a net.
+    assert!(b.net_by_name("MEM.A1").is_some(), "MEM.A1 net present");
+    assert!(b.net_by_name("MEM.A0").is_some(), "MEM.A0 net present");
+    assert!(b.net_by_name("MEM{ADDR}").is_none(), "the bus expression must not be a net");
+    assert!(b.net_by_name("MEM.ADDR").is_none(), "the alias must expand, not stay literal");
+}
+
+#[test]
 fn no_unconnected_components_in_fixtures() {
     for f in ["two_resistors.kicad_sch", "power_labels.kicad_sch"] {
         let Some(b) = fixture(f) else { continue };

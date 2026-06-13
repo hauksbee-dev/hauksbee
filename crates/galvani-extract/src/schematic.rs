@@ -179,9 +179,11 @@ struct NetlistBuilder {
     /// segment's interior into it. (Most net labels in real boards sit
     /// mid-span, so without this almost every label floats free of its wire.)
     segments: Vec<(SheetId, Pt, Pt, bool)>,
-    /// Bus alias definitions per sheet: alias name -> member tokens. Referenced
-    /// from group buses as `{ALIAS}`. Recorded for completeness; resolved when
-    /// a group bus references `{NAME}`.
+    /// Bus alias definitions per sheet: alias name -> member tokens. A group bus
+    /// `PREFIX{ALIAS}` referencing one is resolved by `expand_bus_on_sheet`,
+    /// which substitutes the alias's (themselves-expanded) members. An alias that
+    /// names another alias is left as a literal member (KiCad does not chain
+    /// aliases either), so resolution cannot recurse through this map.
     bus_aliases: HashMap<(SheetId, String), Vec<String>>,
     /// Hierarchical wiring: (sheet instance path, pin name) → union-find node,
     /// recorded for both the parent sheet-pin and the child hierarchical-label
@@ -418,7 +420,7 @@ impl NetlistBuilder {
             if let (Some(name), Some(at)) = (lbl.arg_value(0), at_xy(lbl)) {
                 let node = self.node_at(sheet, at);
                 let name = normalize_label(&name);
-                if let Some(members) = expand_bus(&name) {
+                if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
                     // A bus passing through a hierarchical label connects
                     // member-wise one level up. Recorded and resolved in
                     // `finish` (child side), where the bus this label sits on is
@@ -604,6 +606,29 @@ impl NetlistBuilder {
         });
     }
 
+    /// Expand a bus label on `sheet`, resolving any bus-alias reference against
+    /// the aliases recorded for that sheet. A bare alias token inside a group
+    /// bus (`MEM{ADDR}` where `ADDR` is an alias) expands to the alias's
+    /// members, each token of which is itself expanded (an alias member can be a
+    /// vector like `A[7..0]`). Falls back to plain expansion when the name uses
+    /// no alias.
+    fn expand_bus_on_sheet(&self, sheet: SheetId, name: &str) -> Option<Vec<String>> {
+        let aliases = &self.bus_aliases;
+        let resolve = move |tok: &str| -> Option<Vec<String>> {
+            let members = aliases.get(&(sheet, tok.to_string()))?;
+            // Expand each alias member token (it may be a vector/group bus).
+            let mut out = Vec::new();
+            for m in members {
+                match expand_bus(m) {
+                    Some(exp) => out.extend(exp),
+                    None => out.push(m.clone()),
+                }
+            }
+            Some(out)
+        };
+        expand_bus_aliased(name, &resolve)
+    }
+
     fn add_label(&mut self, sheet: SheetId, lbl: &List, scope: NameScope) {
         if let (Some(name), Some(at)) = (lbl.arg_value(0), at_xy(lbl)) {
             let node = self.node_at(sheet, at);
@@ -616,7 +641,7 @@ impl NetlistBuilder {
             // must not, or `D[0..7]` would become one giant net). We record the
             // bus label's members and position so a sheet pin sitting on this
             // bus under a different name can map its members positionally.
-            match expand_bus(&name) {
+            match self.expand_bus_on_sheet(sheet, &name) {
                 Some(members) => self.bus_labels.push((sheet, at, members)),
                 None => self.push_anchor(sheet, NamedAnchor { name, scope, node }),
             }
@@ -646,7 +671,7 @@ impl NetlistBuilder {
             if let (Some(name), Some(at)) = (pin.arg_value(0), at_xy(pin)) {
                 let node = self.node_at(sheet, at);
                 let name = normalize_label(&name);
-                if let Some(members) = expand_bus(&name) {
+                if let Some(members) = self.expand_bus_on_sheet(sheet, &name) {
                     // A bus sheet pin connects member-wise to the child's
                     // matching bus hierarchical label. Recorded and resolved in
                     // `finish` (parent side): the pin may sit on a parent bus
@@ -1309,6 +1334,20 @@ fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
 ///
 /// The names returned are already `normalize_label`-d (the input should be).
 fn expand_bus(name: &str) -> Option<Vec<String>> {
+    // No alias context: a bare token never resolves to an alias.
+    expand_bus_aliased(name, &|_| None)
+}
+
+/// Expand a bus label into its member net names, resolving bus-alias references.
+///
+/// `alias` maps an alias name to its member tokens (recorded from
+/// `(bus_alias "NAME" (members ...))`). Inside a group bus `PREFIX{...}`, a bare
+/// token that is *not* itself a vector/group bus is looked up as an alias: if it
+/// resolves, its members are spliced in (each then qualified by `PREFIX`, exactly
+/// as KiCad expands `MEM{ADDR}` when `ADDR` is an alias for `A[7..0] WE`).
+///
+/// Returns `None` for a plain (non-bus) label.
+fn expand_bus_aliased(name: &str, alias: &dyn Fn(&str) -> Option<Vec<String>>) -> Option<Vec<String>> {
     // Group bus: optional prefix then `{ ... }`.
     if let Some(open) = name.find('{') {
         if name.ends_with('}') {
@@ -1316,7 +1355,12 @@ fn expand_bus(name: &str) -> Option<Vec<String>> {
             let inner = &name[open + 1..name.len() - 1];
             let mut out = Vec::new();
             for tok in inner.split_whitespace() {
-                let expanded = expand_bus(tok).unwrap_or_else(|| vec![tok.to_string()]);
+                // A token expands as: a nested vector/group bus, OR a bus-alias
+                // reference (`{ALIAS}` is written bare inside the group), OR a
+                // literal single member.
+                let expanded = expand_bus_aliased(tok, alias)
+                    .or_else(|| alias(tok))
+                    .unwrap_or_else(|| vec![tok.to_string()]);
                 for m in expanded {
                     if prefix.is_empty() {
                         out.push(m);
@@ -1430,7 +1474,7 @@ fn ps_pin_number(components: &[Component], ps: &PinSite) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_bus, point_strictly_inside};
+    use super::{expand_bus, expand_bus_aliased, point_strictly_inside};
 
     #[test]
     fn vector_bus_ascending() {
@@ -1482,6 +1526,69 @@ mod tests {
         assert_eq!(
             expand_bus("MEM{A[1..0] WE}"),
             Some(vec!["MEM.A1".into(), "MEM.A0".into(), "MEM.WE".into()])
+        );
+    }
+
+    #[test]
+    fn group_bus_expands_an_alias_reference() {
+        // `(bus_alias "ADDR" (members "A[7..0]" "WE"))` then a group bus
+        // `MEM{ADDR}` must expand ADDR to its (already vector-expanded) members,
+        // each qualified by the MEM prefix.
+        let alias = |tok: &str| -> Option<Vec<String>> {
+            if tok == "ADDR" {
+                // The resolver returns the alias members already expanded, the
+                // way the builder's expand_bus_on_sheet feeds them.
+                Some(vec![
+                    "A7".into(),
+                    "A6".into(),
+                    "A5".into(),
+                    "A4".into(),
+                    "A3".into(),
+                    "A2".into(),
+                    "A1".into(),
+                    "A0".into(),
+                    "WE".into(),
+                ])
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            expand_bus_aliased("MEM{ADDR}", &alias),
+            Some(vec![
+                "MEM.A7".into(),
+                "MEM.A6".into(),
+                "MEM.A5".into(),
+                "MEM.A4".into(),
+                "MEM.A3".into(),
+                "MEM.A2".into(),
+                "MEM.A1".into(),
+                "MEM.A0".into(),
+                "MEM.WE".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn group_bus_mixes_alias_with_inline_members() {
+        // `{ADDR DATA[1..0]}` (anonymous group): ADDR resolves via the alias,
+        // DATA[1..0] expands as a vector, no prefix qualification.
+        let alias =
+            |tok: &str| -> Option<Vec<String>> { (tok == "ADDR").then(|| vec!["A0".into(), "A1".into()]) };
+        assert_eq!(
+            expand_bus_aliased("{ADDR DATA[1..0]}", &alias),
+            Some(vec!["A0".into(), "A1".into(), "DATA1".into(), "DATA0".into()])
+        );
+    }
+
+    #[test]
+    fn unknown_alias_token_stays_a_literal_member() {
+        // A bare token that is neither a bus nor a known alias is a single
+        // literal member (the prior behaviour, preserved).
+        let none = |_: &str| None;
+        assert_eq!(
+            expand_bus_aliased("MEM{ADDR}", &none),
+            Some(vec!["MEM.ADDR".into()])
         );
     }
 
