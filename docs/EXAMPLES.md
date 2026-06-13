@@ -41,13 +41,82 @@ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc
 # -> a table with two GND/+5V shorts and a "2 short(s)" summary
 ```
 
-These `hauksbee run` reports are informational: they print findings but always
-exit 0. To actually FAIL a build on a defect, gate on `hauksbee-ci` (or
-`hauksbee check-code`), which exit non-zero when an assertion or fault hits.
+By default these `hauksbee run` reports are informational: they print findings
+but exit 0. Add `--strict` to make them FAIL on a real problem (see
+[Gate a pipeline](#gate-a-pipeline-with---strict) below), or gate on
+`hauksbee-ci` / `hauksbee check-code` for the full assertion/fault flow.
 
 `hauksbee --help` lists every command, and `hauksbee run --help` (or any
 `<command> --help`) shows that command's flags with an example. Swap in your own
 `.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or a folder of gerbers.
+
+## Plain-language reports (`--plain`)
+
+The expert tables assume you read electronics. Add `--plain` (or its alias
+`--explain`) to any of the report flags to get the same findings translated for
+someone who is *not* an EE: a one-line verdict, then each finding as **what it
+is**, **why it matters**, and **what to do**, ordered worst-first.
+
+```bash
+hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc --plain
+```
+
+The expert output (default) for that board is a table row:
+
+```
+│ short    │ GND  │ +5V  │ B.Cu │ 0.0000 │ 112.0,100.0 │
+```
+
+The same finding in `--plain`:
+
+```
+2 issues found, 2 serious.
+
+1. [SERIOUS] Two separate connections, "GND" and "+5V", are touching
+   (a component pad touches a component pad), near x=112.0 mm, y=100.0 mm on layer B.Cu.
+     Why it matters: These are meant to be electrically separate. Where they
+       touch they become one connection (a short), so "GND" and "+5V" will be
+       forced to the same voltage ... if one is a power rail it can pull large
+       current and overheat.
+     What to do:     Pull the two pieces of copper apart so there is a clear gap
+       between them, or remove the bit of copper that bridges them ...
+```
+
+`--plain` works on `--drc`, `--lint`, `--si`, `--resources`, and on the
+`--headless` co-sim faults (over-current, over-voltage, etc.). It is opt-in: the
+expert tables stay the default, and the plain text is derived from the *same*
+finding data, so the two never disagree. A clean board reads
+`Looks healthy: no ... problems found.`
+
+## Gate a pipeline (with `--strict`)
+
+By default `--drc`/`--lint`/`--si`/`--resources` exit 0 even when they find
+problems, so existing scripts that only read the text are unaffected. Add
+`--strict` (alias `--fail-on-findings`) to make them exit non-zero when there is
+a real defect, turning a single command into a CI gate without a full
+`hauksbee-ci` spec:
+
+```bash
+# Fails (exit 2) only if the board has copper shorts
+hauksbee run my_board.kicad_pcb --drc --strict
+
+# Fails if connectivity lint finds a high/medium issue
+hauksbee run my_board.kicad_pcb --lint --strict
+
+# Combine with --plain for a human-readable gate
+hauksbee run my_board.kicad_pcb --lint --strict --plain
+```
+
+What fails the gate under `--strict`:
+
+| Surface | Fails on |
+|---|---|
+| `--drc` | a true copper short (clearance-only near-shorts do **not** fail) |
+| `--lint` / `--resources` | any high- or medium-severity finding (low notes do not) |
+| `--si` | any real signal-integrity finding (informational computed values do not) |
+| `--headless` | any electrical-stress fault raised during the co-sim |
+
+The non-zero exit code is `2`. Without `--strict` every report still exits `0`.
 
 ## See a board live (the 2D/3D viewer)
 
@@ -62,6 +131,37 @@ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb
 It prints the URL to open (`http://127.0.0.1:3001` by default; change with
 `--port`). If you run it before building the frontend, hauksbee still starts the
 websocket and tells you exactly this build step rather than serving a blank page.
+
+## Drop a board, get a report (the web front door)
+
+For someone who will never touch a terminal, `hauksbee serve` is a "drop your
+board, get a report" web page. It needs no board on the command line and no
+frontend build (the page is self-contained):
+
+```bash
+hauksbee serve            # then open the printed http://127.0.0.1:3001
+hauksbee serve --port 8080
+```
+
+Open the URL, drop a `.kicad_pcb` / `.kicad_sch` / `.brd` / gerber `.zip` onto
+the page (or click to choose one), and the browser shows:
+
+- a one-line overall verdict, colour-coded (green healthy / amber minor / red serious),
+- every finding as **what it is / why it matters / what to do**, grouped into
+  Copper spacing (DRC), Connectivity & wiring, and Signal integrity,
+- a simple 2D map of where the parts sit.
+
+It runs the *same* checks and the *same* plain-language translation as the CLI
+(`--drc`/`--lint`/`--si` + `--plain`); nothing is uploaded off the machine, the
+analysis runs locally in the `hauksbee serve` process.
+
+This local flow is the whole product for a single user. A **hosted** version
+(one URL anyone visits, no install) would additionally need: a small upload
+service running this same `analyze` behind a real web server, per-request
+sandboxing / resource limits (untrusted board files), a size/rate limit beyond
+the built-in 32 MiB body cap, and a privacy stance on uploaded boards (they are
+proprietary). The analysis core is already a pure `bytes -> JSON` function, so a
+hosted deployment is a packaging job, not new analysis work.
 
 ## Board-as-Code examples
 

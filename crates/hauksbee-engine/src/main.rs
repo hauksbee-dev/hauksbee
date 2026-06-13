@@ -3,7 +3,9 @@
 //! ```text
 //! hauksbee run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
 //!                                 [--port 3001] [--report] [--drc] [--lint] [--si]
-//!                                 [--resources] [--apply-shorts] [--models-dir <dir>]
+//!                                 [--resources] [--plain] [--strict]
+//!                                 [--apply-shorts] [--models-dir <dir>]
+//! hauksbee serve      [--port 3001]
 //! hauksbee to-code    <board-file> [--out <file.board>]
 //! hauksbee from-code  <code-file>  [--out <file.kicad_pcb>] [--relayout|--incremental]
 //!                                 [--route|--route-grid]
@@ -15,7 +17,13 @@
 //! - `run --apply-shorts` : apply every detected copper short (bridge the nets)
 //!                          before simulating, so the run shows the consequences.
 //! - `run --headless`     : run the co-sim for `--seconds` and print summary stats.
+//! - `run --plain`        : translate any report into a non-engineer-readable
+//!                          verdict (what / why / fix). Alias `--explain`.
+//! - `run --strict`       : exit 2 when a report finds a real defect (else 0).
+//!                          Alias `--fail-on-findings`.
 //! - `run` (default)      : serve the live websocket (frontend/dist if present).
+//! - `serve`              : local web front door: open a page, drop a board,
+//!                          get the plain-language report in the browser.
 //! - `to-code`            : decompile a board into editable Board-as-Code text.
 //! - `from-code`          : recompile Board-as-Code back into a `.kicad_pcb`.
 //! - `check-code`         : recompile, bind, co-sim with the stress monitor, and
@@ -66,12 +74,14 @@ enum Command {
     /// `--report`/`--drc`/`--lint`/`--si`/`--resources` flags each print one
     /// static report and exit; `--headless` runs the co-sim for `--seconds`.
     ///
-    /// These reports are informational and always exit 0, even when they list
-    /// findings. To FAIL a pipeline on a defect, gate on `hauksbee-ci` (or
-    /// `hauksbee check-code`), which exit non-zero when an assertion or fault hits.
+    /// These reports are informational and exit 0 by default, even when they
+    /// list findings. Add `--strict` to FAIL (exit 2) on a real defect, or
+    /// `--plain` for a non-engineer-readable verdict. For the full assertion /
+    /// fault flow gate on `hauksbee-ci` or `hauksbee check-code`.
     ///
     /// Example:
     ///   hauksbee run my_board.kicad_pcb --report
+    ///   hauksbee run my_board.kicad_pcb --drc --plain --strict
     Run(RunArgs),
 
     /// Decompile a board into editable Board-as-Code text.
