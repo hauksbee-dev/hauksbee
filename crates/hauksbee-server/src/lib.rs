@@ -2,6 +2,7 @@
 //! routing user controls back to the engine.
 
 pub mod engine;
+pub mod frontdoor;
 pub mod protocol;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
