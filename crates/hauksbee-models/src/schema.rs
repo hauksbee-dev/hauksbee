@@ -147,9 +147,23 @@ pub struct Ratings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pin_current_a: Option<f64>,
 
-    /// Maximum junction temperature (C), for when self-heating lands.
+    /// Maximum junction temperature (C). When absent the thermal monitor
+    /// applies a per-class default (125 C for discretes / passives, 150 C for
+    /// power packs); set it here to override from the datasheet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_junction_temp_c: Option<f64>,
+
+    /// Junction-to-ambient thermal resistance (C/W), still-air, no heatsink.
+    /// Drives the steady-state junction-temperature estimate
+    /// `Tj = Tambient + P * theta_JA`. When absent the thermal monitor derives
+    /// a default from the footprint package class (see `hauksbee_engine::thermal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theta_ja_c_per_w: Option<f64>,
+
+    /// Junction-to-case thermal resistance (C/W). Informational / for a future
+    /// heatsinked path; the free-air estimate uses `theta_ja_c_per_w`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theta_jc_c_per_w: Option<f64>,
 }
 
 impl Ratings {
