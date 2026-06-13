@@ -20,6 +20,8 @@ without giving up the speed that made it many times faster than ngspice.
 ```
 .kicad_pcb ──forge-sexpr/model──▶ typed board
 .kicad_sch ──forge-sexpr────────▶ derived netlist   (see docs/SCHEMATICS.md)
+.brd / .d356 ───────────────────▶ typed board
+gerber + drill + P&P ───────────▶ reconstructed board (see docs/GERBER.md)
         │
         ▼
 galvani-extract: pads ⇒ nets ⇒ connectivity graph ⇒ component instances
@@ -32,10 +34,10 @@ galvani-models: lib_id/value/part-number ⇒ device model
 galvani-ir: Circuit IR — devices, nodes, parameters, parasitics (optional)
         │
         ▼
-galvani-solve: partitioned hybrid solver           galvani-mcu: MCU cores
-   linear subcircuits → state-space exp.    ◀───▶    simavr (AVR), more later
+galvani-solve: partitioned hybrid solver           galvani-mcu: MCU backends
+   linear subcircuits → state-space exp.    ◀───▶    AVR/STM32/ESP32/nRF/RISC-V
    nonlinear islands  → MNA + Newton                 pin/ADC/UART/I2C hooks
-   digital            → event queue                  lockstep co-sim
+   digital            → event queue                  lockstep co-sim (docs/MCU.md)
         │
         ▼
 galvani-server: websocket protocol (frames, probes, controls)

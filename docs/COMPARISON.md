@@ -14,7 +14,7 @@ MCUs, rendered live on the actual board.
 
 | | PCB file in | Analog accuracy | MCU firmware | Live board render | Open |
 |---|---|---|---|---|---|
-| **Galvani** | KiCad 5-10, Eagle, IPC-D-356 | SPICE-class devices, validated vs ngspice | simavr (AVR), extensible | yes, adaptive to any board | yes |
+| **Galvani** | KiCad 5-10, Eagle, IPC-D-356, gerber/P&P | SPICE-class devices, validated vs ngspice | AVR, STM32, ESP32/-C3, nRF52840, RISC-V FE310 | yes, adaptive to any board | yes |
 | Proteus VSM | no (own schematic; PCB is output-only) | mixed-mode SPICE | yes, 750+ MCUs | no (schematic anim.) | no, $$$ |
 | Wokwi | no (breadboard JSON) | behavioral only | yes (avr8js etc., closed glue) | breadboard, not PCB | partially |
 | SimulIDE | no | simplified nodal, "not very accurate" | simavr/gpsim | schematic anim. | GPL |
@@ -81,3 +81,19 @@ without the hand-modeling:
   continuous; partitioning can be forced off for ground truth.
 - Strict lossless parsing that caught real corruption in KiCad's own demo
   corpus (royalblue54L_feather, missing paren ×349).
+- Gerber + pick-and-place reverse extraction (`docs/GERBER.md`): ingests boards
+  that ship only manufacturing files (uConsole, Inkplate 6), reconstructing nets
+  and copper from fab data. No other tool in this table ingests a PCB at all,
+  let alone a CAD-less one; the gerber path widens "any board" to boards with no
+  CAD. Validated closed-loop at 99.0-100% net-partition agreement over located
+  pads.
+- Multi-architecture firmware co-sim (`docs/MCU.md`): AVR, STM32, ESP32 + ESP32-C3,
+  nRF52840, and SiFive FE310 RISC-V proven end-to-end behind one lockstep trait.
+  Wokwi and Proteus emulate more part numbers, but from their own non-PCB inputs;
+  galvani's breadth is across CPU architectures co-simulated against a circuit
+  extracted from the real layout.
+- Known-fault validation (`docs/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
+  faults documented in real boards' revision history, six caught statically, one
+  executed via firmware co-sim, each catch two-sided (flags the faulty revision,
+  clean on the fix). No other tool here ships a calibration of this kind; it is
+  what lets the clean famous-board sweep be read as honesty rather than blindness.
