@@ -223,8 +223,11 @@ boards and are expected.
 
 ### Eagle famous-board sweep (release build, warm; the board's own rule)
 
-All eight famous Eagle boards report **zero true shorts**, each judged against
-its own embedded design-rule clearance.
+All ten famous Eagle boards report **zero true shorts**, each judged against
+its own embedded design-rule clearance. The first eight carry the measured
+copper/clearance/time figures below (observed on a release build, warm; the
+last two were added later as regression guards and are asserted short-clean by
+the corpus test without re-measuring the timings):
 
 | Board | Rule | Copper primitives | Shorts | Clearance | Time |
 |-------|------|-------------------|--------|-----------|------|
@@ -236,6 +239,13 @@ its own embedded design-rule clearance.
 | Adafruit Trinket M0 | 0.2032 mm | 369 | 0 | 0 | ~12 ms |
 | SparkFun RedBoard | 0.2032 mm | 851 | 0 | 1 | ~32 ms |
 | SparkFun Pro Micro | 0.1016 mm | 868 | 0 | 0 | ~7 ms |
+| SparkFun Thing Plus SAMD51 | board rule | — | 0 | — | — |
+| SparkFun Thing Plus RP2040 | board rule | — | 0 | — | — |
+
+The last two were the round-3 additions: the RP2040 Thing Plus in particular is
+the regression guard for the Eagle mirror-transform fix in `drc.rs` (its MR0
+micro-SD socket J6 used to drop pads ~23 mm onto the V_USB/EN bottom traces and
+report 5 false shorts), so it must stay short-clean.
 
 The two residual clearance violations (one on Circuit Playground Express, one on
 RedBoard) are genuine sub-rule near-misses on densely-routed copper, not shorts.

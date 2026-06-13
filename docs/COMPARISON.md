@@ -26,15 +26,35 @@ MCUs, rendered live on the actual board.
 
 ## Performance vs ngspice
 
+Two different kinds of number live in the table below, and they are not equally
+load-bearing:
+
+- The **speed** figures (the `vs ngspice` column) are **benchmark observations**,
+  not test-enforced guarantees. They come from `#[ignore]`d benches in
+  `crates/hauksbee-solve/tests/perf.rs` that *print* a ratio; no test asserts a
+  speed ratio, and the numbers vary with machine, ngspice build, and process
+  start-up. Treat them as "what we measured on Apple Silicon against ngspice 46",
+  not as a contract.
+- The **accuracy** figures (the `accuracy` column) are the asserted ones. The
+  always-on suite (`tests/analytic.rs`, and `tests/ngspice.rs` when an ngspice
+  binary is present) gates every run on hard error bounds: rectifier <1% rel, CE
+  amplifier <2% rel, RC ladder <1% rel, diode DC point <0.1%, BJT mirror ratio
+  within 3%. Those are the numbers we stand behind.
+
 Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
 
-| circuit | hauksbee | vs ngspice | accuracy |
+| circuit | hauksbee | vs ngspice (observed) | accuracy (asserted) |
 |---|---|---|---|
-| half-wave rectifier, 10ms tran | 2.05 ms | 23x wall-clock (48.1 ms incl. process start) | <1% rel |
+| half-wave rectifier, 10ms tran | 2.05 ms | ~23x wall-clock (48.1 ms incl. process start) | <1% rel |
 | synapse array, 90 Tarski-like blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
 | small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) | — | 9.6e-10 vs analytic |
 | RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) | — | partitioned vs monolithic 3.8e-4 |
 | KiCad-authored vectors: rectifier / 3x-2N2222 amplifier | runs both via SpiceLoader | same netlists | 2.5e-5 / 0.92% max rel vs ngspice |
+
+The accuracy column entries marked "vs analytic" / "vs monolithic" are checked by
+the partitioned-vs-monolithic and analytic asserts in the always-on suite; the
+"vs ngspice" accuracy entries are asserted only when an ngspice binary is present
+(the relevant tests early-return and skip otherwise, they do not fail).
 
 File-layer performance (forge-sexpr span CST): the 85MB Jetson AGX Thor
 baseboard parses in ~230ms, emits byte-exact in ~114ms (2.1x end-to-end vs
@@ -55,8 +75,11 @@ optimal and the partitioner correctly leaves it alone.
 
 Architecture, not corner-cutting: partitioned islands (linear → exact matrix
 exponential steps; nonlinear → small per-island MNA+Newton; digital →
-events), symbolic factorization reuse, stamp-plan compilation. Accuracy
-cross-checks against ngspice gate every speed claim.
+events), symbolic factorization reuse, stamp-plan compilation. The accuracy
+cross-checks against ngspice and analytic solutions are what is asserted; the
+speed observations above were taken on runs that also passed those accuracy
+bounds, so they are honest measurements rather than corner-cutting, but the
+asserted guarantee is accuracy, not a speed ratio.
 
 ## vs the bespoke Tarski-Emulator
 
@@ -87,8 +110,11 @@ without the hand-modeling:
   let alone a CAD-less one; the gerber path widens "any board" to boards with no
   CAD. Validated closed-loop at 99.0-100% net-partition agreement over located
   pads.
-- Multi-architecture firmware co-sim (`docs/MCU.md`): AVR, STM32, ESP32 + ESP32-C3,
-  nRF52840, and SiFive FE310 RISC-V proven end-to-end behind one lockstep trait.
+- Multi-architecture firmware co-sim (`docs/MCU.md`): AVR, STM32, and ESP32 +
+  ESP32-C3 proven end-to-end (firmware drives a net through the solved circuit);
+  nRF52840 and SiFive FE310 RISC-V proven to UART boot through the same lockstep
+  trait, with the GPIO-current bridge not yet exercised on those two (see the
+  per-architecture proof status in `docs/MCU.md`).
   Wokwi and Proteus emulate more part numbers, but from their own non-PCB inputs;
   hauksbee's breadth is across CPU architectures co-simulated against a circuit
   extracted from the real layout.
