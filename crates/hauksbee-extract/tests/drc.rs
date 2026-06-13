@@ -99,6 +99,68 @@ fn well_separated_tracks_report_nothing() {
 }
 
 #[test]
+fn gap_at_the_rule_is_not_a_clearance_violation() {
+    // Two 0.25 mm tracks whose copper edges are *exactly* the 0.2 mm rule apart
+    // (centres 0.25 + 0.2 = 0.45 mm): routing-to-rule, not a defect. The old
+    // code reported every such boundary gap, producing 137/66 spurious notes on
+    // the hunt boards. It must now be silent.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 0 0.45) (end 10 0.45) (width 0.25) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert!(
+        report.findings.is_empty(),
+        "a gap at the rule is not a violation: {:?}",
+        report.findings.iter().map(|f| f.gap_mm).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gap_a_micron_under_the_rule_is_not_a_clearance_violation() {
+    // Edges 0.1995 mm apart: half a micron under the 0.2 mm rule, inside the
+    // tolerance band. Centres 0.25 + 0.1995 = 0.4495 mm. Still silent.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 0 0.4495) (end 10 0.4495) (width 0.25) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert!(
+        report.findings.is_empty(),
+        "a sub-micron-under-rule gap is not a violation: {:?}",
+        report.findings.iter().map(|f| f.gap_mm).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn genuinely_sub_rule_gap_still_fires() {
+    // Edges 0.15 mm apart (centres 0.25 + 0.15 = 0.40 mm): a real 25% encroach
+    // past the tolerance band. This must still fire so the tolerance does not
+    // blind the check to true clearance violations.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 0 0.40) (end 10 0.40) (width 0.25) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert_eq!(report.short_count(), 0, "not a short");
+    assert_eq!(report.clearance_violations().count(), 1, "a real clearance violation fires");
+    let f = report.clearance_violations().next().unwrap();
+    assert!((f.gap_mm - 0.15).abs() < 1e-6, "gap ~0.15 mm, got {}", f.gap_mm);
+}
+
+#[test]
+fn touching_copper_at_the_rule_is_still_a_short() {
+    // The tolerance only relaxes the soft clearance band; a true overlap (gap
+    // <= 0) is always a short regardless of the rule. Crossing tracks here.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.5) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert_eq!(report.short_count(), 1, "overlap is still a short");
+}
+
+#[test]
 fn segment_pad_overlap_is_a_short() {
     // A track on net A driven straight through a footprint pad on net B.
     let items = r#"
