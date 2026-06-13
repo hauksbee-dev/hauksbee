@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// End-to-end verification against the real galvani-server.
+// End-to-end verification against the real hauksbee-server.
 // Usage: bun run verify.ts
 
 import { chromium } from 'playwright'
@@ -55,7 +55,7 @@ async function main() {
 
   // Check that ident response appeared
   const pageText = await page.textContent('body')
-  const hasIdent = pageText?.includes('galvani-demo') ?? false
+  const hasIdent = pageText?.includes('hauksbee-demo') ?? false
   console.log(`Ident response visible: ${hasIdent}`)
 
   // ── Screenshot 3: Probe scope showing D13_LED square wave ──

@@ -1,6 +1,6 @@
 # Gerber + Pick-and-Place Reverse Extraction
 
-Galvani normally extracts a board from native CAD (a `.kicad_pcb` carries every
+Hauksbee normally extracts a board from native CAD (a `.kicad_pcb` carries every
 pad's net; see `docs/SCHEMATICS.md`). But a large tier of real hardware ships
 only *manufacturing* files: RS-274X copper gerbers, an Excellon (or gerber)
 drill, a pick-and-place CSV, sometimes a BOM, and no CAD at all. The uConsole,
@@ -232,7 +232,7 @@ components bound:    217/223 (97%) to >= 1 net
 extraction time:     ~238 ms
 ```
 
-A famous board with no CAD becomes a netlist galvani can analyse. Note there is
+A famous board with no CAD becomes a netlist hauksbee can analyse. Note there is
 no native CAD to validate against here, so unlike the closed-loop boards these
 numbers are *internal consistency* (it parsed, it bound, ground is the biggest
 net), not a measured agreement. The closed-loop boards are what prove
@@ -261,7 +261,7 @@ width is exact from the manufacturing files** (the one quantity gerbers give mor
 directly than a netlist). A net carrying any pour region is `Poured` and never
 given a discrete width (a plane's true cross-section is not a segment width),
 mirroring the native-CAD `trace_current` `Poured` exemption exactly. The probe is
-`cargo run -p galvani-extract --example gerber_trace_current -- <dir>`.
+`cargo run -p hauksbee-extract --example gerber_trace_current -- <dir>`.
 
 This makes the IPC-2221 trace-current surface runnable on a gerber-only board.
 Its reach is honest: it needs a *cited current attributed to a net*, and gerber

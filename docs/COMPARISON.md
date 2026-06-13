@@ -1,11 +1,11 @@
-# Galvani vs the field
+# Hauksbee vs the field
 
 > Status: structure + qualitative findings final; quantitative cells marked
 > TBD are filled by the benchmark campaign in `testdata/` and `tests/`.
 
 ## The claim
 
-No tool, open or commercial (verified June 2026), does what galvani does:
+No tool, open or commercial (verified June 2026), does what hauksbee does:
 ingest a real PCB layout file, extract the circuit it implements, and run it
 — physically accurate analog co-simulated with real firmware on emulated
 MCUs, rendered live on the actual board.
@@ -14,7 +14,7 @@ MCUs, rendered live on the actual board.
 
 | | PCB file in | Analog accuracy | MCU firmware | Live board render | Open |
 |---|---|---|---|---|---|
-| **Galvani** | KiCad 5-10, Eagle, IPC-D-356, gerber/P&P | SPICE-class devices, validated vs ngspice | AVR, STM32, ESP32/-C3, nRF52840, RISC-V FE310 | yes, adaptive to any board | yes |
+| **Hauksbee** | KiCad 5-10, Eagle, IPC-D-356, gerber/P&P | SPICE-class devices, validated vs ngspice | AVR, STM32, ESP32/-C3, nRF52840, RISC-V FE310 | yes, adaptive to any board | yes |
 | Proteus VSM | no (own schematic; PCB is output-only) | mixed-mode SPICE | yes, 750+ MCUs | no (schematic anim.) | no, $$$ |
 | Wokwi | no (breadboard JSON) | behavioral only | yes (avr8js etc., closed glue) | breadboard, not PCB | partially |
 | SimulIDE | no | simplified nodal, "not very accurate" | simavr/gpsim | schematic anim. | GPL |
@@ -28,7 +28,7 @@ MCUs, rendered live on the actual board.
 
 Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
 
-| circuit | galvani | vs ngspice | accuracy |
+| circuit | hauksbee | vs ngspice | accuracy |
 |---|---|---|---|
 | half-wave rectifier, 10ms tran | 2.05 ms | 23x wall-clock (48.1 ms incl. process start) | <1% rel |
 | synapse array, 90 Tarski-like blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
@@ -60,10 +60,10 @@ cross-checks against ngspice gate every speed claim.
 
 ## vs the bespoke Tarski-Emulator
 
-The predecessor hand-modeled one board. Galvani must match its usefulness
+The predecessor hand-modeled one board. Hauksbee must match its usefulness
 without the hand-modeling:
 
-| | Tarski-Emulator | Galvani |
+| | Tarski-Emulator | Hauksbee |
 |---|---|---|
 | board support | 1 (hardcoded behavioral net) | any KiCad/Eagle/D356 |
 | extraction | hand-written simplifier | automatic binder + model db |
@@ -90,7 +90,7 @@ without the hand-modeling:
 - Multi-architecture firmware co-sim (`docs/MCU.md`): AVR, STM32, ESP32 + ESP32-C3,
   nRF52840, and SiFive FE310 RISC-V proven end-to-end behind one lockstep trait.
   Wokwi and Proteus emulate more part numbers, but from their own non-PCB inputs;
-  galvani's breadth is across CPU architectures co-simulated against a circuit
+  hauksbee's breadth is across CPU architectures co-simulated against a circuit
   extracted from the real layout.
 - Known-fault validation (`docs/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
   faults documented in real boards' revision history, six caught statically, one

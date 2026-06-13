@@ -1,4 +1,4 @@
-# Build the galvani STM32F103 demo firmware.
+# Build the hauksbee STM32F103 demo firmware.
 #
 # Requires arm-none-eabi-gcc (brew install arm-none-eabi-gcc).
 # Produces blinky.elf, which Renode loads with `sysbus LoadELF`.

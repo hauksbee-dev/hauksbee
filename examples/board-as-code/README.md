@@ -1,6 +1,6 @@
 # Board-as-Code examples
 
-A PCB is a program that draws itself. galvani makes that program executable and
+A PCB is a program that draws itself. hauksbee makes that program executable and
 editable: decompile a real `.kicad_pcb` into readable text, edit the text
 (change a value, fix a wiring swap, add a part), recompile it back into a
 coherent board, and run the edit straight through simulation to see whether the
@@ -22,16 +22,16 @@ The loop, in three CLI verbs:
 
 | File | What it is |
 |---|---|
-| `blinky.board` | The small ATmega328P demo board (`crates/galvani-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real example to read. |
+| `blinky.board` | The small ATmega328P demo board (`crates/hauksbee-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real example to read. |
 | `stormduino.board` | A real corpus Arduino-class board (`board-corpus/stormduino`) decompiled. 51 components, 4 repeat-detected blocks. Shows how the decompiler factors repeated hardware into `fn` blocks. |
-| `tarski_miswire_repair.rs` (in `crates/galvani-engine/examples/`) | The headline demo: the Tarski inhibitory-synapse miswire, repaired as a code edit, run through simulation. See below. |
+| `tarski_miswire_repair.rs` (in `crates/hauksbee-engine/examples/`) | The headline demo: the Tarski inhibitory-synapse miswire, repaired as a code edit, run through simulation. See below. |
 
 ## The edit-then-recheck loop
 
 Decompile, edit, recompile, and re-simulate any of these:
 
 ```bash
-BIN=target/release/galvani   # or just `galvani` if installed
+BIN=target/release/hauksbee   # or just `hauksbee` if installed
 
 # 1. decompile a board to editable text
 $BIN to-code "board-corpus/stormduino/stormduino Rev2.kicad_pcb" --out storm.board
@@ -62,7 +62,7 @@ The runnable demo extracts the real cell from the Tarski netlist, applies that
 edit in code, recompiles, and re-simulates both versions:
 
 ```bash
-cargo run --release -p galvani-engine --example tarski_miswire_repair
+cargo run --release -p hauksbee-engine --example tarski_miswire_repair
 ```
 
 Expected output (deterministic):

@@ -9,7 +9,7 @@ it. A board change goes from a layout edit to a fab order to a reflow oven to a
 bench session weeks later, and the first time anyone learns the rail browns out
 is with a multimeter in hand.
 
-`galvani-ci` closes that loop. It runs the galvani PCB emulator headless in a
+`hauksbee-ci` closes that loop. It runs the hauksbee PCB emulator headless in a
 pipeline. Point it at a board file and (optionally) a firmware ELF, give it a
 short list of assertions in a checked-in TOML file, and it boots the firmware on
 the board the layout actually implements and tells you, with an exit code, a
@@ -24,7 +24,7 @@ stress ratings, all checked the way a test suite checks a function.
 ## The model
 
 ```
-layout change ──▶ galvani-ci run ci/power-up.toml
+layout change ──▶ hauksbee-ci run ci/power-up.toml
                      │  extract the circuit from the board file
                      │  bind every component to a device model
                      │  attach the configured power supplies
@@ -44,17 +44,17 @@ into GitHub Actions (`integrations/github-action`) or run it from KiCad
 ## Quick start
 
 ```bash
-cargo build --release -p galvani-ci
+cargo build --release -p hauksbee-ci
 
 # Boot the demo firmware on a small board and check rail + UART + blink.
-./target/release/galvani-ci run crates/galvani-ci/examples/blinky.toml
+./target/release/hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml
 
 # The flagship regression: the Tarski power-up brownout (this one FAILS).
-./target/release/galvani-ci run crates/galvani-ci/examples/tarski_brownout.toml
+./target/release/hauksbee-ci run crates/hauksbee-ci/examples/tarski_brownout.toml
 echo $?   # 1: the rail collapses on a fuzzed power-up state
 
 # The same board, repaired (this one PASSES).
-./target/release/galvani-ci run crates/galvani-ci/examples/tarski_brownout_repaired.toml --junit results.xml
+./target/release/hauksbee-ci run crates/hauksbee-ci/examples/tarski_brownout_repaired.toml --junit results.xml
 echo $?   # 0
 ```
 
@@ -68,7 +68,7 @@ name lists its near-matches ("did you mean `ANALOG_VDD`?").
 
 | Key             | Type     | Default       | Meaning                                                       |
 | --------------- | -------- | ------------- | ------------------------------------------------------------- |
-| `name`          | string   | `"galvani-ci"`| Label shown in reports.                                       |
+| `name`          | string   | `"hauksbee-ci"`| Label shown in reports.                                       |
 | `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356. |
 | `firmware`      | path     | none          | Firmware ELF/hex to boot on the detected MCU.                 |
 | `mcu`           | string   | none          | MCU-kind hint (informational; the binder auto-detects).       |
@@ -110,7 +110,7 @@ volts = 5.0
 
 ### Rail suppression: `suppress_rail`
 
-By default galvani attaches an ideal rail to every recognised supply net. When a
+By default hauksbee attaches an ideal rail to every recognised supply net. When a
 rail is physically fed *through* a board component (a sense shunt, a ferrite, a
 regulator you want to exercise), suppress its auto-rail so the droop or collapse
 is visible:
@@ -170,7 +170,7 @@ checks the worst (highest) it rose to.
 ```toml
 [[assert]]
 kind = "uart"
-contains = "galvani-demo v1"   # or: matches = "v\\d+\\.\\d+"
+contains = "hauksbee-demo v1"   # or: matches = "v\\d+\\.\\d+"
 mcu = "U1"                      # optional; defaults to all MCUs
 ```
 
@@ -250,7 +250,7 @@ standalone netlist (`testdata/tarski_brownout_cell.net`), bound by the ordinary
 pipeline:
 
 ```toml
-# crates/galvani-ci/examples/tarski_brownout.toml
+# crates/hauksbee-ci/examples/tarski_brownout.toml
 name = "tarski power-up brownout (as designed)"
 board = "../../../testdata/tarski_brownout_cell.net"
 duration_ms = 1
@@ -297,7 +297,7 @@ Now the repair. The documented fix is a real milliohm sense shunt. Expressed as
 a one-line override on the same board, same fuzz, same assertion:
 
 ```toml
-# crates/galvani-ci/examples/tarski_brownout_repaired.toml
+# crates/hauksbee-ci/examples/tarski_brownout_repaired.toml
 [[override]]
 ref = "R_Shunt15301"
 value = "0.05"            # milliohm-class sense shunt instead of 1 kΩ
@@ -317,7 +317,7 @@ bench is now caught in 0.1 s, on every layout change, by a regression that can
 never be silently lost.
 
 These two specs are also an integration test
-(`crates/galvani-ci/tests/flagship_brownout.rs`), so galvani's own CI proves the
+(`crates/hauksbee-ci/tests/flagship_brownout.rs`), so hauksbee's own CI proves the
 broken layout stays red and the fixed one stays green.
 
 ## Boot-coverage: watching the firmware define a Hi-Z control net
@@ -342,7 +342,7 @@ still undefined).
 
 ### The two-sided demo
 
-One constructed board, `crates/galvani-ci/examples/boards/boot_gate.kicad_pcb`:
+One constructed board, `crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb`:
 an ATmega328P whose PB0 drives a 2N7002 N-MOSFET gate, with **no pull resistor on
 the gate net** - so at reset the gate floats (Hi-Z), exactly the undefined-default
 shape. Two real AVR firmware variants (built with `avr-gcc`,
@@ -350,12 +350,12 @@ shape. Two real AVR firmware variants (built with `avr-gcc`,
 
 ```bash
 # variant A configures PB0 promptly and drives the gate HIGH -> PASS
-galvani-ci run crates/galvani-ci/examples/boot_gate_pass.toml
+hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass.toml
 #   [PASS] GATE_CTRL driven to >= 3 V within 20 ms of reset
 #          control net 'GATE_CTRL' driven to >= 3 V at 1.00 ms (<= 20 ms), boot window clean
 
 # variant B never touches PB0; the gate floats the whole run -> FAIL
-galvani-ci run crates/galvani-ci/examples/boot_gate_fail.toml
+hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_fail.toml
 #   [FAIL] GATE_CTRL driven to >= 3 V within 20 ms of reset
 #          control net 'GATE_CTRL' was NEVER driven to >= 3 V
 #          (firmware left it Hi-Z / undefined through the whole run)
@@ -363,11 +363,11 @@ galvani-ci run crates/galvani-ci/examples/boot_gate_fail.toml
 
 The check has teeth only because variant B goes RED: the same board, the same
 assertion, two firmwares, opposite verdicts. Pinned as an integration test,
-`crates/galvani-ci/tests/boot_coverage.rs`.
+`crates/hauksbee-ci/tests/boot_coverage.rs`.
 
 ### Backend reach (stated honestly)
 
-This proof uses the **AVR (simavr)** backend, one of galvani's two co-sim
+This proof uses the **AVR (simavr)** backend, one of hauksbee's two co-sim
 backends; the mechanism is backend-agnostic, so it is ready for the **STM32
 (Renode)** backend as well. The corpus boards that carry the *real* misses are
 **not yet co-simmable**: Watchy is ESP32 and ZSWatch is nRF52, and neither has a
@@ -380,7 +380,7 @@ note, **not** a flipped verdict.
 ## Schematic-stage CI
 
 **Catch it before you even lay out the board.** Point a spec's `board` at a
-`.kicad_sch` and galvani-ci runs the same headless co-simulation against the
+`.kicad_sch` and hauksbee-ci runs the same headless co-simulation against the
 schematic, with no PCB in existence yet. The netlist is derived geometrically
 from the schematic the way eeschema derives it (wires, pins, junctions, labels,
 power symbols, hierarchy); see `docs/SCHEMATICS.md`. Everything else in this
@@ -417,10 +417,10 @@ kind = "no_faults"
 ```
 
 A runnable example against KiCad's own `pic_programmer` demo (a 2-sheet
-hierarchy) ships at `crates/galvani-ci/examples/pic_programmer_schematic.toml`:
+hierarchy) ships at `crates/hauksbee-ci/examples/pic_programmer_schematic.toml`:
 
 ```bash
-galvani-ci run crates/galvani-ci/examples/pic_programmer_schematic.toml
+hauksbee-ci run crates/hauksbee-ci/examples/pic_programmer_schematic.toml
 ```
 
 ### Load the hierarchy root, not a sub-sheet
@@ -428,7 +428,7 @@ galvani-ci run crates/galvani-ci/examples/pic_programmer_schematic.toml
 A `.kicad_sch` board is loaded **by path** so its sheet hierarchy resolves:
 sub-sheets live in sibling files, and only the path-based loader follows them.
 Point the spec at the **hierarchy root**. If you point it at a sub-sheet (a file
-referenced by another `.kicad_sch` in the same or parent directory), galvani-ci
+referenced by another `.kicad_sch` in the same or parent directory), hauksbee-ci
 stops with a clear error naming the root, rather than silently extracting one
 page and running a partial board:
 
@@ -443,19 +443,19 @@ pic_programmer.kicad_sch. Point the spec at the hierarchy root
 For a project that has *both* a schematic and a layout, the same spec run at
 either stage returns the same verdict. The schematic netlist and the PCB netlist
 are validated to induce the identical partition of pins into nets (see
-galvani-extract's cross-validation tests), so a `voltage` / `no_faults` / blink
+hauksbee-extract's cross-validation tests), so a `voltage` / `no_faults` / blink
 check passes on the `.kicad_sch` exactly when it passes on the `.kicad_pcb`.
 
 That is a powerful property: the schematic-stage check is not a weaker
 approximation you re-do later, it is the *same* check, available earlier. It is
 enforced as an integration test
-(`crates/galvani-ci/tests/schematic_ci.rs`): the `pic_programmer` spec is run
+(`crates/hauksbee-ci/tests/schematic_ci.rs`): the `pic_programmer` spec is run
 against both the schematic and the layout and the per-assertion results must
 agree.
 
 ### Editor integration: the honest state
 
-KiCad's PCB editor (pcbnew) has an action-plugin API, and galvani-ci ships a
+KiCad's PCB editor (pcbnew) has an action-plugin API, and hauksbee-ci ships a
 plugin for it (`integrations/kicad-plugin`). The **schematic editor (eeschema)
 has no equivalent yet**: KiCad's new IPC plugin API is implemented for the PCB
 editor only in KiCad 9 and 10, schematic-editor support is explicitly future
@@ -469,7 +469,7 @@ So drive schematic-stage CI the way it is actually natural to drive it:
   commit if it goes RED. The commit, not the editor, is the right gate for a
   schematic-level fault, and this is the most natural schematic-stage
   integration anyway.
-- **CLI**: `galvani-ci run myboard-schematic.toml` from a Makefile, a watch
+- **CLI**: `hauksbee-ci run myboard-schematic.toml` from a Makefile, a watch
   script, or by hand.
 - **From pcbnew, on the project**: the pcbnew plugin discovers every spec next to
   the board (and in a sibling `ci/`), including specs whose `board` is the
@@ -477,7 +477,7 @@ So drive schematic-stage CI the way it is actually natural to drive it:
   editor on the same project today.
 
 When eeschema gains a plugin API, the entry point drops in next to the existing
-one: the shared core (`galvani_ci_core.py`) is already file-type-agnostic, it
+one: the shared core (`hauksbee_ci_core.py`) is already file-type-agnostic, it
 only handles the spec path and the binary does the rest.
 
 ## Wiring it into your repo
@@ -487,14 +487,14 @@ only handles the spec path and the binary does the rest.
   `pre-commit install`. Hardware checks then run before a commit lands. See
   `integrations/pre-commit/README.md`.
 - **GitHub Actions**: copy `integrations/github-action/example-workflow.yml`
-  into `.github/workflows/`. It builds galvani-ci (with cargo caching), runs
+  into `.github/workflows/`. It builds hauksbee-ci (with cargo caching), runs
   your spec on every board/firmware change, and publishes the JUnit results to
   the Checks tab. See `integrations/github-action/README.md`.
 - **KiCad (pcbnew)**: install the pcbnew action plugin from
   `integrations/kicad-plugin` to run a spec on the open board and see the
   verdict in a dialog. eeschema has no plugin API yet (see above); use the
   pre-commit hook or CLI for schematic-stage checks.
-- **Any CI**: call `galvani-ci run spec.toml --junit results.xml` and consume
+- **Any CI**: call `hauksbee-ci run spec.toml --junit results.xml` and consume
   the exit code and the JUnit file.
 
 ## Limitations

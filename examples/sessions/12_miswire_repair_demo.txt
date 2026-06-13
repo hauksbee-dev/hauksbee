@@ -1,4 +1,4 @@
-$ cargo run --release -p galvani-engine --example tarski_miswire_repair
+$ cargo run --release -p hauksbee-engine --example tarski_miswire_repair
     (output, compiler lines elided)
 
 Tarski inhibitory-synapse miswire: repair as a Board-as-Code edit

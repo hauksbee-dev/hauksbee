@@ -1,8 +1,8 @@
 # MCU co-simulation backends
 
-Galvani co-simulates emulated microcontroller firmware against the solved analog
+Hauksbee co-simulates emulated microcontroller firmware against the solved analog
 circuit. Every backend presents the same lockstep contract to the engine
-(`galvani-mcu::Mcu`): run N microseconds of firmware, exchange GPIO pin states,
+(`hauksbee-mcu::Mcu`): run N microseconds of firmware, exchange GPIO pin states,
 ADC voltages, and UART bytes. The scheduler does not care which emulator is
 behind the trait, so adding an architecture is adding a backend, not touching the
 co-sim loop.
@@ -25,7 +25,7 @@ roles (e.g. `pc13`, `pa5`, `pb5_sck`).
 
 ## Backends
 
-Three backends live in `galvani-mcu`, each behind a cargo feature (all on by
+Three backends live in `hauksbee-mcu`, each behind a cargo feature (all on by
 default):
 
 | Feature  | Backend         | Parts                              | Mechanism                                            | Links |
@@ -80,8 +80,8 @@ per chunk over RSP is far too slow).
   with `-machine <esp32|esp32s3|esp32c3>`, boots the merged flash image
   (`-drive file=...,if=mtd,format=raw`), and opens a QMP control socket, a serial
   socket, and (best-effort) a gdbstub. It is killed on drop. The binary is found
-  via `$GALVANI_QEMU_XTENSA` / `$GALVANI_QEMU_RISCV32`, then `$GALVANI_QEMU_DIR`,
-  then `~/.galvani-qemu-esp/qemu/bin/`, then the esp-idf idf_tools install, then
+  via `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32`, then `$HAUKSBEE_QEMU_DIR`,
+  then `~/.hauksbee-qemu-esp/qemu/bin/`, then the esp-idf idf_tools install, then
   `PATH` (rejecting Homebrew's mainline qemu, which has no esp32 machine). If none
   is found, instantiation fails with a clear install message (tests skip).
 
@@ -95,7 +95,7 @@ per chunk over RSP is far too slow).
   the Renode ODR-poll, only at a RAM address. The real `gpio_set_level` writes
   still happen; the mailbox is only the observation path the model lacks.
 
-- **GPIO in (push)**: the backend pokes the mailbox `galvani_gpio_in` word over
+- **GPIO in (push)**: the backend pokes the mailbox `hauksbee_gpio_in` word over
   the gdbstub `M` packet; the firmware reads it where it would read `GPIO_IN_REG`.
 
 - **UART (bidirectional)**: `-serial tcp:...,server,nowait` exposes UART0 as a
@@ -132,7 +132,7 @@ control and the peripheral models, so the firmware runs unmodified.
 - **Process**: `RenodeBackend::new(config)` spawns `renode --disable-xwt
   --hide-log -p -P <port>` headless, connects a Monitor TCP client, brings up the
   machine from the config, and connects a UART socket terminal. It is killed on
-  drop. Renode is located via `$GALVANI_RENODE`, then `renode` on `PATH`, then
+  drop. Renode is located via `$HAUKSBEE_RENODE`, then `renode` on `PATH`, then
   `~/renode-portable/...`. If none is found, instantiation fails with a clear
   install message (tests skip; they do not silently fall back to AVR).
 
@@ -212,10 +212,10 @@ make -C testdata/firmware/stm32_blinky
 # install Renode (portable, no system dotnet/mono needed on Apple Silicon)
 #   download renode-<ver>-dotnet.osx-arm64-portable.dmg from
 #   https://github.com/renode/renode/releases , mount it, and copy Renode.app to
-#   ~/renode-portable/  (or put `renode` on PATH, or set GALVANI_RENODE).
+#   ~/renode-portable/  (or put `renode` on PATH, or set HAUKSBEE_RENODE).
 
 # run the co-sim (the integration test does exactly this)
-cargo test -p galvani-engine --test stm32_renode_cosim -- --nocapture
+cargo test -p hauksbee-engine --test stm32_renode_cosim -- --nocapture
 ```
 
 The model db entry (`db/mcu.toml`, id `stm32f103c8`) maps the part to
@@ -241,11 +241,11 @@ Install (two pieces, both native macOS-arm64 / Linux):
 
 ```
 # 1. Espressif QEMU fork binary (small, ~4 MB; no esp-idf needed for it):
-#    grab the prebuilt release and unpack to ~/.galvani-qemu-esp/qemu
+#    grab the prebuilt release and unpack to ~/.hauksbee-qemu-esp/qemu
 #    https://github.com/espressif/qemu/releases   (qemu-xtensa-softmmu-... and
 #    qemu-riscv32-softmmu-... for the C3), or:
 #    python $IDF_PATH/tools/idf_tools.py install qemu-xtensa qemu-riscv32
-#    (the backend also honours $GALVANI_QEMU_XTENSA / $GALVANI_QEMU_RISCV32.)
+#    (the backend also honours $HAUKSBEE_QEMU_XTENSA / $HAUKSBEE_QEMU_RISCV32.)
 #    NOTE: Homebrew's mainline qemu-system-xtensa has NO esp32 machine and is
 #    rejected by the discovery (it checks `-machine help` for esp32).
 
@@ -256,7 +256,7 @@ cd ~/esp/esp-idf && git submodule update --init --depth=1 && ./install.sh esp32,
 cd testdata/firmware/esp32_blinky && ./build.sh   # produces flash.bin
 
 # run the co-sim (the integration test does exactly this)
-cargo test -p galvani-engine --test esp32_qemu_cosim -- --nocapture
+cargo test -p hauksbee-engine --test esp32_qemu_cosim -- --nocapture
 ```
 
 The committed `flash.bin` (merged bootloader + partition table + app) lets the

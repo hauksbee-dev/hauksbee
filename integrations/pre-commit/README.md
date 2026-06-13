@@ -1,6 +1,6 @@
-# galvani-ci pre-commit hook (schematic-stage and layout-stage)
+# hauksbee-ci pre-commit hook (schematic-stage and layout-stage)
 
-Run galvani-ci hardware checks before a commit lands. When a staged file is a
+Run hauksbee-ci hardware checks before a commit lands. When a staged file is a
 board that a checked-in spec targets, the matching check runs; if any assertion
 is RED, the commit is blocked.
 
@@ -13,9 +13,9 @@ before it ever reaches a layout is the commit, not eeschema. (It works for
 
 ## How it works
 
-`galvani_ci_precommit.py` reuses the pcbnew-free core from
-`../kicad-plugin/galvani_ci_core.py`, which is file-type-agnostic: it only ever
-handles the spec path and shells out to the `galvani-ci` binary, which in turn
+`hauksbee_ci_precommit.py` reuses the pcbnew-free core from
+`../kicad-plugin/hauksbee_ci_core.py`, which is file-type-agnostic: it only ever
+handles the spec path and shells out to the `hauksbee-ci` binary, which in turn
 loads a `.kicad_sch` by path (resolving the sheet hierarchy) or a `.kicad_pcb`
 from content. The hook:
 
@@ -38,17 +38,17 @@ pre-commit install
 Or as a plain git hook:
 
 ```bash
-ln -s ../../integrations/pre-commit/galvani_ci_precommit.py .git/hooks/pre-commit
+ln -s ../../integrations/pre-commit/hauksbee_ci_precommit.py .git/hooks/pre-commit
 ```
 
 Point the hook at your built binary if it is not on `PATH`:
 
 ```bash
-cargo build --release -p galvani-ci
-export GALVANI_CI_BIN="$PWD/target/release/galvani-ci"
+cargo build --release -p hauksbee-ci
+export HAUKSBEE_CI_BIN="$PWD/target/release/hauksbee-ci"
 ```
 
-Configure which directories are searched for specs with `GALVANI_CI_SPECS`
+Configure which directories are searched for specs with `HAUKSBEE_CI_SPECS`
 (colon-separated, default `ci:.`).
 
 ## A schematic-stage spec
@@ -76,7 +76,7 @@ kind = "no_faults"
 ```
 
 Commit an edit to `myboard.kicad_sch` and the hook runs this check before the
-commit is recorded. See `crates/galvani-ci/examples/pic_programmer_schematic.toml`
+commit is recorded. See `crates/hauksbee-ci/examples/pic_programmer_schematic.toml`
 for a complete, runnable example, and `docs/CI.md` (Schematic-stage CI) for the
 agreement guarantee with the layout-stage check.
 
@@ -84,8 +84,8 @@ agreement guarantee with the layout-stage check.
 
 The hook's logic lives in the shared core; its discovery and board-detection
 helpers (`find_specs`, `spec_board`, `spec_targets_schematic`) are covered by
-`../kicad-plugin/test_galvani_ci_core.py`. Run them with plain python:
+`../kicad-plugin/test_hauksbee_ci_core.py`. Run them with plain python:
 
 ```bash
-python3 integrations/kicad-plugin/test_galvani_ci_core.py
+python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
 ```

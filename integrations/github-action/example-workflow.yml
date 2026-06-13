@@ -1,6 +1,6 @@
-# Copy this into your HARDWARE repo as .github/workflows/galvani-ci.yml
+# Copy this into your HARDWARE repo as .github/workflows/hauksbee-ci.yml
 #
-# It runs galvani-ci on every push and pull request that touches the board or
+# It runs hauksbee-ci on every push and pull request that touches the board or
 # firmware, so a layout change that would brown out the rail (or break the
 # blink, or silence the UART) turns the build red before anyone touches a
 # soldering iron.
@@ -31,14 +31,14 @@ jobs:
       # - name: Build firmware
       #   run: make -C firmware
 
-      # 3. Run the hardware check. The action builds galvani-ci, runs your
+      # 3. Run the hardware check. The action builds hauksbee-ci, runs your
       #    spec, writes JUnit XML, and emits inline annotations.
-      - name: galvani-ci power-up check
-        uses: ETM-Code/galvani/integrations/github-action@main
+      - name: hauksbee-ci power-up check
+        uses: ETM-Code/hauksbee/integrations/github-action@main
         with:
           spec: ci/power-up.toml
-          junit: galvani-ci-results.xml
-          galvani-ref: main
+          junit: hauksbee-ci-results.xml
+          hauksbee-ref: main
 
   # A matrix is the natural way to run several specs (power-up, blink,
   # brown-out across supplies) in parallel.
@@ -53,7 +53,7 @@ jobs:
           - ci/brownout.toml
     steps:
       - uses: actions/checkout@v4
-      - uses: ETM-Code/galvani/integrations/github-action@main
+      - uses: ETM-Code/hauksbee/integrations/github-action@main
         with:
           spec: ${{ matrix.spec }}
           junit: results-${{ strategy.job-index }}.xml

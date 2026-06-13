@@ -11,7 +11,7 @@ co-sim loop through one trait, so the scheduler ticks them uniformly.
 
 ## The `Peripheral` trait
 
-`galvani_engine::peripherals::Peripheral` is what the scheduler drives. The key
+`hauksbee_engine::peripherals::Peripheral` is what the scheduler drives. The key
 methods, called once per co-sim chunk:
 
 ```
@@ -148,7 +148,7 @@ frontend keeps working unchanged):
   (e.g. `{"pressed":1}`, `{"position":0.5}`, `{"temp_c":40}`,
   `{"transitions":20}`).
 
-## galvani-ci: the `[[peripheral]]` spec section
+## hauksbee-ci: the `[[peripheral]]` spec section
 
 A spec attaches peripherals for a headless run, with type-specific config and a
 timeline of events. Assertions can reference peripheral state.
@@ -205,7 +205,7 @@ max = 25
 ## Proofs (integration tests)
 
 1. **I2C temperature sensor co-sim** -
-   `crates/galvani-engine/tests/i2c_sensor_cosim.rs` (avr feature).
+   `crates/hauksbee-engine/tests/i2c_sensor_cosim.rs` (avr feature).
    AVR firmware (`testdata/firmware/i2c_thermostat`) reads the LM75 over hardware
    TWI and drives PB0 from the temperature vs a 30 °C threshold. The test sweeps
    the configured temperature `[10, 25, 29, 31, 35, 50, 28, 15] °C` and asserts
@@ -213,11 +213,11 @@ max = 25
    the decoded temperature over UART, confirming the master-read path returns the
    real datasheet-encoded bytes.
 2. **CI button press drives a net** -
-   `testdata/ci/button_press.toml` (run by `crates/galvani-ci/tests/peripherals.rs`).
+   `testdata/ci/button_press.toml` (run by `crates/hauksbee-ci/tests/peripherals.rs`).
    A pushbutton is pressed at 100 ms and released at 150 ms on a net pulled to
    +5 V through 10 kΩ. Asserts the net settles back high after release and
    toggles exactly twice from the timed press/release.
-3. **VCD sink**: `crates/galvani-ci/tests/peripherals.rs` and the
+3. **VCD sink**: `crates/hauksbee-ci/tests/peripherals.rs` and the
    `peripherals::sink` unit test. A timed PWL square wave drives a net; the sink
    logs it; the written VCD is validated for a 1 ps timescale, a wire
    declaration, and ~20 known transitions.

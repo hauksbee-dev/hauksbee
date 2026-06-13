@@ -1,5 +1,5 @@
-$ galvani-ci run crates/galvani-ci/examples/tarski_brownout_repaired.toml
-galvani-ci: tarski power-up brownout (repaired)
+$ hauksbee-ci run crates/hauksbee-ci/examples/tarski_brownout_repaired.toml
+hauksbee-ci: tarski power-up brownout (repaired)
   board: ../../../testdata/tarski_brownout_cell.net
   seeds: 8
 

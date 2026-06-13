@@ -59,7 +59,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
           textShadow: '0 0 8px rgba(96,165,250,0.8), 0 0 20px rgba(59,130,246,0.4)',
         }}
       >
-        GALVANI
+        HAUKSBEE
       </div>
 
       <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />

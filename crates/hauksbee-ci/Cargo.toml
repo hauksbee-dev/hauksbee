@@ -1,0 +1,32 @@
+[package]
+name = "hauksbee-ci"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CI for hardware: run a board+firmware spec headless, assert on rails/UART/blink/faults, emit JUnit + GitHub annotations"
+
+[[bin]]
+name = "hauksbee-ci"
+path = "src/main.rs"
+
+[lib]
+name = "hauksbee_ci"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+toml = "0.8"
+regex = "1"
+hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
+hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
+hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
+hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine" }
+hauksbee-server = { version = "0.1.0", path = "../hauksbee-server" }
+
+[dev-dependencies]
+# Boot-coverage tests reuse the backend's real Espressif-QEMU discovery
+# (is_available, which runs -machine help to confirm the esp32 fork) so the
+# heavy ESP32 co-sim cases skip cleanly on a stock-qemu host instead of failing.
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu"] }

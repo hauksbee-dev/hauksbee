@@ -1,0 +1,36 @@
+# boot-coverage on the REAL Watchy v1.5 board file, ESP32 QEMU backend.
+#
+#   HAUKSBEE_QEMU_XTENSA=~/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa \
+#     hauksbee-ci run crates/hauksbee-ci/examples/watchy_v15_display_res.toml
+#
+# This executes the formerly-MISSED Watchy display-RES# validation row
+# (docs/KNOWN_FAULTS_VALIDATION.md). The board is the unmodified corpus Watchy
+# v1.5 layout; its RES net (e-paper reset, U1 ESP32-PICO-D4 pad 28 = GPIO9, the
+# display FPC J1 pad 10) has NO pull resistor in v1.5 - the exact "control input
+# on a Hi-Z GPIO" topology the static netlist cannot adjudicate. The firmware is
+# a deliberately reduced Watchy display-init build (testdata/firmware/
+# watchy_display_init) that drives GPIO9 (DISPLAY_RES) HIGH at boot and holds it,
+# the load-bearing operation Watchy issue #14 is about, while maintaining the RAM
+# mailbox so the ESP32 QEMU backend can observe the GPIO9 edge (real third-party
+# firmware does not mirror GPIO; see docs/MCU.md). boot-coverage watches whether
+# the firmware brings RES to its required HIGH state in time.
+
+name = "boot-coverage: Watchy v1.5 e-paper RES# driven HIGH at boot (reduced firmware)"
+board = "../../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb"
+firmware = "../../../testdata/firmware/watchy_display_init/flash.bin"
+mcu = "esp32_pico"
+duration_ms = 800
+frame_ms = 8
+
+[[supply]]
+net = "+3V3"
+kind = "ideal"
+volts = 3.3
+
+# The e-paper RES# net must be actively driven to a logic high (>= 2.6 V, a
+# comfortable ESP32 VOH) within the boot window, with no stress fault before it.
+[[assert]]
+kind = "boot-coverage"
+net = "RES"
+min = 2.6
+deadline_ms = 700.0

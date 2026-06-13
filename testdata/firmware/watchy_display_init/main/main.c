@@ -1,4 +1,4 @@
-/* Watchy e-paper display-init firmware for the galvani boot-coverage execution.
+/* Watchy e-paper display-init firmware for the hauksbee boot-coverage execution.
  *
  * This is a DELIBERATELY REDUCED stand-in for the full Watchy Arduino firmware,
  * built to flip the Watchy display-RES# boot-coverage validation row
@@ -22,7 +22,7 @@
  *     way for fidelity: DC=GPIO10, CS=GPIO5 (idle high), BUSY=GPIO19 (input).
  *   - UART0 prints a banner so the boot is observable even without GPIO mailbox.
  *   - The RAM mailbox (0x5000_0000) is maintained exactly as the esp32_blinky
- *     demo does, so the galvani QEMU backend synthesises the GPIO9 rising edge
+ *     demo does, so the hauksbee QEMU backend synthesises the GPIO9 rising edge
  *     and the boot-coverage assertion can time it.
  *
  * What this firmware does NOT claim: it is not the full Watchy stack, it does not
@@ -50,11 +50,11 @@
 #define UART_PORT UART_NUM_0
 
 /* GPIO observation mailbox, identical layout to the esp32_blinky demo. */
-#define GALVANI_MAILBOX_BASE 0x50000000UL
-#define GALVANI_GPIO_OUT (*(volatile uint32_t *)(GALVANI_MAILBOX_BASE + 0x00))
-#define GALVANI_GPIO_IN  (*(volatile uint32_t *)(GALVANI_MAILBOX_BASE + 0x04))
-#define GALVANI_MAGIC    (*(volatile uint32_t *)(GALVANI_MAILBOX_BASE + 0x08))
-#define GALVANI_MAGIC_VALUE 0x6A6C6E69UL
+#define HAUKSBEE_MAILBOX_BASE 0x50000000UL
+#define HAUKSBEE_GPIO_OUT (*(volatile uint32_t *)(HAUKSBEE_MAILBOX_BASE + 0x00))
+#define HAUKSBEE_GPIO_IN  (*(volatile uint32_t *)(HAUKSBEE_MAILBOX_BASE + 0x04))
+#define HAUKSBEE_MAGIC    (*(volatile uint32_t *)(HAUKSBEE_MAILBOX_BASE + 0x08))
+#define HAUKSBEE_MAGIC_VALUE 0x6A6C6E69UL
 
 static uint32_t gpio_out_shadow;
 
@@ -65,7 +65,7 @@ static void mailbox_set(int pin, int level)
     } else {
         gpio_out_shadow &= ~(1u << pin);
     }
-    GALVANI_GPIO_OUT = gpio_out_shadow;
+    HAUKSBEE_GPIO_OUT = gpio_out_shadow;
 }
 
 static void uart_setup(void)
@@ -109,9 +109,9 @@ void app_main(void)
     gpio_config(&in);
 
     /* Publish the mailbox tag so the backend trusts the GPIO mirror. */
-    GALVANI_MAGIC = GALVANI_MAGIC_VALUE;
+    HAUKSBEE_MAGIC = HAUKSBEE_MAGIC_VALUE;
     gpio_out_shadow = 0;
-    GALVANI_GPIO_OUT = 0;
+    HAUKSBEE_GPIO_OUT = 0;
 
     /* Bring the e-paper reset HIGH and hold it: the documented required state.
      * CS idle high, DC low (command phase default). The real GxEPD2 init pulses

@@ -1,4 +1,4 @@
-$ galvani run crates/galvani-ci/examples/boards/blinky.kicad_pcb --firmware testdata/firmware/demo/demo.hex --headless --seconds 1.0
+$ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --firmware testdata/firmware/demo/demo.hex --headless --seconds 1.0
 co-sim: 1.00s headless...
 
 simulated 1.000s over 5 nets
@@ -15,5 +15,5 @@ most active nets:
 └────────────────────────────┴──────────┴──────────┴──────────┘
 
 UART output (17 bytes):
-galvani-demo v1
-[32mgalvani-demo v1..[0m
+hauksbee-demo v1
+[32mhauksbee-demo v1..[0m

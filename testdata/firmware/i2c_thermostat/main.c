@@ -1,4 +1,4 @@
-/* I2C thermostat firmware for the galvani peripheral proof.
+/* I2C thermostat firmware for the hauksbee peripheral proof.
  *
  * Reads the temperature register of an LM75 (I2C address 0x48) over the
  * ATmega328P hardware TWI peripheral and drives a GPIO to indicate whether the
@@ -7,7 +7,7 @@
  *   - PB0 LOW                when T <  THRESHOLD_C
  *
  * It also prints the raw temperature register over UART for debugging. The
- * galvani LM75 slave answers the read with real datasheet-encoded bytes
+ * hauksbee LM75 slave answers the read with real datasheet-encoded bytes
  * (0.125 C/LSB, left-justified, big-endian), so this is exercising the actual
  * register format, not a stub.
  *

@@ -13,7 +13,7 @@ changed region; kicad-cli cannot highlight individual footprints.
 
 Run via board_as_code_assets.sh, or directly:
 
-    python3 make_incremental_viz.py --bin <galvani> --board <storm.board> \
+    python3 make_incremental_viz.py --bin <hauksbee> --board <storm.board> \
         --assets <docs/assets> --work <tmpdir> --kicad-cli <kicad-cli>
 """
 from __future__ import annotations

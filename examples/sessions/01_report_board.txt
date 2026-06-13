@@ -1,4 +1,4 @@
-$ galvani run crates/galvani-ci/examples/boards/blinky.kicad_pcb --report
+$ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
 ┌──────────┬────────────┬──────────────┬─────────┬───────────────────────┐
 │ Ref      │ Value      │ Model        │ Conf    │ Became                │
 ├──────────┼────────────┼──────────────┼─────────┼───────────────────────┤

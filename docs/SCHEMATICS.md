@@ -1,11 +1,11 @@
 # Schematic extraction (`.kicad_sch`)
 
-Galvani can simulate a board from its **schematic** alone, before any layout
+Hauksbee can simulate a board from its **schematic** alone, before any layout
 exists. This is what makes early-stage testing possible: you draw the circuit
-in eeschema, and Galvani derives the same netlist eeschema would, binds models,
+in eeschema, and Hauksbee derives the same netlist eeschema would, binds models,
 and runs the solver. No copper is required.
 
-The code lives in `galvani-extract/src/schematic.rs` and produces the same
+The code lives in `hauksbee-extract/src/schematic.rs` and produces the same
 [`ExtractedBoard`] every other extractor produces, so the binder, solver, MCU
 co-sim and stress monitor are unchanged. The only thing absent from a
 schematic-derived board is geometry-dependent physics (copper parasitics, pad
@@ -180,7 +180,7 @@ under a different name and must map member-wise by index.
 The `sch_diag` example is the tool behind these tests:
 
 ```
-cargo run -p galvani-extract --example sch_diag -- \
+cargo run -p hauksbee-extract --example sch_diag -- \
     kicad-demos-src/demos/pic_programmer pic_programmer
 # SCH: 63 comps, 111 nets, 34 multi-pin nets
 # PCB: 63 comps, 111 nets, 34 multi-pin nets

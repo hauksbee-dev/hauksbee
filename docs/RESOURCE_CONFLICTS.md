@@ -26,7 +26,7 @@ Two real, shipped, *documented* bugs define and validate the check:
 
 ## 1. The metadata model
 
-`crates/galvani-extract/db/mcu_resources.toml` is a per-MCU resource map: a part
+`crates/hauksbee-extract/db/mcu_resources.toml` is a per-MCU resource map: a part
 matcher plus a `pad -> { resource bindings }` table, hand-authored from the
 reference manuals with the section cited per block. Keys are **pad/pin numbers**
 exactly as the extracted board carries them (`Pin.number`), because the netlist
@@ -84,7 +84,7 @@ the two kinds the two known bugs exercise are populated and validated here.
 
 The hand table is the source of truth; the automated extraction is a *check on*
 the hand authoring, not a replacement. `resource-extract`
-(`crates/galvani-extract/src/bin/resource_extract.rs`) extends the
+(`crates/hauksbee-extract/src/bin/resource_extract.rs`) extends the
 `model-extract` codex pipeline: `pdftotext` the datasheet, slice the text around
 the GPIO/PWM section, prompt codex (`codex exec --sandbox workspace-write
 --skip-git-repo-check --cd <pdf-dir>`, stdin closed, background poll, 10-min
@@ -94,11 +94,11 @@ timeout) for the GPIO -> slice+channel table, parse and validate every PWM value
 Run **live on the RP2040 datasheet** (5.3 MB, downloaded on demand):
 
 ```
-cargo build -p galvani-extract --bin resource-extract
+cargo build -p hauksbee-extract --bin resource-extract
 curl -sL -o testdata/datasheets/rp2040-datasheet.pdf \
   https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf
 target/debug/resource-extract --pdf testdata/datasheets/rp2040-datasheet.pdf \
-  --part rp2040 --compare crates/galvani-extract/db/mcu_resources.toml
+  --part rp2040 --compare crates/hauksbee-extract/db/mcu_resources.toml
 ```
 
 **Result: 30/30 agreement.** codex read the datasheet's GPIO-function table and
@@ -112,7 +112,7 @@ runner with no codex and no network. The live test
 ## 2. The check
 
 `ExtractedBoard::resource_conflicts()`
-(`crates/galvani-extract/src/resource_conflict.rs`) does:
+(`crates/hauksbee-extract/src/resource_conflict.rs`) does:
 
 1. **Identify the MCU.** Match each component against the table by value/lib id,
    guarded by a `min_pins` count so a loose name match cannot fire on a small
@@ -152,19 +152,19 @@ uniformly.
 ### CLI
 
 ```
-galvani run <board> --resources   # this check only
-galvani run <board> --lint        # connectivity lint + this check
+hauksbee run <board> --resources   # this check only
+hauksbee run <board> --lint        # connectivity lint + this check
 ```
 
 ## 3. Validation (two-sided)
 
 Corpus-gated tests in
-`crates/galvani-extract/tests/resource_conflict_corpus.rs`
-(`GALVANI_REQUIRE_CORPUS=1` makes a missing corpus a hard failure).
+`crates/hauksbee-extract/tests/resource_conflict_corpus.rs`
+(`HAUKSBEE_REQUIRE_CORPUS=1` makes a missing corpus a hard failure).
 
 ### Olimex RP2040-PICO-PC: PWM slice 6A (FLAGGED, known issue #1)
 
-`galvani run .../RP2040-PICO-PC_rev_D.net --resources`:
+`hauksbee run .../RP2040-PICO-PC_rev_D.net --resources`:
 
 ```
 [high] mcu_resource_conflict - RP2040_PLATFORM1 (...): two functions demand
@@ -194,7 +194,7 @@ the one where it does not - the strongest form of two-sided validation.
 
 ### SparkFun SAMD51 Thing Plus: QSPI flash (FLAGGED, known issue #82)
 
-`galvani run .../SAMD51_Thing_Plus.brd --resources`:
+`hauksbee run .../SAMD51_Thing_Plus.brd --resources`:
 
 ```
 [high] mcu_resource_conflict - U2 (ATSAMD51J20A-A): a non-QSPI function occupies
@@ -255,7 +255,7 @@ defects in this check, both fixed before the finding was trusted:
 
 A check that fired on "any RP2040 with DVI and audio" would be a confident false
 positive; the rev-B silence proves it does not. The `resource_probe` example
-(`cargo run -p galvani-extract --example resource_probe <board>`) dumps the
+(`cargo run -p hauksbee-extract --example resource_probe <board>`) dumps the
 per-pad inferred function and is the re-runnable audit trail for both kills.
 
 ## 5. Honest limitations
@@ -290,9 +290,9 @@ per-pad inferred function and is the re-runnable audit trail for both kills.
 ## Reproduce
 
 ```
-cd galvani
-cargo build --release -p galvani-engine
-BIN=target/release/galvani; C=../board-corpus/famous
+cd hauksbee
+cargo build --release -p hauksbee-engine
+BIN=target/release/hauksbee; C=../board-corpus/famous
 
 # FLAGGED: the two known bugs.
 $BIN run "$C/olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.net" --resources
@@ -303,10 +303,10 @@ $BIN run "$C/olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision B/R
 $BIN run "$C/rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch" --resources
 
 # Per-pad inference audit (why a board fires or stays silent).
-cargo run -q -p galvani-extract --example resource_probe \
+cargo run -q -p hauksbee-extract --example resource_probe \
   "$C/olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.net"
 
 # Tests (corpus-gated; REQUIRE_CORPUS makes absence a hard fail).
-GALVANI_REQUIRE_CORPUS=1 cargo test -p galvani-extract --test resource_conflict_corpus
-cargo test -p galvani-extract --bin resource-extract   # incl. the offline extraction fixture
+HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-extract --test resource_conflict_corpus
+cargo test -p hauksbee-extract --bin resource-extract   # incl. the offline extraction fixture
 ```

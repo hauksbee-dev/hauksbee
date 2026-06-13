@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the reduced Watchy display-init firmware and merge it into flash.bin for
-# the galvani ESP32 QEMU boot-coverage execution (docs/KNOWN_FAULTS_VALIDATION.md
+# the hauksbee ESP32 QEMU boot-coverage execution (docs/KNOWN_FAULTS_VALIDATION.md
 # Watchy RES# row). Requires esp-idf v5.x (same install as esp32_blinky/build.sh).
 #
 #   . ~/esp/esp-idf/export.sh

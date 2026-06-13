@@ -371,114 +371,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "galvani-ci"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "galvani-engine",
- "galvani-extract",
- "galvani-ir",
- "galvani-models",
- "galvani-server",
- "galvani-solve",
- "regex",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "galvani-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "evalexpr",
- "forge-codegen",
- "forge-model",
- "galvani-extract",
- "galvani-ir",
- "galvani-mcu",
- "galvani-models",
- "galvani-server",
- "galvani-solve",
- "serde",
- "serde_json",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "galvani-extract"
-version = "0.1.0"
-dependencies = [
- "forge-sexpr",
- "gerber-types",
- "gerber_parser",
- "quick-xml",
- "regex",
- "rstar",
- "serde",
- "thiserror 2.0.18",
- "toml",
- "zip",
-]
-
-[[package]]
-name = "galvani-ir"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "galvani-mcu"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bindgen",
- "libc",
- "pkg-config",
-]
-
-[[package]]
-name = "galvani-models"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "forge-sexpr",
- "once_cell",
- "regex",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "toml",
-]
-
-[[package]]
-name = "galvani-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "galvani-mcu",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
-]
-
-[[package]]
-name = "galvani-solve"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "galvani-ir",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,6 +441,115 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hauksbee-ci"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hauksbee-engine",
+ "hauksbee-extract",
+ "hauksbee-ir",
+ "hauksbee-mcu",
+ "hauksbee-models",
+ "hauksbee-server",
+ "hauksbee-solve",
+ "regex",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "hauksbee-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "evalexpr",
+ "forge-codegen",
+ "forge-model",
+ "hauksbee-extract",
+ "hauksbee-ir",
+ "hauksbee-mcu",
+ "hauksbee-models",
+ "hauksbee-server",
+ "hauksbee-solve",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "hauksbee-extract"
+version = "0.1.0"
+dependencies = [
+ "forge-sexpr",
+ "gerber-types",
+ "gerber_parser",
+ "quick-xml",
+ "regex",
+ "rstar",
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
+ "zip",
+]
+
+[[package]]
+name = "hauksbee-ir"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hauksbee-mcu"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bindgen",
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
+name = "hauksbee-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "forge-sexpr",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
+name = "hauksbee-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "hauksbee-mcu",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+]
+
+[[package]]
+name = "hauksbee-solve"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hauksbee-ir",
+ "serde",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "heapless"

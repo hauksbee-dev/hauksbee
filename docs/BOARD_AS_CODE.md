@@ -1,6 +1,6 @@
 # Board as Code
 
-A PCB is a program that draws itself. Galvani makes that program *executable*
+A PCB is a program that draws itself. Hauksbee makes that program *executable*
 and *editable*: you can decompile a real `.kicad_pcb` into readable code, edit
 the code (change a part value, fix a wiring swap, add a component), recompile it
 back into a coherent board, and run the edit straight through simulation to see
@@ -23,13 +23,13 @@ layer: it carries full pad-level connectivity and round-trips.
                           check-code ──▶ extract ▸ bind ▸ co-sim ▸ stress monitor ▸ report
 ```
 
-Three CLI verbs, alongside the existing `galvani run`:
+Three CLI verbs, alongside the existing `hauksbee run`:
 
 | command | what it does |
 |---|---|
-| `galvani to-code <board>` | decompile a board into Board-as-Code text |
-| `galvani from-code <code>` | recompile code back into a `.kicad_pcb` (optionally re-laid-out with `--relayout`/`--incremental` and routed with `--route`) |
-| `galvani check-code <code>` | recompile, bind, simulate with the stress monitor, print a fault report |
+| `hauksbee to-code <board>` | decompile a board into Board-as-Code text |
+| `hauksbee from-code <code>` | recompile code back into a `.kicad_pcb` (optionally re-laid-out with `--relayout`/`--incremental` and routed with `--route`) |
+| `hauksbee check-code <code>` | recompile, bind, simulate with the stress monitor, print a fault report |
 
 ## The DSL
 
@@ -39,7 +39,7 @@ decompiler found (a synapse instanced 90 times, a neuron a dozen) become
 component carrying its concrete pads and per-pad net assignments:
 
 ```text
-# Board-as-Code (galvani board DSL v1)
+# Board-as-Code (hauksbee board DSL v1)
 board version 20171130
 
 # block block_2c_led_0805_2012metric_c_0805_2012metric: 2 slot(s), 3 instance(s)
@@ -69,9 +69,9 @@ Tarski InputSystem board (`forge-codegen` test `dsl_roundtrip`).
 
 ```bash
 # build the CLI
-cargo build -p galvani-engine
+cargo build -p hauksbee-engine
 
-BIN=target/debug/galvani
+BIN=target/debug/hauksbee
 BOARD="../board-corpus/stormduino/stormduino Rev2.kicad_pcb"
 
 # 1. decompile to code
@@ -121,7 +121,7 @@ Recompiling and re-simulating both versions shows the edit changed the physics:
 | as-wired (code unchanged) | ~689 mA | overcurrent + overpower on IC3906, pin overcurrent on the switch |
 | repaired (code edit) | ~0.42 µA | none |
 
-This is the integration test `galvani-engine` `boardcode_miswire`
+This is the integration test `hauksbee-engine` `boardcode_miswire`
 (`code_edit_repairs_the_miswire`). The fault count strictly drops as a direct
 consequence of the one-line wiring edit.
 
@@ -201,7 +201,7 @@ connectivity check); only the placement changed.
 Regenerate both, the routed board, and the incremental diff with one command:
 
 ```bash
-galvani/scripts/board_as_code_assets.sh
+hauksbee/scripts/board_as_code_assets.sh
 ```
 
 ## Incremental recompile (the preferred default)
@@ -240,7 +240,7 @@ new parts in green, and the 62 untouched parts in grey.
 
 The middle and diff panels are identical to the original except for that one
 part: incremental recompile keeps every untouched component exactly where it
-was. Regenerate with `galvani/scripts/board_as_code_assets.sh` (renderer:
+was. Regenerate with `hauksbee/scripts/board_as_code_assets.sh` (renderer:
 `scripts/make_incremental_viz.py`).
 
 ## Routing
@@ -303,9 +303,9 @@ is not a production autorouter. Use freerouting for real boards.
 | executable DSL (emit / parse / build) | `kicad-forge/crates/forge-codegen/src/dsl/` |
 | re-layout + incremental + grid router | `kicad-forge/crates/forge-codegen/src/layout.rs` |
 | freerouting handoff (DSN / invoke / SES) | `kicad-forge/crates/forge-codegen/src/route_freerouting.rs` |
-| re-runnable asset/export script | `galvani/scripts/board_as_code_assets.sh`, `scripts/make_incremental_viz.py` |
+| re-runnable asset/export script | `hauksbee/scripts/board_as_code_assets.sh`, `scripts/make_incremental_viz.py` |
 | connectivity-only board comparison | `kicad-forge/crates/forge-codegen/src/rebuild.rs` (`compare_connectivity`) |
-| edit -> simulate loop + CLI glue | `galvani/crates/galvani-engine/src/boardcode.rs` |
-| CLI subcommands | `galvani/crates/galvani-engine/src/main.rs` |
+| edit -> simulate loop + CLI glue | `hauksbee/crates/hauksbee-engine/src/boardcode.rs` |
+| CLI subcommands | `hauksbee/crates/hauksbee-engine/src/main.rs` |
 | DSL round-trip + layout tests | `kicad-forge/crates/forge-codegen/tests/dsl_roundtrip.rs` |
-| miswire edit -> simulate demo | `galvani/crates/galvani-engine/tests/boardcode_miswire.rs` |
+| miswire edit -> simulate demo | `hauksbee/crates/hauksbee-engine/tests/boardcode_miswire.rs` |

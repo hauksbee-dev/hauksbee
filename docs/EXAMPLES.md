@@ -1,6 +1,6 @@
 # Examples
 
-Everything you need to run galvani and learn from it, in files you can open and
+Everything you need to run hauksbee and learn from it, in files you can open and
 run. This page indexes the [`examples/`](../examples) tree, the distribution
 [`scripts/`](../scripts), and the captured terminal sessions.
 
@@ -14,7 +14,7 @@ scripts/install.sh
 scripts/doctor.sh
 
 # Run a checked-in CI spec the way a pipeline would
-scripts/ci.sh crates/galvani-ci/examples/blinky.toml
+scripts/ci.sh crates/hauksbee-ci/examples/blinky.toml
 ```
 
 See the [scripts reference](#distribution-scripts) below for the full set.
@@ -29,26 +29,26 @@ reference: [`docs/BOARD_AS_CODE.md`](./BOARD_AS_CODE.md).
 |---|---|
 | [`blinky.board`](../examples/board-as-code/blinky.board) | The 5-component ATmega328P demo board as DSL: the smallest real example to read. |
 | [`stormduino.board`](../examples/board-as-code/stormduino.board) | A real 51-component corpus board, with repeated hardware factored into `fn` blocks. |
-| [`tarski_miswire_repair`](../crates/galvani-engine/examples/tarski_miswire_repair.rs) | **The headline:** repair the Tarski inhibitory-synapse miswire as a one-line code edit, run through simulation. `cargo run --release -p galvani-engine --example tarski_miswire_repair`. |
+| [`tarski_miswire_repair`](../crates/hauksbee-engine/examples/tarski_miswire_repair.rs) | **The headline:** repair the Tarski inhibitory-synapse miswire as a one-line code edit, run through simulation. `cargo run --release -p hauksbee-engine --example tarski_miswire_repair`. |
 
 The edit-then-recheck loop and the miswire walkthrough (with expected output)
 are in the [board-as-code README](../examples/board-as-code/README.md).
 
-## galvani-ci spec examples
+## hauksbee-ci spec examples
 
 [`examples/ci-specs/`](../examples/ci-specs) + the canonical specs in
-[`crates/galvani-ci/examples/`](../crates/galvani-ci/examples). Spec reference:
+[`crates/hauksbee-ci/examples/`](../crates/hauksbee-ci/examples). Spec reference:
 [`docs/CI.md`](./CI.md).
 
 | Spec | Demonstrates | Verdict |
 |---|---|---|
-| [`tarski_brownout.toml`](../crates/galvani-ci/examples/tarski_brownout.toml) | The flagship brownout regression: a fuzzed power-up bit collapses the rail | **RED** (exit 1) |
-| [`tarski_brownout_repaired.toml`](../crates/galvani-ci/examples/tarski_brownout_repaired.toml) | Same board, milliohm-shunt repair applied | **GREEN** |
-| [`blinky.toml`](../crates/galvani-ci/examples/blinky.toml) | Rail + UART + blink + no-faults assertions (the template spec) | **GREEN** |
+| [`tarski_brownout.toml`](../crates/hauksbee-ci/examples/tarski_brownout.toml) | The flagship brownout regression: a fuzzed power-up bit collapses the rail | **RED** (exit 1) |
+| [`tarski_brownout_repaired.toml`](../crates/hauksbee-ci/examples/tarski_brownout_repaired.toml) | Same board, milliohm-shunt repair applied | **GREEN** |
+| [`blinky.toml`](../crates/hauksbee-ci/examples/blinky.toml) | Rail + UART + blink + no-faults assertions (the template spec) | **GREEN** |
 | [`olimex_wifi_burst_transient.toml`](../examples/ci-specs/olimex_wifi_burst_transient.toml) | Scenario/transient: a `rail_window` assertion riding an ESP32 WiFi burst | **GREEN** |
-| [`boot_gate_pass`](../crates/galvani-ci/examples/boot_gate_pass.toml) / [`fail`](../crates/galvani-ci/examples/boot_gate_fail.toml) | `boot-coverage`: does the firmware drive a Hi-Z gate in time? | PASS / FAIL |
-| [`watchy_v15_display_res`](../crates/galvani-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../crates/galvani-ci/examples/watchy_v15_display_res_undriven.toml) | `boot-coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | PASS / FAIL |
-| [`pic_programmer_schematic.toml`](../crates/galvani-ci/examples/pic_programmer_schematic.toml) | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | PASS |
+| [`boot_gate_pass`](../crates/hauksbee-ci/examples/boot_gate_pass.toml) / [`fail`](../crates/hauksbee-ci/examples/boot_gate_fail.toml) | `boot-coverage`: does the firmware drive a Hi-Z gate in time? | PASS / FAIL |
+| [`watchy_v15_display_res`](../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) | `boot-coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | PASS / FAIL |
+| [`pic_programmer_schematic.toml`](../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | PASS |
 
 More detail and the run-and-expected-verdict for each:
 [ci-specs README](../examples/ci-specs/README.md).
@@ -83,7 +83,7 @@ CI-safe (colours auto-disable when not on a TTY or when `NO_COLOR` is set).
 
 | Script | What it does |
 |---|---|
-| [`install.sh`](../scripts/install.sh) | Build `galvani` + `galvani-ci` (release) and install them onto PATH. `--prefix`, `--symlink`, `--no-build`. |
+| [`install.sh`](../scripts/install.sh) | Build `hauksbee` + `hauksbee-ci` (release) and install them onto PATH. `--prefix`, `--symlink`, `--no-build`. |
 | [`doctor.sh`](../scripts/doctor.sh) | Report which tools (kicad-cli, simavr, qemu, renode, freerouting) are present and what each unlocks. |
 | [`ci.sh`](../scripts/ci.sh) | Run one or more specs the pleasant-in-CI way: finds/builds the binary, writes a JUnit file per spec, exits non-zero if any spec is RED. |
 | [`bundle.sh`](../scripts/bundle.sh) | Build a versioned binary bundle (the two bins + db + integrations + examples + scripts) as a `.tar.gz` with a checksum. |

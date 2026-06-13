@@ -1,11 +1,11 @@
-$ galvani to-code "board-corpus/stormduino/stormduino Rev2.kicad_pcb" --out storm.board
+$ hauksbee to-code "board-corpus/stormduino/stormduino Rev2.kicad_pcb" --out storm.board
 wrote /tmp/storm.board
 
-$ galvani from-code storm.board --incremental --out storm_rebuilt.kicad_pcb
+$ hauksbee from-code storm.board --incremental --out storm_rebuilt.kicad_pcb
 re-layout: 0 groups, 4 moved, 47 kept
 wrote /tmp/storm_rebuilt.kicad_pcb
 
-$ galvani check-code storm.board --seconds 0.05
+$ hauksbee check-code storm.board --seconds 0.05
 avr_sadly_crashed
 Board-as-Code check: 
   51 components, 57 nets, 84% resolved, 0 active nets

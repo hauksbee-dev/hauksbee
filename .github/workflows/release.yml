@@ -1,7 +1,7 @@
-# Build galvani release binaries and attach them to a GitHub Release on a tag.
+# Build hauksbee release binaries and attach them to a GitHub Release on a tag.
 #
-# Trigger: push a tag like `v0.1.0`. The workflow builds the `galvani` and
-# `galvani-ci` binaries on macOS and Linux, packages each with scripts/bundle.sh
+# Trigger: push a tag like `v0.1.0`. The workflow builds the `hauksbee` and
+# `hauksbee-ci` binaries on macOS and Linux, packages each with scripts/bundle.sh
 # into a versioned tarball (+ sha256), and uploads them as release assets, so
 # users can download a prebuilt binary instead of compiling. The composite
 # Action and the KiCad plugin both prefer these assets and fall back to building.
@@ -88,7 +88,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: galvani-${{ matrix.label }}
+          name: hauksbee-${{ matrix.label }}
           path: |
             dist/*.tar.gz
             dist/*.sha256

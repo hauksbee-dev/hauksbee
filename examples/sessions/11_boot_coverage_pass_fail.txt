@@ -1,5 +1,5 @@
-$ galvani-ci run crates/galvani-ci/examples/boot_gate_pass.toml
-galvani-ci: boot-coverage: MOSFET gate driven promptly (PASS)
+$ hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass.toml
+hauksbee-ci: boot-coverage: MOSFET gate driven promptly (PASS)
   board: boards/boot_gate.kicad_pcb
   seeds: 1
 
@@ -11,8 +11,8 @@ galvani-ci: boot-coverage: MOSFET gate driven promptly (PASS)
 2/2 assertions passed in 0.03s - GREEN
 [exit 0]
 
-$ galvani-ci run crates/galvani-ci/examples/boot_gate_fail.toml
-galvani-ci: boot-coverage: MOSFET gate left floating (FAIL)
+$ hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_fail.toml
+hauksbee-ci: boot-coverage: MOSFET gate left floating (FAIL)
   board: boards/boot_gate.kicad_pcb
   seeds: 1
 

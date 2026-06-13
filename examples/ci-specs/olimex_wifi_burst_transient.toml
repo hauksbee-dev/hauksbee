@@ -1,10 +1,10 @@
-# galvani-ci TRANSIENT / SCENARIO example: an ESP32 WiFi-TX burst on a robust
+# hauksbee-ci TRANSIENT / SCENARIO example: an ESP32 WiFi-TX burst on a robust
 # supply must NOT brown out the 3V3 rail.
 #
-#   galvani-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
+#   hauksbee-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
 #   echo $?   # 0: the stiff wall supply rides the burst train
 #
-# This is the dynamic side of galvani-ci: a static DC check cannot see a rail
+# This is the dynamic side of hauksbee-ci: a static DC check cannot see a rail
 # sag, because the sag only happens during a current transient. Here a periodic
 # 240 mA burst (over a 40 mA baseline) is attached to the +3.3V rail as a load
 # profile, with honest capacitor parasitics (ESR/ESL) turned on, and a
@@ -16,7 +16,7 @@
 # supplied and the burst should pass. This is the calibration counterpart to a
 # brownout failure: it passing is what lets a genuine brownout (on a weak
 # supply) be trusted as a real failure and not a too-pessimistic model. See the
-# integration test crates/galvani-ci/tests/olimex_burst_calibration.rs.
+# integration test crates/hauksbee-ci/tests/olimex_burst_calibration.rs.
 #
 # Corpus-gated: needs board-corpus/famous/olimex_esp32 present.
 

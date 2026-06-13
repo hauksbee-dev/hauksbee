@@ -1,4 +1,4 @@
-// WebSocket protocol types -- mirrors galvani-server protocol.rs exactly.
+// WebSocket protocol types -- mirrors hauksbee-server protocol.rs exactly.
 // Server uses serde tag = "type" so every message has a `type` discriminant.
 
 // ============================================================

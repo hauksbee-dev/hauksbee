@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the galvani ESP32 QEMU co-sim demo firmware and produce the merged flash
+# Build the hauksbee ESP32 QEMU co-sim demo firmware and produce the merged flash
 # image (flash.bin) the QemuBackend boots.
 #
 # Requires esp-idf v5.x. One-time install (~3-5 GB, native macOS arm64 / Linux):
@@ -9,7 +9,7 @@
 #
 # The Espressif QEMU binary itself is separate and does NOT need esp-idf; grab
 # the prebuilt fork release (native macOS arm64 / Linux) and unpack it:
-#   https://github.com/espressif/qemu/releases   ->  ~/.galvani-qemu-esp/qemu/
+#   https://github.com/espressif/qemu/releases   ->  ~/.hauksbee-qemu-esp/qemu/
 # (or `python $IDF_PATH/tools/idf_tools.py install qemu-xtensa qemu-riscv32`).
 #
 # Then, from this directory:
@@ -33,6 +33,6 @@ cd ..
 echo "Wrote flash.bin ($(du -h flash.bin | cut -f1)) and esp32_blinky.elf"
 echo
 echo "Smoke-test boot under Espressif QEMU:"
-echo "  ~/.galvani-qemu-esp/qemu/bin/qemu-system-xtensa -nographic -machine esp32 \\"
+echo "  ~/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa -nographic -machine esp32 \\"
 echo "     -drive file=flash.bin,if=mtd,format=raw \\"
 echo "     -global driver=timer.esp32.timg,property=wdt_disable,value=true"

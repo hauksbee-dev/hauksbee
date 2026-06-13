@@ -1,4 +1,4 @@
-/* Minimal ESP32 firmware for the galvani QEMU co-sim demo.
+/* Minimal ESP32 firmware for the hauksbee QEMU co-sim demo.
  *
  * Exercises the same coupling paths the STM32/AVR demo firmwares do, so the
  * QEMU backend is proven against the identical co-sim contract:
@@ -22,13 +22,13 @@
  * regardless of the driven level; verified empirically). RAM, by contrast, reads
  * back exactly over the QEMU control channel. So the firmware mirrors its GPIO
  * output word to a fixed, reserved RAM mailbox after every change, and the
- * galvani QEMU backend reads THAT word (same bit layout as GPIO_OUT_REG) to
+ * hauksbee QEMU backend reads THAT word (same bit layout as GPIO_OUT_REG) to
  * synthesise pin edges. The GPIO writes themselves are real driver calls; the
  * mailbox is only the observation path the emulator's gpio model lacks. The
- * mailbox address is published in the firmware's ELF symbol `galvani_gpio_out`
- * and pinned by the backend's GALVANI_ESP32_GPIO_MAILBOX constant.
+ * mailbox address is published in the firmware's ELF symbol `hauksbee_gpio_out`
+ * and pinned by the backend's HAUKSBEE_ESP32_GPIO_MAILBOX constant.
  *
- * Likewise GPIO input: the backend pokes the mailbox-adjacent `galvani_gpio_in`
+ * Likewise GPIO input: the backend pokes the mailbox-adjacent `hauksbee_gpio_in`
  * word, and the firmware reads it where it would read GPIO_IN_REG.
  */
 
@@ -45,18 +45,18 @@
 #define UART_PORT UART_NUM_0
 
 /* GPIO observation/injection mailbox in RTC slow memory (0x5000_0000, 8 KiB,
- * uncached, fixed address, untouched by a minimal app). The galvani QEMU backend
+ * uncached, fixed address, untouched by a minimal app). The hauksbee QEMU backend
  * reads/writes these exact addresses (RAM reads/writes round-trip over the QEMU
  * control channel; the GPIO peripheral registers do not). Layout:
- *   +0x00  galvani_gpio_out : mirror of GPIO_OUT_REG (firmware -> host)
- *   +0x04  galvani_gpio_in  : injected input word (host -> firmware)
- *   +0x08  galvani_magic    : 0x6A6C6E69 ("galv" tag) so the backend can confirm
+ *   +0x00  hauksbee_gpio_out : mirror of GPIO_OUT_REG (firmware -> host)
+ *   +0x04  hauksbee_gpio_in  : injected input word (host -> firmware)
+ *   +0x08  hauksbee_magic    : 0x6A6C6E69 ("galv" tag) so the backend can confirm
  *                             the firmware is mailbox-aware before trusting it. */
-#define GALVANI_MAILBOX_BASE 0x50000000UL
-#define GALVANI_GPIO_OUT (*(volatile uint32_t *)(GALVANI_MAILBOX_BASE + 0x00))
-#define GALVANI_GPIO_IN  (*(volatile uint32_t *)(GALVANI_MAILBOX_BASE + 0x04))
-#define GALVANI_MAGIC    (*(volatile uint32_t *)(GALVANI_MAILBOX_BASE + 0x08))
-#define GALVANI_MAGIC_VALUE 0x6A6C6E69UL
+#define HAUKSBEE_MAILBOX_BASE 0x50000000UL
+#define HAUKSBEE_GPIO_OUT (*(volatile uint32_t *)(HAUKSBEE_MAILBOX_BASE + 0x00))
+#define HAUKSBEE_GPIO_IN  (*(volatile uint32_t *)(HAUKSBEE_MAILBOX_BASE + 0x04))
+#define HAUKSBEE_MAGIC    (*(volatile uint32_t *)(HAUKSBEE_MAILBOX_BASE + 0x08))
+#define HAUKSBEE_MAGIC_VALUE 0x6A6C6E69UL
 
 static uint32_t gpio_out_shadow;
 
@@ -67,7 +67,7 @@ static void mailbox_set(int pin, int level)
     } else {
         gpio_out_shadow &= ~(1u << pin);
     }
-    GALVANI_GPIO_OUT = gpio_out_shadow;
+    HAUKSBEE_GPIO_OUT = gpio_out_shadow;
 }
 
 static void uart_setup(void)
@@ -122,9 +122,9 @@ void app_main(void)
     gpio_config(&io);
 
     /* Publish the mailbox tag so the backend knows this firmware mirrors GPIO. */
-    GALVANI_MAGIC = GALVANI_MAGIC_VALUE;
+    HAUKSBEE_MAGIC = HAUKSBEE_MAGIC_VALUE;
     gpio_out_shadow = 0;
-    GALVANI_GPIO_OUT = 0;
+    HAUKSBEE_GPIO_OUT = 0;
 
     /* Drive GPIO2 HIGH so the analog LED net is energised from boot. */
     gpio_set_level(PIN_ALIVE, 1);

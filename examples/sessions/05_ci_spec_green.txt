@@ -1,17 +1,17 @@
-$ galvani-ci run crates/galvani-ci/examples/blinky.toml
-galvani-ci: blinky power-up sanity
+$ hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml
+hauksbee-ci: blinky power-up sanity
   board: boards/blinky.kicad_pcb
   seeds: 1
 
   [PASS] +5V >= 4.75 V
         +5V: min=5.000V (>= 4.75V) [settled 5.000V]
-  [PASS] UART contains "galvani-demo v1"
-        UART="galvani-demo v1··" contains "galvani-demo v1"
+  [PASS] UART contains "hauksbee-demo v1"
+        UART="hauksbee-demo v1··" contains "hauksbee-demo v1"
   [PASS] D13 toggles at ~5 Hz
         D13: ~4.50 Hz from 9 toggles (want 5 Hz ±40%)
   [PASS] no stress faults raised
         no stress faults
 
 4/4 assertions passed in 1.63s - GREEN
-[32mgalvani-demo v1..[0m
+[32mhauksbee-demo v1..[0m
 [exit 0]
