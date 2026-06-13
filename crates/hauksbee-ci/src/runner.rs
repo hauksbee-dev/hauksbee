@@ -96,6 +96,21 @@ pub struct RunOutcome {
     pub first_reach_ms: HashMap<(String, u64), f64>,
     /// Time (ms) of the first stress fault this run, if any.
     pub first_fault_ms: Option<f64>,
+    /// Small-signal AC results (seed-independent; the same for every seed). The
+    /// Bode `(freq, mag_db, phase_deg)` table per net, plus loop-stability
+    /// margins per net. Empty when the spec has no `[ac]` block.
+    pub ac: Option<AcOutcome>,
+}
+
+/// The shared AC analysis outcome attached to every seed's run.
+#[derive(Debug, Clone, Default)]
+pub struct AcOutcome {
+    /// Bode `(freq_hz, mag_db, phase_deg)` table per net (the transfer function
+    /// from the unit AC stimulus to that net).
+    pub bode: HashMap<String, Vec<(f64, f64, f64)>>,
+    /// Loop-stability margins per net (T = -V_net convention), for any net a
+    /// `phase_margin` assertion references.
+    pub margins: HashMap<String, hauksbee_solve::StabilityMargins>,
 }
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
@@ -125,13 +140,85 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
     thresholds.dedup();
 
+    // Small-signal AC analysis is seed-independent (it linearises about the DC
+    // operating point), so compute it once and share it across seeds.
+    let ac = if spec.ac.is_some() {
+        Some(compute_ac(spec, &base)?)
+    } else {
+        None
+    };
+
     let seeds = spec.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1).max(1);
     let mut outcomes = Vec::with_capacity(seeds as usize);
     for seed in 0..seeds {
-        let outcome = run_one(spec, &base, &thresholds, seed)?;
+        let mut outcome = run_one(spec, &base, &thresholds, seed)?;
+        outcome.ac = ac.clone();
         outcomes.push(outcome);
     }
     Ok(outcomes)
+}
+
+/// Run the spec's `[ac]` sweep on the biased circuit: bind, apply overrides /
+/// supplies / net-drives so the DC operating point matches the run, then run the
+/// AC analysis and collect Bode tables and loop margins for the nets the AC
+/// assertions reference.
+fn compute_ac(spec: &Spec, base: &ExtractedBoard) -> Result<AcOutcome, SpecError> {
+    use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
+
+    let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
+    let board = apply_overrides(spec, base)?;
+    let lib = ModelLibrary::builtin();
+    let mut bound = bind_board(&board, &lib);
+
+    // Bias the operating point exactly as the transient run would: rail
+    // suppression, supplies, and net drives all shift the DC bias the
+    // small-signal model linearises about.
+    for net in &spec.suppress_rail {
+        suppress_rail(&mut bound, net);
+    }
+    for s in &spec.supplies {
+        attach_supply(&mut bound, s)?;
+    }
+    for d in &spec.net_drives {
+        drive_net(&mut bound, &d.net, d.volts);
+    }
+
+    let sweep = match cfg.sweep.as_str() {
+        "lin" => Sweep::Linear,
+        _ => Sweep::Decade,
+    };
+    let ac_spec = AcSpec {
+        fstart: cfg.fstart,
+        fstop: cfg.fstop,
+        points: cfg.points,
+        sweep,
+    };
+    let resp = AcAnalysis::new(SolverOptions::default())
+        .run(&bound.circuit, &ac_spec)
+        .map_err(|e| SpecError::Invalid(format!("AC analysis: {e}")))?;
+
+    // Collect the Bode and loop margins for every net an AC assertion names.
+    let mut out = AcOutcome::default();
+    for a in &spec.asserts {
+        let Some(net) = &a.net else { continue };
+        match a.kind.as_str() {
+            "ac_gain" => {
+                out.bode
+                    .entry(net.clone())
+                    .or_insert_with(|| resp.bode(&bound.circuit, net));
+            }
+            "phase_margin" => {
+                if let Ok(st) = LoopStability::from_response(&resp, &bound.circuit, net) {
+                    out.margins.insert(net.clone(), st.margins());
+                }
+                out.bode
+                    .entry(net.clone())
+                    .or_insert_with(|| resp.bode(&bound.circuit, net));
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// Load and extract the board file the spec points at, dispatching on file
@@ -531,6 +618,7 @@ fn run_one(
         sim_ms: engine.scheduler().sim_time * 1000.0,
         first_reach_ms,
         first_fault_ms,
+        ac: None,
     })
 }
 

@@ -74,6 +74,8 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "rail_window" => check_rail_window(a, out),
         "protection_trip" => check_protection_trip(a, out),
         "boot-coverage" => check_boot_coverage(a, out),
+        "phase_margin" => check_phase_margin(a, out),
+        "ac_gain" => check_ac_gain(a, out),
         other => (false, format!("unknown assertion kind '{other}'")),
     }
 }
@@ -371,6 +373,111 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         );
     }
     (false, format!("{net}: toggle assertion incomplete"))
+}
+
+/// phase_margin: the loop's phase margin (degrees) at gain crossover must lie in
+/// the requested bound. The loop gain is read at `net` from the shared AC sweep.
+fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let net = a.net.clone().unwrap_or_default();
+    let Some(ac) = &out.ac else {
+        return (false, "no AC analysis ran (missing [ac] block)".into());
+    };
+    let Some(m) = ac.margins.get(&net) else {
+        return (false, format!("net '{net}' produced no loop-stability margins"));
+    };
+    let Some(pm) = m.phase_margin_deg else {
+        return (
+            false,
+            format!(
+                "loop '{net}' never crosses 0 dB in the swept band (no gain crossover; DC loop gain {:.1} dB)",
+                m.dc_gain_db
+            ),
+        );
+    };
+    let fc = m.gain_crossover_hz.unwrap_or(f64::NAN);
+    let mut ok = true;
+    let mut parts = Vec::new();
+    if let Some(lo) = a.min {
+        ok &= pm >= lo - 1e-6;
+        parts.push(format!(">= {lo}"));
+    }
+    if let Some(hi) = a.max {
+        ok &= pm <= hi + 1e-6;
+        parts.push(format!("<= {hi}"));
+    }
+    (
+        ok,
+        format!("loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})", parts.join(", ")),
+    )
+}
+
+/// ac_gain: the magnitude (dB) at `net` must lie in the requested bound, at the
+/// frequency `freq_hz` (interpolated) or, if absent, over the whole sweep.
+fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+    let net = a.net.clone().unwrap_or_default();
+    let Some(ac) = &out.ac else {
+        return (false, "no AC analysis ran (missing [ac] block)".into());
+    };
+    let Some(bode) = ac.bode.get(&net) else {
+        return (false, format!("net '{net}' was not sampled by the AC sweep"));
+    };
+    if bode.is_empty() {
+        return (false, format!("net '{net}' has no AC data"));
+    }
+
+    // Pick the gain to test: at a specific frequency (log-interpolated) or the
+    // worst case over the whole band.
+    let (db, where_str) = if let Some(f) = a.freq_hz {
+        (interp_db(bode, f), format!("at {f} Hz"))
+    } else {
+        // Worst case for the bound being checked.
+        let min_db = bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let max_db = bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        // Report whichever extreme the bound cares about (default min).
+        let v = if a.max.is_some() && a.min.is_none() { max_db } else { min_db };
+        (v, "over band".to_string())
+    };
+
+    let mut ok = true;
+    let mut parts = Vec::new();
+    if let Some(lo) = a.min {
+        let worst = if a.freq_hz.is_some() {
+            db
+        } else {
+            bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
+        };
+        ok &= worst >= lo - 1e-6;
+        parts.push(format!("min={worst:.3}dB (>= {lo})"));
+    }
+    if let Some(hi) = a.max {
+        let worst = if a.freq_hz.is_some() {
+            db
+        } else {
+            bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)
+        };
+        ok &= worst <= hi + 1e-6;
+        parts.push(format!("max={worst:.3}dB (<= {hi})"));
+    }
+    (ok, format!("{net} gain {where_str}: {}", parts.join(", ")))
+}
+
+/// Linear interpolation (in log-frequency) of magnitude dB at frequency `f`.
+fn interp_db(bode: &[(f64, f64, f64)], f: f64) -> f64 {
+    if f <= bode[0].0 {
+        return bode[0].1;
+    }
+    if f >= bode[bode.len() - 1].0 {
+        return bode[bode.len() - 1].1;
+    }
+    for w in bode.windows(2) {
+        let (f0, d0) = (w[0].0, w[0].1);
+        let (f1, d1) = (w[1].0, w[1].1);
+        if f >= f0 && f <= f1 {
+            let frac = (f.log10() - f0.log10()) / (f1.log10() - f0.log10()).max(1e-30);
+            return d0 + frac * (d1 - d0);
+        }
+    }
+    bode[bode.len() - 1].1
 }
 
 fn check_no_faults(out: &RunOutcome) -> (bool, String) {
