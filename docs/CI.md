@@ -186,7 +186,7 @@ tolerance = 0.25     # fractional, default 25%
 ```
 
 **`no_faults`**: the stress monitor raised no over-current / over-voltage /
-over-power / reverse-bias faults across the run.
+over-power / reverse-bias / over-temperature faults across the run.
 
 ```toml
 [[assert]]
@@ -201,6 +201,21 @@ kind = "no_faults"
 kind = "max_current"
 ref = "R1"
 amps = 0.02
+```
+
+**`max_temp`**: a component's steady-state junction temperature
+(`Tj = Tambient + P * theta_JA`) stays below a ceiling. Omit `celsius` to check
+against the device's own max junction temperature (from the model DB, or the
+per-package-class default). The ambient is set once per spec with the top-level
+`ambient_c` key (default 25 C). See [THERMAL.md](THERMAL.md) for the model.
+
+```toml
+ambient_c = 70          # top-level: hot-enclosure ambient for the whole run
+
+[[assert]]
+kind = "max_temp"
+ref = "U1"
+celsius = 125           # optional; defaults to the device's own Tj(max)
 ```
 
 **`boot-coverage`**: a control net (a gate / enable / reset / chip-select) that

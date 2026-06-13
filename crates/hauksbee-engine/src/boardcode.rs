@@ -186,6 +186,9 @@ pub struct CheckOptions {
     pub seconds: f64,
     /// Run the stress monitor in destructive mode (parts can be destroyed).
     pub destructive: bool,
+    /// Ambient temperature (C) for the steady-state junction-temperature
+    /// estimate. Defaults to [`crate::thermal::DEFAULT_AMBIENT_C`] (25 C).
+    pub ambient_c: f64,
 }
 
 impl Default for CheckOptions {
@@ -193,6 +196,7 @@ impl Default for CheckOptions {
         CheckOptions {
             seconds: 0.2,
             destructive: false,
+            ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
         }
     }
 }
@@ -222,6 +226,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         controls.destructive_faults = true;
         engine.set_controls(controls);
     }
+    engine.scheduler_mut().set_ambient_c(opts.ambient_c);
 
     // Headless co-sim, collecting faults each frame.
     let frame_dt = 1.0 / 1000.0;

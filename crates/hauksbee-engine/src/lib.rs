@@ -35,6 +35,7 @@ pub mod report;
 pub mod scheduler;
 pub mod shorts;
 pub mod stress;
+pub mod thermal;
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{bind_board, bind_board_with, BoundBoard};
@@ -64,3 +65,6 @@ pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, Usb
 pub use report::{BindOutcome, BindReport, BindRow};
 pub use shorts::{AppliedShort, BRIDGE_OHMS};
 pub use stress::{FaultEvent, FaultKind, StressMonitor};
+pub use thermal::{
+    junction_temp_c, theta_ja_from_footprint, DEFAULT_AMBIENT_C, DEFAULT_THETA_JA,
+};

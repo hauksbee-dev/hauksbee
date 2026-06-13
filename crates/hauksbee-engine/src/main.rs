@@ -127,7 +127,7 @@ enum Command {
 // rather than the old parser's silent first-wins behaviour).
 #[command(group(
     clap::ArgGroup::new("report_mode")
-        .args(["report", "drc", "lint", "si", "resources"])
+        .args(["report", "drc", "lint", "si", "resources", "thermal"])
         .multiple(false)
 ))]
 struct RunArgs {
@@ -166,6 +166,15 @@ struct RunArgs {
     /// Print only the MCU internal resource-conflict report and exit.
     #[arg(long, group = "report_mode")]
     resources: bool,
+
+    /// Run a short headless co-sim and print the steady-state junction-temperature
+    /// estimate per dissipating device (Tj = Tambient + P * theta_JA), then exit.
+    #[arg(long, group = "report_mode")]
+    thermal: bool,
+
+    /// Ambient temperature (C) for the --thermal estimate. Default 25 C.
+    #[arg(long, default_value_t = 25.0, value_name = "C")]
+    ambient: f64,
 
     /// Translate the report into plain language for a non-engineer: a one-line
     /// verdict, then each finding as what it is, why it matters, and what to do.
@@ -251,6 +260,11 @@ struct CheckCodeArgs {
     /// Run the stress monitor in destructive mode (parts can be destroyed).
     #[arg(long)]
     destructive: bool,
+
+    /// Ambient temperature (C) for the steady-state junction-temperature
+    /// estimate (Tj = Tambient + P * theta_JA). Default 25 C.
+    #[arg(long, default_value_t = 25.0, value_name = "C")]
+    ambient: f64,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -390,6 +404,14 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             report.short_count(),
             report.clearance_violations().count(),
         );
+    }
+
+    // --thermal: run a short co-sim, then print the steady-state junction
+    // temperature per dissipating device and exit.
+    if args.thermal {
+        engine.scheduler_mut().set_ambient_c(args.ambient);
+        run_thermal(&mut engine, args.seconds.max(0.05), args.ambient);
+        return Ok(());
     }
 
     if args.headless {
@@ -563,6 +585,7 @@ fn cmd_check_code(args: CheckCodeArgs) -> anyhow::Result<()> {
     let opts = CheckOptions {
         seconds: args.seconds,
         destructive: args.destructive,
+        ambient_c: args.ambient,
     };
     let code = load_code(&args.code)?;
     let report = check_code(&code, &opts)?;
@@ -573,9 +596,6 @@ fn cmd_check_code(args: CheckCodeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the co-sim headless for `seconds`, print the activity summary, and return
-/// the faults raised (de-duplicated by component+kind, worst value kept) so the
-/// caller can render them in plain language and/or gate on them under --strict.
 /// `hauksbee serve [--port N]`: the local web front door (upload-and-report).
 fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     use std::sync::Arc;
@@ -590,6 +610,80 @@ fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     })
 }
 
+/// Run a short headless co-sim and print the steady-state junction-temperature
+/// estimate per dissipating device. Surfaces any over-temperature fault raised
+/// (the same fault channel the live monitor uses) and exits 0 (informational,
+/// like the other `run` reports).
+fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
+    use hauksbee_server::engine::Engine;
+    use std::collections::HashMap;
+
+    eprintln!("thermal: {seconds:.2}s co-sim at {ambient_c:.0} C ambient...");
+    let frame_dt = 1.0 / 1000.0;
+    let mut t = 0.0;
+    // Peak temperature seen per device over the run (steady state is reached
+    // quickly; the peak is the worst-case junction temperature).
+    let mut peak_temp: HashMap<String, f64> = HashMap::new();
+    let mut overtemp: HashMap<String, (f64, f64)> = HashMap::new(); // ref -> (Tj, limit)
+    while t < seconds {
+        let frame = engine.step(frame_dt);
+        for (reference, &tj) in &engine.scheduler().temp_states() {
+            let e = peak_temp.entry(reference.clone()).or_insert(f64::NEG_INFINITY);
+            if tj > *e {
+                *e = tj;
+            }
+        }
+        for f in &frame.faults {
+            if f.kind == "overtemperature" {
+                overtemp.insert(f.component.clone(), (f.value, f.limit));
+            }
+        }
+        t += frame_dt;
+    }
+
+    let mut rows: Vec<(String, f64)> =
+        peak_temp.into_iter().filter(|(_, v)| v.is_finite()).collect();
+    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    println!(
+        "\nsteady-state junction temperature (Tj = {ambient_c:.0} C + P * theta_JA):"
+    );
+    if rows.is_empty() {
+        println!("  no dissipating device reached a measurable temperature.");
+        return;
+    }
+    println!(
+        "┌────────────────────┬───────────┬──────────┐\n\
+         │ Component          │  Tj (C)   │  status  │\n\
+         ├────────────────────┼───────────┼──────────┤"
+    );
+    for (reference, tj) in &rows {
+        let status = if let Some((_, limit)) = overtemp.get(reference) {
+            format!("OVER {limit:.0}")
+        } else {
+            "ok".to_string()
+        };
+        println!(
+            "│ {:<18} │ {:>7.1}   │ {:<8} │",
+            truncate(reference, 18),
+            tj,
+            status
+        );
+    }
+    println!("└────────────────────┴───────────┴──────────┘");
+    if !overtemp.is_empty() {
+        println!(
+            "\n{} device(s) over their junction-temperature limit.",
+            overtemp.len()
+        );
+    } else {
+        println!("\nall dissipating devices within their junction-temperature limit.");
+    }
+}
+
+/// Run the co-sim headless for `seconds`, print the activity summary, and return
+/// the faults raised (de-duplicated by component+kind, worst value kept) so the
+/// caller can render them in plain language and/or gate on them under --strict.
 fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
