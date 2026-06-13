@@ -50,6 +50,7 @@ use hauksbee_server::Server;
     about = "CI for hardware: hand it a PCB; it tells you what blows up before you order boards.",
     long_about = None,
     propagate_version = true,
+    infer_subcommands = true,
     arg_required_else_help = true
 )]
 struct Cli {
@@ -95,6 +96,14 @@ enum Command {
 }
 
 #[derive(Parser)]
+// The five "print one report and exit" flags pick the report to show, so they
+// are mutually exclusive: pass at most one (clap errors clearly if you pass two,
+// rather than the old parser's silent first-wins behaviour).
+#[command(group(
+    clap::ArgGroup::new("report_mode")
+        .args(["report", "drc", "lint", "si", "resources"])
+        .multiple(false)
+))]
 struct RunArgs {
     /// Board file to load (.kicad_pcb, .kicad_sch, .brd, .d356, or gerbers).
     #[arg(value_name = "BOARD")]
@@ -113,23 +122,23 @@ struct RunArgs {
     headless: bool,
 
     /// Print the bind report table (every component -> device model) and exit.
-    #[arg(long)]
+    #[arg(long, group = "report_mode")]
     report: bool,
 
     /// Print the geometric copper short / clearance (DRC) report and exit.
-    #[arg(long)]
+    #[arg(long, group = "report_mode")]
     drc: bool,
 
     /// Print the connectivity lint + strap-pin + resource-conflict report and exit.
-    #[arg(long)]
+    #[arg(long, group = "report_mode")]
     lint: bool,
 
     /// Print the signal-integrity / physics static-check report and exit.
-    #[arg(long)]
+    #[arg(long, group = "report_mode")]
     si: bool,
 
     /// Print only the MCU internal resource-conflict report and exit.
-    #[arg(long)]
+    #[arg(long, group = "report_mode")]
     resources: bool,
 
     /// Bridge every detected copper short before simulating (show the consequences).

@@ -166,8 +166,17 @@ fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
         ExtractedBoard::from_kicad_schematic_path(board_path)
             .map_err(|e| SpecError::Invalid(format!("extracting schematic: {e}")))
     } else {
-        let text = std::fs::read_to_string(board_path)
-            .map_err(|e| SpecError::Io(format!("reading board {}: {e}", board_path.display())))?;
+        let text = std::fs::read_to_string(board_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                SpecError::Io(format!(
+                    "no board file at '{}' (resolved from the spec's `board` key). \
+                     Check that path; it is taken relative to the spec file's directory",
+                    board_path.display()
+                ))
+            } else {
+                SpecError::Io(format!("reading board {}: {e}", board_path.display()))
+            }
+        })?;
         ExtractedBoard::from_auto(&text)
             .map_err(|e| SpecError::Invalid(format!("extracting board: {e}")))
     }

@@ -455,8 +455,17 @@ pub struct Assertion {
 impl Spec {
     /// Load and validate a spec from a TOML file.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| SpecError::Io(format!("reading {}: {e}", path.display())))?;
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                SpecError::Io(format!(
+                    "no spec file at '{}'. Check the path, or try a bundled example:\n  \
+                     hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml",
+                    path.display()
+                ))
+            } else {
+                SpecError::Io(format!("reading {}: {e}", path.display()))
+            }
+        })?;
         let mut spec: Spec = toml::from_str(&text).map_err(|e| SpecError::Toml {
             file: path.display().to_string(),
             message: e.message().to_string(),

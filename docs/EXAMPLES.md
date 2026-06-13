@@ -4,7 +4,9 @@ Everything you need to run hauksbee and learn from it, in files you can open and
 run. This page indexes the [`examples/`](../examples) tree, the distribution
 [`scripts/`](../scripts), and the captured terminal sessions.
 
-## Get it running in one command
+## Get it running
+
+One command builds and installs it; the other two are the usual next steps.
 
 ```bash
 # Build both binaries and put them on PATH (no sudo; installs into ~/.local/bin)
@@ -28,6 +30,15 @@ these prints one report and exits, so they are the fastest way to see it work:
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report   # what each part bound to
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --drc       # copper shorts / clearance
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --lint      # connectivity + strap-pin lint
+```
+
+Blinky is a clean board, so those reports come back empty (which is the correct
+verdict). To see what a *finding* looks like, run DRC on the bundled `boot_gate`
+board, which has a deliberate copper short:
+
+```bash
+hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc
+# -> a table with two GND/+5V shorts and a "2 short(s)" summary
 ```
 
 `hauksbee --help` lists every command, and `hauksbee run --help` (or any
