@@ -31,7 +31,10 @@
 //! assert!(wf.final_node(&c, "out").unwrap() > 0.99);
 //! ```
 
+mod ac;
+mod cmatrix;
 mod linear;
+mod loop_stability;
 mod newton;
 mod options;
 mod partition;
@@ -42,7 +45,10 @@ mod stamp;
 mod system;
 mod transient;
 
+pub use ac::{AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
+pub use cmatrix::ComplexSystem;
 pub use linear::LinearIsland;
+pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};
 pub use newton::{dc_operating_point, Workspace};
 pub use options::{DeviceEffects, Integration, Partitioning, SolverOptions, StepControl};
 pub use partition::{Island, Partition};
