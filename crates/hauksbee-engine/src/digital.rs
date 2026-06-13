@@ -500,7 +500,8 @@ impl Hc595Chain {
         let mut carry = self.lvl_ser as u8;
         for s in self.shift.iter_mut() {
             let out_bit = (*s >> 7) & 1; // stage 7 = qh_serial
-            *s = ((*s << 1) | carry) & 0xFF;
+            // u8 wraps to 8 bits on shift, so no explicit & 0xFF mask is needed.
+            *s = (*s << 1) | carry;
             carry = out_bit;
         }
     }
@@ -546,6 +547,29 @@ fn classify(model: &ModelEntry) -> DigitalKind {
         DigitalKind::Hc165
     } else {
         DigitalKind::Buffer
+    }
+}
+
+/// Which pin roles a digital component treats as outputs (gets a driver).
+/// Used by the binder to decide which pins to stamp Thevenin drivers on.
+pub fn output_roles(model: &ModelEntry) -> Vec<String> {
+    match classify(model) {
+        DigitalKind::Hc595 => [
+            "qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        DigitalKind::Hc165 => ["qh", "qh_n"].iter().map(|s| s.to_string()).collect(),
+        DigitalKind::Buffer => {
+            // Any pin role starting with 'y' (74HCxx convention) is an output.
+            model
+                .pins
+                .values()
+                .filter(|r| r.starts_with('y'))
+                .cloned()
+                .collect()
+        }
     }
 }
 
@@ -694,12 +718,21 @@ mod tests {
 
         chain.replay(&log);
 
-        // With only one shift the chain cannot hold all four distinct bytes.
-        let matches = (0..n).filter(|&p| chain.latched[p] == weights[n - 1 - p]).count();
-        assert!(
-            matches < n,
-            "collapsed single-edge replay must NOT reproduce the full PATH B latch \
-             (got {matches}/{n} correct); the edge path is what makes it work"
+        // The full PATH B expectation is the distinct-byte pattern below; a
+        // collapsed single-edge replay must NOT reproduce it (tighter than a
+        // per-position count, which could tolerate a lucky partial match). In
+        // fact a single SRCLK edge shifts in only one bit, so the registers are
+        // all zero, which we also assert to keep the test non-vacuous.
+        let expected: Vec<u8> = (0..n).map(|p| weights[n - 1 - p]).collect();
+        assert_ne!(
+            chain.latched, expected,
+            "collapsed single-edge replay must NOT reproduce the full PATH B latch; \
+             the edge path is what makes it work"
+        );
+        assert_eq!(
+            chain.latched,
+            vec![0u8; n],
+            "a single SRCLK edge shifts in only one bit, so nothing meaningful latches"
         );
     }
 
@@ -743,32 +776,52 @@ mod tests {
             assert_eq!(ch.len(), 2, "each chain has its own 2 chips");
         }
 
-        // Drive only chain A's controller with all-ones serial; chain B must stay
-        // zero (no serial bleed across the chain boundary).
+        // Build BOTH controllers. Chain A's SER is PB3; chain B's SER is a
+        // different head net (here unbound to any MCU GPIO, so B sees no SER
+        // edges). Both share SRCLK/RCLK so B is clocked by the same pulse train.
         let ser_a = circuit.node("SER_A");
         let mut gpio_a: HashMap<i64, (char, u8)> = HashMap::new();
         gpio_a.insert(srclk.0 as i64, ('B', 5));
         gpio_a.insert(rclk.0 as i64, ('D', 6));
         gpio_a.insert(ser_a.0 as i64, ('B', 3));
-        // Find the chain whose head is U_A0.
-        let order_a = chains
-            .iter()
-            .find(|c| chips[c[0]].reference == "U_A0")
-            .cloned()
-            .expect("chain A present");
-        let mut chain_a = Hc595Chain::build(&chips, order_a, &gpio_a).expect("chain A binds");
+        // Chain B: same clock/latch GPIO, but its SER head is a DIFFERENT MCU
+        // pin (PB4) that never toggles in the log below, so B's serial input
+        // stays low regardless of A's data.
+        let ser_b = circuit.node("SER_B");
+        let mut gpio_b = gpio_a.clone();
+        gpio_b.remove(&(ser_a.0 as i64));
+        gpio_b.insert(ser_b.0 as i64, ('B', 4));
 
+        let find = |head: &str, chains: &[Vec<usize>]| -> Vec<usize> {
+            chains
+                .iter()
+                .find(|c| chips[c[0]].reference == head)
+                .cloned()
+                .expect("chain present")
+        };
+        let mut chain_a = Hc595Chain::build(&chips, find("U_A0", &chains), &gpio_a)
+            .expect("chain A binds");
+        let mut chain_b = Hc595Chain::build(&chips, find("U_B0", &chains), &gpio_b)
+            .expect("chain B binds");
+
+        // Clock 16 ones into A while feeding the SAME pulse train to B.
         let mut log = Vec::new();
         for _ in 0..16 {
-            log.push(('B', 3, true)); // SER high
-            log.push(('B', 5, true));
-            log.push(('B', 5, false));
+            log.push(('B', 3, true)); // SER (A's head) high
+            log.push(('B', 5, true)); // SRCLK rising (broadcast)
+            log.push(('B', 5, false)); // SRCLK falling
         }
-        log.push(('D', 6, true)); // latch
+        log.push(('D', 6, true)); // RCLK latch (broadcast)
         chain_a.replay(&log);
+        chain_b.replay(&log);
+
         assert_eq!(chain_a.latched, vec![0xFF, 0xFF], "chain A fills with ones");
-        // chain B is a different controller and was never clocked here; the key
-        // point proven above is that A's 2-chip register did not absorb B.
+        assert_eq!(
+            chain_b.latched,
+            vec![0x00, 0x00],
+            "chain B, clocked by the same SRCLK but with no SER, stays zero: \
+             A's serial does NOT bleed across the chain boundary"
+        );
     }
 
     /// OE_n (active-low output enable) gates the parallel outputs: while OE_n is
@@ -824,28 +877,5 @@ mod tests {
             chips[0].drivers.values().all(|d| d.enabled),
             "OE_n low re-enables qa..qh drivers"
         );
-    }
-}
-
-/// Which pin roles a digital component treats as outputs (gets a driver).
-/// Used by the binder to decide which pins to stamp Thevenin drivers on.
-pub fn output_roles(model: &ModelEntry) -> Vec<String> {
-    match classify(model) {
-        DigitalKind::Hc595 => [
-            "qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
-        DigitalKind::Hc165 => ["qh", "qh_n"].iter().map(|s| s.to_string()).collect(),
-        DigitalKind::Buffer => {
-            // Any pin role starting with 'y' (74HCxx convention) is an output.
-            model
-                .pins
-                .values()
-                .filter(|r| r.starts_with('y'))
-                .cloned()
-                .collect()
-        }
     }
 }

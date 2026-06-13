@@ -1505,8 +1505,12 @@ fn bind_mcu(
         let adc_ch = adc_of_role(role, module);
         let used_as_control = digital_control_nodes.contains(&(node.0 as i64));
         if let Some(ch) = adc_ch {
+            // A dual-purpose pin driven as digital control binds as GPIO instead
+            // of ADC, BUT only if it actually has a digital port pin. A6/A7 on
+            // the ATmega328P are ADC-only (no port C pin), so `apin_gpio_of_role`
+            // returns None; in that impossible-on-real-hardware case we fall back
+            // to the ADC probe rather than dropping the pin entirely.
             if used_as_control {
-                // Digital control net: bind as GPIO below, no ADC probe.
                 if let Some((port, bit)) = apin_gpio_of_role(role, module) {
                     let net_name = circuit.node_name(node).to_string();
                     let mut drv = PinDriver::stamp(
@@ -1518,10 +1522,12 @@ fn bind_mcu(
                     );
                     drv.set_enabled(circuit, false);
                     gpio_drivers.insert((port, bit), drv);
+                    continue;
                 }
-                continue;
+                // No digital port pin (A6/A7): fall through to ADC.
             }
-            // Genuine analog input: ADC probe, no output driver.
+            // Genuine analog input (or control pin with no port pin): ADC probe,
+            // no output driver.
             adc_nets.insert(ch, node);
             continue;
         }
