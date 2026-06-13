@@ -104,15 +104,21 @@ impl AcSpec {
                     .collect()
             }
             Sweep::Decade => {
+                // Index-based geometric stepping avoids accumulated float drift,
+                // and the final point is pinned to fstop so a non-integer number
+                // of decades (e.g. 100 Hz .. 3 kHz) still includes the endpoint.
                 let decades = (self.fstop / self.fstart).log10();
-                let total = (decades * self.points as f64).ceil() as usize + 1;
+                let steps = (decades * self.points as f64).ceil() as usize;
                 let ratio = 10f64.powf(1.0 / self.points as f64);
-                let mut f = self.fstart;
-                let mut out = Vec::with_capacity(total);
-                while f <= self.fstop * (1.0 + 1e-9) {
+                let mut out = Vec::with_capacity(steps + 1);
+                for i in 0..steps {
+                    let f = self.fstart * ratio.powi(i as i32);
+                    if f >= self.fstop * (1.0 - 1e-9) {
+                        break;
+                    }
                     out.push(f);
-                    f *= ratio;
                 }
+                out.push(self.fstop);
                 out
             }
         }

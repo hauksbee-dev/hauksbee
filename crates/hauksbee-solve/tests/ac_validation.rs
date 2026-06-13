@@ -27,6 +27,27 @@ fn rc_lowpass(r: f64, c: f64) -> (Circuit, f64) {
 }
 
 #[test]
+fn decade_sweep_includes_endpoints_for_non_integer_decades() {
+    // 100 Hz .. 3 kHz is ~1.477 decades: the endpoint must still be present.
+    let spec = AcSpec { fstart: 100.0, fstop: 3000.0, points: 10, sweep: Sweep::Decade };
+    let f = spec.frequencies();
+    assert_eq!(f[0], 100.0, "first point should be fstart");
+    assert!((f.last().copied().unwrap() - 3000.0).abs() < 1e-6, "last={:?}", f.last());
+    // Monotonic increasing.
+    assert!(f.windows(2).all(|w| w[1] > w[0]), "not monotonic: {f:?}");
+}
+
+#[test]
+fn linear_sweep_hits_both_endpoints() {
+    let spec = AcSpec { fstart: 10.0, fstop: 100.0, points: 5, sweep: Sweep::Linear };
+    let f = spec.frequencies();
+    assert_eq!(f.len(), 5);
+    assert!((f[0] - 10.0).abs() < 1e-9);
+    assert!((f[4] - 100.0).abs() < 1e-9);
+    assert!((f[2] - 55.0).abs() < 1e-9, "midpoint {:?}", f[2]);
+}
+
+#[test]
 fn rc_lowpass_corner_is_minus_3db_minus_45deg() {
     let r = 1.0e3_f64;
     let c = 159.155e-9; // fc = 1/(2 pi RC) ~ 1000.0 Hz
