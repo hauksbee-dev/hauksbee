@@ -1,9 +1,10 @@
 # Signal-integrity static checks (`--si`)
 
-Four pure-arithmetic, physics-grounded static checks over the data hauksbee
-already extracts (copper geometry, netlists, part values) plus a small table of
-cited datasheet constants. Each targets a bug class that really ships. They live
-in `crates/hauksbee-extract/src/si.rs`, run as `hauksbee run <board> --si`, and
+Five pure-arithmetic, physics-grounded static checks over the data hauksbee
+already extracts (copper geometry, netlists, part values, board stackup) plus a
+small table of cited datasheet constants. Each targets a bug class that really
+ships. They live in `crates/hauksbee-extract/src/si.rs` (+ the
+`si/impedance.rs` submodule for check 5), run as `hauksbee run <board> --si`, and
 follow the same calibration discipline as the rest of the tool
 (`docs/FAMOUS_SWEEP.md`, `docs/KNOWN_FAULTS_VALIDATION.md`):
 
@@ -258,6 +259,153 @@ minimal D+/D- = 19.2 / 19.1 mm, skew 0.10 mm. The ZSWatch DevKit pairs (skew
 
 ---
 
+## 5. Controlled impedance (`controlled_impedance`)
+
+Tells a USB / Ethernet / high-speed designer whether their controlled-impedance
+traces are routed to the right characteristic impedance, from trace geometry +
+the board stackup, using the standard quasi-static closed-form formulas. Lives in
+`crates/hauksbee-extract/src/si/impedance.rs`.
+
+### Formulas (hand-checked against a published reference calculator)
+
+These are the same equations the online calculators (Polar's IPC-2141 form,
+chemandy, the National Semiconductor differential form) use, so the tool matches
+them to a fraction of a percent. They are **quasi-static closed-form estimates,
+not a field solve.**
+
+- **Single-ended microstrip** (IPC-2141), a trace on an outer copper layer over
+  the nearest reference plane:
+
+  ```
+  Z0 = (87 / sqrt(Er + 1.41)) * ln(5.98*H / (0.8*W + T))
+  ```
+
+  `H` = dielectric height to the plane, `W` = trace width, `T` = copper
+  thickness, `Er` = substrate dielectric constant.
+
+- **Single-ended stripline** (IPC-2141), a trace between two planes:
+
+  ```
+  Z0 = (60 / sqrt(Er)) * ln(4*H / (0.67*pi*(0.8*W + T)))
+  ```
+
+- **Differential microstrip** (National Semiconductor / Wadell), an edge-coupled
+  pair:
+
+  ```
+  Zdiff = 2*Z0 * (1 - 0.48 * exp(-0.96 * S / H))
+  ```
+
+  `S` = edge-to-edge trace spacing (measured from the routed geometry: the median
+  centreline gap between a D+ segment and a D- segment, minus the two
+  half-widths). `Z0` is the single-ended microstrip impedance of one leg.
+
+#### Validation (formula vs reference calculator)
+
+| Case | W / S / H / T / Er (mm) | Tool | Reference calculator | Δ |
+|------|--------------------------|------|----------------------|---|
+| 50-ohm microstrip | W 0.3, H 0.2, T 0.035, Er 4.3 | **53.5 Ω** | 53.5 Ω (chemandy / mycalctools IPC-2141) | <0.1% |
+| microstrip #2 | W 0.25, H 0.2, T 0.035, Er 4.3 | **59.2 Ω** | 59.3 Ω | <0.2% |
+| wide-trace ~50 Ω | W 2.9, H 1.51, T 0.035, Er 4.5 | **48.1 Ω** | ~48 Ω | within band |
+| stripline | W 0.15, H 0.5, T 0.035, Er 4.3 | **52.5 Ω** | 52.5 Ω (hand) | <0.1% |
+| 90-ohm USB diff | W 0.3, S 0.2, H 0.2, T 0.035, Er 4.3 | **87.4 Ω** | 87.4 Ω (hand, NatSemi form) | exact |
+
+(The prompt's "~0.3 mm on 0.2 mm FR4 Er 4.3 is roughly 50 ohm" lands at 53.5 Ω on
+the IPC-2141 empirical form, the same number every published calculator returns;
+the USB geometry W 0.3 / S 0.2 / H 0.2 gives 87.4 Ω, inside 90 Ω ±15%.)
+
+### Stackup: what the board provides vs what is assumed
+
+KiCad stores the stackup in `(setup (stackup ...))`: each physical layer carries
+a `type` (`copper` / `core` / `prepreg` / mask / silk), `thickness`, and for
+dielectrics `material` + `epsilon_r` + `loss_tangent`. The check reads the F.Cu
+copper thickness `T`, the **first dielectric under F.Cu** as the microstrip
+reference height `H`, and its `epsilon_r` as `Er`. (17 of the famous-corpus
+`.kicad_pcb` files carry a full stackup; all are FR4, F.Cu 0.035 mm, Er 4.5, with
+`H` from 0.196 mm on the 4-layer watch boards up to 1.51 mm on the 2-layer
+keyboards.)
+
+When the file has **no stackup** (e.g. the RP2040 minimal board), the check does
+not guess silently: it computes against a **stated default assumption** (1.51 mm
+FR4 core, `T` = 0.035 mm 1 oz copper, `Er` = 4.3) and reports the result as
+`info` only, with the word `ASSUMED` in the note, never a finding.
+
+Stripline is implemented and validated but not auto-applied: identifying which
+inner layer is a solid reference plane (needed for the plane-to-plane `H`) is not
+something the stackup block alone states, and the corpus controlled-impedance
+nets are outer-layer microstrip. (Documented reach, not a guess.)
+
+### Targets and tolerance
+
+| Class | Detected by | Target | Tolerance |
+|-------|-------------|--------|-----------|
+| USB D+/D- | the shared diff-pair detector (`D+/D-`, `DP/DM`, `USB_D±`, `UD±`, …) | 90 Ω differential | ±15% |
+| Ethernet / MDI pair | name convention `TRD`/`TRX`/`MDI`/`MX0..3`/`ETH` + `_P`/`_N`/`±` | 100 Ω differential | ±15% |
+| 50 Ω single-ended | RF-feed names only (`RF`, `RF_IN/OUT`, `ANT*`) | 50 Ω | ±15% |
+
+±15% is the looser of the two common fab tolerances (±10% / ±15%); the looser
+band keeps the model's own few-percent error from ever producing the finding on
+its own. A deviation past ±30% is `high` (the link will reflect / fail), 15-30%
+is `medium`. Intra-pair skew and width necking are surfaced by check 4
+(`usb_diff_pair`); this check adds the impedance.
+
+The single-ended set is deliberately narrow (RF feedlines only): an ordinary GPIO
+or a bare `CLK` is **not** assumed to be a 50 Ω controlled line, so it is never
+judged.
+
+### The two honesty gates (why it is silent on the whole corpus)
+
+A deviation becomes a **finding** only when BOTH hold; anything short is an
+`info` note carrying the computed impedance and the deviation:
+
+1. **A real file stackup** (not the default assumption).
+2. **Declared impedance-control intent**: KiCad's
+   `(stackup (dielectric_constraints yes))`. This is the hard-won corpus lesson.
+   The closed-form model is a genuine estimate with a real error band on dense
+   real boards: it has **no co-planar-ground term** and assumes the trace
+   references the nearest plane at the dielectric height, so on 4-layer boards
+   with ground-flanked routing it over-estimates `Zdiff` by ~25-35% (every
+   genuinely-coupled corpus USB/Ethernet pair reads 119-125 Ω against a 90/100 Ω
+   target). And on 2-layer boards a full-speed USB pair that was *deliberately
+   not* impedance-controlled (every keyboard / trackball in the corpus) reads
+   140-160 Ω and is perfectly fine. We cannot tell a full-speed pair (impedance
+   irrelevant) from a high-speed one (impedance critical) from the netlist. So
+   the board must itself say it is impedance-controlled before a deviation is a
+   defect.
+
+**Every known-good corpus board sets `dielectric_constraints no`** (they chose
+not to control these nets), so the check is silent across the whole corpus while
+still computing and surfacing every impedance as an auditable `info` note. A board
+that declares impedance control yet routes a pair out of band is the genuine bug
+class this fires on.
+
+### Calibration evidence
+
+- **Watchy** (4-layer, `H` = 0.28 mm, Er 4.5, `dielectric_constraints no`): the
+  USB pair computes `Zdiff ~ 125 Ω` and the `LNA_IN/RF` feed `Z0 ~ 63 Ω`. Both
+  are out of band, both are `info` (the board did not declare control) - **not a
+  fire.** The intent gate in action on a real board.
+- **ZSWatch** mainboard + DevKit, **MNT Reform** motherboards (the `ETH0_*` and
+  `LPCUD_*` pairs), **lily58 / corne / Reform keyboards + trackball**, **LumenPnP
+  mobo**: all compute a real impedance (119 Ω … 209 Ω), all `dielectric_constraints
+  no`, all `info`. **Zero findings.**
+- **RP2040 minimal**: no stackup -> USB pair estimate under the `ASSUMED` default
+  stackup, `info` only.
+
+### What this is NOT
+
+- **Not a field solver.** Quasi-static closed-form only; no 2D/3D EM solve.
+- **No co-planar-ground / ground-flanked term**, no via-stub or reference-plane-
+  transition modelling - the single biggest source of the over-estimate above.
+- **No crosstalk, no reflection / TDR, no insertion-loss / dielectric-loss sim**
+  (the `loss_tangent` in the stackup is read but not yet used).
+- **No FS-vs-HS inference**: it cannot tell whether a USB pair actually needs to
+  be 90 Ω, which is exactly why the `dielectric_constraints` intent gate exists.
+- Spacing is the median routed segment gap, not the designer's intended gap;
+  arcs and poured copper are not used for the spacing measure.
+
+---
+
 ## Reproduce
 
 ```bash
@@ -270,6 +418,12 @@ $BIN run "$C/rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.ki
 $BIN run "$C/zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb" --si
 $BIN run "$C/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb" --si
 
-# The zero-false-positive gate over the whole corpus (KiCad + Eagle).
+# Controlled-impedance estimate on a board WITH a stackup (Watchy: computes the
+# real Zdiff, info because the board declares dielectric_constraints no).
+$BIN run "$C/watchy/Watchy.kicad_pcb" --si | grep controlled_impedance
+
+# The zero-false-positive gate over the whole corpus (KiCad + Eagle), plus the
+# hand-checked impedance formulas vs the reference calculator (unit tests).
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-extract --test si_corpus
+cargo test -p hauksbee-extract --lib si::
 ```
