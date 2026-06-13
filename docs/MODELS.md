@@ -136,6 +136,55 @@ Measured results from real codex extractions of the three reference datasheets:
 | 1N4148 (D)   | Vf 0.688 V @ 10.1 mA          | Vf max 1.0 V @ 10 mA (real ~0.7 V) |
 | AMS1117-3.3  | Vout 3.300 V @ 33 mA load     | 3.300 V (3.201..3.399 V)         |
 
+## Power-FET and AFE model coverage
+
+### Generic power-FET fallbacks (catch-all by footprint)
+
+Two generic placeholder entries in `db/mosfet.toml` bind any unmodeled power FET
+in a recognised power-FET package (DPAK, D2PAK, TO-252, TO-263, TO-220,
+PowerPAK SO-8, PQFN, TDSON, LFPAK, DFN-8) to conservative default ratings:
+
+| Entry ID                  | Kind | Rds(on) model | Max voltage | Max current | Notes |
+|---------------------------|------|---------------|-------------|-------------|-------|
+| `generic_nmos_power_pkg`  | nmos | 20 mOhm (rd+rs) | 30 V (conservative) | 20 A | PLACEHOLDER |
+| `generic_pmos_power_pkg`  | pmos | 20 mOhm (rd+rs) | 30 V (conservative) | 20 A | PLACEHOLDER |
+
+These are **not datasheet-sourced**; they are labeled as placeholders. Their purpose
+is to make dissipation and Tj computation possible for unmodeled power FETs rather
+than leaving the thermal monitor blind. A specific part entry (any entry with a
+`value_re` or `mpn_re`) always outscores these catch-alls due to the specificity
+scoring in `matcher.rs` (footprint-only score = 5; value_re adds 30).
+
+### Specific power-FET entries (datasheet-sourced)
+
+| Part         | Kind | Vds (V) | Id (A) | Rds(on) | Package     | Datasheet |
+|--------------|------|---------|--------|---------|-------------|-----------|
+| IPA045N10N3G | nmos | 100     | 100    | 4.5 mOhm @ 10V | TO-220 | Infineon Rev 2.6 2019-02-15 |
+| IRF9358      | pmos | -30     | -9.2/ch | 16.3 mOhm @ -10V | SO-8 DUAL | Infineon Rev 2.1 |
+| SIR182DP     | nmos | 100     | 21     | 17 mOhm @ 10V | PowerPAK SO-8 | Vishay Doc 66664 Rev E 2022-07-13 |
+
+IRF9358 is a dual P-channel device; the entry models single-channel electrical
+behaviour. The DUAL nature and full pin map for both channels is documented in the
+TOML comment.
+
+### AFE, gate drivers, and current-sense amplifiers
+
+| Part         | Kind    | Key rating          | Notes |
+|--------------|---------|---------------------|-------|
+| bq76952      | digital | VPACK 85 V abs max  | TI SLUSDX9C Rev C 2021. Minimal-resolve: internal AFE, protection FET control, coulomb counter, and I2C register map are NOT modeled. Resolves the part so supply-voltage and Tj checking work. |
+| LM5107       | digital | VDD 15 V abs max    | TI SNVSA29B Rev B 2015. Minimal-resolve: half-bridge level-shift and dead-time logic not modeled. |
+| LM5109       | digital | VDD 15 V abs max    | TI SNVSA31C Rev C 2017. Matches LM5109BMA (mppt-1210 U1) and all LM5109 variants. Minimal-resolve: same as LM5107 but LIN is active-low. |
+| INA180       | opamp   | VS 26 V abs max     | TI SBOS774D Rev D 2019. Gain by suffix (A1=20, A2=50, A3=100, A4=200 V/V). |
+| INA181       | opamp   | VS 26 V abs max     | TI SBOS744C Rev C 2019. Same gain variants, SOT-23-5 pinout. |
+| INA186       | opamp   | VS 26 V abs max     | TI SBOS791A Rev A 2020. Bidirectional current-sense. |
+| INA2181      | opamp   | VS 26 V abs max     | TI SBOS831A Rev A 2021. DUAL (two INA181 channels in MSOP-10). |
+
+The bq76952, LM5107, and LM5109 entries are explicitly minimal-resolve: they give
+the part an id, kind, and ratings so it stops binding open, but internal logic is
+not modeled. This is documented honestly in the TOML comments and in the
+description field. A full behavioral model would require a `[models.behavioral]`
+block (see the LTC4020 entry in `db/power_ics.toml` for the pattern).
+
 ## Tests
 
 - **Offline (always run in CI)**:
@@ -144,6 +193,11 @@ Measured results from real codex extractions of the three reference datasheets:
     codex, no network.
   - `hauksbee-engine` `fixture_*` physical-validation tests simulate canned
     models and assert the datasheet numbers.
+  - `hauksbee-models` `tests/power_fet_afe_resolve.rs` (10 tests): resolves each
+    new specific part (IPA045N10N3G, IRF9358, SIR182DP, bq76952, LM5107, LM5109,
+    INA181, INA2181) by value and asserts kind + sane ratings; also asserts that
+    the generic power-FET fallback binds an unknown FET-in-DPAK by footprint, and
+    that a specific value entry beats the catch-all when both match.
 - **Live (manual)**: `hauksbee-models` `extract_bc847_live` is `#[ignore]`d and
   runs real codex against `testdata/datasheets/BC847.pdf`. See
   `crates/hauksbee-models/README_DATASHEET.md`.
