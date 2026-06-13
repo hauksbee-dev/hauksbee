@@ -21,6 +21,30 @@ This is not lint and it is not a DRC. It is the board, alive, under assertions:
 the analogue rails, the firmware's serial output, the blink frequency, the
 stress ratings, all checked the way a test suite checks a function.
 
+### The static-check corpus gates (a separate, complementary layer)
+
+The bring-up CI above runs *firmware on a board under assertions*. The static
+checks (`--drc`, `--lint`, `--si`) have their own enforcement: a **zero-false-
+positive corpus gate**, the standing discipline that a check ships only if it
+raises no findings on the known-good famous corpus. These are encoded as
+corpus-gated cargo tests rather than spec assertions, and are the CI-level
+guarantee for the checks the bug-hunt tooling work added:
+
+- **DRC clearance tolerance**: `cargo test -p hauksbee-extract --test drc`
+  (boundary/at-rule/sub-rule cases) plus the `drc_corpus` / `eagle_drc_corpus`
+  sweeps stay green; the at-rule noise drops (bms-c1 137 -> 0, pd-sink 66 -> 4).
+- **Trace ampacity + input-cap ripple** (`--si` checks 6, 7):
+  `HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-engine --test si_ampacity_ripple`
+  asserts the checks fire on a genuinely undersized routed trace and raise
+  **zero findings** across the famous corpus (the `famous_corpus_has_no_ampacity
+  _or_ripple_findings` sweep is the assertion). The hand-checked mppt-1210 C1
+  1.66x ripple case is a unit test in `checks::ripple`.
+- **Device-decode** (`--lint`): `cargo test -p hauksbee-engine device_decode`
+  pins the CYPD3177 Table-2 decode against the hunt's hand-derived detents.
+
+Run `HAUKSBEE_REQUIRE_CORPUS=1` to turn a missing corpus into a hard failure so
+none of these gates can vacuously green-out.
+
 ## The model
 
 ```
