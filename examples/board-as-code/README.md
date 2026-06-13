@@ -1,6 +1,6 @@
 # Board-as-Code examples
 
-A PCB is a program that draws itself. galvani makes that program executable and
+A PCB is a program that draws itself. hauksbee makes that program executable and
 editable: decompile a real `.kicad_pcb` into readable text, edit the text
 (change a value, fix a wiring swap, add a part), recompile it back into a
 coherent board, and run the edit straight through simulation to see whether the
@@ -22,7 +22,7 @@ The loop, in three CLI verbs:
 
 | File | What it is |
 |---|---|
-| `blinky.board` | The small ATmega328P demo board (`crates/galvani-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real example to read. |
+| `blinky.board` | The small ATmega328P demo board (`crates/hauksbee-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real example to read. |
 | `stormduino.board` | A real corpus Arduino-class board (`board-corpus/stormduino`) decompiled. 51 components, 4 repeat-detected blocks. Shows how the decompiler factors repeated hardware into `fn` blocks. |
 
 ## The edit-then-recheck loop
@@ -30,7 +30,7 @@ The loop, in three CLI verbs:
 Decompile, edit, recompile, and re-simulate any of these:
 
 ```bash
-BIN=target/release/galvani   # or just `galvani` if installed
+BIN=target/release/hauksbee   # or just `hauksbee` if installed
 
 # 1. decompile a board to editable text
 $BIN to-code "board-corpus/stormduino/stormduino Rev2.kicad_pcb" --out storm.board

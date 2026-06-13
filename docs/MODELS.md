@@ -1,6 +1,6 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
-Every component the binder meets needs a simulation model. Galvani resolves one
+Every component the binder meets needs a simulation model. Hauksbee resolves one
 from three sources, layered by priority (later wins):
 
 ```
@@ -8,32 +8,32 @@ builtin TOML DB   <   datasheet extraction   <   user SPICE
    (lowest)                                          (highest)
 ```
 
-- **Built-in DB** (`crates/galvani-models/db/*.toml`): the curated library that
-  ships with galvani. Covers the common families (BC847, 1N4148, 7805, 74HC595,
+- **Built-in DB** (`crates/hauksbee-models/db/*.toml`): the curated library that
+  ships with hauksbee. Covers the common families (BC847, 1N4148, 7805, 74HC595,
   ATmega328P, ...) plus passives resolved straight from the `Value` field.
 - **Datasheet extraction** (`model-extract` binary): when a part is not in the
-  DB, point galvani at the part's PDF datasheet and an LLM backend (codex by
+  DB, point hauksbee at the part's PDF datasheet and an LLM backend (codex by
   default) extracts a model entry in the same TOML schema. The result is dropped
-  into `~/.galvani/models/` and loaded as a user-dir entry.
+  into `~/.hauksbee/models/` and loaded as a user-dir entry.
 - **User SPICE**: a `.model` / `.subckt` card you supply always wins, so you can
   override anything with a vendor-provided SPICE deck.
 
 The resolution order itself lives in `ModelLibrary::resolve`
-(`crates/galvani-models/src/lib.rs`): SPICE cards first, then user TOML entries
+(`crates/hauksbee-models/src/lib.rs`): SPICE cards first, then user TOML entries
 (which is where extracted models land), then the built-in DB.
 
-## Pointing galvani at a datasheet
+## Pointing hauksbee at a datasheet
 
 ```bash
 # build the extractor
-cargo build -p galvani-models --bin model-extract
+cargo build -p hauksbee-models --bin model-extract
 
 # extract a model from a PDF datasheet
 ./target/debug/model-extract \
     --pdf testdata/datasheets/BC847.pdf \
     --part BC847 \
     --kind bjt_npn \
-    --out-dir ~/.galvani/models       # default if omitted
+    --out-dir ~/.hauksbee/models       # default if omitted
 ```
 
 `--kind` is one of: `passive | diode | bjt_npn | bjt_pnp | nmos | pmos | vreg |
@@ -41,7 +41,7 @@ opamp | comparator | analog_switch | digital | dac | adc | shift_register | mcu
 | connector | ignore`.
 
 The tool writes `<part>.toml` to the output directory. Any TOML in
-`~/.galvani/models/` is loaded as a user-dir entry the next time the library is
+`~/.hauksbee/models/` is loaded as a user-dir entry the next time the library is
 built, so an extracted part is immediately resolvable by value/MPN.
 
 ## What gets extracted
@@ -56,7 +56,7 @@ The extractor pulls two things from the datasheet:
 2. **Absolute-maximum ratings** into `[models.ratings]` — `max_current_a`,
    `max_surge_current_a`, `max_power_w`, `max_voltage_v`,
    `max_junction_temp_c`. These feed the **stress monitor**
-   (`crates/galvani-engine/src/stress.rs`): the live operating point is checked
+   (`crates/hauksbee-engine/src/stress.rs`): the live operating point is checked
    against them and faults are raised when a part is driven past its limits. An
    omitted field means "no limit known".
 
@@ -65,7 +65,7 @@ so an extracted model is auditable.
 
 ## The pipeline, end to end
 
-`crates/galvani-models/src/bin/model_extract.rs`:
+`crates/hauksbee-models/src/bin/model_extract.rs`:
 
 1. **PDF → text** via `pdftotext` (if present). When it is absent the backend is
    told to read the PDF directly from its working directory.
@@ -76,11 +76,11 @@ so an extracted model is auditable.
      --skip-git-repo-check --cd <pdf_dir>`. stdin is closed so codex does not
      block; the final agent message (clean TOML) comes back on stdout while
      session logging goes to stderr. A hard timeout (10 min) kills a stuck run.
-   - **API** (optional): set `GALVANI_LLM_API_KEY` (+ `GALVANI_LLM_MODEL`,
-     `GALVANI_LLM_BASE_URL`) to use an OpenAI-compatible chat endpoint instead.
+   - **API** (optional): set `HAUKSBEE_LLM_API_KEY` (+ `HAUKSBEE_LLM_MODEL`,
+     `HAUKSBEE_LLM_BASE_URL`) to use an OpenAI-compatible chat endpoint instead.
 4. **Parse + validate**: the reply is parsed as TOML, the device kind is checked
    against the requested kind, and every param is range-checked
-   (`crates/galvani-models/src/validation.rs`). A failure feeds the error back
+   (`crates/hauksbee-models/src/validation.rs`). A failure feeds the error back
    to the backend for one retry.
 5. **Write** `<part>.toml`.
 
@@ -88,7 +88,7 @@ so an extracted model is auditable.
 
 The extractor fails loudly and usefully:
 
-- **No backend**: clear error listing codex / `GALVANI_LLM_API_KEY` / the
+- **No backend**: clear error listing codex / `HAUKSBEE_LLM_API_KEY` / the
   offline mock as options.
 - **codex timeout**: killed after 10 minutes with a message to tighten the
   prompt or use the API backend.
@@ -104,7 +104,7 @@ Parsing and range checks are necessary but not sufficient: a model can be
 syntactically fine and still physically wrong (an `is` off by orders of
 magnitude, an LDO that does not regulate). So extracted models are validated by
 **simulation** against the datasheet's spec'd operating point, in
-`crates/galvani-engine/tests/datasheet_validation.rs`:
+`crates/hauksbee-engine/tests/datasheet_validation.rs`:
 
 | kind  | check                                                                 |
 |-------|-----------------------------------------------------------------------|
@@ -127,14 +127,14 @@ Measured results from real codex extractions of the three reference datasheets:
 ## Tests
 
 - **Offline (always run in CI)**:
-  - `galvani-models` `offline_pipeline_with_mock_reply` drives the whole
-    extractor with a canned reply via `GALVANI_EXTRACT_MOCK_REPLY=<file>` — no
+  - `hauksbee-models` `offline_pipeline_with_mock_reply` drives the whole
+    extractor with a canned reply via `HAUKSBEE_EXTRACT_MOCK_REPLY=<file>` — no
     codex, no network.
-  - `galvani-engine` `fixture_*` physical-validation tests simulate canned
+  - `hauksbee-engine` `fixture_*` physical-validation tests simulate canned
     models and assert the datasheet numbers.
-- **Live (manual)**: `galvani-models` `extract_bc847_live` is `#[ignore]`d and
+- **Live (manual)**: `hauksbee-models` `extract_bc847_live` is `#[ignore]`d and
   runs real codex against `testdata/datasheets/BC847.pdf`. See
-  `crates/galvani-models/README_DATASHEET.md`.
+  `crates/hauksbee-models/README_DATASHEET.md`.
 
 # Behavioural device models (power ICs)
 
@@ -142,8 +142,8 @@ The SPICE-level kinds (R/C/L, diode, BJT, MOSFET, switches, simple regulators)
 cannot capture the *internal logic* of power ICs: a charger's input-current
 limit servo, a PMIC's ship-mode pull to a rail, a balancer's bleed FETs, a
 sequencer's state machine. For those, a model entry carries a declarative
-`[models.behavioral]` block, parsed by `crates/galvani-models/src/behavioral.rs`
-and realised at run time by `crates/galvani-engine/src/behavioral.rs`.
+`[models.behavioral]` block, parsed by `crates/hauksbee-models/src/behavioral.rs`
+and realised at run time by `crates/hauksbee-engine/src/behavioral.rs`.
 
 A behavioural device participates in the solve loop exactly the way the
 configurable power supplies do: it stamps controllable Thevenin legs and sense
@@ -226,16 +226,16 @@ with no model edit — the basis of the two-sided fault validations in
 Models layer `builtin < datasheet-extracted < user` (later wins). A custom
 behavioural part is just a TOML file dropped into a user directory:
 
-- `~/.galvani/models/` — where datasheet extraction writes.
-- `~/.config/galvani/models/` — your own custom models.
-- any `--models-dir <dir>` passed to `galvani run` (highest priority).
+- `~/.hauksbee/models/` — where datasheet extraction writes.
+- `~/.config/hauksbee/models/` — your own custom models.
+- any `--models-dir <dir>` passed to `hauksbee run` (highest priority).
 
 ### Worked example: a "crazy" custom charger
 
 Suppose you have a part `ACME-BUCK-9000`, a buck charger whose input-current
 limit is programmed by a resistor `R42` against a 0.005 ohm shunt `R43`, with a
 STAT open-drain pin that pulls low while charging. Drop this into
-`~/.config/galvani/models/acme.toml`:
+`~/.config/hauksbee/models/acme.toml`:
 
 ```toml
 [[models]]
@@ -290,7 +290,7 @@ od_assert = true           # pull STAT low while charging
 Then:
 
 ```bash
-galvani run my_board.kicad_pcb --models-dir ~/.config/galvani/models
+hauksbee run my_board.kicad_pcb --models-dir ~/.config/hauksbee/models
 ```
 
 The part binds with no recompile: the converter regulates `bat` to 8.4 V with an
@@ -302,13 +302,13 @@ FSM enters `charging`.
 Some parts have behaviour no finite declarative schema captures — a closed-loop
 controller with internal state, a sequencer with data-dependent timing, a part
 whose output depends on an I2C register the firmware wrote. For those, implement
-the `CustomBehavior` trait (`crates/galvani-engine/src/behavioral.rs`) in Rust
+the `CustomBehavior` trait (`crates/hauksbee-engine/src/behavioral.rs`) in Rust
 and register it before binding:
 
 ```rust
-use galvani_engine::{CustomBehavior, CustomRegistry, bind_board_with};
-use galvani_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
-use galvani_models::{ModelLibrary, Params};
+use hauksbee_engine::{CustomBehavior, CustomRegistry, bind_board_with};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use hauksbee_models::{ModelLibrary, Params};
 use std::collections::BTreeMap;
 
 struct MyController { isrc: Option<DeviceId>, integ: f64 }
@@ -325,7 +325,7 @@ impl CustomBehavior for MyController {
     }
     fn update(&mut self, circuit: &mut Circuit,
               node_v: &dyn Fn(NodeId) -> f64, _t: f64, dt: f64,
-              _faults: &mut Vec<galvani_engine::FaultEvent>) {
+              _faults: &mut Vec<hauksbee_engine::FaultEvent>) {
         // Arbitrary stateful Rust: e.g. an integrating controller.
         self.integ += dt * (5.0 - node_v(NodeId(1)));
         if let Some(id) = self.isrc {
@@ -370,5 +370,5 @@ honestly left the ILIMIT transfer-function constants at zero because the
 datasheet excerpt did not state the programming equation (those were calibrated
 in the hand model from the documented 60 W/88 W revision evidence, which the
 datasheet alone does not contain). The captured output is regression-locked
-offline in `crates/galvani-models/tests/codex_behavioral_fixture.rs`; the live
+offline in `crates/hauksbee-models/tests/codex_behavioral_fixture.rs`; the live
 run is the `#[ignore]`d `extract_ltc4020_charger_live`.

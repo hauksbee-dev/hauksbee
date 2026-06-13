@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Shared helpers for the galvani distribution scripts.
+# Shared helpers for the hauksbee distribution scripts.
 #
 # Sourced by install.sh, doctor.sh, ci.sh and bundle.sh. Keeps the colour /
 # logging / path logic in one place so every script behaves the same way and
 # stays CI-safe (colours auto-disable when stdout is not a TTY or NO_COLOR is
 # set). This file is not meant to be executed directly.
 
-# Resolve the galvani repo root from this file's location (scripts/ lives at
+# Resolve the hauksbee repo root from this file's location (scripts/ lives at
 # the workspace root), so the scripts work no matter the caller's cwd.
 _common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GALVANI_ROOT="$(cd "${_common_dir}/.." && pwd)"
-export GALVANI_ROOT
+HAUKSBEE_ROOT="$(cd "${_common_dir}/.." && pwd)"
+export HAUKSBEE_ROOT
 
 # Colours, but only when attached to a terminal and NO_COLOR is unset. CI logs
 # stay clean. (Some colours are used only by scripts that source this file.)
@@ -33,8 +33,8 @@ die()  { err "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # The release binary directory inside the workspace.
-galvani_target_bin() { printf '%s/target/release\n' "$GALVANI_ROOT"; }
+hauksbee_target_bin() { printf '%s/target/release\n' "$HAUKSBEE_ROOT"; }
 
 # Default install prefix: honour PREFIX, else ~/.local (no sudo), which is on
 # PATH for most modern shells; fall back is documented in install.sh --help.
-galvani_default_prefix() { printf '%s\n' "${PREFIX:-$HOME/.local}"; }
+hauksbee_default_prefix() { printf '%s\n' "${PREFIX:-$HOME/.local}"; }

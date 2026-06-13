@@ -1,0 +1,37 @@
+# hauksbee-ci example: SCHEMATIC-STAGE CI.
+#
+# Catch it before you even lay out the board. This spec runs against a
+# `.kicad_sch` directly (no PCB exists yet) by deriving the netlist
+# geometrically from the schematic (wires, pins, labels, power symbols) and
+# recursing the sheet hierarchy. The board here is KiCad's own `pic_programmer`
+# demo (a 2-sheet KiCad 10 hierarchy: pic_programmer.kicad_sch references
+# pic_sockets.kicad_sch), whose schematic extraction is cross-validated to be
+# net-for-net identical to its layout.
+#
+#   hauksbee-ci run crates/hauksbee-ci/examples/pic_programmer_schematic.toml
+#
+# The same spec body runs against pic_programmer.kicad_pcb and must agree (see
+# crates/hauksbee-ci/tests/schematic_ci.rs): schematic-stage CI and layout-stage
+# CI give the same verdict where both exist.
+
+name = "pic_programmer schematic power-up sanity"
+board = "../../../../board-corpus/kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch"
+duration_ms = 1
+
+# No PCB, no firmware: drive the VCC rail through an ideal 5 V supply and check
+# the design powers up cleanly.
+[[supply]]
+net = "VCC"
+kind = "ideal"
+volts = 5.0
+
+# 1. The VCC rail must sit at 5 V.
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 4.99
+max = 5.01
+
+# 2. Nothing in the design exceeds its rating at power-up.
+[[assert]]
+kind = "no_faults"

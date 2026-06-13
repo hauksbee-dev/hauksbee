@@ -1,6 +1,6 @@
 # Limitations: triage and closure
 
-galvani's other docs each record the honest limitations of their own surface.
+hauksbee's other docs each record the honest limitations of their own surface.
 Several of those felt feasible to close. This doc is the triage: what was
 chased to ground truth and fixed, and what is deferred with the reason. The bar
 for "fixed" is the project's: every change covered by a test, no false positive
@@ -10,7 +10,7 @@ evidence.
 The governing rule throughout is the Tarski meta-lesson: a surprising pass or
 fail is presumed a defect in *our* tool until chased to ground truth. Two of the
 fixes below began as recorded "honest limitations" and turned out, once chased,
-to be galvani defects.
+to be hauksbee defects.
 
 ## Fixed
 
@@ -19,7 +19,7 @@ to be galvani defects.
 - **Was** (docs/FAMOUS_SWEEP.md, round 3): "the USB-C CC audit under-reads the
   device-side Rd on a board with two USB-C receptacles (Lily58's two halves);
   the board is clean ... the audit just does not credit them."
-- **Chased to ground truth.** Two compounding causes, both galvani defects:
+- **Chased to ground truth.** Two compounding causes, both hauksbee defects:
   1. `audit_cc_termination` resolved a *single* best-scoring receptacle, so the
      second receptacle's independent Rd was never read; and
   2. one half's Rd resistors (R11/R12 on J6) return to `GNDA`, a secondary

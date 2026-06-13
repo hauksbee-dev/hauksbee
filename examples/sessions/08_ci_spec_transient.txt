@@ -1,5 +1,5 @@
-$ galvani-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
-galvani-ci: Olimex ESP32-EVB: WiFi burst on robust supply (transient)
+$ hauksbee-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
+hauksbee-ci: Olimex ESP32-EVB: WiFi burst on robust supply (transient)
   board: ../../../board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch
   seeds: 1
 

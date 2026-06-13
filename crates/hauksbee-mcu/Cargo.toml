@@ -1,0 +1,28 @@
+[package]
+name = "hauksbee-mcu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+description = "Generalized MCU emulation bridge (simavr-backed AVR)"
+
+[features]
+# `avr` links libsimavr (GPL-3.0) and builds the AvrMcu backend.
+# `renode` builds the process-driven RenodeBackend (pure std, no native link).
+# `qemu` builds the process-driven QemuBackend for the ESP32 family (pure std,
+#   talks to an external Espressif QEMU over QMP + gdbstub + a UART socket).
+# All on by default; any can be disabled for a lighter build.
+default = ["avr", "renode", "qemu"]
+avr = []
+renode = []
+qemu = []
+
+[dependencies]
+anyhow = { workspace = true }
+libc = "0.2"
+
+[build-dependencies]
+bindgen = "0.71"
+pkg-config = "0.3"
+
+[dev-dependencies]

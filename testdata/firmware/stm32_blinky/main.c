@@ -1,4 +1,4 @@
-/* Minimal bare-metal STM32F103 firmware for the galvani Renode co-sim demo.
+/* Minimal bare-metal STM32F103 firmware for the hauksbee Renode co-sim demo.
  *
  * Exercises the same coupling paths as the AVR demo firmware:
  *   - GPIO out: PC13 (blue pill onboard LED) toggles every 100 ms.

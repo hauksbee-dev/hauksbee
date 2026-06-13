@@ -1,9 +1,9 @@
 # Signal-integrity static checks (`--si`)
 
-Four pure-arithmetic, physics-grounded static checks over the data galvani
+Four pure-arithmetic, physics-grounded static checks over the data hauksbee
 already extracts (copper geometry, netlists, part values) plus a small table of
 cited datasheet constants. Each targets a bug class that really ships. They live
-in `crates/galvani-extract/src/si.rs`, run as `galvani run <board> --si`, and
+in `crates/hauksbee-extract/src/si.rs`, run as `hauksbee run <board> --si`, and
 follow the same calibration discipline as the rest of the tool
 (`docs/FAMOUS_SWEEP.md`, `docs/KNOWN_FAULTS_VALIDATION.md`):
 
@@ -261,8 +261,8 @@ minimal D+/D- = 19.2 / 19.1 mm, skew 0.10 mm. The ZSWatch DevKit pairs (skew
 ## Reproduce
 
 ```bash
-cd galvani
-BIN=target/release/galvani; cargo build --release -p galvani-engine
+cd hauksbee
+BIN=target/release/hauksbee; cargo build --release -p hauksbee-engine
 C=../board-corpus/famous
 
 # Per-board SI report (findings + the auditable info notes).
@@ -271,5 +271,5 @@ $BIN run "$C/zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb" --si
 $BIN run "$C/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb" --si
 
 # The zero-false-positive gate over the whole corpus (KiCad + Eagle).
-GALVANI_REQUIRE_CORPUS=1 cargo test -p galvani-extract --test si_corpus
+HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-extract --test si_corpus
 ```

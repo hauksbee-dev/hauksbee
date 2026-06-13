@@ -1,0 +1,22 @@
+[package]
+name = "hauksbee-models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "model-extract"
+path = "src/bin/model_extract.rs"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+toml = "0.8"
+regex = "1"
+once_cell = "1"
+
+serde_json = { workspace = true }
+
+[dev-dependencies]
+forge-sexpr = { workspace = true }

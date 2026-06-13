@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# ci.sh - run galvani-ci specs in a pipeline, the pleasant way.
+# ci.sh - run hauksbee-ci specs in a pipeline, the pleasant way.
 #
-# A thin wrapper around the `galvani-ci` binary that:
-#   * finds the binary (PATH, GALVANI_CI_BIN, or a local target/release build),
+# A thin wrapper around the `hauksbee-ci` binary that:
+#   * finds the binary (PATH, HAUKSBEE_CI_BIN, or a local target/release build),
 #   * builds it on the fly if it is missing and cargo is available,
 #   * runs one or more specs, writing a JUnit file per spec,
 #   * prints a compact summary and exits non-zero if any spec failed.
 #
 # Designed to be dropped into any CI (GitHub, GitLab, Buildkite). When
-# GITHUB_ACTIONS is set, galvani-ci itself emits inline ::error annotations.
+# GITHUB_ACTIONS is set, hauksbee-ci itself emits inline ::error annotations.
 #
 # Usage:
 #   scripts/ci.sh [--junit-dir DIR] [--quiet] [--no-build] SPEC [SPEC ...]
 #   scripts/ci.sh --help
 #
 # Options:
-#   --junit-dir DIR  Write <spec-name>.xml per spec into DIR (default: ./galvani-ci-junit).
-#   --quiet          Pass --quiet to galvani-ci (suppress per-assertion lines).
+#   --junit-dir DIR  Write <spec-name>.xml per spec into DIR (default: ./hauksbee-ci-junit).
+#   --quiet          Pass --quiet to hauksbee-ci (suppress per-assertion lines).
 #   --no-build       Never build; fail if the binary is not found.
 #   --help           Show this help.
 #
 # Environment:
-#   GALVANI_CI_BIN   Explicit path to the galvani-ci binary.
+#   HAUKSBEE_CI_BIN   Explicit path to the hauksbee-ci binary.
 #   CARGO            cargo binary (default: cargo), used only if a build is needed.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
@@ -29,7 +29,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'; }
 
-JUNIT_DIR="galvani-ci-junit"
+JUNIT_DIR="hauksbee-ci-junit"
 QUIET=0
 NO_BUILD=0
 SPECS=()
@@ -48,28 +48,28 @@ done
 
 [ "${#SPECS[@]}" -gt 0 ] || die "no spec given. Usage: scripts/ci.sh SPEC [SPEC ...] (try --help)"
 
-# Locate galvani-ci: explicit env, then PATH, then a local release build.
+# Locate hauksbee-ci: explicit env, then PATH, then a local release build.
 find_bin() {
-  if [ -n "${GALVANI_CI_BIN:-}" ] && [ -x "${GALVANI_CI_BIN}" ]; then
-    printf '%s\n' "$GALVANI_CI_BIN"; return 0
+  if [ -n "${HAUKSBEE_CI_BIN:-}" ] && [ -x "${HAUKSBEE_CI_BIN}" ]; then
+    printf '%s\n' "$HAUKSBEE_CI_BIN"; return 0
   fi
-  if have galvani-ci; then command -v galvani-ci; return 0; fi
-  local local_bin; local_bin="$(galvani_target_bin)/galvani-ci"
+  if have hauksbee-ci; then command -v hauksbee-ci; return 0; fi
+  local local_bin; local_bin="$(hauksbee_target_bin)/hauksbee-ci"
   [ -x "$local_bin" ] && { printf '%s\n' "$local_bin"; return 0; }
   return 1
 }
 
 if ! BIN="$(find_bin)"; then
   if [ "$NO_BUILD" -eq 1 ]; then
-    die "galvani-ci not found and --no-build set. Set GALVANI_CI_BIN or put it on PATH."
+    die "hauksbee-ci not found and --no-build set. Set HAUKSBEE_CI_BIN or put it on PATH."
   fi
   CARGO="${CARGO:-cargo}"
-  have "$CARGO" || die "galvani-ci not found and cargo unavailable to build it."
-  log "galvani-ci not found; building it (release)"
-  ( cd "$GALVANI_ROOT" && "$CARGO" build --release -p galvani-ci )
-  BIN="$(galvani_target_bin)/galvani-ci"
+  have "$CARGO" || die "hauksbee-ci not found and cargo unavailable to build it."
+  log "hauksbee-ci not found; building it (release)"
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-ci )
+  BIN="$(hauksbee_target_bin)/hauksbee-ci"
 fi
-log "Using galvani-ci: $BIN"
+log "Using hauksbee-ci: $BIN"
 
 mkdir -p "$JUNIT_DIR"
 QUIET_ARG=()

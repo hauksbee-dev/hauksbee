@@ -1,8 +1,8 @@
-$ galvani run board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb --lint
+$ hauksbee run board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb --lint
 net-lint: 1 finding(s)
   [high] strap_pin - U3 strap pin gpio0 (gpio0) net '/GPIO0{slash}XTAL1{slash}CLKIN' carries a free-running clock source CR1 (Q50MHz/25ppm/3V/4P/5x3.2mm): a clock present at the reset latch can mis-strap the part (GPIO0 high = SPI boot (normal); low = download/UART boot. A 50 MHz clock here randomly enters download mode (Olimex ESP32-EVB))
 
-$ galvani run .../ESP32-EVB_Rev_L.kicad_pcb --si
+$ hauksbee run .../ESP32-EVB_Rev_L.kicad_pcb --si
 si-checks: no findings.
 si-checks: 4 info note(s)
   [info] i2c_rise_time - I2C SDA '/GPIO13{slash}I2C-SDA': pull-up 2200 ohm x ~10 pF (1 dev) -> t_r ~ 19 ns (< 1000 ns) - ok

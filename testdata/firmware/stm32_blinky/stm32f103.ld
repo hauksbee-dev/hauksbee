@@ -1,4 +1,4 @@
-/* Linker script for the galvani STM32F103 demo firmware.
+/* Linker script for the hauksbee STM32F103 demo firmware.
  * STM32F103C8: 64 KiB flash @ 0x08000000, 20 KiB SRAM @ 0x20000000. */
 
 ENTRY(Reset_Handler)

@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/galvani-ir",
-    "crates/galvani-solve",
-    "crates/galvani-extract",
-    "crates/galvani-models",
-    "crates/galvani-mcu",
-    "crates/galvani-server",
-    "crates/galvani-engine",
-    "crates/galvani-ci",
+    "crates/hauksbee-ir",
+    "crates/hauksbee-solve",
+    "crates/hauksbee-extract",
+    "crates/hauksbee-models",
+    "crates/hauksbee-mcu",
+    "crates/hauksbee-server",
+    "crates/hauksbee-engine",
+    "crates/hauksbee-ci",
 ]
 
 [workspace.package]

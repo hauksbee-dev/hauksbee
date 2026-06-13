@@ -1,4 +1,4 @@
-/* Demo firmware exercising every galvani co-sim coupling path:
+/* Demo firmware exercising every hauksbee co-sim coupling path:
  * - GPIO out: PB5 (Arduino D13 LED) toggles every 100ms
  * - ADC in:   channel 0 sampled continuously
  * - UART:     9600 baud; 'v' returns last ADC reading in millivolts,
@@ -67,7 +67,7 @@ int main(void) {
     DDRB |= _BV(DDB5);
     uart_init();
     adc_init();
-    uart_puts("galvani-demo v1\r\n");
+    uart_puts("hauksbee-demo v1\r\n");
 
     uint16_t last_mv = 0;
     uint8_t ticks = 0;
@@ -85,7 +85,7 @@ int main(void) {
                 print_u16(last_mv);
                 uart_puts("mV\r\n");
             } else if (c == 'i') {
-                uart_puts("galvani-demo v1\r\n");
+                uart_puts("hauksbee-demo v1\r\n");
             } else {
                 uart_tx(c);
             }

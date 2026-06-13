@@ -1,0 +1,42 @@
+# hauksbee-ci example: boot the demo firmware on a small ATmega328P board and
+# assert the three things you would otherwise check by hand on the bench.
+#
+#   hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml
+#
+# The board is a bare ATmega328P with an LED on D13 (PB5) and a 2.5 V divider
+# into ADC0. The firmware blinks D13 at ~5 Hz, prints a banner over UART, and
+# answers 'v' with the ADC reading.
+
+name = "blinky power-up sanity"
+board = "boards/blinky.kicad_pcb"
+firmware = "../../../testdata/firmware/demo/demo.hex"
+mcu = "atmega328p"
+duration_ms = 1000
+
+# A real USB-powered build: assert the rail still behaves under the supply.
+[[supply]]
+net = "+5V"
+kind = "usb"
+usb = "5v0.5a"
+
+# 1. The 5 V rail must hold up.
+[[assert]]
+kind = "voltage"
+net = "+5V"
+min = 4.75
+
+# 2. The firmware must print its banner over UART.
+[[assert]]
+kind = "uart"
+contains = "hauksbee-demo v1"
+
+# 3. The D13 LED net must blink at ~5 Hz (the firmware toggles every 100 ms).
+[[assert]]
+kind = "toggle"
+net = "D13"
+freq_hz = 5.0
+tolerance = 0.4
+
+# 4. No component may exceed its rating.
+[[assert]]
+kind = "no_faults"

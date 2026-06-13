@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# bundle.sh - build a versioned, distributable galvani binary bundle.
+# bundle.sh - build a versioned, distributable hauksbee binary bundle.
 #
-# Produces dist/galvani-<version>-<target>.tar.gz containing:
-#   bin/galvani, bin/galvani-ci   the release binaries
+# Produces dist/hauksbee-<version>-<target>.tar.gz containing:
+#   bin/hauksbee, bin/hauksbee-ci   the release binaries
 #   db/                           the reference model database (the binaries
 #                                 embed it; this copy is for the layered
-#                                 ~/.galvani/models override mechanism and docs)
+#                                 ~/.hauksbee/models override mechanism and docs)
 #   integrations/                 the GitHub Action, KiCad plugin, pre-commit hook
-#   examples/                     the galvani-ci specs + boards (runnable demos)
+#   examples/                     the hauksbee-ci specs + boards (runnable demos)
 #   scripts/                      install.sh / doctor.sh / ci.sh
 #   VERSION, README-BUNDLE.txt    provenance + how to install
 #
@@ -51,7 +51,7 @@ CARGO="${CARGO:-cargo}"
 
 # Version: from the workspace Cargo.toml [workspace.package] version unless given.
 if [ -z "$VERSION" ]; then
-  VERSION="$(grep -m1 '^version' "$GALVANI_ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
+  VERSION="$(grep -m1 '^version' "$HAUKSBEE_ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
   [ -n "$VERSION" ] || die "could not read version from Cargo.toml; pass --version"
 fi
 
@@ -62,75 +62,75 @@ if [ -z "$TARGET" ]; then
   TARGET="${os}-${arch}"
 fi
 
-SRC="$(galvani_target_bin)"
+SRC="$(hauksbee_target_bin)"
 if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust or pass --no-build."
   log "Building release binaries"
-  ( cd "$GALVANI_ROOT" && "$CARGO" build --release -p galvani-engine -p galvani-ci )
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci )
 fi
-for bin in galvani galvani-ci; do
+for bin in hauksbee hauksbee-ci; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."
 done
 
-NAME="galvani-${VERSION}-${TARGET}"
+NAME="hauksbee-${VERSION}-${TARGET}"
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/galvani-bundle.XXXXXX")"
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/hauksbee-bundle.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 ROOTDIR="$STAGE/$NAME"
 mkdir -p "$ROOTDIR/bin"
 
 log "Staging $NAME"
-install -m 0755 "$SRC/galvani"    "$ROOTDIR/bin/galvani"
-install -m 0755 "$SRC/galvani-ci" "$ROOTDIR/bin/galvani-ci"
+install -m 0755 "$SRC/hauksbee"    "$ROOTDIR/bin/hauksbee"
+install -m 0755 "$SRC/hauksbee-ci" "$ROOTDIR/bin/hauksbee-ci"
 
 # Reference assets. Binaries embed the model db; this copy supports the layered
-# ~/.galvani/models override and is handy documentation.
-cp -R "$GALVANI_ROOT/crates/galvani-models/db" "$ROOTDIR/db"
-cp -R "$GALVANI_ROOT/integrations" "$ROOTDIR/integrations"
-cp -R "$GALVANI_ROOT/scripts" "$ROOTDIR/scripts"
+# ~/.hauksbee/models override and is handy documentation.
+cp -R "$HAUKSBEE_ROOT/crates/hauksbee-models/db" "$ROOTDIR/db"
+cp -R "$HAUKSBEE_ROOT/integrations" "$ROOTDIR/integrations"
+cp -R "$HAUKSBEE_ROOT/scripts" "$ROOTDIR/scripts"
 # Examples: ship the specs, boards and READMEs (skip any scratch dirs).
 mkdir -p "$ROOTDIR/examples"
-cp -R "$GALVANI_ROOT/crates/galvani-ci/examples/." "$ROOTDIR/examples/ci-specs"
-[ -d "$GALVANI_ROOT/examples" ] && cp -R "$GALVANI_ROOT/examples/." "$ROOTDIR/examples/"
+cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"
+[ -d "$HAUKSBEE_ROOT/examples" ] && cp -R "$HAUKSBEE_ROOT/examples/." "$ROOTDIR/examples/"
 # Drop python bytecode caches so the bundle is reproducible.
 find "$ROOTDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
 
 printf '%s\n' "$VERSION" > "$ROOTDIR/VERSION"
-GIT_SHA="$(cd "$GALVANI_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GIT_SHA="$(cd "$HAUKSBEE_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 cat > "$ROOTDIR/README-BUNDLE.txt" <<EOF
-galvani ${VERSION} (${TARGET})
+hauksbee ${VERSION} (${TARGET})
 built from git ${GIT_SHA}
 
 A universal PCB emulator: bind a board, bring it to life, assert it in CI.
 
 CONTENTS
-  bin/galvani       the CLI (run / to-code / from-code / check-code)
-  bin/galvani-ci    the headless CI runner (TOML specs, JUnit, GH annotations)
+  bin/hauksbee       the CLI (run / to-code / from-code / check-code)
+  bin/hauksbee-ci    the headless CI runner (TOML specs, JUnit, GH annotations)
   db/               reference model database (the binaries already embed it;
-                    drop extra parts here or in ~/.galvani/models to extend)
-  examples/         runnable demos: board-as-code + galvani-ci specs + sessions
+                    drop extra parts here or in ~/.hauksbee/models to extend)
+  examples/         runnable demos: board-as-code + hauksbee-ci specs + sessions
   integrations/     GitHub Action, KiCad plugin, pre-commit hook
   scripts/          install.sh, doctor.sh, ci.sh
 
 INSTALL
   Copy the two binaries onto your PATH:
-    install -m 0755 bin/galvani bin/galvani-ci /usr/local/bin/
+    install -m 0755 bin/hauksbee bin/hauksbee-ci /usr/local/bin/
   or run the bundled installer (no sudo, installs into ~/.local/bin):
     PREFIX=\$HOME/.local scripts/install.sh --no-build --symlink
 
 VERIFY (no external files needed - the static checks run on the bundled board)
-  galvani run examples/ci-specs/boards/blinky.kicad_pcb --report
-  galvani run examples/ci-specs/boards/blinky.kicad_pcb --drc
+  hauksbee run examples/ci-specs/boards/blinky.kicad_pcb --report
+  hauksbee run examples/ci-specs/boards/blinky.kicad_pcb --drc
 
 The binaries are self-contained (model db compiled in). Optional firmware
 backends (qemu, renode) are detected at runtime; run scripts/doctor.sh to see
 what is present.
 
-NOTE: the firmware-bearing galvani-ci specs in examples/ci-specs (blinky.toml,
+NOTE: the firmware-bearing hauksbee-ci specs in examples/ci-specs (blinky.toml,
 the boot-coverage and brownout specs) reference firmware and netlists that live
-in the galvani repo's testdata/ (too large to bundle). Run those from a repo
+in the hauksbee repo's testdata/ (too large to bundle). Run those from a repo
 checkout. The bundled specs are the canonical, documented examples to copy.
 EOF
 

@@ -1,4 +1,4 @@
-/* Minimal Cortex-M3 startup for the galvani STM32F103 demo firmware.
+/* Minimal Cortex-M3 startup for the hauksbee STM32F103 demo firmware.
  *
  * Provides the initial vector table (stack pointer + reset handler), copies
  * .data from flash to RAM, zeroes .bss, then calls main(). Only the two

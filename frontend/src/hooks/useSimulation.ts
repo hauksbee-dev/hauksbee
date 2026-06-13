@@ -59,7 +59,7 @@ export function useSimulation(): SimulationState {
             })
             break
           case 'Error':
-            console.warn('[galvani] server error:', msg.message)
+            console.warn('[hauksbee] server error:', msg.message)
             break
         }
       }

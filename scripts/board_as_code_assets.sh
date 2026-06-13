@@ -3,7 +3,7 @@
 # Regenerate every Board-as-Code documentation asset, end to end, from the
 # corpus boards. Re-runnable: it builds the CLI, decompiles, re-lays-out,
 # routes with freerouting, runs an incremental edit, and exports SVG/PNG into
-# galvani/docs/assets/.
+# hauksbee/docs/assets/.
 #
 # Requirements:
 #   - kicad-cli (KiCad 8/9): for SVG export. Override with KICAD_CLI=...
@@ -15,14 +15,14 @@
 #     writes the SES; 2.x stalls unless the board is 100% routed).
 #
 # Usage:
-#   galvani/scripts/board_as_code_assets.sh
+#   hauksbee/scripts/board_as_code_assets.sh
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GALVANI_DIR="$(cd "$HERE/.." && pwd)"
-REPO_ROOT="$(cd "$GALVANI_DIR/.." && pwd)"
-ASSETS="$GALVANI_DIR/docs/assets"
+HAUKSBEE_DIR="$(cd "$HERE/.." && pwd)"
+REPO_ROOT="$(cd "$HAUKSBEE_DIR/.." && pwd)"
+ASSETS="$HAUKSBEE_DIR/docs/assets"
 CORPUS="${BOARD_CORPUS:-$REPO_ROOT/board-corpus}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -41,9 +41,9 @@ fi
 
 mkdir -p "$ASSETS"
 
-echo "==> building galvani CLI"
-( cd "$GALVANI_DIR" && cargo build -p galvani-engine )
-BIN="$GALVANI_DIR/target/debug/galvani"
+echo "==> building hauksbee CLI"
+( cd "$HAUKSBEE_DIR" && cargo build -p hauksbee-engine )
+BIN="$HAUKSBEE_DIR/target/debug/hauksbee"
 
 svg() { # svg <in.kicad_pcb> <out.svg>
   "$KICAD_CLI" pcb export svg --layers "F.Cu,B.Cu,F.SilkS,Edge.Cuts" \

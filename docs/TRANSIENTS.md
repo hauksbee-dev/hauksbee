@@ -33,9 +33,9 @@ solver paths.
 A load profile is a named, time-varying current draw a part presents on its
 supply pin. It is consumed by the transient layer as a current sink (an
 `Isource`) stamped on the part's supply node, so the rail sees the same dI/dt a
-real chip imposes. Profiles live in `crates/galvani-models/db/load_profiles.toml`
+real chip imposes. Profiles live in `crates/hauksbee-models/db/load_profiles.toml`
 (embedded at compile time, cited inline to datasheets) and are parsed by
-`galvani_models::profile`.
+`hauksbee_models::profile`.
 
 ### Schema
 
@@ -90,7 +90,7 @@ on the motor classes (a finite current slope rather than a step edge).
 ### How it drives the solver (both paths)
 
 The load is a `DynamicLoad` peripheral
-(`crates/galvani-engine/src/peripherals/load.rs`) that owns an `Isource`
+(`crates/hauksbee-engine/src/peripherals/load.rs`) that owns an `Isource`
 (`p = supply node`, `n = GROUND`, so it pulls current out of the rail) and sets
 its value each chunk from `profile.current_at(t)`. This rides the existing
 `Isource` machinery:
@@ -121,7 +121,7 @@ better than it is.
 
 Rather than widen the shared `Device::Capacitor` IR, an ESR/ESL capacitor is
 stamped as a **series R-L-C network** between the two original pads, with one or
-two internal nodes (`crates/galvani-engine/src/decoupling.rs`):
+two internal nodes (`crates/hauksbee-engine/src/decoupling.rs`):
 
 ```
 pad_a ──[ R_esr ]── n1 ──[ L_esl ]── n2 ──[ C ]── pad_b
@@ -175,7 +175,7 @@ dynamic the Inkplate cold-boot inrush hits: the pack is fine at steady state but
 the TX surge trips protection.
 
 `PowerSupply::Battery` carries an optional `BatteryProtection`
-(`crates/galvani-engine/src/power_supply.rs`):
+(`crates/hauksbee-engine/src/power_supply.rs`):
 
 ```
 protection_trip_a   = 1.0     # over-current trip threshold (A)
@@ -258,7 +258,7 @@ reports whether any battery supply's protection latched during the run.
 
 ### (a) Analytic decoupling sag: solver vs hand math, <1%
 
-`crates/galvani-solve/tests/decoupling_sag.rs`. Every test computes the exact
+`crates/hauksbee-solve/tests/decoupling_sag.rs`. Every test computes the exact
 closed form in the test and checks the solver against it.
 
 - **ESR step + linear discharge**: a 10 uF cap (30 mΩ ESR) pre-charged to 3.3 V,
@@ -279,7 +279,7 @@ closed form in the test and checks the solver against it.
 
 ### (b) The Inkplate-class two-sided demo
 
-`crates/galvani-ci/tests/inkplate_class_demo.rs`, board
+`crates/hauksbee-ci/tests/inkplate_class_demo.rs`, board
 `testdata/inkplate_class.net`.
 
 **This is a representative reconstruction, not the real Inkplate board.** No
@@ -312,7 +312,7 @@ solved rail current; the survival is the measured rail staying up.
 
 ### (c) Corpus calibration: Olimex ESP32-EVB, must PASS
 
-`crates/galvani-ci/tests/olimex_burst_calibration.rs`, board
+`crates/hauksbee-ci/tests/olimex_burst_calibration.rs`, board
 `board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch`
 (corpus-gated).
 

@@ -1,0 +1,2224 @@
+//! Copper short / clearance detection (geometric DRC).
+//!
+//! Hauksbee simulates from a real layout, so two pieces of copper that touch
+//! when they belong to different nets are an *electrical* fact the simulation
+//! must know about: a solder bridge, an overlapping pad, a pour eating into a
+//! track. This module finds those from geometry alone and hands them to the
+//! engine, which can then merge the shorted nets and show the consequence.
+//!
+//! ## What is checked
+//!
+//! Every conductive primitive on a copper layer is reduced to one of three
+//! shapes, all in board millimetres:
+//!   - **Capsule** (a "stadium"): a track segment of finite width, or an arc
+//!     sampled into a short capsule chain. Distance to anything else is the
+//!     segment-to-segment distance minus both half-widths.
+//!   - **Disc**: a round pad, or a via / through-hole pad annular ring. Spans
+//!     the layers it touches (vias and `*.Cu` pads sit on every copper layer).
+//!   - **Polygon**: a rectangular / rounded / oval / custom pad outline, or a
+//!     filled zone area. Distance uses closed-polygon edge distance, and a
+//!     point-in-polygon test catches full containment.
+//!
+//! Primitives are bucketed per copper layer and indexed in an [`rstar`]
+//! R*-tree, so each one is only distance-tested against neighbours whose
+//! bounding boxes are within the clearance window. That keeps an 85 MB board
+//! (hundreds of thousands of primitives) to a few seconds instead of the
+//! O(n²) blow-up a naive all-pairs sweep would cost.
+//!
+//! ## Overlap vs clearance
+//!
+//! For a candidate pair on different nets we compute the signed gap (copper
+//! edge to copper edge, already accounting for widths):
+//!   - gap `<= 0` → the copper actually intersects: a **short**
+//!     ([`ViolationKind::Short`]).
+//!   - `0 < gap < clearance` → they do not touch but sit closer than the
+//!     design rule allows: a **clearance violation**
+//!     ([`ViolationKind::Clearance`]), a near-short risk, lower severity.
+//!
+//! Clearance is read from the board's design rules when present, else a sane
+//! default ([`DEFAULT_CLEARANCE_MM`]).
+
+use std::collections::HashMap;
+
+use forge_sexpr::{Document, List};
+use rstar::{RTree, RTreeObject, AABB};
+use serde::{Deserialize, Serialize};
+
+/// Default copper-to-copper clearance (mm) when the board states no rule.
+pub const DEFAULT_CLEARANCE_MM: f64 = 0.2;
+
+/// Arcs are flattened into this many straight capsule links. Eight keeps the
+/// chord error under a few microns for typical track-radius arcs while staying
+/// cheap.
+const ARC_SEGMENTS: usize = 8;
+
+/// Whether a finding is a true short or only a clearance violation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViolationKind {
+    /// Copper from two nets physically overlaps (gap <= 0): an electrical short.
+    Short,
+    /// Copper from two nets is closer than the design clearance but not
+    /// touching: a near-short manufacturing risk.
+    Clearance,
+}
+
+impl ViolationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ViolationKind::Short => "short",
+            ViolationKind::Clearance => "clearance",
+        }
+    }
+}
+
+/// What kind of copper primitive was involved in a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemKind {
+    Track,
+    Arc,
+    Via,
+    Pad,
+    Zone,
+}
+
+impl ItemKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ItemKind::Track => "track",
+            ItemKind::Arc => "arc",
+            ItemKind::Via => "via",
+            ItemKind::Pad => "pad",
+            ItemKind::Zone => "zone",
+        }
+    }
+}
+
+/// One copper primitive involved in a finding (the human-facing description).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Item {
+    pub kind: ItemKind,
+    /// Net id this copper belongs to.
+    pub net: i64,
+    /// Owning component reference for pads (e.g. "U3"), empty otherwise.
+    pub owner: String,
+}
+
+/// One short / clearance finding between two different nets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrcFinding {
+    pub kind: ViolationKind,
+    /// The two nets involved (ids), lower id first for stable ordering.
+    pub net_a: i64,
+    pub net_b: i64,
+    /// Net names, matching `net_a` / `net_b`.
+    pub net_a_name: String,
+    pub net_b_name: String,
+    /// Copper layer the violation is on (e.g. "F.Cu").
+    pub layer: String,
+    /// Representative location (mm), the midpoint of the closest approach.
+    pub x: f64,
+    pub y: f64,
+    /// Signed copper-edge gap (mm). <= 0 for an overlap, the penetration depth
+    /// as a negative number; positive for a clearance violation.
+    pub gap_mm: f64,
+    /// The two primitives that came closest.
+    pub item_a: Item,
+    pub item_b: Item,
+}
+
+/// The full DRC report for a board.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DrcReport {
+    /// Clearance rule used (mm).
+    pub clearance_mm: f64,
+    /// Every finding, shorts and clearance violations together.
+    pub findings: Vec<DrcFinding>,
+    /// Number of copper primitives indexed (diagnostics / perf reporting).
+    pub primitive_count: usize,
+}
+
+impl DrcReport {
+    /// Only the true overlaps (electrical shorts).
+    pub fn shorts(&self) -> impl Iterator<Item = &DrcFinding> {
+        self.findings
+            .iter()
+            .filter(|f| f.kind == ViolationKind::Short)
+    }
+
+    /// Only the clearance (near-short) violations.
+    pub fn clearance_violations(&self) -> impl Iterator<Item = &DrcFinding> {
+        self.findings
+            .iter()
+            .filter(|f| f.kind == ViolationKind::Clearance)
+    }
+
+    pub fn short_count(&self) -> usize {
+        self.shorts().count()
+    }
+
+    pub fn is_clean(&self) -> bool {
+        self.short_count() == 0
+    }
+
+    /// Distinct unordered net pairs that are shorted together, as (id, id) with
+    /// the lower id first. The engine uses these to merge nets.
+    pub fn shorted_net_pairs(&self) -> Vec<(i64, i64)> {
+        let mut pairs: Vec<(i64, i64)> = self
+            .shorts()
+            .map(|f| (f.net_a.min(f.net_b), f.net_a.max(f.net_b)))
+            .collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
+    }
+}
+
+// ── Geometry primitives ──────────────────────────────────────────────────────
+
+/// A capsule: a line segment with a radius (half copper width). Tracks and arc
+/// links are capsules; a disc is a degenerate capsule with `a == b`.
+#[derive(Debug, Clone, Copy)]
+struct Capsule {
+    ax: f64,
+    ay: f64,
+    bx: f64,
+    by: f64,
+    r: f64,
+}
+
+/// A primitive's solid shape, all coordinates in board mm.
+#[derive(Debug, Clone)]
+enum Shape {
+    /// Track / arc-link / disc (via, round pad).
+    Capsule(Capsule),
+    /// Closed polygon outline (rect/oval/custom pad, zone fill). The points are
+    /// the vertices in order; `r` is an extra inflation radius (0 for zones,
+    /// the corner radius for a roundrect treated as a polygon + radius).
+    Polygon { pts: Vec<(f64, f64)>, r: f64 },
+}
+
+/// One indexed copper primitive on a single layer.
+#[derive(Debug, Clone)]
+struct Primitive {
+    shape: Shape,
+    net: i64,
+    kind: ItemKind,
+    owner: String,
+    /// Axis-aligned bounds (minx, miny, maxx, maxy), already inflated by the
+    /// primitive's own radius so a box-overlap query within `clearance` of two
+    /// boxes is a superset of the real close pairs.
+    bounds: [f64; 4],
+    /// Index back into the per-layer primitive vector (set after build).
+    idx: usize,
+}
+
+impl Primitive {
+    fn item(&self) -> Item {
+        Item {
+            kind: self.kind,
+            net: self.net,
+            owner: self.owner.clone(),
+        }
+    }
+}
+
+/// An R*-tree leaf: a primitive's bounding box plus its index. We keep the
+/// heavy shape data out of the tree and look it up by index, so the tree nodes
+/// stay small.
+#[derive(Debug, Clone)]
+struct Leaf {
+    bounds: [f64; 4],
+    idx: usize,
+}
+
+impl RTreeObject for Leaf {
+    type Envelope = AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_corners([self.bounds[0], self.bounds[1]], [self.bounds[2], self.bounds[3]])
+    }
+}
+
+// ── Distance helpers (all in mm) ─────────────────────────────────────────────
+
+/// Squared distance from point P to segment AB.
+fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len2 = dx * dx + dy * dy;
+    if len2 <= f64::EPSILON {
+        let ex = px - ax;
+        let ey = py - ay;
+        return ex * ex + ey * ey;
+    }
+    let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
+    let cx = ax + t * dx;
+    let cy = ay + t * dy;
+    let ex = px - cx;
+    let ey = py - cy;
+    ex * ex + ey * ey
+}
+
+/// Minimum distance between two segments (centerlines), 0 if they cross.
+fn seg_seg_dist(
+    a1: (f64, f64),
+    a2: (f64, f64),
+    b1: (f64, f64),
+    b2: (f64, f64),
+) -> f64 {
+    if segments_intersect(a1, a2, b1, b2) {
+        return 0.0;
+    }
+    let d = point_seg_dist2(a1.0, a1.1, b1.0, b1.1, b2.0, b2.1)
+        .min(point_seg_dist2(a2.0, a2.1, b1.0, b1.1, b2.0, b2.1))
+        .min(point_seg_dist2(b1.0, b1.1, a1.0, a1.1, a2.0, a2.1))
+        .min(point_seg_dist2(b2.0, b2.1, a1.0, a1.1, a2.0, a2.1));
+    d.sqrt()
+}
+
+/// Orientation sign of the triplet (p, q, r): >0 ccw, <0 cw, 0 colinear.
+fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
+    (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+}
+
+fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
+    q.0 <= p.0.max(r.0) && q.0 >= p.0.min(r.0) && q.1 <= p.1.max(r.1) && q.1 >= p.1.min(r.1)
+}
+
+/// Proper / improper segment intersection test.
+fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
+    let d1 = orient(p3, p4, p1);
+    let d2 = orient(p3, p4, p2);
+    let d3 = orient(p1, p2, p3);
+    let d4 = orient(p1, p2, p4);
+    if ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0)) {
+        return true;
+    }
+    (d1 == 0.0 && on_seg(p3, p1, p4))
+        || (d2 == 0.0 && on_seg(p3, p2, p4))
+        || (d3 == 0.0 && on_seg(p1, p3, p2))
+        || (d4 == 0.0 && on_seg(p1, p4, p2))
+}
+
+/// Even-odd point-in-polygon test.
+fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Minimum distance from point P to the closed polygon boundary.
+fn point_poly_edge_dist(px: f64, py: f64, poly: &[(f64, f64)]) -> f64 {
+    let n = poly.len();
+    if n == 0 {
+        return f64::INFINITY;
+    }
+    if n == 1 {
+        return ((px - poly[0].0).powi(2) + (py - poly[0].1).powi(2)).sqrt();
+    }
+    let mut best = f64::INFINITY;
+    let mut j = n - 1;
+    for i in 0..n {
+        best = best.min(point_seg_dist2(px, py, poly[j].0, poly[j].1, poly[i].0, poly[i].1));
+        j = i;
+    }
+    best.sqrt()
+}
+
+/// Minimum boundary-to-boundary distance between two polygons (0 if their
+/// edges cross). Containment is handled by the caller via point-in-polygon.
+fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+    let mut best = f64::INFINITY;
+    let na = a.len();
+    let nb = b.len();
+    if na < 2 || nb < 2 {
+        // Degenerate: fall back to nearest-vertex.
+        for &pa in a {
+            best = best.min(point_poly_edge_dist(pa.0, pa.1, b));
+        }
+        return best;
+    }
+    let mut ja = na - 1;
+    for ia in 0..na {
+        let a1 = a[ja];
+        let a2 = a[ia];
+        let mut jb = nb - 1;
+        for ib in 0..nb {
+            let b1 = b[jb];
+            let b2 = b[ib];
+            best = best.min(seg_seg_dist(a1, a2, b1, b2));
+            jb = ib;
+        }
+        ja = ia;
+    }
+    best
+}
+
+/// Centerline distance between two capsules' segments (radii subtracted by
+/// the caller).
+fn capsule_centerline_dist(a: &Capsule, b: &Capsule) -> f64 {
+    seg_seg_dist((a.ax, a.ay), (a.bx, a.by), (b.ax, b.ay), (b.bx, b.by))
+}
+
+/// Signed copper-edge gap between two primitives. Negative means they overlap
+/// (the magnitude is roughly the penetration), and the returned `(x, y)` is a
+/// representative point of closest approach.
+fn shape_gap(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
+    match (a, b) {
+        (Shape::Capsule(ca), Shape::Capsule(cb)) => {
+            let d = capsule_centerline_dist(ca, cb) - ca.r - cb.r;
+            let mid = (
+                (ca.ax + ca.bx + cb.ax + cb.bx) / 4.0,
+                (ca.ay + ca.by + cb.ay + cb.by) / 4.0,
+            );
+            (d, mid)
+        }
+        (Shape::Capsule(c), Shape::Polygon { pts, r }) | (Shape::Polygon { pts, r }, Shape::Capsule(c)) => {
+            // True centerline-to-boundary distance: the capsule segment against
+            // every polygon edge (0 if it crosses the boundary). This catches a
+            // track passing straight through a pad even when neither endpoint is
+            // inside and no vertex is near.
+            let seg_a = (c.ax, c.ay);
+            let seg_b = (c.bx, c.by);
+            let mut best = f64::INFINITY;
+            let n = pts.len();
+            if n >= 2 {
+                let mut j = n - 1;
+                for i in 0..n {
+                    best = best.min(seg_seg_dist(seg_a, seg_b, pts[j], pts[i]));
+                    j = i;
+                }
+            } else if n == 1 {
+                best = point_seg_dist2(pts[0].0, pts[0].1, c.ax, c.ay, c.bx, c.by).sqrt();
+            }
+            // Containment: either capsule endpoint inside the polygon (the
+            // track terminates within the pad / pour copper).
+            let contained = point_in_polygon(c.ax, c.ay, pts) || point_in_polygon(c.bx, c.by, pts);
+            let gap = if contained {
+                // Fully engulfed: a hard overlap regardless of edge distance.
+                -(c.r + r).max(0.0) - 1e-6
+            } else {
+                best - c.r - r
+            };
+            // Representative point: capsule midpoint (close enough for display).
+            (gap, ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0))
+        }
+        (Shape::Polygon { pts: pa, r: ra }, Shape::Polygon { pts: pb, r: rb }) => {
+            let edge = poly_poly_edge_dist(pa, pb) - ra - rb;
+            // Containment either way is a hard overlap.
+            let contained = pa.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pb))
+                || pb.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pa));
+            let gap = if contained { edge.min(0.0) - 1e-6 } else { edge };
+            let mid = pa
+                .first()
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            (gap, mid)
+        }
+    }
+}
+
+// ── Net resolution (mirrors pcb.rs, but standalone) ──────────────────────────
+
+/// A net id table that handles all three KiCad encodings the same way `pcb.rs`
+/// does: declared `(net N "name")`, name-only `(net "name")`, and the older
+/// `(net N)` + separate `(net_name "name")` on zones.
+#[derive(Default)]
+struct NetResolver {
+    by_id: HashMap<i64, String>,
+    by_name: HashMap<String, i64>,
+    next_synthetic: i64,
+}
+
+impl NetResolver {
+    fn from_root(root: &List) -> Self {
+        let mut r = NetResolver::default();
+        for n in root.find_all("net") {
+            match (n.arg_i64(0), n.arg_value(0), n.arg_value(1)) {
+                (Some(id), _, name) => r.declare(id, name.unwrap_or_default()),
+                (None, Some(name), _) => {
+                    r.id_of(&name);
+                }
+                _ => {}
+            }
+        }
+        r
+    }
+
+    fn declare(&mut self, id: i64, name: String) {
+        self.by_name.entry(name.clone()).or_insert(id);
+        self.by_id.entry(id).or_insert(name);
+        self.next_synthetic = self.next_synthetic.max(id + 1);
+    }
+
+    fn id_of(&mut self, name: &str) -> i64 {
+        if let Some(&id) = self.by_name.get(name) {
+            return id;
+        }
+        let id = self.next_synthetic.max(1);
+        self.next_synthetic = id + 1;
+        self.declare(id, name.to_string());
+        id
+    }
+
+    fn name_of(&self, id: i64) -> String {
+        self.by_id.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// True for nets that carry no real connectivity: KiCad's auto-generated
+    /// `unconnected-(...)` placeholders (one per floating pad) and the empty
+    /// net 0. Copper on these cannot form an electrical short, so the sweep
+    /// skips them the same way it skips net 0.
+    fn is_no_net(&self, id: i64) -> bool {
+        id == 0 || self.name_of(id).starts_with("unconnected-")
+    }
+
+    /// Resolve a `(net ...)` child of a list to an id, handling the numeric,
+    /// name-only, and numeric-with-sibling-`net_name` forms.
+    fn net_ref(&mut self, list: &List) -> Option<i64> {
+        let net = list.find("net")?;
+        // Numeric id form.
+        if let Some(id) = net.arg(0).filter(|t| !t.is_string()).and_then(|t| t.as_i64()) {
+            // Some zones carry both `(net N)` and `(net_name "X")`; declare the
+            // name so reporting has it.
+            if let Some(name) = list.find_value("net_name") {
+                self.declare(id, name);
+            }
+            return Some(id);
+        }
+        // Name-only form.
+        let name = net.arg_value(0)?;
+        Some(self.id_of(&name))
+    }
+}
+
+// ── Extraction ───────────────────────────────────────────────────────────────
+
+/// A whole filled-zone polygon kept aside for containment tests (a different-net
+/// primitive sitting fully inside the pour is a short even if it never crosses
+/// the boundary). The boundary itself is indexed as edge capsules so the R-tree
+/// prunes the distance sweep; this side-table only serves point-in-polygon.
+#[derive(Debug, Clone)]
+struct ZonePoly {
+    pts: Vec<(f64, f64)>,
+    net: i64,
+    bounds: [f64; 4],
+    /// True when this came from a real `filled_polygon` (the actual copper, with
+    /// antipads / thermal reliefs). Outline-only zones (no computed fill, common
+    /// in pre-2017 boards) set this false: their drawn boundary is kept for
+    /// clearance checks, but the containment short-test is skipped because the
+    /// solid outline would falsely engulf every pad of other nets.
+    filled: bool,
+}
+
+/// Per-layer accumulator of copper primitives.
+#[derive(Default)]
+struct LayerBuckets {
+    /// layer name -> primitives on that layer (indexed for the distance sweep).
+    by_layer: HashMap<String, Vec<Primitive>>,
+    /// layer name -> full zone polygons (for containment only).
+    zones: HashMap<String, Vec<ZonePoly>>,
+}
+
+impl LayerBuckets {
+    fn push(&mut self, layer: &str, prim: Primitive) {
+        self.by_layer.entry(layer.to_string()).or_default().push(prim);
+    }
+
+    /// Add a zone polygon: its boundary edges become indexed capsules (radius 0)
+    /// so distance/clearance to it is pruned by the R-tree, and the whole
+    /// polygon is stashed for the containment pass. `filled` marks whether this
+    /// is real fill copper (eligible for the containment short-test) or only a
+    /// drawn outline.
+    fn push_zone(&mut self, layer: &str, pts: Vec<(f64, f64)>, net: i64, filled: bool) {
+        if pts.len() < 3 {
+            return;
+        }
+        let n = pts.len();
+        let mut j = n - 1;
+        for i in 0..n {
+            let cap = Capsule {
+                ax: pts[j].0,
+                ay: pts[j].1,
+                bx: pts[i].0,
+                by: pts[i].1,
+                r: 0.0,
+            };
+            self.push(layer, make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()));
+            j = i;
+        }
+        let bounds = polygon_bounds(&pts);
+        self.zones
+            .entry(layer.to_string())
+            .or_default()
+            .push(ZonePoly { pts, net, bounds, filled });
+    }
+}
+
+/// Bounding box (minx, miny, maxx, maxy) of a point list.
+fn polygon_bounds(pts: &[(f64, f64)]) -> [f64; 4] {
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for &(x, y) in pts {
+        b[0] = b[0].min(x);
+        b[1] = b[1].min(y);
+        b[2] = b[2].max(x);
+        b[3] = b[3].max(y);
+    }
+    b
+}
+
+/// Read `(start x y)` / `(end x y)` style coordinate children.
+fn xy_pair(list: &List, name: &str) -> Option<(f64, f64)> {
+    let l = list.find(name)?;
+    Some((l.arg_f64(0)?, l.arg_f64(1)?))
+}
+
+/// Inflated bounds of a shape: (minx, miny, maxx, maxy).
+fn shape_bounds(shape: &Shape) -> [f64; 4] {
+    match shape {
+        Shape::Capsule(c) => {
+            let minx = c.ax.min(c.bx) - c.r;
+            let miny = c.ay.min(c.by) - c.r;
+            let maxx = c.ax.max(c.bx) + c.r;
+            let maxy = c.ay.max(c.by) + c.r;
+            [minx, miny, maxx, maxy]
+        }
+        Shape::Polygon { pts, r } => {
+            let mut minx = f64::INFINITY;
+            let mut miny = f64::INFINITY;
+            let mut maxx = f64::NEG_INFINITY;
+            let mut maxy = f64::NEG_INFINITY;
+            for &(x, y) in pts {
+                minx = minx.min(x);
+                miny = miny.min(y);
+                maxx = maxx.max(x);
+                maxy = maxy.max(y);
+            }
+            [minx - r, miny - r, maxx + r, maxy + r]
+        }
+    }
+}
+
+/// A representative interior point of a shape (its centroid-ish point), used
+/// for the zone containment test.
+fn representative_point(shape: &Shape) -> (f64, f64) {
+    match shape {
+        Shape::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
+        Shape::Polygon { pts, .. } => {
+            let n = pts.len().max(1) as f64;
+            let sx: f64 = pts.iter().map(|p| p.0).sum();
+            let sy: f64 = pts.iter().map(|p| p.1).sum();
+            (sx / n, sy / n)
+        }
+    }
+}
+
+fn make_prim(shape: Shape, net: i64, kind: ItemKind, owner: String) -> Primitive {
+    let bounds = shape_bounds(&shape);
+    Primitive {
+        shape,
+        net,
+        kind,
+        owner,
+        bounds,
+        idx: 0,
+    }
+}
+
+/// Expand a `*.Cu` / `F&B.Cu` layer token to the concrete copper layers it
+/// occupies, given the set of copper layers the board declares.
+fn expand_layers(token: &str, copper_layers: &[String]) -> Vec<String> {
+    if token == "*.Cu" || token.eq_ignore_ascii_case("F&B.Cu") {
+        copper_layers.to_vec()
+    } else if token.ends_with(".Cu") {
+        vec![token.to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Collect the copper layer names the board declares (from `(layers ...)`),
+/// falling back to the canonical two-layer stack.
+fn copper_layers_of(root: &List) -> Vec<String> {
+    let mut layers = Vec::new();
+    if let Some(decl) = root.find("layers") {
+        for l in decl.lists() {
+            // `(0 "F.Cu" signal)`: the name is arg 0 (a string).
+            if let Some(name) = l.arg_value(0) {
+                if name.ends_with(".Cu") {
+                    layers.push(name);
+                }
+            }
+            // `(layer "F.Cu" ...)` style is also possible; name in arg 0 too.
+        }
+    }
+    if layers.is_empty() {
+        layers = vec!["F.Cu".to_string(), "B.Cu".to_string()];
+    }
+    layers
+}
+
+/// Build the per-layer copper primitives for a parsed board.
+fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
+    let mut buckets = LayerBuckets::default();
+    let copper_layers = copper_layers_of(root);
+
+    // ── Track segments ──────────────────────────────────────────────────────
+    for seg in root.find_all("segment") {
+        let (Some(start), Some(end)) = (xy_pair(seg, "start"), xy_pair(seg, "end")) else {
+            continue;
+        };
+        let width = seg.find_f64("width").unwrap_or(0.0);
+        let layer = seg.find_value("layer").unwrap_or_default();
+        if !layer.ends_with(".Cu") {
+            continue;
+        }
+        let Some(net) = nets.net_ref(seg) else { continue };
+        let cap = Capsule {
+            ax: start.0,
+            ay: start.1,
+            bx: end.0,
+            by: end.1,
+            r: width / 2.0,
+        };
+        buckets.push(&layer, make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new()));
+    }
+
+    // ── Arc tracks (KiCad 7+ `(arc (start)(mid)(end)(width)(layer)(net))`) ───
+    for arc in root.find_all("arc") {
+        let (Some(start), Some(end)) = (xy_pair(arc, "start"), xy_pair(arc, "end")) else {
+            continue;
+        };
+        let mid = xy_pair(arc, "mid");
+        let width = arc.find_f64("width").unwrap_or(0.0);
+        let layer = arc.find_value("layer").unwrap_or_default();
+        if !layer.ends_with(".Cu") {
+            continue;
+        }
+        let Some(net) = nets.net_ref(arc) else { continue };
+        for cap in flatten_arc(start, mid, end, width) {
+            buckets.push(&layer, make_prim(Shape::Capsule(cap), net, ItemKind::Arc, String::new()));
+        }
+    }
+
+    // ── Vias (multi-layer discs) ────────────────────────────────────────────
+    for via in root.find_all("via") {
+        let Some(at) = xy_pair(via, "at") else { continue };
+        let size = via.find_f64("size").unwrap_or(0.0);
+        let Some(net) = nets.net_ref(via) else { continue };
+        let layer_token = via
+            .find("layers")
+            .and_then(|l| {
+                // `(layers "F.Cu" "B.Cu")`: span the named copper layers.
+                let names: Vec<String> = (0..)
+                    .map_while(|i| l.arg_value(i))
+                    .filter(|n| n.ends_with(".Cu"))
+                    .collect();
+                if names.is_empty() {
+                    None
+                } else {
+                    Some(names)
+                }
+            })
+            .unwrap_or_else(|| copper_layers.clone());
+        let disc = Capsule {
+            ax: at.0,
+            ay: at.1,
+            bx: at.0,
+            by: at.1,
+            r: size / 2.0,
+        };
+        for layer in &layer_token {
+            buckets.push(layer, make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new()));
+        }
+    }
+
+    // ── Filled zones (copper pours) ─────────────────────────────────────────
+    for zone in root.find_all("zone") {
+        let Some(net) = nets.net_ref(zone) else { continue };
+        // A zone can fill several layers; each `(filled_polygon (layer ...))`
+        // is the actual copper. Fall back to the zone's own `(layer ...)` and
+        // its drawn `(polygon ...)` outline when no fill is present.
+        let mut any_fill = false;
+        for fp in zone.find_all("filled_polygon") {
+            let layer = fp
+                .find_value("layer")
+                .or_else(|| zone.find_value("layer"))
+                .unwrap_or_default();
+            if !layer.ends_with(".Cu") {
+                continue;
+            }
+            if let Some(pts) = read_pts(fp) {
+                if pts.len() >= 3 {
+                    any_fill = true;
+                    buckets.push_zone(&layer, pts, net, true);
+                }
+            }
+        }
+        if !any_fill {
+            // No fill computed in the file (common pre-2017): keep the drawn
+            // outline for clearance checks but mark it unfilled so the
+            // containment short-test skips it (the solid outline would falsely
+            // engulf every other-net pad inside the pour, since antipads and
+            // thermal reliefs are not represented).
+            let layer = zone.find_value("layer").unwrap_or_default();
+            if layer.ends_with(".Cu") {
+                if let Some(poly) = zone.find("polygon").and_then(read_pts) {
+                    buckets.push_zone(&layer, poly, net, false);
+                }
+            }
+        }
+    }
+
+    // ── Pads (inside footprints) ────────────────────────────────────────────
+    for fp in root.find_all("footprint").chain(root.find_all("module")) {
+        let owner = footprint_reference(fp);
+        let (fx, fy, frot) = at_of(fp);
+        let rot_rad = frot.to_radians();
+        let (fsin, fcos) = rot_rad.sin_cos();
+        for pad in fp.find_all("pad") {
+            let Some(net) = nets.net_ref(pad) else { continue };
+            collect_pad(
+                pad,
+                net,
+                &owner,
+                (fx, fy),
+                (fsin, fcos),
+                &copper_layers,
+                &mut buckets,
+            );
+        }
+    }
+
+    buckets
+}
+
+/// One pad → a primitive on each copper layer it touches.
+fn collect_pad(
+    pad: &List,
+    net: i64,
+    owner: &str,
+    forigin: (f64, f64),
+    frot: (f64, f64),
+    copper_layers: &[String],
+    buckets: &mut LayerBuckets,
+) {
+    let (fsin, fcos) = frot;
+    let (fx, fy) = forigin;
+    // Pad-local placement.
+    let (px, py, prot) = at_of(pad);
+    // Pad shape token is the 3rd positional arg: (pad "1" smd roundrect ...).
+    let shape_tok = pad.arg_value(2).unwrap_or_default();
+    let size = pad.find("size");
+    let (sx, sy) = match size {
+        Some(s) => (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0)),
+        None => (0.0, 0.0),
+    };
+
+    // World transform for a pad-frame offset (KiCad y-down, footprint rotation
+    // counter-clockwise: matches pcb.rs's pad placement).
+    let to_world = |ox: f64, oy: f64| -> (f64, f64) {
+        (fx + px * fcos + py * fsin + ox, fy - px * fsin + py * fcos + oy)
+    };
+    let pad_origin = to_world(0.0, 0.0);
+
+    // Rotate a pad-local outline offset into the world frame. KiCad writes the
+    // pad's `(at x y rot)` rotation as the pad outline's *absolute* board-frame
+    // orientation (the footprint rotation is already folded into it), so the
+    // outline is rotated by `prot` alone (NOT composed with the footprint
+    // rotation again, which the position transform already applied). The y-down
+    // form matches `to_world`: (lx cos + ly sin, -lx sin + ly cos).
+    let (psin, pcos) = prot.to_radians().sin_cos();
+    let outline_to_world = |lx: f64, ly: f64| -> (f64, f64) {
+        let wx = lx * pcos + ly * psin;
+        let wy = -lx * psin + ly * pcos;
+        (pad_origin.0 + wx, pad_origin.1 + wy)
+    };
+
+    // Layers this pad sits on.
+    let layers: Vec<String> = pad
+        .find("layers")
+        .map(|l| {
+            let toks: Vec<String> = (0..).map_while(|i| l.arg_value(i)).collect();
+            let mut out = Vec::new();
+            for t in toks {
+                out.extend(expand_layers(&t, copper_layers));
+            }
+            out
+        })
+        .filter(|v: &Vec<String>| !v.is_empty())
+        .unwrap_or_else(|| copper_layers.to_vec());
+
+    let shape = match shape_tok.as_str() {
+        "circle" => {
+            let r = sx.max(sy) / 2.0;
+            Shape::Capsule(Capsule {
+                ax: pad_origin.0,
+                ay: pad_origin.1,
+                bx: pad_origin.0,
+                by: pad_origin.1,
+                r,
+            })
+        }
+        "oval" => {
+            // A stadium: a capsule whose segment runs along the longer axis,
+            // radius = half the shorter dimension.
+            let (long, short, along_x) = if sx >= sy { (sx, sy, true) } else { (sy, sx, false) };
+            let half = (long - short).max(0.0) / 2.0;
+            let (a, b) = if along_x {
+                (outline_to_world(-half, 0.0), outline_to_world(half, 0.0))
+            } else {
+                (outline_to_world(0.0, -half), outline_to_world(0.0, half))
+            };
+            Shape::Capsule(Capsule {
+                ax: a.0,
+                ay: a.1,
+                bx: b.0,
+                by: b.1,
+                r: short / 2.0,
+            })
+        }
+        "custom" => {
+            // Custom pad: gather its primitive polygon(s); fall back to the box.
+            if let Some(poly) = custom_pad_polygon(pad, &outline_to_world) {
+                Shape::Polygon { pts: poly, r: 0.0 }
+            } else {
+                rect_polygon(sx, sy, &outline_to_world, 0.0)
+            }
+        }
+        // rect, roundrect, trapezoid and anything else: a rectangle. For
+        // roundrect we keep a corner radius as inflation so the rounded copper
+        // is not overstated.
+        _ => {
+            let rr = if shape_tok == "roundrect" {
+                let ratio = pad.find_f64("roundrect_rratio").unwrap_or(0.0);
+                ratio * sx.min(sy)
+            } else {
+                0.0
+            };
+            // Inset the rectangle by the corner radius and carry `r` so the
+            // rounded outline is represented as inset-poly + radius.
+            rect_polygon((sx - 2.0 * rr).max(0.0), (sy - 2.0 * rr).max(0.0), &outline_to_world, rr)
+        }
+    };
+
+    for layer in &layers {
+        buckets.push(layer, make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string()));
+    }
+}
+
+/// A rectangle of size (w, h) centred on the pad origin, built via the world
+/// transform, carrying inflation radius `r`.
+fn rect_polygon(w: f64, h: f64, to_world: &dyn Fn(f64, f64) -> (f64, f64), r: f64) -> Shape {
+    let hw = w / 2.0;
+    let hh = h / 2.0;
+    let pts = vec![
+        to_world(-hw, -hh),
+        to_world(hw, -hh),
+        to_world(hw, hh),
+        to_world(-hw, hh),
+    ];
+    Shape::Polygon { pts, r }
+}
+
+/// Read a custom pad's polygon outline, transformed to world coordinates.
+fn custom_pad_polygon(pad: &List, to_world: &dyn Fn(f64, f64) -> (f64, f64)) -> Option<Vec<(f64, f64)>> {
+    let prim = pad.find("primitives")?;
+    let poly = prim.find("gr_poly").or_else(|| prim.find("poly"))?;
+    let pts = poly.find("pts")?;
+    let out: Vec<(f64, f64)> = pts
+        .find_all("xy")
+        .filter_map(|p| Some(to_world(p.arg_f64(0)?, p.arg_f64(1)?)))
+        .collect();
+    (out.len() >= 3).then_some(out)
+}
+
+/// Read a `(pts (xy ..)(xy ..))` child into world-frame coordinates (no
+/// transform; zones / filled polygons are already in board frame).
+fn read_pts(list: &List) -> Option<Vec<(f64, f64)>> {
+    let pts = list.find("pts")?;
+    let out: Vec<(f64, f64)> = pts
+        .find_all("xy")
+        .filter_map(|p| Some((p.arg_f64(0)?, p.arg_f64(1)?)))
+        .collect();
+    (!out.is_empty()).then_some(out)
+}
+
+/// Flatten an arc (start, optional mid, end) of the given width into a chain of
+/// capsule links. Without a mid point we approximate with the chord.
+fn flatten_arc(start: (f64, f64), mid: Option<(f64, f64)>, end: (f64, f64), width: f64) -> Vec<Capsule> {
+    let r = width / 2.0;
+    let Some(mid) = mid else {
+        return vec![Capsule {
+            ax: start.0,
+            ay: start.1,
+            bx: end.0,
+            by: end.1,
+            r,
+        }];
+    };
+    // Circumcircle of the three points.
+    let Some((cx, cy, radius)) = circle_from_3(start, mid, end) else {
+        return vec![Capsule {
+            ax: start.0,
+            ay: start.1,
+            bx: end.0,
+            by: end.1,
+            r,
+        }];
+    };
+    let ang = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx);
+    let a0 = ang(start);
+    let am = ang(mid);
+    let a1 = ang(end);
+    // Sweep direction: go start->mid->end the short way through mid.
+    // Normalise so the arc passes through mid.
+    let through = |from: f64, to: f64, via: f64| {
+        let norm = |x: f64| {
+            let mut v = x;
+            while v <= -std::f64::consts::PI {
+                v += std::f64::consts::TAU;
+            }
+            while v > std::f64::consts::PI {
+                v -= std::f64::consts::TAU;
+            }
+            v
+        };
+        // Total CCW sweep from->to and whether mid lies on it.
+        let mut s = norm(to - from);
+        if s < 0.0 {
+            s += std::f64::consts::TAU;
+        }
+        let mut m = norm(via - from);
+        if m < 0.0 {
+            m += std::f64::consts::TAU;
+        }
+        if m <= s {
+            s
+        } else {
+            s - std::f64::consts::TAU
+        }
+    };
+    let sweep = through(a0, a1, am);
+    let mut caps = Vec::with_capacity(ARC_SEGMENTS);
+    let mut prev = start;
+    for i in 1..=ARC_SEGMENTS {
+        let t = i as f64 / ARC_SEGMENTS as f64;
+        let a = a0 + sweep * t;
+        let p = (cx + radius * a.cos(), cy + radius * a.sin());
+        caps.push(Capsule {
+            ax: prev.0,
+            ay: prev.1,
+            bx: p.0,
+            by: p.1,
+            r,
+        });
+        prev = p;
+    }
+    caps
+}
+
+/// Circumcircle (centre, radius) of three points, or None if colinear.
+fn circle_from_3(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Option<(f64, f64, f64)> {
+    let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
+    if d.abs() < 1e-12 {
+        return None;
+    }
+    let a2 = a.0 * a.0 + a.1 * a.1;
+    let b2 = b.0 * b.0 + b.1 * b.1;
+    let c2 = c.0 * c.0 + c.1 * c.1;
+    let ux = (a2 * (b.1 - c.1) + b2 * (c.1 - a.1) + c2 * (a.1 - b.1)) / d;
+    let uy = (a2 * (c.0 - b.0) + b2 * (a.0 - c.0) + c2 * (b.0 - a.0)) / d;
+    let r = ((a.0 - ux).powi(2) + (a.1 - uy).powi(2)).sqrt();
+    Some((ux, uy, r))
+}
+
+/// `(at x y [rot])` reader.
+fn at_of(list: &List) -> (f64, f64, f64) {
+    match list.find("at") {
+        Some(at) => (
+            at.arg_f64(0).unwrap_or(0.0),
+            at.arg_f64(1).unwrap_or(0.0),
+            at.arg_f64(2).unwrap_or(0.0),
+        ),
+        None => (0.0, 0.0, 0.0),
+    }
+}
+
+/// Reference designator of a footprint (property "Reference" or fp_text).
+fn footprint_reference(fp: &List) -> String {
+    for prop in fp.find_all("property") {
+        if prop.arg_value(0).as_deref() == Some("Reference") {
+            if let Some(v) = prop.arg_value(1) {
+                return v;
+            }
+        }
+    }
+    for t in fp.find_all("fp_text") {
+        if t.arg_value(0).as_deref() == Some("reference") {
+            if let Some(v) = t.arg_value(1) {
+                return v;
+            }
+        }
+    }
+    String::new()
+}
+
+// ── Board clearance rule ─────────────────────────────────────────────────────
+
+/// Read the board's design-rule copper clearance (mm), else the default. KiCad
+/// stores it in `(setup (rules (min_clearance N)))` (modern) or a default
+/// net-class `(clearance N)`. We take the smallest credible rule we can find in
+/// `(setup ...)`, since DRC should use the tightest rule. Zone `connect_pads`
+/// clearances are intentionally ignored (they are not the trace rule).
+fn board_clearance(root: &List) -> f64 {
+    let Some(setup) = root.find("setup") else {
+        return DEFAULT_CLEARANCE_MM;
+    };
+    // Modern: (setup (rules (min_clearance N) ...)).
+    if let Some(rules) = setup.find("rules") {
+        if let Some(c) = rules.find_f64("min_clearance") {
+            if c > 0.0 {
+                return c;
+            }
+        }
+    }
+    // Direct (setup (min_clearance N)) or (setup (clearance N)).
+    for key in ["min_clearance", "clearance", "trace_clearance"] {
+        if let Some(c) = setup.find_f64(key) {
+            if c > 0.0 {
+                return c;
+            }
+        }
+    }
+    DEFAULT_CLEARANCE_MM
+}
+
+// ── Top-level DRC ────────────────────────────────────────────────────────────
+
+/// Run geometric short / clearance detection on a parsed `.kicad_pcb` document.
+/// `clearance_override` forces the clearance rule (mm) when `Some`.
+pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
+    let Some(root) = doc.root() else {
+        return DrcReport::default();
+    };
+    if root.name() != Some("kicad_pcb") {
+        return DrcReport::default();
+    }
+    let mut nets = NetResolver::from_root(root);
+    let clearance = clearance_override.unwrap_or_else(|| board_clearance(root));
+    let buckets = collect_primitives(root, &mut nets);
+
+    // Nets that carry no real connectivity (net 0 and KiCad's per-pad
+    // `unconnected-(...)` placeholders): copper on them is never a short.
+    let no_net: std::collections::HashSet<i64> = buckets
+        .by_layer
+        .values()
+        .flat_map(|v| v.iter().map(|p| p.net))
+        .chain(buckets.zones.values().flat_map(|v| v.iter().map(|z| z.net)))
+        .filter(|&id| nets.is_no_net(id))
+        .collect();
+
+    let net_owners = std::collections::HashMap::new();
+    sweep_buckets(buckets, clearance, &no_net, &net_owners, |id| nets.name_of(id))
+}
+
+/// The geometry-source-agnostic core of the DRC: take per-layer copper buckets
+/// (already in board mm), a clearance rule, the set of net ids that carry no
+/// connectivity (never a short), and a way to resolve a net id to its name, and
+/// run the R-tree pruned edge / clearance sweep plus the zone containment pass.
+///
+/// Both the KiCad path ([`run_drc`]) and the Eagle path
+/// ([`eagle_drc::run`]) build [`LayerBuckets`] from their own geometry and hand
+/// them here, so there is exactly one detection / classification engine.
+///
+/// `net_owners` maps a net id to the set of component references (footprints) it
+/// has a pad inside. It feeds the intra-footprint exemption: a *track* of net A
+/// abutting a *pad* of net B that lives in footprint F is not a board short when
+/// net A also has a pad in F. That is the deliberate escape routing of a solder
+/// jumper / star-ground / fuse-clip footprint, which the router did not create
+/// and the EDA does not flag. The KiCad caller passes an empty map (its
+/// pad-vs-pad same-owner rule already covers that ecosystem's footprints); the
+/// Eagle caller fills it because Eagle tracks carry no owner of their own.
+fn sweep_buckets(
+    buckets: LayerBuckets,
+    clearance: f64,
+    no_net: &std::collections::HashSet<i64>,
+    net_owners: &std::collections::HashMap<i64, std::collections::HashSet<String>>,
+    name_of: impl Fn(i64) -> String,
+) -> DrcReport {
+    let mut report = DrcReport {
+        clearance_mm: clearance,
+        findings: Vec::new(),
+        primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
+    };
+
+    // De-dup findings on the same net pair + layer + rounded location, so a
+    // pour overlapping a long track does not emit thousands of near-identical
+    // rows.
+    let mut seen: std::collections::HashSet<(i64, i64, String, i64, i64)> =
+        std::collections::HashSet::new();
+
+    // Record one finding, de-duplicating on net pair + layer + ~0.25 mm cell so
+    // a pour running alongside a long track does not emit thousands of rows.
+    let mut record = |kind: ViolationKind,
+                      pa: i64,
+                      pb: i64,
+                      item_a: Item,
+                      item_b: Item,
+                      layer: &str,
+                      cx: f64,
+                      cy: f64,
+                      gap: f64| {
+        let (na, nb) = (pa.min(pb), pa.max(pb));
+        let key = (
+            na,
+            nb,
+            layer.to_string(),
+            (cx * 4.0).round() as i64,
+            (cy * 4.0).round() as i64,
+        );
+        if !seen.insert(key) {
+            return;
+        }
+        let (item_a, item_b) = if pa <= pb { (item_a, item_b) } else { (item_b, item_a) };
+        report.findings.push(DrcFinding {
+            kind,
+            net_a: na,
+            net_b: nb,
+            net_a_name: name_of(na),
+            net_b_name: name_of(nb),
+            layer: layer.to_string(),
+            x: cx,
+            y: cy,
+            gap_mm: gap,
+            item_a,
+            item_b,
+        });
+    };
+
+    let empty_zones: Vec<ZonePoly> = Vec::new();
+    for (layer, prims_ref) in &buckets.by_layer {
+        let zones = buckets.zones.get(layer).unwrap_or(&empty_zones);
+        // Index primitives, recording their position for shape lookup.
+        let mut prims = prims_ref.clone();
+        for (i, p) in prims.iter_mut().enumerate() {
+            p.idx = i;
+        }
+        let leaves: Vec<Leaf> = prims
+            .iter()
+            .map(|p| Leaf {
+                bounds: p.bounds,
+                idx: p.idx,
+            })
+            .collect();
+        let tree = RTree::bulk_load(leaves);
+
+        // ── Edge / clearance sweep (R-tree pruned) ──────────────────────────
+        for p in &prims {
+            // Query window: this primitive's bounds inflated by the clearance.
+            let query = AABB::from_corners(
+                [p.bounds[0] - clearance, p.bounds[1] - clearance],
+                [p.bounds[2] + clearance, p.bounds[3] + clearance],
+            );
+            for leaf in tree.locate_in_envelope_intersecting(query) {
+                let q = &prims[leaf.idx];
+                // Each unordered pair once; skip same-net.
+                if q.idx <= p.idx || q.net == p.net {
+                    continue;
+                }
+                // Net 0 and `unconnected-(...)` copper carry no connectivity, so
+                // they cannot form an electrical short.
+                if no_net.contains(&p.net) || no_net.contains(&q.net) {
+                    continue;
+                }
+                // Two pads of the *same* footprint are positioned by the
+                // footprint author, not the router. Some footprints place
+                // different-net pads deliberately abutting (fuse clips, jumper
+                // bridges, edge-connector fingers). KiCad does not treat that as
+                // a board short, so neither do we.
+                if p.kind == ItemKind::Pad
+                    && q.kind == ItemKind::Pad
+                    && !p.owner.is_empty()
+                    && p.owner == q.owner
+                {
+                    continue;
+                }
+                // Two nets that both land a pad in the *same* component are
+                // deliberately tied there: a solder jumper (`SJ`, `SMT-JUMPER`),
+                // a star-ground point, a 0-ohm / ferrite bridge (GND↔UGND on the
+                // Uno is exactly this, joined through the `GROUND` SJ jumper). The
+                // component places their pads a hair apart by design and the
+                // traces feeding it abut, which the EDA does not flag as a board
+                // short. So copper of two nets sharing a footprint is exempt:
+                // their abutment is the designer's tie, not a router-made short.
+                // (This generalises the KiCad pad-vs-pad same-owner rule to the
+                // track-vs-pad and track-vs-track forms Eagle's jumpers produce,
+                // since Eagle traces carry no owner of their own.)
+                if net_owners
+                    .get(&p.net)
+                    .zip(net_owners.get(&q.net))
+                    .is_some_and(|(fa, fb)| !fa.is_disjoint(fb))
+                {
+                    continue;
+                }
+                let (gap, (cx, cy)) = shape_gap(&p.shape, &q.shape);
+                if gap >= clearance {
+                    continue;
+                }
+                let kind = if gap <= 0.0 {
+                    ViolationKind::Short
+                } else {
+                    ViolationKind::Clearance
+                };
+                record(kind, p.net, q.net, p.item(), q.item(), layer, cx, cy, gap);
+            }
+        }
+
+        // ── Zone containment pass ───────────────────────────────────────────
+        // A primitive sitting fully inside a different-net pour (without ever
+        // crossing the indexed boundary edges) is still a short. Test each
+        // non-zone primitive's representative point against every opposite-net
+        // zone whose bounding box contains it.
+        if !zones.is_empty() {
+            for p in &prims {
+                if p.kind == ItemKind::Zone || no_net.contains(&p.net) {
+                    continue;
+                }
+                let (rx, ry) = representative_point(&p.shape);
+                for z in zones {
+                    if !z.filled || z.net == p.net || no_net.contains(&z.net) {
+                        continue;
+                    }
+                    if rx < z.bounds[0] || rx > z.bounds[2] || ry < z.bounds[1] || ry > z.bounds[3] {
+                        continue;
+                    }
+                    if point_in_polygon(rx, ry, &z.pts) {
+                        record(
+                            ViolationKind::Short,
+                            p.net,
+                            z.net,
+                            p.item(),
+                            Item { kind: ItemKind::Zone, net: z.net, owner: String::new() },
+                            layer,
+                            rx,
+                            ry,
+                            -clearance,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Stable order: shorts first, then by net pair and layer.
+    report.findings.sort_by(|a, b| {
+        (a.kind == ViolationKind::Clearance)
+            .cmp(&(b.kind == ViolationKind::Clearance))
+            .then(a.net_a.cmp(&b.net_a))
+            .then(a.net_b.cmp(&b.net_b))
+            .then(a.layer.cmp(&b.layer))
+    });
+    report
+}
+
+/// Convenience: parse `.kicad_pcb` text and run DRC with the default clearance
+/// rule (or the board's own rule when present).
+pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
+    let doc = forge_sexpr::parse(text)?;
+    Ok(run_drc(&doc, None))
+}
+
+/// Convenience: run the geometric DRC on Eagle `.brd` XML text, using the
+/// board's own design-rule clearance (falling back to [`DEFAULT_CLEARANCE_MM`]).
+pub fn eagle_drc_from_text(text: &str) -> DrcReport {
+    eagle_drc::run(text, None)
+}
+
+// ── Eagle .brd geometry → the same engine ────────────────────────────────────
+
+/// Eagle `.brd` geometry extraction. The connectivity extractor in `eagle.rs`
+/// reads pad nets; this reads *copper geometry per net* (wires, vias, pads,
+/// smds, polygons, rectangles, circles) and feeds it to [`sweep_buckets`], the
+/// exact same short / clearance engine the KiCad path uses. The geometry is kept
+/// in Eagle's native frame (millimetres, y-up); the DRC is self-consistent so
+/// the y orientation never matters, only relative positions do.
+///
+/// Layer model: Eagle copper layers are numbered, 1 = Top, 16 = Bottom, 2..15
+/// inner. A mirrored element (`rot="MR<deg>"`) is flipped onto the opposite side,
+/// so its smds and the side-specific copper swap 1↔16.
+pub mod eagle_drc {
+    use super::{
+        make_prim, sweep_buckets, Capsule, DrcReport, ItemKind, LayerBuckets, Shape, ARC_SEGMENTS,
+        DEFAULT_CLEARANCE_MM,
+    };
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use std::collections::HashMap;
+
+    type Attrs = HashMap<String, String>;
+
+    /// A polygon being streamed: (signal index, outline stroke width, copper
+    /// layer number, vertices as (x, y, curve-to-next-degrees)).
+    type PartialPoly = (usize, f64, i64, Vec<(f64, f64, f64)>);
+
+    fn attrs_of(e: &quick_xml::events::BytesStart) -> Attrs {
+        e.attributes()
+            .flatten()
+            .map(|a| {
+                (
+                    String::from_utf8_lossy(a.key.as_ref()).into_owned(),
+                    String::from_utf8_lossy(&a.value).into_owned(),
+                )
+            })
+            .collect()
+    }
+
+    fn num(a: &Attrs, k: &str) -> Option<f64> {
+        a.get(k)?.parse().ok()
+    }
+
+    /// Parse an Eagle length value that may carry a unit suffix (`"6mil"`,
+    /// `"0.15mm"`, or a bare number already in mm). Design-rule clearances are
+    /// written in mil; raw geometry coordinates are bare mm.
+    fn parse_len_mm(s: &str) -> Option<f64> {
+        let s = s.trim();
+        if let Some(v) = s.strip_suffix("mil") {
+            return v.trim().parse::<f64>().ok().map(|m| m * 0.0254);
+        }
+        if let Some(v) = s.strip_suffix("mm") {
+            return v.trim().parse::<f64>().ok();
+        }
+        if let Some(v) = s.strip_suffix("mic") {
+            return v.trim().parse::<f64>().ok().map(|m| m * 0.001);
+        }
+        if let Some(v) = s.strip_suffix("inch") {
+            return v.trim().parse::<f64>().ok().map(|m| m * 25.4);
+        }
+        s.parse::<f64>().ok()
+    }
+
+    /// A copper layer number is real copper (1 = Top, 16 = Bottom, 2..15 inner).
+    fn is_copper_layer(n: i64) -> bool {
+        (1..=16).contains(&n)
+    }
+
+    /// Canonical layer name for reporting, matching the connectivity extractor's
+    /// `F.Cu` / `B.Cu` convention for the two outer layers.
+    fn layer_name(n: i64) -> String {
+        match n {
+            1 => "F.Cu".to_string(),
+            16 => "B.Cu".to_string(),
+            other => format!("In{other}.Cu"),
+        }
+    }
+
+    /// Mirror a copper layer number across the board (Top↔Bottom). Inner layers
+    /// reflect about the stack centre; for the two-layer boards in scope this is
+    /// just 1↔16, but the general form keeps multilayer honest.
+    fn mirror_layer(n: i64) -> i64 {
+        if (1..=16).contains(&n) {
+            17 - n
+        } else {
+            n
+        }
+    }
+
+    /// One pad / smd shape inside a package definition, in package-local mm.
+    /// `name` is the pad name, used to map the placed copper to its net.
+    #[derive(Clone)]
+    enum PkgItem {
+        /// Through-hole pad: present on every copper layer. `shape` is Eagle's
+        /// (round / square / octagon / long / offset); `diameter` is the pad
+        /// copper diameter, `drill` the hole, `rot_deg` the pad's own rotation.
+        Pad {
+            name: String,
+            x: f64,
+            y: f64,
+            diameter: f64,
+            drill: f64,
+            shape: String,
+            rot_deg: f64,
+        },
+        /// Surface-mount pad: a single layer (1 by default, flipped by mirror),
+        /// `dx`/`dy` rectangle with `roundness` (0..100 %) and `rot_deg`.
+        Smd {
+            name: String,
+            x: f64,
+            y: f64,
+            dx: f64,
+            dy: f64,
+            roundness: f64,
+            rot_deg: f64,
+            layer: i64,
+        },
+    }
+
+    impl PkgItem {
+        fn name(&self) -> &str {
+            match self {
+                PkgItem::Pad { name, .. } | PkgItem::Smd { name, .. } => name,
+            }
+        }
+    }
+
+    /// A placed component instance.
+    struct Element {
+        name: String,
+        package: String,
+        x: f64,
+        y: f64,
+        rot_deg: f64,
+        mirrored: bool,
+    }
+
+    /// Board-level copper geometry attached to a net (signal), read straight from
+    /// `<signal>` children: wires, vias, polygons, plus board-level rectangles /
+    /// circles on copper layers.
+    enum SignalGeom {
+        Wire {
+            x1: f64,
+            y1: f64,
+            x2: f64,
+            y2: f64,
+            width: f64,
+            curve: f64,
+            layer: i64,
+        },
+        Via {
+            x: f64,
+            y: f64,
+            diameter: Option<f64>,
+            drill: f64,
+            shape: String,
+        },
+        Polygon {
+            width: f64,
+            layer: i64,
+            verts: Vec<(f64, f64, f64)>, // (x, y, curve-to-next in deg)
+        },
+        Rect {
+            x1: f64,
+            y1: f64,
+            x2: f64,
+            y2: f64,
+            rot_deg: f64,
+            layer: i64,
+        },
+        Circle {
+            x: f64,
+            y: f64,
+            radius: f64,
+            width: f64,
+            layer: i64,
+        },
+    }
+
+    /// Everything parsed from a `.brd`: package defs, placements, per-net copper,
+    /// and the board's design-rule clearance.
+    #[derive(Default)]
+    struct Parsed {
+        packages: HashMap<String, Vec<PkgItem>>,
+        elements: Vec<Element>,
+        /// signal index -> (name, geometry)
+        signals: Vec<(String, Vec<SignalGeom>)>,
+        clearance_mm: Option<f64>,
+        via_restring: ViaRestring,
+        saw_eagle: bool,
+    }
+
+    /// Via outer-diameter rule, used when a via gives no explicit `diameter`.
+    /// Eagle computes the annular ring as `max(rvViaOuter * drill, rlMinViaOuter)`
+    /// clamped to `rlMaxViaOuter`, and the outer diameter is `drill + 2*ring`.
+    struct ViaRestring {
+        rv: f64,
+        min_mm: f64,
+        max_mm: f64,
+    }
+
+    impl Default for ViaRestring {
+        fn default() -> Self {
+            // Eagle's stock defaults.
+            ViaRestring { rv: 0.25, min_mm: 0.2032, max_mm: 0.508 }
+        }
+    }
+
+    impl ViaRestring {
+        fn outer_diameter(&self, drill: f64) -> f64 {
+            let ring = (self.rv * drill).clamp(self.min_mm, self.max_mm);
+            drill + 2.0 * ring
+        }
+    }
+
+    /// Parse `rot`/`rot`-style strings: `R90`, `MR270`, `M90`, `SR0`. Returns
+    /// `(degrees, mirrored)`.
+    fn parse_rot(s: &str) -> (f64, bool) {
+        let mirrored = s.contains('M');
+        let deg = s
+            .trim_start_matches(['M', 'S', 'R'])
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        (deg, mirrored)
+    }
+
+    /// Stream the XML once, collecting packages, elements, signals and rules.
+    fn parse(text: &str) -> Parsed {
+        let mut reader = Reader::from_str(text);
+        reader.config_mut().trim_text(true);
+        let mut out = Parsed::default();
+
+        // Parser state.
+        let mut cur_package: Option<String> = None;
+        let mut cur_signal: Option<usize> = None;
+        // The polygon currently being read (signal index, partial Polygon).
+        let mut cur_poly: Option<PartialPoly> = None;
+        // Pending raw param values, resolved after the stream.
+        let mut params: HashMap<String, String> = HashMap::new();
+        // Depth nesting so we know when a polygon's vertices end.
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let name = e.name().as_ref().to_vec();
+                    let a = attrs_of(&e);
+                    match name.as_slice() {
+                        b"eagle" => out.saw_eagle = true,
+                        b"param" => {
+                            if let (Some(k), Some(v)) = (a.get("name"), a.get("value")) {
+                                params.insert(k.clone(), v.clone());
+                            }
+                        }
+                        b"package" => {
+                            cur_package = a.get("name").cloned();
+                            if let Some(n) = &cur_package {
+                                out.packages.entry(n.clone()).or_default();
+                            }
+                        }
+                        b"pad" => {
+                            if let Some(pkg) = &cur_package {
+                                if let (Some(x), Some(y)) = (num(&a, "x"), num(&a, "y")) {
+                                    let drill = num(&a, "drill").unwrap_or(0.0);
+                                    let diameter = num(&a, "diameter").unwrap_or(0.0);
+                                    let (rot_deg, _) =
+                                        parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"));
+                                    out.packages.entry(pkg.clone()).or_default().push(
+                                        PkgItem::Pad {
+                                            name: a.get("name").cloned().unwrap_or_default(),
+                                            x,
+                                            y,
+                                            diameter,
+                                            drill,
+                                            shape: a
+                                                .get("shape")
+                                                .cloned()
+                                                .unwrap_or_else(|| "round".to_string()),
+                                            rot_deg,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        b"smd" => {
+                            if let Some(pkg) = &cur_package {
+                                if let (Some(x), Some(y), Some(dx), Some(dy)) =
+                                    (num(&a, "x"), num(&a, "y"), num(&a, "dx"), num(&a, "dy"))
+                                {
+                                    let (rot_deg, _) =
+                                        parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"));
+                                    let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(1);
+                                    out.packages.entry(pkg.clone()).or_default().push(
+                                        PkgItem::Smd {
+                                            name: a.get("name").cloned().unwrap_or_default(),
+                                            x,
+                                            y,
+                                            dx,
+                                            dy,
+                                            roundness: num(&a, "roundness").unwrap_or(0.0),
+                                            rot_deg,
+                                            layer,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        b"element" => {
+                            let (rot_deg, mirrored) =
+                                parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"));
+                            out.elements.push(Element {
+                                name: a.get("name").cloned().unwrap_or_default(),
+                                package: a.get("package").cloned().unwrap_or_default(),
+                                x: num(&a, "x").unwrap_or(0.0),
+                                y: num(&a, "y").unwrap_or(0.0),
+                                rot_deg,
+                                mirrored,
+                            });
+                        }
+                        b"signal" => {
+                            out.signals
+                                .push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
+                            cur_signal = Some(out.signals.len() - 1);
+                        }
+                        b"wire" => {
+                            if let Some(si) = cur_signal {
+                                if let (Some(x1), Some(y1), Some(x2), Some(y2)) =
+                                    (num(&a, "x1"), num(&a, "y1"), num(&a, "x2"), num(&a, "y2"))
+                                {
+                                    let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
+                                    if is_copper_layer(layer) {
+                                        out.signals[si].1.push(SignalGeom::Wire {
+                                            x1,
+                                            y1,
+                                            x2,
+                                            y2,
+                                            width: num(&a, "width").unwrap_or(0.0),
+                                            curve: num(&a, "curve").unwrap_or(0.0),
+                                            layer,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        b"via" => {
+                            if let Some(si) = cur_signal {
+                                if let (Some(x), Some(y)) = (num(&a, "x"), num(&a, "y")) {
+                                    out.signals[si].1.push(SignalGeom::Via {
+                                        x,
+                                        y,
+                                        diameter: num(&a, "diameter"),
+                                        drill: num(&a, "drill").unwrap_or(0.0),
+                                        shape: a
+                                            .get("shape")
+                                            .cloned()
+                                            .unwrap_or_else(|| "round".to_string()),
+                                    });
+                                }
+                            }
+                        }
+                        b"polygon" => {
+                            if let Some(si) = cur_signal {
+                                let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
+                                if is_copper_layer(layer) {
+                                    cur_poly =
+                                        Some((si, num(&a, "width").unwrap_or(0.0), layer, Vec::new()));
+                                }
+                            }
+                        }
+                        b"vertex" => {
+                            if let Some((_, _, _, verts)) = cur_poly.as_mut() {
+                                if let (Some(x), Some(y)) = (num(&a, "x"), num(&a, "y")) {
+                                    verts.push((x, y, num(&a, "curve").unwrap_or(0.0)));
+                                }
+                            }
+                        }
+                        b"rectangle" => {
+                            if let Some(si) = cur_signal {
+                                let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
+                                if is_copper_layer(layer) {
+                                    if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (
+                                        num(&a, "x1"),
+                                        num(&a, "y1"),
+                                        num(&a, "x2"),
+                                        num(&a, "y2"),
+                                    ) {
+                                        let (rot_deg, _) = parse_rot(
+                                            a.get("rot").map(String::as_str).unwrap_or("R0"),
+                                        );
+                                        out.signals[si].1.push(SignalGeom::Rect {
+                                            x1,
+                                            y1,
+                                            x2,
+                                            y2,
+                                            rot_deg,
+                                            layer,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        b"circle" => {
+                            if let Some(si) = cur_signal {
+                                let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
+                                if is_copper_layer(layer) {
+                                    if let (Some(x), Some(y), Some(r)) =
+                                        (num(&a, "x"), num(&a, "y"), num(&a, "radius"))
+                                    {
+                                        out.signals[si].1.push(SignalGeom::Circle {
+                                            x,
+                                            y,
+                                            radius: r,
+                                            width: num(&a, "width").unwrap_or(0.0),
+                                            layer,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::End(e)) => match e.name().as_ref() {
+                    b"package" => cur_package = None,
+                    b"signal" => cur_signal = None,
+                    b"polygon" => {
+                        if let Some((si, width, layer, verts)) = cur_poly.take() {
+                            if verts.len() >= 3 {
+                                out.signals[si]
+                                    .1
+                                    .push(SignalGeom::Polygon { width, layer, verts });
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        // Resolve the design-rule clearance: take the tightest of the spacing
+        // rules that actually gate copper-to-copper (wire/pad/via/smd), so we do
+        // not manufacture noise by using a looser rule than the board allows.
+        let dr_keys = [
+            "mdWireWire",
+            "mdWirePad",
+            "mdWireVia",
+            "mdPadPad",
+            "mdPadVia",
+            "mdViaVia",
+            "mdSmdPad",
+            "mdSmdVia",
+            "mdSmdSmd",
+        ];
+        let mut tightest: Option<f64> = None;
+        for k in dr_keys {
+            if let Some(v) = params.get(k).and_then(|s| parse_len_mm(s)) {
+                if v > 0.0 {
+                    tightest = Some(tightest.map_or(v, |t: f64| t.min(v)));
+                }
+            }
+        }
+        out.clearance_mm = tightest;
+
+        // Via restring rule (for vias with no explicit diameter).
+        let mut vr = ViaRestring::default();
+        if let Some(v) = params.get("rvViaOuter").and_then(|s| s.parse::<f64>().ok()) {
+            vr.rv = v;
+        }
+        if let Some(v) = params.get("rlMinViaOuter").and_then(|s| parse_len_mm(s)) {
+            vr.min_mm = v;
+        }
+        if let Some(v) = params.get("rlMaxViaOuter").and_then(|s| parse_len_mm(s)) {
+            vr.max_mm = v;
+        }
+        out.via_restring = vr;
+
+        out
+    }
+
+    /// Flatten an Eagle `curve` arc (chord endpoints + signed included angle in
+    /// degrees) into a chain of capsule links of the given radius.
+    fn flatten_curve(
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        curve_deg: f64,
+        r: f64,
+    ) -> Vec<Capsule> {
+        if curve_deg.abs() < 1e-6 {
+            return vec![Capsule { ax: x1, ay: y1, bx: x2, by: y2, r }];
+        }
+        // The included angle is `curve_deg`; the chord subtends it. Centre lies
+        // off the chord midpoint by the sagitta direction.
+        let theta = curve_deg.to_radians();
+        let mx = (x1 + x2) / 2.0;
+        let my = (y1 + y2) / 2.0;
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let chord = (dx * dx + dy * dy).sqrt();
+        if chord < 1e-9 {
+            return vec![Capsule { ax: x1, ay: y1, bx: x2, by: y2, r }];
+        }
+        let radius = (chord / 2.0) / (theta / 2.0).sin().abs();
+        // Distance from chord midpoint to centre.
+        let h = (radius * radius - (chord / 2.0).powi(2)).max(0.0).sqrt();
+        // Unit normal to the chord. The centre sits a distance `h` along the
+        // normal from the midpoint, but on which side depends on the sign of the
+        // included angle AND on whether the arc is the major or minor one. Rather
+        // than reason through every quadrant (and get the parallel diff-pair arcs
+        // crossing, which manufactures false shorts), pick the side that actually
+        // lands the sweep on the stated endpoint.
+        let nx = -dy / chord;
+        let ny = dx / chord;
+        let pick = |s: f64| -> (f64, f64, f64, f64) {
+            let cx = mx + s * h * nx;
+            let cy = my + s * h * ny;
+            let a0 = (y1 - cy).atan2(x1 - cx);
+            let ex = cx + radius * (a0 + theta).cos();
+            let ey = cy + radius * (a0 + theta).sin();
+            let err = (ex - x2).hypot(ey - y2);
+            (err, cx, cy, a0)
+        };
+        let (cx, cy, a0) = {
+            let plus = pick(1.0);
+            let minus = pick(-1.0);
+            let best = if plus.0 <= minus.0 { plus } else { minus };
+            (best.1, best.2, best.3)
+        };
+        let mut caps = Vec::with_capacity(ARC_SEGMENTS);
+        let mut prev = (x1, y1);
+        for i in 1..=ARC_SEGMENTS {
+            let t = i as f64 / ARC_SEGMENTS as f64;
+            let a = a0 + theta * t;
+            let p = (cx + radius * a.cos(), cy + radius * a.sin());
+            caps.push(Capsule { ax: prev.0, ay: prev.1, bx: p.0, by: p.1, r });
+            prev = p;
+        }
+        caps
+    }
+
+    /// Build a regular-octagon polygon of "diameter" `d` (flat-to-flat across the
+    /// bounding box) centred at `(cx, cy)`, rotated by `rot` radians.
+    fn octagon(cx: f64, cy: f64, d: f64, rot: f64) -> Vec<(f64, f64)> {
+        let r = d / 2.0;
+        // Octagon vertices at 22.5° offsets, circumradius chosen so the flats
+        // sit at ±r (matching Eagle's flat-to-flat pad size).
+        let circum = r / (std::f64::consts::FRAC_PI_8).cos();
+        let (rs, rc) = rot.sin_cos();
+        (0..8)
+            .map(|i| {
+                let a = std::f64::consts::FRAC_PI_8 + i as f64 * std::f64::consts::FRAC_PI_4;
+                let (lx, ly) = (circum * a.cos(), circum * a.sin());
+                (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc)
+            })
+            .collect()
+    }
+
+    /// Axis-aligned-then-rotated rectangle centred at `(cx, cy)` of size `w`×`h`.
+    fn rect_pts(cx: f64, cy: f64, w: f64, h: f64, rot: f64) -> Vec<(f64, f64)> {
+        let hw = w / 2.0;
+        let hh = h / 2.0;
+        let (rs, rc) = rot.sin_cos();
+        [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+            .into_iter()
+            .map(|(lx, ly)| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc))
+            .collect()
+    }
+
+    /// Place a package item into world coordinates and push the resulting copper
+    /// primitive(s) onto the right layer(s).
+    fn place_pkg_item(
+        item: &PkgItem,
+        el: &Element,
+        net: i64,
+        copper_layers: &[i64],
+        buckets: &mut LayerBuckets,
+    ) {
+        // Element transform: local (lx, ly) → world. Eagle is y-up, rotation CCW.
+        // A mirrored element (`MR<deg>`) is reflected about the Y axis (negate
+        // local X) and then rotated CLOCKWISE by `deg` (mirroring flips the sense
+        // of rotation). Equivalently: flip-X, then rotate by `-deg`.
+        //
+        // The earlier form used flip-Y with `+deg`. That is *identical* to
+        // flip-X/`-deg` only when the rotation is a non-trivial multiple that
+        // absorbs the sign (e.g. MR90), which is why it tested clean on the QT
+        // Py's `MR90` SOIC8. But for `MR0` / `MR180` (no rotation to absorb the
+        // sign) flip-Y and flip-X diverge, and flip-Y placed pads on the wrong
+        // side of the package origin. That manufactured false shorts on the
+        // SparkFun RP2040 Thing Plus, whose `MR0` micro-SD socket J6 then dropped
+        // its SCLK/VCC/GND pads ~23 mm away, on top of the V_USB / EN bottom
+        // traces. With flip-X/`-deg`, J6's SCLK pad lands at (10.51, 49.05),
+        // exactly on its own SPI_SCK1 net copper (verified), and the QT Py `MR90`
+        // placement is unchanged (the two transforms coincide there).
+        let eff_rot = if el.mirrored { -el.rot_deg } else { el.rot_deg };
+        let (esin, ecos) = eff_rot.to_radians().sin_cos();
+        let to_world = |lx: f64, ly: f64| -> (f64, f64) {
+            let mx = if el.mirrored { -lx } else { lx };
+            (el.x + mx * ecos - ly * esin, el.y + mx * esin + ly * ecos)
+        };
+        match item {
+            PkgItem::Pad { x, y, diameter, drill, shape, rot_deg, .. } => {
+                let (cx, cy) = to_world(*x, *y);
+                // Pads in the corpus all carry an explicit copper diameter; if one
+                // is absent, fall back to a 0.2 mm annular ring over the drill.
+                let d = if *diameter > 0.0 { *diameter } else { drill + 2.0 * 0.2032 };
+                // Pad rotation combines the element rotation with the pad's own;
+                // mirroring negates the pad rotation (it is reflected).
+                let pad_rot = if el.mirrored {
+                    (el.rot_deg - rot_deg).to_radians()
+                } else {
+                    (el.rot_deg + rot_deg).to_radians()
+                };
+                let shape = match shape.as_str() {
+                    "square" => Shape::Polygon { pts: rect_pts(cx, cy, d, d, pad_rot), r: 0.0 },
+                    "octagon" => Shape::Polygon { pts: octagon(cx, cy, d, pad_rot), r: 0.0 },
+                    "long" => {
+                        // A "long" pad is a stadium: length 2*d along the pad's
+                        // axis, width d. Model as a capsule.
+                        let half = d / 2.0; // segment half-length so total ≈ 2d
+                        let (rs, rc) = pad_rot.sin_cos();
+                        let ax = cx - half * rc;
+                        let ay = cy - half * rs;
+                        let bx = cx + half * rc;
+                        let by = cy + half * rs;
+                        Shape::Capsule(Capsule { ax, ay, bx, by, r: d / 2.0 })
+                    }
+                    "offset" => {
+                        // Offset: like "long" but the hole sits at one end, so the
+                        // copper extends a full diameter to one side.
+                        let (rs, rc) = pad_rot.sin_cos();
+                        let bx = cx + d * rc;
+                        let by = cy + d * rs;
+                        Shape::Capsule(Capsule { ax: cx, ay: cy, bx, by, r: d / 2.0 })
+                    }
+                    // round (default): a disc.
+                    _ => Shape::Capsule(Capsule { ax: cx, ay: cy, bx: cx, by: cy, r: d / 2.0 }),
+                };
+                for layer in copper_layers {
+                    buckets.push(
+                        &layer_name(*layer),
+                        make_prim(shape.clone(), net, ItemKind::Pad, el.name.clone()),
+                    );
+                }
+            }
+            PkgItem::Smd { x, y, dx, dy, roundness, rot_deg, layer, .. } => {
+                let (cx, cy) = to_world(*x, *y);
+                // The smd's drawn layer (1 by default) flips with a mirrored
+                // element.
+                let layer = if el.mirrored { mirror_layer(*layer) } else { *layer };
+                if !is_copper_layer(layer) {
+                    return;
+                }
+                let smd_rot = if el.mirrored {
+                    (el.rot_deg - rot_deg).to_radians()
+                } else {
+                    (el.rot_deg + rot_deg).to_radians()
+                };
+                // Roundness is a percentage of the shorter side used as the
+                // corner radius; carry it as an inflation radius on an inset rect
+                // so the rounded copper is not overstated (same trick as KiCad
+                // roundrect).
+                let rr = (roundness / 100.0) * dx.min(*dy) / 2.0;
+                let shape = Shape::Polygon {
+                    pts: rect_pts(cx, cy, (dx - 2.0 * rr).max(0.0), (dy - 2.0 * rr).max(0.0), smd_rot),
+                    r: rr,
+                };
+                buckets.push(
+                    &layer_name(layer),
+                    make_prim(shape, net, ItemKind::Pad, el.name.clone()),
+                );
+            }
+        }
+    }
+
+    /// Run the geometric DRC on Eagle `.brd` text, feeding the shared engine.
+    /// `clearance_override` forces the clearance rule (mm) when `Some`; otherwise
+    /// the board's own design-rule clearance is used, falling back to
+    /// [`DEFAULT_CLEARANCE_MM`] only when the board states none.
+    pub fn run(text: &str, clearance_override: Option<f64>) -> DrcReport {
+        let parsed = parse(text);
+        if !parsed.saw_eagle {
+            return DrcReport::default();
+        }
+        let clearance = clearance_override
+            .or(parsed.clearance_mm)
+            .unwrap_or(DEFAULT_CLEARANCE_MM);
+
+        // Net ids: 1-based signal index, matching `eagle.rs`. Name lookup table.
+        let names: Vec<String> = parsed.signals.iter().map(|(n, _)| n.clone()).collect();
+        let name_of = |id: i64| -> String {
+            names.get((id - 1) as usize).cloned().unwrap_or_default()
+        };
+
+        // The two-layer copper stack these boards use; a TH pad / via sits on all
+        // of them. (Inner layers would be added here for a multilayer board, but
+        // the famous corpus is all two-layer.)
+        let copper_layers: Vec<i64> = vec![1, 16];
+
+        let mut buckets = LayerBuckets::default();
+
+        // ── Board-level signal geometry ──────────────────────────────────────
+        for (si, (_, geoms)) in parsed.signals.iter().enumerate() {
+            let net = si as i64 + 1;
+            for g in geoms {
+                match g {
+                    SignalGeom::Wire { x1, y1, x2, y2, width, curve, layer } => {
+                        let r = width / 2.0;
+                        for cap in flatten_curve(*x1, *y1, *x2, *y2, *curve, r) {
+                            buckets.push(
+                                &layer_name(*layer),
+                                make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new()),
+                            );
+                        }
+                    }
+                    SignalGeom::Via { x, y, diameter, drill, shape } => {
+                        let d = diameter.unwrap_or_else(|| parsed.via_restring.outer_diameter(*drill));
+                        // A via spans every copper layer (`extent="1-16"`).
+                        let prim_shape = if shape == "octagon" {
+                            Shape::Polygon { pts: octagon(*x, *y, d, 0.0), r: 0.0 }
+                        } else {
+                            Shape::Capsule(Capsule { ax: *x, ay: *y, bx: *x, by: *y, r: d / 2.0 })
+                        };
+                        for layer in &copper_layers {
+                            buckets.push(
+                                &layer_name(*layer),
+                                make_prim(prim_shape.clone(), net, ItemKind::Via, String::new()),
+                            );
+                        }
+                    }
+                    SignalGeom::Polygon { width, layer, verts } => {
+                        // Signal polygon (copper pour). HONESTY CAVEAT: a `.brd`
+                        // stores only the pour's *requested outline*, not the
+                        // copper Eagle actually pours. The real fill carves an
+                        // `isolate` antipad gap around every foreign-net wire / pad
+                        // / via that sits inside the outline, and arbitrates
+                        // overlapping pours by `rank`. Neither the antipads nor the
+                        // rank are in the file. So the drawn outline is NOT copper
+                        // we can short against: treating its boundary as solid
+                        // copper turns every track that legitimately crosses into
+                        // the pour (and every foreign pad the pour isolates around)
+                        // into a false short. We therefore EXCLUDE the pour from
+                        // the short / clearance test entirely rather than
+                        // manufacture noise. Re-pouring the board in Eagle and
+                        // exporting the computed polygons (with antipads) would be
+                        // needed to check pour-to-copper shorts honestly; that data
+                        // is not present here. The outline is still flattened (with
+                        // per-vertex curves) so the parse is exercised and the
+                        // limitation is explicit, not silent.
+                        let _ = (width, layer);
+                        let _pour_outline = flatten_polygon(verts);
+                    }
+                    SignalGeom::Rect { x1, y1, x2, y2, rot_deg, layer } => {
+                        let cx = (x1 + x2) / 2.0;
+                        let cy = (y1 + y2) / 2.0;
+                        let w = (x2 - x1).abs();
+                        let h = (y2 - y1).abs();
+                        let pts = rect_pts(cx, cy, w, h, rot_deg.to_radians());
+                        buckets.push(
+                            &layer_name(*layer),
+                            make_prim(
+                                Shape::Polygon { pts, r: 0.0 },
+                                net,
+                                ItemKind::Zone,
+                                String::new(),
+                            ),
+                        );
+                    }
+                    SignalGeom::Circle { x, y, radius, width, layer } => {
+                        // A drawn circle on copper: the copper is the annulus of
+                        // stroke `width` at `radius`, but for short detection the
+                        // conservative solid disc of the outer radius is used.
+                        let r = radius + width / 2.0;
+                        buckets.push(
+                            &layer_name(*layer),
+                            make_prim(
+                                Shape::Capsule(Capsule { ax: *x, ay: *y, bx: *x, by: *y, r }),
+                                net,
+                                ItemKind::Zone,
+                                String::new(),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
+        // ── Placed package copper (pads + smds) ──────────────────────────────
+        // (element, pad-name) → net, from contactrefs. We re-read those here via
+        // the connectivity extractor's mapping so the geometry carries nets.
+        let pad_net = pad_net_map(text, &parsed);
+        // net id -> set of element references it has a pad inside. Feeds the
+        // jumper / star-ground escape-routing exemption in the sweep.
+        let mut net_owners: HashMap<i64, std::collections::HashSet<String>> = HashMap::new();
+        for ((el_name, _pad), net) in &pad_net {
+            net_owners.entry(*net).or_default().insert(el_name.clone());
+        }
+        for el in &parsed.elements {
+            let Some(items) = parsed.packages.get(&el.package) else { continue };
+            for item in items {
+                let net = pad_net
+                    .get(&(el.name.clone(), item.name().to_string()))
+                    .copied()
+                    .unwrap_or(0);
+                place_pkg_item(item, el, net, &copper_layers, &mut buckets);
+            }
+        }
+
+        // Net 0 (no contactref → unconnected pad) carries no connectivity, so it
+        // is never a short, exactly like KiCad's net 0.
+        let no_net: std::collections::HashSet<i64> = std::iter::once(0).collect();
+
+        sweep_buckets(buckets, clearance, &no_net, &net_owners, name_of)
+    }
+
+    /// Flatten a polygon's vertex ring, expanding any per-vertex `curve` (the arc
+    /// from this vertex to the next) into intermediate points.
+    fn flatten_polygon(verts: &[(f64, f64, f64)]) -> Vec<(f64, f64)> {
+        let n = verts.len();
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let (x1, y1, curve) = verts[i];
+            let (x2, y2, _) = verts[(i + 1) % n];
+            out.push((x1, y1));
+            if curve.abs() > 1e-6 {
+                for cap in flatten_curve(x1, y1, x2, y2, curve, 0.0) {
+                    out.push((cap.bx, cap.by));
+                }
+                // The last pushed point coincides with the next vertex; drop it
+                // so we do not duplicate (the loop pushes (x2,y2) next iteration).
+                out.pop();
+            }
+        }
+        out
+    }
+
+    /// (element, pad-name) → net id, read from `<contactref>` inside `<signal>`.
+    fn pad_net_map(text: &str, parsed: &Parsed) -> HashMap<(String, String), i64> {
+        let mut reader = Reader::from_str(text);
+        reader.config_mut().trim_text(true);
+        let mut map = HashMap::new();
+        let mut cur_signal: Option<usize> = None;
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let a = attrs_of(&e);
+                    match e.name().as_ref() {
+                        b"signal" => {
+                            let name = a.get("name").cloned().unwrap_or_default();
+                            cur_signal = parsed.signals.iter().position(|(n, _)| *n == name);
+                        }
+                        b"contactref" => {
+                            if let (Some(si), Some(el), Some(pad)) =
+                                (cur_signal, a.get("element"), a.get("pad"))
+                            {
+                                map.insert((el.clone(), pad.clone()), si as i64 + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::End(e)) if e.name().as_ref() == b"signal" => cur_signal = None,
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        map
+    }
+}

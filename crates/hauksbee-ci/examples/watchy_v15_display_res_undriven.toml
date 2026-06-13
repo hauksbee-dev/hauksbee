@@ -1,0 +1,32 @@
+# boot-coverage NEGATIVE control: same Watchy v1.5 board, firmware that never
+# drives the e-paper RES# net.
+#
+#   HAUKSBEE_QEMU_XTENSA=~/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa \
+#     hauksbee-ci run crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml
+#   echo $?   # 1: RES is never driven, so boot-coverage goes RED
+#
+# This is the teeth of the boot-coverage execution: identical board, identical
+# assertion, a firmware that drives GPIO2/GPIO4 (the esp32_blinky demo) but NOT
+# GPIO9 (the Watchy DISPLAY_RES). Since v1.5 has no pull on the RES net, the net
+# stays Hi-Z / undefined the whole run and never reaches the required HIGH. The
+# check FAILS, proving it is genuinely watching the firmware drive the net and
+# not passing vacuously. (The PASS variant watchy_v15_display_res.toml uses the
+# display-init firmware that does drive GPIO9.)
+
+name = "boot-coverage: Watchy v1.5 RES# left undriven (negative control, FAIL)"
+board = "../../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb"
+firmware = "../../../testdata/firmware/esp32_blinky/flash.bin"
+mcu = "esp32_pico"
+duration_ms = 800
+frame_ms = 8
+
+[[supply]]
+net = "+3V3"
+kind = "ideal"
+volts = 3.3
+
+[[assert]]
+kind = "boot-coverage"
+net = "RES"
+min = 2.6
+deadline_ms = 700.0

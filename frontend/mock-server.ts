@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-// Mock galvani-server: streams SimFrames at 30fps over WebSocket.
-// Protocol exactly mirrors crates/galvani-server/src/protocol.rs (serde tag="type").
+// Mock hauksbee-server: streams SimFrames at 30fps over WebSocket.
+// Protocol exactly mirrors crates/hauksbee-server/src/protocol.rs (serde tag="type").
 //
 // Usage: bun run mock-server.ts
 
@@ -171,7 +171,7 @@ function handleMessage(ws: import('bun').ServerWebSocket<unknown>, raw: string) 
       console.log(`[mock] serial <- ${JSON.stringify(text)}`)
       // Demo responses
       const responses: Record<string, string> = {
-        'i\n': 'galvani-demo v1\r\n',
+        'i\n': 'hauksbee-demo v1\r\n',
         'v\n': `${Math.round(adc_volts * 1000)} mV\r\n`,
       }
       const resp = responses[text]
@@ -256,9 +256,9 @@ serve({
     if (url.pathname === '/ws' || url.pathname === '/') {
       if (server.upgrade(req)) return undefined
     }
-    return new Response('galvani mock-server', { status: 200 })
+    return new Response('hauksbee mock-server', { status: 200 })
   },
 })
 
-console.log(`[galvani mock-server] listening on ws://localhost:${PORT}/ws`)
+console.log(`[hauksbee mock-server] listening on ws://localhost:${PORT}/ws`)
 console.log('[mock] send { "type": "Play" } to start the sim')

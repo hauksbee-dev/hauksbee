@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# install.sh - one command to build galvani and put it on your PATH.
+# install.sh - one command to build hauksbee and put it on your PATH.
 #
-# Builds the `galvani` and `galvani-ci` release binaries from this checkout and
+# Builds the `hauksbee` and `hauksbee-ci` release binaries from this checkout and
 # installs (copies) them into a bin directory on your PATH. Idempotent: re-runs
 # rebuild only what cargo decides is stale and overwrite the installed copies.
 #
@@ -43,26 +43,26 @@ while [ $# -gt 0 ]; do
 done
 
 CARGO="${CARGO:-cargo}"
-PREFIX="${PREFIX_ARG:-$(galvani_default_prefix)}"
+PREFIX="${PREFIX_ARG:-$(hauksbee_default_prefix)}"
 BINDIR="$PREFIX/bin"
-SRC="$(galvani_target_bin)"
+SRC="$(hauksbee_target_bin)"
 
 have "$CARGO" || die "cargo not found. Install Rust from https://rustup.rs, then re-run."
 
 if [ "$DO_BUILD" -eq 1 ]; then
-  log "Building galvani + galvani-ci (release)"
-  ( cd "$GALVANI_ROOT" && "$CARGO" build --release -p galvani-engine -p galvani-ci )
+  log "Building hauksbee + hauksbee-ci (release)"
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci )
 else
   log "Skipping build (--no-build)"
 fi
 
-for bin in galvani galvani-ci; do
+for bin in hauksbee hauksbee-ci; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing. Run without --no-build, or 'cargo build --release' first."
 done
 
 mkdir -p "$BINDIR"
 log "Installing into $BINDIR"
-for bin in galvani galvani-ci; do
+for bin in hauksbee hauksbee-ci; do
   dest="$BINDIR/$bin"
   if [ "$USE_SYMLINK" -eq 1 ]; then
     ln -sf "$SRC/$bin" "$dest"
@@ -82,5 +82,5 @@ else
 fi
 printf '\n'
 log "Done. Verify with:"
-info "  galvani run $GALVANI_ROOT/crates/galvani-ci/examples/boards/blinky.kicad_pcb --report"
-info "  galvani-ci run $GALVANI_ROOT/crates/galvani-ci/examples/blinky.toml"
+info "  hauksbee run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
+info "  hauksbee-ci run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/blinky.toml"

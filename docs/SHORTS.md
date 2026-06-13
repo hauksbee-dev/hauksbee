@@ -1,11 +1,11 @@
 # Copper short / clearance detection, and simulating shorts
 
-Galvani simulates from a real layout, so two pieces of copper that touch while
+Hauksbee simulates from a real layout, so two pieces of copper that touch while
 belonging to different nets are an electrical fact the simulation must know
 about: a solder bridge, an overlapping pad, a pour eating into a track. This
-document covers how those are found from geometry (`galvani-extract`), and how a
+document covers how those are found from geometry (`hauksbee-extract`), and how a
 detected short is then applied to the live circuit so the simulation shows what
-the board actually does with the short present (`galvani-engine`).
+the board actually does with the short present (`hauksbee-engine`).
 
 ## Pipeline
 
@@ -22,7 +22,7 @@ the board actually does with the short present (`galvani-engine`).
                          frontend fault channel (no UI change)
 ```
 
-## Detection (`galvani-extract/src/drc.rs`)
+## Detection (`hauksbee-extract/src/drc.rs`)
 
 ### Geometry kinds covered
 
@@ -103,11 +103,11 @@ explicit override.
 `DrcReport` carries every finding (nets involved by id and name, copper layer,
 representative `(x, y)` location, signed gap, and the two involved items with
 their kind and owning component), plus `shorted_net_pairs()` for the engine. The
-CLI surfaces it: `galvani run <board> --drc` prints the table and exits, and
+CLI surfaces it: `hauksbee run <board> --drc` prints the table and exits, and
 `ExtractedBoard::drc(text)` is the library entry point, alongside the existing
 `lint()`.
 
-## Eagle `.brd` detection (`galvani-extract/src/drc.rs`, `eagle_drc`)
+## Eagle `.brd` detection (`hauksbee-extract/src/drc.rs`, `eagle_drc`)
 
 The most famous open-hardware boards (Arduino Uno, five Adafruit, two SparkFun)
 are Eagle, not KiCad, so they used to get `n/a` for DRC. The Eagle path closes
@@ -115,7 +115,7 @@ that gap: it reads copper *geometry* per net out of the `.brd` XML and feeds it
 to the same `sweep_buckets` engine the KiCad path uses. There is one detection /
 classification core; only the front-end geometry reader differs.
 `ExtractedBoard::drc(text)` dispatches on content (`(kicad_pcb` vs `<eagle`), so
-`galvani run <board.brd> --drc` works.
+`hauksbee run <board.brd> --drc` works.
 
 Geometry is kept in Eagle's native frame (millimetres, y-up). The DRC is
 self-consistent, so the y orientation never matters; only relative positions do.
@@ -178,7 +178,7 @@ no owner of their own, so the exemption keys on shared net membership in a
 footprint). On the Uno this correctly clears `GND`↔`UGND`, joined through the
 `GROUND` SJ jumper.
 
-## Simulation (`galvani-engine/src/shorts.rs`)
+## Simulation (`hauksbee-engine/src/shorts.rs`)
 
 A detected (or hypothetical) short is applied by bridging the two nets' circuit
 nodes with a small resistor (`BRIDGE_OHMS = 5 mΩ`, the resistance of a real
@@ -191,7 +191,7 @@ ratings).
 
 Each applied bridge is itself surfaced as a `FaultEvent` of kind `short` through
 the same channel as the rating-based faults, so the frontend highlights it with
-no UI change. Two entry points on `GalvaniEngine` / `Scheduler`:
+no UI change. Two entry points on `HauksbeeEngine` / `Scheduler`:
 
 - `apply_drc_shorts(&report)`: apply every true overlap a `DrcReport` found
   (clearance-only violations are not applied), and the convenience
@@ -254,24 +254,24 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
 
 ## Tests
 
-- `galvani-extract/tests/drc.rs`: 11 synthetic fixtures, one per geometry kind
+- `hauksbee-extract/tests/drc.rs`: 11 synthetic fixtures, one per geometry kind
   (segment-segment, segment-pad, pad-pad, via-zone, via-spans-layers) plus
   clearance-only, cross-layer non-shorts, same-footprint abutment, and the
   clearance-override classification.
-- `galvani-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
+- `hauksbee-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
   shorts across the parseable boards (skipped gracefully if the corpus is
   absent).
-- `galvani-extract/tests/eagle_drc.rs`: 16 synthetic minimal `.brd` fixtures, one
+- `hauksbee-extract/tests/eagle_drc.rs`: 16 synthetic minimal `.brd` fixtures, one
   per Eagle geometry kind (wire-wire short, wire-smd, smd-smd, via-wire,
   via-spans-layers, octagon pad, curved wire) plus the clearance-only, no-rule
   fallback, cross-layer non-short, shared-footprint (jumper) abutment, mirrored
   package placed on the bottom, via-restring derivation, and the design-rule
   clearance respected / overridden cases.
-- `galvani-extract/tests/eagle_drc_corpus.rs`: the famous-Eagle sweep over all
+- `hauksbee-extract/tests/eagle_drc_corpus.rs`: the famous-Eagle sweep over all
   eight boards (Arduino Uno, five Adafruit, two SparkFun), asserting zero true
   shorts and recording per-board clearance counts, rule, primitive count and
   timing (skipped gracefully if the corpus is absent).
-- `galvani-engine/tests/shorts.rs`: end-to-end, detect a copper short from a
+- `hauksbee-engine/tests/shorts.rs`: end-to-end, detect a copper short from a
   layout, apply it, and assert a `short` fault is raised and the bridged nets are
   pulled together; the what-if `short_nets` rail-to-ground case raising an
   overpower fault on the series resistor; and a clean board applying nothing.

@@ -1,6 +1,6 @@
-# Galvani Architecture
+# Hauksbee Architecture
 
-Galvani takes a real PCB design (KiCad first), extracts the circuit it
+Hauksbee takes a real PCB design (KiCad first), extracts the circuit it
 implements, and brings it to life: a fast, physically accurate analog
 simulation co-simulated with emulated microcontrollers, rendered live on the
 actual board layout. No existing tool (open or commercial, as of mid-2026)
@@ -9,7 +9,7 @@ schematic, never from a layout.
 
 ## Lineage
 
-Galvani generalizes the Tarski-Emulator, which proved the approach on one
+Hauksbee generalizes the Tarski-Emulator, which proved the approach on one
 board: closed-form integration where topology permits, event-driven digital,
 firmware on an emulated MCU coupled through pin-level hooks. Tarski's
 hand-built network is replaced by automatic extraction and a general solver,
@@ -24,23 +24,23 @@ without giving up the speed that made it many times faster than ngspice.
 gerber + drill + P&P ───────────▶ reconstructed board (see docs/GERBER.md)
         │
         ▼
-galvani-extract: pads ⇒ nets ⇒ connectivity graph ⇒ component instances
+hauksbee-extract: pads ⇒ nets ⇒ connectivity graph ⇒ component instances
         │                                   ▲
         ▼                                   │ model binding
-galvani-models: lib_id/value/part-number ⇒ device model
+hauksbee-models: lib_id/value/part-number ⇒ device model
    (built-in defaults │ user SPICE │ datasheet extraction via codex)
         │
         ▼
-galvani-ir: Circuit IR — devices, nodes, parameters, parasitics (optional)
+hauksbee-ir: Circuit IR — devices, nodes, parameters, parasitics (optional)
         │
         ▼
-galvani-solve: partitioned hybrid solver           galvani-mcu: MCU backends
+hauksbee-solve: partitioned hybrid solver           hauksbee-mcu: MCU backends
    linear subcircuits → state-space exp.    ◀───▶    AVR/STM32/ESP32/nRF/RISC-V
    nonlinear islands  → MNA + Newton                 pin/ADC/UART/I2C hooks
    digital            → event queue                  lockstep co-sim (docs/MCU.md)
         │
         ▼
-galvani-server: websocket protocol (frames, probes, controls)
+hauksbee-server: websocket protocol (frames, probes, controls)
         │
         ▼
 frontend: board-accurate 2D/3D render, live signal flow, probes, controls
@@ -72,4 +72,4 @@ remain available for digital ICs and for speed toggles.
 
 - `kicad-forge` (sibling): lossless KiCad parse/produce, typed model,
   board-to-code with repeat detection.
-- `galvani` (this repo): extraction, models, solver, MCU co-sim, server, UI.
+- `hauksbee` (this repo): extraction, models, solver, MCU co-sim, server, UI.
