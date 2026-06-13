@@ -1,0 +1,124 @@
+# Build galvani release binaries and attach them to a GitHub Release on a tag.
+#
+# Trigger: push a tag like `v0.1.0`. The workflow builds the `galvani` and
+# `galvani-ci` binaries on macOS and Linux, packages each with scripts/bundle.sh
+# into a versioned tarball (+ sha256), and uploads them as release assets, so
+# users can download a prebuilt binary instead of compiling. The composite
+# Action and the KiCad plugin both prefer these assets and fall back to building.
+#
+# Cross-compilation note: this builds natively on each runner (a macOS runner
+# for the macOS artifact, a Linux runner for the Linux artifact), which is the
+# honest, tested path. We deliberately do NOT cross-compile (e.g. linux->mac or
+# building aarch64-linux on x86) because that is untested here and would ship
+# binaries no one ran. The matrix can be extended with real runners (e.g. a
+# macos-13 x86 runner, an arm64 linux runner) when they are available.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build (e.g. v0.1.0). Used as the bundle version."
+        required: true
+
+permissions:
+  contents: write   # needed to create the release and upload assets
+
+jobs:
+  build:
+    name: build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+          - os: macos-latest
+            label: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-${{ matrix.os }}-
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        env:
+          # Pass untrusted dispatch input via env (never interpolate it into the
+          # script body); validate before use.
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Tag push -> strip refs/tags/v ; manual dispatch -> the provided tag.
+          raw="${INPUT_TAG:-$REF_NAME}"
+          # Accept only a sane version slug; reject anything else.
+          if ! printf '%s' "$raw" | grep -Eq '^v?[0-9A-Za-z._-]+$'; then
+            echo "refusing suspicious version string: $raw" >&2
+            exit 1
+          fi
+          echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build bundle
+        shell: bash
+        run: |
+          chmod +x scripts/*.sh
+          scripts/bundle.sh \
+            --version "${{ steps.ver.outputs.version }}" \
+            --target "${{ matrix.label }}" \
+            --out dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: galvani-${{ matrix.label }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish a Release for an actual tag push; workflow_dispatch just
+    # produces downloadable build artifacts (above).
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect assets
+        shell: bash
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} dist/ \;
+          ls -la dist
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true

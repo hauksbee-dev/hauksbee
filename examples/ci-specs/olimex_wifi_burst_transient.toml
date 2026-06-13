@@ -1,0 +1,84 @@
+# galvani-ci TRANSIENT / SCENARIO example: an ESP32 WiFi-TX burst on a robust
+# supply must NOT brown out the 3V3 rail.
+#
+#   galvani-ci run examples/ci-specs/olimex_wifi_burst_transient.toml
+#   echo $?   # 0: the stiff wall supply rides the burst train
+#
+# This is the dynamic side of galvani-ci: a static DC check cannot see a rail
+# sag, because the sag only happens during a current transient. Here a periodic
+# 240 mA burst (over a 40 mA baseline) is attached to the +3.3V rail as a load
+# profile, with honest capacitor parasitics (ESR/ESL) turned on, and a
+# `rail_window` assertion judges the rail over the burst window: it must stay
+# above 3.0 V and never dip below 3.1 V for more than 5 ms.
+#
+# The board is the real Olimex ESP32-EVB (REV-L) schematic from the corpus. It
+# is wall/USB powered through a 3A-class LDO with bulk caps, so it is robustly
+# supplied and the burst should pass. This is the calibration counterpart to a
+# brownout failure: it passing is what lets a genuine brownout (on a weak
+# supply) be trusted as a real failure and not a too-pessimistic model. See the
+# integration test crates/galvani-ci/tests/olimex_burst_calibration.rs.
+#
+# Corpus-gated: needs board-corpus/famous/olimex_esp32 present.
+
+name = "Olimex ESP32-EVB: WiFi burst on robust supply (transient)"
+board = "../../../board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch"
+duration_ms = 40
+frame_ms = 0.2
+
+# A stiff wall adapter on each rail (low output resistance, small ripple).
+[[supply]]
+net = "+3.3V"
+kind = "wall"
+volts = 3.3
+r_out_ohms = 0.1
+ripple_vpp = 0.02
+ripple_hz = 100.0
+
+[[supply]]
+net = "+5V"
+kind = "wall"
+volts = 5.0
+r_out_ohms = 0.1
+
+# Turn the board's decoupling caps from ideal to honest (ESR/ESL inferred from
+# each cap's footprint + value), so the rail's transient response is realistic.
+[decoupling]
+parasitics = true
+
+# A standard ESP32 WiFi-TX burst train: 240 mA bursts for 10 ms every 100 ms
+# over a 40 mA idle baseline.
+[[profile]]
+id = "burst_load"
+description = "ESP32 WiFi-TX burst train attached to the 3V3 rail"
+[[profile.segment]]
+level_a = 0.040
+rise_s = 0.001
+duration_s = 0.0
+[[profile.segment]]
+level_a = 0.240
+rise_s = 0.0005
+duration_s = 0.010
+period_s = 0.100
+idle_a = 0.040
+
+# Attach the burst load to the +3.3V rail (by net, robust to designators).
+[[scenario]]
+id = "burst"
+part = "U1"
+profile = "burst_load"
+supply_net = "+3.3V"
+start_ms = 1.0
+
+# The rail must hold through the burst window.
+[[assert]]
+kind = "rail_window"
+name = "3V3 holds through WiFi burst on a robust supply"
+scenario = "burst"
+net = "+3.3V"
+min = 3.0
+dip_below = 3.1
+for_max_ms = 5.0
+
+# And nothing is over-stressed.
+[[assert]]
+kind = "no_faults"

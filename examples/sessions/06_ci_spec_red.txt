@@ -1,0 +1,10 @@
+$ galvani-ci run crates/galvani-ci/examples/tarski_brownout.toml
+galvani-ci: tarski power-up brownout (as designed)
+  board: ../../../testdata/tarski_brownout_cell.net
+  seeds: 8
+
+  [FAIL] ANALOG_VDD comes up across all power-up register states
+        seed 1: ANALOG_VDD: min=0.759V (>= 4.9V) [settled 0.759V]
+
+0/1 assertions passed in 0.20s - RED
+[exit 1]

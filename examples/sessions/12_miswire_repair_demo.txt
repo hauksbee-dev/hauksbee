@@ -1,0 +1,12 @@
+$ cargo run --release -p galvani-engine --example tarski_miswire_repair
+    (output, compiler lines elided)
+
+Tarski inhibitory-synapse miswire: repair as a Board-as-Code edit
+
+as-wired (code unchanged): V(COM)=0.865 V, I~689.2 mA
+  faults: ANALOG_SWITCH3905_s1 PinOvercurrent, IC3906_q2 Overcurrent, IC3906_q2 Overpower
+
+repaired (code edit):      V(COM)=5.0000 V, I~0.424 uA
+  faults: none
+
+The one-line net swap on IC3906 pad 5/3 took the cell from 3 fault(s) to 0 fault(s).

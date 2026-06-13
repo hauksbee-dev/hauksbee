@@ -25,20 +25,31 @@ this one. See `docs/CI.md` (Schematic-stage CI).
 
 ## Prerequisites
 
-1. Build the runner and put it on your PATH (or note its path):
+You need a `galvani-ci` binary. The plugin finds one without any setup in most
+cases, and only offers to compile as a last resort.
 
-   ```bash
-   cargo build --release -p galvani-ci
-   # binary at target/release/galvani-ci
-   ```
+It looks for the binary in this order:
 
-   The plugin finds the binary via, in order: an explicit path, the
-   `GALVANI_CI_BIN` environment variable, then your `PATH`. The simplest setup
-   is to copy or symlink `galvani-ci` somewhere on PATH:
+1. an explicit path passed in code,
+2. the `GALVANI_CI_BIN` environment variable,
+3. your `PATH`,
+4. a prebuilt release bundle (`bin/galvani-ci` next to a `galvani` checkout, or
+   `~/.galvani/bin/galvani-ci`) or a local `target/release/galvani-ci`.
 
-   ```bash
-   ln -s "$PWD/target/release/galvani-ci" /usr/local/bin/galvani-ci
-   ```
+So the easiest path is to **download a prebuilt release** (see the repo's
+Releases, produced by `.github/workflows/release.yml`) and unpack it, or run
+`scripts/install.sh` once. If none of the above is found, the plugin asks
+whether to build it with cargo (the explicit, opt-in fallback):
+
+```bash
+# Either: a prebuilt release tarball (no compiler needed)
+tar -xzf galvani-<version>-<os>-<arch>.tar.gz
+PREFIX=$HOME/.local ./galvani-*/scripts/install.sh --no-build --symlink
+
+# Or: build from source once
+cargo build --release -p galvani-ci   # binary at target/release/galvani-ci
+ln -s "$PWD/target/release/galvani-ci" /usr/local/bin/galvani-ci
+```
 
 2. Keep at least one galvani-ci spec next to your board, or in a sibling `ci/`
    directory (e.g. `ci/power-up.toml`).

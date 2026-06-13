@@ -1,0 +1,3 @@
+$ galvani run crates/galvani-ci/examples/boards/blinky.kicad_pcb --drc
+DRC: 28 primitive(s), clearance rule 0.200 mm
+no shorts or clearance violations.

@@ -11,3 +11,7 @@ testdata/firmware/stm32_blinky/blinky.bin
 # machine-extracted result it produces is committed at
 # testdata/resource/rp2040_pwm_extracted.toml as the offline fixture.
 testdata/datasheets/rp2040-datasheet.pdf
+
+# Python bytecode caches
+__pycache__/
+*.pyc
