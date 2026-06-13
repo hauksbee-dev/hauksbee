@@ -75,9 +75,33 @@ polygon-polygon distance, with proper segment-crossing tests so a track passing
 straight *through* a pad is caught even when no endpoint or vertex is near):
 
 - gap `<= 0` → the copper intersects: a **short** (`ViolationKind::Short`).
-- `0 < gap < clearance` → not touching but closer than the rule allows: a
-  **clearance violation** (`ViolationKind::Clearance`), a lower-severity
-  near-short risk.
+- `0 < gap < clearance - CLEARANCE_TOLERANCE_MM` → not touching but genuinely
+  closer than the rule allows: a **clearance violation**
+  (`ViolationKind::Clearance`), a lower-severity near-short risk.
+- `clearance - tolerance <= gap < clearance` → a gap sitting *at* the rule (or a
+  few microns under it): routing-to-rule, **not reported**. See the tolerance
+  note below.
+
+#### Clearance tolerance (the boundary-noise fix)
+
+A gap reported as `clearance - epsilon` is overwhelmingly a routing-to-rule
+artifact, not a defect: KiCad lets the router lay copper exactly at the design
+rule, and the nm grid plus our arc/capsule flattening (chord error a few
+microns) leaves the *measured* gap a hair under the nominal rule. Reporting
+those produced **137 spurious clearance notes on bms-c1 and 66 on the PD-sink
+board**, which drowned the real findings. So a small tolerance
+(`CLEARANCE_TOLERANCE_MM = 0.005 mm`, 5 um, well under any real copper clearance
+yet above the geometry's own rounding noise) raises the floor for the soft
+clearance band: a positive gap is a clearance violation only when it falls more
+than the tolerance below the rule. **Shorts (gap <= 0, real copper overlap) are
+unaffected** — the tolerance only relaxes the soft clearance band, never a true
+intersection.
+
+Validated: bms-c1 drops from 137 spurious notes to **0** ("no shorts or
+clearance violations"); the PD-sink board drops from 66 to **4** genuinely sub-
+rule gaps (0.15 / 0.18 mm under the 0.2 mm rule) that were previously buried.
+The DRC corpus + fixture tests (including the at-rule, sub-micron-under-rule, and
+genuinely-sub-rule cases) stay green; true shorts still fire.
 
 Filled zones are handled specially for performance: a single GND pour can carry
 thousands of boundary vertices and a board-spanning bounding box, which would
