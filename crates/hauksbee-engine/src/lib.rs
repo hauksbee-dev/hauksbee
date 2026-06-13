@@ -27,6 +27,7 @@ pub mod decoupling;
 pub mod digital;
 pub mod drivers;
 pub mod engine;
+pub mod frontdoor;
 pub mod peripherals;
 pub mod plain;
 pub mod power_supply;
@@ -55,6 +56,7 @@ pub use peripherals::{
     spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave},
     Peripheral, PeripheralSet, TickCtx, TimelineEvent,
 };
+pub use frontdoor::{analyze, analyze_json, WebReport, WebSection};
 pub use plain::{
     plain_drc, plain_faults, plain_netlint, plain_si, PlainFinding, PlainLevel, PlainReport,
 };

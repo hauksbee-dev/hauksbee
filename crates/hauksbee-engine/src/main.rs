@@ -97,6 +97,18 @@ enum Command {
     /// Example:
     ///   hauksbee check-code my_board.board --seconds 0.2
     CheckCode(CheckCodeArgs),
+
+    /// Start the local web front door: a "drop your board, get a report" page.
+    ///
+    /// Opens a local web server with no board pre-loaded. Point a browser at the
+    /// printed URL, drop a .kicad_pcb / .kicad_sch / .brd / gerber zip on the
+    /// page, and get the plain-language verdict, the full report, and a 2D map
+    /// of the parts — no terminal needed beyond this command. Nothing is
+    /// uploaded off the machine; the analysis runs in this process.
+    ///
+    /// Example:
+    ///   hauksbee serve --port 3001
+    Serve(ServeArgs),
 }
 
 #[derive(Parser)]
@@ -210,6 +222,13 @@ struct FromCodeArgs {
 }
 
 #[derive(Parser)]
+struct ServeArgs {
+    /// Port for the local web front door.
+    #[arg(long, default_value_t = 3001, value_name = "PORT")]
+    port: u16,
+}
+
+#[derive(Parser)]
 struct CheckCodeArgs {
     /// Board-as-Code file (or directory) to check.
     #[arg(value_name = "CODE")]
@@ -231,6 +250,7 @@ fn main() -> anyhow::Result<()> {
         Command::ToCode(args) => cmd_to_code(args),
         Command::FromCode(args) => cmd_from_code(args),
         Command::CheckCode(args) => cmd_check_code(args),
+        Command::Serve(args) => cmd_serve(args),
     };
     if let Err(e) = &result {
         eprintln!("error: {e}");
@@ -546,6 +566,20 @@ fn cmd_check_code(args: CheckCodeArgs) -> anyhow::Result<()> {
 /// Run the co-sim headless for `seconds`, print the activity summary, and return
 /// the faults raised (de-duplicated by component+kind, worst value kept) so the
 /// caller can render them in plain language and/or gate on them under --strict.
+/// `hauksbee serve [--port N]`: the local web front door (upload-and-report).
+fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
+    use std::sync::Arc;
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let addr = format!("127.0.0.1:{}", args.port);
+        // Inject the engine's analysis as the server's analyzer callback, so the
+        // server crate needs no dependency on the engine/extract crates.
+        let analyze: hauksbee_server::frontdoor::Analyzer =
+            Arc::new(|name: &str, contents: &str| hauksbee_engine::analyze_json(name, contents));
+        hauksbee_server::frontdoor::serve(&addr, analyze).await
+    })
+}
+
 fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
