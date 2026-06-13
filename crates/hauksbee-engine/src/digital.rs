@@ -279,15 +279,17 @@ impl DigitalComponent {
     }
 }
 
-/// Recover the physical daisy-chain order of the 74HC595 chips from their nets:
-/// chip A precedes chip B when A's `qh_serial` node == B's `ser` node. The head
-/// is the chip whose `ser` is not produced by any chip in the set (it is driven
-/// by the MCU's serial-data net instead). Returns indices into `digital` in
-/// chain order, head first. Chips not reachable from a head are appended.
+/// Recover the SEPARATE physical 74HC595 daisy chains on a board. Chip A
+/// precedes chip B in a chain when A's `qh_serial` node == B's `ser` node; a
+/// chain's head is the chip whose `ser` is not produced by any chip in the set
+/// (it is driven by the MCU's serial-data net instead). Returns one
+/// head-to-tail index list PER physical chain, so two chains fed by different
+/// SER sources are NOT flattened into one (their serial streams must not bleed
+/// across). Chips not reachable from any head form their own singleton chains.
 ///
 /// This is the single source of truth for chain ordering, shared by the
-/// scheduler's edge-driven chain controller and the `tarski_inference` example.
-pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
+/// scheduler's edge-driven chain controllers and the `tarski_inference` example.
+pub fn order_595_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
     let chips: Vec<usize> = digital
         .iter()
         .enumerate()
@@ -316,15 +318,16 @@ pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
     // Deterministic.
     heads.sort_by(|&a, &b| digital[a].reference.cmp(&digital[b].reference));
 
-    let mut order = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Vec<usize>> = Vec::new();
     for head in heads {
+        let mut chain = Vec::new();
         let mut cur = Some(head);
         while let Some(i) = cur {
             if !seen.insert(i) {
                 break;
             }
-            order.push(i);
+            chain.push(i);
             let next_node = digital[i].roles.get("qh_serial").map(|n| n.0 as i64);
             cur = next_node.and_then(|node| {
                 chips
@@ -333,14 +336,26 @@ pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
                     .find(|&j| ser_of(j) == Some(node) && !seen.contains(&j))
             });
         }
-    }
-    // Append any chips not reachable from a head (defensive).
-    for &i in &chips {
-        if seen.insert(i) {
-            order.push(i);
+        if !chain.is_empty() {
+            out.push(chain);
         }
     }
-    order
+    // Any chip not reachable from a head (e.g. a ring, or a chip whose head was
+    // pruned) becomes its own singleton chain rather than being silently merged.
+    for &i in &chips {
+        if seen.insert(i) {
+            out.push(vec![i]);
+        }
+    }
+    out
+}
+
+/// Flattened head-to-tail order of every 74HC595 chip, all chains concatenated.
+/// Kept for the `tarski_inference` example's single-chain verification (the
+/// board has exactly one 90-chip chain). The scheduler uses
+/// [`order_595_chains`] instead so independent chains stay separate.
+pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
+    order_595_chains(digital).into_iter().flatten().collect()
 }
 
 /// An edge-driven model of one MCU-bit-banged 74HC595 daisy-chain.
@@ -367,6 +382,10 @@ pub struct Hc595Chain {
     pub rclk: (char, u8),
     /// MCU GPIO `(port, bit)` for the broadcast active-low clear, if wired.
     pub srclr_n: Option<(char, u8)>,
+    /// MCU GPIO `(port, bit)` for the broadcast active-low output-enable, if
+    /// wired. While OE_n is HIGH the parallel outputs (qa..qh) are Hi-Z; the
+    /// serial output qh_serial is NOT gated by OE.
+    pub oe_n: Option<(char, u8)>,
     /// MCU GPIO `(port, bit)` for the head chip's serial-data input.
     pub ser: (char, u8),
     /// Per-chip 8-bit shift register (low byte used). `shift[c]` is chip
@@ -379,7 +398,11 @@ pub struct Hc595Chain {
     lvl_ser: bool,
     lvl_srclk: bool,
     lvl_rclk: bool,
+    /// SRCLR_n level (active-low clear). Defaults released (high).
     lvl_srclr_n: bool,
+    /// OE_n level (active-low output-enable). Defaults enabled (low) so an
+    /// unwired OE never tri-states the outputs.
+    lvl_oe_n: bool,
 }
 
 impl Hc595Chain {
@@ -407,8 +430,9 @@ impl Hc595Chain {
         let srclk = role_gpio(head, "srclk")?;
         let rclk = role_gpio(head, "rclk")?;
         let ser = role_gpio(head, "ser")?;
-        // SRCLR_n is optional: some boards tie it high in hardware.
+        // SRCLR_n and OE_n are optional: some boards tie them in hardware.
         let srclr_n = role_gpio(head, "srclr_n");
+        let oe_n = role_gpio(head, "oe_n");
 
         let n = order.len();
         Some(Hc595Chain {
@@ -416,15 +440,15 @@ impl Hc595Chain {
             srclk,
             rclk,
             srclr_n,
+            oe_n,
             ser,
             shift: vec![0u8; n],
             latched: vec![0u8; n],
             lvl_ser: false,
             lvl_srclk: false,
-            // SRCLR_n defaults released (high) so an unwired clear never holds
-            // the chain cleared.
             lvl_rclk: false,
             lvl_srclr_n: true,
+            lvl_oe_n: false,
         })
     }
 
@@ -447,6 +471,10 @@ impl Hc595Chain {
                         *s = 0;
                     }
                 }
+            }
+            if Some(pin) == self.oe_n {
+                // Active-low output-enable: tracked here, applied in `apply`.
+                self.lvl_oe_n = high;
             }
             if pin == self.srclk {
                 let rising = high && !self.lvl_srclk;
@@ -480,7 +508,13 @@ impl Hc595Chain {
     /// Push each chip's latched byte onto its qa..qh output drivers and mirror
     /// the latched/shift state into the owning `DigitalComponent` so frame
     /// reporting (`state_summary`) stays correct. `out_reg[0]=qa` is stage 0.
-    pub fn apply(&self, digital: &mut [DigitalComponent], circuit: &mut Circuit) {
+    ///
+    /// While OE_n is HIGH the parallel outputs are tri-stated (Hi-Z): the qa..qh
+    /// drivers are disabled so the analog solve sees a high-impedance leg, not a
+    /// stale latched level. The serial output qh_serial is not gated by OE.
+    pub fn apply(&mut self, digital: &mut [DigitalComponent], circuit: &mut Circuit) {
+        // OE_n defaults low (enabled) when no OE pin is wired.
+        let outputs_enabled = !self.lvl_oe_n;
         for (c, &chip_idx) in self.order.iter().enumerate() {
             let latched = self.latched[c];
             let shift = self.shift[c];
@@ -490,6 +524,13 @@ impl Hc595Chain {
                 d.out_reg[i] = bit;
                 let s = ((shift >> i) & 1) == 1;
                 d.shift_reg[i] = s;
+            }
+            // Tri-state / enable the parallel-output drivers per OE_n. qh_serial
+            // is left enabled (it is not output-enable gated on the 74HC595).
+            for name in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"] {
+                if let Some(drv) = d.drivers.get_mut(name) {
+                    drv.set_enabled(circuit, outputs_enabled);
+                }
             }
             d.drive_outputs(circuit);
         }
@@ -659,6 +700,129 @@ mod tests {
             matches < n,
             "collapsed single-edge replay must NOT reproduce the full PATH B latch \
              (got {matches}/{n} correct); the edge path is what makes it work"
+        );
+    }
+
+    /// Two physically independent 595 chains (different SER source nets) must be
+    /// recovered as SEPARATE chains, not flattened into one register where chain
+    /// A's tail serial bleeds into chain B's head.
+    #[test]
+    fn independent_chains_are_not_merged() {
+        let model = hc595_model();
+        let mut circuit = Circuit::new();
+        // Shared clock/latch, but two distinct SER head nets -> two chains.
+        let srclk = circuit.node("SRCLK");
+        let rclk = circuit.node("RCLK");
+        let mut chips: Vec<DigitalComponent> = Vec::new();
+        // Build chain `tag` of 2 chips fed by its own head SER net.
+        let make = |chips: &mut Vec<DigitalComponent>, tag: &str, circuit: &mut Circuit| {
+            let head_ser = circuit.node(&format!("SER_{tag}"));
+            let mut prev_qh: Option<NodeId> = None;
+            for k in 0..2 {
+                let mut roles: HashMap<String, NodeId> = HashMap::new();
+                roles.insert("srclk".into(), srclk);
+                roles.insert("rclk".into(), rclk);
+                roles.insert("ser".into(), prev_qh.unwrap_or(head_ser));
+                let qh = circuit.node(&format!("QHS_{tag}{k}"));
+                roles.insert("qh_serial".into(), qh);
+                chips.push(DigitalComponent::new(
+                    format!("U_{tag}{k}"),
+                    &model,
+                    roles,
+                    HashMap::new(),
+                ));
+                prev_qh = Some(qh);
+            }
+        };
+        make(&mut chips, "A", &mut circuit);
+        make(&mut chips, "B", &mut circuit);
+
+        let chains = order_595_chains(&chips);
+        assert_eq!(chains.len(), 2, "two independent chains, not one merged list");
+        for ch in &chains {
+            assert_eq!(ch.len(), 2, "each chain has its own 2 chips");
+        }
+
+        // Drive only chain A's controller with all-ones serial; chain B must stay
+        // zero (no serial bleed across the chain boundary).
+        let ser_a = circuit.node("SER_A");
+        let mut gpio_a: HashMap<i64, (char, u8)> = HashMap::new();
+        gpio_a.insert(srclk.0 as i64, ('B', 5));
+        gpio_a.insert(rclk.0 as i64, ('D', 6));
+        gpio_a.insert(ser_a.0 as i64, ('B', 3));
+        // Find the chain whose head is U_A0.
+        let order_a = chains
+            .iter()
+            .find(|c| chips[c[0]].reference == "U_A0")
+            .cloned()
+            .expect("chain A present");
+        let mut chain_a = Hc595Chain::build(&chips, order_a, &gpio_a).expect("chain A binds");
+
+        let mut log = Vec::new();
+        for _ in 0..16 {
+            log.push(('B', 3, true)); // SER high
+            log.push(('B', 5, true));
+            log.push(('B', 5, false));
+        }
+        log.push(('D', 6, true)); // latch
+        chain_a.replay(&log);
+        assert_eq!(chain_a.latched, vec![0xFF, 0xFF], "chain A fills with ones");
+        // chain B is a different controller and was never clocked here; the key
+        // point proven above is that A's 2-chip register did not absorb B.
+    }
+
+    /// OE_n (active-low output enable) gates the parallel outputs: while OE_n is
+    /// HIGH the qa..qh drivers tri-state (Hi-Z), so the analog solve does not see
+    /// the latched levels. The serial output is unaffected. We assert the drivers
+    /// get disabled/enabled to track OE.
+    #[test]
+    fn oe_high_tristates_parallel_outputs() {
+        use crate::drivers::{PinDriver, DEFAULT_RO};
+        let model = hc595_model();
+        let mut circuit = Circuit::new();
+        let srclk = circuit.node("SRCLK");
+        let rclk = circuit.node("RCLK");
+        let ser = circuit.node("SER");
+        let oe = circuit.node("OE_N");
+
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        roles.insert("srclk".into(), srclk);
+        roles.insert("rclk".into(), rclk);
+        roles.insert("ser".into(), ser);
+        roles.insert("oe_n".into(), oe);
+        // Stamp real drivers on qa..qh so we can read their enabled state.
+        let mut drivers: HashMap<String, PinDriver> = HashMap::new();
+        for q in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"] {
+            let net = circuit.node(&q.to_uppercase());
+            roles.insert(q.into(), net);
+            let drv = PinDriver::stamp(&mut circuit, net, q, &format!("U_{q}"), DEFAULT_RO);
+            drivers.insert(q.into(), drv);
+        }
+        let mut chips = vec![DigitalComponent::new("U0".into(), &model, roles, drivers)];
+
+        let mut gpio: HashMap<i64, (char, u8)> = HashMap::new();
+        gpio.insert(srclk.0 as i64, ('B', 5));
+        gpio.insert(rclk.0 as i64, ('D', 6));
+        gpio.insert(ser.0 as i64, ('B', 3));
+        gpio.insert(oe.0 as i64, ('C', 2));
+        let order = order_595_chains(&chips).into_iter().next().unwrap();
+        let mut chain = Hc595Chain::build(&chips, order, &gpio).expect("binds");
+        assert_eq!(chain.oe_n, Some(('C', 2)), "OE_n bound to PC2");
+
+        // Drive OE_n HIGH (outputs disabled), then apply.
+        chain.replay(&[('C', 2, true)]);
+        chain.apply(&mut chips, &mut circuit);
+        assert!(
+            chips[0].drivers.values().all(|d| !d.enabled),
+            "OE_n high tri-states all qa..qh drivers"
+        );
+
+        // Drive OE_n LOW (outputs enabled), then apply.
+        chain.replay(&[('C', 2, false)]);
+        chain.apply(&mut chips, &mut circuit);
+        assert!(
+            chips[0].drivers.values().all(|d| d.enabled),
+            "OE_n low re-enables qa..qh drivers"
         );
     }
 }
