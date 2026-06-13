@@ -85,6 +85,7 @@ pub enum SiCheck {
     I2cRiseTime,
     AntennaKeepout,
     UsbDiffPair,
+    ControlledImpedance,
 }
 
 impl SiCheck {
@@ -94,6 +95,7 @@ impl SiCheck {
             SiCheck::I2cRiseTime => "i2c_rise_time",
             SiCheck::AntennaKeepout => "antenna_keepout",
             SiCheck::UsbDiffPair => "usb_diff_pair",
+            SiCheck::ControlledImpedance => "controlled_impedance",
         }
     }
 }
@@ -151,11 +153,16 @@ impl ExtractedBoard {
             if let Some(r) = doc.root() {
                 check_antenna_keepout(self, r, &mut report);
                 check_usb_diff_pair(self, r, &mut report);
+                impedance::check_controlled_impedance(self, r, &mut report);
             }
         }
         report
     }
 }
+
+/// Controlled-impedance signal-integrity check (single-ended microstrip /
+/// stripline Z0 and differential pair impedance from geometry + stackup).
+pub mod impedance;
 
 // ===========================================================================
 // Shared net / part helpers (kept local so the module is self-contained, like

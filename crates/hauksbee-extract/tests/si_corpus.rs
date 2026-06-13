@@ -190,3 +190,60 @@ fn rp2040_usb_pair_skew_is_info() {
         "the matched RP2040 USB pair must not fire"
     );
 }
+
+/// The RP2040 minimal board has NO `(stackup ...)` block, so the controlled-
+/// impedance check cannot compute a real impedance: it reports the USB pair
+/// estimate under the stated default-assumption stackup, as INFO only, never a
+/// finding. This pins the "unknown stackup -> info, never a fire" path on a real
+/// board (the headline zero-false-positive guard for the new check).
+#[test]
+fn rp2040_no_stackup_impedance_is_info_only() {
+    let Some(famous) = corpus_famous() else {
+        return;
+    };
+    let path =
+        famous.join("rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb");
+    let Some(report) = run_si(&path) else {
+        return;
+    };
+    let zi: Vec<_> = report.of_check(SiCheck::ControlledImpedance).collect();
+    assert!(!zi.is_empty(), "RP2040 USB pair produces a controlled-impedance note");
+    assert!(
+        zi.iter().all(|f| f.severity == SiSeverity::Info),
+        "no stackup -> impedance is info only, never a finding"
+    );
+    assert!(
+        zi.iter().any(|f| f.message.contains("ASSUMED")),
+        "the default-assumption stackup must be flagged"
+    );
+}
+
+/// A corpus board WITH a stackup (Watchy, 4-layer, dielectric 0.28 mm Er 4.5)
+/// computes a real differential impedance for its USB pair and surfaces it as an
+/// auditable INFO note. Because Watchy sets `dielectric_constraints no` (it did
+/// not intend to control the full-speed USB pair), the out-of-band estimate is
+/// info, NOT a finding: the intent gate in action on a real board.
+#[test]
+fn watchy_usb_impedance_computed_but_info_uncontrolled() {
+    let Some(famous) = corpus_famous() else {
+        return;
+    };
+    let path = famous.join("watchy/Watchy.kicad_pcb");
+    let Some(report) = run_si(&path) else {
+        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
+            panic!("Watchy missing under required corpus");
+        }
+        return;
+    };
+    let zi: Vec<_> = report.of_check(SiCheck::ControlledImpedance).collect();
+    let usb = zi
+        .iter()
+        .find(|f| f.message.contains("USB_D"))
+        .expect("Watchy USB pair impedance note present");
+    assert_eq!(usb.severity, SiSeverity::Info, "uncontrolled board -> info not a fire");
+    // The note carries the real board stackup (not the default) and the target.
+    assert!(usb.message.contains("board") && usb.message.contains("90 ohm"),
+        "note carries the file stackup and the USB target: {}", usb.message);
+    assert!(usb.message.contains("does not declare controlled impedance"),
+        "the intent gate must be explained: {}", usb.message);
+}

@@ -446,3 +446,191 @@ fn usb_polarity_classifier_rejects_non_usb() {
     assert_eq!(super::usb_polarity("D+").1, Some('+'));
     assert_eq!(super::usb_polarity("UD-").1, Some('-'));
 }
+
+// ---------------------------------------------------------------------------
+// Controlled-impedance check.
+// ---------------------------------------------------------------------------
+
+use super::impedance::{
+    differential_microstrip_z, microstrip_z0, read_stackup, stripline_z0, StackupSource,
+};
+
+#[test]
+fn microstrip_z0_matches_reference_calculator() {
+    // The published IPC-2141 reference case (verified against the chemandy /
+    // mycalctools online calculators): W=0.3 mm, H=0.2 mm, T=0.035 mm, Er=4.3
+    // -> Z0 = 53.5 ohm. Our closed form must match the calculator to within a
+    // few percent (it is the same formula, so it matches to < 0.1%).
+    let z = microstrip_z0(0.3, 0.2, 0.035, 4.3).unwrap();
+    assert!((z - 53.5).abs() < 0.5, "IPC-2141 microstrip 0.3/0.2 = {z} ohm, want ~53.5");
+    // A second reference point: W=0.25 mm same stack -> 59.3 ohm (calculator).
+    let z2 = microstrip_z0(0.25, 0.2, 0.035, 4.3).unwrap();
+    assert!((z2 - 59.3).abs() < 0.6, "IPC-2141 microstrip 0.25/0.2 = {z2} ohm, want ~59.3");
+    // A near-50-ohm wide trace on 1.6 mm 2-layer FR4 (W=2.9 mm, H=1.51, Er=4.5)
+    // -> ~48 ohm, the classic "wide trace on a thick board is ~50 ohm".
+    let z3 = microstrip_z0(2.9, 1.51, 0.035, 4.5).unwrap();
+    assert!((z3 - 48.0).abs() < 2.0, "wide-trace 50-ohm-ish case = {z3} ohm");
+}
+
+#[test]
+fn microstrip_z0_declines_degenerate_geometry() {
+    // A trace so wide the log argument falls to <= 1 (formula invalid): decline,
+    // do not return a bogus negative impedance.
+    assert!(microstrip_z0(50.0, 0.2, 0.035, 4.3).is_none());
+    assert!(microstrip_z0(0.0, 0.2, 0.035, 4.3).is_none());
+}
+
+#[test]
+fn stripline_z0_hand_value() {
+    // IPC-2141 stripline: Z0 = (60/sqrt(Er)) * ln(4H / (0.67*pi*(0.8W+T))).
+    // W=0.15, H=0.5, T=0.035, Er=4.3:
+    //   0.8*0.15+0.035 = 0.155; 0.67*pi*0.155 = 0.3262; 4*0.5/0.3262 = 6.131;
+    //   ln = 1.8134; 60/sqrt(4.3)=28.94; Z0 = 52.5 ohm.
+    let z = stripline_z0(0.15, 0.5, 0.035, 4.3).unwrap();
+    assert!((z - 52.5).abs() < 1.0, "stripline = {z} ohm, want ~52.5");
+}
+
+#[test]
+fn differential_microstrip_matches_hand_value() {
+    // National Semiconductor form: Zdiff = 2*Z0*(1 - 0.48*exp(-0.96*S/H)).
+    // For a 90-ohm USB geometry W=0.3, S=0.2, H=0.2, T=0.035, Er=4.3:
+    //   Z0(0.3,0.2) = 53.52 ohm; S/H = 1.0; exp(-0.96) = 0.3829;
+    //   factor = 1 - 0.48*0.3829 = 0.8162; Zdiff = 2*53.52*0.8162 = 87.4 ohm.
+    let z0 = microstrip_z0(0.3, 0.2, 0.035, 4.3).unwrap();
+    let zd = differential_microstrip_z(z0, 0.2, 0.2).unwrap();
+    assert!((zd - 87.4).abs() < 1.0, "USB diff = {zd} ohm, want ~87.4 (within 90 +-15%)");
+    // Tighter spacing lowers Zdiff (more coupling); wider spacing raises it.
+    let tight = differential_microstrip_z(z0, 0.1, 0.2).unwrap();
+    let wide = differential_microstrip_z(z0, 0.4, 0.2).unwrap();
+    assert!(tight < zd && zd < wide, "coupling monotonicity: {tight} < {zd} < {wide}");
+}
+
+/// A USB pair routed on F.Cu over a known stackup, with a controllable trace
+/// width and spacing (two parallel segments `gap` apart, edge-to-edge).
+/// `controlled` sets `dielectric_constraints yes` (the board declares
+/// impedance-control intent, so a deviation can be a finding).
+fn impedance_usb_text_intent(w: f64, gap: f64, diel: f64, er: f64, controlled: bool) -> String {
+    // Two parallel horizontal runs; centre-to-centre = gap + w (so edge-to-edge
+    // spacing = gap). Stackup: F.Cu 0.035, dielectric `diel` Er `er`, B.Cu.
+    let y_minus = gap + w; // centreline of D- relative to D+ at y=0.
+    let dc = if controlled { "yes" } else { "no" };
+    format!(
+        r#"(kicad_pcb (version 20240101)
+        (setup (stackup
+          (layer "F.Cu" (type "copper") (thickness 0.035))
+          (layer "dielectric 1" (type "core") (thickness {diel}) (material "FR4") (epsilon_r {er}))
+          (layer "B.Cu" (type "copper") (thickness 0.035))
+          (dielectric_constraints {dc})))
+        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM")
+        (segment (start 0 0) (end 20 0) (width {w}) (layer "F.Cu") (net 1))
+        (segment (start 0 {y_minus}) (end 20 {y_minus}) (width {w}) (layer "F.Cu") (net 2)))"#
+    )
+}
+
+/// The same board, declaring controlled-impedance intent (the common path for
+/// the in-band / fire tests).
+fn impedance_usb_text(w: f64, gap: f64, diel: f64, er: f64) -> String {
+    impedance_usb_text_intent(w, gap, diel, er, true)
+}
+
+#[test]
+fn read_stackup_from_board() {
+    let text = impedance_usb_text(0.3, 0.2, 0.2, 4.3);
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let s = read_stackup(doc.root().unwrap()).expect("stackup present");
+    assert_eq!(s.source, StackupSource::Board);
+    assert!((s.h_microstrip_mm - 0.2).abs() < 1e-9);
+    assert!((s.t_cu_mm - 0.035).abs() < 1e-9);
+    assert!((s.er - 4.3).abs() < 1e-9);
+}
+
+#[test]
+fn controlled_impedance_in_band_usb_is_info() {
+    // W=0.3, edge-to-edge gap 0.2, diel 0.2, Er 4.3 -> Zdiff ~ 87.4 ohm, within
+    // 90 ohm +-15%: an info note, never a finding.
+    let text = impedance_usb_text(0.3, 0.2, 0.2, 4.3);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    assert_eq!(r.finding_count(), 0, "in-band USB diff must not fire");
+    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("a note");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(f.message.contains("ok"), "in-band must read ok: {}", f.message);
+}
+
+#[test]
+fn controlled_impedance_out_of_band_usb_fires() {
+    // Very narrow traces, wide spacing on a thick dielectric drive Zdiff far
+    // above 90 ohm: a real finding (the link is impedance-wrong) against a real
+    // file stackup. W=0.1, gap 0.5, diel 0.5 -> Zdiff well over 90+15%.
+    let text = impedance_usb_text(0.1, 0.5, 0.5, 4.3);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    assert_eq!(r.finding_count(), 1, "grossly out-of-band USB diff must fire");
+    let f = r.findings_only().next().unwrap();
+    assert_eq!(f.check, SiCheck::ControlledImpedance);
+    assert!(f.message.contains("deviation"), "finding cites the deviation: {}", f.message);
+}
+
+#[test]
+fn controlled_impedance_uncontrolled_board_is_info_even_out_of_band() {
+    // The SAME grossly-out-of-band geometry but the board declares
+    // `dielectric_constraints no` (it did NOT intend to control these nets, like
+    // every full-speed USB keyboard in the corpus). Must be info, never a fire:
+    // the designer chose not to control impedance, so a high reading is not a
+    // defect. This is the corpus zero-false-positive gate in unit form.
+    let text = impedance_usb_text_intent(0.1, 0.5, 0.5, 4.3, false);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    assert_eq!(r.finding_count(), 0, "uncontrolled board must never fire");
+    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("an info note");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(f.message.contains("does not declare controlled impedance"),
+        "must explain why it is info: {}", f.message);
+}
+
+#[test]
+fn controlled_impedance_no_stackup_is_info_never_finding() {
+    // The SAME out-of-band geometry but with NO stackup block: the estimate uses
+    // the default-assumption stackup and MUST be info only, never a finding. This
+    // is the zero-false-positive guard: an unknown stackup cannot manufacture a
+    // controlled-impedance finding. (The RP2040 minimal board class.)
+    let text = r#"(kicad_pcb (version 20240101)
+        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM")
+        (segment (start 0 0) (end 20 0) (width 0.1) (layer "F.Cu") (net 1))
+        (segment (start 0 0.6) (end 20 0.6) (width 0.1) (layer "F.Cu") (net 2)))"#;
+    let b = ExtractedBoard::from_kicad_pcb(text).unwrap();
+    let doc = forge_sexpr::parse(text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    assert_eq!(r.finding_count(), 0, "no stackup -> never a finding");
+    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("an info estimate");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(f.message.contains("ASSUMED") && f.message.contains("info"),
+        "must flag the assumed stackup: {}", f.message);
+}
+
+#[test]
+fn controlled_impedance_ethernet_pair_targets_100_ohm() {
+    // An Ethernet-named pair (TRD0_P/TRD0_N) is judged against 100 ohm, not 90.
+    let text = r#"(kicad_pcb (version 20240101)
+        (setup (stackup
+          (layer "F.Cu" (type "copper") (thickness 0.035))
+          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
+          (layer "B.Cu" (type "copper") (thickness 0.035))))
+        (net 0 "") (net 1 "TRD0_P") (net 2 "TRD0_N")
+        (segment (start 0 0) (end 20 0) (width 0.25) (layer "F.Cu") (net 1))
+        (segment (start 0 0.45) (end 20 0.45) (width 0.25) (layer "F.Cu") (net 2)))"#;
+    let b = ExtractedBoard::from_kicad_pcb(text).unwrap();
+    let doc = forge_sexpr::parse(text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("a note");
+    assert!(f.message.contains("100 ohm") && f.message.contains("Ethernet"),
+        "Ethernet pair must target 100 ohm: {}", f.message);
+}
