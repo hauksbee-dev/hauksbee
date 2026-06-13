@@ -3,9 +3,10 @@
 //! ```text
 //! hauksbee run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
 //!                                 [--port 3001] [--report] [--drc] [--lint] [--si]
-//!                                 [--resources] [--apply-shorts]
+//!                                 [--resources] [--apply-shorts] [--models-dir <dir>]
 //! hauksbee to-code    <board-file> [--out <file.board>]
-//! hauksbee from-code  <code-file>  [--out <file.kicad_pcb>]
+//! hauksbee from-code  <code-file>  [--out <file.kicad_pcb>] [--relayout|--incremental]
+//!                                 [--route|--route-grid]
 //! hauksbee check-code <code-dir|file> [--seconds N] [--destructive]
 //! ```
 //!
@@ -19,114 +20,191 @@
 //! - `from-code`          : recompile Board-as-Code back into a `.kicad_pcb`.
 //! - `check-code`         : recompile, bind, co-sim with the stress monitor, and
 //!                          print a fault report (the edit -> simulate loop).
+//!
+//! The argument surface is defined with `clap` (derive API), so `--help`/`-h`
+//! at the top level and per command, usage-on-error, and did-you-mean
+//! suggestions all come for free.
 
 use std::path::{Path, PathBuf};
 
+use clap::{Parser, Subcommand};
+
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::boardcode::{
-    check_code, decompile_board_to_code, load_code, render_check_report,
-    CheckOptions,
+    check_code, decompile_board_to_code, load_code, render_check_report, CheckOptions,
 };
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 use hauksbee_server::Server;
 
-struct Args {
+/// CI for hardware: hand it a PCB and it tells you what blows up before you fab.
+///
+/// Point `hauksbee` at any board file (KiCad, Eagle, IPC-D-356, or gerbers) and
+/// it extracts the circuit, binds device models, runs the static checks, and can
+/// co-simulate the firmware on an emulated MCU. Start with `run --report`.
+#[derive(Parser)]
+#[command(
+    name = "hauksbee",
+    version,
+    about = "CI for hardware: hand it a PCB; it tells you what blows up before you order boards.",
+    long_about = None,
+    propagate_version = true,
+    arg_required_else_help = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Extract + bind a board, then check it or bring it to life.
+    ///
+    /// With no flag, serves the live 2D/3D frontend on a local websocket. The
+    /// `--report`/`--drc`/`--lint`/`--si`/`--resources` flags each print one
+    /// static report and exit; `--headless` runs the co-sim for `--seconds`.
+    ///
+    /// Example:
+    ///   hauksbee run my_board.kicad_pcb --report
+    Run(RunArgs),
+
+    /// Decompile a board into editable Board-as-Code text.
+    ///
+    /// Example:
+    ///   hauksbee to-code my_board.kicad_pcb --out my_board.board
+    ToCode(ToCodeArgs),
+
+    /// Recompile Board-as-Code back into a `.kicad_pcb`.
+    ///
+    /// Optionally re-place the parts (`--relayout`/`--incremental`) and route
+    /// them (`--route` via freerouting, or `--route-grid` for the in-tree A*).
+    ///
+    /// Example:
+    ///   hauksbee from-code my_board.board --out my_board.kicad_pcb --route
+    FromCode(FromCodeArgs),
+
+    /// Recompile, bind, co-sim with the stress monitor, print a fault report.
+    ///
+    /// This is the edit -> simulate loop: exits non-zero if a fault is raised,
+    /// so it drops straight into a script or pre-commit hook.
+    ///
+    /// Example:
+    ///   hauksbee check-code my_board.board --seconds 0.2
+    CheckCode(CheckCodeArgs),
+}
+
+#[derive(Parser)]
+struct RunArgs {
+    /// Board file to load (.kicad_pcb, .kicad_sch, .brd, .d356, or gerbers).
+    #[arg(value_name = "BOARD")]
     board: PathBuf,
+
+    /// Firmware image to co-simulate on the board's MCU (e.g. an AVR .hex/.elf).
+    #[arg(long, value_name = "HEX")]
     firmware: Option<PathBuf>,
+
+    /// Seconds of simulated time to run under --headless.
+    #[arg(long, default_value_t = 1.0, value_name = "N")]
     seconds: f64,
+
+    /// Run the co-sim headless for --seconds and print summary stats (no server).
+    #[arg(long)]
     headless: bool,
-    report_only: bool,
-    drc_only: bool,
-    lint_only: bool,
-    si_only: bool,
-    resources_only: bool,
+
+    /// Print the bind report table (every component -> device model) and exit.
+    #[arg(long)]
+    report: bool,
+
+    /// Print the geometric copper short / clearance (DRC) report and exit.
+    #[arg(long)]
+    drc: bool,
+
+    /// Print the connectivity lint + strap-pin + resource-conflict report and exit.
+    #[arg(long)]
+    lint: bool,
+
+    /// Print the signal-integrity / physics static-check report and exit.
+    #[arg(long)]
+    si: bool,
+
+    /// Print only the MCU internal resource-conflict report and exit.
+    #[arg(long)]
+    resources: bool,
+
+    /// Bridge every detected copper short before simulating (show the consequences).
+    #[arg(long)]
     apply_shorts: bool,
+
+    /// Port for the live frontend websocket server (default flow).
+    #[arg(long, default_value_t = 3001, value_name = "PORT")]
     port: u16,
-    /// Extra user model directory (highest priority), layered over the built-in
-    /// DB and the default `~/.hauksbee/models` / `~/.config/hauksbee/models` dirs.
+
+    /// Extra model directory (highest priority), layered over the built-in DB.
+    #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
 }
 
-fn parse_run_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
-    let board = it.next().map(PathBuf::from).ok_or_else(usage)?;
-    let mut args = Args {
-        board,
-        firmware: None,
-        seconds: 1.0,
-        headless: false,
-        report_only: false,
-        drc_only: false,
-        lint_only: false,
-        si_only: false,
-        resources_only: false,
-        apply_shorts: false,
-        port: 3001,
-        models_dir: None,
-    };
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--models-dir" => {
-                args.models_dir = Some(PathBuf::from(it.next().ok_or("--models-dir needs a path")?))
-            }
-            "--firmware" => {
-                args.firmware = Some(PathBuf::from(it.next().ok_or("--firmware needs a path")?))
-            }
-            "--seconds" => {
-                args.seconds = it
-                    .next()
-                    .ok_or("--seconds needs a number")?
-                    .parse()
-                    .map_err(|_| "bad --seconds")?
-            }
-            "--headless" => args.headless = true,
-            "--report" => args.report_only = true,
-            "--drc" => args.drc_only = true,
-            "--lint" => args.lint_only = true,
-            "--si" => args.si_only = true,
-            "--resources" => args.resources_only = true,
-            "--apply-shorts" => args.apply_shorts = true,
-            "--port" => {
-                args.port = it
-                    .next()
-                    .ok_or("--port needs a number")?
-                    .parse()
-                    .map_err(|_| "bad --port")?
-            }
-            other => return Err(format!("unknown flag '{other}'\n{}", usage())),
-        }
-    }
-    Ok(args)
+#[derive(Parser)]
+struct ToCodeArgs {
+    /// Board file to decompile.
+    #[arg(value_name = "BOARD")]
+    board: PathBuf,
+
+    /// Write the Board-as-Code to this file (default: print to stdout).
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
 }
 
-fn usage() -> String {
-    "usage:\n  \
-     hauksbee run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--resources] [--apply-shorts] [--models-dir <dir>]\n  \
-     hauksbee to-code <board-file> [--out <file.board>]\n  \
-     hauksbee from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid]\n  \
-     hauksbee check-code <code-dir|file> [--seconds N] [--destructive]"
-        .to_string()
+#[derive(Parser)]
+struct FromCodeArgs {
+    /// Board-as-Code file (or directory) to recompile.
+    #[arg(value_name = "CODE")]
+    code: PathBuf,
+
+    /// Write the `.kicad_pcb` here (default: print to stdout).
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+
+    /// Re-place every part from scratch before emitting.
+    #[arg(long, conflicts_with = "incremental")]
+    relayout: bool,
+
+    /// Re-place only parts that moved, keeping the rest pinned.
+    #[arg(long)]
+    incremental: bool,
+
+    /// Autoroute via freerouting (falls back to the grid A* if absent).
+    #[arg(long, conflicts_with = "route_grid")]
+    route: bool,
+
+    /// Force the in-tree grid A* router instead of freerouting.
+    #[arg(long)]
+    route_grid: bool,
+}
+
+#[derive(Parser)]
+struct CheckCodeArgs {
+    /// Board-as-Code file (or directory) to check.
+    #[arg(value_name = "CODE")]
+    code: PathBuf,
+
+    /// Seconds of simulated time to run the stress monitor for.
+    #[arg(long, default_value_t = 0.2, value_name = "N")]
+    seconds: f64,
+
+    /// Run the stress monitor in destructive mode (parts can be destroyed).
+    #[arg(long)]
+    destructive: bool,
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut it = std::env::args().skip(1);
-    let cmd = match it.next() {
-        Some(c) => c,
-        None => {
-            eprintln!("{}", usage());
-            std::process::exit(2);
-        }
-    };
-    let result = match cmd.as_str() {
-        "run" => cmd_run(it),
-        "to-code" => cmd_to_code(it),
-        "from-code" => cmd_from_code(it),
-        "check-code" => cmd_check_code(it),
-        other => {
-            eprintln!("unknown command '{other}'\n{}", usage());
-            std::process::exit(2);
-        }
+    let cli = Cli::parse();
+    let result = match cli.command {
+        Command::Run(args) => cmd_run(args),
+        Command::ToCode(args) => cmd_to_code(args),
+        Command::FromCode(args) => cmd_from_code(args),
+        Command::CheckCode(args) => cmd_check_code(args),
     };
     if let Err(e) = &result {
         eprintln!("error: {e}");
@@ -135,17 +213,23 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
-fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
-    let args = match parse_run_args(it) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(2);
+/// Read a board file, turning a missing file into an actionable message.
+fn read_board_text(path: &Path) -> anyhow::Result<String> {
+    std::fs::read_to_string(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!(
+                "no board file at '{}'. Check the path, or try a bundled example:\n  \
+                 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
+                path.display()
+            )
+        } else {
+            anyhow::anyhow!("reading '{}': {e}", path.display())
         }
-    };
+    })
+}
 
-    let text = std::fs::read_to_string(&args.board)
-        .map_err(|e| anyhow::anyhow!("reading {}: {e}", args.board.display()))?;
+fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
+    let text = read_board_text(&args.board)?;
     // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
     // it must be loaded by path to recurse the hierarchy; everything else is
     // self-contained and sniffed from its content.
@@ -160,14 +244,14 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     let extra: Vec<&std::path::Path> = args.models_dir.as_deref().into_iter().collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
 
-    if args.report_only {
+    if args.report {
         let bound = bind_board(&board, &lib);
         print!("{}", bound.report.render_table());
         return Ok(());
     }
 
     // --drc: run geometric short / clearance detection, print, exit.
-    if args.drc_only {
+    if args.drc {
         let report = ExtractedBoard::drc(&text)?;
         print!("{}", render_drc(&report));
         return Ok(());
@@ -176,7 +260,7 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     // --lint: run the connectivity lint-class checks, the boot strap-pin lint
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
-    if args.lint_only {
+    if args.lint {
         let mut report = board.net_lint();
         let straps = hauksbee_engine::checks::straps::strap_lint(&board, &lib);
         report.findings.extend(straps.findings);
@@ -186,7 +270,7 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     }
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
-    if args.resources_only {
+    if args.resources {
         let report = board.resource_conflicts();
         print!("{}", hauksbee_extract::render_netlint(&report));
         return Ok(());
@@ -195,7 +279,7 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     // --si: run the signal-integrity / physics static checks, print, exit. The
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
-    if args.si_only {
+    if args.si {
         let report = board.si_checks(Some(&text));
         print!("{}", hauksbee_extract::render_si(&report));
         return Ok(());
@@ -226,22 +310,18 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    serve(engine, args.port)
+    // Serve the loaded board's own file at the URL the frontend fetches it from
+    // (`/boards/<name>`), so the 2D/3D viewer renders the real geometry for any
+    // board, not just the demo boards baked into dist/.
+    let board_url = format!("/boards/{}", file_name(&args.board));
+    serve(engine, args.port, Some((board_url, text)))
 }
 
 /// `hauksbee to-code <board-file> [--out <file.board>]`
-fn cmd_to_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
-    let board = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
-    let mut out: Option<PathBuf> = None;
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--out" => out = Some(PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--out needs a path"))?)),
-            other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
-        }
-    }
-    let text = std::fs::read_to_string(&board)?;
+fn cmd_to_code(args: ToCodeArgs) -> anyhow::Result<()> {
+    let text = read_board_text(&args.board)?;
     let code = decompile_board_to_code(&text)?;
-    match out {
+    match args.out {
         Some(p) => {
             std::fs::write(&p, &code)?;
             eprintln!("wrote {}", p.display());
@@ -263,23 +343,25 @@ enum RouteMode {
 }
 
 /// `hauksbee from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid]`
-fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
+fn cmd_from_code(args: FromCodeArgs) -> anyhow::Result<()> {
     use forge_codegen::{relayout, LayoutConfig, Program};
-    let code_path = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
-    let mut out: Option<PathBuf> = None;
-    let mut layout: Option<LayoutConfig> = None;
-    let mut route = RouteMode::None;
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--out" => out = Some(PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--out needs a path"))?)),
-            "--relayout" => layout = Some(LayoutConfig::full()),
-            "--incremental" => layout = Some(LayoutConfig::incremental()),
-            "--route" => route = RouteMode::Freerouting,
-            "--route-grid" => route = RouteMode::Grid,
-            other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
-        }
-    }
-    let code = load_code(Path::new(&code_path))?;
+
+    let layout: Option<LayoutConfig> = if args.relayout {
+        Some(LayoutConfig::full())
+    } else if args.incremental {
+        Some(LayoutConfig::incremental())
+    } else {
+        None
+    };
+    let route = if args.route {
+        RouteMode::Freerouting
+    } else if args.route_grid {
+        RouteMode::Grid
+    } else {
+        RouteMode::None
+    };
+
+    let code = load_code(&args.code)?;
 
     // Parse + (optionally) re-place, then build a Pcb we can route on.
     let base = Program::parse(&code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
@@ -296,11 +378,11 @@ fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     let mut pcb = prog.build();
 
     if route != RouteMode::None {
-        route_board(&mut pcb, &prog, route, out.as_deref())?;
+        route_board(&mut pcb, &prog, route, args.out.as_deref())?;
     }
 
     let board_text = pcb.emit();
-    match out {
+    match args.out {
         Some(p) => {
             std::fs::write(&p, &board_text)?;
             eprintln!("wrote {}", p.display());
@@ -382,23 +464,12 @@ fn route_board(
 }
 
 /// `hauksbee check-code <code-dir|file> [--seconds N] [--destructive]`
-fn cmd_check_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
-    let code_path = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
-    let mut opts = CheckOptions::default();
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--seconds" => {
-                opts.seconds = it
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--seconds needs a number"))?
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("bad --seconds"))?
-            }
-            "--destructive" => opts.destructive = true,
-            other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
-        }
-    }
-    let code = load_code(Path::new(&code_path))?;
+fn cmd_check_code(args: CheckCodeArgs) -> anyhow::Result<()> {
+    let opts = CheckOptions {
+        seconds: args.seconds,
+        destructive: args.destructive,
+    };
+    let code = load_code(&args.code)?;
     let report = check_code(&code, &opts)?;
     print!("{}", render_check_report(&report));
     if !report.healthy() {
@@ -455,14 +526,38 @@ fn run_headless(engine: &mut HauksbeeEngine, seconds: f64) {
     }
 }
 
-fn serve(engine: HauksbeeEngine, port: u16) -> anyhow::Result<()> {
+fn serve(
+    engine: HauksbeeEngine,
+    port: u16,
+    board_file: Option<(String, String)>,
+) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let server = Server::new(Box::new(engine));
         let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist");
-        let dir = static_dir.exists().then_some(static_dir);
+        let dir = static_dir.exists().then(|| static_dir.clone());
         let addr = format!("127.0.0.1:{port}");
-        server.serve(&addr, dir.as_deref()).await
+
+        if dir.is_some() {
+            println!("\n  hauksbee is live. Open this in your browser:\n");
+            println!("      http://{addr}\n");
+            println!("  (2D/3D board view; Ctrl-C to stop.)\n");
+        } else {
+            // The frontend is a build artifact and is not checked in, so a fresh
+            // clone has no dist/ yet. Serve the websocket regardless (so the API
+            // and any external viewer still work) but tell the user exactly how
+            // to get the live view rather than leaving them on a blank 404 page.
+            println!("\n  hauksbee websocket server is live at ws://{addr}/ws  (Ctrl-C to stop)\n");
+            println!("  The live 2D/3D viewer at http://{addr} needs the frontend built once:\n");
+            println!("      cd frontend && bun install && bun run build\n");
+            println!("  then re-run this command. For a quick non-visual check, try:\n");
+            println!("      hauksbee run <board> --report      # bind table");
+            println!("      hauksbee run <board> --drc          # copper shorts");
+            println!("      hauksbee run <board> --headless     # co-sim summary\n");
+        }
+        server
+            .serve_with_board(&addr, dir.as_deref(), board_file)
+            .await
     })
 }
 

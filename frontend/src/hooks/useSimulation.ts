@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, ClientMessage } from '../types/protocol'
 
-const WS_URL = `ws://${window.location.hostname}:3001/ws`
+// Connect to the same origin that served the page, so the viewer works on any
+// `hauksbee run --port <PORT>` (and over https). In `vite dev` the dev server
+// proxies `/ws` to the backend (see vite.config.ts), so window.location.host is
+// correct there too. Override with VITE_WS_URL only for unusual split setups.
+const WS_URL =
+  import.meta.env.VITE_WS_URL ??
+  `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 
 export interface SimulationState {
   connected: boolean

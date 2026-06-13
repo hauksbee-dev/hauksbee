@@ -44,9 +44,30 @@ impl Server {
     }
 
     pub fn router(&self, static_dir: Option<&std::path::Path>) -> Router {
+        self.router_with_board(static_dir, None)
+    }
+
+    /// Build the router, optionally serving the loaded board's own file at a
+    /// fixed URL path so the frontend's geometry renderer can fetch it. The
+    /// static `dist/` only carries the demo boards, so without this any user
+    /// board would 404 in the 2D/3D view; serving the actual file here makes
+    /// `hauksbee run <any board>` show its real geometry.
+    pub fn router_with_board(
+        &self,
+        static_dir: Option<&std::path::Path>,
+        board_file: Option<(String, String)>,
+    ) -> Router {
         let mut router = Router::new()
             .route("/ws", get(ws_handler))
             .with_state(self.shared.clone());
+        if let Some((url_path, contents)) = board_file {
+            router = router.route(
+                &url_path,
+                get(move || async move {
+                    ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], contents)
+                }),
+            );
+        }
         if let Some(dir) = static_dir {
             router = router.fallback_service(tower_http::services::ServeDir::new(dir));
         }
@@ -58,9 +79,18 @@ impl Server {
         addr: &str,
         static_dir: Option<&std::path::Path>,
     ) -> anyhow::Result<()> {
+        self.serve_with_board(addr, static_dir, None).await
+    }
+
+    pub async fn serve_with_board(
+        &self,
+        addr: &str,
+        static_dir: Option<&std::path::Path>,
+        board_file: Option<(String, String)>,
+    ) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         eprintln!("hauksbee-server listening on http://{addr}");
-        axum::serve(listener, self.router(static_dir)).await?;
+        axum::serve(listener, self.router_with_board(static_dir, board_file)).await?;
         Ok(())
     }
 }

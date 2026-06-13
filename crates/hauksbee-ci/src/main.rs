@@ -1,68 +1,70 @@
 //! `hauksbee-ci` CLI.
 //!
 //! ```text
-//! hauksbee-ci run <spec.toml> [--junit out.xml] [--quiet]
+//! hauksbee-ci run <spec.toml> [--junit <out.xml>] [--quiet]
 //! ```
 //!
 //! Exit code is 0 if every assertion passed, 1 otherwise (2 on a usage/spec
 //! error). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
 //! annotations are emitted to stdout so failures surface inline.
+//!
+//! The argument surface is defined with `clap` (derive API): `--help`/`-h`,
+//! usage-on-error, and did-you-mean suggestions all come for free.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::{Parser, Subcommand};
+
 use hauksbee_ci::{run, RunConfig};
 
-struct Args {
+/// CI for hardware: run a board+firmware spec headless and assert on the result.
+///
+/// Point it at a TOML spec and it boots the firmware on the emulated PCB, then
+/// asserts on rails, UART, blink rate and stress faults. Exits 0 if every
+/// assertion passed, 1 if any failed, 2 on a spec/usage error. Writes JUnit XML
+/// with --junit and emits GitHub annotations under GITHUB_ACTIONS.
+#[derive(Parser)]
+#[command(
+    name = "hauksbee-ci",
+    version,
+    about = "CI for hardware: boot firmware on the emulated PCB and assert rails, UART, and blink.",
+    long_about = None,
+    propagate_version = true,
+    arg_required_else_help = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run a hauksbee-ci spec and assert on the result.
+    ///
+    /// Example:
+    ///   hauksbee-ci run ci/power-up.toml --junit results.xml
+    Run(RunArgs),
+}
+
+#[derive(Parser)]
+struct RunArgs {
+    /// The hauksbee-ci TOML spec to run.
+    #[arg(value_name = "SPEC")]
     spec: PathBuf,
+
+    /// Write JUnit XML to this path (for the CI test-report step).
+    #[arg(long, value_name = "OUT.XML")]
     junit: Option<PathBuf>,
+
+    /// Suppress the per-assertion human report (exit code still reflects pass/fail).
+    #[arg(long)]
     quiet: bool,
 }
 
-fn usage() -> String {
-    "usage: hauksbee-ci run <spec.toml> [--junit <out.xml>] [--quiet]".to_string()
-}
-
-fn parse_args() -> Result<Args, String> {
-    let mut it = std::env::args().skip(1);
-    let cmd = it.next().ok_or_else(usage)?;
-    if cmd == "--help" || cmd == "-h" {
-        return Err(usage());
-    }
-    if cmd != "run" {
-        return Err(format!("unknown command '{cmd}'\n{}", usage()));
-    }
-    let spec = it
-        .next()
-        .map(PathBuf::from)
-        .ok_or_else(|| format!("missing spec file\n{}", usage()))?;
-    let mut args = Args {
-        spec,
-        junit: None,
-        quiet: false,
-    };
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--junit" => {
-                args.junit = Some(PathBuf::from(
-                    it.next().ok_or("--junit needs a path")?,
-                ))
-            }
-            "--quiet" => args.quiet = true,
-            other => return Err(format!("unknown flag '{other}'\n{}", usage())),
-        }
-    }
-    Ok(args)
-}
-
 fn main() -> ExitCode {
-    let args = match parse_args() {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
+    let cli = Cli::parse();
+    let Command::Run(args) = cli.command;
 
     let cfg = RunConfig {
         spec: args.spec.clone(),
