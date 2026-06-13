@@ -144,12 +144,27 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         }
     };
 
-    let text = std::fs::read_to_string(&args.board)
+    // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
+    // would fail a UTF-8 `read_to_string`. Text formats (KiCad / Eagle / IPC)
+    // are recovered losslessly from these bytes.
+    let raw = std::fs::read(&args.board)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", args.board.display()))?;
+    // Binary board (Altium): auto-detected from the OLE2 magic + Altium streams,
+    // exactly as the Eagle path is auto-detected from XML content. No new CLI
+    // surface.
+    let altium = ExtractedBoard::from_auto_bytes(&raw).transpose()?;
+    // Text view for the text formats and the geometry-bearing text checks.
+    let text = if altium.is_some() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&raw).into_owned()
+    };
     // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
     // it must be loaded by path to recurse the hierarchy; everything else is
     // self-contained and sniffed from its content.
-    let board = if args.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
+    let board = if let Some(b) = altium.clone() {
+        b
+    } else if args.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
         ExtractedBoard::from_kicad_schematic_path(&args.board)?
     } else {
         ExtractedBoard::from_auto(&text)?
@@ -168,7 +183,11 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
 
     // --drc: run geometric short / clearance detection, print, exit.
     if args.drc_only {
-        let report = ExtractedBoard::drc(&text)?;
+        let report = if altium.is_some() {
+            ExtractedBoard::altium_drc(&raw)?
+        } else {
+            ExtractedBoard::drc(&text)?
+        };
         print!("{}", render_drc(&report));
         return Ok(());
     }
@@ -196,7 +215,10 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
     if args.si_only {
-        let report = board.si_checks(Some(&text));
+        // Altium geometry is not yet threaded into the SI text checks, so pass
+        // None there; the connectivity-based SI checks still run on `board`.
+        let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
+        let report = board.si_checks(geo_text);
         print!("{}", hauksbee_extract::render_si(&report));
         return Ok(());
     }
@@ -212,7 +234,11 @@ fn cmd_run(it: impl Iterator<Item = String>) -> anyhow::Result<()> {
 
     // --apply-shorts: bridge every detected copper short before simulating.
     if args.apply_shorts {
-        let report = ExtractedBoard::drc(&text)?;
+        let report = if altium.is_some() {
+            ExtractedBoard::altium_drc(&raw)?
+        } else {
+            ExtractedBoard::drc(&text)?
+        };
         let applied = engine.apply_drc_shorts(&report);
         eprintln!(
             "applied {applied} copper short(s) of {} detected ({} clearance violations)",
