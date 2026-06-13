@@ -133,3 +133,23 @@ exists precisely so the global solver behaviour stays unchanged; flipping it on
 would alter every transient/operating-point result across the corpus and
 introduce regressions. The right broadening was the inference quality, not the
 default-on switch. Intentionally not changed.
+
+## Recorded elsewhere (still open, owned by their own surface)
+
+These are genuine open limitations the code carries today. Each is the
+responsibility of the doc that owns the surface, and is listed here only so this
+triage page is a complete index of what is *not* yet closed:
+
+- **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs): the QEMU backend
+  does not intercept I2C, so an I2C DAC on the bus is not answered. See
+  `docs/TARSKI_RESULTS.md` and `docs/TEST_CAMPAIGN.md`.
+- **nRF5340 has no co-sim backend**: the Renode 1.16.1 portable build ships no
+  nRF5340 platform, so the ZSWatch-class DISPLAY-EN fault stays a static miss.
+  See `docs/MCU.md` and `docs/KNOWN_FAULTS_VALIDATION.md`.
+- **Bit-banged SPI at sub-chunk timing collapses in full co-sim**: the 595 chain
+  is covered by the model-level (PATH B) verification instead. See
+  `docs/TEST_CAMPAIGN.md`.
+- **PCB-only extraction has no pinfunctions**: multi-unit packages fall back to
+  db pin maps when only a layout (no schematic netlist) is available; schematic
+  netlists are authoritative when present. See `docs/TEST_CAMPAIGN.md` and
+  `docs/FAMOUS_SWEEP.md`.
