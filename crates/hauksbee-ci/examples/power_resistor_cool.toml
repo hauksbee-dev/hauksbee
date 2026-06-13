@@ -1,0 +1,29 @@
+# hauksbee-ci thermal example (within limits).
+#
+#   hauksbee-ci run crates/hauksbee-ci/examples/power_resistor_cool.toml
+#
+# A 30-ohm 2512 power resistor across a 5 V bench rail dissipates 5^2/30 = 0.83 W.
+# In a 2512 package (theta_JA ~= 80 C/W) at 25 C ambient the steady-state
+# junction temperature is 25 + 0.83*80 = 91.7 C, comfortably under the 125 C
+# default limit. This spec asserts the part stays cool.
+
+name = "power resistor within thermal limits"
+board = "boards/power_resistor.kicad_pcb"
+duration_ms = 20
+ambient_c = 25
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+volts = 5.0
+current_limit_a = 2.0
+
+# The junction temperature must stay at or below 125 C.
+[[assert]]
+kind = "max_temp"
+ref = "R1"
+celsius = 125
+
+# And no fault of any kind should fire.
+[[assert]]
+kind = "no_faults"

@@ -1,0 +1,28 @@
+# hauksbee-ci thermal example (over the limit at high ambient).
+#
+#   hauksbee-ci run crates/hauksbee-ci/examples/power_resistor_hot.toml
+#
+# The same board and dissipation as power_resistor_cool.toml, but in a 90 C
+# ambient (a hot enclosure). Now Tj = 90 + 0.83*80 = 156.7 C, over the 125 C
+# default junction-temperature limit. The thermal monitor must flag it. This
+# spec is the failing side of the two-sided demo: the max_temp assertion FAILS,
+# so the run exits non-zero.
+
+name = "power resistor over thermal limit (hot ambient)"
+board = "boards/power_resistor.kicad_pcb"
+duration_ms = 20
+ambient_c = 90
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+volts = 5.0
+current_limit_a = 2.0
+
+# This assertion is EXPECTED TO FAIL: at 90 C ambient the resistor runs at
+# ~157 C, over its 125 C junction limit. Run this spec to see the over-temp
+# fault surface and the build go red.
+[[assert]]
+kind = "max_temp"
+ref = "R1"
+celsius = 125
