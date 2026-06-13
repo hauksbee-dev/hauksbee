@@ -1,26 +1,38 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
-Every component the binder meets needs a simulation model. Hauksbee resolves one
-from three sources, layered by priority (later wins):
+Every component the binder meets needs a simulation model. Physics arrives by
+**four** authoring routes, but they collapse into **three** resolution tiers:
+the codex-extracted models and the hand-written behavioural models are both just
+TOML entries that land in the same user-TOML tier, so the resolver does not treat
+them as separate sources.
 
-```
-builtin TOML DB   <   datasheet extraction   <   user SPICE
-   (lowest)                                          (highest)
-```
+The four authoring routes:
 
 - **Built-in DB** (`crates/hauksbee-models/db/*.toml`): the curated library that
   ships with hauksbee. Covers the common families (BC847, 1N4148, 7805, 74HC595,
   ATmega328P, ...) plus passives resolved straight from the `Value` field.
-- **Datasheet extraction** (`model-extract` binary): when a part is not in the
-  DB, point hauksbee at the part's PDF datasheet and an LLM backend (codex by
-  default) extracts a model entry in the same TOML schema. The result is dropped
-  into `~/.hauksbee/models/` and loaded as a user-dir entry.
+- **Datasheet (codex) extraction** (`model-extract` binary): when a part is not
+  in the DB, point hauksbee at the part's PDF datasheet and an LLM backend (codex
+  by default) extracts a model entry in the same TOML schema. The result is
+  dropped into `~/.hauksbee/models/` and loaded as a user-dir entry.
+- **Hand-written behavioural** TOML: a `[models.behavioral]` entry you author by
+  hand for a power IC (see "Behavioural device models" below). Loaded from the
+  same user model directories as the extracted models.
 - **User SPICE**: a `.model` / `.subckt` card you supply always wins, so you can
   override anything with a vendor-provided SPICE deck.
 
+The three resolution tiers, layered by priority (later wins):
+
+```
+builtin TOML DB   <   user TOML (extracted + hand-written)   <   user SPICE
+   (lowest)                                                       (highest)
+```
+
 The resolution order itself lives in `ModelLibrary::resolve`
-(`crates/hauksbee-models/src/lib.rs`): SPICE cards first, then user TOML entries
-(which is where extracted models land), then the built-in DB.
+(`crates/hauksbee-models/src/lib.rs`), which returns a `source` of exactly one of
+`"spice"`, `"user"`, or `"builtin"`: SPICE cards first, then user TOML entries
+(where both extracted *and* hand-written behavioural models land), then the
+built-in DB.
 
 ## Pointing hauksbee at a datasheet
 
@@ -223,8 +235,9 @@ with no model edit — the basis of the two-sided fault validations in
 
 ## Adding a custom part without recompiling
 
-Models layer `builtin < datasheet-extracted < user` (later wins). A custom
-behavioural part is just a TOML file dropped into a user directory:
+Models layer `builtin < user TOML < user SPICE` (later wins), and both
+datasheet-extracted and hand-written behavioural models share the user-TOML tier.
+A custom behavioural part is just a TOML file dropped into a user directory:
 
 - `~/.hauksbee/models/` — where datasheet extraction writes.
 - `~/.config/hauksbee/models/` — your own custom models.
