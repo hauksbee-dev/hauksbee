@@ -47,6 +47,22 @@ use serde::{Deserialize, Serialize};
 /// Default copper-to-copper clearance (mm) when the board states no rule.
 pub const DEFAULT_CLEARANCE_MM: f64 = 0.2;
 
+/// Tolerance band (mm) below the clearance rule inside which a gap is treated as
+/// *at* the rule, not a violation.
+///
+/// A gap reported as `clearance - epsilon` is overwhelmingly a routing-to-rule
+/// artifact: KiCad lets the router lay copper *at* the design rule, and the nm
+/// grid plus our capsule/arc flattening (chord error a few microns, see
+/// `ARC_SEGMENTS`) leaves the measured gap a hair under the nominal rule. Those
+/// boundary gaps generated 137 spurious clearance notes on bms-c1 and 66 on the
+/// PD-sink board, drowning real findings. So a gap within this many microns of
+/// the rule is not a violation; only a gap genuinely *under* (rule - tolerance)
+/// is. Shorts (gap <= 0, actual copper overlap) are unaffected: this only
+/// raises the floor for the soft clearance band, never for true intersections.
+/// 5 um is well under any real copper clearance (the tightest fab rules are
+/// ~75 um) yet above the geometry's own rounding noise.
+pub const CLEARANCE_TOLERANCE_MM: f64 = 0.005;
+
 /// Arcs are flattened into this many straight capsule links. Eight keeps the
 /// chord error under a few microns for typical track-radius arcs while staying
 /// cheap.
@@ -1295,13 +1311,17 @@ fn sweep_buckets(
                     continue;
                 }
                 let (gap, (cx, cy)) = shape_gap(&p.shape, &q.shape);
-                if gap >= clearance {
-                    continue;
-                }
+                // A genuine overlap (gap <= 0) is always a short. A positive gap
+                // is a clearance violation only when it falls more than the
+                // tolerance below the rule; a gap sitting at (or a few microns
+                // under) the rule is routing-to-rule, not a defect, and is
+                // dropped to kill the boundary-note noise.
                 let kind = if gap <= 0.0 {
                     ViolationKind::Short
-                } else {
+                } else if gap < clearance - CLEARANCE_TOLERANCE_MM {
                     ViolationKind::Clearance
+                } else {
+                    continue;
                 };
                 record(kind, p.net, q.net, p.item(), q.item(), layer, cx, cy, gap);
             }
