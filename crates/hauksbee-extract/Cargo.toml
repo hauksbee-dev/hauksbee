@@ -10,6 +10,7 @@ name = "resource-extract"
 path = "src/bin/resource_extract.rs"
 
 [dependencies]
+cfb = "0.14"
 forge-sexpr.workspace = true
 gerber-types = "0.7.0"
 gerber_parser = "0.5.0"
