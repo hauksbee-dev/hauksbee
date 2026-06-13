@@ -396,6 +396,7 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let mut report = board.net_lint();
         let straps = hauksbee_engine::checks::straps::strap_lint(&board, &lib);
         report.findings.extend(straps.findings);
+        report.findings.extend(hauksbee_engine::checks::device_decode::device_decode_lint(&board, &lib).findings);
         report.findings.extend(board.resource_conflicts().findings);
         if args.plain {
             print!("{}", hauksbee_engine::plain_netlint(&report).render());
@@ -429,7 +430,14 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         // Altium geometry is not yet threaded into the SI text checks, so pass
         // None there; the connectivity-based SI checks still run on `board`.
         let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
-        let report = board.si_checks(geo_text);
+        let mut report = board.si_checks(geo_text);
+        // Engine-layer SI checks whose attribution needs the bound DB models:
+        // trace ampacity (current attribution + IPC-2221) and input-cap ripple
+        // (converter topology + cap ripple rating). These augment the
+        // extract-layer SI report exactly the way --lint augments its report
+        // with the strap lint.
+        hauksbee_engine::checks::ampacity::append_ampacity(&board, &lib, geo_text, &mut report);
+        hauksbee_engine::checks::ripple::append_ripple(&board, &lib, &mut report);
         if args.plain {
             print!("{}", hauksbee_engine::plain_si(&report).render());
         } else {

@@ -15,6 +15,17 @@
 //! - [`straps`]: the boot strapping-pin lint. It reads each MCU's strap table
 //!   from the model db and flags a strap net that cannot hold the level the part
 //!   needs at reset (a free-running clock on it, or a pull to the wrong rail).
+//! - [`converter`]: discrete switching-converter topology recovery (switch node
+//!   / input rail / output rail / bulk caps) from the netlist + part kinds,
+//!   shared by the ampacity and ripple checks.
+//! - [`ampacity`]: IPC-2221 trace-ampacity, wired into `--si`. Attributes cited
+//!   currents from the DB models and runs the
+//!   [`audit_trace_currents`](hauksbee_extract::audit_trace_currents) engine.
+//! - [`ripple`]: input bulk-capacitor ripple-current overstress on a buck.
 
+pub mod ampacity;
+pub mod converter;
+pub mod device_decode;
+pub mod ripple;
 pub mod straps;
 pub mod usb_c;

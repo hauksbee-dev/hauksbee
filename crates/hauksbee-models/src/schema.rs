@@ -147,6 +147,14 @@ pub struct Ratings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pin_current_a: Option<f64>,
 
+    /// Rated RMS ripple current (A) for a capacitor, at its datasheet reference
+    /// frequency / temperature. Drives the input-cap ripple-current check
+    /// (`hauksbee_engine::checks::ripple`). When absent the check applies a
+    /// conservative per-class default keyed on the cap's dielectric; set this to
+    /// override from the datasheet (e.g. the UCC EKYB 3.0 A at 100 kHz / 105 C).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_ripple_current_a: Option<f64>,
+
     /// Maximum junction temperature (C). When absent the thermal monitor
     /// applies a per-class default (125 C for discretes / passives, 150 C for
     /// power packs); set it here to override from the datasheet.

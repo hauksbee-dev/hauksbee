@@ -43,8 +43,8 @@ pub use si::{
     SiReport, SiSeverity,
 };
 pub use trace_current::{
-    audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root, CopperKind,
-    NetCopper, TraceAudit, TraceCurrentFinding,
+    audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root,
+    net_copper_from_text, CopperKind, NetCopper, TraceAudit, TraceCurrentFinding,
 };
 
 use serde::{Deserialize, Serialize};
