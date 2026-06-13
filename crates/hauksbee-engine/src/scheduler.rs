@@ -42,8 +42,16 @@ pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 /// Captured state shared between an MCU's C callbacks and the scheduler.
 #[derive(Default)]
 struct McuShared {
-    /// Pin edges since last drain: (port, bit) -> latest level.
+    /// Pin edges since last drain: (port, bit) -> latest level. Still used by
+    /// ordinary GPIO drivers (which only care about the final level a chunk
+    /// settles to) and diagnostics / frame state.
     pin_edges: HashMap<(char, u8), bool>,
+    /// Ordered log of EVERY pin transition since the last drain, in the order
+    /// the firmware produced them. Unlike `pin_edges` (latest-level map, which
+    /// collapses a sub-µs `shiftOut` SCLK pulse train to its final level), this
+    /// preserves each edge so the bit-banged 74HC595 chain can be clocked at
+    /// edge granularity (FIX 1).
+    pin_edge_log: Vec<(char, u8, bool)>,
     /// UART bytes the firmware emitted since last drain.
     uart_out: Vec<u8>,
 }
@@ -65,6 +73,13 @@ pub struct Scheduler {
     pub circuit: Circuit,
     pub net_nodes: HashMap<String, NodeId>,
     pub digital: Vec<DigitalComponent>,
+    /// MCU-bit-banged 74HC595 chains, clocked from the ordered pin-edge log at
+    /// edge granularity (FIX 1). The chips these drive are listed in
+    /// `chain_chips` and are skipped by the once-per-chunk `digital` tick so
+    /// they are not driven twice.
+    chains: Vec<crate::digital::Hc595Chain>,
+    /// Indices into `digital` of every chip driven by `chains` (the edge path).
+    chain_chips: std::collections::HashSet<usize>,
     mcus: Vec<LiveMcu>,
     /// Latest solved node voltages, indexed by `NodeId.0`.
     pub node_volts: Vec<f64>,
@@ -153,6 +168,14 @@ impl Scheduler {
             live.push(core_with_hooks(core, binding));
         }
 
+        // Build the MCU-bit-banged 74HC595 chain controllers (FIX 1). For each
+        // live MCU, map the net node each GPIO driver pushes onto back to its
+        // (port, bit), then identify the 595 daisy-chain(s) and bind their
+        // broadcast control signals (SRCLK / RCLK / SRCLR_n) and head SER to
+        // GPIO pins. A chain whose essential control pins are not bound to GPIO
+        // is left to the old once-per-chunk digital tick (so nothing regresses).
+        let (chains, chain_chips) = build_595_chains(&digital, &live);
+
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
@@ -160,6 +183,8 @@ impl Scheduler {
             circuit,
             net_nodes,
             digital,
+            chains,
+            chain_chips,
             mcus: live,
             node_volts: vec![0.0; n_nodes],
             branch_x: vec![0.0; n_branch],
@@ -327,10 +352,11 @@ impl Scheduler {
             }
             let _ = m.core.run_micros(micros);
 
-            let (edges, bytes) = {
+            let (edges, edge_log, bytes) = {
                 let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
                 (
                     std::mem::take(&mut sh.pin_edges),
+                    std::mem::take(&mut sh.pin_edge_log),
                     std::mem::take(&mut sh.uart_out),
                 )
             };
@@ -338,6 +364,16 @@ impl Scheduler {
                 uart.entry(m.binding.reference.clone())
                     .or_default()
                     .extend(bytes);
+            }
+            // 1b. Edge-driven 74HC595 chains: replay the ordered transition log
+            // so each bit-banged SRCLK/RCLK pulse clocks the chain (FIX 1). This
+            // happens before the latest-level driver apply below; the chain's
+            // latched outputs are pushed onto the analog nets after the digital
+            // tick (so they are not clobbered by the once-per-chunk tick).
+            if !self.chains.is_empty() && !edge_log.is_empty() {
+                for chain in &mut self.chains {
+                    chain.replay(&edge_log);
+                }
             }
             // 2. Apply GPIO edges to drivers. An edge means the firmware has
             // configured the pin as a driven output, so enable the (initially
@@ -353,13 +389,31 @@ impl Scheduler {
         }
 
         // 5(prev). Digital components drive their outputs from current state,
-        // sampling the previous chunk's solved node voltages.
+        // sampling the previous chunk's solved node voltages. Chips owned by an
+        // edge-driven 595 chain are SKIPPED here: they are clocked by the edge
+        // path above and have their latched outputs applied below, so ticking
+        // them once-per-chunk too would double-drive them with a stale,
+        // pulse-collapsed sample.
         {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-            for d in &mut self.digital {
+            for (i, d) in self.digital.iter_mut().enumerate() {
+                if self.chain_chips.contains(&i) {
+                    continue;
+                }
                 d.tick(&mut self.circuit, &node_v);
             }
+        }
+        // 5b(prev). Push the edge-driven chains' latched outputs onto the analog
+        // nets (the latched switch-select levels the membrane solve will see).
+        // Move the chains out to satisfy the borrow checker (apply needs &mut
+        // self.digital and &mut self.circuit), then put them back.
+        if !self.chains.is_empty() {
+            let chains = std::mem::take(&mut self.chains);
+            for chain in &chains {
+                chain.apply(&mut self.digital, &mut self.circuit);
+            }
+            self.chains = chains;
         }
 
         // 2b. Update configurable power supplies from the rail current measured
@@ -629,6 +683,25 @@ impl Scheduler {
         out
     }
 
+    /// Per edge-driven 74HC595 chain, the MCU GPIO `(port, bit)` bound to its
+    /// SRCLK, RCLK, optional SRCLR_n, and head SER, plus the chip count. Empty
+    /// when no chain is clocked by the MCU (the old once-per-chunk path is used).
+    /// Exposed for diagnostics and co-sim tests of the chain wiring (FIX 1).
+    pub fn hc595_chain_pins(
+        &self,
+    ) -> Vec<(
+        (char, u8),
+        (char, u8),
+        Option<(char, u8)>,
+        (char, u8),
+        usize,
+    )> {
+        self.chains
+            .iter()
+            .map(|c| (c.srclk, c.rclk, c.srclr_n, c.ser, c.order.len()))
+            .collect()
+    }
+
     /// Digital component register states, for component-state frames.
     pub fn digital_states(&self) -> HashMap<String, HashMap<String, f64>> {
         self.digital
@@ -869,6 +942,45 @@ fn instantiate_renode(_part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
     )
 }
 
+/// Build the edge-driven 74HC595 chain controllers and the set of chip indices
+/// they own. Each chain's broadcast control signals and head SER are matched to
+/// an MCU GPIO by comparing each role's net node against the node every GPIO
+/// driver pushes onto. A chain with no identifiable MCU controller (essential
+/// pins not bound to GPIO) is dropped, leaving its chips to the old digital
+/// tick. Multiple MCUs are supported: each MCU's GPIO map is tried; the chain
+/// binds to whichever MCU drives its control pins.
+fn build_595_chains(
+    digital: &[DigitalComponent],
+    mcus: &[LiveMcu],
+) -> (Vec<crate::digital::Hc595Chain>, std::collections::HashSet<usize>) {
+    use crate::digital::{order_595_chain, Hc595Chain};
+
+    let order = order_595_chain(digital);
+    let mut chains = Vec::new();
+    let mut owned = std::collections::HashSet::new();
+    if order.is_empty() {
+        return (chains, owned);
+    }
+
+    // Try each MCU's GPIO-net map until one can drive this chain's control pins.
+    for m in mcus {
+        let gpio_node: HashMap<i64, (char, u8)> = m
+            .binding
+            .gpio_drivers
+            .iter()
+            .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+            .collect();
+        if let Some(chain) = Hc595Chain::build(digital, order.clone(), &gpio_node) {
+            for &c in &chain.order {
+                owned.insert(c);
+            }
+            chains.push(chain);
+            break;
+        }
+    }
+    (chains, owned)
+}
+
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
 fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMcu {
     let shared = Arc::new(Mutex::new(McuShared::default()));
@@ -878,11 +990,9 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     // UB. So never panic on a poisoned lock: recover the guard and keep going
     // (the captured data is a simple accumulation buffer).
     core.on_pin_change(Box::new(move |pin: PinId, high: bool| {
-        pin_sink
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pin_edges
-            .insert((pin.port, pin.bit), high);
+        let mut sh = pin_sink.lock().unwrap_or_else(|e| e.into_inner());
+        sh.pin_edges.insert((pin.port, pin.bit), high);
+        sh.pin_edge_log.push((pin.port, pin.bit, high));
     }));
     let uart_sink = shared.clone();
     core.on_uart(Box::new(move |b: u8| {
