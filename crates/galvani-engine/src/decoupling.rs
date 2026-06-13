@@ -59,6 +59,7 @@ impl EsrEsl {
     ///
     /// | class        | ESR     | ESL    | source                                   |
     /// |--------------|---------|--------|------------------------------------------|
+    /// | MLCC 0201    | 80 mΩ   | 0.3 nH | Murata GRM033 datasheets / SimSurfing    |
     /// | MLCC 0402    | 50 mΩ   | 0.4 nH | Murata GRM155 datasheets / SimSurfing    |
     /// | MLCC 0603    | 30 mΩ   | 0.6 nH | Murata GRM188 datasheets / SimSurfing    |
     /// | MLCC 0805    | 20 mΩ   | 0.8 nH | Murata GRM21 datasheets / SimSurfing     |

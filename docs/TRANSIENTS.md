@@ -141,6 +141,7 @@ true`) or names a per-ref override. This keeps global behaviour unchanged.
 
 | class        | ESR     | ESL    | source                                   |
 |--------------|---------|--------|------------------------------------------|
+| MLCC 0201    | 80 mΩ   | 0.3 nH | Murata GRM033 datasheets / SimSurfing    |
 | MLCC 0402    | 50 mΩ   | 0.4 nH | Murata GRM155 datasheets / SimSurfing    |
 | MLCC 0603    | 30 mΩ   | 0.6 nH | Murata GRM188 datasheets / SimSurfing    |
 | MLCC 0805    | 20 mΩ   | 0.8 nH | Murata GRM21 datasheets / SimSurfing     |
@@ -154,9 +155,14 @@ datasheet 100 kHz figure for a mid-value part. These are deliberately
 representative class defaults, not a per-MPN table; a per-part override
 (`esr_ohms` / `esl_henries`) wins when a datasheet number is known.
 
-The footprint inference (`EsrEsl::from_footprint`) buckets `CP_*` / large-can /
-radial / axial footprints as electrolytic, small tant case codes as tantalum,
-and MLCC footprints by their imperial size code, falling back to 0603 MLCC.
+The footprint inference (`EsrEsl::from_footprint`, split into the unit-testable
+`class_from_footprint`) buckets `CP_*` / large-can / radial / axial footprints as
+electrolytic, explicit tantalum markers (TANTALUM/TANT, EIA case codes,
+`CASE-A..D`) as tantalum, and MLCC footprints by their size code in *either*
+imperial (`0402`) or the equivalent metric form (`1005Metric`), with a dedicated
+0201 class (highest ESR of the ladder); it falls back to 0603 MLCC for an
+unrecognised name. Parasitics remain **opt-in**, so broadening the inference does
+not change any default solver result.
 
 ---
 
