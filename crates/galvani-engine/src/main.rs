@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use galvani_engine::binder::bind_board;
 use galvani_engine::boardcode::{
-    check_code, code_to_board_text, decompile_board_to_code, load_code, render_check_report,
+    check_code, decompile_board_to_code, load_code, render_check_report,
     CheckOptions,
 };
 use galvani_engine::GalvaniEngine;
@@ -104,7 +104,7 @@ fn usage() -> String {
     "usage:\n  \
      galvani run <board-file> [--firmware <hex>] [--seconds N] [--headless] [--port 3001] [--report] [--drc] [--lint] [--si] [--resources] [--apply-shorts] [--models-dir <dir>]\n  \
      galvani to-code <board-file> [--out <file.board>]\n  \
-     galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]\n  \
+     galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid]\n  \
      galvani check-code <code-dir|file> [--seconds N] [--destructive]"
         .to_string()
 }
@@ -251,24 +251,40 @@ fn cmd_to_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental]`
+/// How to route the recompiled board.
+#[derive(Clone, Copy, PartialEq)]
+enum RouteMode {
+    /// No routing (placement only) - the historical default.
+    None,
+    /// Hand off to freerouting; fall back to the grid A* if it is absent.
+    Freerouting,
+    /// Force the in-tree grid A* fallback.
+    Grid,
+}
+
+/// `galvani from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid]`
 fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
     use forge_codegen::{relayout, LayoutConfig, Program};
     let code_path = it.next().ok_or_else(|| anyhow::anyhow!("{}", usage()))?;
     let mut out: Option<PathBuf> = None;
     let mut layout: Option<LayoutConfig> = None;
+    let mut route = RouteMode::None;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--out" => out = Some(PathBuf::from(it.next().ok_or_else(|| anyhow::anyhow!("--out needs a path"))?)),
             "--relayout" => layout = Some(LayoutConfig::full()),
             "--incremental" => layout = Some(LayoutConfig::incremental()),
+            "--route" => route = RouteMode::Freerouting,
+            "--route-grid" => route = RouteMode::Grid,
             other => anyhow::bail!("unknown flag '{other}'\n{}", usage()),
         }
     }
     let code = load_code(Path::new(&code_path))?;
-    let board_text = if let Some(cfg) = layout {
-        let base = Program::parse(&code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
-        let mut prog = base.clone();
+
+    // Parse + (optionally) re-place, then build a Pcb we can route on.
+    let base = Program::parse(&code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
+    let mut prog = base.clone();
+    if let Some(cfg) = layout {
         let report = relayout(&mut prog, &base, &cfg);
         eprintln!(
             "re-layout: {} groups, {} moved, {} kept",
@@ -276,10 +292,14 @@ fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
             report.moved.len(),
             report.kept
         );
-        prog.build().emit()
-    } else {
-        code_to_board_text(&code)?
-    };
+    }
+    let mut pcb = prog.build();
+
+    if route != RouteMode::None {
+        route_board(&mut pcb, &prog, route, out.as_deref())?;
+    }
+
+    let board_text = pcb.emit();
     match out {
         Some(p) => {
             std::fs::write(&p, &board_text)?;
@@ -287,6 +307,77 @@ fn cmd_from_code(mut it: impl Iterator<Item = String>) -> anyhow::Result<()> {
         }
         None => print!("{board_text}"),
     }
+    Ok(())
+}
+
+/// Route a built board in place. Prefers freerouting; documents and falls back
+/// to the grid A* when freerouting is unavailable (or when explicitly forced).
+fn route_board(
+    pcb: &mut forge_model::Pcb,
+    prog: &forge_codegen::Program,
+    mode: RouteMode,
+    out: Option<&Path>,
+) -> anyhow::Result<()> {
+    use forge_codegen::{route_grid, FreeroutingConfig, RouteRules};
+
+    let rules = RouteRules::default();
+    let fr_cfg = FreeroutingConfig::default();
+
+    let use_grid = match mode {
+        RouteMode::Grid => true,
+        RouteMode::Freerouting => !forge_codegen::freerouting_available(&fr_cfg),
+        RouteMode::None => return Ok(()),
+    };
+
+    if !use_grid {
+        // Freerouting handoff (the production path).
+        let workdir = out
+            .and_then(|p| p.parent())
+            .map(|d| d.join("freerouting-work"))
+            .unwrap_or_else(|| std::env::temp_dir().join("galvani-freerouting"));
+        eprintln!("routing: freerouting handoff (DSN -> freerouting -> SES)...");
+        match forge_codegen::route_with_freerouting(pcb, prog.outline, &rules, &fr_cfg, &workdir) {
+            Ok(o) => {
+                let pct = if o.nets_to_route > 0 {
+                    o.nets_routed as f64 / o.nets_to_route as f64 * 100.0
+                } else {
+                    100.0
+                };
+                eprintln!(
+                    "routed: {}/{} nets ({:.0}%), {} segments, {} vias, {:.1}s (freerouting)",
+                    o.nets_routed, o.nets_to_route, pct, o.segments, o.vias, o.elapsed_secs
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("freerouting failed ({e}); falling back to grid A*");
+            }
+        }
+    } else {
+        eprintln!("routing: freerouting absent, using in-tree grid A* fallback");
+    }
+
+    // Grid A* fallback. Route on the program (it reads pad geometry from there)
+    // and merge tracks onto the board.
+    let res = route_grid(prog, 0.5);
+    let mut net_id = std::collections::HashMap::new();
+    for n in pcb.nets() {
+        net_id.insert(n.name.clone(), n.id);
+    }
+    let mut seg = 0usize;
+    for t in &res.tracks {
+        let id = net_id.get(&t.net).copied();
+        for pair in t.points.windows(2) {
+            pcb.add_segment(pair[0], pair[1], 0.25, "F.Cu", id);
+            seg += 1;
+        }
+    }
+    eprintln!(
+        "routed: {} tracks ({} segments), {} unrouted nets (grid A* fallback)",
+        res.tracks.len(),
+        seg,
+        res.unrouted.len()
+    );
     Ok(())
 }
 
