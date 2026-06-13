@@ -145,6 +145,19 @@ struct RunArgs {
     #[arg(long, group = "report_mode")]
     resources: bool,
 
+    /// Translate the report into plain language for a non-engineer: a one-line
+    /// verdict, then each finding as what it is, why it matters, and what to do.
+    /// Applies to --drc/--lint/--si/--resources and to --headless faults.
+    #[arg(long, visible_alias = "explain")]
+    plain: bool,
+
+    /// Exit non-zero if a report (--drc/--lint/--si/--resources) finds problems,
+    /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
+    /// only read the text are unaffected). Counts shorts + serious/medium lint &
+    /// SI findings; clearance-only and low-severity notes do not fail the gate.
+    #[arg(long, visible_alias = "fail-on-findings")]
+    strict: bool,
+
     /// Bridge every detected copper short before simulating (show the consequences).
     #[arg(long)]
     apply_shorts: bool,
@@ -258,6 +271,8 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
 
     if args.report {
+        // The bind table is a description of the board, not a pass/fail check, so
+        // --plain / --strict do not apply to it; print the table as before.
         let bound = bind_board(&board, &lib);
         print!("{}", bound.report.render_table());
         return Ok(());
@@ -266,7 +281,15 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // --drc: run geometric short / clearance detection, print, exit.
     if args.drc {
         let report = ExtractedBoard::drc(&text)?;
-        print!("{}", render_drc(&report));
+        if args.plain {
+            print!("{}", hauksbee_engine::plain_drc(&report).render());
+        } else {
+            print!("{}", render_drc(&report));
+        }
+        // Strict: any true short fails the gate (clearance-only does not).
+        if args.strict && report.short_count() > 0 {
+            std::process::exit(2);
+        }
         return Ok(());
     }
 
@@ -278,14 +301,28 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let straps = hauksbee_engine::checks::straps::strap_lint(&board, &lib);
         report.findings.extend(straps.findings);
         report.findings.extend(board.resource_conflicts().findings);
-        print!("{}", hauksbee_extract::render_netlint(&report));
+        if args.plain {
+            print!("{}", hauksbee_engine::plain_netlint(&report).render());
+        } else {
+            print!("{}", hauksbee_extract::render_netlint(&report));
+        }
+        if args.strict && lint_fails(&report) {
+            std::process::exit(2);
+        }
         return Ok(());
     }
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if args.resources {
         let report = board.resource_conflicts();
-        print!("{}", hauksbee_extract::render_netlint(&report));
+        if args.plain {
+            print!("{}", hauksbee_engine::plain_netlint(&report).render());
+        } else {
+            print!("{}", hauksbee_extract::render_netlint(&report));
+        }
+        if args.strict && lint_fails(&report) {
+            std::process::exit(2);
+        }
         return Ok(());
     }
 
@@ -294,7 +331,14 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // KiCad layout text, so it is passed through.
     if args.si {
         let report = board.si_checks(Some(&text));
-        print!("{}", hauksbee_extract::render_si(&report));
+        if args.plain {
+            print!("{}", hauksbee_engine::plain_si(&report).render());
+        } else {
+            print!("{}", hauksbee_extract::render_si(&report));
+        }
+        if args.strict && si_fails(&report) {
+            std::process::exit(2);
+        }
         return Ok(());
     }
 
@@ -319,7 +363,15 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     }
 
     if args.headless {
-        run_headless(&mut engine, args.seconds);
+        let faults = run_headless(&mut engine, args.seconds);
+        if args.plain {
+            println!();
+            print!("{}", hauksbee_engine::plain_faults(&faults).render());
+        }
+        // Strict: any fault raised during the run fails the gate.
+        if args.strict && !faults.is_empty() {
+            std::process::exit(2);
+        }
         return Ok(());
     }
 
@@ -491,16 +543,34 @@ fn cmd_check_code(args: CheckCodeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_headless(engine: &mut HauksbeeEngine, seconds: f64) {
+/// Run the co-sim headless for `seconds`, print the activity summary, and return
+/// the faults raised (de-duplicated by component+kind, worst value kept) so the
+/// caller can render them in plain language and/or gate on them under --strict.
+fn run_headless(
+    engine: &mut HauksbeeEngine,
+    seconds: f64,
+) -> Vec<hauksbee_engine::FaultEvent> {
+    use hauksbee_engine::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
     eprintln!("co-sim: {seconds:.2}s headless...");
     let frame_dt = 1.0 / 1000.0; // 1 kHz frame cadence
     let mut t = 0.0;
     let mut last_uart: Vec<u8> = Vec::new();
+    let mut faults: Vec<FaultEvent> = Vec::new();
     while t < seconds {
         let frame = engine.step(frame_dt);
         for bytes in frame.uart.values() {
             last_uart.extend_from_slice(bytes);
+        }
+        for f in frame.faults {
+            faults.push(FaultEvent {
+                component: f.component,
+                kind: FaultKind::from_str(&f.kind),
+                value: f.value,
+                limit: f.limit,
+                t: f.t,
+                destroyed: f.destroyed,
+            });
         }
         t += frame_dt;
     }
@@ -537,6 +607,34 @@ fn run_headless(engine: &mut HauksbeeEngine, seconds: f64) {
         let s = String::from_utf8_lossy(&last_uart);
         println!("\nUART output ({} bytes):\n{}", last_uart.len(), s.trim_end());
     }
+
+    // De-duplicate faults by (component, kind), keeping the worst value, so a
+    // fault that trips every chunk is reported once. Mirrors check_board_text.
+    faults.sort_by(|a, b| {
+        a.component
+            .cmp(&b.component)
+            .then(a.kind.as_str().cmp(b.kind.as_str()))
+            .then(b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    faults.dedup_by(|a, b| a.component == b.component && a.kind.as_str() == b.kind.as_str());
+    faults
+}
+
+/// Strict-mode predicate for the lint report: a high- or medium-severity finding
+/// fails the gate. Low-severity notes (cosmetic / unlikely-to-bite) do not, to
+/// keep the gate from being noisy.
+fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
+    use hauksbee_extract::Severity;
+    report
+        .findings
+        .iter()
+        .any(|f| matches!(f.severity, Severity::High | Severity::Medium))
+}
+
+/// Strict-mode predicate for the SI report: any real finding (high/medium/low,
+/// but not the informational computed-value notes) fails the gate.
+fn si_fails(report: &hauksbee_extract::SiReport) -> bool {
+    report.finding_count() > 0
 }
 
 fn serve(

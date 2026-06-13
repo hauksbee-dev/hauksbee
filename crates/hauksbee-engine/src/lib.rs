@@ -28,6 +28,7 @@ pub mod digital;
 pub mod drivers;
 pub mod engine;
 pub mod peripherals;
+pub mod plain;
 pub mod power_supply;
 pub mod report;
 pub mod scheduler;
@@ -53,6 +54,9 @@ pub use peripherals::{
     sink::VcdSink,
     spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave},
     Peripheral, PeripheralSet, TickCtx, TimelineEvent,
+};
+pub use plain::{
+    plain_drc, plain_faults, plain_netlint, plain_si, PlainFinding, PlainLevel, PlainReport,
 };
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
