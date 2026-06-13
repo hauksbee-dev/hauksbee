@@ -116,6 +116,7 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> Program {
         version: 20241229,
         blocks: Vec::new(),
         body,
+        outline: None,
     }
 }
 
