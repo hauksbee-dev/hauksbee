@@ -160,13 +160,29 @@ pub fn dc_operating_point(
     circuit: &Circuit,
     opts: &SolverOptions,
 ) -> Result<(), String> {
+    dc_operating_point_seeded(ws, circuit, opts, None)
+}
+
+/// Solve the DC operating point, optionally warm-started from a `seed` (a prior
+/// operating point of the same circuit, e.g. the previous co-sim chunk's final
+/// unknowns). A good seed lets plain Newton converge in ~1 iteration, skipping
+/// the expensive gmin/source-stepping homotopy that a cold start needs on a
+/// stiff nonlinear board. This is EXACT: Newton converges to the same unique root
+/// regardless of the starting guess; the seed only changes the iteration count,
+/// and a seed that fails falls back to the identical cold (zeroed) path below.
+pub fn dc_operating_point_seeded(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    seed: Option<&[f64]>,
+) -> Result<(), String> {
     let use_ic = circuit.iter().any(|(_, d)| {
         matches!(
             d,
             Device::Capacitor { ic: Some(_), .. } | Device::Inductor { ic: Some(_), .. }
         )
     });
-    dc_solve(ws, circuit, opts, use_ic)
+    dc_solve(ws, circuit, opts, use_ic, seed)
 }
 
 fn dc_solve(
@@ -174,6 +190,7 @@ fn dc_solve(
     circuit: &Circuit,
     opts: &SolverOptions,
     use_ic: bool,
+    seed: Option<&[f64]>,
 ) -> Result<(), String> {
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
@@ -181,7 +198,21 @@ fn dc_solve(
         newton_solve(ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, use_ic, gmin, scale)
     };
 
-    // Attempt 1: direct.
+    // Attempt 0 (warm start): if a seed of the right size is given, try plain
+    // Newton from it. Near the previous operating point this converges in a few
+    // iterations; a failure simply falls through to the cold path, so the root
+    // found is identical either way.
+    if let Some(s) = seed {
+        if s.len() == ws.x.len() {
+            ws.x.copy_from_slice(s);
+            let r = solve(ws, opts.gmin, 1.0);
+            if r.converged {
+                return Ok(());
+            }
+        }
+    }
+
+    // Attempt 1: direct (cold, zeroed).
     for v in ws.x.iter_mut() {
         *v = 0.0;
     }

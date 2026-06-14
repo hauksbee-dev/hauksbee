@@ -7,7 +7,7 @@
 //! switches are watched for threshold crossings; when one is straddled, the
 //! step is bisected to land near the crossing so edges aren't smeared.
 
-use crate::newton::{dc_operating_point, newton_solve, Workspace};
+use crate::newton::{dc_operating_point_seeded, newton_solve, Workspace};
 use crate::options::{Integration, SolverOptions, StepControl};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
@@ -105,6 +105,21 @@ impl Transient {
         &self,
         circuit: &Circuit,
         tstop: f64,
+        sink: F,
+    ) -> Result<(), String> {
+        self.run_streaming_seeded(circuit, tstop, None, sink)
+    }
+
+    /// Like [`Transient::run_streaming`], but warm-starts the t=0 DC operating
+    /// point from `dc_seed` (a prior operating point of the same circuit, e.g.
+    /// the previous co-sim chunk's final unknowns). Lets a stiff nonlinear board
+    /// skip the cold-start homotopy each chunk; exact (same root, fewer Newton
+    /// iters), with a cold fallback when the seed does not fit or fails.
+    pub fn run_streaming_seeded<F: FnMut(StepSample)>(
+        &self,
+        circuit: &Circuit,
+        tstop: f64,
+        dc_seed: Option<&[f64]>,
         mut sink: F,
     ) -> Result<(), String> {
         let opts = &self.opts;
@@ -113,15 +128,27 @@ impl Transient {
         // it safe and profitable. Otherwise we fall through to the reference
         // monolithic engine below (which `Partitioning::Off` always uses), so
         // results never regress and Off is bit-identical to the classic solver.
-        if let Some(mut pt) = crate::partitioned::PartitionedTransient::try_build(circuit, opts) {
-            return pt.run_streaming(circuit, tstop, sink);
+        //
+        // BUT skip it when a warm DC seed is supplied (a co-sim march continuing
+        // from the previous chunk). The partitioned path rebuilds and re-seeds a
+        // cold global DC operating point plus each island's cold DC every chunk;
+        // with a good seed the monolithic path below converges in ~1 Newton
+        // iteration, which is far cheaper than that per-chunk cold seeding on a
+        // stiff nonlinear board. Both paths solve to the same operating point
+        // (Off is bit-identical), so switching is exact.
+        if dc_seed.is_none() {
+            if let Some(mut pt) = crate::partitioned::PartitionedTransient::try_build(circuit, opts)
+            {
+                return pt.run_streaming(circuit, tstop, sink);
+            }
         }
 
         let mut ws = Workspace::new(circuit);
         let n_dev = circuit.devices.len();
 
-        // DC operating point seeds t = 0.
-        dc_operating_point(&mut ws, circuit, opts)?;
+        // DC operating point seeds t = 0 (warm-started from the prior chunk when
+        // a seed is supplied).
+        dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed)?;
 
         let mut state = ReactiveState::new(n_dev);
         seed_reactive_state(&mut state, circuit, &ws);
