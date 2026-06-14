@@ -56,6 +56,11 @@ pub struct BindRow {
     pub outcome: BindOutcome,
     /// Set when a connected analog part failed to resolve (loud warning).
     pub warning: Option<String>,
+    /// Pin-role GUESS warnings: one per pad whose role the binder inferred from
+    /// the pin-rule table (not an explicit schematic pin-function). Each names
+    /// the pad, the guessed role, and the rule that matched, so nothing is
+    /// silently guessed. Empty when every role was explicit.
+    pub guesses: Vec<String>,
 }
 
 /// The full report from one bind pass.
@@ -120,6 +125,14 @@ impl BindReport {
         self.rows
             .iter()
             .filter_map(|r| r.warning.as_deref().map(|w| (r.reference.as_str(), w)))
+    }
+
+    /// Every pin-role GUESS warning: `(reference, message)` for each pad whose
+    /// role was inferred from a pin-rule rather than an explicit pin-function.
+    pub fn guess_warnings(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.rows
+            .iter()
+            .flat_map(|r| r.guesses.iter().map(move |g| (r.reference.as_str(), g.as_str())))
     }
 
     /// Render a Unicode box-drawing table of every row.
@@ -208,17 +221,22 @@ impl BindReport {
         ));
 
         // Summary line.
+        let guess_count = self.guess_warnings().count();
         out.push_str(&format!(
-            "\n{} of {} non-ignored components resolved ({:.0}%); {} mcu(s), {} digital, {} warnings\n",
+            "\n{} of {} non-ignored components resolved ({:.0}%); {} mcu(s), {} digital, {} warnings, {} pin-role guesses\n",
             self.resolved_count(),
             self.non_ignored_count(),
             self.resolved_fraction() * 100.0,
             self.mcu_count(),
             self.count_where(|o| matches!(o, BindOutcome::Digital { .. })),
             self.warnings().count(),
+            guess_count,
         ));
         for (r, w) in self.warnings() {
             out.push_str(&format!("  ⚠ {r}: {w}\n"));
+        }
+        for (r, g) in self.guess_warnings() {
+            out.push_str(&format!("  ? {r}: {g}\n"));
         }
         // Legend for the Conf column, shown only when a row is not `exact` so a
         // first-timer knows whether to worry about a `guessed`/`family` row.

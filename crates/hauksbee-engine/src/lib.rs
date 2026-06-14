@@ -43,8 +43,9 @@ pub mod tui;
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{bind_board, bind_board_with, BoundBoard};
 pub use boardcode::{
-    check_board_text, check_code, code_to_board_text, decompile_board_to_code, load_code,
-    program_from_extracted, render_check_report, CheckOptions, CheckReport,
+    check_board_text, check_code, code_to_board_text, decompile_any_to_code,
+    decompile_board_to_code, load_code, program_from_extracted, render_check_report, CheckOptions,
+    CheckReport,
 };
 pub use checks::usb_c::{
     classify_attach, classify_board, extract_sink_termination, usb_c_report, Attach, Cable,
