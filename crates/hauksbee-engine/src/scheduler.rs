@@ -90,6 +90,11 @@ pub struct Scheduler {
     /// Latest solved branch currents, indexed by branch unknown (after nodes).
     /// `branch_x[branch_index]`; map a device to its branch with [`Layout`].
     branch_x: Vec<f64>,
+    /// Previous chunk's final unknown vector, used to warm-start the next chunk's
+    /// DC operating point (skips cold-start homotopy on a stiff nonlinear board).
+    /// Cleared on a solver failure or a structural relayout (size mismatch is
+    /// also rejected safely by the solver).
+    last_dc_seed: Option<Vec<f64>>,
     /// Frozen MNA unknown layout for the current circuit (branch lookup).
     layout: Layout,
     /// Configurable power supplies, updated between chunks (Feature 1).
@@ -209,6 +214,7 @@ impl Scheduler {
             mcus: live,
             node_volts: vec![0.0; n_nodes],
             branch_x: vec![0.0; n_branch],
+            last_dc_seed: None,
             layout,
             supplies,
             behavioral,
@@ -673,10 +679,21 @@ impl Scheduler {
         let n_nodes = self.circuit.node_count();
         let mut final_x: Vec<f64> = Vec::new();
         // Run a short transient; capture the last accepted step's unknowns.
-        let res = t.run_streaming(&self.circuit, chunk, |s| {
-            final_x.clear();
-            final_x.extend_from_slice(s.x);
-        });
+        // Warm-start this chunk's DC operating point from the previous chunk's
+        // final unknowns: the operating point barely moves between 100 us chunks,
+        // so plain Newton converges in ~1 iteration instead of re-running the
+        // cold-start gmin/source-stepping homotopy on the full nonlinear board
+        // every chunk. Exact (same root, fewer iters); a size-mismatched or
+        // failing seed falls back to the cold solve inside the solver.
+        let res = t.run_streaming_seeded(
+            &self.circuit,
+            chunk,
+            self.last_dc_seed.as_deref(),
+            |s| {
+                final_x.clear();
+                final_x.extend_from_slice(s.x);
+            },
+        );
         match res {
             Ok(()) => {
                 self.node_volts.resize(n_nodes, 0.0);
@@ -690,11 +707,15 @@ impl Scheduler {
                 for b in 0..n_branch {
                     self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
                 }
+                // Seed the next chunk's DC solve with this chunk's end state.
+                self.last_dc_seed = Some(final_x);
             }
             Err(_) => {
                 // Solver failure: hold previous voltages rather than crash the
-                // whole co-sim (the chunk is short; next chunk may recover).
+                // whole co-sim (the chunk is short; next chunk may recover). Drop
+                // the warm seed so the next chunk cold-starts cleanly.
                 self.node_volts.resize(n_nodes, 0.0);
+                self.last_dc_seed = None;
             }
         }
     }
@@ -921,6 +942,8 @@ impl Scheduler {
         self.node_volts.resize(n_nodes, 0.0);
         let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
         self.branch_x.resize(n_branch, 0.0);
+        // The unknown vector changed shape; a prior warm seed no longer applies.
+        self.last_dc_seed = None;
     }
 }
 
