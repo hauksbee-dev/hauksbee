@@ -98,4 +98,26 @@ Hauksbee was built for one board no simulation tool could honestly check: Tarski
 
 The name is for [Francis Hauksbee](https://en.wikipedia.org/wiki/Francis_Hauksbee), who built the first machine to make the electrostatic spark on demand. Bringing a dead board to life is roughly the same trick.
 
-See the website at [hauksbee.dev](https://hauksbee.dev). Honest limitations are catalogued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). MIT licensed.
+See the website at [hauksbee.dev](https://hauksbee.dev). Honest limitations are catalogued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+
+---
+
+## Acknowledgements
+
+Hauksbee stands on a lot of open-source work. The substantial ones:
+
+**MCU co-simulation backends**
+- [simavr](https://github.com/buserror/simavr) (GPL-3.0) — cycle-accurate AVR / ATmega328P emulation, linked in-process via FFI, behind the `avr` backend.
+- [Renode](https://renode.io) by Antmicro (MIT) — STM32, nRF52 and SiFive RISC-V emulation, driven headless over its Monitor protocol.
+- [QEMU](https://www.qemu.org) and [Espressif's QEMU fork](https://github.com/espressif/qemu) (GPL-2.0) — ESP32 / ESP32-S3 / ESP32-C3 emulation with the SoC peripherals modelled.
+
+**PCB tooling**
+- [KiCad](https://www.kicad.org) (GPL-3.0) — the Altium `.PcbDoc` binary record parsers are ported field-by-field from KiCad's open-source Altium importer ([`docs/ALTIUM.md`](docs/ALTIUM.md)); `kicad-cli` is used for DRC cross-checks.
+- [freerouting](https://github.com/freerouting/freerouting) — the open-source autorouter hauksbee hands recompiled board-as-code off to for production routing (separate process, invoked headless).
+- [ngspice](https://ngspice.sourceforge.io) — the reference SPICE engine the solver is cross-validated against for accuracy and benchmarked beside.
+
+**Rust ecosystem** — [num-complex](https://crates.io/crates/num-complex) (complex MNA for the AC solver), [cfb](https://crates.io/crates/cfb) (OLE2 parsing for Altium files), [evalexpr](https://crates.io/crates/evalexpr) (behavioural device-model expressions), [clap](https://crates.io/crates/clap) (CLI), [axum](https://crates.io/crates/axum) + [tower-http](https://crates.io/crates/tower-http) + [tokio](https://crates.io/crates/tokio) (the web front door), [serde](https://crates.io/crates/serde) (serialisation), [bindgen](https://crates.io/crates/bindgen) (the simavr FFI bindings), and the wider Rust crate ecosystem.
+
+## License
+
+Hauksbee's own source is **MIT** (see [`LICENSE`](LICENSE)). One caveat, stated plainly: the optional `avr` backend links **libsimavr, which is GPL-3.0**, so a binary built with the default features (which include `avr`) is a combined work covered by GPL-3.0. Build with `--no-default-features --features renode,qemu` for a GPL-free binary — Renode and the Espressif QEMU fork run as separate processes reached over TCP, so they impose no link-time licence obligation.
