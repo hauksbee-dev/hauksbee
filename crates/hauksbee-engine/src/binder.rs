@@ -53,6 +53,23 @@ pub struct McuBinding {
     pub module: bool,
 }
 
+/// One MCP4728 quad DAC discovered on the board. Carries the assigned 7-bit
+/// I2C address, the board reference/value config (VREF, gain), and the four
+/// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
+/// creates one [`Mcp4728`](crate::Mcp4728) slave per binding, attaches them on a
+/// shared bus, and pushes each channel's computed VOUT onto these drivers every
+/// chunk (the `Hc595Chain::apply` cadence) so the analog solve sees the DAC
+/// output voltages.
+pub struct DacBinding {
+    pub reference: String,
+    pub address: u8,
+    pub vref: f64,
+    pub gain: u8,
+    /// VOUT channel A..D -> stamped driver (None if that channel net is
+    /// unconnected / tied to ground on this board).
+    pub vout_drivers: [Option<PinDriver>; 4],
+}
+
 /// The bound board: a ready-to-solve circuit plus the event-driven layer.
 pub struct BoundBoard {
     pub name: String,
@@ -78,6 +95,9 @@ pub struct BoundBoard {
     pub behavioral: Vec<crate::behavioral::BehavioralDevice>,
     /// Per-device metadata for the fault/stress monitor (Feature 2).
     pub device_meta: Vec<DeviceMeta>,
+    /// MCP4728 quad DACs discovered on the board, with their VOUT drivers. The
+    /// scheduler turns these into I2C slaves and drives the analog VOUT nets.
+    pub dacs: Vec<DacBinding>,
     pub report: BindReport,
 }
 
@@ -142,6 +162,7 @@ pub fn bind_board_with(
     let mut component_kinds: HashMap<String, String> = HashMap::new();
     let mut digital: Vec<DigitalComponent> = Vec::new();
     let mut mcus: Vec<McuBinding> = Vec::new();
+    let mut dacs: Vec<DacBinding> = Vec::new();
     let input_sources: HashMap<String, hauksbee_ir::DeviceId> = HashMap::new();
 
     // Detect whether the board has its own regulator chain we can solve. If a
@@ -181,6 +202,7 @@ pub fn bind_board_with(
                     &node_of,
                     &mut digital,
                     &mut mcus,
+                    &mut dacs,
                     has_vreg,
                     &power_nets,
                     &digital_control_nodes,
@@ -200,6 +222,19 @@ pub fn bind_board_with(
             outcome,
             warning,
         });
+    }
+
+    // ── Assign MCP4728 I2C addresses deterministically by reference order ────
+    // The board reprograms the three DACs to 0x60/0x61/0x62 during bring-up
+    // (that bit-banged address-reprogramming is OUT OF SCOPE here). We model the
+    // post-bring-up state: addresses 0x60+i assigned by ascending reference
+    // designator (U1101->0x60, U1102->0x61, U1103->0x62). ASSUMPTION: the
+    // netlist does not encode the final address per device, so by-ref ordering
+    // is the deterministic stand-in; it matches the board's U1101/02/03 layout
+    // and the firmware's CONF_MCP4728_ADDRS = {0x60,0x61,0x62}.
+    dacs.sort_by(|a, b| a.reference.cmp(&b.reference));
+    for (i, d) in dacs.iter_mut().enumerate() {
+        d.address = 0x60 + i as u8;
     }
 
     // ── Pass 3: attach configurable power supplies ──────────────────────────
@@ -268,6 +303,7 @@ pub fn bind_board_with(
         supplies,
         behavioral,
         device_meta,
+        dacs,
         report,
     }
 }
@@ -775,6 +811,7 @@ fn bind_component(
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     digital: &mut Vec<DigitalComponent>,
     mcus: &mut Vec<McuBinding>,
+    dacs: &mut Vec<DacBinding>,
     has_vreg: bool,
     power_nets: &HashMap<String, f64>,
     digital_control_nodes: &std::collections::HashSet<i64>,
@@ -814,12 +851,20 @@ fn bind_component(
                 None,
             )
         }
-        Dac | Adc => {
-            // Treated as behavioral passthrough buffers for now.
+        Dac => {
+            // MCP4728-class quad I2C DAC: stamp Thevenin drivers on the four
+            // VOUT channel nets and record a DacBinding. The scheduler creates
+            // the I2C slave and pushes computed VOUT onto these drivers each
+            // chunk. The I2C transactions reach the slave through the MCU's TWI
+            // `on_i2c` hook, not these nets, so no digital buffer is stamped.
+            bind_mcp4728_dac(comp, model, circuit, &role_nets, dacs)
+        }
+        Adc => {
+            // Treated as a behavioral passthrough buffer for now.
             bind_digital(comp, model, circuit, &role_nets, digital);
             (
                 BindOutcome::Digital {
-                    kind: format!("{:?}", model.kind).to_ascii_lowercase(),
+                    kind: "adc".to_string(),
                 },
                 None,
             )
@@ -940,6 +985,22 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             "s" | "sel" | "in" | "ctrl" => "ctrl",
             "gnd" | "vss" => "vss",
             "vcc" | "vdd" => "vcc",
+            _ => return None,
+        },
+        // MCP4728-class DACs: the schematic VOUTA..VOUTD / SDA / SCL / ~{LDAC}
+        // pin names are authoritative over the db's pad-number map (which some
+        // symbol libraries number differently). This pins each VOUT channel to
+        // the right analog net regardless of MSOP vs symbol pin numbering.
+        ComponentKind::Dac => match f.as_str() {
+            "vouta" | "vout_a" => "vout_a",
+            "voutb" | "vout_b" => "vout_b",
+            "voutc" | "vout_c" => "vout_c",
+            "voutd" | "vout_d" => "vout_d",
+            "sda" => "sda",
+            "scl" => "scl",
+            "ldac" | "~{ldac}" | "ldac_n" => "ldac_n",
+            "vdd" => "vdd",
+            "vss" | "gnd" => "vss",
             _ => return None,
         },
         _ => return None,
@@ -1416,6 +1477,71 @@ fn bind_analog_switch(
     (
         BindOutcome::Behavioral {
             device: "vswitch".to_string(),
+        },
+        None,
+    )
+}
+
+/// Bind an MCP4728-class quad I2C DAC: stamp a low-impedance Thevenin
+/// [`PinDriver`] on each connected VOUT channel net (ROUT ~1 Ω per the
+/// datasheet) and push a [`DacBinding`] the scheduler turns into an I2C slave.
+/// The address is assigned later by reference order; we leave a placeholder.
+fn bind_mcp4728_dac(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+    dacs: &mut Vec<DacBinding>,
+) -> (BindOutcome, Option<String>) {
+    // Output series resistance: datasheet ROUT ~1 Ω (normal mode). A small,
+    // non-zero value keeps the MNA well-conditioned while presenting a stiff
+    // source onto the synapse set-point nets.
+    let rout = model.params.get_f64("rout").unwrap_or(1.0);
+    let vref = model.params.get_f64("vref_int").unwrap_or(2.048);
+    let gain = model.params.get_f64("gain").unwrap_or(2.0).round() as u8;
+
+    let channel_roles = ["vout_a", "vout_b", "vout_c", "vout_d"];
+    let mut vout_drivers: [Option<PinDriver>; 4] = [None, None, None, None];
+    let mut stamped = 0;
+    for (ch, role) in channel_roles.iter().enumerate() {
+        let Some(&net) = roles.get(*role) else { continue };
+        if net.is_ground() {
+            continue;
+        }
+        let net_name = circuit.node_name(net).to_string();
+        let drv = PinDriver::stamp(
+            circuit,
+            net,
+            &net_name,
+            &format!("{}_{role}", comp.reference),
+            rout,
+        );
+        vout_drivers[ch] = Some(drv);
+        stamped += 1;
+    }
+
+    if stamped == 0 {
+        return (
+            BindOutcome::Unresolved {
+                reason: "MCP4728 has no connected VOUT channel".to_string(),
+            },
+            Some(format!(
+                "{} ({}): no VOUT channel connected, DAC left idle",
+                comp.reference, comp.value
+            )),
+        );
+    }
+
+    dacs.push(DacBinding {
+        reference: comp.reference.clone(),
+        address: 0x60, // placeholder; reassigned by reference order post-bind.
+        vref,
+        gain,
+        vout_drivers,
+    });
+    (
+        BindOutcome::Behavioral {
+            device: format!("mcp4728 quad DAC ({stamped} VOUT)"),
         },
         None,
     )

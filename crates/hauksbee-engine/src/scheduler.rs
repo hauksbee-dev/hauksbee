@@ -32,7 +32,7 @@ use hauksbee_solve::{Layout, SolverOptions, Transient};
 use crate::behavioral::BehavioralDevice;
 use crate::binder::{BoundBoard, McuBinding};
 use crate::digital::DigitalComponent;
-use crate::peripherals::{I2cBus, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
+use crate::peripherals::{I2cBus, Mcp4728, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
 
@@ -113,6 +113,21 @@ pub struct Scheduler {
     i2c_buses: Vec<Arc<Mutex<I2cBus>>>,
     /// SPI bus slaves, shared with each MCU's `on_spi` callback.
     spi_buses: Vec<Arc<Mutex<SpiBus>>>,
+    /// MCP4728 DAC VOUT drivers: each entry maps an I2C slave (by address, on
+    /// `dac_bus`) to its four VOUT-channel [`PinDriver`]s. Every chunk the
+    /// scheduler reads the slave's computed VOUT per channel and pushes it onto
+    /// the matching driver before the analog solve (the `Hc595Chain::apply`
+    /// cadence), so firmware DAC writes become real analog output voltages.
+    dac_vouts: Vec<DacVoutDrive>,
+}
+
+/// One MCP4728's analog VOUT drive: the bus its slave lives on, the slave's
+/// 7-bit address, and the four channel drivers (None where the VOUT net is not
+/// connected on the board).
+struct DacVoutDrive {
+    bus: Arc<Mutex<I2cBus>>,
+    address: u8,
+    drivers: [Option<crate::drivers::PinDriver>; 4],
 }
 
 /// Running statistics for one net across a run.
@@ -151,6 +166,7 @@ impl Scheduler {
             supplies,
             behavioral,
             device_meta,
+            dacs,
             ..
         } = bound;
 
@@ -183,7 +199,7 @@ impl Scheduler {
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
-        Ok(Scheduler {
+        let mut sched = Scheduler {
             circuit,
             net_nodes,
             digital,
@@ -205,7 +221,68 @@ impl Scheduler {
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
-        })
+            dac_vouts: Vec::new(),
+        };
+
+        // Wire up the board's MCP4728 quad DACs: build one I2C slave per binding
+        // at its assigned address, attach them on a shared bus (so firmware TWI
+        // writes reach them through `on_i2c`), and record each slave's VOUT
+        // drivers so the chunk loop pushes computed VOUT onto the analog nets.
+        if !dacs.is_empty() {
+            sched.attach_mcp4728_dacs(dacs);
+        }
+
+        Ok(sched)
+    }
+
+    /// Build and attach the MCP4728 DAC slaves discovered by the binder. One
+    /// shared [`I2cBus`] holds all of them (addressed 0x60/0x61/0x62); the bus
+    /// is registered as every MCU's `on_i2c` handler. Each DAC's VOUT-channel
+    /// drivers are kept in `dac_vouts` so [`Scheduler::push_dac_vouts`] can
+    /// drive the analog nets each chunk.
+    fn attach_mcp4728_dacs(&mut self, dacs: Vec<crate::binder::DacBinding>) {
+        let mut bus = I2cBus::new("MCP4728_BUS");
+        for d in &dacs {
+            let mut slave = Mcp4728::with_config(d.address, d.vref, d.gain);
+            // Carry the datasheet ROUT through so state() / diagnostics agree
+            // with the stamped driver resistance.
+            slave.rout = 1.0;
+            bus.add_slave(Box::new(slave));
+        }
+        let bus = Arc::new(Mutex::new(bus));
+        self.attach_i2c_bus(bus.clone());
+        for d in dacs {
+            self.dac_vouts.push(DacVoutDrive {
+                bus: bus.clone(),
+                address: d.address,
+                drivers: d.vout_drivers,
+            });
+        }
+        // Seed the analog nets with the DACs' power-on VOUT (code 0 -> ~0 V).
+        self.push_dac_vouts();
+    }
+
+    /// Read each MCP4728 slave's current per-channel VOUT and push it onto that
+    /// channel's [`PinDriver`]. Called each chunk after the MCU runs (so a just-
+    /// completed I2C DAC write is reflected) and before the analog solve, the
+    /// same cadence the 74HC595 chains use.
+    fn push_dac_vouts(&mut self) {
+        for dv in &self.dac_vouts {
+            // Snapshot the four VOUT voltages under the bus lock, then release it
+            // before mutating the circuit (drivers borrow `self.circuit`).
+            let vouts: [f64; 4] = {
+                let bus = dv.bus.lock().unwrap_or_else(|e| e.into_inner());
+                match bus.slave::<Mcp4728>(dv.address) {
+                    Some(s) => [s.vout(0), s.vout(1), s.vout(2), s.vout(3)],
+                    None => continue,
+                }
+            };
+            for (ch, drv) in dv.drivers.iter().enumerate() {
+                if let Some(drv) = drv {
+                    drv.set_volts(&mut self.circuit, vouts[ch]);
+                }
+            }
+        }
     }
 
     /// Attach an I2C bus and register it as every live MCU's `on_i2c` handler.
@@ -424,6 +501,14 @@ impl Scheduler {
                 chain.apply(&mut self.digital, &mut self.circuit);
             }
             self.chains = chains;
+        }
+
+        // 5c(prev). Push each MCP4728's computed VOUT onto its channel drivers,
+        // so a DAC write the MCU just issued over TWI (handled in step 1 via
+        // `on_i2c`) appears as a real analog output voltage in this chunk's
+        // solve. Same cadence as the 595 chain apply above.
+        if !self.dac_vouts.is_empty() {
+            self.push_dac_vouts();
         }
 
         // 2b. Update configurable power supplies from the rail current measured

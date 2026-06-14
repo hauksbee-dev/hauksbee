@@ -16,23 +16,27 @@ vref_int   = 2.048       # internal reference voltage (V) — Vref_int
 vref_ext   = 5.0         # assumed external VDD reference option (V)
 lsb_size_v = 0.000488    # 2.048 / 4096 V per LSB
 i2c_addr   = 0x60        # default unshifted 7-bit I2C address (A2A1A0=000)
-sda_pin    = "4"
-scl_pin    = "3"
+gain       = 2           # board configuration: Gx=2 (full-scale 2*Vref = 4.096 V)
+sda_pin    = "3"
+scl_pin    = "2"
 # Supply pins
 supply_pin = "1"          # VDD
-gnd_pin    = "2"          # VSS
-
+gnd_pin    = "10"         # VSS
+# Pad->role map matching the Tarski netlist symbol numbering (KiCad Analog_DAC
+# library): VDD=1, SCL=2, SDA=3, LDAC=4, RDY/BSY=5, VOUTA..D=6..9, VSS=10.
+# Schematic pinfunctions (VOUTA..VOUTD/SDA/SCL/~{LDAC}) override this when
+# present, so this map only matters for PCB-only extraction.
 [models.pins]
 "1"  = "vdd"
-"2"  = "vss"
-"3"  = "scl"
-"4"  = "sda"
-"5"  = "ldac_n"
-"6"  = "vout_d"
-"7"  = "vout_c"
-"8"  = "vout_b"
-"9"  = "vout_a"
-"10" = "rdy_bsy_n"
+"2"  = "scl"
+"3"  = "sda"
+"4"  = "ldac_n"
+"5"  = "rdy_bsy_n"
+"6"  = "vout_a"
+"7"  = "vout_b"
+"8"  = "vout_c"
+"9"  = "vout_d"
+"10" = "vss"
 
 [models.ratings]
 max_pin_current_a = 0.025
