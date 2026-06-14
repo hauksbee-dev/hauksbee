@@ -63,6 +63,14 @@ struct NonlinearIsland {
 /// matrix-exponential advance beats re-solving it via MNA every step.
 const SMALL_ISLAND_STATES: usize = 48;
 
+/// If, after tearing a shunt-fed rail, the largest nonlinear block is still
+/// bigger than this, the tear did not genuinely fragment the core (something
+/// else — e.g. an analog-switch mesh — keeps it fused). Tearing then buys nothing
+/// and we fall back to the monolithic path. Sized well above a real per-neuron
+/// block (~65 devices on the Tarski board) but far below the fused 5k-device
+/// island, so the win is taken only when it is real.
+const TEAR_MAX_BLOCK_DEVICES: usize = 600;
+
 /// Count the reactive states (caps + inductors) in an island.
 fn count_states(circuit: &Circuit, isl: &Island) -> usize {
     isl.devices
@@ -74,6 +82,14 @@ fn count_states(circuit: &Circuit, isl: &Island) -> usize {
             )
         })
         .count()
+}
+
+/// Runtime state for one shunt-fed rail tear (see [`crate::partition::RailTear`]).
+/// The rail voltage is an unknown solved by a scalar balance each step.
+struct RailTearState {
+    rail: NodeId,
+    feed: NodeId,
+    r_shunt: f64,
 }
 
 /// The partitioned engine for a fixed-step run.
@@ -88,6 +104,8 @@ pub struct PartitionedTransient {
     nonlinear: Vec<NonlinearIsland>,
     /// Global voltage source ids (cut points) and their global +/- nodes.
     sources: Vec<DeviceId>,
+    /// Detected shunt-fed rail tears, solved by scalar balance each step.
+    tears: Vec<RailTearState>,
     /// Global node-voltage exchange buffer, indexed by NodeId.0.
     vbuf: Vec<f64>,
     n_nodes: usize,
@@ -105,7 +123,33 @@ impl PartitionedTransient {
         if !matches!(opts.step, StepControl::Fixed { .. }) {
             return None;
         }
-        let part = Partition::analyze(circuit);
+        // Detect shunt-fed rail tears first; if any, the analysis splits the
+        // array into per-block islands that couple only through the scalar rail
+        // voltage (bordered-block-diagonal). This is what unfuses the Tarski
+        // synapse array (one ANALOG_VDD rail behind a 1 kΩ sense shunt).
+        let mut part = Partition::analyze_with_tears(circuit);
+
+        // A tear only helps if it actually FRAGMENTS the fused core into small
+        // blocks. If a giant nonlinear island survives the tear (e.g. the array
+        // is still fused through another path — analog switches that the static
+        // graph can't cut), tearing buys nothing and only risks a harder per-block
+        // seed. In that case drop the tears and fall back to the plain analysis,
+        // so the monolithic path handles the board correctly (no regression).
+        let largest_nl_devices = part
+            .islands
+            .iter()
+            .filter(|i| !i.linear)
+            .map(|i| i.devices.len())
+            .max()
+            .unwrap_or(0);
+        if !part.tears.is_empty() && largest_nl_devices > TEAR_MAX_BLOCK_DEVICES {
+            part = Partition::analyze(circuit);
+        }
+
+        let has_tears = !part.tears.is_empty();
+        // Rail nodes: islands touching them are kept as nonlinear sub-blocks so
+        // their rail-boundary current is readable for the scalar balance.
+        let rail_nodes: Vec<NodeId> = part.tears.iter().map(|t| t.rail).collect();
 
         // Decide whether partitioning actually helps. The closed-form linear
         // fast path wins on *small* islands (few states, where one exact matrix-
@@ -125,7 +169,9 @@ impl PartitionedTransient {
 
         let many_islands = n_islands >= 4;
         let small_linear_speedup = part.has_linear_island() && largest_linear <= SMALL_ISLAND_STATES;
-        if !many_islands && !small_linear_speedup {
+        // A rail tear genuinely fragments a fused nonlinear core, so it is always
+        // worth taking even if the per-island linear heuristics don't trigger.
+        if !has_tears && !many_islands && !small_linear_speedup {
             // One big monolithic-friendly block (or a lone large ladder): let the
             // reference sparse engine handle it.
             return None;
@@ -138,8 +184,16 @@ impl PartitionedTransient {
         let mut lin_free_nodes = Vec::new();
         let mut nonlinear = Vec::new();
 
+        let touches_rail = |isl: &crate::partition::Island| -> bool {
+            !rail_nodes.is_empty()
+                && isl.boundary_in.iter().any(|n| rail_nodes.contains(n))
+        };
         for isl in &part.islands {
-            if isl.linear {
+            // A linear island that loads a torn rail must be solved as a sub-block
+            // (not state-space reduced) so its rail-boundary current is readable
+            // for the scalar balance. Pure linear islands off the rail keep the
+            // fast closed-form path.
+            if isl.linear && !touches_rail(isl) {
                 match LinearIsland::compile(circuit, isl, opts.gmin) {
                     Some(li) => {
                         let n = li.n_states();
@@ -160,6 +214,19 @@ impl PartitionedTransient {
             }
         }
 
+        // Build runtime tear states. Each rail's loads are the nonlinear sub-
+        // blocks that pin it as a boundary; their rail currents are read directly
+        // during the balance, so no extra bookkeeping is needed here.
+        let tears: Vec<RailTearState> = part
+            .tears
+            .iter()
+            .map(|t| RailTearState {
+                rail: t.rail,
+                feed: t.feed,
+                r_shunt: t.r_shunt,
+            })
+            .collect();
+
         // Order cut sources so each is applied only after the node it references
         // is resolved: grounded-reference sources first, then sources whose
         // reference is a node a prior source already pins. This makes the single
@@ -174,6 +241,7 @@ impl PartitionedTransient {
             lin_free_nodes,
             nonlinear,
             sources,
+            tears,
             vbuf: vec![0.0; n_nodes + 1],
             n_nodes,
         })
@@ -224,9 +292,13 @@ impl PartitionedTransient {
             // at the new time (zero-order hold input for this step).
             self.apply_sources(circuit, tnext);
 
-            // Gauss-Seidel sweeps over islands.
-            for sweep in 0..relax_sweeps {
-                self.sweep(circuit, h, tnext, sweep == 0)?;
+            if self.tears.is_empty() {
+                // Gauss-Seidel sweeps over islands (unchanged legacy path).
+                for sweep in 0..relax_sweeps {
+                    self.sweep(circuit, h, tnext, sweep == 0)?;
+                }
+            } else {
+                self.step_with_rail_balance(circuit, h, tnext, relax_sweeps)?;
             }
 
             // Commit accepted state in every island (advance reactive history).
@@ -235,6 +307,134 @@ impl PartitionedTransient {
             t = tnext;
             self.gather_into(&mut xglobal);
             sink(StepSample { time: t, x: &xglobal });
+        }
+        Ok(())
+    }
+
+    /// Advance one step while exactly closing every shunt-fed rail's KCL balance.
+    ///
+    /// For a single tear node the system is bordered-block-diagonal: every block
+    /// depends on the rest only through `v(rail)`. We solve the scalar balance
+    ///   f(v_rail) = (v_feed - v_rail)/R_shunt - Σ_blocks I_drawn(v_rail) = 0
+    /// by the secant method, re-solving the (small) blocks at each trial rail
+    /// voltage. At convergence the partitioned node voltages equal the monolithic
+    /// solution to Newton tolerance — no behaviour is approximated, the array is
+    /// merely re-grouped around its one genuine coupling scalar.
+    ///
+    /// With multiple independent tears we relax them round-robin; since the tears
+    /// found on this board share the same feed (`+5V`) but separate rails, the
+    /// coupling between them is only second order and the outer loop converges in
+    /// a handful of passes.
+    fn step_with_rail_balance(
+        &mut self,
+        circuit: &Circuit,
+        h: f64,
+        tnext: f64,
+        _relax_sweeps: usize,
+    ) -> Result<(), String> {
+        // One sweep advances trial state from accepted history at the current
+        // rail estimates (linear islands + every nonlinear block solved once).
+        self.sweep(circuit, h, tnext, true)?;
+
+        // Outer rail balance: a scalar Newton per tear, iterated until each rail's
+        // KCL residual is below a VOLTAGE-referred tolerance. A residual current
+        // `r` leaves a rail-voltage error of at most `r * r_shunt`, so we drive
+        // each rail's residual below `v_target / r_shunt` (independent of the
+        // shunt value). `v_target` is one tenth of the node tolerance, giving a
+        // 10x margin under the exactness gate regardless of the shunt resistance.
+        let v_target = (self.opts.vntol * 0.1).max(1e-12);
+        let max_outer = 60usize;
+        for _ in 0..max_outer {
+            let mut converged = true;
+            for ti in 0..self.tears.len() {
+                let i_tol = (v_target / self.tears[ti].r_shunt).max(1e-15);
+                let resid = self.balance_one_rail(circuit, h, tnext, ti)?;
+                if resid.abs() > i_tol {
+                    converged = false;
+                }
+            }
+            if converged {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// One scalar-Newton step on rail `ti`'s KCL balance. Returns the residual
+    /// current that remained BEFORE this update (so the outer loop can test
+    /// convergence on the actual balance error, not just the step size).
+    fn balance_one_rail(
+        &mut self,
+        circuit: &Circuit,
+        h: f64,
+        tnext: f64,
+        ti: usize,
+    ) -> Result<f64, String> {
+        let rail = self.tears[ti].rail;
+        let feed = self.tears[ti].feed;
+        let r_shunt = self.tears[ti].r_shunt;
+
+        // f(v_rail) = current supplied through the shunt MINUS current drawn by
+        // all blocks loading the rail. Root => KCL satisfied at the rail node.
+        let gmin = self.opts.gmin;
+        // Each block sub-circuit stamps its OWN gmin-to-ground shunt on its local
+        // copy of the rail node (the reference monolithic engine stamps exactly
+        // ONE such shunt on the single rail node). So summing the blocks' rail
+        // boundary currents double-counts the gmin draw `n_loads` times. We undo
+        // the surplus `(n_loads - 1)·gmin·v_rail` so the torn rail's KCL matches
+        // the monolithic node equation bit-for-bit. This is the only bookkeeping
+        // difference between the two formulations; correcting it makes the tear
+        // exact rather than O(n·gmin) off.
+        let n_loads = self.nonlinear.iter().filter(|nl| nl.touches_rail(rail)).count();
+        let surplus = (n_loads.saturating_sub(1)) as f64 * gmin;
+        let residual = |s: &Self| -> f64 {
+            let v_feed = if feed.is_ground() { 0.0 } else { s.vbuf[feed.0 as usize] };
+            let v_rail = s.vbuf[rail.0 as usize];
+            let i_in = (v_feed - v_rail) / r_shunt;
+            let i_out: f64 = s.nonlinear.iter().map(|nl| nl.rail_current(rail)).sum();
+            // Add back the surplus gmin current the per-block shunts over-drew.
+            i_in - i_out + surplus * v_rail
+        };
+
+        let v0 = self.vbuf[rail.0 as usize];
+        let f0 = residual(self);
+        if f0.abs() <= self.opts.abstol.max(1e-12) {
+            return Ok(f0);
+        }
+        // Numeric derivative df/dv_rail from a small perturbation. The shunt term
+        // contributes -1/R_shunt; the block term its incremental rail conductance.
+        let dv_probe = (v0.abs() * 1e-6).max(1e-6);
+        self.vbuf[rail.0 as usize] = v0 + dv_probe;
+        self.resolve_rail_blocks(circuit, h, tnext, rail)?;
+        let f1 = residual(self);
+
+        let slope = (f1 - f0) / dv_probe;
+        let v_new = if slope.abs() > 1e-15 {
+            v0 - f0 / slope
+        } else {
+            v0
+        };
+        self.vbuf[rail.0 as usize] = v_new;
+        self.resolve_rail_blocks(circuit, h, tnext, rail)?;
+        Ok(f0)
+    }
+
+    /// Re-solve (in place, no history advance) only the blocks that load `rail`,
+    /// after its boundary voltage changed. Cheap: the off-rail blocks are
+    /// untouched.
+    fn resolve_rail_blocks(
+        &mut self,
+        _circuit: &Circuit,
+        h: f64,
+        tnext: f64,
+        rail: NodeId,
+    ) -> Result<(), String> {
+        for nl in &mut self.nonlinear {
+            if nl.touches_rail(rail) {
+                nl.refresh_boundary(&self.vbuf);
+                nl.step(h, tnext, false, &self.opts)?;
+                nl.write_back(&mut self.vbuf);
+            }
         }
         Ok(())
     }
@@ -550,6 +750,29 @@ impl NonlinearIsland {
             return Err(format!("nonlinear island Newton failed at h={h}"));
         }
         Ok(())
+    }
+
+    /// Current this island draws OUT of a given global rail node.
+    ///
+    /// The boundary source is stamped `p = rail_local, n = ground`. The MNA stamp
+    /// adds `+1·i` to node `p`'s KCL row, where `i` is the source branch unknown,
+    /// so the rail node's balance reads `I_island + i = 0` ⇒ the current the
+    /// island draws from the rail is `-i`. Returns 0 if this island does not
+    /// touch `rail`.
+    fn rail_current(&self, rail: NodeId) -> f64 {
+        for (gn, sid) in &self.boundary {
+            if *gn == rail {
+                if let Some(bi) = self.ws.layout.branch(*sid) {
+                    return -self.ws.x[bi];
+                }
+            }
+        }
+        0.0
+    }
+
+    /// True if this island pins the given global rail as a boundary input.
+    fn touches_rail(&self, rail: NodeId) -> bool {
+        self.boundary.iter().any(|(gn, _)| *gn == rail)
     }
 
     /// Write the island's owned node voltages back to the global buffer.

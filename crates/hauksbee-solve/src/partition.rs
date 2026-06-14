@@ -77,6 +77,38 @@ pub struct Island {
     pub boundary_in: Vec<NodeId>,
 }
 
+/// A shunt-fed rail tear: an internal supply rail node (e.g. `ANALOG_VDD`) that
+/// is fed from a pinned source rail (e.g. `+5V`) through a *single* series
+/// resistor — a current-sense shunt or supply impedance — and is shared by many
+/// otherwise-independent nonlinear blocks (the current-mirror emitters).
+///
+/// Because the rail couples the blocks only through one scalar (its voltage),
+/// the system is bordered-block-diagonal: it decomposes EXACTLY into the per-
+/// block islands plus a single scalar KCL balance at the rail. The driver solves
+/// that balance by tearing — pin the rail to a trial voltage, solve every block,
+/// sum the block currents drawn from the rail, and adjust the rail voltage until
+/// the shunt current matches. At convergence this reproduces the monolithic
+/// solution bit-for-bit within Newton tolerance; nothing is approximated.
+#[derive(Debug, Clone)]
+pub struct RailTear {
+    /// The torn rail node (shared boundary across all blocks).
+    pub rail: NodeId,
+    /// The pinned source node feeding the rail (e.g. `+5V`).
+    pub feed: NodeId,
+    /// The single series resistor between `feed` and `rail` (the shunt).
+    pub shunt: DeviceId,
+    /// Series resistance of the shunt (Ω).
+    pub r_shunt: f64,
+    /// Other linear devices that also tie to the rail and have a free (non-rail,
+    /// non-pinned) terminal — e.g. membrane pull-up resistors. These couple only
+    /// through the rail voltage and are accounted for via their islands' boundary
+    /// currents. A rail load with NO free terminal (e.g. a rail-to-ground bypass
+    /// capacitor) would be dropped by the island analysis and its current lost,
+    /// so its presence makes [`detect_rail_tears`] reject the tear entirely
+    /// (conservative fallback to the exact monolithic path).
+    pub extra_loads: Vec<DeviceId>,
+}
+
 /// The full partition of a circuit.
 #[derive(Debug, Clone)]
 pub struct Partition {
@@ -87,11 +119,35 @@ pub struct Partition {
     pub sources: Vec<DeviceId>,
     /// Total non-ground node count (for sizing global exchange buffers).
     pub n_nodes: usize,
+    /// Detected shunt-fed rail tears. When non-empty, the orchestrator must
+    /// solve each tear's scalar rail balance (see [`RailTear`]); the islands are
+    /// already split as if the rail were a boundary input.
+    pub tears: Vec<RailTear>,
 }
 
 impl Partition {
-    /// Analyze a circuit into islands.
+    /// Analyze a circuit into islands, with no rail tearing (legacy behaviour).
     pub fn analyze(circuit: &Circuit) -> Partition {
+        Self::analyze_inner(circuit, &[])
+    }
+
+    /// Analyze a circuit into islands, additionally detecting and cutting
+    /// shunt-fed supply-rail tear nodes (see [`RailTear`]). This is what unlocks
+    /// the Tarski synapse array: every current mirror shares one `ANALOG_VDD`
+    /// rail fed through a 1 kΩ sense shunt, which otherwise fuses the whole
+    /// array into one giant nonlinear island.
+    pub fn analyze_with_tears(circuit: &Circuit) -> Partition {
+        let tears = detect_rail_tears(circuit);
+        let tear_nodes: Vec<NodeId> = tears.iter().map(|t| t.rail).collect();
+        let mut p = Self::analyze_inner(circuit, &tear_nodes);
+        p.tears = tears;
+        p
+    }
+
+    /// Core analysis. `extra_pinned` nodes are treated as boundary inputs (not
+    /// unioned through), exactly like ideal-source-pinned nodes — used for rail
+    /// tear nodes.
+    fn analyze_inner(circuit: &Circuit, extra_pinned: &[NodeId]) -> Partition {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1); // index by NodeId.0; 0 = ground
 
@@ -105,6 +161,14 @@ impl Partition {
         // islands. We still fuse a device's own internal nodes normally.
         let mut pinned = vec![false; n_nodes + 1];
         pinned[0] = true; // ground is a (trivially pinned) reference
+        // Rail tear nodes are treated as boundary inputs: a device touching the
+        // rail does not fuse with other blocks through it. The rail's voltage is
+        // resolved by the orchestrator's scalar balance, not by an ideal source.
+        for n in extra_pinned {
+            if !n.is_ground() {
+                pinned[n.0 as usize] = true;
+            }
+        }
         for (id, dev) in circuit.iter() {
             if let Device::Vsource { p, n, .. } = dev {
                 sources.push(id);
@@ -238,6 +302,7 @@ impl Partition {
             islands,
             sources,
             n_nodes,
+            tears: Vec::new(),
         }
     }
 
@@ -256,14 +321,197 @@ impl Partition {
         let lin = self.islands.iter().filter(|i| i.linear).count();
         let nl = self.nonlinear_count();
         format!(
-            "{} islands ({} linear, {} nonlinear), {} cut sources, {} nodes",
+            "{} islands ({} linear, {} nonlinear), {} cut sources, {} tears, {} nodes",
             self.islands.len(),
             lin,
             nl,
             self.sources.len(),
+            self.tears.len(),
             self.n_nodes
         )
     }
+}
+
+/// Minimum number of *nonlinear* devices that must share a rail before we treat
+/// it as a tear (and not just an incidental two-terminal node). Below this, the
+/// monolithic solve of the fused block is already cheap and tearing buys nothing.
+const TEAR_MIN_NONLINEAR_FANOUT: usize = 8;
+
+/// A series resistor at or below this resistance (Ω) is treated as a *stiff*
+/// supply-leg connection: the two nodes it joins are effectively the same rail
+/// for tear-detection purposes. This catches the binder's supply representation,
+/// where an ideal `Vsource` sits behind a ~1 mΩ series resistor (`STIFF_R_OHMS`)
+/// feeding the named rail net. It is deliberately far smaller than a real sense
+/// shunt (the Tarski analog rail is fed through 1 kΩ), so a genuine shunt is
+/// never mistaken for a stiff leg.
+const STIFF_SUPPLY_R: f64 = 1.0;
+
+/// Compute which nodes are held at a (near-)fixed supply potential: pinned by an
+/// ideal voltage source, OR reachable from such a node through only *stiff*
+/// (<= [`STIFF_SUPPLY_R`]) series resistors. The latter is what makes the
+/// binder's "Vsource behind a 1 mΩ leg" rails register as proper supply feeds.
+fn pinned_nodes(circuit: &Circuit, n_nodes: usize) -> Vec<bool> {
+    let mut pinned = vec![false; n_nodes + 1];
+    pinned[0] = true;
+    for _ in 0..circuit.devices.len().min(128) {
+        let mut changed = false;
+        for (_, dev) in circuit.iter() {
+            match dev {
+                Device::Vsource { p, n, .. } => {
+                    let (pi, ni) = (p.0 as usize, n.0 as usize);
+                    if (n.is_ground() || pinned[ni]) && !pinned[pi] {
+                        pinned[pi] = true;
+                        changed = true;
+                    }
+                    if (p.is_ground() || pinned[pi]) && !pinned[ni] {
+                        pinned[ni] = true;
+                        changed = true;
+                    }
+                }
+                // Stiff supply leg: propagate the rail across a near-zero R.
+                Device::Resistor { a, b, ohms, .. } if *ohms <= STIFF_SUPPLY_R => {
+                    let (ai, bi) = (a.0 as usize, b.0 as usize);
+                    if pinned[ai] && !pinned[bi] && !b.is_ground() {
+                        pinned[bi] = true;
+                        changed = true;
+                    }
+                    if pinned[bi] && !pinned[ai] && !a.is_ground() {
+                        pinned[ai] = true;
+                        changed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    pinned
+}
+
+/// Detect shunt-fed supply-rail tear nodes (see [`RailTear`]).
+///
+/// A node `rail` qualifies as a tear iff ALL of:
+///   * it is NOT itself pinned by an ideal source;
+///   * exactly one resistor connects it to a *pinned* node (the sense shunt /
+///     supply impedance) — call that node `feed`;
+///   * no ideal voltage source touches `rail` (it is genuinely internal);
+///   * at least [`TEAR_MIN_NONLINEAR_FANOUT`] nonlinear devices touch `rail`
+///     (it is the shared rail of a current-mirror array, not an incidental net).
+///
+/// This is an EXACT structural condition: when it holds, the only coupling among
+/// the blocks hanging off `rail` is the single scalar `v(rail)`, and the system
+/// is bordered-block-diagonal. The orchestrator's scalar balance reproduces the
+/// monolithic answer; no device behaviour is abstracted away.
+fn detect_rail_tears(circuit: &Circuit) -> Vec<RailTear> {
+    let n_nodes = circuit.max_node() as usize;
+    if n_nodes == 0 {
+        return Vec::new();
+    }
+    let pinned = pinned_nodes(circuit, n_nodes);
+
+    // Per node: count nonlinear-device touches, list resistors to a pinned node,
+    // and flag if an ideal Vsource touches it.
+    let mut nl_fanout = vec![0usize; n_nodes + 1];
+    let mut vsource_touch = vec![false; n_nodes + 1];
+    // resistor links from a non-pinned node to a pinned node: (rail) -> (feed, dev, ohms)
+    let mut shunt_links: Vec<Vec<(usize, DeviceId, f64)>> = vec![Vec::new(); n_nodes + 1];
+
+    for (id, dev) in circuit.iter() {
+        if !dev.is_linear() {
+            for n in dev.nodes() {
+                if !n.is_ground() {
+                    nl_fanout[n.0 as usize] += 1;
+                }
+            }
+        }
+        match dev {
+            Device::Vsource { p, n, .. } => {
+                if !p.is_ground() {
+                    vsource_touch[p.0 as usize] = true;
+                }
+                if !n.is_ground() {
+                    vsource_touch[n.0 as usize] = true;
+                }
+            }
+            Device::Resistor { a, b, ohms, .. } => {
+                let (ai, bi) = (a.0 as usize, b.0 as usize);
+                // A candidate supply shunt feeds the unpinned (rail) side from a
+                // pinned SUPPLY node. The feed must NOT be ground: a resistor to
+                // ground is a leak / load, not a supply shunt, and tearing there
+                // would wrongly treat the node as supply-driven.
+                if pinned[ai] && !a.is_ground() && !pinned[bi] && !b.is_ground() {
+                    shunt_links[bi].push((ai, id, *ohms));
+                } else if pinned[bi] && !b.is_ground() && !pinned[ai] && !a.is_ground() {
+                    shunt_links[ai].push((bi, id, *ohms));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut tears = Vec::new();
+    for rail in 1..=n_nodes {
+        if pinned[rail] || vsource_touch[rail] {
+            continue;
+        }
+        if nl_fanout[rail] < TEAR_MIN_NONLINEAR_FANOUT {
+            continue;
+        }
+        // Exactly one resistor to a pinned node => an unambiguous series shunt.
+        if shunt_links[rail].len() != 1 {
+            continue;
+        }
+        let (feed, shunt, r_shunt) = shunt_links[rail][0];
+        // Other linear loads tied to the rail (e.g. membrane pull-up resistors)
+        // are recorded for diagnostics; they live in their blocks' islands and
+        // are accounted for through the rail voltage automatically — UNLESS a
+        // device
+        // connects ONLY between the rail and already-pinned/ground nodes. Such a
+        // device (e.g. a rail-to-ground decoupling capacitor) has no free node,
+        // so `analyze_inner` drops it from every island and its current would be
+        // silently excluded from the rail balance — diverging from the monolithic
+        // engine, which stamps it on the single rail node. We CANNOT account for
+        // its current with the boundary-source bookkeeping, so we reject the tear
+        // entirely and fall back to the monolithic path (exact, just not torn).
+        // This is the conservative-correctness guard: only tear where every rail
+        // load has a free node whose island reports its current.
+        let mut droppable_load = false;
+        let mut extra_loads = Vec::new();
+        for (id, dev) in circuit.iter() {
+            if id == shunt {
+                continue;
+            }
+            let touches_rail = dev.nodes().iter().any(|n| n.0 as usize == rail);
+            if !touches_rail {
+                continue;
+            }
+            // Does this device have any non-ground node that is NOT the rail and
+            // NOT already pinned? If not, it is dropped and its current is lost.
+            let has_free = dev.nodes().iter().any(|n| {
+                !n.is_ground() && n.0 as usize != rail && !pinned[n.0 as usize]
+            });
+            if !has_free {
+                droppable_load = true;
+                break;
+            }
+            if dev.is_linear() {
+                extra_loads.push(id);
+            }
+        }
+        if droppable_load {
+            continue;
+        }
+        tears.push(RailTear {
+            rail: NodeId(rail as u32),
+            feed: NodeId(feed as u32),
+            shunt,
+            r_shunt,
+            extra_loads,
+        });
+    }
+    tears
 }
 
 #[cfg(test)]
