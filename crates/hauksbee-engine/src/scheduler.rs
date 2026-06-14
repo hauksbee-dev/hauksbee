@@ -711,11 +711,32 @@ impl Scheduler {
                 self.last_dc_seed = Some(final_x);
             }
             Err(_) => {
-                // Solver failure: hold previous voltages rather than crash the
-                // whole co-sim (the chunk is short; next chunk may recover). Drop
-                // the warm seed so the next chunk cold-starts cleanly.
-                self.node_volts.resize(n_nodes, 0.0);
-                self.last_dc_seed = None;
+                // The transient march failed to advance. If the DC operating
+                // point at t=0 was still captured (the streaming sink fires once
+                // before the march loop), use it: a converged DC bias is a far
+                // better state to report and to seed the next chunk from than a
+                // hard zero, which would brown out the modelled MCU. This is what
+                // lets a board whose stiff nonlinear march cannot progress (e.g.
+                // the diode-laden Tarski synapse core) still hold its DC rails and
+                // DAC/peripheral voltages instead of collapsing the whole co-sim.
+                if !final_x.is_empty() {
+                    self.node_volts.resize(n_nodes, 0.0);
+                    self.node_volts[0] = 0.0;
+                    for node in 1..n_nodes {
+                        self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
+                    }
+                    let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
+                    self.branch_x.resize(n_branch, 0.0);
+                    for b in 0..n_branch {
+                        self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
+                    }
+                    self.last_dc_seed = Some(final_x);
+                } else {
+                    // Nothing usable captured: hold previous voltages, cold-start
+                    // the next chunk.
+                    self.node_volts.resize(n_nodes, 0.0);
+                    self.last_dc_seed = None;
+                }
             }
         }
     }

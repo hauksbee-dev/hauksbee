@@ -74,6 +74,10 @@ pub struct StampCtx<'a> {
     pub opts: &'a SolverOptions,
     /// Current Newton iterate of all unknowns (node voltages then branches).
     pub x: &'a [f64],
+    /// Previous Newton iterate (the last accepted point), used as the anchor for
+    /// pn-junction voltage limiting. Equal to `x` on the very first iteration of
+    /// an operating point (no prior point yet), which disables limiting then.
+    pub x_prev: &'a [f64],
     pub time: f64,
     pub coeffs: IntegCoeffs,
     pub state: &'a ReactiveState,
@@ -87,6 +91,12 @@ pub struct StampCtx<'a> {
     pub gmin: f64,
     /// Source scaling for source-stepping homotopy (1.0 = full).
     pub src_scale: f64,
+    /// Tiny resistance (ohms) added in series with every ideal voltage source
+    /// (stamped on the branch-row diagonal) during the staged-DC fallback. It
+    /// keeps the frozen sparse ordering from hitting a zero pivot on a Vsource
+    /// branch when a downstream junction conducts (a numerical, not physical,
+    /// singularity). 0.0 disables it, keeping the normal path bit-identical.
+    pub branch_reg: f64,
 }
 
 impl StampCtx<'_> {
@@ -94,6 +104,14 @@ impl StampCtx<'_> {
     fn v(&self, node: NodeId) -> f64 {
         match self.layout.node(node) {
             Some(i) => self.x[i],
+            None => 0.0,
+        }
+    }
+    /// Node voltage at the PREVIOUS Newton iterate (the limiting anchor).
+    #[inline]
+    fn v_prev(&self, node: NodeId) -> f64 {
+        match self.layout.node(node) {
+            Some(i) => self.x_prev[i],
             None => 0.0,
         }
     }
@@ -178,6 +196,14 @@ pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
             if i < ctx.layout.n_nodes {
                 g.add(i, i, ctx.gmin);
             }
+        }
+    }
+    // Staged-DC branch regularization: a negligible series resistance on every
+    // Vsource/Inductor branch diagonal, so the frozen ordering always has a
+    // nonzero pivot there even when a conducting diode reshapes the elimination.
+    if ctx.branch_reg > 0.0 {
+        for i in ctx.layout.n_nodes..ctx.layout.size {
+            g.add(i, i, -ctx.branch_reg);
         }
     }
     for (id, dev) in ctx.circuit.iter() {
@@ -687,8 +713,47 @@ fn stamp_comparator(
     // Hysteresis: threshold depends on current output state.
     let high = prev_out > 0.5 * (out_lo + out_hi);
     let thresh = if high { -hyst } else { hyst };
-    let target = if vp - vn > thresh { out_hi } else { out_lo };
     let gout = 1.0;
+
+    // Staged-DC path (branch_reg > 0): the bare bang-bang transfer below has no
+    // tangent, so on a stiff board where a comparator input sits near threshold
+    // the output chatters between rails every Newton iteration and the solve
+    // never settles (the limit cycle that collapses the Tarski diode-laden DC
+    // point). Replace it, for the staged solve only, with a smooth high-gain
+    // logistic transfer that has a real derivative, so Newton sees a continuous
+    // function and converges. A real LMV7219 has finite (high) open-loop gain,
+    // so this is physically faithful, not a fudge; the discrete model below is
+    // kept bit-identical for every normal solve (branch_reg == 0).
+    if ctx.branch_reg > 0.0 {
+        let span = out_hi - out_lo;
+        // Gain shaping: ~full swing over a few mV around threshold (LMV7219 is a
+        // ~100+ dB comparator; a few-mV transition keeps the tangent bounded yet
+        // sharp). k chosen so the logistic saturates well inside the rails.
+        let k = 2000.0; // 1/V; ~2 mV transition width
+        let d = vp - vn - thresh;
+        let kd = (k * d).clamp(-40.0, 40.0);
+        let e = (-kd).exp();
+        let sig = 1.0 / (1.0 + e); // logistic in (0,1)
+        let target = out_lo + span * sig;
+        let dsig = k * sig * (1.0 - sig); // d target/d d  = span*k*sig*(1-sig)/... handled below
+        let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
+        if let Some(oi) = ctx.layout.node(out) {
+            g.add(oi, oi, gout);
+            rhs[oi] += gout * target;
+            // Couple output to inputs through the transfer tangent.
+            if let Some(pi) = ctx.layout.node(inp) {
+                g.add(oi, pi, -gout * dtarget_dvp);
+                rhs[oi] -= gout * dtarget_dvp * vp;
+            }
+            if let Some(ni) = ctx.layout.node(inn) {
+                g.add(oi, ni, gout * dtarget_dvp);
+                rhs[oi] += gout * dtarget_dvp * vn;
+            }
+        }
+        return;
+    }
+
+    let target = if vp - vn > thresh { out_hi } else { out_lo };
     if let Some(oi) = ctx.layout.node(out) {
         g.add(oi, oi, gout);
         rhs[oi] += gout * target;
@@ -752,12 +817,12 @@ fn inject(rhs: &mut [f64], node: Option<usize>, val: f64) {
 // previous Newton iterate; these helpers read it back.
 impl StampCtx<'_> {
     fn last_vd(&self, a: NodeId, k: NodeId) -> f64 {
-        self.v(a) - self.v(k)
+        self.v_prev(a) - self.v_prev(k)
     }
     fn last_vbe(&self, b: NodeId, e: NodeId) -> f64 {
-        self.v(b) - self.v(e)
+        self.v_prev(b) - self.v_prev(e)
     }
     fn last_vbc(&self, b: NodeId, c: NodeId) -> f64 {
-        self.v(b) - self.v(c)
+        self.v_prev(b) - self.v_prev(c)
     }
 }
