@@ -1,0 +1,33 @@
+{
+  "name": "hauksbee-board",
+  "displayName": "Hauksbee Board DSL",
+  "description": "Syntax highlighting for hauksbee Board-as-Code .board files (hauksbee board DSL v1)",
+  "version": "0.1.0",
+  "publisher": "tarski",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tarski/galvani"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "hauksbee-board",
+        "aliases": ["Hauksbee Board", "board-dsl"],
+        "extensions": [".board"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "hauksbee-board",
+        "scopeName": "source.board",
+        "path": "./syntax/board.tmLanguage.json"
+      }
+    ]
+  }
+}
