@@ -160,6 +160,18 @@ impl Transient {
         // on the normal ladder keeps the bit-identical classic transient path.
         if ws.used_staged_dc() {
             ws.set_staged_branch_reg(1e-2);
+            // The dynamic re-pivot fallback is available for the stiff march too,
+            // but only pays off if the per-step Newton actually converges on this
+            // board; on the Tarski synapse core the comparator/stretch-node limit
+            // cycle (not an LU singularity) is the blocker, so enabling it would
+            // just grind expensive re-factorizations to the same non-converged
+            // result. It is therefore opt-in (HAUKSBEE_TRANSIENT_DYN=1); the
+            // default transient keeps the fast frozen path (a singular refactor
+            // bails the step, the scheduler holds the last good operating point),
+            // which is the unchanged pre-existing behaviour.
+            if std::env::var("HAUKSBEE_TRANSIENT_DYN").is_ok() {
+                ws.symbolic.set_allow_dynamic(true);
+            }
         }
 
         let mut state = ReactiveState::new(n_dev);

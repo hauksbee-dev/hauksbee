@@ -97,6 +97,16 @@ pub struct StampCtx<'a> {
     /// branch when a downstream junction conducts (a numerical, not physical,
     /// singularity). 0.0 disables it, keeping the normal path bit-identical.
     pub branch_reg: f64,
+    /// Optional FROZEN comparator output decisions (keyed by device id),
+    /// supplied only by the staged-DC event-driven outer loop. When present, a
+    /// comparator's `high`/low state is held at the frozen value for the whole
+    /// inner Newton solve instead of being recomputed from the chattering output
+    /// node each iteration; the outer loop re-evaluates the decisions between
+    /// inner solves and re-solves until they stop flipping. This turns the
+    /// otherwise-discontinuous comparator network into a smooth circuit Newton
+    /// can converge, killing the limit cycle. `None` (every normal solve) keeps
+    /// the self-deciding behaviour bit-identical.
+    pub cmp_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
 }
 
 impl StampCtx<'_> {
@@ -242,7 +252,7 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
             stamp_opamp(ctx, *out, *inp, *inn, *gain, *rail_lo, *rail_hi, g, rhs)
         }
         Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => {
-            stamp_comparator(ctx, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs)
+            stamp_comparator(ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs)
         }
     }
 }
@@ -696,8 +706,10 @@ fn stamp_opamp(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stamp_comparator(
     ctx: &StampCtx,
+    id: DeviceId,
     out: NodeId,
     inp: NodeId,
     inn: NodeId,
@@ -710,37 +722,63 @@ fn stamp_comparator(
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     let prev_out = ctx.v(out);
+    let gout = 1.0;
+
+    // Event-driven staged path: the outer loop supplies a FROZEN decision for
+    // this comparator. Hold its output state fixed for the whole inner Newton
+    // solve so it cannot chatter; the threshold is set by the frozen state's
+    // hysteresis side. This is the limit-cycle cure: with every comparator's
+    // state fixed, the inner circuit is smooth and Newton converges; the outer
+    // loop re-evaluates and re-solves if any decision flipped.
+    if let Some(freeze) = ctx.cmp_freeze {
+        let _ = (vp, vn, hyst);
+        let high = freeze.get(&id).copied().unwrap_or(prev_out > 0.5 * (out_lo + out_hi));
+        // PIN the output to its frozen rail with a CONSTANT target (no input
+        // dependence). A smooth input-dependent transfer still swings the output
+        // whenever the comparator inputs pass near threshold, which makes the
+        // output node chase the inputs and the inner Newton limit-cycle (the
+        // output flip-flops at the step cap forever). Decoupling the output from
+        // the inputs entirely — output := frozen rail — makes the inner circuit
+        // strictly feed-FORWARD through the comparator, so Newton converges
+        // cleanly. The outer event loop is what enforces input/output
+        // consistency: it re-derives each comparator's rail from the converged
+        // inputs and re-solves until no rail flips, so the fixed point is a true
+        // root with every output consistent with its own inputs.
+        let target = if high { out_hi } else { out_lo };
+        if let Some(oi) = ctx.layout.node(out) {
+            g.add(oi, oi, gout);
+            rhs[oi] += gout * target;
+        }
+        return;
+    }
+
     // Hysteresis: threshold depends on current output state.
     let high = prev_out > 0.5 * (out_lo + out_hi);
     let thresh = if high { -hyst } else { hyst };
-    let gout = 1.0;
 
-    // Staged-DC path (branch_reg > 0): the bare bang-bang transfer below has no
-    // tangent, so on a stiff board where a comparator input sits near threshold
-    // the output chatters between rails every Newton iteration and the solve
-    // never settles (the limit cycle that collapses the Tarski diode-laden DC
-    // point). Replace it, for the staged solve only, with a smooth high-gain
-    // logistic transfer that has a real derivative, so Newton sees a continuous
-    // function and converges. A real LMV7219 has finite (high) open-loop gain,
-    // so this is physically faithful, not a fudge; the discrete model below is
-    // kept bit-identical for every normal solve (branch_reg == 0).
+    // Staged-DC path (branch_reg > 0) without an event-freeze map: the bare
+    // bang-bang transfer below has no tangent, so on a stiff board where a
+    // comparator input sits near threshold the output chatters between rails
+    // every Newton iteration. Replace it, for the staged solve only, with a
+    // smooth high-gain logistic transfer that has a real derivative. A real
+    // LMV7219 has finite (high) open-loop gain, so this is physically faithful;
+    // the discrete model below is kept bit-identical for every normal solve
+    // (branch_reg == 0 and no freeze map).
     if ctx.branch_reg > 0.0 {
         let span = out_hi - out_lo;
-        // Gain shaping: ~full swing over a few mV around threshold (LMV7219 is a
-        // ~100+ dB comparator; a few-mV transition keeps the tangent bounded yet
-        // sharp). k chosen so the logistic saturates well inside the rails.
-        let k = 2000.0; // 1/V; ~2 mV transition width
+        let k = std::env::var("HAUKSBEE_CMP_K").ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(2000.0); // 1/V; ~2 mV transition width
         let d = vp - vn - thresh;
         let kd = (k * d).clamp(-40.0, 40.0);
         let e = (-kd).exp();
         let sig = 1.0 / (1.0 + e); // logistic in (0,1)
         let target = out_lo + span * sig;
-        let dsig = k * sig * (1.0 - sig); // d target/d d  = span*k*sig*(1-sig)/... handled below
+        let dsig = k * sig * (1.0 - sig);
         let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
         if let Some(oi) = ctx.layout.node(out) {
             g.add(oi, oi, gout);
             rhs[oi] += gout * target;
-            // Couple output to inputs through the transfer tangent.
             if let Some(pi) = ctx.layout.node(inp) {
                 g.add(oi, pi, -gout * dtarget_dvp);
                 rhs[oi] -= gout * dtarget_dvp * vp;

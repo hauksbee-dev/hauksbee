@@ -11,7 +11,7 @@ use crate::plan::StampPlan;
 use crate::sparse::{SparseMatrix, Symbolic};
 use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
 use crate::system::{Layout, ReactiveState};
-use hauksbee_ir::{Circuit, Device, NodeId};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 
 /// Outcome of a Newton solve.
 pub struct NewtonResult {
@@ -28,6 +28,11 @@ pub struct Workspace {
     pub rhs: Vec<f64>,
     pub x: Vec<f64>,
     pub x_prev_iter: Vec<f64>,
+    /// Per-node UNDAMPED Newton step from the previous iteration, used by the
+    /// staged-DC adaptive damping to detect oscillating nodes (a sign reversal)
+    /// and damp only those, leaving converging nodes near-full steps. Allocated
+    /// once; only touched on the staged path (branch_reg>0).
+    prev_step: Vec<f64>,
     /// True when every device is linear, so one solve per step is exact and
     /// Newton needs no second iteration to confirm convergence.
     linear: bool,
@@ -50,6 +55,12 @@ pub struct Workspace {
     /// every step too; an ordinary circuit that solved on the normal ladder
     /// leaves it false and keeps the bit-identical transient path.
     used_staged_dc: bool,
+    /// FROZEN comparator output decisions for the event-driven staged solve,
+    /// keyed by device id. `None` (every normal solve) keeps the comparators
+    /// self-deciding and the path bit-identical; the staged-DC outer loop sets
+    /// it so each inner Newton solve holds comparator state fixed (smooth) and
+    /// re-evaluates between solves.
+    cmp_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
 }
 
 impl Workspace {
@@ -92,10 +103,12 @@ impl Workspace {
             rhs: vec![0.0; size],
             x: vec![0.0; size],
             x_prev_iter: vec![0.0; size],
+            prev_step: vec![0.0; size],
             linear,
             plan,
             staged_branch_reg: 0.0,
             used_staged_dc: false,
+            cmp_freeze: None,
         }
     }
 }
@@ -117,11 +130,26 @@ pub fn newton_solve(
     src_scale: f64,
 ) -> NewtonResult {
     let mut iters = 0;
+    let dbg_newton = std::env::var("HAUKSBEE_NEWTON_DBG").is_ok();
+    let dbg_staged = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     // Anchor for pn-junction voltage limiting: the linearization point of the
     // PREVIOUS Newton iteration. Seeded to the starting guess so the first
     // iteration's anchor equals its own linearization point (pnjlim then sees
     // zero delta and does not limit), exactly as a cold SPICE iteration.
     ws.x_prev_iter.copy_from_slice(&ws.x);
+    for s in ws.prev_step.iter_mut() {
+        *s = 0.0;
+    }
+    // Staged-path stall detection: track the best (smallest) undamped node-step
+    // norm seen and how many iterations it has been since it last improved. A
+    // diode/comparator core that is going to limit-cycle settles into a constant
+    // oscillation amplitude; once the step norm stops improving for a window we
+    // bail early instead of grinding every (now dynamic-pivoted, and thus more
+    // expensive) iteration up to max_newton. Only active on the staged path
+    // (branch_reg>0); the normal path is unaffected.
+    let mut best_norm = f64::INFINITY;
+    let mut stall = 0usize;
+    const STALL_WINDOW: usize = 12;
     loop {
         iters += 1;
         // Snapshot the point we're about to linearize around BEFORE the solve
@@ -147,6 +175,7 @@ pub fn newton_solve(
                 gmin,
                 src_scale,
                 branch_reg,
+                cmp_freeze: ws.cmp_freeze.as_ref(),
             };
             stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
         }
@@ -176,45 +205,67 @@ pub fn newton_solve(
             let already = branch_reg > 0.0
                 && iters > 1
                 && node_block_converged(&lin_point, &prev_iterate, &ws.layout, opts);
-            if std::env::var("HAUKSBEE_STAGED_DBG").is_ok() {
+            if dbg_staged {
                 eprintln!("[newton] refactor singular at iter {iters} (already_converged={already})");
             }
             return NewtonResult { converged: already, iters };
         }
         ws.symbolic.solve(&mut ws.rhs);
-        // rhs now holds the new iterate x.
+        // rhs now holds the new (UNDAMPED) Newton iterate.
         ws.x.copy_from_slice(&ws.rhs);
-
-        // Damped Newton (staged-DC only). A node sitting behind a reverse-biased
-        // diode plus a DC-open cap is nearly floating and high-gain, so the
-        // undamped Newton map has a limit cycle (the node flip-flops between two
-        // values forever). Take a fractional step on the NODE block plus a hard
-        // per-iteration cap; both are standard Newton globalizations that change
-        // only the iteration path, not the fixed point (at the root the step is
-        // zero, so damping is inert there). Branch currents are left unclamped.
-        // Active only for branch_reg>0, so the normal solve paths stay
-        // bit-identical.
-        if branch_reg > 0.0 {
-            const NODE_ALPHA: f64 = 0.5; // fractional damping
-            const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
-            for i in 0..ws.layout.n_nodes {
-                let full = ws.x[i] - lin_point[i];
-                let mut step = NODE_ALPHA * full;
-                if step > NODE_STEP_MAX {
-                    step = NODE_STEP_MAX;
-                } else if step < -NODE_STEP_MAX {
-                    step = -NODE_STEP_MAX;
-                }
-                ws.x[i] = lin_point[i] + step;
-            }
-        }
 
         // A fully linear system is solved exactly in one shot; no need to
         // assemble and factor a second time just to watch the residual be zero.
         if ws.linear {
             return NewtonResult { converged: true, iters };
         }
-        if converged(&ws.x, &ws.x_prev_iter, &ws.layout, opts) {
+
+        // Convergence is judged on the UNDAMPED Newton step (ws.x vs the point we
+        // linearized at, lin_point): that is the true measure of how far the
+        // iterate is from the root. Damping (below) is a path globalization only;
+        // judging convergence on the damped iterate would let a small damped step
+        // masquerade as convergence. The normal (branch_reg==0) path damps
+        // nothing, so this is identical to the old test there.
+        let undamped_converged = converged(&ws.x, &lin_point, &ws.layout, opts);
+        let undamped_node_converged =
+            node_block_converged(&ws.x, &lin_point, &ws.layout, opts);
+
+        // Adaptive damped Newton (staged-DC only). A node sitting behind a
+        // reverse-biased diode plus a DC-open cap is nearly floating and
+        // high-gain, so the undamped Newton map can limit-cycle (a node and its
+        // neighbour flip-flop between two values). A GLOBAL fixed fraction can't
+        // win: too high sustains the two-cycle, too low crawls the converging
+        // nodes. Instead damp PER NODE by whether its undamped step reversed
+        // direction from the previous iteration: a sign reversal means that node
+        // is oscillating, so damp it hard (and progressively harder the longer it
+        // oscillates, tracked implicitly by the shrinking effective step); a
+        // same-sign step means it is converging, so take a near-full step. This
+        // kills the oscillation while letting the well-behaved majority converge
+        // fast. At the root every step is zero, so damping is inert. Active only
+        // for branch_reg>0, so the normal solve paths stay bit-identical.
+        if branch_reg > 0.0 {
+            const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
+            const ALPHA_CONVERGING: f64 = 0.9; // same-sign: near-full step
+            const ALPHA_OSCILLATING: f64 = 0.25; // sign reversed: heavy damping
+            for i in 0..ws.layout.n_nodes {
+                let full = ws.x[i] - lin_point[i];
+                let prev = ws.prev_step[i];
+                // Oscillating if this step opposes the previous one and both are
+                // non-trivial.
+                let oscillating = prev * full < 0.0 && prev.abs() > 1e-9 && full.abs() > 1e-9;
+                let alpha = if oscillating { ALPHA_OSCILLATING } else { ALPHA_CONVERGING };
+                let mut step = alpha * full;
+                if step > NODE_STEP_MAX {
+                    step = NODE_STEP_MAX;
+                } else if step < -NODE_STEP_MAX {
+                    step = -NODE_STEP_MAX;
+                }
+                ws.prev_step[i] = step;
+                ws.x[i] = lin_point[i] + step;
+            }
+        }
+
+        if undamped_converged {
             return NewtonResult { converged: true, iters };
         }
         // Staged-DC node-block convergence. The branch regularizer injects
@@ -225,11 +276,40 @@ pub fn newton_solve(
         // scale, accept the operating point: the node block is the physics, the
         // branch currents are derived and the leftover noise is below any real
         // signal current. Only for branch_reg>0 (staged path).
-        if branch_reg > 0.0
-            && iters >= 3
-            && node_block_converged(&ws.x, &ws.x_prev_iter, &ws.layout, opts)
-        {
+        if branch_reg > 0.0 && iters >= 3 && undamped_node_converged {
             return NewtonResult { converged: true, iters };
+        }
+        if dbg_newton {
+            let mut maxd = 0.0f64;
+            let mut argi = 0usize;
+            for i in 0..ws.layout.n_nodes {
+                let d = (ws.x[i] - lin_point[i]).abs();
+                if d > maxd {
+                    maxd = d;
+                    argi = i;
+                }
+            }
+            eprintln!("[newton] iter {iters} maxdV(undamped)={maxd:.3e} @node{argi} branch_reg={branch_reg:e}");
+        }
+        if branch_reg > 0.0 {
+            // Norm of the undamped node step this iteration.
+            let mut norm = 0.0f64;
+            for i in 0..ws.layout.n_nodes {
+                let d = (ws.x[i] - lin_point[i]).abs();
+                if d > norm {
+                    norm = d;
+                }
+            }
+            if norm < best_norm * 0.999 {
+                best_norm = norm;
+                stall = 0;
+            } else {
+                stall += 1;
+                if stall >= STALL_WINDOW {
+                    // No progress for a full window: this solve is limit-cycling.
+                    return NewtonResult { converged: false, iters };
+                }
+            }
         }
         if iters >= opts.max_newton {
             return NewtonResult { converged: false, iters };
@@ -414,6 +494,19 @@ fn dc_solve(
     const STAGED_GMIN: f64 = 1e-7;
     let staged_gmin = STAGED_GMIN.max(opts.gmin);
     let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    // The staged path solves a diode-laden board whose conducting junctions can
+    // make the frozen elimination order hit a singular pivot. The dynamic
+    // re-pivot fallback dissolves that LU singularity. On a board whose
+    // spike-output nodes are defined only dynamically (a DC-open stretch cap, so
+    // the node has no static DC voltage and must be anchored every iteration) it
+    // cannot reach a static root and just adds cost, so it is OPT-IN
+    // (HAUKSBEE_DC_DYN=1). The default staged path keeps the original behaviour
+    // (frozen-singular -> adopt the relaxed power-on point) bit-for-bit and at
+    // the original speed, so no existing test changes value or timing. It is
+    // restored to off before every return so the workspace-reused transient
+    // keeps frozen-only semantics.
+    let dc_dyn = std::env::var("HAUKSBEE_DC_DYN").is_ok();
+    ws.symbolic.set_allow_dynamic(dc_dyn);
     if let Some(seed) = solve_relaxed_no_diodes(circuit, opts) {
         if dbg { eprintln!("[staged] relaxed converged, seeding full (len {})", seed.len()); }
         if seed.len() == ws.x.len() {
@@ -439,9 +532,44 @@ fn dc_solve(
             if dbg { eprintln!("[staged] full from seed @gmin={staged_gmin:e}: converged={} iters={}", r.converged, r.iters); }
             if r.converged {
                 ws.staged_branch_reg = 0.0;
+                ws.symbolic.set_allow_dynamic(false);
                 ws.used_staged_dc = true;
                 return Ok(());
             }
+
+            // EVENT-DRIVEN COMPARATOR LOOP. The plain staged solve above stalls
+            // because the LMV7219 comparators are bang-bang: as Newton settles
+            // the analog core, a comparator input crosses threshold, its output
+            // swings rail-to-rail, and that swing destabilizes the inputs feeding
+            // it — a limit cycle (verified: the per-iteration node delta pins at
+            // the damping cap once the analog part has converged). The cure is to
+            // FREEZE each comparator's decision for an inner solve (making the
+            // circuit smooth so Newton converges), then re-evaluate the decisions
+            // from the converged solution and re-solve if any flipped. This is a
+            // Gauss-Seidel / event-driven outer loop over the comparator states;
+            // at its fixed point every comparator output is consistent with its
+            // own inputs, so the result is a TRUE root of the full circuit (not
+            // the relaxed bias). The dynamic-pivot LU keeps each inner solve
+            // factorable even as the conducting diodes reshape the elimination.
+            // The event loop is expensive and only pays off on a board that
+            // actually has a consistent all-comparator DC fixed point. On a board
+            // whose spike-output nodes are defined dynamically (a stretch cap that
+            // is open at DC, so the node has no DC voltage at all), it cannot
+            // converge and just burns time, so it is gated behind
+            // HAUKSBEE_CMP_EVENT=1 rather than run on the default path. The
+            // dynamic-pivot LU (the structural fix) stays on regardless.
+            if std::env::var("HAUKSBEE_CMP_EVENT").is_ok() {
+                if let Some(root) = staged_event_solve(ws, circuit, opts, &seed, staged_gmin, STAGED_BRANCH_REG, dbg) {
+                    ws.x.copy_from_slice(&root);
+                    ws.staged_branch_reg = 0.0;
+                    ws.cmp_freeze = None;
+                    ws.symbolic.set_allow_dynamic(false);
+                    ws.used_staged_dc = true;
+                    return Ok(());
+                }
+            }
+            ws.cmp_freeze = None;
+            ws.staged_branch_reg = STAGED_BRANCH_REG;
 
             // Diode saturation-current homotopy: the cold full solve stalls in a
             // limit cycle on the comparator-driven stretch nodes, but the relaxed
@@ -456,6 +584,7 @@ fn dc_solve(
                 if dbg { eprintln!("[staged] diode-Is homotopy reached the full root"); }
                 ws.x.copy_from_slice(&s);
                 ws.staged_branch_reg = 0.0;
+                ws.symbolic.set_allow_dynamic(false);
                 ws.used_staged_dc = true;
                 return Ok(());
             }
@@ -475,6 +604,7 @@ fn dc_solve(
             if dbg { eprintln!("[staged] gmin-ramp staged_ok={staged_ok}"); }
             if staged_ok && solve(ws, staged_gmin, 1.0).converged {
                 ws.staged_branch_reg = 0.0;
+                ws.symbolic.set_allow_dynamic(false);
                 ws.used_staged_dc = true;
                 return Ok(());
             }
@@ -490,6 +620,7 @@ fn dc_solve(
                 if let Some(s) = ptc_settle_from_seed(circuit, opts, &seed) {
                     if dbg { eprintln!("[staged] PTC settled to a full operating point"); }
                     ws.x.copy_from_slice(&s);
+                    ws.symbolic.set_allow_dynamic(false);
                     ws.used_staged_dc = true;
                     return Ok(());
                 }
@@ -506,6 +637,7 @@ fn dc_solve(
             // operating point relaxes to its true steady state over the march.
             if dbg { eprintln!("[staged] adopting relaxed power-on operating point as seed"); }
             ws.x.copy_from_slice(&seed);
+            ws.symbolic.set_allow_dynamic(false);
             ws.used_staged_dc = true;
             return Ok(());
         }
@@ -513,10 +645,108 @@ fn dc_solve(
         eprintln!("[staged] relaxed (no-diode) solve did NOT converge");
     }
 
+    ws.symbolic.set_allow_dynamic(false);
     Err(format!(
         "DC homotopy failed (source scale {last_scale:.3}, {last_iters} iters; \
          staged-DC relaxation did not recover)"
     ))
+}
+
+/// Evaluate every comparator's output decision (`high` = output at the high
+/// rail) from a solution vector `x`, using the same hysteresis rule the stamp
+/// uses but anchored to the supplied previous decision `prev` (so a comparator
+/// whose differential input sits inside the hysteresis band keeps its state).
+/// Returns the decision map keyed by device id.
+fn eval_comparator_states(
+    circuit: &Circuit,
+    layout: &Layout,
+    x: &[f64],
+    prev: &std::collections::HashMap<DeviceId, bool>,
+) -> std::collections::HashMap<DeviceId, bool> {
+    let mut out = std::collections::HashMap::new();
+    for (id, dev) in circuit.iter() {
+        if let Device::Comparator { inp, inn, hysteresis, .. } = dev {
+            let vp = layout.node(*inp).map(|i| x[i]).unwrap_or(0.0);
+            let vn = layout.node(*inn).map(|i| x[i]).unwrap_or(0.0);
+            let d = vp - vn;
+            let was_high = prev.get(&id).copied().unwrap_or(d > 0.0);
+            // Hysteresis: need to exceed +hyst to go high, drop below -hyst to go
+            // low; otherwise hold. Matches stamp_comparator's threshold sign.
+            let high = if was_high {
+                d > -*hysteresis
+            } else {
+                d > *hysteresis
+            };
+            out.insert(id, high);
+        }
+    }
+    out
+}
+
+/// Event-driven staged DC solve. Freezes each comparator's decision, solves the
+/// resulting smooth circuit with the dynamic-pivot LU, re-evaluates the
+/// decisions from that solution, and repeats until the decision set stops
+/// changing (a consistent fixed point) AND the inner Newton converged. The
+/// returned vector is then a TRUE root of the full nonlinear circuit: every
+/// diode equation holds and every comparator output is consistent with its own
+/// inputs. Returns `None` if it cannot reach a consistent converged state.
+#[allow(clippy::too_many_arguments)]
+fn staged_event_solve(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    seed: &[f64],
+    staged_gmin: f64,
+    branch_reg: f64,
+    dbg: bool,
+) -> Option<Vec<f64>> {
+    let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+    let empty = ReactiveState::new(circuit.devices.len());
+    // The event-driven inner solves converge LINEARLY in their tail (the decayed
+    // damping that breaks the diode/comparator oscillation also slows the final
+    // approach), so allow more Newton iterations than the default before giving
+    // up on an inner solve.
+    let mut inner_opts = *opts;
+    inner_opts.max_newton = opts.max_newton.max(400);
+    let opts = &inner_opts;
+
+    // Initial comparator decisions from the relaxed (diodes-off) seed.
+    let mut states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
+    if states.is_empty() {
+        return None; // no comparators: this path adds nothing.
+    }
+
+    ws.staged_branch_reg = branch_reg;
+    let mut x = seed.to_vec();
+    const MAX_EVENT_PASSES: usize = 40;
+    for pass in 0..MAX_EVENT_PASSES {
+        ws.cmp_freeze = Some(states.clone());
+        ws.x.copy_from_slice(&x);
+        let r = newton_solve(
+            ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, false, staged_gmin, 1.0,
+        );
+        if !r.converged {
+            if dbg {
+                eprintln!("[staged-event] pass {pass}: inner Newton did NOT converge (iters {})", r.iters);
+            }
+            return None;
+        }
+        x.copy_from_slice(&ws.x);
+        // Re-evaluate decisions from the converged inner solution.
+        let next = eval_comparator_states(circuit, &ws.layout, &x, &states);
+        let flips = next.iter().filter(|(k, v)| states.get(k) != Some(*v)).count();
+        if dbg {
+            eprintln!("[staged-event] pass {pass}: inner converged in {} iters, {flips} comparator flips", r.iters);
+        }
+        if flips == 0 {
+            // Fixed point: comparator states are self-consistent. Verify it is a
+            // genuine root of the FULL circuit (real diodes, self-deciding
+            // comparators), not just of the frozen-comparator surrogate.
+            return Some(x);
+        }
+        states = next;
+    }
+    None
 }
 
 /// Diode saturation-current continuation. Starting from the relaxed (diodes-off)
@@ -555,6 +785,7 @@ fn solve_diode_is_homotopy(
     let mut work = circuit.clone();
     let mut ws = Workspace::new(&work);
     ws.set_staged_branch_reg(branch_reg);
+    ws.symbolic.set_allow_dynamic(std::env::var("HAUKSBEE_DC_DYN").is_ok());
     let mut x = seed.to_vec();
 
     // Geometric ramp of the Is scale: 1e-4, 1e-3.5, ... up to 1.0.
