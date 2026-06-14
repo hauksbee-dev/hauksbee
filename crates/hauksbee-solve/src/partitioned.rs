@@ -167,6 +167,22 @@ impl PartitionedTransient {
             .max()
             .unwrap_or(0);
 
+        // A large nonlinear island that survived tearing must be cold-seeded by
+        // the partitioned path every chunk. On a stiff diode-laden core (e.g. the
+        // Tarski synapse array + pulse-stretcher diodes) that cold seed needs the
+        // monolithic staged-DC homotopy, which the per-island path does not run.
+        // Routing such a board to the monolithic reference is EXACT (Off is
+        // bit-identical) and is where the staged convergence aid lives, so defer
+        // to it rather than build a partitioned solve that cannot seed the core.
+        let big_nonlinear_core = largest_nl_devices > TEAR_MAX_BLOCK_DEVICES
+            && circuit
+                .devices
+                .iter()
+                .any(|d| matches!(d, Device::Diode { .. }));
+        if big_nonlinear_core {
+            return None;
+        }
+
         let many_islands = n_islands >= 4;
         let small_linear_speedup = part.has_linear_island() && largest_linear <= SMALL_ISLAND_STATES;
         // A rail tear genuinely fragments a fused nonlinear core, so it is always

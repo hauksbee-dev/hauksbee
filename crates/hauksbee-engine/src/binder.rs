@@ -658,6 +658,52 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
+    // Generic signal diode by reference class. KiCad's stock "Device:D" symbol
+    // carries the value "D" with no MPN, so the model db cannot resolve it; a
+    // bare SOD/SMA/SMB/MELF/DO diode footprint with no resolved model is the
+    // same case. These are real silicon junctions on the board (on Tarski the
+    // ~94 D_stretch/D_inject/D_hyst pulse-stretcher diodes), so leaving them
+    // OPEN silently deletes a conducting path. Mirror the r_/c_/l_ fallbacks:
+    // when the part is unmistakably a 2-terminal diode, bind a generic 1N4148
+    // signal diode (datasheet-grounded params below).
+    if prefix.starts_with('D') && prefix != "DAC" {
+        let v = comp.value.trim();
+        let val_is_generic = v.is_empty()
+            || v.eq_ignore_ascii_case("D")
+            || v.eq_ignore_ascii_case("diode")
+            || v.eq_ignore_ascii_case("1N4148")
+            || v.eq_ignore_ascii_case("1N4148W")
+            || v.eq_ignore_ascii_case("1N4148WS");
+        let fp = comp.footprint.to_ascii_uppercase();
+        // Footprint families for small 2-pin signal/switching diodes.
+        let fp_is_diode = fp.contains("SOD")
+            || fp.contains("SMA")
+            || fp.contains("SMB")
+            || fp.contains("SMC")
+            || fp.contains("MELF")
+            || fp.contains("DO-")
+            || fp.contains("D_")
+            || fp.contains("DIODE");
+        // Bind the fallback when the value is a generic diode token, OR the
+        // value is unparseable-as-a-passive but the footprint is a diode body.
+        if val_is_generic || (parse_value(&comp.value).is_none() && fp_is_diode) {
+            return Some(make_entry(
+                "signal_diode_1n4148_fallback",
+                ComponentKind::Diode,
+                "generic signal diode (engine fallback: value=\"D\"/bare diode \
+                 footprint -> 1N4148, Philips/Vishay SPICE model)",
+                diode_1n4148_params(),
+                // KiCad Device:D Sim.Pins is "1=K 2=A" (SOD cathode=pin1); the
+                // netlist also carries pinfunction K/A which the binder reads
+                // first, so this pad map is the PCB-only-extraction fallback.
+                [("1", "cathode"), ("2", "anode")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ));
+        }
+    }
+
     // Passives by reference class, when a magnitude can be recovered from the
     // value field. Handles plain engineering values ("4k7", "100n") and the
     // structured naming some teams use ("R_47k_0402", "C_22u_25V_0805",
@@ -704,6 +750,27 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         }
     }
     None
+}
+
+/// Datasheet-grounded SPICE parameters for a generic 1N4148 small-signal
+/// switching diode, used by the value-"D" diode fallback. Values are the
+/// canonical Philips/Vishay 1N4148 model (the part on Tarski is LCSC C2099 =
+/// JSCJ 1N4148W in SOD-323, a standard 1N4148-family switching diode):
+///   IS=4.352e-9 A, N=1.906, RS=0.6458 Ohm, CJO=7.048e-13 F, VJ=0.869 V,
+///   M=0.0306, TT=3.48e-9 s, BV=110 V.
+/// Source: Philips/Vishay 1N4148 .MODEL card (the de-facto reference set,
+/// e.g. spice-padiwa-amps/1N4148.lib); BOM part LCSC C2099 (1N4148W).
+fn diode_1n4148_params() -> hauksbee_models::Params {
+    let mut p = hauksbee_models::Params::default();
+    p.set_f64("is", 4.352e-9);
+    p.set_f64("n", 1.906);
+    p.set_f64("rs", 0.6458);
+    p.set_f64("cjo", 7.048e-13);
+    p.set_f64("vj", 0.869);
+    p.set_f64("m", 0.0306);
+    p.set_f64("tt", 3.48e-9);
+    p.set_f64("bv", 110.0);
+    p
 }
 
 /// Construct a [`ModelEntry`] for an engine-layer fallback. Centralised so a

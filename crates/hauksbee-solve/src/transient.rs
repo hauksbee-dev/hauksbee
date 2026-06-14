@@ -147,8 +147,20 @@ impl Transient {
         let n_dev = circuit.devices.len();
 
         // DC operating point seeds t = 0 (warm-started from the prior chunk when
-        // a seed is supplied).
+        // a seed is supplied). The DC solve manages its own staged regularizers
+        // internally and leaves the workspace flag at 0.
         dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed)?;
+
+        // Only when the DC point itself needed the staged fallback (the standard
+        // plain+gmin+source ladder failed) is the board stiff enough that the
+        // same reverse-biased-diode + cap-isolated-node degeneracy destabilizes
+        // each transient step. Arm the staged regularizers (negligible branch
+        // series R + node damping + node-block convergence) for the whole march
+        // in that case only; an ordinary diode circuit (e.g. a rectifier) solved
+        // on the normal ladder keeps the bit-identical classic transient path.
+        if ws.used_staged_dc() {
+            ws.set_staged_branch_reg(1e-2);
+        }
 
         let mut state = ReactiveState::new(n_dev);
         seed_reactive_state(&mut state, circuit, &ws);
