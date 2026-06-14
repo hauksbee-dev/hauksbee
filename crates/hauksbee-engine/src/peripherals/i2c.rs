@@ -488,9 +488,13 @@ enum Mcp4728Cmd {
     None,
     /// Fast Write: 2 bytes per channel, auto-incrementing from A.
     Fast,
-    /// Multi / Sequential / Single Write: 3 bytes per channel (cmd + 2 data),
-    /// channel taken from the command byte.
+    /// Multi / Single Write: 3 bytes per channel (cmd + 2 data), channel taken
+    /// from each group's command byte.
     Write,
+    /// Sequential Write: ONE command byte (consumed in `on_write`, which seeds
+    /// the channel cursor with its start channel), then back-to-back data pairs
+    /// that auto-increment the channel. The command byte is NOT in `write_acc`.
+    Seq,
     /// A command we do not model (e.g. write-address-bits); bytes are ignored.
     Other,
 }
@@ -573,10 +577,11 @@ impl Mcp4728 {
         }
     }
 
-    /// Decode the accumulated Multi/Single/Sequential-Write bytes. The first
-    /// byte is the command (already consumed into `cmd`); here `write_acc` holds
-    /// `[cmd][data_hi][data_lo]...`. Each 3-byte group is
-    /// `[C2 C1 C0 W1 W0 DAC1 DAC0 UDAC][Vref PD1 PD0 Gx D11..D8][D7..D0]`.
+    /// Decode the accumulated Multi/Single-Write bytes. `write_acc` holds one
+    /// command byte per channel: `[cmd][data_hi][data_lo]...`. Each 3-byte group
+    /// is `[C2 C1 C0 W1 W0 DAC1 DAC0 UDAC][Vref PD1 PD0 Gx D11..D8][D7..D0]`.
+    /// Sequential Write (one command, then auto-incrementing pairs) is handled
+    /// separately by [`Mcp4728::decode_seq`].
     fn decode_write(&mut self) {
         // Process complete 3-byte groups (cmd + 2 data).
         while self.write_acc.len() >= 3 {
@@ -595,6 +600,26 @@ impl Mcp4728 {
             // internal, otherwise leave the per-channel vref as configured.
             let vref = if vref_bit == 1 { Some(2.048) } else { None };
             self.commit(channel, code, pd, Some(gain), vref);
+        }
+    }
+
+    /// Decode Sequential-Write data pairs. The command byte was consumed in
+    /// `on_write` (it seeded `fast_channel` with the start channel), so
+    /// `write_acc` holds only data pairs `[Vref PD1 PD0 Gx D11..D8][D7..D0]`,
+    /// each writing the cursor channel and advancing it (A->B->C->D, wrapping).
+    fn decode_seq(&mut self) {
+        while self.write_acc.len() >= 2 {
+            let d_hi = self.write_acc.remove(0);
+            let d_lo = self.write_acc.remove(0);
+            let vref_bit = (d_hi >> 7) & 0x01;
+            let pd = (d_hi >> 5) & 0x03;
+            let gain_bit = (d_hi >> 4) & 0x01;
+            let code = (((d_hi & 0x0F) as u16) << 8) | d_lo as u16;
+            let gain = if gain_bit == 1 { 2 } else { 1 };
+            let vref = if vref_bit == 1 { Some(2.048) } else { None };
+            let ch = (self.fast_channel & 0x03) as usize;
+            self.commit(ch, code, pd, Some(gain), vref);
+            self.fast_channel = (self.fast_channel + 1) & 0x03;
         }
     }
 
@@ -655,8 +680,17 @@ impl I2cSlave for Mcp4728 {
                 self.write_acc.push(data);
             } else {
                 let c = (data >> 5) & 0x07; // C2 C1 C0 (top three bits)
-                // 010 = Multi-Write, 011 = Single/Sequential Write.
-                if c == 0b010 || c == 0b011 {
+                let w = (data >> 3) & 0x03; // W1 W0 (the write sub-type)
+                // 010 = the DAC-write family; W1W0: 00 = Multi, 10 = Sequential,
+                // 11 = Single. 011 = single-channel write variant.
+                if c == 0b010 && w == 0b10 {
+                    // Sequential Write: consume the single command byte now (it
+                    // carries only the start channel), then the trailing data
+                    // pairs auto-increment from there. The command byte does NOT
+                    // go into write_acc.
+                    self.cmd = Mcp4728Cmd::Seq;
+                    self.fast_channel = ((data >> 1) & 0x03) as usize;
+                } else if c == 0b010 || c == 0b011 {
                     self.cmd = Mcp4728Cmd::Write;
                     self.write_acc.push(data);
                 } else {
@@ -675,6 +709,7 @@ impl I2cSlave for Mcp4728 {
         match self.cmd {
             Mcp4728Cmd::Fast => self.decode_fast(),
             Mcp4728Cmd::Write => self.decode_write(),
+            Mcp4728Cmd::Seq => self.decode_seq(),
             _ => {}
         }
     }
@@ -901,6 +936,39 @@ mod tests {
         let dac = bus.slave::<Mcp4728>(0x60).unwrap();
         assert_eq!(dac.code(2), 1500, "channel C programmed via Multi-Write");
         assert!((dac.vout(2) - 1.500).abs() < 1e-9, "VOUT C = 1.5 V");
+    }
+
+    #[test]
+    fn mcp4728_sequential_write_auto_increments_channels() {
+        // Sequential Write: ONE command byte (start channel A), then four data
+        // pairs that auto-increment A->B->C->D. cmd = 010 | W1W0=10 | DAC=00 |
+        // UDAC=0 = 0b0101_0000 = 0x50. Each data hi = [Vref=1 PD=00 Gx=1 D11..D8].
+        // Codes 100/200/300/400 -> A..D. This sequence is mis-framed by the old
+        // 3-byte-per-group decoder; it must land each code in its own channel.
+        let mut bus = I2cBus::new("U")
+            .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+        let pair = |code: u16| -> [u8; 2] {
+            let hi = (1u8 << 7) | (1 << 4) | (((code >> 8) & 0x0F) as u8);
+            [hi, (code & 0xFF) as u8]
+        };
+        let mut evs = vec![I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: 0x50 }];
+        for code in [100u16, 200, 300, 400] {
+            for b in pair(code) {
+                evs.push(I2cEvent::Write { addr: 0x60, data: b });
+            }
+        }
+        evs.push(I2cEvent::Stop { addr: 0x60 });
+        for ev in evs {
+            bus.dispatch(ev);
+        }
+        let dac = bus.slave::<Mcp4728>(0x60).unwrap();
+        assert_eq!(
+            [dac.code(0), dac.code(1), dac.code(2), dac.code(3)],
+            [100, 200, 300, 400],
+            "Sequential Write lands each code in its own auto-incremented channel"
+        );
+        assert!((dac.vout(3) - 0.400).abs() < 1e-9, "VOUT D = 0.4 V");
     }
 
     #[test]
