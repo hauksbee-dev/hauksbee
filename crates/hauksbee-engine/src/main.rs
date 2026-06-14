@@ -27,7 +27,8 @@
 //! - `run` (default)      : serve the live websocket (frontend/dist if present).
 //! - `serve`              : local web front door: open a page, drop a board,
 //!                          get the plain-language report in the browser.
-//! - `to-code`            : decompile a board into editable Board-as-Code text.
+//! - `to-code`            : decompile a board (`.kicad_pcb`, `.net`, IPC, Eagle)
+//!                          into editable Board-as-Code text.
 //! - `from-code`          : recompile Board-as-Code back into a `.kicad_pcb`.
 //! - `check-code`         : recompile, bind, co-sim with the stress monitor, and
 //!                          print a fault report (the edit -> simulate loop).
@@ -42,7 +43,8 @@ use clap::{Parser, Subcommand};
 
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::boardcode::{
-    check_code, decompile_board_to_code, load_code, render_check_report, CheckOptions,
+    check_code, code_to_board_text, decompile_any_to_code, load_code, render_check_report,
+    CheckOptions,
 };
 use hauksbee_engine::result::{
     self, ac_is_all_sentinel, coverage_open_active_refs, lint_findings_json, no_signal_path_reason,
@@ -78,6 +80,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Extract + bind a board, then check it or bring it to life.
+    ///
+    /// Accepts a KiCad `.kicad_pcb`/`.kicad_sch`, Eagle `.brd`, IPC-D-356,
+    /// gerbers, Altium `.PcbDoc`, a KiCad `.net`, or Board-as-Code (`.board`,
+    /// detected by extension or its DSL header) — all analysed identically.
     ///
     /// With no flag, serves the live 2D/3D frontend on a local websocket. The
     /// `--report`/`--drc`/`--lint`/`--si`/`--resources` flags each print one
@@ -406,6 +412,14 @@ fn read_board_text(path: &Path) -> anyhow::Result<String> {
     })
 }
 
+/// True when the text is a Board-as-Code (`.board`) DSL source, recognised by
+/// the header `program_from_extracted`/`to_code` emit. Lets a `.board` saved
+/// without that extension still route through the recompile path.
+fn is_board_code_header(text: &str) -> bool {
+    let head: String = text.chars().take(256).collect();
+    head.contains("Board-as-Code") || head.contains("board version ")
+}
+
 fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
     // would fail a UTF-8 read. Text formats (KiCad / Eagle / IPC) are recovered
@@ -432,17 +446,30 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // surface.
     let altium = ExtractedBoard::from_auto_bytes(&raw).transpose()?;
     // Text view for the text formats and the geometry-bearing text checks.
-    let text = if altium.is_some() {
+    let mut text = if altium.is_some() {
         String::new()
     } else {
         String::from_utf8_lossy(&raw).into_owned()
     };
+    // Board-as-Code (`.board`): detected by extension or the DSL header. Parse
+    // the DSL, recompile it to `.kicad_pcb` text, then feed the same analysis
+    // path the layout formats use. The recompiled KiCad text replaces `text` so
+    // the geometry-bearing checks (DRC, SI) and the live viewer see the rebuilt
+    // board, not the DSL source they cannot parse.
+    let is_board_code = altium.is_none()
+        && (args.board.extension().and_then(|e| e.to_str()) == Some("board")
+            || is_board_code_header(&text));
+    if is_board_code {
+        text = code_to_board_text(&text)?;
+    }
     // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
     // it must be loaded by path to recurse the hierarchy; everything else is
     // self-contained and sniffed from its content.
     let board = if let Some(b) = altium.clone() {
         b
-    } else if args.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
+    } else if !is_board_code
+        && args.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch")
+    {
         ExtractedBoard::from_kicad_schematic_path(&args.board)?
     } else {
         ExtractedBoard::from_auto(&text)?
@@ -670,6 +697,21 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             print!("{}", hauksbee_engine::plain_netlint(&report).render());
         } else {
             print!("{}", hauksbee_extract::render_netlint(&report));
+        }
+        // Surface pin-role GUESS warnings: roles the binder inferred from the
+        // configurable pin-rule table rather than an explicit pin-function.
+        // Nothing is silently guessed, so the lint reports each one.
+        let bound = bind_board(&board, &lib);
+        let guesses: Vec<(String, String)> = bound
+            .report
+            .guess_warnings()
+            .map(|(r, g)| (r.to_string(), g.to_string()))
+            .collect();
+        if !guesses.is_empty() {
+            println!("\npin-role guesses ({}):", guesses.len());
+            for (r, g) in &guesses {
+                println!("  ? {r}: {g}");
+            }
         }
         if args.strict && lint_fails(&report) {
             std::process::exit(2);
@@ -1410,9 +1452,14 @@ fn cmd_ac(
 }
 
 /// `hauksbee to-code <board-file> [--out <file.board>]`
+///
+/// Accepts any text board the extractor understands. A `.kicad_pcb` keeps the
+/// cluster-aware geometry decompiler; a KiCad `.net` / IPC-D-356 / Eagle `.brd`
+/// / `.kicad_sch` is extracted and emitted flat (so a layout-free netlist also
+/// becomes editable Board-as-Code).
 fn cmd_to_code(args: ToCodeArgs) -> anyhow::Result<()> {
     let text = read_board_text(&args.board)?;
-    let code = decompile_board_to_code(&text)?;
+    let code = decompile_any_to_code(&text)?;
     match args.out {
         Some(p) => {
             std::fs::write(&p, &code)?;

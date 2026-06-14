@@ -28,6 +28,7 @@
 
 pub mod behavioral;
 pub mod matcher;
+pub mod pin_rules;
 pub mod profile;
 pub mod schema;
 pub mod sensor_spec;
@@ -42,12 +43,16 @@ use regex::Error as RegexError;
 use thiserror::Error;
 
 pub use matcher::ComponentQuery;
+pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
     ComponentKind, ModelEntry, Params, StrapInternalPull, StrapLevel, StrapPin,
 };
 pub use sensor_spec::{Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError};
 pub use spice_input::SpiceCard;
+
+/// Built-in pin-role inference rules, embedded at compile time.
+static BUILTIN_PIN_RULES_TOML: &str = include_str!("../db/pin_rules.toml");
 
 // ── Embedded database files ───────────────────────────────────────────────────
 
@@ -79,6 +84,9 @@ pub enum ModelError {
 
     #[error("validation failed for '{id}': {messages}")]
     ValidationFailed { id: String, messages: String },
+
+    #[error("pin-rule error in '{file}': {message}")]
+    PinRules { file: String, message: String },
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -160,6 +168,9 @@ pub struct ModelLibrary {
     user: Vec<CompiledEntry>,
     /// User-provided SPICE cards (`.model` / `.subckt`).
     spice: Vec<SpiceCard>,
+    /// Pin-role inference rules (built-in seed + user `pin_rules.toml` files).
+    /// User rules are prepended so they override the built-ins.
+    pin_rules: PinRuleTable,
 }
 
 use matcher::CompiledEntry;
@@ -167,7 +178,12 @@ use matcher::CompiledEntry;
 impl ModelLibrary {
     /// Create an empty library with no entries.
     pub fn empty() -> Self {
-        ModelLibrary { builtin: Vec::new(), user: Vec::new(), spice: Vec::new() }
+        ModelLibrary {
+            builtin: Vec::new(),
+            user: Vec::new(),
+            spice: Vec::new(),
+            pin_rules: PinRuleTable::empty(),
+        }
     }
 
     /// Create a library loaded with all built-in database entries.
@@ -179,7 +195,17 @@ impl ModelLibrary {
             lib.load_toml_str(toml_src, name, false)
                 .unwrap_or_else(|e| panic!("built-in database '{}' failed to load: {}", name, e));
         }
+        lib.pin_rules
+            .load_toml_str(BUILTIN_PIN_RULES_TOML, false)
+            .unwrap_or_else(|e| panic!("built-in pin_rules.toml failed to load: {e}"));
         lib
+    }
+
+    /// The pin-role inference table (built-in rules plus any user
+    /// `pin_rules.toml`). Consulted by the binder when a pad lacks an explicit
+    /// pin-function role.
+    pub fn pin_rules(&self) -> &PinRuleTable {
+        &self.pin_rules
     }
 
     /// Lazily-initialised shared built-in library.
@@ -255,6 +281,15 @@ impl ModelLibrary {
                 }
             };
             let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+            // A `pin_rules.toml` (or any file carrying a `[[pin_rules]]` array)
+            // is loaded into the pin-role inference table, prepended so user
+            // rules override the built-ins. Everything else is model entries.
+            if name == "pin_rules" || src.contains("[[pin_rules]]") {
+                if let Err(e) = self.pin_rules.load_toml_str(&src, true) {
+                    errors.push(ModelError::PinRules { file: name, message: e });
+                }
+                continue;
+            }
             if let Err(e) = self.load_toml_str(&src, &name, true) {
                 errors.push(e);
             }

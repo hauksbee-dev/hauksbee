@@ -45,6 +45,32 @@ pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
     Ok(to_code(&pcb))
 }
 
+/// Decompile *any* extracted board text into editable Board-as-Code.
+///
+/// `decompile_board_to_code` only accepts a `.kicad_pcb` (it goes straight
+/// through `Pcb::parse`, which rejects a `.net`/IPC/Eagle file). This bridge
+/// handles every text format the extractor understands: a `.kicad_pcb` keeps
+/// the geometry-rich layout path (so blocks/clusters and pad geometry survive),
+/// and everything else (KiCad `.net`, IPC-D-356, Eagle `.brd`, KiCad `.sch`)
+/// goes through [`ExtractedBoard::from_auto`] + [`program_from_extracted`].
+///
+/// A `.net` carries pin *functions* (`pinfunction "A"`/`"K"`) that a layout
+/// lacks. The Board-as-Code `pad` line has no role slot (it is a geometry +
+/// net record), so the function is not re-emitted verbatim; what survives is
+/// the pad *number*, which the binder's pin-role rule table maps back to a role
+/// (Feature 2). For a netlist with a generic diode the standard `1->K, 2->A`
+/// numbering binds the part directly, with a guess-warning naming the rule.
+pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
+    let head: String = board_text.chars().take(512).collect();
+    if head.contains("(kicad_pcb") {
+        // Layout: keep the cluster-aware geometry decompiler.
+        return decompile_board_to_code(board_text);
+    }
+    // Netlist / IPC / Eagle / schematic: extract, then emit flat code.
+    let board = ExtractedBoard::from_auto(board_text)?;
+    Ok(program_from_extracted(&board).emit())
+}
+
 /// Build an editable Board-as-Code [`Program`] directly from an
 /// [`ExtractedBoard`].
 ///
@@ -93,7 +119,14 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> Program {
             .collect();
         body.push(Stmt::Single(Comp {
             reference: c.reference.clone(),
-            lib_id: if c.lib_id.is_empty() {
+            // Board-as-Code recompiles to a `.kicad_pcb`, where a component's
+            // identity is its FOOTPRINT (the extractor sets `footprint = lib_id`
+            // of the footprint block). A netlist carries both a symbol lib_id
+            // ("Device:D") and a footprint ("Diode_SMD:D_SOD-323"); the footprint
+            // is what survives the round-trip and what the binder + pin-rule
+            // table match on, so prefer it. Fall back to the symbol lib_id only
+            // when no footprint is known.
+            lib_id: if !c.footprint.is_empty() {
                 c.footprint.clone()
             } else {
                 c.lib_id.clone()

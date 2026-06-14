@@ -1,0 +1,97 @@
+# Pin-role inference rules.
+#
+# Layout-only board sources (.kicad_pcb, or Board-as-Code decompiled from one)
+# carry pads with bare NUMBERS and no electrode role (a diode footprint has pads
+# "1"/"2", not "anode"/"cathode"). A netlist carries the role via
+# `pinfunction "A"/"K"`, but a layout round-trip drops it. These rules let the
+# binder recover the role from the footprint + part kind + pad count, so a
+# polarised part still binds.
+#
+# Every role assigned from a rule is a GUESS: the binder emits a warning naming
+# the component, pad, role, and the rule id (visible in the bind report and
+# `--lint`). An explicit pinfunction role always wins over a rule, so a part with
+# A/K pin functions binds with no warning.
+#
+# ── Rule schema ──────────────────────────────────────────────────────────────
+#   [[pin_rules]]
+#   id           = "unique-id"          # surfaced in the guess-warning
+#   description  = "..."                 # documentation only
+#   footprint_re = "regex"              # case-insensitive, matched on footprint
+#   kind         = "diode"              # resolved part kind (optional)
+#   pad_count    = 2                     # exact pad count (optional)
+#   roles        = { "1" = "cathode", "2" = "anode" }
+#
+# A rule matches when EVERY populated condition holds (footprint_re AND kind AND
+# pad_count). At least one condition must be present. Rules are tried in order;
+# the first that matches and maps the requested pad wins.
+#
+# ── User extension ───────────────────────────────────────────────────────────
+# Drop a `pin_rules.toml` (any file with a [[pin_rules]] array) into a model
+# directory — `~/.config/hauksbee/models`, `~/.hauksbee/models`, or a
+# `--models-dir` path — and its rules are layered AHEAD of these built-ins, so a
+# user rule overrides or extends the defaults without recompiling. Example: to
+# flip the diode convention for a house footprint, add a rule with the same
+# footprint family and the opposite pad→role map.
+
+# ── 2-pin diodes ──────────────────────────────────────────────────────────────
+# KiCad's stock "Device:D" Sim.Pins is "1=K 2=A": pad 1 is the cathode, pad 2 is
+# the anode. Confirmed against the Tarski netlist, where the D_stretch parts
+# carry `(pin "1") (pinfunction "K")` and `(pin "2") (pinfunction "A")`. This is
+# the standard KiCad small-signal / rectifier diode numbering (SOD/SMA/SMB/MELF/
+# DO bodies all share it).
+[[pin_rules]]
+id = "diode_2pin_k1_a2"
+description = "2-pin diode (SOD/SMA/SMB/MELF/DO/Diode_*): pad1=cathode, pad2=anode (KiCad Device:D 1=K 2=A)"
+footprint_re = "(?:^Diode_|SOD-?|SMA|SMB|SMC|MELF|DO-|D_SMA|D_SMB|^D_|_Diode_|DIODE)"
+kind = "diode"
+pad_count = 2
+roles = { "1" = "cathode", "2" = "anode" }
+
+# ── 2-pin LEDs ────────────────────────────────────────────────────────────────
+# KiCad LED_SMD / LED_THT footprints use the same diode numbering: pad 1 is the
+# cathode, pad 2 the anode.
+[[pin_rules]]
+id = "led_2pin_k1_a2"
+description = "2-pin LED (LED_SMD/LED_THT): pad1=cathode, pad2=anode"
+footprint_re = "(?:^LED_SMD:|^LED_THT:|LED_)"
+kind = "diode"
+pad_count = 2
+roles = { "1" = "cathode", "2" = "anode" }
+
+# ── SOT-23 BJT ────────────────────────────────────────────────────────────────
+# The KiCad SOT-23 transistor pinout (Package_TO_SOT_SMD:SOT-23) is
+# 1=base, 2=emitter, 3=collector — the convention KiCad's Q_NPN_BEC / Q_PNP_BEC
+# symbols and the SOT-23 footprint use.
+[[pin_rules]]
+id = "bjt_sot23_b1_e2_c3"
+description = "SOT-23 BJT: pad1=base, pad2=emitter, pad3=collector"
+footprint_re = "SOT-23(?:$|[^-0-9])"
+kind = "bjt_npn"
+pad_count = 3
+roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
+
+[[pin_rules]]
+id = "bjt_sot23_b1_e2_c3_pnp"
+description = "SOT-23 BJT (PNP): pad1=base, pad2=emitter, pad3=collector"
+footprint_re = "SOT-23(?:$|[^-0-9])"
+kind = "bjt_pnp"
+pad_count = 3
+roles = { "1" = "base", "2" = "emitter", "3" = "collector" }
+
+# ── SOT-23 MOSFET ─────────────────────────────────────────────────────────────
+# KiCad SOT-23 MOSFET (Q_NMOS_GSD / Q_PMOS_GSD): 1=gate, 2=source, 3=drain.
+[[pin_rules]]
+id = "nmos_sot23_g1_s2_d3"
+description = "SOT-23 N-MOSFET: pad1=gate, pad2=source, pad3=drain"
+footprint_re = "SOT-23(?:$|[^-0-9])"
+kind = "nmos"
+pad_count = 3
+roles = { "1" = "gate", "2" = "source", "3" = "drain" }
+
+[[pin_rules]]
+id = "pmos_sot23_g1_s2_d3"
+description = "SOT-23 P-MOSFET: pad1=gate, pad2=source, pad3=drain"
+footprint_re = "SOT-23(?:$|[^-0-9])"
+kind = "pmos"
+pad_count = 3
+roles = { "1" = "gate", "2" = "source", "3" = "drain" }

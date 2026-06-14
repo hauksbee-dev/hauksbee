@@ -91,6 +91,52 @@ tf    = 3.0e-10   # forward transit time (s)
 | connector       | (none — pad map is the useful part)                              |
 | ignore          | (none — component is silently skipped during extraction)         |
 
+## Pin-role inference rules (`pin_rules.toml`)
+
+A layout-only board source (a `.kicad_pcb`, or Board-as-Code decompiled from
+one) gives a component pads with bare *numbers* and no electrode role: a diode
+footprint has pads `1`/`2`, never `anode`/`cathode`. A netlist carries the role
+(`pinfunction "A"`/`"K"`), but a layout round-trip drops it, and a role-dependent
+binder (diode, BJT, MOSFET) can no longer bind the part.
+
+`db/pin_rules.toml` is the configurable inference layer that recovers the role
+from the footprint + part kind + pad count. Every role assigned this way is a
+**guess**: the binder emits a warning naming the component, pad, role, and the
+rule that matched (shown in `hauksbee run --report` and `--lint`). An explicit
+pin-function always wins, so a part with `A`/`K` pins binds with no warning.
+
+```toml
+[[pin_rules]]
+# Stable id, surfaced verbatim in the guess-warning.
+id = "diode_2pin_k1_a2"
+description = "2-pin diode: pad1=cathode, pad2=anode (KiCad Device:D 1=K 2=A)"
+
+# A rule matches when EVERY populated condition holds. At least one is required.
+footprint_re = "(?:^Diode_|SOD-?|SMA|SMB|MELF|DO-|^D_)"   # case-insensitive
+kind         = "diode"        # resolved part kind (diode | bjt_npn | nmos | …)
+pad_count    = 2              # exact pad count
+
+# Pad number -> role. The roles a binder expects:
+#   diode      : anode, cathode
+#   bjt_npn/pnp: base, emitter, collector
+#   nmos/pmos  : gate, source, drain
+roles = { "1" = "cathode", "2" = "anode" }
+```
+
+### Extending or overriding (no recompile)
+
+Drop a `pin_rules.toml` (or any file containing a `[[pin_rules]]` array) into a
+model directory:
+
+  1. `~/.hauksbee/models`
+  2. `~/.config/hauksbee/models`
+  3. any `--models-dir` path
+
+Those rules are layered **ahead** of the built-ins, so a user rule with the same
+footprint family overrides the default (e.g. to flip the diode convention for a
+house footprint), and a rule for a new footprint family simply extends coverage.
+Rules are tried in order; the first that matches and maps the requested pad wins.
+
 ## Physical-range validation
 
 The `model-extract` tool and the test suite enforce these sanity bounds before

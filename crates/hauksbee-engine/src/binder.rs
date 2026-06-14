@@ -215,11 +215,14 @@ pub fn bind_board_with(
         let conf = res.confidence;
         let model_id = model.as_ref().map(|m| m.id.clone());
 
-        let (kind_str, outcome, warning) = match &model {
-            None => unresolved_outcome(comp, &node_of),
+        let (kind_str, outcome, warning, guesses) = match &model {
+            None => {
+                let (kind_str, outcome, warning) = unresolved_outcome(comp, &node_of);
+                (kind_str, outcome, warning, Vec::new())
+            }
             Some(m) => {
                 let kind_str = format!("{:?}", m.kind).to_ascii_lowercase();
-                let (outcome, warning) = bind_component(
+                let (outcome, warning, guesses) = bind_component(
                     comp,
                     m,
                     conf,
@@ -231,8 +234,9 @@ pub fn bind_board_with(
                     has_vreg,
                     &power_nets,
                     &digital_control_nodes,
+                    lib.pin_rules(),
                 );
-                (Some(kind_str), outcome, warning)
+                (Some(kind_str), outcome, warning, guesses)
             }
         };
 
@@ -246,6 +250,7 @@ pub fn bind_board_with(
             confidence: conf,
             outcome,
             warning,
+            guesses,
         });
     }
 
@@ -298,6 +303,7 @@ pub fn bind_board_with(
             confidence: Confidence::Exact,
             outcome: BindOutcome::PowerRail { volts: *volts },
             warning: None,
+            guesses: Vec::new(),
         });
     }
 
@@ -1230,6 +1236,7 @@ fn unresolved_outcome(
 /// Bind a single resolved component. Mutates the circuit and the digital/mcu
 /// collections; returns its outcome and any warning.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn bind_component(
     comp: &Component,
     model: &ModelEntry,
@@ -1242,11 +1249,15 @@ fn bind_component(
     has_vreg: bool,
     power_nets: &HashMap<String, f64>,
     digital_control_nodes: &std::collections::HashSet<i64>,
-) -> (BindOutcome, Option<String>) {
+    pin_rules: &hauksbee_models::PinRuleTable,
+) -> (BindOutcome, Option<String>, Vec<String>) {
     use ComponentKind::*;
 
-    // role -> node for this component's connected pins.
-    let role_nets = role_node_map(comp, model, node_of);
+    // role -> node for this component's connected pins. Explicit pin-functions
+    // and the model's pad map come first; for any role-dependent pad still
+    // without a role the pin-rule table is consulted, and each such inference is
+    // recorded as a guess-warning (so nothing is silently guessed).
+    let (role_nets, guesses) = role_node_map_guessed(comp, model, node_of, pin_rules);
     // pad number -> node, regardless of role.
     let pad_nodes = |pad: &str| -> Option<NodeId> {
         comp.pins
@@ -1255,7 +1266,7 @@ fn bind_component(
             .and_then(|p| node_of(p.net))
     };
 
-    match model.kind {
+    let (outcome, warning) = match model.kind {
         Passive => bind_passive(comp, model, circuit, node_of),
         Diode => bind_diode(comp, model, circuit, &role_nets),
         BjtNpn | BjtPnp => bind_bjt(comp, model, circuit, &role_nets),
@@ -1326,7 +1337,8 @@ fn bind_component(
             },
             None,
         ),
-    }
+    };
+    (outcome, warning, guesses)
 }
 
 /// Map each connected pin to its model role string.
@@ -1342,6 +1354,52 @@ fn role_node_map(
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> HashMap<String, NodeId> {
     role_node_map_pins(comp, &model.pins, Some(model.kind), node_of)
+}
+
+/// As [`role_node_map`] but, for any pad still without a role after the explicit
+/// pin-function and model-pad-map sources, consults the configurable pin-rule
+/// table. Returns the role map plus one guess-warning per pad whose role a rule
+/// supplied (naming the component, pad, role, and rule id), so an inferred role
+/// is never silent.
+///
+/// Precedence is preserved: a role an explicit pin-function or the model's pad
+/// map already filled is left untouched (no rule, no warning). The rule only
+/// fills a *gap* — exactly the layout-only case where the pad carries a bare
+/// number and no electrode name.
+fn role_node_map_guessed(
+    comp: &Component,
+    model: &ModelEntry,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+    pin_rules: &hauksbee_models::PinRuleTable,
+) -> (HashMap<String, NodeId>, Vec<String>) {
+    let mut m = role_node_map(comp, model, node_of);
+    let mut guesses = Vec::new();
+
+    // Nothing to infer when the rule table is empty or the part has no pads.
+    if pin_rules.is_empty() {
+        return (m, guesses);
+    }
+    let pad_count = comp.pins.len();
+    // The set of roles already filled by an explicit source — never overwritten.
+    for pin in &comp.pins {
+        let Some(node) = node_of(pin.net) else { continue };
+        let Some(inf) = pin_rules.role_for_pad(&comp.footprint, Some(model.kind), pad_count, &pin.number)
+        else {
+            continue;
+        };
+        // Only a guess if this role is not already present from an explicit
+        // pin-function or the model pad map.
+        if m.contains_key(&inf.role) {
+            continue;
+        }
+        m.insert(inf.role.clone(), node);
+        guesses.push(format!(
+            "pad {} role '{}' guessed from rule '{}' (no explicit pin-function; \
+             footprint \"{}\", {} pads)",
+            pin.number, inf.role, inf.rule_id, comp.footprint, pad_count,
+        ));
+    }
+    (m, guesses)
 }
 
 /// As [`role_node_map`] but taking the pad->role map and (optional) kind
