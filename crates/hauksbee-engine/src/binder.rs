@@ -76,7 +76,15 @@ pub struct BoundBoard {
     pub circuit: Circuit,
     /// Net name -> circuit node.
     pub net_nodes: HashMap<String, NodeId>,
-    /// All net names in declaration order (for board_info / frames).
+    /// All net names in *net-declaration order* (for board_info / frame counts).
+    ///
+    /// WARNING: this is NOT a `NodeId` reverse map. It is pushed once per real
+    /// net (skipping KiCad's no-net id 0), so it has no entry for the ground
+    /// node that occupies `NodeId(0)` in the circuit. Indexing it by `NodeId.0`
+    /// is therefore OFF BY ONE and relabels every node as its successor — which
+    /// is exactly what produced a spurious "comparator +IN -> SCL" mis-wiring
+    /// claim on the Tarski board. To turn a `NodeId` back into a net name, use
+    /// [`Circuit::node_name`] (the circuit's authoritative reverse map).
     pub net_names: Vec<String>,
     pub digital: Vec<DigitalComponent>,
     pub mcus: Vec<McuBinding>,
@@ -134,6 +142,10 @@ pub fn bind_board_with(
     // net id -> node id (for pin wiring). Net 0 is KiCad's "no net".
     let mut netid_node: HashMap<i64, NodeId> = HashMap::new();
     let mut power_nets: HashMap<String, f64> = HashMap::new();
+    // Rails identified by a `power_out` source pin's function (net id -> volts),
+    // catching supply nets whose NAME is non-canonical (e.g. `+5P`) but whose
+    // driving pin is tagged `power_out`.
+    let power_out_nets = power_out_net_voltages(board);
     for net in &board.nets {
         if net.id == 0 {
             continue;
@@ -146,8 +158,15 @@ pub fn bind_board_with(
         netid_node.insert(net.id, node);
         net_nodes.insert(net.name.clone(), node);
         net_names.push(net.name.clone());
-        if let Some(v) = power_rail_voltage(&net.name) {
-            power_nets.insert(net.name.clone(), v);
+        // A rail is recognised either by its canonical name or by a `power_out`
+        // pin that drives it at a named voltage (the general case). Ground nets
+        // are never rails.
+        if !node.is_ground() {
+            if let Some(v) =
+                power_rail_voltage(&net.name).or_else(|| power_out_nets.get(&net.id).copied())
+            {
+                power_nets.insert(net.name.clone(), v);
+            }
         }
     }
 
@@ -359,7 +378,8 @@ fn bind_behavioral(
         // floating at 0 V (mb2.5+ NC).
         let empty_pins = std::collections::BTreeMap::new();
         let model_pins = model.as_ref().map(|m| &m.pins).unwrap_or(&empty_pins);
-        let role_nets = role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
+        let role_nets =
+            role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
         let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
             .into_iter()
             .filter(|(_role, node)| !circuit.node_name(*node).starts_with("unconnected-"))
@@ -786,8 +806,7 @@ fn make_entry(
     // This keeps us forward-compatible with new `#[serde(default)]` fields on
     // ModelEntry without hand-listing them.
     let stub = format!("id = \"{id}\"\nkind = \"{}\"\n", kind_str(kind));
-    let mut entry: ModelEntry =
-        toml::from_str(&stub).expect("fallback ModelEntry stub parses");
+    let mut entry: ModelEntry = toml::from_str(&stub).expect("fallback ModelEntry stub parses");
     entry.description = description.to_string();
     entry.params = params;
     entry.pins = pins;
@@ -822,14 +841,34 @@ fn kind_str(kind: ComponentKind) -> &'static str {
 /// The ATmega328P DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
 fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
     [
-        ("1", "pc6_reset"), ("2", "pd0_rxd"), ("3", "pd1_txd"), ("4", "pd2_int0"),
-        ("5", "pd3_int1_oc2b"), ("6", "pd4_t0_xck"), ("7", "vcc"), ("8", "gnd"),
-        ("9", "pb6_xtal1"), ("10", "pb7_xtal2"), ("11", "pd5_t1_oc0b"),
-        ("12", "pd6_ain0_oc0a"), ("13", "pd7_ain1"), ("14", "pb0_icp1"),
-        ("15", "pb1_oc1a"), ("16", "pb2_ss_oc1b"), ("17", "pb3_mosi_oc2a"),
-        ("18", "pb4_miso"), ("19", "pb5_sck"), ("20", "avcc"), ("21", "aref"),
-        ("22", "gnd2"), ("23", "pc0_adc0"), ("24", "pc1_adc1"), ("25", "pc2_adc2"),
-        ("26", "pc3_adc3"), ("27", "pc4_adc4_sda"), ("28", "pc5_adc5_scl"),
+        ("1", "pc6_reset"),
+        ("2", "pd0_rxd"),
+        ("3", "pd1_txd"),
+        ("4", "pd2_int0"),
+        ("5", "pd3_int1_oc2b"),
+        ("6", "pd4_t0_xck"),
+        ("7", "vcc"),
+        ("8", "gnd"),
+        ("9", "pb6_xtal1"),
+        ("10", "pb7_xtal2"),
+        ("11", "pd5_t1_oc0b"),
+        ("12", "pd6_ain0_oc0a"),
+        ("13", "pd7_ain1"),
+        ("14", "pb0_icp1"),
+        ("15", "pb1_oc1a"),
+        ("16", "pb2_ss_oc1b"),
+        ("17", "pb3_mosi_oc2a"),
+        ("18", "pb4_miso"),
+        ("19", "pb5_sck"),
+        ("20", "avcc"),
+        ("21", "aref"),
+        ("22", "gnd2"),
+        ("23", "pc0_adc0"),
+        ("24", "pc1_adc1"),
+        ("25", "pc2_adc2"),
+        ("26", "pc3_adc3"),
+        ("27", "pc4_adc4_sda"),
+        ("28", "pc5_adc5_scl"),
     ]
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -996,7 +1035,9 @@ fn role_node_map_pins(
     let mut m = HashMap::new();
     if let Some(kind) = kind {
         for pin in &comp.pins {
-            let Some(node) = node_of(pin.net) else { continue };
+            let Some(node) = node_of(pin.net) else {
+                continue;
+            };
             if let Some(role) = role_from_pinfunction(kind, &pin.function) {
                 m.entry(role).or_insert(node);
             }
@@ -1052,6 +1093,12 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             "s" | "sel" | "in" | "ctrl" => "ctrl",
             "gnd" | "vss" => "vss",
             "vcc" | "vdd" => "vcc",
+            _ => return None,
+        },
+        ComponentKind::Opamp | ComponentKind::Comparator => match f.as_str() {
+            "out" | "output" | "q" => "out",
+            "+in" | "in+" | "inp" | "in_p" | "in_plus" | "non-inverting" => "in_plus",
+            "-in" | "in-" | "inn" | "in_n" | "in_minus" | "inverting" => "in_minus",
             _ => return None,
         },
         // MCP4728-class DACs: the schematic VOUTA..VOUTD / SDA / SCL / ~{LDAC}
@@ -1229,8 +1276,7 @@ fn bind_bjt(
         let mut stamped = 0;
         for suffix in &suffixes {
             let get = |role: &str| roles.get(&format!("{role}{suffix}")).copied();
-            let (Some(c), Some(b), Some(e)) =
-                (get("collector"), get("base"), get("emitter"))
+            let (Some(c), Some(b), Some(e)) = (get("collector"), get("base"), get("emitter"))
             else {
                 continue;
             };
@@ -1254,9 +1300,15 @@ fn bind_bjt(
         );
     }
 
-    let c = roles.get("collector").or_else(|| pick(roles, &["c"])).copied();
+    let c = roles
+        .get("collector")
+        .or_else(|| pick(roles, &["c"]))
+        .copied();
     let b = roles.get("base").or_else(|| pick(roles, &["b"])).copied();
-    let e = roles.get("emitter").or_else(|| pick(roles, &["e"])).copied();
+    let e = roles
+        .get("emitter")
+        .or_else(|| pick(roles, &["e"]))
+        .copied();
     let (Some(c), Some(b), Some(e)) = (c, b, e) else {
         return open_warning(comp, "BJT pins not all connected");
     };
@@ -1462,7 +1514,9 @@ fn bind_analog_switch(
     let s0 = pick(roles, &["s0", "b1"]).copied();
     let s1 = pick(roles, &["s1", "b2"]).copied();
     let sel = pick(roles, &["ctrl", "s", "in"]).copied();
-    let vss = pick(roles, &["vss", "gnd"]).copied().unwrap_or(NodeId::GROUND);
+    let vss = pick(roles, &["vss", "gnd"])
+        .copied()
+        .unwrap_or(NodeId::GROUND);
     if let (Some(com), Some(s0), Some(s1), Some(sel), Some(vcc)) =
         (com, s0, s1, sel, pick(roles, &["vcc"]).copied())
     {
@@ -1523,7 +1577,9 @@ fn bind_analog_switch(
         }
     };
     let ctrl = pick(roles, &["ctrl", "ctrl_1", "in"]).copied();
-    let ctrl_n = pick(roles, &["vss", "gnd"]).copied().unwrap_or(NodeId::GROUND);
+    let ctrl_n = pick(roles, &["vss", "gnd"])
+        .copied()
+        .unwrap_or(NodeId::GROUND);
     let Some(ctrl) = ctrl else {
         return open_warning(comp, "analog switch control not connected");
     };
@@ -1571,7 +1627,9 @@ fn bind_mcp4728_dac(
     let mut vout_drivers: [Option<PinDriver>; 4] = [None, None, None, None];
     let mut stamped = 0;
     for (ch, role) in channel_roles.iter().enumerate() {
-        let Some(&net) = roles.get(*role) else { continue };
+        let Some(&net) = roles.get(*role) else {
+            continue;
+        };
         if net.is_ground() {
             continue;
         }
@@ -1763,7 +1821,10 @@ fn open_warning(comp: &Component, why: &str) -> (BindOutcome, Option<String>) {
         BindOutcome::Unresolved {
             reason: why.to_string(),
         },
-        Some(format!("{} ({}): {why}, left open", comp.reference, comp.value)),
+        Some(format!(
+            "{} ({}): {why}, left open",
+            comp.reference, comp.value
+        )),
     )
 }
 
@@ -1908,8 +1969,10 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// True for ground-family net names.
 fn is_ground(name: &str) -> bool {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    matches!(n.as_str(), "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "VSS" | "0" | "VEE")
-        || n.ends_with("GND")
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "VSS" | "0" | "VEE"
+    ) || n.ends_with("GND")
 }
 
 /// If `name` is a recognised supply rail, return its nominal voltage.
@@ -1932,4 +1995,39 @@ fn power_rail_voltage(name: &str) -> Option<f64> {
             }
         }
     }
+}
+
+/// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
+/// pinfunction names a voltage is a supply rail at that voltage, no matter what
+/// the NET is named. KiCad netlists from boards that use a non-canonical rail
+/// label (e.g. `+5P`, `VBUS_SW`, `SYS_3V3`) still tag the *source pin* of a
+/// regulator/MCU/connector as `power_out`, so this catches rails that pure
+/// name-matching ([`power_rail_voltage`]) misses. Returns the rail voltage if
+/// any `power_out` pin on the board drives this net id with a known function.
+///
+/// A genuine regulator output is handled separately (the vreg model sources its
+/// own net); this only stamps an ideal rail when nothing else drives the net,
+/// which is correct for an externally/MCU-supplied rail whose source is not
+/// itself solved (e.g. the Arduino's `+5V` pin feeding the analog array).
+fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
+    let mut out: HashMap<i64, f64> = HashMap::new();
+    for comp in &board.components {
+        for pin in &comp.pins {
+            if !pin.kind.starts_with("power_out") {
+                continue;
+            }
+            let Some(net_id) = pin.net else { continue };
+            if net_id == 0 {
+                continue;
+            }
+            // A no_connect power_out pin drives nothing (e.g. an unused 3V3 leg).
+            if pin.kind.contains("no_connect") {
+                continue;
+            }
+            if let Some(v) = power_rail_voltage(&pin.function) {
+                out.insert(net_id, v);
+            }
+        }
+    }
+    out
 }
