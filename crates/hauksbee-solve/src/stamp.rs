@@ -107,6 +107,18 @@ pub struct StampCtx<'a> {
     /// can converge, killing the limit cycle. `None` (every normal solve) keeps
     /// the self-deciding behaviour bit-identical.
     pub cmp_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
+    /// Optional FROZEN analog-switch on/off decisions (keyed by device id),
+    /// supplied only by the staged-DC event-driven outer loop. The 4320
+    /// SN74LVC1G3157 switches that fuse the Tarski synapse mesh each carry a
+    /// tanh-blended conductance whose control node sits near the transition for
+    /// a coupled core; left self-deciding, the inner Newton limit-cycles as the
+    /// switch flips on/off every iteration. When present, each switch's
+    /// conductance is PINNED to its frozen rail (full `ron` or `roff`, no
+    /// control dependence) so the inner circuit is smooth and Newton converges;
+    /// the outer Gauss-Seidel loop re-derives every switch's rail from the
+    /// converged control voltages and re-solves until none flip. `None` (every
+    /// normal solve) keeps the smooth tanh + control tangent bit-identical.
+    pub switch_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
 }
 
 impl StampCtx<'_> {
@@ -246,7 +258,7 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
             stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs)
         }
         Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => {
-            stamp_vswitch(ctx, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs)
+            stamp_vswitch(ctx, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs)
         }
         Device::OpAmp { out, inp, inn, gain, rail_lo, rail_hi, .. } => {
             stamp_opamp(ctx, *out, *inp, *inn, *gain, *rail_lo, *rail_hi, g, rhs)
@@ -473,7 +485,26 @@ fn stamp_diode(
 
     let vd_raw = ctx.v(a) - ctx.v(k);
     // Use the last accepted junction voltage as the limiting anchor.
-    let vd = pnjlim(vd_raw, ctx.last_vd(a, k), nvt, vc);
+    let mut vd = pnjlim(vd_raw, ctx.last_vd(a, k), nvt, vc);
+
+    // STAGED-DC diode pre-limit (the relaxed-seed overflow cure). On the staged
+    // path only (branch_reg > 0), HARD-CLAMP the junction voltage so the very
+    // FIRST stamp from the relaxed (diodes-off) seed cannot overflow exp(). The
+    // relaxed seed leaves some stretcher-diode cathodes floating; their first
+    // forward bias can be tens of volts, and on iteration 1 pnjlim sees a zero
+    // delta (anchor == iterate) so it does not limit — diode_eval then evaluates
+    // exp(vd/nvt) ≈ 1e30 A and poisons the Newton step (measured: dc_residual
+    // ~1e30 A at the V_out nets). Clamping vd to a few hundred mV past vcrit
+    // bounds the current to a sane magnitude without changing the root: a real
+    // forward junction sits ~0.6–0.9 V, far below this clamp, so at any genuine
+    // operating point the clamp is inactive and the solve is unchanged. The
+    // normal path (branch_reg == 0) keeps the unclamped behaviour bit-identical.
+    if ctx.branch_reg > 0.0 {
+        let vd_max = vc + 0.4; // a few hundred mV into strong conduction
+        if vd > vd_max {
+            vd = vd_max;
+        }
+    }
 
     let (id, gd) = diode_eval(model, vd, t_c, temp_on);
     let gd = gd.max(ctx.opts.gmin);
@@ -641,8 +672,10 @@ fn stamp_mosfet(
     inject(rhs, sn, ieq_signed);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stamp_vswitch(
     ctx: &StampCtx,
+    id: DeviceId,
     a: NodeId,
     b: NodeId,
     cp: NodeId,
@@ -654,19 +687,74 @@ fn stamp_vswitch(
     g: &mut SparseMatrix,
     rhs: &mut [f64],
 ) {
+    let gon = 1.0 / ron.max(1e-12);
+    let goff = 1.0 / roff.max(1e-12);
+
+    // Event-frozen path: the staged-DC outer loop supplies a FROZEN on/off
+    // decision for this switch. Pin the conductance to that rail (full ron or
+    // roff) with NO control-node dependence, so the inner circuit is smooth and
+    // strictly through-conducting. This is the limit-cycle cure for the
+    // analog-switch mesh: with every switch's state fixed, the fused core is a
+    // smooth resistor network Newton converges; the outer loop re-derives each
+    // switch's rail from the converged control voltages and re-solves until no
+    // switch flips, so the fixed point is a true root with every switch state
+    // consistent with its own control. (Mirrors the comparator cmp_freeze.)
+    if let Some(freeze) = ctx.switch_freeze {
+        let vmid = 0.5 * (von + voff);
+        let on = freeze
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| (ctx.v(cp) - ctx.v(cn)) > vmid);
+        let gsw = if on { gon } else { goff };
+        stamp_cond(g, ctx.layout, a, b, gsw);
+        return;
+    }
+
     let vctrl = ctx.v(cp) - ctx.v(cn);
     let vmid = 0.5 * (von + voff);
     let span = ((von - voff).abs()).max(1e-9);
-    // Smooth tanh transition between log-conductances.
-    let gon = 1.0 / ron.max(1e-12);
-    let goff = 1.0 / roff.max(1e-12);
-    let s = 0.5 * (1.0 + (3.0 * (vctrl - vmid) / span).tanh());
-    let gln = goff.ln() + s * (gon.ln() - goff.ln());
+    // Smooth tanh transition between log-conductances. With u the tanh argument,
+    //   s   = 0.5 * (1 + tanh(u)),      u = 3*(vctrl - vmid)/span
+    //   gln = ln(goff) + s*(ln(gon) - ln(goff))
+    //   gsw = exp(gln)
+    let lgon = gon.ln();
+    let lgoff = goff.ln();
+    let u = 3.0 * (vctrl - vmid) / span;
+    let th = u.tanh();
+    let s = 0.5 * (1.0 + th);
+    let gln = lgoff + s * (lgon - lgoff);
     let gsw = gln.exp();
+
+    // Conductance stamp between the through nodes (a, b).
     stamp_cond(g, ctx.layout, a, b, gsw);
-    // The control dependence is weak; treat as fixed within a Newton step (the
-    // switch is quasi-static and the outer event handler refines crossings).
-    let _ = rhs;
+
+    // CONTROL-NODE JACOBIAN (the true tangent). The switch current
+    //   i = gsw * (v_a - v_b)
+    // depends on the control voltage vctrl through gsw. The MNA companion of a
+    // voltage-controlled conductance adds a transconductance coupling the (a,b)
+    // current rows to the (cp,cn) control columns, with
+    //   gm_ctrl = d i / d vctrl = (v_a - v_b) * d gsw / d vctrl
+    //   d gsw / d vctrl = gsw * (ln(gon) - ln(goff)) * ds/dvctrl
+    //   ds/dvctrl       = 0.5 * (1 - tanh^2(u)) * (3/span)
+    // and a matching equivalent-current correction so the linearization is
+    // exact at the operating point (same root, faster convergence). Stamping
+    // this makes each switch Newton-linearized instead of a Picard fixed point.
+    let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
+    let vab = ctx.v(a) - ctx.v(b);
+    let gm_ctrl = vab * dgsw_dvctrl;
+    if gm_ctrl != 0.0 {
+        let (ai, bi) = (ctx.layout.node(a), ctx.layout.node(b));
+        let (cpi, cni) = (ctx.layout.node(cp), ctx.layout.node(cn));
+        // i_a += gm_ctrl * (v_cp - v_cn), i_b -= ... .
+        add_transconductance(g, ai, bi, cpi, cni, gm_ctrl);
+        // Equivalent-current correction: the transconductance term contributes
+        // gm_ctrl * vctrl to the linearized current, which is already implicit
+        // in the conductance stamp at the operating point. Subtract it back via
+        // the RHS so the residual equals the true device current there.
+        let ieq = gm_ctrl * vctrl;
+        inject(rhs, ai, ieq);
+        inject(rhs, bi, -ieq);
+    }
 }
 
 fn stamp_opamp(

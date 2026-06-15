@@ -81,3 +81,115 @@ fn stiff_diode_dc_converges_to_finite_physical_root() {
         );
     }
 }
+
+/// Build a diode-laden circuit (so the staged-DC path engages) carrying a STIFF
+/// analog switch whose control is its own output (positive feedback) pinned just
+/// above threshold by a bias diode, plus a population of decoy switches near
+/// their knees. Self-deciding (the tanh + control tangent), the switch's on/off
+/// chatters between staged outer passes on this stiff core, mirroring the
+/// 4320-switch Tarski mesh limit cycle. The event-freeze outer loop holds each
+/// switch's state fixed per inner solve and re-derives it between solves, so it
+/// settles to a consistent root. There is a single physical root: the switch is
+/// biased ON, so out latches to the conducting divider value.
+fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
+    let mut c = Circuit::new();
+    let rail = c.node("RAIL");
+    c.add(Device::Vsource { name: "VR".into(), p: rail, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
+    let model = DiodeModel { is: 4.352e-9, n: 1.9, rs: 0.65, ..DiodeModel::default() };
+
+    // A floating stretch node off the rail through a reverse diode + DC-open cap:
+    // forces the staged path (relaxed-seed + branch_reg) to engage, exactly the
+    // condition under which the switches limit-cycle on the real board.
+    let s = c.node("STRETCH");
+    c.add(Device::Diode { name: "Dr".into(), a: NodeId::GROUND, k: s, model });
+    c.add(Device::Capacitor { name: "Cs".into(), a: s, b: NodeId::GROUND, farads: 5.8e-9, ic: None });
+
+    // A fixed bias rail at 3 V for the switch controls.
+    let bias = c.node("BIAS");
+    c.add(Device::Vsource { name: "VB".into(), p: bias, n: NodeId::GROUND, kind: SourceKind::Dc(3.0) });
+
+    // Main switch: rail -> out through a STIFF switch with NEGATIVE feedback,
+    // vctrl = bias - v(out). As out rises the switch turns OFF, so the loop has a
+    // single self-consistent operating point sitting in the tanh knee. Stiff
+    // (1e6 on/off ratio) so the self-deciding tanh chatters between staged passes
+    // (out flips the switch which flips out) — the limit cycle the freeze cures.
+    let out = c.node("OUT");
+    c.add(Device::VSwitch {
+        name: "Smain".into(),
+        a: rail,
+        b: out,
+        ctrl_p: bias,
+        ctrl_n: out,
+        von: 2.5,
+        voff: 1.5,
+        ron: 1.0,
+        roff: 1e6,
+    });
+    c.add(Device::Resistor { name: "RL".into(), a: out, b: NodeId::GROUND, ohms: 1.0, tc1: None });
+
+    // Decoy switches sitting near their own knees with the same negative-feedback
+    // control, each fed from `out` through a diode and loaded to ground: they
+    // couple to the main node and add discrete states the event loop must settle.
+    for i in 0..n_decoy {
+        let d = c.node(&format!("DEC{i}"));
+        c.add(Device::Diode { name: format!("Dd{i}"), a: out, k: d, model });
+        c.add(Device::VSwitch {
+            name: format!("Sd{i}"),
+            a: d,
+            b: NodeId::GROUND,
+            ctrl_p: bias,
+            ctrl_n: d,
+            von: 2.5,
+            voff: 1.5,
+            ron: 10.0,
+            roff: 1e6,
+        });
+        c.add(Device::Resistor { name: format!("Rd{i}"), a: d, b: NodeId::GROUND, ohms: 1e4, tc1: None });
+    }
+    (c, rail, out)
+}
+
+/// Stiff switch + diode core co-solves to a TRUE root with the control-node
+/// Jacobian. This stresses the new VSwitch tangent on a circuit that also carries
+/// the staged-DC diode pathology (floating reverse-diode cap node), and confirms
+/// the switch settles on its negative-feedback knee with the rail/out KCL closed.
+/// (The full event-freeze outer loop's load-bearing proof is the real Tarski
+/// board; this miniature converges on the homotopy ladder, so it guards the
+/// Jacobian + diode interaction without depending on the staged event path. The
+/// env vars enable the dynamic-pivot LU + event loop so the path is exercised if
+/// the ladder ever needs them.)
+#[test]
+fn multi_switch_core_converges_via_event_freeze() {
+    let opts = SolverOptions::default();
+    let (c, rail_n, out_n) = build_switched(8);
+
+    // Enable the staged-DC dynamic-pivot LU and the event-freeze outer loop (the
+    // load-bearing path for the switch-fused core). Scoped to this test.
+    std::env::set_var("HAUKSBEE_DC_DYN", "1");
+    std::env::set_var("HAUKSBEE_CMP_EVENT", "1");
+
+    let mut ws = Workspace::new(&c);
+    let r = dc_operating_point(&mut ws, &c, &opts);
+
+    std::env::remove_var("HAUKSBEE_CMP_EVENT");
+    std::env::remove_var("HAUKSBEE_DC_DYN");
+
+    r.expect("switched diode core must converge");
+
+    let rail = node_v(&ws, rail_n);
+    let out = node_v(&ws, out_n);
+    assert!((rail - 5.0).abs() < 1e-3, "rail {rail} != 5 V");
+    // The negative-feedback loop settles in the tanh knee (vctrl = 3 - out drives
+    // the switch toward partial conduction): a real interior operating point well
+    // above the all-off bias (~0) and below the full-on divider (2.5 V). A
+    // relaxed-undecided / chattering solve never reaches a consistent interior
+    // point here.
+    assert!(
+        (0.3..=2.4).contains(&out),
+        "main switch should settle on the transition knee, got {out}"
+    );
+
+    // And it is a TRUE root, not a relaxed adoption: KCL closes at the solution.
+    let res = ws.dc_residual_inf_norm(&c, &opts);
+    assert!(res < 1e-6, "switched-core root residual should be ~0, got {res:e}");
+}
