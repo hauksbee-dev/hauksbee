@@ -79,6 +79,14 @@ pub struct Workspace {
     /// (`newton_solve_event`) before cutting the timestep. Off by default, so an
     /// ordinary circuit's per-step path is unchanged.
     tran_event: bool,
+    /// Armed by the transient driver on the same stiff-board condition as
+    /// `tran_event`: enable the GLOBAL Armijo line-search globalization inside the
+    /// per-step (`dc==false`) Newton, to defeat the traveling fused-mesh limit
+    /// cycle (the post-reset overshoot whose maxdV rotates across mesh nodes, which
+    /// per-node damping cannot catch). Off by default so an ordinary circuit's
+    /// per-step path is bit-identical (no residual evaluation). Also force-on via
+    /// HAUKSBEE_NEWTON_LINESEARCH=1 for diagnosis.
+    tran_line_search: bool,
 }
 
 impl Workspace {
@@ -97,6 +105,14 @@ impl Workspace {
     /// Whether the per-step transient event-freeze retry is armed.
     pub fn tran_event(&self) -> bool {
         self.tran_event
+    }
+
+    /// Arm/disarm the per-step transient Armijo line-search globalization. Set by
+    /// the transient driver on the stiff-board path (same condition as
+    /// `set_tran_event`); the default-false keeps ordinary per-step Newton
+    /// bit-identical (and free of the extra residual evaluation).
+    pub fn set_tran_line_search(&mut self, on: bool) {
+        self.tran_line_search = on;
     }
 
     /// Enable the staged-DC regularizers (Vsource-branch series resistance,
@@ -236,6 +252,7 @@ impl Workspace {
             cmp_freeze: None,
             switch_freeze: None,
             tran_event: false,
+            tran_line_search: false,
         }
     }
 }
@@ -259,6 +276,35 @@ pub fn newton_solve(
     let mut iters = 0;
     let dbg_newton = std::env::var("HAUKSBEE_NEWTON_DBG").is_ok();
     let dbg_staged = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    // GLOBAL damped-Newton line-search (Armijo backtracking on the full residual
+    // infinity-norm). Gated behind HAUKSBEE_NEWTON_LINESEARCH=1; OFF by default so
+    // every existing per-step path is bit-identical. This is the textbook
+    // globalization for a traveling overshoot in a stiff mesh (the measured
+    // refractory-reset follow-on limit cycle: a huge Newton correction that pins
+    // maxdV on a DIFFERENT synapse-mesh/BJT-mirror node each iteration, which the
+    // per-node oscillation damping cannot catch because the offending node moves).
+    // On each Newton step compute the full step dx, then backtrack alpha in
+    // {1, 0.5, 0.25, ...} until ||F(x + alpha*dx)||_inf < (1 - c*alpha)||F(x)||_inf
+    // with c = ARMIJO_C and a floor on alpha; the accepted step decreases the true
+    // nonlinear residual monotonically, so the iteration cannot travel.
+    //
+    // SCOPE: the TRANSIENT per-step Newton only (`dc == false`), never the DC
+    // operating-point / staged-event solves (`dc == true`). The DC staged path has
+    // its own carefully-tuned homotopy (relaxed seed + diode-Is continuation +
+    // event-freeze Gauss-Seidel); folding an Armijo residual-decrease onto those
+    // inner solves perturbs their convergence (measured: it broke the milestone's
+    // rest-DC). The brief's globalization target is the post-reset traveling
+    // mesh limit cycle, which lives in the transient per-step Newton, so the
+    // line-search belongs there. With the flag off it is a no-op everywhere.
+    //
+    // Armed either by the transient driver on the stiff-board path
+    // (ws.tran_line_search, the auto path that keeps the milestone green without an
+    // env var) or forced via HAUKSBEE_NEWTON_LINESEARCH=1 for diagnosis. Never on
+    // the DC path (dc==true).
+    let line_search = !dc
+        && (ws.tran_line_search || std::env::var("HAUKSBEE_NEWTON_LINESEARCH").is_ok());
+    const ARMIJO_C: f64 = 1e-4;
+    const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     // Anchor for pn-junction voltage limiting: the linearization point of the
     // PREVIOUS Newton iteration. Seeded to the starting guess so the first
     // iteration's anchor equals its own linearization point (pnjlim then sees
@@ -341,6 +387,30 @@ pub fn newton_solve(
             }
             return NewtonResult { converged: already, iters };
         }
+        // Residual of the NONLINEAR system at the current linearization point,
+        // F(lin_point) = g*lin_point - rhs over the node block. Computed from the
+        // just-stamped (g, rhs) BEFORE the solve clobbers rhs, so the line-search
+        // can compare the trial residual against it. Only built when the
+        // line-search is armed (otherwise it is dead work on the bit-identical
+        // default path).
+        let f_norm_lin = if line_search && !ws.linear {
+            let mut worst = 0.0f64;
+            for i in 0..ws.layout.n_nodes {
+                let row = ws.matrix.row(i);
+                let mut acc = 0.0;
+                for &(col, val) in row {
+                    acc += val * lin_point[col];
+                }
+                let f = (acc - ws.rhs[i]).abs();
+                if f > worst {
+                    worst = f;
+                }
+            }
+            worst
+        } else {
+            0.0
+        };
+
         ws.symbolic.solve(&mut ws.rhs);
         // rhs now holds the new (UNDAMPED) Newton iterate.
         ws.x.copy_from_slice(&ws.rhs);
@@ -349,6 +419,62 @@ pub fn newton_solve(
         // assemble and factor a second time just to watch the residual be zero.
         if ws.linear {
             return NewtonResult { converged: true, iters };
+        }
+
+        // GLOBAL Armijo line-search (opt-in). Backtrack the full Newton step dx =
+        // (ws.x - lin_point) until the trial point's nonlinear residual decreases
+        // sufficiently. This REPLACES the undamped iterate with lin_point+alpha*dx;
+        // the per-node staged damping below then operates on the globalized point.
+        // Convergence is still judged on the resulting step (lin_point -> ws.x), so
+        // a heavily backtracked step reads as "not yet converged" and the loop
+        // continues -- exactly what stops the traveling overshoot.
+        if line_search {
+            let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - lin_point[i]).collect();
+            let mut alpha = 1.0;
+            let mut best_alpha = 1.0;
+            let mut best_norm = f64::INFINITY;
+            loop {
+                // Trial point x = lin_point + alpha*dx, evaluated into ws.x scratch.
+                for i in 0..ws.x.len() {
+                    ws.x[i] = lin_point[i] + alpha * dx[i];
+                }
+                let trial_norm = residual_inf_norm_at(
+                    ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
+                );
+                if trial_norm < best_norm {
+                    best_norm = trial_norm;
+                    best_alpha = alpha;
+                }
+                // Armijo sufficient-decrease on the residual inf-norm. The first
+                // Newton iterate (f_norm_lin==0 because lin_point is the cold
+                // start) accepts the full step.
+                let accept = trial_norm.is_finite()
+                    && (f_norm_lin <= 0.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
+                if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
+                    break;
+                }
+                alpha *= 0.5;
+            }
+            // If even the floor step did not satisfy Armijo, take the best alpha
+            // tried (the largest residual decrease seen) rather than a step that
+            // increases the residual.
+            let use_alpha = if best_norm.is_finite() && best_norm < f_norm_lin && f_norm_lin > 0.0 {
+                best_alpha
+            } else {
+                alpha
+            };
+            for i in 0..ws.x.len() {
+                ws.x[i] = lin_point[i] + use_alpha * dx[i];
+            }
+            if dbg_newton {
+                eprintln!(
+                    "[newton-ls] iter {iters} alpha={use_alpha:.4} ||F||: {f_norm_lin:.3e} -> {best_norm:.3e}"
+                );
+            }
+            // After globalizing, re-stamp must happen for the next iteration's
+            // matrix anyway, so nothing else to restore here. The scratch ws.matrix
+            // / ws.rhs were overwritten by residual_inf_norm_at and will be
+            // re-stamped at the top of the next loop.
         }
 
         // Convergence is judged on the UNDAMPED Newton step (ws.x vs the point we
@@ -473,6 +599,69 @@ pub fn newton_solve(
             return NewtonResult { converged: false, iters };
         }
     }
+}
+
+/// Stamp the full nonlinear system at `ws.x` (a trial point) with the SAME
+/// integration/freeze/regularizer context as the live Newton iteration, and
+/// return the infinity-norm of the residual `F = g*x - rhs` over the NODE block.
+/// Used by the opt-in Armijo line-search in [`newton_solve`] to evaluate a
+/// backtracked trial point. Clobbers `ws.matrix` and `ws.rhs` (scratch that the
+/// next Newton iteration re-stamps anyway). A non-finite entry returns +inf so a
+/// poisoned trial point is never accepted.
+#[allow(clippy::too_many_arguments)]
+fn residual_inf_norm_at(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    time: f64,
+    coeffs: IntegCoeffs,
+    state: &ReactiveState,
+    dc: bool,
+    use_ic: bool,
+    gmin: f64,
+    src_scale: f64,
+    branch_reg: f64,
+) -> f64 {
+    ws.matrix.clear_values();
+    for v in ws.rhs.iter_mut() {
+        *v = 0.0;
+    }
+    {
+        let ctx = StampCtx {
+            circuit,
+            layout: &ws.layout,
+            opts,
+            x: &ws.x,
+            x_prev: &ws.x_prev_iter,
+            time,
+            coeffs,
+            state,
+            dc,
+            use_ic,
+            gmin,
+            src_scale,
+            branch_reg,
+            cmp_freeze: ws.cmp_freeze.as_ref(),
+            switch_freeze: ws.switch_freeze.as_ref(),
+        };
+        stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
+    }
+    let mut worst = 0.0f64;
+    for i in 0..ws.layout.n_nodes {
+        let row = ws.matrix.row(i);
+        let mut acc = 0.0;
+        for &(col, val) in row {
+            acc += val * ws.x[col];
+        }
+        let f = acc - ws.rhs[i];
+        if !f.is_finite() {
+            return f64::INFINITY;
+        }
+        if f.abs() > worst {
+            worst = f.abs();
+        }
+    }
+    worst
 }
 
 /// Node-block-only convergence test: every NODE voltage within
