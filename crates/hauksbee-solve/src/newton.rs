@@ -33,6 +33,13 @@ pub struct Workspace {
     /// and damp only those, leaving converging nodes near-full steps. Allocated
     /// once; only touched on the staged path (branch_reg>0).
     prev_step: Vec<f64>,
+    /// Per-node consecutive-oscillation counter: how many iterations in a row a
+    /// node's undamped step has reversed sign. Used by the staged-DC adaptive
+    /// damping to damp a persistently-oscillating node PROGRESSIVELY harder (a
+    /// fixed fraction can sustain a stubborn 2-cycle, the measured refractory-reset
+    /// follow-on limit cycle on the synapse-mesh / BJT-mirror nodes). Allocated
+    /// once; only touched on the staged path (branch_reg>0).
+    osc_count: Vec<u32>,
     /// True when every device is linear, so one solve per step is exact and
     /// Newton needs no second iteration to confirm convergence.
     linear: bool,
@@ -221,6 +228,7 @@ impl Workspace {
             x: vec![0.0; size],
             x_prev_iter: vec![0.0; size],
             prev_step: vec![0.0; size],
+            osc_count: vec![0; size],
             linear,
             plan,
             staged_branch_reg: 0.0,
@@ -258,6 +266,9 @@ pub fn newton_solve(
     ws.x_prev_iter.copy_from_slice(&ws.x);
     for s in ws.prev_step.iter_mut() {
         *s = 0.0;
+    }
+    for c in ws.osc_count.iter_mut() {
+        *c = 0;
     }
     // Staged-path stall detection: track the best (smallest) undamped node-step
     // norm seen and how many iterations it has been since it last improved. A
@@ -366,14 +377,33 @@ pub fn newton_solve(
         if branch_reg > 0.0 {
             const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
             const ALPHA_CONVERGING: f64 = 0.9; // same-sign: near-full step
-            const ALPHA_OSCILLATING: f64 = 0.25; // sign reversed: heavy damping
+            const ALPHA_OSCILLATING: f64 = 0.25; // sign reversed: base damping
             for i in 0..ws.layout.n_nodes {
                 let full = ws.x[i] - lin_point[i];
                 let prev = ws.prev_step[i];
                 // Oscillating if this step opposes the previous one and both are
                 // non-trivial.
                 let oscillating = prev * full < 0.0 && prev.abs() > 1e-9 && full.abs() > 1e-9;
-                let alpha = if oscillating { ALPHA_OSCILLATING } else { ALPHA_CONVERGING };
+                // PROGRESSIVE damping: a fixed fraction (0.25) breaks a transient
+                // 2-cycle but can SUSTAIN a stubborn one (the measured
+                // refractory-reset follow-on limit cycle, where a synapse-mesh /
+                // BJT-mirror node and its neighbour flip-flop at the step cap for
+                // hundreds of iterations and never decay). Each consecutive
+                // oscillation halves the node's damping again (0.25, 0.125, ...),
+                // so a node that keeps reversing is driven toward a near-frozen
+                // step and the cycle collapses; a node that stops reversing resets
+                // its counter and resumes near-full steps. A converging node never
+                // oscillates, so this is inert at the root and bit-identical on the
+                // normal path (branch_reg==0 skips this block entirely).
+                let alpha = if oscillating {
+                    ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
+                    // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
+                    let shrink = ws.osc_count[i].saturating_sub(1).min(8);
+                    ALPHA_OSCILLATING / (1u32 << shrink) as f64
+                } else {
+                    ws.osc_count[i] = 0;
+                    ALPHA_CONVERGING
+                };
                 let mut step = alpha * full;
                 if step > NODE_STEP_MAX {
                     step = NODE_STEP_MAX;
@@ -1065,6 +1095,7 @@ pub fn newton_solve_event(
     coeffs: IntegCoeffs,
     state: &ReactiveState,
     gmin: f64,
+    cmp_smooth: bool,
 ) -> bool {
     let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     let spdt = SpdtPairs::analyze(circuit);
@@ -1111,13 +1142,45 @@ pub fn newton_solve_event(
     // CMP_SMOOTH leaves comparators SELF-DECIDING via the smooth high-gain
     // logistic transfer (the branch_reg>0 path, which has a real tangent), so the
     // comparator tracks its flip continuously while the switch mesh stays frozen.
-    let cmp_smooth = std::env::var("HAUKSBEE_TRAN_CMP_SMOOTH").is_ok();
+    //
+    // The OUTPUT refractory reset is the opposite regime: once the output spike
+    // SPIKE1 climbs through the refractory NEURON_SWITCH's control threshold the
+    // switch shorts the output membrane to GND in a fast positive-feedback
+    // discharge (membrane -> comparator -> spike -> switch -> membrane). With the
+    // output comparator left SMOOTH its ~2000 V^-1 logistic gain couples the
+    // collapsing membrane straight back into the spike/switch loop and the
+    // per-step Newton diverges. There the comparator must be FROZEN like every
+    // other state so the inner circuit is a smooth resistor network. The caller
+    // therefore tries cmp_smooth=true first (resolves the membrane-crosses-up
+    // FIRE, the C_adapt feedback) and, if that fails, cmp_smooth=false (resolves
+    // the reset discharge). `cmp_smooth` is the per-call mode, not the env, so the
+    // two-mode retry can pick the regime that converges this step.
+    //
+    // GMIN FLOOR for the inner solves. The DC staged path anchors the
+    // otherwise-floating high-impedance synapse-mesh nodes (BJT mirror bases /
+    // off-switch internal nodes between the magnitude switches and the spike
+    // gate, DC-coupled only through reverse-biased junctions and DC-open caps)
+    // with a STAGED_GMIN=1e-7 floor; without it those nodes have no defined
+    // operating point and the inner Newton limit-cycles on them (the measured
+    // "maxdV pinned at the 2 V damping cap, rotating across mesh nodes" at the
+    // refractory-reset follow-on step). The per-step event-freeze is called with
+    // opts.gmin (1e-12), far too small to anchor them, so floor it to the same
+    // staged value here. Pure-resistor inner conductances dwarf 1e-7 S, so the
+    // physical nodes are unaffected (a 1e-7 S leak across 5 V is 0.5 uA, below the
+    // signal currents); it only pins the genuinely-floating ones.
+    //
+    // Applied ONLY in the frozen-comparator (reset) regime: the smooth-comparator
+    // FIRE step converges on the bare opts.gmin, and a 1e-7 floor there perturbs
+    // the membrane-near-threshold operating point enough to BREAK the earlier
+    // hidden spike-gate flip (measured: the floor moved the failure from the
+    // refractory reset back to the fire). So only the reset pass raises the floor.
+    let inner_gmin = if cmp_smooth { gmin } else { gmin.max(1e-7) };
     let mut x = seed.clone();
     for pass in 0..MAX_EVENT_PASSES {
         ws.cmp_freeze = if cmp_smooth { None } else { Some(cmp_states.clone()) };
         ws.switch_freeze = Some(sw_states.clone());
         ws.x.copy_from_slice(&x);
-        let r = newton_solve(ws, circuit, inner, time, dt, coeffs, state, false, false, gmin, 1.0);
+        let r = newton_solve(ws, circuit, inner, time, dt, coeffs, state, false, false, inner_gmin, 1.0);
         if !r.converged {
             if dbg {
                 eprintln!("[tran-event] t={time:.6e} pass {pass}: inner Newton did NOT converge (iters {})", r.iters);

@@ -236,18 +236,36 @@ impl Transient {
             let mut used_event = false;
             if !converged && ws.tran_event() {
                 // The bare per-step Newton limit-cycled (the spike-gate SPDT flip
-                // under synapse current). Retry this step through the event-freeze
-                // loop: freeze comparator+switch states per inner solve, re-derive
-                // Gauss-Seidel with break-before-make, until consistent. Re-seed
-                // ws.x to the accepted point first so the freeze derives from the
-                // step's entry state. The dynamic-pivot LU is enabled for the
-                // inner solves so the diode-reshaped matrix stays factorable.
-                ws.x.copy_from_slice(&x_accepted);
+                // under synapse current, or the refractory reset). Retry this step
+                // through the event-freeze loop: freeze comparator+switch states
+                // per inner solve, re-derive Gauss-Seidel with break-before-make,
+                // until consistent. Re-seed ws.x to the accepted point first so the
+                // freeze derives from the step's entry state. The dynamic-pivot LU
+                // is enabled for the inner solves so the diode-reshaped matrix stays
+                // factorable.
                 let had_dyn = ws.symbolic.allow_dynamic();
                 ws.symbolic.set_allow_dynamic(true);
-                converged = newton_solve_event(
-                    &mut ws, circuit, opts, t + h, h, coeffs, &state, opts.gmin,
-                );
+                // Two-mode retry. The smooth-comparator pass resolves the
+                // membrane-crosses-UP fire (the output comparator's C_adapt
+                // feedback needs a continuous transfer there); the frozen pass
+                // resolves the refractory-reset discharge (the smooth comparator's
+                // high gain re-couples the collapsing membrane into the
+                // spike->switch loop and diverges, so the comparator must be
+                // frozen like every other discrete state). The env var, when set,
+                // forces the smooth mode FIRST (the historical default for the
+                // FIRE step); either way the other mode is tried if the first
+                // fails, so a single step is solved by whichever regime fits.
+                let prefer_smooth = std::env::var("HAUKSBEE_TRAN_CMP_SMOOTH").is_ok();
+                let modes = [prefer_smooth, !prefer_smooth];
+                for &cmp_smooth in &modes {
+                    ws.x.copy_from_slice(&x_accepted);
+                    if newton_solve_event(
+                        &mut ws, circuit, opts, t + h, h, coeffs, &state, opts.gmin, cmp_smooth,
+                    ) {
+                        converged = true;
+                        break;
+                    }
+                }
                 ws.symbolic.set_allow_dynamic(had_dyn);
                 used_event = converged;
             }
@@ -296,11 +314,23 @@ impl Transient {
             let mut next_dt = dt;
             match opts.step {
                 _ if used_event => {
-                    // Event-resolved step: accept, and shrink the next step so the
-                    // post-flip dynamics (the stretched spike rising) are tracked
-                    // finely rather than overshot.
+                    // Event-resolved step: accept, and set the next step to a
+                    // MODERATE size, not a fraction of h. The flip step is often
+                    // reached at a tiny h (the bare-Newton step-cut shrank dt while
+                    // approaching the discontinuity); continuing at h*0.5 would
+                    // leave dt microscopic, and a microscopic dt makes the reactive
+                    // companion conductance (C/dt, e.g. the 10 nF output membrane /
+                    // dt) astronomically stiff -- which is exactly what makes the
+                    // FOLLOW-ON step's Newton singular and re-opens the wall right
+                    // after the refractory switch closes. Resume at ~the post-flip
+                    // physical time constant (the membrane discharge RC ~ 70 ns
+                    // through the 7 Ohm switch), tracked but not microscopic; LTE
+                    // grows it back once the fast tail passes. Floored to a sane
+                    // value, never below the old h*0.5 (so a genuinely fine flip
+                    // step doesn't get coarsened).
                     accept = true;
-                    next_dt = (h * 0.5).clamp(dt_min, dt_max);
+                    let resume = (h * 0.5).max(1e-7);
+                    next_dt = resume.clamp(dt_min, dt_max);
                 }
                 StepControl::Fixed { .. } => accept = true,
                 StepControl::Adaptive { .. } => {
