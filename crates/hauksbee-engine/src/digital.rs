@@ -144,6 +144,23 @@ impl DigitalComponent {
         self.drive_outputs(circuit);
     }
 
+    /// Latch a parallel-output byte directly into the output register and push
+    /// it onto the analog drivers, bypassing the serial shift/clock sequence.
+    /// This is the model-level "the host already streamed and latched the
+    /// chain" shortcut (the same end state as the edge-driven `Hc595Chain`),
+    /// for harnesses that drive a 74HC595's known latched value without
+    /// simulating the SPI bit-bang. `out_reg[i]` (i.e. `qa+i`) gets bit `i` of
+    /// `byte`. No-op for non-595 kinds.
+    pub fn latch_byte(&mut self, circuit: &mut Circuit, byte: u8) {
+        if self.kind != DigitalKind::Hc595 {
+            return;
+        }
+        for i in 0..self.bits.min(8) {
+            self.out_reg[i] = (byte >> i) & 1 == 1;
+        }
+        self.drive_outputs(circuit);
+    }
+
     fn tick_595(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
         let ser = self.sample("ser", node_v);
         let srclk = self.sample("srclk", node_v);

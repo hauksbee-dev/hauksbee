@@ -158,18 +158,25 @@ impl Transient {
         // series R + node damping + node-block convergence) for the whole march
         // in that case only; an ordinary diode circuit (e.g. a rectifier) solved
         // on the normal ladder keeps the bit-identical classic transient path.
-        if ws.used_staged_dc() {
+        let transient_dyn = std::env::var("HAUKSBEE_TRANSIENT_DYN").is_ok();
+        if ws.used_staged_dc() || transient_dyn {
+            // Arm the staged regularizers (negligible branch series R + node
+            // damping + node-block convergence) AND the VSwitch/diode control
+            // limiting (which is gated on branch_reg>0). On the synapse spike
+            // path the per-step Newton fails right at the spike-gate switch flip
+            // (a multi-decade conductance snap as a neuron V_out climbs through
+            // the switch transition); the control limiting tracks the switch
+            // through that transition. Armed when the DC needed staging OR when
+            // the caller opts in (TRANSIENT_DYN) even on a cleanly-DC-solved but
+            // dynamically-stiff march (the RAMP-from-rest spike case).
             ws.set_staged_branch_reg(1e-2);
             // The dynamic re-pivot fallback is available for the stiff march too,
             // but only pays off if the per-step Newton actually converges on this
-            // board; on the Tarski synapse core the comparator/stretch-node limit
-            // cycle (not an LU singularity) is the blocker, so enabling it would
-            // just grind expensive re-factorizations to the same non-converged
-            // result. It is therefore opt-in (HAUKSBEE_TRANSIENT_DYN=1); the
+            // board; it is therefore opt-in (HAUKSBEE_TRANSIENT_DYN=1); the
             // default transient keeps the fast frozen path (a singular refactor
             // bails the step, the scheduler holds the last good operating point),
             // which is the unchanged pre-existing behaviour.
-            if std::env::var("HAUKSBEE_TRANSIENT_DYN").is_ok() {
+            if transient_dyn {
                 ws.symbolic.set_allow_dynamic(true);
             }
         }

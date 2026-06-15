@@ -710,9 +710,31 @@ fn stamp_vswitch(
         return;
     }
 
-    let vctrl = ctx.v(cp) - ctx.v(cn);
+    let vctrl_raw = ctx.v(cp) - ctx.v(cn);
     let vmid = 0.5 * (von + voff);
     let span = ((von - voff).abs()).max(1e-9);
+    // CONTROL LIMITING (staged / dynamic path only, branch_reg > 0). The
+    // log-interpolated conductance gsw = exp(lgoff + s*(lgon-lgoff)) spans many
+    // decades (ron ~ ohms, roff ~ 1e9), so a single Newton iteration that moves
+    // the control voltage across the transition makes gsw jump multiple decades
+    // at once. On a switch carrying real current (e.g. a synapse spike-gate
+    // whose control is a climbing neuron V_out) that snap destabilizes the
+    // coupled solve and the per-step Newton fails right at the flip. Mirroring
+    // pn-junction limiting (pnjlim) for diodes, bound the per-iteration change
+    // in the tanh argument `u` to ~1 (about one transition-width / a few
+    // decades of conductance) anchored on the previous iterate, so Newton tracks
+    // the switch through its transition smoothly. branch_reg==0 (every normal
+    // solve) keeps vctrl unlimited and the path bit-identical.
+    let vctrl = if ctx.branch_reg > 0.0 {
+        let vctrl_old = ctx.v_prev(cp) - ctx.v_prev(cn);
+        let u_new = 3.0 * (vctrl_raw - vmid) / span;
+        let u_old = 3.0 * (vctrl_old - vmid) / span;
+        const MAX_DU: f64 = 1.0;
+        let du = (u_new - u_old).clamp(-MAX_DU, MAX_DU);
+        vmid + (u_old + du) * span / 3.0
+    } else {
+        vctrl_raw
+    };
     // Smooth tanh transition between log-conductances. With u the tanh argument,
     //   s   = 0.5 * (1 + tanh(u)),      u = 3*(vctrl - vmid)/span
     //   gln = ln(goff) + s*(ln(gon) - ln(goff))
