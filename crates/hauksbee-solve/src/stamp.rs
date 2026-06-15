@@ -119,6 +119,10 @@ pub struct StampCtx<'a> {
     /// converged control voltages and re-solves until none flip. `None` (every
     /// normal solve) keeps the smooth tanh + control tangent bit-identical.
     pub switch_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
+    /// SPDT leg sibling map (device id -> complementary throw's device id) for
+    /// the smooth break-before-make coupling. Consulted only when
+    /// HAUKSBEE_SPDT_BBM=1; empty/ignored otherwise (path bit-identical).
+    pub spdt_sibling: &'a std::collections::HashMap<DeviceId, DeviceId>,
 }
 
 impl StampCtx<'_> {
@@ -743,7 +747,55 @@ fn stamp_vswitch(
     let lgoff = goff.ln();
     let u = 3.0 * (vctrl - vmid) / span;
     let th = u.tanh();
-    let s = 0.5 * (1.0 + th);
+    let mut s = 0.5 * (1.0 + th);
+
+    // BREAK-BEFORE-MAKE for SPDT legs (HAUKSBEE_SPDT_BBM=1, gated; default OFF ->
+    // bit-identical). A real SN74LVC1G3157 SPDT is NEVER low-Z to both throws at
+    // once: as the SELECT crosses its threshold the leaving throw opens before the
+    // entering throw closes. The bare smooth-tanh model breaks this -- at the
+    // SELECT transition MID-band BOTH complementary legs sit at the geometric-mean
+    // conductance sqrt(ron*roff) (~70-200 kohm), so the common node `a` is
+    // simultaneously low-Z to BOTH throws. In the Tarski synapse spike-gate the two
+    // throws are the output membrane (s1) and a fixed rail (s0 = GND on the
+    // excitatory leg, +5P on the inhibitory leg). Both legs half-on therefore wires
+    // the rail straight onto the membrane through `a`, injecting a WEIGHT-INDEPENDENT
+    // common-mode current (the +5P throw of the inhibitory gate pulls `a` to ~3 V
+    // and the half-on s1 dumps ~20 uA into the membrane regardless of the latched
+    // synapse weight) -- the over-firing pedestal. Enforcing break-before-make:
+    // WINNER-TAKE-ALL between the two throws by their SELECT margin: the throw
+    // whose control sits FURTHER past its own threshold is the selected one and
+    // keeps (most of) its conductance; the LOSER is driven toward roff. With
+    //   margin = (vctrl - vmid)/span        (>0: past the make threshold)
+    //   s_eff  = s * sigmoid(K*(margin_self - margin_sib))
+    // a cleanly selected throw (margin_self >> margin_sib) is unchanged, the
+    // opposite throw collapses to roff, and AT the exact crossover both halve --
+    // so the rail throw never bridges to the membrane throw, while the GENUINELY
+    // selected throw (the spike-gate s1 once the climbing hidden V_out passes the
+    // band centre) still conducts the weighted synapse current. This is the
+    // analog realisation of the same on-margin tie-break the frozen event path
+    // (`eval_switch_states`) uses, made smooth/differentiable for the per-step
+    // Newton. K sets the transition sharpness (HAUKSBEE_SPDT_BBM_K, default 6).
+    let bbm = std::env::var("HAUKSBEE_SPDT_BBM").as_deref() == Ok("1");
+    if bbm {
+        if let Some(&sib) = ctx.spdt_sibling.get(&id) {
+            if let Some(Device::VSwitch { ctrl_p: scp, ctrl_n: scn, von: svon, voff: svoff, .. }) =
+                ctx.circuit.devices.get(sib.0 as usize)
+            {
+                let svmid = 0.5 * (svon + svoff);
+                let sspan = (svon - svoff).abs().max(1e-9);
+                let margin_self = (vctrl - vmid) / span;
+                let margin_sib = ((ctx.v(*scp) - ctx.v(*scn)) - svmid) / sspan;
+                let k_bbm = std::env::var("HAUKSBEE_SPDT_BBM_K")
+                    .ok()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(6.0);
+                let arg = (k_bbm * (margin_self - margin_sib)).clamp(-40.0, 40.0);
+                let win = 1.0 / (1.0 + (-arg).exp());
+                s *= win;
+            }
+        }
+    }
+
     let gln = lgoff + s * (lgon - lgoff);
     let gsw = gln.exp();
 
