@@ -86,6 +86,12 @@ impl SparseMatrix {
         }
     }
 
+    /// The assembled `(col, value)` entries of one row. Used to evaluate the KCL
+    /// residual `g·x - rhs` at a candidate operating point without a full solve.
+    pub fn row(&self, i: usize) -> &[(usize, f64)] {
+        &self.rows[i]
+    }
+
     /// Column-compressed view `(col_ptr, row_idx, vals)` of the matrix.
     fn to_csc(&self) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
         let n = self.n;
