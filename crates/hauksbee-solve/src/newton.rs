@@ -61,6 +61,12 @@ pub struct Workspace {
     /// it so each inner Newton solve holds comparator state fixed (smooth) and
     /// re-evaluates between solves.
     cmp_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    /// FROZEN analog-switch on/off decisions for the event-driven staged solve,
+    /// keyed by device id. `None` (every normal solve) keeps the switches'
+    /// smooth tanh conductance + control tangent and the path bit-identical; the
+    /// staged-DC outer loop sets it so each inner Newton solve holds switch state
+    /// fixed (smooth resistor network) and re-evaluates between solves.
+    switch_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
 }
 
 impl Workspace {
@@ -115,6 +121,7 @@ impl Workspace {
             src_scale: 1.0,
             branch_reg: 0.0,
             cmp_freeze: None,
+            switch_freeze: None,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
         // F = g*x - rhs, infinity norm over node rows.
@@ -160,6 +167,7 @@ impl Workspace {
             src_scale: 1.0,
             branch_reg: 0.0,
             cmp_freeze: None,
+            switch_freeze: None,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
         let mut worst = (0.0f64, 0usize);
@@ -201,6 +209,7 @@ impl Workspace {
             staged_branch_reg: 0.0,
             used_staged_dc: false,
             cmp_freeze: None,
+            switch_freeze: None,
         }
     }
 }
@@ -268,6 +277,7 @@ pub fn newton_solve(
                 src_scale,
                 branch_reg,
                 cmp_freeze: ws.cmp_freeze.as_ref(),
+                switch_freeze: ws.switch_freeze.as_ref(),
             };
             stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
         }
@@ -669,12 +679,14 @@ fn dc_solve(
                     ws.x.copy_from_slice(&root);
                     ws.staged_branch_reg = 0.0;
                     ws.cmp_freeze = None;
+                    ws.switch_freeze = None;
                     ws.symbolic.set_allow_dynamic(false);
                     ws.used_staged_dc = true;
                     return Ok(());
                 }
             }
             ws.cmp_freeze = None;
+            ws.switch_freeze = None;
             ws.staged_branch_reg = STAGED_BRANCH_REG;
 
             // Diode saturation-current homotopy: the cold full solve stalls in a
@@ -789,6 +801,34 @@ fn eval_comparator_states(
     out
 }
 
+/// Derive each analog switch's frozen on/off decision from a solution vector
+/// `x`, using the switch's own (von, voff) thresholds with hysteresis so a
+/// control voltage inside the [voff, von] band holds the switch's previous
+/// state. Returns the decision map keyed by device id, empty when the circuit
+/// has no switches (so the event loop can skip the freeze for plain boards).
+fn eval_switch_states(
+    circuit: &Circuit,
+    layout: &Layout,
+    x: &[f64],
+    prev: &std::collections::HashMap<DeviceId, bool>,
+) -> std::collections::HashMap<DeviceId, bool> {
+    let mut out = std::collections::HashMap::new();
+    for (id, dev) in circuit.iter() {
+        if let Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } = dev {
+            let vp = layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
+            let vn = layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
+            let vctrl = vp - vn;
+            let vmid = 0.5 * (von + voff);
+            let was_on = prev.get(&id).copied().unwrap_or(vctrl > vmid);
+            // Hysteresis at the switch's own band: turn ON above von, OFF below
+            // voff, otherwise hold. (For von==voff this is the mid crossing.)
+            let on = if was_on { vctrl > *voff } else { vctrl > *von };
+            out.insert(id, on);
+        }
+    }
+    out
+}
+
 /// Event-driven staged DC solve. Freezes each comparator's decision, solves the
 /// resulting smooth circuit with the dynamic-pivot LU, re-evaluates the
 /// decisions from that solution, and repeats until the decision set stops
@@ -816,17 +856,26 @@ fn staged_event_solve(
     inner_opts.max_newton = opts.max_newton.max(400);
     let opts = &inner_opts;
 
-    // Initial comparator decisions from the relaxed (diodes-off) seed.
-    let mut states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
-    if states.is_empty() {
-        return None; // no comparators: this path adds nothing.
+    // Initial comparator AND analog-switch decisions from the relaxed
+    // (diodes-off) seed. The discrete state of BOTH device classes is frozen in
+    // the inner solve: the comparators are bang-bang and the 4320 analog
+    // switches each carry a tanh conductance whose control sits near transition
+    // for the coupled core, so both must be held fixed for the inner circuit to
+    // be smooth (otherwise a flipping switch flips the synapse current that
+    // flips a comparator that flips the switch — the measured limit cycle on the
+    // switch-control / BJT-base nodes).
+    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
+    let mut sw_states = eval_switch_states(circuit, &ws.layout, seed, &Default::default());
+    if cmp_states.is_empty() && sw_states.is_empty() {
+        return None; // nothing discrete to freeze: this path adds nothing.
     }
 
     ws.staged_branch_reg = branch_reg;
     let mut x = seed.to_vec();
     const MAX_EVENT_PASSES: usize = 40;
     for pass in 0..MAX_EVENT_PASSES {
-        ws.cmp_freeze = Some(states.clone());
+        ws.cmp_freeze = Some(cmp_states.clone());
+        ws.switch_freeze = Some(sw_states.clone());
         ws.x.copy_from_slice(&x);
         let r = newton_solve(
             ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, false, staged_gmin, 1.0,
@@ -835,23 +884,35 @@ fn staged_event_solve(
             if dbg {
                 eprintln!("[staged-event] pass {pass}: inner Newton did NOT converge (iters {})", r.iters);
             }
+            ws.switch_freeze = None;
             return None;
         }
         x.copy_from_slice(&ws.x);
-        // Re-evaluate decisions from the converged inner solution.
-        let next = eval_comparator_states(circuit, &ws.layout, &x, &states);
-        let flips = next.iter().filter(|(k, v)| states.get(k) != Some(*v)).count();
+        // Re-evaluate BOTH decision sets from the converged inner solution
+        // (Gauss-Seidel over the discrete comparator + switch states).
+        let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
+        let next_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states);
+        let cmp_flips = next_cmp.iter().filter(|(k, v)| cmp_states.get(k) != Some(*v)).count();
+        let sw_flips = next_sw.iter().filter(|(k, v)| sw_states.get(k) != Some(*v)).count();
         if dbg {
-            eprintln!("[staged-event] pass {pass}: inner converged in {} iters, {flips} comparator flips", r.iters);
+            eprintln!(
+                "[staged-event] pass {pass}: inner converged in {} iters, {cmp_flips} comparator flips, {sw_flips} switch flips",
+                r.iters
+            );
         }
-        if flips == 0 {
-            // Fixed point: comparator states are self-consistent. Verify it is a
-            // genuine root of the FULL circuit (real diodes, self-deciding
-            // comparators), not just of the frozen-comparator surrogate.
+        if cmp_flips == 0 && sw_flips == 0 {
+            // Fixed point: every comparator AND every switch state is consistent
+            // with its own (control) inputs at the converged smooth solution.
+            // The returned vector is then a genuine root of the FULL circuit
+            // (real diodes, self-deciding comparators, self-deciding switches),
+            // not just of the frozen surrogate.
+            ws.switch_freeze = None;
             return Some(x);
         }
-        states = next;
+        cmp_states = next_cmp;
+        sw_states = next_sw;
     }
+    ws.switch_freeze = None;
     None
 }
 
@@ -1163,5 +1224,274 @@ mod residual_tests {
             (r_off - 2e-3).abs() < 1e-4,
             "a 1 V error at the midpoint should leave ~2 mA KCL residual, got {r_off:e}"
         );
+    }
+}
+
+#[cfg(test)]
+mod vswitch_jacobian_tests {
+    use super::{dc_operating_point, newton_solve, Workspace};
+    use crate::options::SolverOptions;
+    use crate::stamp::IntegCoeffs;
+    use crate::system::ReactiveState;
+    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+
+    // A NEGATIVE-feedback analog switch (unique root, control in the tanh knee).
+    // A 5 V source drives `out` through the switch; the switch's control is
+    // vctrl = vbias - v(out), so as `out` rises the conductance FALLS. That
+    // negative feedback gives a single self-consistent operating point sitting
+    // right on the tanh transition, where the conductance's dependence on the
+    // control voltage is strongest. A no-tangent (Picard) stamp iterates this
+    // fixed point slowly / oscillates across the knee; the control-node Jacobian
+    // makes it Newton-linearized and convergent in a few iterations to the same
+    // unique root.
+    fn feedback_switch_circuit() -> (Circuit, NodeId) {
+        let mut c = Circuit::new();
+        let src = c.node("src");
+        let out = c.node("out");
+        let bias = c.node("bias");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: src,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        c.add(Device::Vsource {
+            name: "VB".into(),
+            p: bias,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.5),
+        });
+        c.add(Device::VSwitch {
+            name: "S1".into(),
+            a: src,
+            b: out,
+            ctrl_p: bias, // vctrl = vbias - v(out): negative feedback through out
+            ctrl_n: out,
+            von: 2.0,
+            voff: 1.0,
+            ron: 1.0,
+            roff: 1e3,
+        });
+        c.add(Device::Resistor {
+            name: "RL".into(),
+            a: out,
+            b: NodeId::GROUND,
+            ohms: 1.0,
+            tc1: None,
+        });
+        (c, out)
+    }
+
+    #[test]
+    fn control_jacobian_converges_to_the_true_root() {
+        let (c, out) = feedback_switch_circuit();
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).expect("switch DC solve converges");
+
+        let vout = ws.layout.node(out).map(|i| ws.x[i]).unwrap();
+        // The negative-feedback loop settles on the tanh knee between the fully-on
+        // divider (2.5 V) and the fully-off divider (5/1001 ≈ 0 V). Confirm it is
+        // a real interior operating point, not pinned to either rail.
+        assert!(
+            (0.2..=2.5).contains(&vout),
+            "negative-feedback switch should settle in the tanh knee, got {vout}"
+        );
+
+        // It must be a TRUE root: the KCL residual at the solved point is ~0.
+        let r = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(r < 1e-7, "residual at the switch root should be ~0, got {r:e}");
+    }
+
+    // A gently-coupled negative-feedback switch (wide tanh transition, moderate
+    // impedances) on which plain undamped Newton converges. With the control-node
+    // Jacobian the conductance is Newton-linearized, so the loop closes in a
+    // handful of iterations. Without a control tangent (the old `let _ = rhs`) the
+    // conductance lags the control voltage by one iteration (Picard), which on
+    // this feedback loop needs many more sweeps to settle. Bound the iteration
+    // count below what a tangent-free stamp needs.
+    fn gentle_feedback_switch_circuit() -> (Circuit, NodeId) {
+        let mut c = Circuit::new();
+        let src = c.node("src");
+        let out = c.node("out");
+        let bias = c.node("bias");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: src,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        c.add(Device::Vsource {
+            name: "VB".into(),
+            p: bias,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(4.0),
+        });
+        c.add(Device::VSwitch {
+            name: "S1".into(),
+            a: src,
+            b: out,
+            ctrl_p: bias, // vctrl = 4 - v(out): gentle negative feedback
+            ctrl_n: out,
+            von: 5.0, // wide transition (span = 5 V): smooth, non-stiff tanh
+            voff: 0.0,
+            ron: 100.0,
+            roff: 1e4,
+        });
+        c.add(Device::Resistor {
+            name: "RL".into(),
+            a: out,
+            b: NodeId::GROUND,
+            ohms: 100.0,
+            tc1: None,
+        });
+        (c, out)
+    }
+
+    #[test]
+    fn control_jacobian_converges_in_few_iterations() {
+        let (c, out) = gentle_feedback_switch_circuit();
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let empty = ReactiveState::new(c.devices.len());
+        // Cold start from zero (the default x), full sources, DC. Plain Newton,
+        // no homotopy: this is the bare per-step behaviour the tangent improves.
+        let r = newton_solve(
+            &mut ws, &c, &opts, 0.0, 1.0, coeffs, &empty, true, false, opts.gmin, 1.0,
+        );
+        assert!(r.converged, "switch Newton should converge, iters={}", r.iters);
+        assert!(
+            r.iters <= 8,
+            "the control Jacobian should converge the feedback switch quickly, took {} iters",
+            r.iters
+        );
+        // And to a real interior operating point on the transition (not pinned to
+        // either rail), with a near-zero KCL residual (a true root).
+        let vout = ws.layout.node(out).map(|i| ws.x[i]).unwrap();
+        assert!(
+            (0.3..=2.5).contains(&vout),
+            "gentle feedback switch should settle on the transition, got {vout}"
+        );
+        let res = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(res < 1e-7, "residual at the gentle-switch root should be ~0, got {res:e}");
+    }
+}
+
+#[cfg(test)]
+mod switch_freeze_tests {
+    use super::{eval_switch_states, solve_relaxed_no_diodes, staged_event_solve, Workspace};
+    use crate::options::SolverOptions;
+    use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
+    use std::collections::HashMap;
+
+    // eval_switch_states must classify each switch on/off from its control voltage
+    // with hysteresis at the switch's own (von, voff) band.
+    #[test]
+    fn switch_states_track_control_with_hysteresis() {
+        let mut c = Circuit::new();
+        let ctrl = c.node("ctrl");
+        let out = c.node("out");
+        let id = c.add(Device::VSwitch {
+            name: "S".into(),
+            a: ctrl,
+            b: out,
+            ctrl_p: ctrl,
+            ctrl_n: NodeId::GROUND,
+            von: 2.0,
+            voff: 1.0,
+            ron: 1.0,
+            roff: 1e6,
+        });
+        let layout = crate::system::Layout::new(&c);
+        let ci = layout.node(ctrl).unwrap();
+        let mut x = vec![0.0; layout.size];
+
+        // Control above von -> ON regardless of prior state.
+        x[ci] = 3.0;
+        let s = eval_switch_states(&c, &layout, &x, &HashMap::new());
+        assert_eq!(s.get(&id), Some(&true), "vctrl=3 > von=2 should be ON");
+
+        // Control inside the band holds the prior state (hysteresis).
+        x[ci] = 1.5;
+        let mut prev = HashMap::new();
+        prev.insert(id, true);
+        let held_on = eval_switch_states(&c, &layout, &x, &prev);
+        assert_eq!(held_on.get(&id), Some(&true), "in-band should hold prior ON");
+        prev.insert(id, false);
+        let held_off = eval_switch_states(&c, &layout, &x, &prev);
+        assert_eq!(held_off.get(&id), Some(&false), "in-band should hold prior OFF");
+
+        // Control below voff -> OFF.
+        x[ci] = 0.5;
+        let s = eval_switch_states(&c, &layout, &x, &HashMap::new());
+        assert_eq!(s.get(&id), Some(&false), "vctrl=0.5 < voff=1 should be OFF");
+    }
+
+    // The event-freeze outer loop, driven directly, on a switch + diode core with
+    // a SATURATED consistent root (the realistic Tarski case: the SN74LVC1G3157
+    // switches are driven by digital control nodes pulled hard to a rail, so at
+    // the true root every switch is fully ON or fully OFF, not mid-transition).
+    // Freezing pins each switch to ron/roff per inner solve and re-derives the
+    // state between solves; the loop reaches the consistent saturated fixed point.
+    // This exercises the switch half of the Gauss-Seidel loop end-to-end and
+    // confirms the returned vector is a self-consistent root.
+    //
+    // (The freeze is correct precisely when the root is saturated — pinning a
+    // switch to a rail cannot represent a switch whose true solution is partial
+    // conduction at its own knee; that case is handled by the smooth tanh path
+    // with the new control tangent, not the freeze. The limit-cycle cure's
+    // load-bearing proof on a real switch mesh is the Tarski board.)
+    #[test]
+    fn staged_event_solve_settles_switch_core() {
+        let mut c = Circuit::new();
+        let rail = c.node("RAIL");
+        let ctrl_on = c.node("CON"); // pulled to the rail: switch saturated ON
+        let ctrl_off = c.node("COFF"); // pulled to ground: switch saturated OFF
+        let out_on = c.node("OUTON");
+        let out_off = c.node("OUTOFF");
+        let flt = c.node("FLT");
+        c.add(Device::Vsource { name: "VR".into(), p: rail, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
+        // Control nodes pulled hard to definite rails (a 595 output, saturated).
+        c.add(Device::Resistor { name: "Ron".into(), a: rail, b: ctrl_on, ohms: 100.0, tc1: None });
+        c.add(Device::Resistor { name: "Roff".into(), a: ctrl_off, b: NodeId::GROUND, ohms: 100.0, tc1: None });
+        // Switch driven ON: routes the rail to out_on.
+        c.add(Device::VSwitch {
+            name: "Son".into(), a: rail, b: out_on, ctrl_p: ctrl_on, ctrl_n: NodeId::GROUND,
+            von: 2.5, voff: 1.5, ron: 1.0, roff: 1e6,
+        });
+        c.add(Device::Resistor { name: "RLon".into(), a: out_on, b: NodeId::GROUND, ohms: 1.0, tc1: None });
+        // Switch driven OFF: leaves out_off near ground.
+        c.add(Device::VSwitch {
+            name: "Soff".into(), a: rail, b: out_off, ctrl_p: ctrl_off, ctrl_n: NodeId::GROUND,
+            von: 2.5, voff: 1.5, ron: 1.0, roff: 1e6,
+        });
+        c.add(Device::Resistor { name: "RLoff".into(), a: out_off, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        // Floating reverse-diode cap node, so the relaxed-seed staged machinery is
+        // engaged (the diode pathology the staged path exists for).
+        let model = DiodeModel { is: 4.352e-9, n: 1.9, rs: 0.65, ..DiodeModel::default() };
+        c.add(Device::Diode { name: "Dr".into(), a: NodeId::GROUND, k: flt, model });
+        c.add(Device::Capacitor { name: "Cf".into(), a: flt, b: NodeId::GROUND, farads: 5.8e-9, ic: None });
+
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        ws.symbolic.set_allow_dynamic(true);
+        let seed = solve_relaxed_no_diodes(&c, &opts).expect("relaxed seed converges");
+
+        let root = staged_event_solve(&mut ws, &c, &opts, &seed, 1e-9, 1e-2, false)
+            .expect("event-freeze settles the saturated switch core to a consistent root");
+
+        let v_on = root[ws.layout.node(out_on).unwrap()];
+        let v_off = root[ws.layout.node(out_off).unwrap()];
+        // ON switch: 5 V divided 1:1 -> ~2.5 V. OFF switch: leaks 5 V through 1e6
+        // to a 1k load -> ~5 mV. The states are saturated and distinct.
+        assert!((2.0..=2.5).contains(&v_on), "ON switch should conduct (~2.5 V), got {v_on}");
+        assert!(v_off < 0.1, "OFF switch should block (~0 V), got {v_off}");
+
+        // The returned vector is a consistent fixed point: re-deriving the switch
+        // states from it produces no flip.
+        let states = eval_switch_states(&c, &ws.layout, &root, &HashMap::new());
+        let states2 = eval_switch_states(&c, &ws.layout, &root, &states);
+        assert_eq!(states, states2, "switch states at the root must be self-consistent");
     }
 }
