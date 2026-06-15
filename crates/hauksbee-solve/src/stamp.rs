@@ -761,10 +761,23 @@ fn stamp_vswitch(
     // and a matching equivalent-current correction so the linearization is
     // exact at the operating point (same root, faster convergence). Stamping
     // this makes each switch Newton-linearized instead of a Picard fixed point.
+    // The control-node transconductance is a Newton TANGENT (it makes each switch
+    // Newton-linearized rather than a Picard fixed point); it is not required for
+    // correctness -- the same root is reached without it, just with more
+    // iterations. For a torn feedforward column whose spike-gate control is a
+    // HIGH-Z boundary node (the captured hidden V_out, driven through an external
+    // RC, drawing zero conduction current), summing this term across the ~20
+    // switch legs on that one control node with the large mirror voltage
+    // `vab≈4.5 V` couples back into the iterative solution and throttles the
+    // control's slew so the gate never closes (measured: V_out charges ~15x
+    // slower than its R*C). HAUKSBEE_SW_NO_CTRL_GM=1 drops the back-coupling so
+    // the control node is purely exogenous; the conductance stamp + the switch's
+    // own a/b dynamics still track the flip. OFF by default -> bit-identical.
+    let skip_ctrl_gm = std::env::var("HAUKSBEE_SW_NO_CTRL_GM").as_deref() == Ok("1");
     let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
     let vab = ctx.v(a) - ctx.v(b);
     let gm_ctrl = vab * dgsw_dvctrl;
-    if gm_ctrl != 0.0 {
+    if gm_ctrl != 0.0 && !skip_ctrl_gm {
         let (ai, bi) = (ctx.layout.node(a), ctx.layout.node(b));
         let (cpi, cni) = (ctx.layout.node(cp), ctx.layout.node(cn));
         // i_a += gm_ctrl * (v_cp - v_cn), i_b -= ... .
