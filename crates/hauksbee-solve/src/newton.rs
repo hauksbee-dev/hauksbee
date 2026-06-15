@@ -324,6 +324,14 @@ pub fn newton_solve(
 /// voltages have settled.
 fn node_block_converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bool {
     for i in 0..layout.n_nodes {
+        // A non-finite iterate is NEVER "converged". Guard before the tol test:
+        // `(NaN).abs() > tol` is false, so without this a NaN/Inf Newton image
+        // would silently pass the convergence test and the solve would "accept" a
+        // poisoned operating point. Finite circuits never trip this, so the
+        // normal path is bit-identical.
+        if !x[i].is_finite() {
+            return false;
+        }
         let tol = opts.reltol * x[i].abs().max(xp[i].abs()) + opts.vntol;
         if (x[i] - xp[i]).abs() > tol {
             return false;
@@ -336,6 +344,12 @@ fn node_block_converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOpt
 /// currents within `reltol*|i| + abstol`.
 fn converged(x: &[f64], xp: &[f64], layout: &Layout, opts: &SolverOptions) -> bool {
     for i in 0..x.len() {
+        // Reject a non-finite iterate (see node_block_converged): `(NaN).abs() >
+        // tol` is false, so without this a NaN/Inf unknown would pass as
+        // converged. Finite circuits never trip this; the normal path is exact.
+        if !x[i].is_finite() {
+            return false;
+        }
         let tol = if i < layout.n_nodes {
             opts.reltol * x[i].abs().max(xp[i].abs()) + opts.vntol
         } else {
@@ -928,4 +942,79 @@ fn ptc_settle_from_seed(
         return Some(last[..orig_size].to_vec());
     }
     None
+}
+
+#[cfg(test)]
+mod nan_guard_tests {
+    use super::{converged, node_block_converged};
+    use crate::options::SolverOptions;
+    use crate::system::Layout;
+    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+
+    // A tiny circuit so we can build a real Layout (the convergence tests index
+    // it for the node/branch split). Two nodes + a source branch.
+    fn small_layout() -> Layout {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let b = c.node("b");
+        c.add(Device::Vsource {
+            name: "V".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a,
+            b,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "Rg".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
+        Layout::new(&c)
+    }
+
+    // The bug this guards: `(NaN).abs() > tol` is FALSE, so a naive
+    // tolerance-only test reports a NaN-poisoned Newton image as "converged",
+    // and the solver accepts an Inf/NaN operating point as a root. Both
+    // convergence tests must REJECT any non-finite unknown.
+    #[test]
+    fn nan_iterate_is_not_converged() {
+        let layout = small_layout();
+        let opts = SolverOptions::default();
+        let n = layout.size;
+        // A point that, BUT FOR the non-finite entry, is bit-identical to its
+        // anchor (delta zero => would pass the tol test trivially).
+        let xp = vec![1.0; n];
+        let mut x = xp.clone();
+        x[0] = f64::NAN;
+        assert!(
+            !node_block_converged(&x, &xp, &layout, &opts),
+            "a NaN node voltage must not pass node_block_converged"
+        );
+        assert!(
+            !converged(&x, &xp, &layout, &opts),
+            "a NaN unknown must not pass converged"
+        );
+        // Same for +Inf (a near-singular solve can produce an Inf image).
+        x[0] = f64::INFINITY;
+        assert!(!node_block_converged(&x, &xp, &layout, &opts));
+        assert!(!converged(&x, &xp, &layout, &opts));
+    }
+
+    // Sanity: a clean finite fixed point still converges (no false negative).
+    #[test]
+    fn finite_fixed_point_still_converges() {
+        let layout = small_layout();
+        let opts = SolverOptions::default();
+        let x = vec![0.5; layout.size];
+        assert!(node_block_converged(&x, &x, &layout, &opts));
+        assert!(converged(&x, &x, &layout, &opts));
+    }
 }
