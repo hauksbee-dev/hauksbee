@@ -87,6 +87,16 @@ pub struct Workspace {
     /// per-step path is bit-identical (no residual evaluation). Also force-on via
     /// HAUKSBEE_NEWTON_LINESEARCH=1 for diagnosis.
     tran_line_search: bool,
+    /// SPDT leg sibling map (device id -> the device id of its complementary
+    /// throw), recovered once at construction. Two `VSwitch` legs are siblings
+    /// when they share the common node `a` and their names differ only in the
+    /// `_s0`/`_s1` suffix the binder assigns the two throws. Threaded into the
+    /// stamp so the smooth-tanh path can enforce BREAK-BEFORE-MAKE (a real SPDT
+    /// is never low-Z to both throws at once): in the select transition band the
+    /// loser leg is driven toward `roff`, instead of both legs sitting at the
+    /// geometric-mean conductance and bridging the two throws. Only consulted
+    /// when HAUKSBEE_SPDT_BBM=1 (gated; default OFF -> bit-identical).
+    spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
 }
 
 impl Workspace {
@@ -162,6 +172,7 @@ impl Workspace {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            spdt_sibling: &self.spdt_sibling,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
         // F = g*x - rhs, infinity norm over node rows.
@@ -208,6 +219,7 @@ impl Workspace {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            spdt_sibling: &self.spdt_sibling,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
         let mut worst = (0.0f64, 0usize);
@@ -236,6 +248,7 @@ impl Workspace {
         let size = layout.size;
         let linear = circuit.devices.iter().all(|d| d.is_linear());
         let plan = StampPlan::compile(circuit, &layout, &matrix);
+        let spdt_sibling = SpdtPairs::analyze(circuit).sibling;
         Workspace {
             layout,
             symbolic,
@@ -253,6 +266,7 @@ impl Workspace {
             switch_freeze: None,
             tran_event: false,
             tran_line_search: false,
+            spdt_sibling,
         }
     }
 }
@@ -353,6 +367,7 @@ pub fn newton_solve(
                 branch_reg,
                 cmp_freeze: ws.cmp_freeze.as_ref(),
                 switch_freeze: ws.switch_freeze.as_ref(),
+                spdt_sibling: &ws.spdt_sibling,
             };
             stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
         }
@@ -643,6 +658,7 @@ fn residual_inf_norm_at(
             branch_reg,
             cmp_freeze: ws.cmp_freeze.as_ref(),
             switch_freeze: ws.switch_freeze.as_ref(),
+            spdt_sibling: &ws.spdt_sibling,
         };
         stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
     }
