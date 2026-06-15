@@ -243,6 +243,11 @@ impl Symbolic {
         self.allow_dynamic = allow;
     }
 
+    /// Whether the dynamic-pivot fallback is currently enabled.
+    pub fn allow_dynamic(&self) -> bool {
+        self.allow_dynamic
+    }
+
     /// Recompute the numeric factors of `m` (same pattern). Tries the fast
     /// frozen-ordering path first; if that order hits a singular/zero pivot
     /// (which a diode-reshaped board can provoke even when the matrix is
