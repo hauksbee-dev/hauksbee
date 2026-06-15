@@ -84,6 +84,98 @@ impl Workspace {
     pub fn used_staged_dc(&self) -> bool {
         self.used_staged_dc
     }
+
+    /// DC KCL residual at the current `self.x`: assemble the linearized system
+    /// `g·x = rhs` at this iterate (DC, no homotopy: gmin = opts.gmin, full
+    /// sources), then return the infinity norm of `F = g·x - rhs` over the NODE
+    /// block only (the branch rows of an ideal Vsource enforce a voltage and are
+    /// not a KCL balance). This is the honest "how far from a true root is this
+    /// point" measure: at a root every node's KCL closes, so `F ≈ 0`. A
+    /// non-finite entry returns +inf (a poisoned point is never a root). Read-only
+    /// w.r.t. the operating point; it just stamps and multiplies.
+    pub fn dc_residual_inf_norm(&mut self, circuit: &Circuit, opts: &SolverOptions) -> f64 {
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let empty = ReactiveState::new(circuit.devices.len());
+        self.matrix.clear_values();
+        for v in self.rhs.iter_mut() {
+            *v = 0.0;
+        }
+        let ctx = StampCtx {
+            circuit,
+            layout: &self.layout,
+            opts,
+            x: &self.x,
+            x_prev: &self.x,
+            time: 0.0,
+            coeffs,
+            state: &empty,
+            dc: true,
+            use_ic: false,
+            gmin: opts.gmin,
+            src_scale: 1.0,
+            branch_reg: 0.0,
+            cmp_freeze: None,
+        };
+        stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
+        // F = g*x - rhs, infinity norm over node rows.
+        let mut worst = 0.0f64;
+        for i in 0..self.layout.n_nodes {
+            let row = self.matrix.row(i);
+            let mut acc = 0.0;
+            for &(col, val) in row {
+                acc += val * self.x[col];
+            }
+            let f = acc - self.rhs[i];
+            if !f.is_finite() {
+                return f64::INFINITY;
+            }
+            if f.abs() > worst {
+                worst = f.abs();
+            }
+        }
+        worst
+    }
+
+    /// Argmax companion of [`Self::dc_residual_inf_norm`]: returns
+    /// `(max|F|, node_index)` so callers can name the worst-balanced node.
+    pub fn dc_residual_argmax(&mut self, circuit: &Circuit, opts: &SolverOptions) -> (f64, usize) {
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let empty = ReactiveState::new(circuit.devices.len());
+        self.matrix.clear_values();
+        for v in self.rhs.iter_mut() {
+            *v = 0.0;
+        }
+        let ctx = StampCtx {
+            circuit,
+            layout: &self.layout,
+            opts,
+            x: &self.x,
+            x_prev: &self.x,
+            time: 0.0,
+            coeffs,
+            state: &empty,
+            dc: true,
+            use_ic: false,
+            gmin: opts.gmin,
+            src_scale: 1.0,
+            branch_reg: 0.0,
+            cmp_freeze: None,
+        };
+        stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
+        let mut worst = (0.0f64, 0usize);
+        for i in 0..self.layout.n_nodes {
+            let row = self.matrix.row(i);
+            let mut acc = 0.0;
+            for &(col, val) in row {
+                acc += val * self.x[col];
+            }
+            let f = (acc - self.rhs[i]).abs();
+            if f > worst.0 {
+                worst = (f, i);
+            }
+        }
+        worst
+    }
 }
 
 impl Workspace {
@@ -1016,5 +1108,60 @@ mod nan_guard_tests {
         let x = vec![0.5; layout.size];
         assert!(node_block_converged(&x, &x, &layout, &opts));
         assert!(converged(&x, &x, &layout, &opts));
+    }
+}
+
+#[cfg(test)]
+mod residual_tests {
+    use super::{dc_operating_point, Workspace};
+    use crate::options::SolverOptions;
+    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+
+    // A 1V source feeding two equal series resistors to ground: the midpoint
+    // solves to 0.5 V. At the true solution the KCL residual is ~0; at a wrong
+    // operating point it is the actual mismatch current. The residual API must
+    // report near-zero at the solved point and a real current off it.
+    #[test]
+    fn dc_residual_is_zero_at_the_root() {
+        let mut c = Circuit::new();
+        let top = c.node("top");
+        let mid = c.node("mid");
+        c.add(Device::Vsource {
+            name: "V".into(),
+            p: top,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: top,
+            b: mid,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: mid,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).unwrap();
+        // At the converged root, every node's KCL closes.
+        let r_root = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(r_root < 1e-9, "residual at the root should be ~0, got {r_root:e}");
+
+        // Perturb the midpoint by 1 V: KCL now mismatches by ~1 V / 500 ohm = 2 mA
+        // (the two 1k resistors in parallel see the extra volt).
+        if let Some(i) = ws.layout.node(mid) {
+            ws.x[i] += 1.0;
+        }
+        let r_off = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(
+            (r_off - 2e-3).abs() < 1e-4,
+            "a 1 V error at the midpoint should leave ~2 mA KCL residual, got {r_off:e}"
+        );
     }
 }
