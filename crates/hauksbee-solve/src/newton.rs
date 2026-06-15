@@ -67,12 +67,29 @@ pub struct Workspace {
     /// staged-DC outer loop sets it so each inner Newton solve holds switch state
     /// fixed (smooth resistor network) and re-evaluates between solves.
     switch_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    /// Armed by the transient driver on a stiff comparator/switch board: when a
+    /// bare per-step Newton fails, retry the step through the event-freeze loop
+    /// (`newton_solve_event`) before cutting the timestep. Off by default, so an
+    /// ordinary circuit's per-step path is unchanged.
+    tran_event: bool,
 }
 
 impl Workspace {
     /// Access the compiled constant-backbone stamp plan.
     pub fn stamp_plan(&self) -> &StampPlan {
         &self.plan
+    }
+
+    /// Arm/disarm the per-step transient event-freeze retry. Set by the transient
+    /// driver only on a board that needed the staged DC (or via TRANSIENT_DYN);
+    /// the default-false keeps ordinary circuits on the plain per-step path.
+    pub fn set_tran_event(&mut self, on: bool) {
+        self.tran_event = on;
+    }
+
+    /// Whether the per-step transient event-freeze retry is armed.
+    pub fn tran_event(&self) -> bool {
+        self.tran_event
     }
 
     /// Enable the staged-DC regularizers (Vsource-branch series resistance,
@@ -210,6 +227,7 @@ impl Workspace {
             used_staged_dc: false,
             cmp_freeze: None,
             switch_freeze: None,
+            tran_event: false,
         }
     }
 }
@@ -393,7 +411,15 @@ pub fn newton_solve(
             }
             eprintln!("[newton] iter {iters} maxdV(undamped)={maxd:.3e} @node{argi} branch_reg={branch_reg:e}");
         }
-        if branch_reg > 0.0 {
+        // Stall detection bails a limit-cycling solve early. It must NOT fire when
+        // the discrete states are FROZEN (cmp_freeze/switch_freeze set): the inner
+        // circuit is then smooth and converges monotonically-but-slowly (the
+        // diode/BJT-mirror tail is linear), so a flat window is "still working",
+        // not a limit cycle. Bailing there wrongly fails the event-freeze inner
+        // solve right at the spike-gate flip. With the states self-deciding
+        // (no freeze) the early bail is the correct limit-cycle guard.
+        let frozen = ws.cmp_freeze.is_some() || ws.switch_freeze.is_some();
+        if branch_reg > 0.0 && !frozen {
             // Norm of the undamped node step this iteration.
             let mut norm = 0.0f64;
             for i in 0..ws.layout.n_nodes {
@@ -801,18 +827,81 @@ fn eval_comparator_states(
     out
 }
 
+/// The two complementary legs of one physical SPDT analog switch, paired by the
+/// shared common node `a` (the binder emits `{ref}_s0` / `{ref}_s1` with the same
+/// `a` = the summing/common node, opposite control senses). The summing bus must
+/// never be simultaneously low-Z to BOTH throws, so the break-before-make logic
+/// in [`eval_switch_states`] consults these pairs.
+struct SpdtPairs {
+    /// device id -> the device id of its sibling leg (only present for paired legs).
+    sibling: std::collections::HashMap<DeviceId, DeviceId>,
+}
+
+impl SpdtPairs {
+    /// Recover SPDT leg pairs from the circuit. A pair is two `VSwitch` devices
+    /// that share the same common node `a` and whose names differ only in the
+    /// `_s0`/`_s1` suffix the binder assigns to the two throws. Built once per
+    /// event solve; empty for boards with no SPDTs (then the break-before-make is
+    /// inert and the path is unchanged).
+    /// No SPDT pairs (the break-before-make is inert). Used by unit tests on
+    /// circuits with no complementary-leg SPDTs.
+    #[cfg(test)]
+    fn empty() -> SpdtPairs {
+        SpdtPairs { sibling: std::collections::HashMap::new() }
+    }
+
+    fn analyze(circuit: &Circuit) -> SpdtPairs {
+        // Group VSwitch legs by (common node a, base name without the _sN suffix).
+        let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
+            std::collections::HashMap::new();
+        for (id, dev) in circuit.iter() {
+            if let Device::VSwitch { name, a, .. } = dev {
+                let base = name
+                    .strip_suffix("_s0")
+                    .or_else(|| name.strip_suffix("_s1"))
+                    .map(|s| s.to_string());
+                if let Some(base) = base {
+                    groups.entry((a.0, base)).or_default().push(id);
+                }
+            }
+        }
+        let mut sibling = std::collections::HashMap::new();
+        for (_, ids) in groups {
+            if ids.len() == 2 {
+                sibling.insert(ids[0], ids[1]);
+                sibling.insert(ids[1], ids[0]);
+            }
+        }
+        SpdtPairs { sibling }
+    }
+}
+
 /// Derive each analog switch's frozen on/off decision from a solution vector
 /// `x`, using the switch's own (von, voff) thresholds with hysteresis so a
 /// control voltage inside the [voff, von] band holds the switch's previous
 /// state. Returns the decision map keyed by device id, empty when the circuit
 /// has no switches (so the event loop can skip the freeze for plain boards).
+///
+/// BREAK-BEFORE-MAKE: for the two complementary legs of one SPDT (paired in
+/// `pairs`), both legs are NEVER allowed ON in the same frozen state. During the
+/// flip the smooth tanh conductance of each leg would otherwise make the common
+/// node simultaneously low-Z to BOTH throws (GND and the output membrane) — the
+/// multi-decade conductance snap that makes the per-step Newton matrix singular.
+/// When both legs of a pair evaluate ON, the leg whose control sits LESS firmly
+/// in its on-region is forced OFF (break) so the other can make. The
+/// Gauss-Seidel outer loop re-derives between inner solves, so as the control
+/// fully crosses, the make leg takes over cleanly after the break leg has opened.
 fn eval_switch_states(
     circuit: &Circuit,
     layout: &Layout,
     x: &[f64],
     prev: &std::collections::HashMap<DeviceId, bool>,
+    pairs: &SpdtPairs,
 ) -> std::collections::HashMap<DeviceId, bool> {
-    let mut out = std::collections::HashMap::new();
+    // First pass: each switch's raw hysteretic decision and its "on-margin" (how
+    // far the control sits past the on threshold; higher = more firmly on).
+    let mut on: std::collections::HashMap<DeviceId, bool> = std::collections::HashMap::new();
+    let mut margin: std::collections::HashMap<DeviceId, f64> = std::collections::HashMap::new();
     for (id, dev) in circuit.iter() {
         if let Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } = dev {
             let vp = layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
@@ -822,11 +911,34 @@ fn eval_switch_states(
             let was_on = prev.get(&id).copied().unwrap_or(vctrl > vmid);
             // Hysteresis at the switch's own band: turn ON above von, OFF below
             // voff, otherwise hold. (For von==voff this is the mid crossing.)
-            let on = if was_on { vctrl > *voff } else { vctrl > *von };
-            out.insert(id, on);
+            let st = if was_on { vctrl > *voff } else { vctrl > *von };
+            on.insert(id, st);
+            // On-margin relative to vmid (sign-agnostic to which leg): used only
+            // to choose which leg breaks when both would make.
+            margin.insert(id, vctrl - vmid);
         }
     }
-    out
+    // Break-before-make: resolve every SPDT pair so at most one leg is ON.
+    for (&id, &sib) in pairs.sibling.iter() {
+        // Process each unordered pair once (id < sib).
+        if id.0 >= sib.0 {
+            continue;
+        }
+        let a_on = on.get(&id).copied().unwrap_or(false);
+        let b_on = on.get(&sib).copied().unwrap_or(false);
+        if a_on && b_on {
+            // Both legs want to conduct (the transition overlap). Keep the leg
+            // whose control sits more firmly in its on-region; break the other.
+            let ma = margin.get(&id).copied().unwrap_or(0.0);
+            let mb = margin.get(&sib).copied().unwrap_or(0.0);
+            if ma >= mb {
+                on.insert(sib, false);
+            } else {
+                on.insert(id, false);
+            }
+        }
+    }
+    on
 }
 
 /// Event-driven staged DC solve. Freezes each comparator's decision, solves the
@@ -864,8 +976,9 @@ fn staged_event_solve(
     // be smooth (otherwise a flipping switch flips the synapse current that
     // flips a comparator that flips the switch — the measured limit cycle on the
     // switch-control / BJT-base nodes).
+    let spdt = SpdtPairs::analyze(circuit);
     let mut cmp_states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
-    let mut sw_states = eval_switch_states(circuit, &ws.layout, seed, &Default::default());
+    let mut sw_states = eval_switch_states(circuit, &ws.layout, seed, &Default::default(), &spdt);
     if cmp_states.is_empty() && sw_states.is_empty() {
         return None; // nothing discrete to freeze: this path adds nothing.
     }
@@ -891,7 +1004,7 @@ fn staged_event_solve(
         // Re-evaluate BOTH decision sets from the converged inner solution
         // (Gauss-Seidel over the discrete comparator + switch states).
         let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
-        let next_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states);
+        let next_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states, &spdt);
         let cmp_flips = next_cmp.iter().filter(|(k, v)| cmp_states.get(k) != Some(*v)).count();
         let sw_flips = next_sw.iter().filter(|(k, v)| sw_states.get(k) != Some(*v)).count();
         if dbg {
@@ -914,6 +1027,169 @@ fn staged_event_solve(
     }
     ws.switch_freeze = None;
     None
+}
+
+/// Event-driven TRANSIENT step solve: the per-step analogue of
+/// [`staged_event_solve`]. Where the bare per-step [`newton_solve`] limit-cycles
+/// at a comparator/switch flip (the synapse spike-gate SPDT snapping multiple
+/// conductance decades while it carries real mirror current — "Newton failed at
+/// t~133us"), this freezes BOTH the comparator and the analog-switch discrete
+/// states for each inner solve (making the step a smooth circuit Newton can
+/// converge), re-derives every state from the converged inner solution
+/// (Gauss-Seidel), and re-solves until no state flips. The break-before-make in
+/// [`eval_switch_states`] keeps the summing bus from ever being low-Z to both
+/// SPDT throws at once.
+///
+/// Unlike the DC event loop, the transient step has the reactive companion
+/// (`state`, `coeffs`, `dt`) of the real integration step, so the converged
+/// fixed point is a genuine root of the FULL nonlinear circuit AT t+dt: every
+/// diode/BJT equation holds, every cap/inductor companion holds, and every
+/// comparator+switch state is consistent with its own control. Returns the
+/// converged `ws.x` in place + `true` on success; `false` (and `ws.x` left at
+/// the last inner iterate) when it cannot reach a consistent converged state, so
+/// the caller falls back to a step cut.
+///
+/// DAMPED PARTIAL FLIP: the bare DC event loop flips every disagreeing state at
+/// once and can cycle (the brief's "fails at pass 1, 369 flips don't settle").
+/// Here the re-derivation is bounded — at most `MAX_FLIPS_PER_PASS` switches are
+/// allowed to change state per Gauss-Seidel pass, chosen by largest control
+/// over/under-drive — so the discrete state walks toward consistency instead of
+/// thrashing. Comparators (few, and the spike driver) are not throttled.
+#[allow(clippy::too_many_arguments)]
+pub fn newton_solve_event(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    time: f64,
+    dt: f64,
+    coeffs: IntegCoeffs,
+    state: &ReactiveState,
+    gmin: f64,
+) -> bool {
+    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
+    let spdt = SpdtPairs::analyze(circuit);
+    // Seed the discrete states from the entry iterate (the accepted previous
+    // step, already in ws.x), anchored on the previous decisions if any (so a
+    // control sitting in a hysteresis band holds, not chatters).
+    let seed = ws.x.clone();
+    let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &seed, &Default::default());
+    let mut sw_states = eval_switch_states(circuit, &ws.layout, &seed, &Default::default(), &spdt);
+    if cmp_states.is_empty() && sw_states.is_empty() {
+        // Nothing discrete to freeze: a plain step is already smooth. Caller
+        // should not have routed here, but stay correct: one ordinary solve.
+        let r = newton_solve(ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0);
+        return r.converged;
+    }
+
+    // Allow more inner Newton iterations: the frozen inner circuit converges
+    // linearly in its tail (the damping that breaks the diode chatter slows the
+    // final approach), as in the DC event loop.
+    let mut inner_opts = *opts;
+    inner_opts.max_newton = std::env::var("HAUKSBEE_TRAN_INNER_MAXIT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| opts.max_newton.max(400));
+    let inner = &inner_opts;
+
+    const MAX_EVENT_PASSES: usize = 60;
+    // Switch flip budget per Gauss-Seidel pass. A throttle keeps the discrete
+    // state from thrashing, but too small a budget splits a single fired
+    // neuron's ganged spike-gates (one V_out drives ~10 output gates) across
+    // passes, leaving an inconsistent intermediate the inner solve fights. The
+    // budget is read from the env (HAUKSBEE_TRAN_FLIP_BUDGET) for tuning;
+    // default high enough to flip a neuron's whole gate fan-out in one pass.
+    let max_flips_per_pass: usize = std::env::var("HAUKSBEE_TRAN_FLIP_BUDGET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64);
+    // Comparator handling in the inner solve. By default the comparators are
+    // FROZEN per inner solve (like the DC event loop), which converges the hidden
+    // spike-gate flip. But the OUTPUT neuron has an adaptation feedback (C_adapt
+    // couples its comparator OUT back to its own -IN threshold node): with the
+    // output comparator pinned to a constant rail the inner Newton cannot resolve
+    // that feedback and stalls right at the membrane-crosses-threshold instant.
+    // CMP_SMOOTH leaves comparators SELF-DECIDING via the smooth high-gain
+    // logistic transfer (the branch_reg>0 path, which has a real tangent), so the
+    // comparator tracks its flip continuously while the switch mesh stays frozen.
+    let cmp_smooth = std::env::var("HAUKSBEE_TRAN_CMP_SMOOTH").is_ok();
+    let mut x = seed.clone();
+    for pass in 0..MAX_EVENT_PASSES {
+        ws.cmp_freeze = if cmp_smooth { None } else { Some(cmp_states.clone()) };
+        ws.switch_freeze = Some(sw_states.clone());
+        ws.x.copy_from_slice(&x);
+        let r = newton_solve(ws, circuit, inner, time, dt, coeffs, state, false, false, gmin, 1.0);
+        if !r.converged {
+            if dbg {
+                eprintln!("[tran-event] t={time:.6e} pass {pass}: inner Newton did NOT converge (iters {})", r.iters);
+            }
+            ws.cmp_freeze = None;
+            ws.switch_freeze = None;
+            return false;
+        }
+        x.copy_from_slice(&ws.x);
+
+        // Re-derive both discrete state sets from the converged inner solution.
+        let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
+        let want_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states, &spdt);
+
+        // Comparators flip freely (few, and they DRIVE the event). When the
+        // comparators are self-deciding (cmp_smooth), their state isn't frozen so
+        // there is no frozen-vs-derived flip to count — consistency is automatic
+        // (the smooth transfer always agrees with its own inputs), so the loop's
+        // fixed point is governed by the switch set alone.
+        let cmp_flips = if cmp_smooth {
+            0
+        } else {
+            next_cmp.iter().filter(|(k, v)| cmp_states.get(k) != Some(*v)).count()
+        };
+
+        // Switches: bound how many flip this pass. Rank the disagreeing switches
+        // by how far their control has moved past the relevant threshold and flip
+        // only the most-committed handful — a damped Gauss-Seidel that walks
+        // toward the consistent state instead of flipping all 369 at once (which
+        // cycles). The break-before-make in want_sw already guarantees no SPDT
+        // pair is both-on, so flipping a subset never shorts the summing bus.
+        let mut disagree: Vec<(DeviceId, bool, f64)> = Vec::new();
+        for (id, dev) in circuit.iter() {
+            if let Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } = dev {
+                let want = want_sw.get(&id).copied().unwrap_or(false);
+                if sw_states.get(&id).copied() != Some(want) {
+                    let vp = ws.layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
+                    let vn = ws.layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
+                    let vmid = 0.5 * (von + voff);
+                    // Over/under-drive magnitude past the band centre = commitment.
+                    disagree.push((id, want, (vp - vn - vmid).abs()));
+                }
+            }
+        }
+        let sw_flips = disagree.len();
+        disagree.sort_by(|a, b| b.2.total_cmp(&a.2));
+        for (id, want, _) in disagree.iter().take(max_flips_per_pass) {
+            sw_states.insert(*id, *want);
+        }
+        cmp_states = next_cmp;
+
+        if dbg {
+            eprintln!(
+                "[tran-event] t={time:.6e} pass {pass}: inner converged in {} iters, {cmp_flips} cmp flips, {sw_flips} sw disagreements (flipped {})",
+                r.iters,
+                sw_flips.min(max_flips_per_pass)
+            );
+        }
+
+        if cmp_flips == 0 && sw_flips == 0 {
+            // Fixed point at t+dt: every comparator + switch state is consistent
+            // with its own control at the converged smooth solution, so ws.x is a
+            // true root of the full self-deciding circuit at this step.
+            ws.cmp_freeze = None;
+            ws.switch_freeze = None;
+            ws.x.copy_from_slice(&x);
+            return true;
+        }
+    }
+    ws.cmp_freeze = None;
+    ws.switch_freeze = None;
+    false
 }
 
 /// Diode saturation-current continuation. Starting from the relaxed (diodes-off)
@@ -1380,7 +1656,7 @@ mod vswitch_jacobian_tests {
 
 #[cfg(test)]
 mod switch_freeze_tests {
-    use super::{eval_switch_states, solve_relaxed_no_diodes, staged_event_solve, Workspace};
+    use super::{eval_switch_states, solve_relaxed_no_diodes, staged_event_solve, SpdtPairs, Workspace};
     use crate::options::SolverOptions;
     use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
     use std::collections::HashMap;
@@ -1409,22 +1685,22 @@ mod switch_freeze_tests {
 
         // Control above von -> ON regardless of prior state.
         x[ci] = 3.0;
-        let s = eval_switch_states(&c, &layout, &x, &HashMap::new());
+        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty());
         assert_eq!(s.get(&id), Some(&true), "vctrl=3 > von=2 should be ON");
 
         // Control inside the band holds the prior state (hysteresis).
         x[ci] = 1.5;
         let mut prev = HashMap::new();
         prev.insert(id, true);
-        let held_on = eval_switch_states(&c, &layout, &x, &prev);
+        let held_on = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty());
         assert_eq!(held_on.get(&id), Some(&true), "in-band should hold prior ON");
         prev.insert(id, false);
-        let held_off = eval_switch_states(&c, &layout, &x, &prev);
+        let held_off = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty());
         assert_eq!(held_off.get(&id), Some(&false), "in-band should hold prior OFF");
 
         // Control below voff -> OFF.
         x[ci] = 0.5;
-        let s = eval_switch_states(&c, &layout, &x, &HashMap::new());
+        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty());
         assert_eq!(s.get(&id), Some(&false), "vctrl=0.5 < voff=1 should be OFF");
     }
 
@@ -1490,8 +1766,8 @@ mod switch_freeze_tests {
 
         // The returned vector is a consistent fixed point: re-deriving the switch
         // states from it produces no flip.
-        let states = eval_switch_states(&c, &ws.layout, &root, &HashMap::new());
-        let states2 = eval_switch_states(&c, &ws.layout, &root, &states);
+        let states = eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty());
+        let states2 = eval_switch_states(&c, &ws.layout, &root, &states, &SpdtPairs::empty());
         assert_eq!(states, states2, "switch states at the root must be self-consistent");
     }
 }

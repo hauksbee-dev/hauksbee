@@ -7,7 +7,7 @@
 //! switches are watched for threshold crossings; when one is straddled, the
 //! step is bisected to land near the crossing so edges aren't smeared.
 
-use crate::newton::{dc_operating_point_seeded, newton_solve, Workspace};
+use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
 use crate::options::{Integration, SolverOptions, StepControl};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
@@ -170,13 +170,26 @@ impl Transient {
             // the caller opts in (TRANSIENT_DYN) even on a cleanly-DC-solved but
             // dynamically-stiff march (the RAMP-from-rest spike case).
             ws.set_staged_branch_reg(1e-2);
-            // The dynamic re-pivot fallback is available for the stiff march too,
-            // but only pays off if the per-step Newton actually converges on this
-            // board; it is therefore opt-in (HAUKSBEE_TRANSIENT_DYN=1); the
-            // default transient keeps the fast frozen path (a singular refactor
-            // bails the step, the scheduler holds the last good operating point),
-            // which is the unchanged pre-existing behaviour.
+            // Arm the per-step transient event-freeze retry: when a bare per-step
+            // Newton fails (the spike-gate SPDT flip), retry the step with the
+            // comparator+switch states frozen Gauss-Seidel + break-before-make
+            // before cutting the timestep. Gated behind TRANSIENT_DYN (the
+            // explicit spike-path opt-in) so an ordinary staged board (e.g. the
+            // DAC-rail co-sim, which needs the staged regularizers but whose
+            // per-step Newton converges on the bare path) keeps its exact prior
+            // behaviour and timing -- the retry only fires for callers chasing
+            // the spike transient. The retry itself is a no-op unless the bare
+            // step actually fails, so even when armed it never changes a step
+            // that already converged.
             if transient_dyn {
+                ws.set_tran_event(true);
+            }
+            // The dynamic re-pivot LU is enabled LOCALLY by the event-freeze retry
+            // (newton_solve_event) only on the step that flips, so the bulk of
+            // clean steps stay on the fast frozen path. HAUKSBEE_TRANSIENT_DYN=1
+            // additionally forces it on for EVERY step (the old, slower lever),
+            // kept for diagnosis; the default arming relies on the per-step retry.
+            if std::env::var("HAUKSBEE_TRANSIENT_DYN_GLOBAL").is_ok() {
                 ws.symbolic.set_allow_dynamic(true);
             }
         }
@@ -219,7 +232,27 @@ impl Transient {
                 &mut ws, circuit, opts, t + h, h, coeffs, &state, false, false, opts.gmin, 1.0,
             );
 
-            if !r.converged {
+            let mut converged = r.converged;
+            let mut used_event = false;
+            if !converged && ws.tran_event() {
+                // The bare per-step Newton limit-cycled (the spike-gate SPDT flip
+                // under synapse current). Retry this step through the event-freeze
+                // loop: freeze comparator+switch states per inner solve, re-derive
+                // Gauss-Seidel with break-before-make, until consistent. Re-seed
+                // ws.x to the accepted point first so the freeze derives from the
+                // step's entry state. The dynamic-pivot LU is enabled for the
+                // inner solves so the diode-reshaped matrix stays factorable.
+                ws.x.copy_from_slice(&x_accepted);
+                let had_dyn = ws.symbolic.allow_dynamic();
+                ws.symbolic.set_allow_dynamic(true);
+                converged = newton_solve_event(
+                    &mut ws, circuit, opts, t + h, h, coeffs, &state, opts.gmin,
+                );
+                ws.symbolic.set_allow_dynamic(had_dyn);
+                used_event = converged;
+            }
+
+            if !converged {
                 // Cut the step hard and retry.
                 if h <= dt_min * 1.0001 {
                     return Err(format!(
@@ -231,6 +264,14 @@ impl Transient {
             }
 
             // Event check: did a comparator/switch control cross threshold?
+            // SKIP when this step was resolved by the event-freeze loop: that
+            // Gauss-Seidel already handled the discrete crossing CONSISTENTLY
+            // (every comparator + switch state re-derived to a fixed point with
+            // break-before-make). Bisecting toward the crossing here would throw
+            // away that converged solution and re-seed a mid-transition step the
+            // bare Newton can't solve — the exact dt_min thrash that re-opened the
+            // wall. With the event loop owning the discontinuity, accept the step.
+            if !used_event {
             if let Some(frac) = crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes()) {
                 if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
                     // Bisect toward the crossing for a sharper edge.
@@ -241,11 +282,26 @@ impl Transient {
                     }
                 }
             }
+            }
+
+            // Also skip LTE rejection for an event-resolved step: the reactive
+            // curvature across a comparator/switch flip is huge (the spike edge),
+            // so the LTE estimate would reject and shrink dt forever right at the
+            // event the loop just resolved. Accept the event step (the event loop
+            // converged it to a true root at t+h); the next ordinary step resumes
+            // normal LTE control. Only the event-resolved step is exempted.
 
             // LTE control for adaptive stepping.
             let accept;
             let mut next_dt = dt;
             match opts.step {
+                _ if used_event => {
+                    // Event-resolved step: accept, and shrink the next step so the
+                    // post-flip dynamics (the stretched spike rising) are tracked
+                    // finely rather than overshot.
+                    accept = true;
+                    next_dt = (h * 0.5).clamp(dt_min, dt_max);
+                }
                 StepControl::Fixed { .. } => accept = true,
                 StepControl::Adaptive { .. } => {
                     let err = lte_estimate(circuit, &ws, &state, h, opts);
