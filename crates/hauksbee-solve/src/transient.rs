@@ -183,6 +183,14 @@ impl Transient {
             // that already converged.
             if transient_dyn {
                 ws.set_tran_event(true);
+                // Arm the GLOBAL Armijo line-search in the per-step Newton on the
+                // same stiff-board opt-in. It is the globalization for the
+                // post-reset traveling fused-mesh limit cycle (a huge Newton
+                // correction whose maxdV rotates across synapse-mesh / BJT-mirror
+                // nodes, which per-node oscillation damping cannot catch). A no-op
+                // on steps that already converge (alpha=1 full step), so it never
+                // changes an already-good step; it only backtracks the overshoot.
+                ws.set_tran_line_search(true);
             }
             // The dynamic re-pivot LU is enabled LOCALLY by the event-freeze retry
             // (newton_solve_event) only on the step that flips, so the bulk of
