@@ -108,6 +108,28 @@ pub trait Mcu {
     /// thread.
     fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool) + Send>);
 
+    /// Register a synchronous input responder.
+    ///
+    /// On every GPIO output edge (the same edges `on_pin_change` sees) the
+    /// responder is invoked with the pin and its new level, and returns a list
+    /// of input pins to drive — applied *immediately*, before the firmware's
+    /// next instruction, within the same `run_micros`. This is the mechanism
+    /// that lets a firmware bit-bang a clock and `digitalRead` the resulting
+    /// serial-out bit in the SAME tight loop: e.g. a 74HC165 presenting its next
+    /// QH bit onto MISO on each SCLK edge. Resolving the response per output edge
+    /// (not once per analog chunk) is the read-direction analogue of the
+    /// edge-driven 74HC595 write path.
+    ///
+    /// The default is a no-op for backends that cannot drive an input pin
+    /// synchronously from within their run loop (Renode / QEMU push state once
+    /// per chunk).
+    #[allow(clippy::type_complexity)]
+    fn on_input_responder(
+        &mut self,
+        _responder: Box<dyn FnMut(PinId, bool) -> Vec<(PinId, bool)> + Send>,
+    ) {
+    }
+
     // ---- UART ----
 
     /// Inject bytes into the MCU's UART RX (as if the host sent them).

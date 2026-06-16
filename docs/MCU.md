@@ -14,9 +14,31 @@ run_micros(us)            advance firmware by us microseconds (lockstep step)
 set_digital_in(pin, hi)   drive an external input pin
 set_analog_in(ch, volts)  inject an ADC voltage
 on_pin_change(cb)         callback per GPIO output edge: (PinId{port,bit}, level)
+on_input_responder(cb)    SYNCHRONOUS responder: per output edge, returns input
+                          pins to drive immediately (before the next instruction)
 uart_write(bytes)         inject UART RX bytes
 on_uart(cb)               callback per UART TX byte
 ```
+
+### `on_input_responder` — closing a readback inside the firmware's bit-bang loop
+
+`on_pin_change` reports output edges; the scheduler can collapse them and react
+*next* analog chunk. That is too coarse for a firmware that bit-bangs a clock and
+`digitalRead`s the resulting serial-out bit in the SAME tight loop — e.g. the
+Tarski `_ReadShiftRegisterWord`, which for 16 bits does `digitalRead(MISO)` then
+pulses SCLK with back-to-back, sub-µs `digitalWrite`s. By the time the chunk
+ends, the firmware has already finished reading; injecting MISO once per chunk
+(the old behaviour) reads `0x0000`.
+
+`on_input_responder` fixes this: the AVR backend invokes it from the same
+per-port output hook that fires `on_pin_change`, and the pins it returns are
+raised onto their ioport input IRQs *synchronously*, before the firmware's next
+instruction. The engine installs an edge-driven `Hc165Chain` here: on the PL
+falling edge it latches the parallel inputs (the spike latches) into a QH-emit
+bit sequence, and on each SCLK rising edge it presents the next bit on MISO. This
+is the read-direction analogue of the edge-driven `Hc595Chain` write path — both
+resolve the bit-banged clock per edge, not per chunk. Renode/QEMU keep the
+default no-op (they push state once per chunk).
 
 `PinId { port: char, bit: u8 }` is the generic pin address. AVR uses port letters
 `B/C/D`; STM32 uses `A`..`G` with bit `0..15`; nRF52 and RISC-V use port `'0'`/`'1'`

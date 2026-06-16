@@ -124,6 +124,17 @@ pub struct Scheduler {
     /// the matching driver before the analog solve (the `Hc595Chain::apply`
     /// cadence), so firmware DAC writes become real analog output voltages.
     dac_vouts: Vec<DacVoutDrive>,
+    /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
+    /// granularity inside the owning MCU's run loop via its synchronous input
+    /// responder (the read-direction analogue of `chains`). Wrapped in
+    /// Arc<Mutex<>> because the responder closure owns a clone. Each shares the
+    /// `input_volts` snapshot the scheduler refreshes from the last solve so the
+    /// 165 captures the latest spike-latch states on its PL load.
+    hc165_chains: Vec<Arc<Mutex<crate::digital::Hc165Chain>>>,
+    /// Latest solved node voltages, shared with the 165 read chains so their
+    /// PL-load sampling (which fires inside the MCU run, before this chunk's
+    /// solve) sees the previous chunk's settled latch voltages.
+    input_volts: Arc<Mutex<Vec<f64>>>,
 }
 
 /// One MCP4728's analog VOUT drive: the bus its slave lives on, the slave's
@@ -228,7 +239,14 @@ impl Scheduler {
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
             dac_vouts: Vec::new(),
+            hc165_chains: Vec::new(),
+            input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
         };
+
+        // Build the edge-driven 74HC165 read chains and install each as its
+        // owning MCU's synchronous input responder, so a firmware readback
+        // (bit-banged SCLK + digitalRead(MISO)) resolves at edge granularity.
+        sched.build_and_install_165_chains();
 
         // Wire up the board's MCP4728 quad DACs: build one I2C slave per binding
         // at its assigned address, attach them on a shared bus (so firmware TWI
@@ -266,6 +284,75 @@ impl Scheduler {
         }
         // Seed the analog nets with the DACs' power-on VOUT (code 0 -> ~0 V).
         self.push_dac_vouts();
+    }
+
+    /// Build the edge-driven 74HC165 read chains (one per physical chain whose
+    /// PL / CLK / QH→MISO pins bind to an MCU's GPIO) and install each as that
+    /// MCU's synchronous input responder. The responder fires on every GPIO
+    /// output edge during the MCU's run: it forwards PL / SCLK edges to the
+    /// chain, which samples the spike-latch inputs on a PL load and presents the
+    /// next QH bit on MISO, returning the (MISO pin, level) to drive immediately.
+    /// This closes the readback inside the firmware's own bit-bang loop.
+    fn build_and_install_165_chains(&mut self) {
+        use crate::digital::{order_165_chains, Hc165Chain, LogicLevels};
+
+        // Per MCU: net-node -> (port,bit). Every wired digital-capable pin gets a
+        // (possibly tri-stated) gpio driver, so this map covers both the control
+        // outputs (PL/SCLK) and the MISO *input* pin (its driver stays disabled
+        // because the firmware never drives it, but the mapping is what we need).
+        let gpio_maps: Vec<HashMap<i64, (char, u8)>> = self
+            .mcus
+            .iter()
+            .map(|m| {
+                m.binding
+                    .gpio_drivers
+                    .iter()
+                    .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+                    .collect()
+            })
+            .collect();
+
+        for order in order_165_chains(&self.digital) {
+            for (mi, gpio_node) in gpio_maps.iter().enumerate() {
+                // PL/CLK come from gpio_node; MISO is also in gpio_node (the
+                // input pin's tri-stated driver carries the net mapping).
+                let Some(chain) =
+                    Hc165Chain::build(&self.digital, order.clone(), gpio_node, gpio_node)
+                else {
+                    continue;
+                };
+                let levels: LogicLevels = chain.levels(&self.digital);
+                let pl_n = chain.pl_n;
+                let clk = chain.clk;
+                let chain = Arc::new(Mutex::new(chain));
+                let chain_cb = chain.clone();
+                let volts = self.input_volts.clone();
+                // The responder: only PL/SCLK edges matter; ignore everything
+                // else cheaply. Read the shared voltage snapshot for the
+                // PL-load sampling of the latch inputs.
+                self.mcus[mi].core.on_input_responder(Box::new(
+                    move |pin: PinId, high: bool| -> Vec<(PinId, bool)> {
+                        let pin = (pin.port, pin.bit);
+                        if pin != pl_n && pin != clk {
+                            return Vec::new();
+                        }
+                        let v = volts.lock().unwrap_or_else(|e| e.into_inner());
+                        let node_v = |n: hauksbee_ir::NodeId| {
+                            v.get(n.0 as usize).copied().unwrap_or(0.0)
+                        };
+                        let mut ch = chain_cb.lock().unwrap_or_else(|e| e.into_inner());
+                        match ch.on_edge(pin, high, &node_v, &levels) {
+                            Some(((port, bit), level)) => {
+                                vec![(PinId { port, bit }, level)]
+                            }
+                            None => Vec::new(),
+                        }
+                    },
+                ));
+                self.hc165_chains.push(chain);
+                break;
+            }
+        }
     }
 
     /// Read each MCP4728 slave's current per-channel VOUT and push it onto that
@@ -431,6 +518,16 @@ impl Scheduler {
 
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
         let micros = (chunk * 1e6).round().max(1.0) as u64;
+
+        // Refresh the snapshot the edge-driven 74HC165 read chains sample on a
+        // PL load (it fires inside the MCU run below, so it must reflect the
+        // PREVIOUS chunk's settled spike-latch voltages). Cheap clone; only
+        // taken when a 165 read chain is present.
+        if !self.hc165_chains.is_empty() {
+            let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
+            snap.clear();
+            snap.extend_from_slice(&self.node_volts);
+        }
 
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
         for mi in 0..self.mcus.len() {
@@ -842,6 +939,29 @@ impl Scheduler {
             .collect()
     }
 
+    /// Per edge-driven 74HC165 read chain, the MCU GPIO `(port,bit)` bound to
+    /// its PL, CLK, and MISO input, plus chip count. Empty when no MCU-clocked
+    /// 165 chain was identified. For diagnostics and read-chain co-sim tests.
+    #[allow(clippy::type_complexity)]
+    pub fn hc165_chain_pins(&self) -> Vec<((char, u8), (char, u8), (char, u8), usize)> {
+        self.hc165_chains
+            .iter()
+            .map(|c| {
+                let c = c.lock().unwrap_or_else(|e| e.into_inner());
+                (c.pl_n, c.clk, c.miso, c.order.len())
+            })
+            .collect()
+    }
+
+    /// The last word each 74HC165 read chain captured on its most recent PL
+    /// load (MSB-first, as the firmware accumulates it). For diagnostics/tests.
+    pub fn hc165_loaded_words(&self) -> Vec<u16> {
+        self.hc165_chains
+            .iter()
+            .map(|c| c.lock().unwrap_or_else(|e| e.into_inner()).loaded_word())
+            .collect()
+    }
+
     /// Digital component register states, for component-state frames.
     pub fn digital_states(&self) -> HashMap<String, HashMap<String, f64>> {
         self.digital
@@ -963,6 +1083,11 @@ impl Scheduler {
         self.node_volts.resize(n_nodes, 0.0);
         let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
         self.branch_x.resize(n_branch, 0.0);
+        // Keep the 165 read-chain voltage snapshot sized to the node count.
+        {
+            let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
+            snap.resize(n_nodes, 0.0);
+        }
         // The unknown vector changed shape; a prior warm seed no longer applies.
         self.last_dc_seed = None;
     }
