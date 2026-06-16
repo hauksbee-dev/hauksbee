@@ -555,6 +555,263 @@ impl Hc595Chain {
     }
 }
 
+/// Recover the SEPARATE physical 74HC165 serial-out chains on a board, returned
+/// HEAD-FIRST per chain. The HEAD is the chip whose `qh` serial output is read
+/// by the MCU (it is not consumed by another 165's `ser` input); each subsequent
+/// chip is the one feeding the previous chip's `ser` from its own `qh`. So
+/// walking a chain head→tail follows the serial bitstream backward from QH/MISO
+/// into the upstream chips — the order the firmware shifts bits OUT.
+///
+/// Mirror of [`order_595_chains`] for the read direction. A chip not reachable
+/// from any head becomes its own singleton chain rather than being merged.
+pub fn order_165_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
+    let chips: Vec<usize> = digital
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.kind == DigitalKind::Hc165)
+        .map(|(i, _)| i)
+        .collect();
+
+    // node -> chip whose `ser` input is that node (the consumer of a QH).
+    let mut consumer: HashMap<i64, usize> = HashMap::new();
+    for &i in &chips {
+        if let Some(n) = digital[i].roles.get("ser") {
+            consumer.insert(n.0 as i64, i);
+        }
+    }
+    let qh_of = |i: usize| digital[i].roles.get("qh").map(|n| n.0 as i64);
+
+    // Head: a chip whose `qh` is not consumed by any chip's `ser` (it feeds the
+    // MCU's MISO instead).
+    let mut heads: Vec<usize> = chips
+        .iter()
+        .copied()
+        .filter(|&i| match qh_of(i) {
+            Some(q) => !consumer.contains_key(&q),
+            None => true,
+        })
+        .collect();
+    heads.sort_by(|&a, &b| digital[a].reference.cmp(&digital[b].reference));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for head in heads {
+        let mut chain = Vec::new();
+        let mut cur = Some(head);
+        while let Some(i) = cur {
+            if !seen.insert(i) {
+                break;
+            }
+            chain.push(i);
+            // The next (upstream) chip is the one whose `qh` feeds THIS chip's
+            // `ser`.
+            let ser_node = digital[i].roles.get("ser").map(|n| n.0 as i64);
+            cur = ser_node.and_then(|node| {
+                chips
+                    .iter()
+                    .copied()
+                    .find(|&j| qh_of(j) == Some(node) && !seen.contains(&j))
+            });
+        }
+        if !chain.is_empty() {
+            out.push(chain);
+        }
+    }
+    for &i in &chips {
+        if seen.insert(i) {
+            out.push(vec![i]);
+        }
+    }
+    out
+}
+
+/// An edge-driven model of one MCU-bit-banged 74HC165 parallel-in / serial-out
+/// chain — the READ-direction analogue of [`Hc595Chain`].
+///
+/// The firmware reads the chain by pulsing PL (parallel-load) low to capture the
+/// parallel inputs, then bit-banging the shared SCLK while sampling the head
+/// chip's QH on its MISO input pin. Both the PL pulse and the SCLK pulse train
+/// are sub-µs back-to-back `digitalWrite`s, far below the analog chunk rate, so
+/// they MUST be resolved in the EVENT domain at edge granularity — exactly like
+/// the 595 write path. The crucial difference: the firmware `digitalRead`s the
+/// serial-out bit *between its own clock edges, inside the same `run_micros`*,
+/// so this chain runs synchronously from the MCU's GPIO-output hook (via the
+/// MCU's input-responder) and drives the next QH bit straight onto the MISO
+/// input pin, before the firmware's next instruction.
+///
+/// On PL falling edge it samples every chip's parallel inputs (a..h) into a
+/// bit sequence ordered the way bits emerge at QH (head chip's h,g,…,a, then the
+/// upstream chip's h,…,a, …) and presents bit 0 on MISO. On each SCLK RISING
+/// edge it advances to the next bit and presents it. This reproduces the exact
+/// `value` the firmware's `_ReadShiftRegisterWord` accumulates.
+pub struct Hc165Chain {
+    /// Chip indices into the scheduler's `digital` vec, HEAD first (QH→MISO).
+    pub order: Vec<usize>,
+    /// MCU GPIO `(port, bit)` for the broadcast parallel-load (active-low).
+    pub pl_n: (char, u8),
+    /// MCU GPIO `(port, bit)` for the broadcast shift clock.
+    pub clk: (char, u8),
+    /// MCU input pin `(port, bit)` the head chip's QH drives (MISO).
+    pub miso: (char, u8),
+    /// Per chip, its 8 parallel-input net nodes in role order a..h. `None`
+    /// where that input is unconnected (reads low).
+    pub inputs: Vec<[Option<NodeId>; 8]>,
+    /// The captured serial bit sequence in QH-emit order (index 0 = first bit
+    /// out, before any clock). Rebuilt on each PL load.
+    seq: Vec<bool>,
+    /// Index of the bit currently presented at QH.
+    pos: usize,
+    /// Live decoded control levels (carried across edges within a chunk).
+    lvl_pl_n: bool,
+    lvl_clk: bool,
+    /// The current QH level being presented on MISO.
+    lvl_qh: bool,
+}
+
+impl Hc165Chain {
+    /// Build a 165 read-chain controller from the ordered 165 chips and the
+    /// MCU's GPIO net map. PL and CLK are broadcast control nets read off the
+    /// head chip; the head's `qh` net must map to an MCU input pin (MISO).
+    /// Returns `None` if the essential PL / CLK / QH→MISO bindings are missing.
+    pub fn build(
+        digital: &[DigitalComponent],
+        order: Vec<usize>,
+        gpio_node: &HashMap<i64, (char, u8)>,
+        input_node: &HashMap<i64, (char, u8)>,
+    ) -> Option<Self> {
+        let head = *order.first()?;
+        let chip = |i: usize| &digital[i];
+        let role_gpio = |i: usize, role: &str| -> Option<(char, u8)> {
+            let node = chip(i).roles.get(role)?;
+            gpio_node.get(&(node.0 as i64)).copied()
+        };
+
+        let pl_n = role_gpio(head, "pl_n")?;
+        let clk = role_gpio(head, "clk")?;
+        // The head chip's QH must be wired to an MCU input pin (MISO).
+        let qh_node = chip(head).roles.get("qh")?;
+        let miso = input_node.get(&(qh_node.0 as i64)).copied()?;
+
+        // Capture each chip's parallel-input nodes (a..h) for sampling on load.
+        let roles = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        let inputs: Vec<[Option<NodeId>; 8]> = order
+            .iter()
+            .map(|&ci| {
+                let mut arr = [None; 8];
+                for (k, r) in roles.iter().enumerate() {
+                    arr[k] = digital[ci].roles.get(*r).copied();
+                }
+                arr
+            })
+            .collect();
+
+        Some(Hc165Chain {
+            order,
+            pl_n,
+            clk,
+            miso,
+            inputs,
+            seq: Vec::new(),
+            pos: 0,
+            lvl_pl_n: true,
+            lvl_clk: false,
+            lvl_qh: false,
+        })
+    }
+
+    /// MCU GPIO pins this chain consumes edges from: PL, CLK. (MISO is an
+    /// output of the chain, an input to the MCU.)
+    pub fn watches(&self, pin: (char, u8)) -> bool {
+        pin == self.pl_n || pin == self.clk
+    }
+
+    /// Latch the parallel inputs into the QH-emit-ordered bit sequence, using a
+    /// snapshot of the current solved node voltages and the chips' logic
+    /// thresholds. Head chip's h,g,…,a come first (they reach QH first), then
+    /// each upstream chip's h,…,a.
+    pub fn load(&mut self, node_v: &dyn Fn(NodeId) -> f64, levels: &LogicLevels) {
+        self.seq.clear();
+        for chip_inputs in &self.inputs {
+            // Emit order within a chip is h,g,f,e,d,c,b,a (h reaches QH first).
+            for k in (0..8).rev() {
+                let bit = match chip_inputs[k] {
+                    Some(n) => node_v(n) >= levels.vih,
+                    None => false,
+                };
+                self.seq.push(bit);
+            }
+        }
+        self.pos = 0;
+        self.lvl_qh = self.seq.first().copied().unwrap_or(false);
+    }
+
+    /// Process one GPIO output edge. Returns the MISO drive `(pin, level)` if the
+    /// presented QH bit changed (so the responder can push it onto the MCU input
+    /// pin). PL low (re)loads; SCLK rising advances to the next bit.
+    pub fn on_edge(
+        &mut self,
+        pin: (char, u8),
+        high: bool,
+        node_v: &dyn Fn(NodeId) -> f64,
+        levels: &LogicLevels,
+    ) -> Option<((char, u8), bool)> {
+        let prev_qh = self.lvl_qh;
+        if pin == self.pl_n {
+            let falling = !high && self.lvl_pl_n;
+            self.lvl_pl_n = high;
+            // 74HC165 loads asynchronously while PL is LOW; capture on the
+            // falling edge (data is stable by then in the firmware's PL pulse).
+            if falling {
+                self.load(node_v, levels);
+            }
+        } else if pin == self.clk {
+            let rising = high && !self.lvl_clk;
+            self.lvl_clk = high;
+            // Shifts only happen in shift mode (PL released high). A rising CLK
+            // advances the register one stage toward QH.
+            if rising && self.lvl_pl_n {
+                self.pos += 1;
+                self.lvl_qh = self.seq.get(self.pos).copied().unwrap_or(false);
+            }
+        }
+        if self.lvl_qh != prev_qh || pin == self.pl_n {
+            // Always (re)assert MISO on a load so the first bit is present before
+            // the firmware's first read, even when it equals the prior level.
+            Some((self.miso, self.lvl_qh))
+        } else {
+            None
+        }
+    }
+
+    /// Logic thresholds of the head chip (for input sampling). The chips share a
+    /// family, so any chip's levels serve.
+    pub fn levels(&self, digital: &[DigitalComponent]) -> LogicLevels {
+        self.order
+            .first()
+            .map(|&i| digital[i].levels)
+            .unwrap_or(LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 3.15,
+                vil: 1.35,
+                ro: DEFAULT_RO,
+            })
+    }
+
+    /// The current word the chain would have shifted out given a captured load,
+    /// MSB-first as the firmware accumulates it (bit 15 = first bit out). For
+    /// diagnostics / tests; reflects `seq` independent of clocking position.
+    pub fn loaded_word(&self) -> u16 {
+        let mut w = 0u16;
+        for (i, &b) in self.seq.iter().enumerate().take(16) {
+            if b {
+                w |= 1 << (15 - i);
+            }
+        }
+        w
+    }
+}
+
 /// Decide a digital component's behaviour family from its model id / params.
 fn classify(model: &ModelEntry) -> DigitalKind {
     let id = model.id.to_ascii_lowercase();
@@ -894,5 +1151,166 @@ mod tests {
             chips[0].drivers.values().all(|d| d.enabled),
             "OE_n low re-enables qa..qh drivers"
         );
+    }
+
+    /// Resolve the builtin 74HC165 model entry for test fixtures.
+    fn hc165_model() -> hauksbee_models::ModelEntry {
+        let lib = ModelLibrary::builtin();
+        let q = ComponentQuery::new(None, Some("74HC165".to_string()), None);
+        lib.resolve(&q).model.expect("builtin 74HC165 model")
+    }
+
+    /// Build the real Tarski 2-chip 165 read chain: U15002 is the head whose QH
+    /// feeds MISO; U15001 is upstream (its QH → U15002.ser). The parallel inputs
+    /// carry the spike latches; we wire a chosen set HIGH and the rest to GND, and
+    /// drive their net voltages so the chain samples them on a PL load.
+    fn build_165_chain(
+        circuit: &mut Circuit,
+        head_inputs_hi: &[&str], // role letters a..h on the HEAD (U15002) to set high
+        up_inputs_hi: &[&str],   // role letters a..h on the UPSTREAM (U15001) to set high
+    ) -> (Vec<DigitalComponent>, Hc165Chain) {
+        let model = hc165_model();
+        let pl = circuit.node("PARALLEL_LOAD");
+        let clk = circuit.node("SCLK");
+        let miso = circuit.node("MISO");
+        let inter = circuit.node("U15001_Q7"); // U15001.qh -> U15002.ser
+
+        let make = |circuit: &mut Circuit,
+                    refn: &str,
+                    ser: NodeId,
+                    qh: NodeId,
+                    hi: &[&str]|
+         -> DigitalComponent {
+            let mut roles: HashMap<String, NodeId> = HashMap::new();
+            roles.insert("pl_n".into(), pl);
+            roles.insert("clk".into(), clk);
+            roles.insert("ser".into(), ser);
+            roles.insert("qh".into(), qh);
+            // Each parallel input gets its own net; set high ones to +5, rest GND.
+            for r in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+                let n = circuit.node(&format!("{refn}_{r}"));
+                roles.insert(r.into(), n);
+            }
+            let d = DigitalComponent::new(refn.into(), &model, roles.clone(), HashMap::new());
+            // Drive the input nets via voltage sources so node_v reads them.
+            for r in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+                let n = roles[r];
+                let v = if hi.contains(&r) { 5.0 } else { 0.0 };
+                circuit.add(hauksbee_ir::Device::Vsource {
+                    name: format!("V_{refn}_{r}"),
+                    p: n,
+                    n: NodeId::GROUND,
+                    kind: hauksbee_ir::SourceKind::Dc(v),
+                });
+            }
+            d
+        };
+
+        // U15001 upstream (ser unused → tie to GND node), QH → inter.
+        let up = make(circuit, "U15001", NodeId::GROUND, inter, up_inputs_hi);
+        // U15002 head: ser ← inter, QH → MISO.
+        let head = make(circuit, "U15002", inter, miso, head_inputs_hi);
+        let chips = vec![up, head];
+
+        // GPIO map: PL=PD4, SCLK=PB5, MISO=PB4 (the firmware mapping).
+        let mut gpio: HashMap<i64, (char, u8)> = HashMap::new();
+        gpio.insert(pl.0 as i64, ('D', 4));
+        gpio.insert(clk.0 as i64, ('B', 5));
+        gpio.insert(miso.0 as i64, ('B', 4));
+
+        let order = order_165_chains(&chips);
+        assert_eq!(order.len(), 1, "one 165 chain recovered");
+        // Head-first: U15002 (feeds MISO) before U15001 (upstream).
+        let refs: Vec<&str> = order[0].iter().map(|&i| chips[i].reference.as_str()).collect();
+        assert_eq!(refs, vec!["U15002", "U15001"], "head-first chain order");
+
+        let chain = Hc165Chain::build(&chips, order.into_iter().next().unwrap(), &gpio, &gpio)
+            .expect("165 chain binds to GPIO/MISO");
+        (chips, chain)
+    }
+
+    /// Replay the firmware's exact ReadOutput sequence against the edge-driven
+    /// chain: PL low/high (load), then 16×(read MISO, pulse SCLK high/low), and
+    /// reconstruct the same `value` `_ReadShiftRegisterWord` accumulates. The
+    /// known latch pattern must read back bit-exact.
+    #[test]
+    fn hc165_reads_known_latch_pattern_via_edges() {
+        let mut circuit = Circuit::new();
+        // Map the real spike-latch wiring: head=U15002 inputs a..h = L3..L10,
+        // upstream=U15001 inputs g,h = L1,L2 (others unconnected). The emit order
+        // at QH is head.h,g,..,a then up.h,g,..,a, so the 16-bit word MSB..LSB is
+        //   [L10 L9 L8 L7 L6 L5 L4 L3  L2 L1 . . . . . .]
+        // Choose a recognizable pattern: L1,L4,L7,L10 high (a "digit" spike set).
+        // head (U15002): a=L3 b=L4 c=L5 d=L6 e=L7 f=L8 g=L9 h=L10
+        let head_hi = ["b" /*L4*/, "e" /*L7*/, "h" /*L10*/];
+        // upstream (U15001): g=L1 h=L2  (a..f unconnected on the real board)
+        let up_hi = ["g" /*L1*/];
+        let (_chips, mut chain) = build_165_chain(&mut circuit, &head_hi, &up_hi);
+
+        let levels = LogicLevels::from_params(&hc165_model());
+        // node_v reads the chain's input nets from the circuit's DC vsources.
+        // We don't run MNA here; instead resolve each input net by its source.
+        // Simplest: the build wired V_* sources at 5/0; emulate node_v by reading
+        // the source value back. Build a node->volt map from the vsources.
+        let mut volts: HashMap<i64, f64> = HashMap::new();
+        for dev in &circuit.devices {
+            if let hauksbee_ir::Device::Vsource { p, kind, .. } = dev {
+                if let hauksbee_ir::SourceKind::Dc(v) = kind {
+                    volts.insert(p.0 as i64, *v);
+                }
+            }
+        }
+        let node_v = |n: NodeId| volts.get(&(n.0 as i64)).copied().unwrap_or(0.0);
+
+        // Firmware ReadOutput: PL low then high (load on the low pulse).
+        let mut value: u16 = 0;
+        let mut miso_level = false;
+        let apply = |out: Option<((char, u8), bool)>, miso: &mut bool| {
+            if let Some(((_p, _b), lvl)) = out {
+                *miso = lvl;
+            }
+        };
+        apply(chain.on_edge(('D', 4), false, &node_v, &levels), &mut miso_level); // PL low
+        apply(chain.on_edge(('D', 4), true, &node_v, &levels), &mut miso_level); // PL high
+
+        // _ReadShiftRegisterWord: 16 × { value<<=1; value|=read(MISO); pulse SCLK }
+        for _ in 0..16 {
+            value <<= 1;
+            value |= miso_level as u16;
+            apply(chain.on_edge(('B', 5), true, &node_v, &levels), &mut miso_level); // SCLK rise
+            apply(chain.on_edge(('B', 5), false, &node_v, &levels), &mut miso_level); // SCLK fall
+        }
+
+        // Expected MSB-first word: L10 L9 L8 L7 L6 L5 L4 L3 | L2 L1 . . . . . .
+        // highs: L4,L7,L10 on head; L1 upstream.
+        // bit15=L10=1, bit14=L9=0, bit13=L8=0, bit12=L7=1, bit11=L6=0,
+        // bit10=L5=0, bit9=L4=1, bit8=L3=0, bit7=L2=0, bit6=L1=1, bit5..0=0.
+        let expected: u16 = (1 << 15) | (1 << 12) | (1 << 9) | (1 << 6);
+        assert_eq!(
+            value, expected,
+            "165 readback word 0x{value:04X} should match known latch pattern 0x{expected:04X}"
+        );
+        // The model-level loaded_word must agree with the bit-banged readback.
+        assert_eq!(chain.loaded_word(), expected, "loaded_word matches readback");
+    }
+
+    /// Regression guard: a single SCLK edge (the collapsed once-per-chunk view)
+    /// cannot reproduce the full 16-bit readback. Proves the per-edge path is
+    /// load-bearing for the 165 just as it is for the 595.
+    #[test]
+    fn hc165_collapsed_single_edge_does_not_read_full_word() {
+        let mut circuit = Circuit::new();
+        let (_chips, mut chain) =
+            build_165_chain(&mut circuit, &["a", "h"], &["a"]);
+        let levels = LogicLevels::from_params(&hc165_model());
+        let node_v = |_n: NodeId| 0.0; // collapsed: never re-sample
+        // One PL + one SCLK edge, no full pulse train.
+        let _ = chain.on_edge(('D', 4), false, &node_v, &levels);
+        let _ = chain.on_edge(('D', 4), true, &node_v, &levels);
+        let before = chain.pos;
+        let _ = chain.on_edge(('B', 5), true, &node_v, &levels);
+        assert_eq!(chain.pos, before + 1, "a single SCLK rise advances exactly one bit");
+        // With only one clocked bit you cannot have walked all 16 stages.
+        assert!(chain.pos < 16, "collapsed single edge cannot shift the whole word");
     }
 }
