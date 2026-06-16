@@ -67,6 +67,14 @@ impl LogicLevels {
 pub enum DigitalKind {
     Hc595,
     Hc165,
+    /// Cross-coupled NOR set/reset latch (a 74HC02 latch pair). Roles `set`
+    /// (active-high SET input), `reset` (active-high RESET input), and output
+    /// `q`. Active-LOW Q semantics of the Tarski spike recorder: at reset Q is
+    /// HIGH (idle), a SET pulse drives Q LOW and the cross-couple HOLDS it LOW
+    /// until the next RESET. Modelled directly from the NOR-latch truth table so
+    /// the firmware-driven 74HC165 readback samples the same level the real
+    /// board's latch Q presents (idle HIGH -> 0xFFC0, captured spike LOW).
+    NorLatch,
     /// Generic transparent buffer / unmodelled digital block.
     Buffer,
 }
@@ -92,6 +100,10 @@ pub struct DigitalComponent {
     prev_rclk: bool,
     prev_clk: bool,
     prev_pl: bool,
+    /// NOR-latch held state: (Q, Qb). Initialised to the post-reset idle level
+    /// (Q HIGH) so a board that has never been driven reads the cleared word.
+    latch_q: bool,
+    latch_qb: bool,
 }
 
 impl DigitalComponent {
@@ -119,6 +131,39 @@ impl DigitalComponent {
             prev_rclk: false,
             prev_clk: false,
             prev_pl: false,
+            // Power-on idle = the cleared latch state (Q HIGH, Qb LOW), matching
+            // the real 74HC02 NOR latch after RESET_SR with no spike captured.
+            latch_q: true,
+            latch_qb: false,
+        }
+    }
+
+    /// Build a NOR SR latch component (one latch = one cross-coupled gate
+    /// pair). `roles` must carry `set`, `reset`, and `q`; the caller has stamped
+    /// the `q` output [`PinDriver`]. Uses the supplied logic levels (the 74HC02
+    /// model entry's). State initialises to the cleared idle (Q HIGH).
+    pub fn new_nor_latch(
+        reference: String,
+        levels: LogicLevels,
+        roles: HashMap<String, NodeId>,
+        drivers: HashMap<String, PinDriver>,
+    ) -> Self {
+        DigitalComponent {
+            reference,
+            kind: DigitalKind::NorLatch,
+            levels,
+            roles,
+            drivers,
+            input_state: HashMap::new(),
+            shift_reg: vec![false; 1],
+            out_reg: vec![false; 1],
+            bits: 1,
+            prev_srclk: false,
+            prev_rclk: false,
+            prev_clk: false,
+            prev_pl: false,
+            latch_q: true,
+            latch_qb: false,
         }
     }
 
@@ -139,6 +184,7 @@ impl DigitalComponent {
         match self.kind {
             DigitalKind::Hc595 => self.tick_595(node_v),
             DigitalKind::Hc165 => self.tick_165(node_v),
+            DigitalKind::NorLatch => self.tick_nor_latch(node_v),
             DigitalKind::Buffer => self.tick_buffer(node_v),
         }
         self.drive_outputs(circuit);
@@ -219,6 +265,39 @@ impl DigitalComponent {
         self.out_reg.copy_from_slice(&self.shift_reg);
     }
 
+    /// Cross-coupled NOR SR latch (74HC02 latch pair). Q = NOR(set, Qb),
+    /// Qb = NOR(reset, Q). `set` and `reset` are sampled active-HIGH from the
+    /// analog nets (SPIKE<n> and RESET_SR); the held (Q, Qb) is re-settled each
+    /// tick by iterating the two NOR equations to a fixed point.
+    ///
+    /// Truth table (matching the Tarski spike recorder):
+    ///   reset=1            -> Q forced LOW? NO. With this wiring Q = NOR(set, Qb)
+    ///                         and Qb = NOR(reset, Q): reset HIGH pulls Qb LOW, so
+    ///                         Q = NOR(set, 0) = !set. With set idle (0) Q is HIGH
+    ///                         = the cleared/idle level (active-low: idle reads
+    ///                         HIGH). A captured spike is set=1 -> Q LOW, held.
+    ///   set=1,reset=0      -> Q LOW (a spike is latched).
+    ///   set=0,reset=0      -> HOLD (Q keeps its last value -- the latch memory).
+    fn tick_nor_latch(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
+        let set = self.sample("set", node_v);
+        let reset = self.sample("reset", node_v);
+        let nor = |a: bool, b: bool| !(a || b);
+        // Iterate to the latch's stable fixed point (≤4 passes suffices for a
+        // 2-gate cross-couple; HOLD keeps the prior state).
+        let (mut q, mut qb) = (self.latch_q, self.latch_qb);
+        for _ in 0..4 {
+            let nq = nor(set, qb);
+            let nqb = nor(reset, q);
+            if nq == q && nqb == qb {
+                break;
+            }
+            q = nq;
+            qb = nqb;
+        }
+        self.latch_q = q;
+        self.latch_qb = qb;
+    }
+
     fn tick_buffer(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
         // Transparent: copy any sampled "a*" input role onto matching "y*"
         // output role (74HCxx buffer/gate naming), else hold.
@@ -259,6 +338,11 @@ impl DigitalComponent {
                 }
                 if let Some(drv) = self.drivers.get("qh_n") {
                     drv.set_volts(circuit, self.levels.drive_volts(!qh));
+                }
+            }
+            DigitalKind::NorLatch => {
+                if let Some(drv) = self.drivers.get("q") {
+                    drv.set_volts(circuit, self.levels.drive_volts(self.latch_q));
                 }
             }
             DigitalKind::Buffer => {
@@ -835,6 +919,7 @@ pub fn output_roles(model: &ModelEntry) -> Vec<String> {
         .map(|s| s.to_string())
         .collect(),
         DigitalKind::Hc165 => ["qh", "qh_n"].iter().map(|s| s.to_string()).collect(),
+        DigitalKind::NorLatch => vec!["q".to_string()],
         DigitalKind::Buffer => {
             // Any pin role starting with 'y' (74HCxx convention) is an output.
             model
@@ -1312,5 +1397,69 @@ mod tests {
         assert_eq!(chain.pos, before + 1, "a single SCLK rise advances exactly one bit");
         // With only one clocked bit you cannot have walked all 16 stages.
         assert!(chain.pos < 16, "collapsed single edge cannot shift the whole word");
+    }
+
+    /// 74HC02 NOR SR spike latch: the truth table the firmware-driven readback
+    /// depends on. Idle (after reset, no spike) => Q HIGH (active-low idle, the
+    /// real board's 0xFFC0). A SET pulse (SPIKE) => Q LOW and HELD low after the
+    /// pulse clears. RESET_SR => Q back HIGH. This is the polarity that makes an
+    /// idle board decode as NO spikes (not a 10-way tie).
+    #[test]
+    fn nor_latch_spike_polarity_idle_high_spike_low_held() {
+        let mut circuit = Circuit::new();
+        let set_n = circuit.node("SPIKE1");
+        let reset_n = circuit.node("RESET_SR");
+        let q_n = circuit.node("L1");
+        let levels = LogicLevels {
+            voh: 4.4,
+            vol: 0.1,
+            vih: 3.15,
+            vil: 1.35,
+            ro: crate::drivers::DEFAULT_RO,
+        };
+        let mut roles = HashMap::new();
+        roles.insert("set".to_string(), set_n);
+        roles.insert("reset".to_string(), reset_n);
+        roles.insert("q".to_string(), q_n);
+        // No real driver needed for the state check; drive into an empty map and
+        // inspect latch_q directly.
+        let mut latch =
+            DigitalComponent::new_nor_latch("U_L1".to_string(), levels, roles, HashMap::new());
+
+        // Drive set/reset by a node-voltage closure.
+        let make_v = |set_hi: bool, reset_hi: bool| {
+            move |n: NodeId| -> f64 {
+                if n == set_n {
+                    if set_hi { 4.5 } else { 0.0 }
+                } else if n == reset_n {
+                    if reset_hi { 4.5 } else { 0.0 }
+                } else {
+                    0.0
+                }
+            }
+        };
+
+        // 1. Power-on idle: Q HIGH.
+        assert!(latch.latch_q, "power-on idle latch Q must be HIGH (cleared/idle)");
+
+        // 2. Assert RESET_SR (set low): Q stays HIGH (the cleared level).
+        latch.tick_nor_latch(&make_v(false, true));
+        assert!(latch.latch_q, "RESET with no spike holds Q HIGH (idle)");
+
+        // 3. Release reset, no spike: HOLD HIGH.
+        latch.tick_nor_latch(&make_v(false, false));
+        assert!(latch.latch_q, "idle hold keeps Q HIGH");
+
+        // 4. A spike (SET pulse HIGH): Q goes LOW.
+        latch.tick_nor_latch(&make_v(true, false));
+        assert!(!latch.latch_q, "a SET pulse (spike) drives Q LOW");
+
+        // 5. Spike clears (SET low), no reset: Q HELD LOW (the latch memory).
+        latch.tick_nor_latch(&make_v(false, false));
+        assert!(!latch.latch_q, "Q stays LOW after the spike clears (held by cross-couple)");
+
+        // 6. RESET_SR pulse: Q back HIGH (idle).
+        latch.tick_nor_latch(&make_v(false, true));
+        assert!(latch.latch_q, "RESET_SR returns Q to HIGH (idle)");
     }
 }

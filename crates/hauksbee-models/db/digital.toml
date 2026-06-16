@@ -164,3 +164,50 @@ gnd_pin    = "7"
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc02"
+kind = "digital"
+description = "74HC02 quad 2-input NOR gate (used as cross-coupled SR spike latches on Tarski)"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC02"
+
+[models.params]
+# Source: TI 74HC02 datasheet (SCLS050). Quad 2-input NOR. On the Tarski Spike
+# Recorder the four gates are wired in cross-coupled PAIRS as NOR set/reset
+# latches (one latch per output neuron); the binder detects the cross-couple and
+# emits a NorLatch behavioral component per latch (set = SPIKE<n>, reset =
+# RESET_SR, q = L<n>). At reset Q is HIGH (idle, active-low readback => 0xFFC0);
+# a captured spike pulls Q LOW and the cross-couple holds it until RESET_SR.
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 8.0e-9
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+# Gate pinout as wired on the Tarski board (verified against the netlist):
+# gate1 out=1 in=2,3 ; gate2 out=4 in=5,6 ; gate3 out=10 in=8,9 ; gate4 out=13 in=11,12.
+"1"  = "g1y"
+"2"  = "g1a"
+"3"  = "g1b"
+"4"  = "g2y"
+"5"  = "g2a"
+"6"  = "g2b"
+"7"  = "gnd"
+"8"  = "g3a"
+"9"  = "g3b"
+"10" = "g3y"
+"11" = "g4a"
+"12" = "g4b"
+"13" = "g4y"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0

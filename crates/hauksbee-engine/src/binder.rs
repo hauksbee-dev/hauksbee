@@ -1679,6 +1679,16 @@ fn bind_digital(
     roles: &HashMap<String, NodeId>,
     digital: &mut Vec<DigitalComponent>,
 ) {
+    // A quad/dual NOR gate (74HC02) wired as cross-coupled SR spike latches: if
+    // any gate pair forms a NOR latch (one gate's output net == the other gate's
+    // input net and vice-versa), bind one NorLatch behavioral component per latch
+    // and return. Falls through to the generic buffer path if no latch found.
+    if model.id.to_ascii_lowercase().contains("74hc02")
+        && bind_nor_latches(comp, model, circuit, roles, digital)
+    {
+        return;
+    }
+
     // Stamp a Thevenin driver on each connected output role.
     let mut drivers = HashMap::new();
     for role in output_roles(model) {
@@ -1703,6 +1713,114 @@ fn bind_digital(
         roles.clone(),
         drivers,
     ));
+}
+
+/// Detect and bind cross-coupled NOR SR latches on a 74HC02 (the Tarski spike
+/// recorder). Each gate `g<n>` has output role `g<n>y` and input roles `g<n>a`,
+/// `g<n>b`. A latch is a pair of gates (gQ, gQb) where `gQ.y == gQb.<one input>`
+/// and `gQb.y == gQ.<one input>` (the cross-couple). For the latch:
+///   - `reset` = the gate whose NON-cross-couple input net name contains "RESET"
+///     (RESET_SR) — that gate's output is Qb (internal);
+///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
+///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
+/// Stamps a Thevenin driver on the `q` net and pushes one [`DigitalComponent`]
+/// (`DigitalKind::NorLatch`) per latch. Returns true if ≥1 latch was bound.
+fn bind_nor_latches(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+    digital: &mut Vec<DigitalComponent>,
+) -> bool {
+    use crate::digital::{DigitalComponent, LogicLevels};
+    // Collect the gates present (output + its two inputs).
+    struct Gate {
+        idx: usize,
+        y: NodeId,
+        ins: Vec<NodeId>,
+    }
+    let mut gates: Vec<Gate> = Vec::new();
+    for n in 1..=4usize {
+        let y = roles.get(&format!("g{n}y")).copied();
+        let a = roles.get(&format!("g{n}a")).copied();
+        let b = roles.get(&format!("g{n}b")).copied();
+        if let Some(y) = y {
+            let ins: Vec<NodeId> = [a, b].into_iter().flatten().collect();
+            gates.push(Gate { idx: n, y, ins });
+        }
+    }
+    let levels = LogicLevels::from_params(model);
+    let mut bound = 0usize;
+    let mut used: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for i in 0..gates.len() {
+        if used.contains(&i) {
+            continue;
+        }
+        for j in 0..gates.len() {
+            if i == j || used.contains(&j) {
+                continue;
+            }
+            // Cross-couple: gate i's output feeds gate j's input AND vice-versa.
+            let cross = gates[j].ins.contains(&gates[i].y) && gates[i].ins.contains(&gates[j].y);
+            if !cross {
+                continue;
+            }
+            // The non-cross-couple input of each gate (the SET / RESET line).
+            let other_in = |g: &Gate, partner_y: NodeId| -> Option<NodeId> {
+                g.ins.iter().copied().find(|&n| n != partner_y)
+            };
+            let in_i = other_in(&gates[i], gates[j].y);
+            let in_j = other_in(&gates[j], gates[i].y);
+            let net_name = |n: Option<NodeId>| n.map(|n| circuit.node_name(n).to_string());
+            let i_is_reset = net_name(in_i)
+                .map(|s| s.to_ascii_uppercase().contains("RESET"))
+                .unwrap_or(false);
+            let j_is_reset = net_name(in_j)
+                .map(|s| s.to_ascii_uppercase().contains("RESET"))
+                .unwrap_or(false);
+            // The reset gate's output is Qb; the OTHER gate is Q.
+            let (q_gate, set_in) = if j_is_reset && !i_is_reset {
+                (i, in_i)
+            } else if i_is_reset && !j_is_reset {
+                (j, in_j)
+            } else {
+                // No RESET-named line found — not a recognisable SR latch here.
+                continue;
+            };
+            let reset_in = if q_gate == i { in_j } else { in_i };
+            let (Some(set_n), Some(reset_n)) = (set_in, reset_in) else { continue };
+            let q_net = gates[q_gate].y;
+            if q_net.is_ground() {
+                continue;
+            }
+            // Stamp the Q output driver and build the latch component.
+            let q_name = circuit.node_name(q_net).to_string();
+            let drv = PinDriver::stamp(
+                circuit,
+                q_net,
+                &q_name,
+                &format!("{}_latch{}_q", comp.reference, gates[q_gate].idx),
+                DEFAULT_RO,
+            );
+            let mut lroles: HashMap<String, NodeId> = HashMap::new();
+            lroles.insert("set".to_string(), set_n);
+            lroles.insert("reset".to_string(), reset_n);
+            lroles.insert("q".to_string(), q_net);
+            let mut ldrivers = HashMap::new();
+            ldrivers.insert("q".to_string(), drv);
+            digital.push(DigitalComponent::new_nor_latch(
+                format!("{}_L{}", comp.reference, gates[q_gate].idx),
+                levels,
+                lroles,
+                ldrivers,
+            ));
+            used.insert(i);
+            used.insert(j);
+            bound += 1;
+            break;
+        }
+    }
+    bound > 0
 }
 
 #[allow(clippy::too_many_arguments)]
