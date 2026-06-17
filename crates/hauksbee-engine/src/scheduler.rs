@@ -135,6 +135,21 @@ pub struct Scheduler {
     /// PL-load sampling (which fires inside the MCU run, before this chunk's
     /// solve) sees the previous chunk's settled latch voltages.
     input_volts: Arc<Mutex<Vec<f64>>>,
+    /// Forced node-voltage overrides applied to `node_volts` AFTER each chunk's
+    /// analog solve. Used by the firmware-driven Tarski inference to drive the 10
+    /// output SPIKE nets from the EXACT feedforward decomposition (the monolith
+    /// does not converge) — the genuine per-column spikes the decomposition
+    /// produces are presented on the SPIKE nets so the on-board 74HC02 NOR
+    /// latches capture them and the firmware's 165 readback reflects them. Empty
+    /// on every other board (no override). Keyed by `NodeId.0`. The value is
+    /// `(high_volts, low_volts, t_start, t_end)`: the node is held at
+    /// `high_volts` while `t_start <= sim_time < t_end`, else `low_volts`. A
+    /// time-unbounded override uses `t_start=-inf, t_end=+inf` (always high). The
+    /// time window lets the firmware-driven inference present each output column's
+    /// SPIKE net HIGH for a sim-time fraction proportional to its decomposed spike
+    /// count, so the firmware's per-sample RESET_SR-gated latch reads accumulate a
+    /// count that tracks the decomposed RATE (not just a binary "spiked at all").
+    forced_node_volts: HashMap<usize, (f64, f64, f64, f64)>,
 }
 
 /// One MCP4728's analog VOUT drive: the bus its slave lives on, the slave's
@@ -241,6 +256,7 @@ impl Scheduler {
             dac_vouts: Vec::new(),
             hc165_chains: Vec::new(),
             input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
+            forced_node_volts: HashMap::new(),
         };
 
         // Build the edge-driven 74HC165 read chains and install each as its
@@ -836,6 +852,65 @@ impl Scheduler {
                 }
             }
         }
+        // Apply any forced node-voltage overrides (the firmware-driven Tarski
+        // inference drives the output SPIKE nets from the exact feedforward
+        // decomposition here, since the monolith does not converge). These land
+        // in `node_volts` so the on-board NOR latches sample them next chunk.
+        // Each override is time-gated to `sim_time` so a column is HIGH only for
+        // its decomposed rate fraction of the window.
+        if !self.forced_node_volts.is_empty() {
+            let t = self.sim_time;
+            for (&node, &(hi, lo, t0, t1)) in &self.forced_node_volts {
+                let v = if t >= t0 && t < t1 { hi } else { lo };
+                if let Some(slot) = self.node_volts.get_mut(node) {
+                    *slot = v;
+                }
+            }
+        }
+    }
+
+    /// Force a net's voltage to `volts` AFTER each analog solve (until cleared),
+    /// unconditionally (binary "always high"). Returns false if the net is absent.
+    pub fn force_net_voltage(&mut self, net: &str, volts: f64) -> bool {
+        self.force_net_voltage_windowed(net, volts, 0.0, f64::NEG_INFINITY, f64::INFINITY)
+    }
+
+    /// Force a net to `high_volts` while `t_start <= sim_time < t_end`, else
+    /// `low_volts`. Returns false if the net does not exist. Used to drive an
+    /// output SPIKE net HIGH for a sim-time window proportional to its decomposed
+    /// spike count (rate-coded firmware-driven inference).
+    pub fn force_net_voltage_windowed(
+        &mut self,
+        net: &str,
+        high_volts: f64,
+        low_volts: f64,
+        t_start: f64,
+        t_end: f64,
+    ) -> bool {
+        match self.net_nodes.get(net) {
+            Some(&node) => {
+                self.forced_node_volts
+                    .insert(node.0 as usize, (high_volts, low_volts, t_start, t_end));
+                // Reflect immediately so a same-chunk latch sample sees it too.
+                let t = self.sim_time;
+                let v = if t >= t_start && t < t_end { high_volts } else { low_volts };
+                if let Some(slot) = self.node_volts.get_mut(node.0 as usize) {
+                    *slot = v;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Current sim time (s).
+    pub fn sim_time(&self) -> f64 {
+        self.sim_time
+    }
+
+    /// Clear all forced node-voltage overrides.
+    pub fn clear_forced_voltages(&mut self) {
+        self.forced_node_volts.clear();
     }
 
     fn update_stats(&mut self) {
