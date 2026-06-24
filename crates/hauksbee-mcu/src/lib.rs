@@ -38,6 +38,7 @@ pub mod ffi {
 
 #[cfg(feature = "avr")]
 pub mod avr;
+pub mod elf;
 pub mod traits;
 
 #[cfg(feature = "renode")]
@@ -46,7 +47,7 @@ pub mod renode;
 #[cfg(feature = "qemu")]
 pub mod qemu;
 
-pub use traits::{I2cEvent, McuState, Mcu, PinId, SpiEvent};
+pub use traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 
 #[cfg(feature = "avr")]
 pub use avr::AvrMcu;

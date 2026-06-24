@@ -60,6 +60,11 @@ pub enum I2cEvent {
 pub struct SpiEvent {
     /// Byte clocked out of MOSI.
     pub mosi: u8,
+    /// True when this event signals a chip-select deassert (FinishTransmission).
+    /// The `mosi` field is meaningless when `deselect` is true; the callback
+    /// return value is also ignored. Backends that cannot observe chip-select
+    /// leave this false; the `SpiBus.post_solve` deselect path handles those.
+    pub deselect: bool,
 }
 
 /// Core trait for an emulated microcontroller.
@@ -131,6 +136,21 @@ pub trait Mcu {
     /// may return the MISO byte the peripheral would provide.
     fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>);
 
+    /// Install a handler for SPI bus events on a named controller.
+    ///
+    /// The default implementation forwards to [`on_spi`], which is correct for
+    /// single-controller backends (AVR, QEMU). Multi-controller backends (Renode
+    /// with multiple SPI controllers) override this to route each controller to
+    /// its own bridge/callback, so a slave attached to "spi2" only receives
+    /// traffic from the spi2 controller, not from spi3.
+    fn on_spi_controller(
+        &mut self,
+        _controller: &str,
+        cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>,
+    ) {
+        self.on_spi(cb);
+    }
+
     // ---- Status ----
 
     /// Sample the current execution state without advancing the simulation.
@@ -145,4 +165,11 @@ pub trait Mcu {
     /// this. The Renode backend uses it to read only the relevant ports' output
     /// registers each chunk instead of every port the platform defines.
     fn set_active_ports(&mut self, _ports: &[char]) {}
+
+    /// Hint which 7-bit I2C slave addresses are attached to the MCU-facing bus.
+    ///
+    /// Push-style backends can ignore this. Backends that need to register
+    /// concrete bus peripherals with an external emulator use it to expose only
+    /// the addresses the engine actually modeled.
+    fn set_i2c_slave_addresses(&mut self, _addresses: &[u8]) {}
 }

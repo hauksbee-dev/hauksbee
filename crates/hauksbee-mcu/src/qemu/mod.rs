@@ -170,6 +170,14 @@ pub struct QemuConfig {
     /// Clock frequency in Hz reported by [`Mcu::frequency`] (advisory: QEMU
     /// models the SoC clocking; this is for the engine's bookkeeping).
     pub frequency_hz: u64,
+    /// ELF `e_machine` this SoC's core executes: `EM_XTENSA` for ESP32 / S3,
+    /// `EM_RISCV` for the ESP32-C3. Used to gate the firmware ELF (or its
+    /// sibling app ELF beside the merged flash image) against the board's ISA,
+    /// so an Xtensa image on a RISC-V board is refused rather than booted into
+    /// 136 MB of UART garbage. See [`crate::elf`].
+    pub expected_e_machine: u16,
+    /// Human-readable MCU/board name for arch-mismatch error messages.
+    pub mcu_label: String,
 }
 
 impl QemuConfig {
@@ -189,6 +197,8 @@ impl QemuConfig {
             }],
             icount_shift: 2,
             frequency_hz: 240_000_000,
+            expected_e_machine: crate::elf::EM_XTENSA,
+            mcu_label: "ESP32 (Xtensa LX6)".to_string(),
         }
     }
 
@@ -205,6 +215,8 @@ impl QemuConfig {
             }],
             icount_shift: 2,
             frequency_hz: 240_000_000,
+            expected_e_machine: crate::elf::EM_XTENSA,
+            mcu_label: "ESP32-S3 (Xtensa LX7)".to_string(),
         }
     }
 
@@ -221,8 +233,109 @@ impl QemuConfig {
             }],
             icount_shift: 2,
             frequency_hz: 160_000_000,
+            expected_e_machine: crate::elf::EM_RISCV,
+            mcu_label: "ESP32-C3 (RISC-V RV32IMC)".to_string(),
         }
     }
+}
+
+/// Validate the architecture of a QEMU flash image against the SoC's ISA.
+///
+/// QEMU boots from a merged `.bin` flash image, which is raw and carries no
+/// ELF header. So:
+///   1. If `flash_image` is itself an ELF (rare, but possible), check it.
+///   2. Otherwise (raw `.bin`), look for the esp-idf-emitted app ELF in the same
+///      directory — the sibling `*.elf` files — and check the arch against those.
+///      This is the build layout in `testdata/firmware/esp32*/` (e.g. `flash.bin`
+///      beside `esp32_blinky.elf`), and it is what makes the persona's
+///      Xtensa-on-RISC-V mistake catchable even though the bin itself is opaque.
+///   3. If neither yields an ELF, the image is left unchecked (no false error).
+///
+/// # Sibling resolution (conservative: zero false positives)
+///
+/// A firmware directory can legitimately hold sibling ELFs of *different* ISAs
+/// (e.g. `testdata/firmware/esp32_blinky/` ships both the Xtensa
+/// `esp32_blinky.elf` and the RISC-V `esp32c3_blinky.elf` next to the raw
+/// `flash.bin`). We must not false-error just because *some* sibling disagrees
+/// with the board. The rule is therefore "any sibling matches → pass":
+///   - collect every sibling that parses as an ELF and read its `e_machine`;
+///   - if ANY of them matches `expected`, the image is arch-consistent → `Ok`;
+///   - only if there are sibling ELFs and NONE matches do we raise the clear
+///     two-sided mismatch error (the genuine Xtensa-on-RISC-V case the gate was
+///     built for — where the *only* sibling disagrees — is still caught);
+///   - no parseable sibling ELF at all → unchecked (`Ok`, never a false error).
+///
+/// As a tie-break, when nothing matches we report the mismatch against a sibling
+/// whose filename stem matches the `.bin`'s stem if one exists, else the first
+/// mismatching sibling, so the message is the most relevant one.
+///
+/// Returns `Err` only on a genuine architecture mismatch.
+fn validate_flash_image_arch(
+    flash_image: &Path,
+    expected: u16,
+    mcu_label: &str,
+) -> Result<()> {
+    // Case 1: the image is itself an ELF.
+    if let Some(found) = crate::elf::read_e_machine(flash_image)? {
+        if found != expected {
+            return crate::elf::validate_arch(flash_image, expected, mcu_label);
+        }
+        return Ok(());
+    }
+
+    // Case 2: raw .bin — probe sibling ELFs in the same directory.
+    let Some(dir) = flash_image.parent() else {
+        return Ok(());
+    };
+    let bin_stem = flash_image.file_stem().and_then(|s| s.to_str());
+
+    // Collect every sibling that actually parses as an ELF, with its e_machine.
+    let mut sibling_elfs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_elf = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("elf"))
+                .unwrap_or(false);
+            if !is_elf {
+                continue;
+            }
+            // A `.elf` that does not actually parse as an ELF (None) is skipped;
+            // a real I/O error is propagated.
+            match crate::elf::read_e_machine(&p)? {
+                Some(found) => {
+                    if found == expected {
+                        // Any matching sibling → the image is arch-consistent.
+                        return Ok(());
+                    }
+                    sibling_elfs.push(p);
+                }
+                None => continue,
+            }
+        }
+    }
+
+    // No sibling ELF at all → unchecked (never a false error).
+    if sibling_elfs.is_empty() {
+        return Ok(());
+    }
+
+    // Sibling ELFs exist but NONE matched the board ISA → genuine mismatch.
+    // Prefer the sibling whose filename stem relates to the .bin for the message;
+    // otherwise the first mismatching sibling.
+    let report = bin_stem
+        .and_then(|bs| {
+            sibling_elfs.iter().find(|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|es| es == bs || es.contains(bs) || bs.contains(es))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(&sibling_elfs[0]);
+    crate::elf::validate_arch(report, expected, mcu_label)
 }
 
 /// Allocate three distinct free TCP ports (QMP, gdbstub, UART), holding all
@@ -284,6 +397,18 @@ impl QemuBackend {
                 flash_image.display()
             );
         }
+
+        // Arch gate (BEFORE spawning QEMU): the persona-esp32-iot hunt loaded an
+        // Xtensa image onto a RISC-V ESP32-C3 and got 136 MB of UART garbage with
+        // no error. QEMU boots from the merged `.bin`, which is raw and carries no
+        // ISA, so we cannot check the flash image directly — but the esp-idf build
+        // emits the app ELF (which DOES carry e_machine) right beside it. If the
+        // image itself is an ELF, check it; otherwise check a sibling app ELF if
+        // one is present. A raw `.bin` with no sibling ELF is left unchecked
+        // (we never false-error), but the common build layout (flash.bin next to
+        // <name>.elf) is now caught.
+        validate_flash_image_arch(flash_image, config.expected_e_machine, &config.mcu_label)?;
+
         let (qmp_port, gdb_port, uart_port) = free_port_triple()?;
 
         let mut process = QemuProcess::spawn(
@@ -390,7 +515,13 @@ impl QemuBackend {
                     for bit in 0..bank.width {
                         if (changed >> bit) & 1 != 0 {
                             let high = (new >> bit) & 1 != 0;
-                            cb(PinId { port: bank.letter, bit }, high);
+                            cb(
+                                PinId {
+                                    port: bank.letter,
+                                    bit,
+                                },
+                                high,
+                            );
                         }
                     }
                 }
@@ -465,7 +596,13 @@ impl Mcu for QemuBackend {
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         // Drive the firmware-visible input by poking GPIO_IN_REG. Maintain a
         // shadow so we set/clear exactly the addressed bit.
-        if let Some(bank) = self.config.banks.iter().find(|b| b.letter == pin.port).cloned() {
+        if let Some(bank) = self
+            .config
+            .banks
+            .iter()
+            .find(|b| b.letter == pin.port)
+            .cloned()
+        {
             let cur = *self.in_shadow.get(&bank.letter).unwrap_or(&0);
             let next = if high {
                 cur | (1 << pin.bit)
@@ -501,7 +638,9 @@ impl Mcu for QemuBackend {
     }
 
     fn on_i2c(&mut self, _cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
-        // I2C interception is not wired for the QEMU backend (as for Renode).
+        // The installed Espressif QEMU hard-wires its own tmp105 on i2c0 and
+        // exposes no host-byte hook for the controller's internal RX FIFO.
+        // See docs/hunts/CODEX_QEMU_I2C_RESULTS.md for the investigation.
     }
 
     fn on_spi(&mut self, _cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
@@ -564,5 +703,89 @@ mod tests {
     fn ports_triple_distinct() {
         let (a, b, c) = free_port_triple().unwrap();
         assert!(a != b && b != c && a != c);
+    }
+
+    // ── validate_flash_image_arch: sibling-ELF resolution ────────────────────
+
+    /// Minimal fake ELF carrying `e_machine` (little-endian) at the given path.
+    /// `e_machine` lives at file offset 0x12 for both ELF32 and ELF64.
+    fn write_fake_elf(path: &Path, e_machine: u16) {
+        use std::io::Write;
+        const E_MACHINE_OFFSET: usize = 0x12;
+        let mut buf = vec![0u8; E_MACHINE_OFFSET + 2];
+        buf[..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+        buf[5] = 1; // EI_DATA little-endian
+        buf[E_MACHINE_OFFSET..E_MACHINE_OFFSET + 2].copy_from_slice(&e_machine.to_le_bytes());
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(&buf).unwrap();
+    }
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "hauksbee-archgate-unit-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// THE BUG: a raw `.bin` (Xtensa flash image) sits in a directory that holds
+    /// TWO sibling ELFs of DIFFERENT arch — the matching Xtensa `esp32_blinky.elf`
+    /// AND the non-matching RISC-V `esp32c3_blinky.elf`. The gate must PASS for an
+    /// Xtensa board because a correct-arch sibling exists; it must NOT false-error
+    /// just because the RISC-V sibling disagrees.
+    #[test]
+    fn raw_bin_with_one_matching_and_one_mismatching_sibling_passes() {
+        let dir = unique_dir("mixed");
+        let bin = dir.join("flash.bin");
+        std::fs::write(&bin, [0xff, 0xff, 0xff, 0xff, 0x00, 0x01]).unwrap();
+        write_fake_elf(&dir.join("esp32_blinky.elf"), crate::elf::EM_XTENSA);
+        write_fake_elf(&dir.join("esp32c3_blinky.elf"), crate::elf::EM_RISCV);
+
+        let res = validate_flash_image_arch(&bin, crate::elf::EM_XTENSA, "ESP32 (Xtensa LX6)");
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            res.is_ok(),
+            "an Xtensa flash.bin with a matching Xtensa sibling must PASS even \
+             though a RISC-V sibling is also present: {res:?}"
+        );
+    }
+
+    /// Regression guard for the genuine mismatch: a raw `.bin` whose ONLY sibling
+    /// ELFs are ALL the wrong arch (here two distinct wrong-arch siblings) must
+    /// still be REFUSED with the clear two-sided message. The fix must not let an
+    /// all-wrong image slip through.
+    #[test]
+    fn raw_bin_with_all_mismatching_siblings_is_refused() {
+        let dir = unique_dir("allwrong");
+        let bin = dir.join("flash.bin");
+        std::fs::write(&bin, [0xff, 0xff, 0xff, 0xff, 0x00, 0x01]).unwrap();
+        // Two siblings, both Xtensa, on a RISC-V board: none match.
+        write_fake_elf(&dir.join("app_a.elf"), crate::elf::EM_XTENSA);
+        write_fake_elf(&dir.join("app_b.elf"), crate::elf::EM_XTENSA);
+
+        let res = validate_flash_image_arch(&bin, crate::elf::EM_RISCV, "ESP32-C3 (RISC-V)");
+        std::fs::remove_dir_all(&dir).ok();
+        let err = res.expect_err("an all-wrong-arch image must be refused");
+        let msg = format!("{err}");
+        assert!(msg.contains("Xtensa"), "msg: {msg}");
+        assert!(msg.contains("RISC-V"), "msg: {msg}");
+        assert!(msg.contains("ESP32-C3"), "msg: {msg}");
+    }
+
+    /// A raw `.bin` with no sibling ELF at all is left unchecked (never errors).
+    #[test]
+    fn raw_bin_with_no_sibling_elf_is_unchecked() {
+        let dir = unique_dir("nosib");
+        let bin = dir.join("flash.bin");
+        std::fs::write(&bin, [0xff, 0xff, 0xff, 0xff, 0x00, 0x01]).unwrap();
+        let res = validate_flash_image_arch(&bin, crate::elf::EM_RISCV, "ESP32-C3");
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(res.is_ok(), "no sibling ELF → unchecked, got: {res:?}");
     }
 }

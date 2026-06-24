@@ -49,7 +49,9 @@ impl Qmp {
                 }
             }
         };
-        stream.set_read_timeout(Some(Duration::from_millis(200))).ok();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
         stream.set_nodelay(true).ok();
         let mut q = Qmp {
             stream,
@@ -108,8 +110,7 @@ impl Qmp {
     /// `xp /1wx 0x3ff44004` prints e.g. `000000003ff44004: 0x00000020`.
     pub fn read_u32(&mut self, addr: u32) -> Result<u32> {
         let out = self.hmp(&format!("xp /1wx 0x{addr:08x}"))?;
-        parse_xp_word(&out)
-            .with_context(|| format!("parsing xp output for 0x{addr:08x}: {out:?}"))
+        parse_xp_word(&out).with_context(|| format!("parsing xp output for 0x{addr:08x}: {out:?}"))
     }
 
     // NOTE on memory WRITES: the QEMU human monitor has no portable
@@ -268,9 +269,7 @@ fn extract_field(msg: &str, key: &str) -> Option<String> {
         None
     } else {
         // Scalar (number / bool / null): read to the next delimiter.
-        let endp = value
-            .find([',', '}', '\n'])
-            .unwrap_or(value.len());
+        let endp = value.find([',', '}', '\n']).unwrap_or(value.len());
         value = value[..endp].trim();
         Some(value.to_string())
     }
@@ -338,7 +337,10 @@ mod tests {
     #[test]
     fn extracts_object_return() {
         let msg = "{\"return\": {\"running\": true}}";
-        assert_eq!(extract_field(msg, "return").as_deref(), Some("{\"running\": true}"));
+        assert_eq!(
+            extract_field(msg, "return").as_deref(),
+            Some("{\"running\": true}")
+        );
     }
 
     #[test]
@@ -360,7 +362,10 @@ mod tests {
     #[test]
     fn parses_xp_word() {
         assert_eq!(parse_xp_word("000000003ff44004: 0x00000020"), Some(0x20));
-        assert_eq!(parse_xp_word("0x3ff44004: 0xdeadbeef\r\n"), Some(0xdeadbeef));
+        assert_eq!(
+            parse_xp_word("0x3ff44004: 0xdeadbeef\r\n"),
+            Some(0xdeadbeef)
+        );
         assert_eq!(parse_xp_word("no hex here"), None);
     }
 }

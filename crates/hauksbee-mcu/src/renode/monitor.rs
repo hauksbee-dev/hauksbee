@@ -25,10 +25,7 @@ pub struct Monitor {
 impl Monitor {
     /// Connect to a Renode Monitor listening on `addr`, retrying until
     /// `connect_timeout` elapses (Renode takes several seconds to bind).
-    pub fn connect<A: ToSocketAddrs + Clone>(
-        addr: A,
-        connect_timeout: Duration,
-    ) -> Result<Self> {
+    pub fn connect<A: ToSocketAddrs + Clone>(addr: A, connect_timeout: Duration) -> Result<Self> {
         let deadline = Instant::now() + connect_timeout;
         loop {
             // Resolve fresh each attempt; the port may not be open yet.
@@ -247,9 +244,7 @@ mod tests {
         // newline and the real prompt; the bare exception must not be framed.
         assert!(prompt_index("Could not load\n(FileNotFoundException)\n").is_none());
         // ...but once the real prompt arrives it frames correctly.
-        assert!(
-            prompt_index("Could not load\n(FileNotFoundException)\n(f103) ").is_some()
-        );
+        assert!(prompt_index("Could not load\n(FileNotFoundException)\n(f103) ").is_some());
     }
 
     #[test]

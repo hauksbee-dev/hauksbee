@@ -25,7 +25,9 @@ impl UartSocket {
         loop {
             match TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
                 Ok(stream) => {
-                    stream.set_read_timeout(Some(Duration::from_millis(20))).ok();
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(20)))
+                        .ok();
                     stream.set_nodelay(true).ok();
                     return Ok(UartSocket { stream });
                 }
