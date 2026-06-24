@@ -230,6 +230,16 @@ impl Scheduler {
         &self.substitutions
     }
 
+    /// Whether any MCU produced at least one GPIO output edge — i.e. the firmware
+    /// actually configured and drove a pin. This is the honest "the firmware did
+    /// something" signal: unlike net `toggles` it survives a pin that is driven
+    /// once and HELD (e.g. a boot-gate firmware that sets a control line high and
+    /// leaves it), which contributes zero net transitions yet clearly ran. Keyed
+    /// on `last_levels`, which is populated only from firmware pin-change edges.
+    pub fn any_gpio_driven(&self) -> bool {
+        self.mcus.iter().any(|m| !m.last_levels.is_empty())
+    }
+
     /// Attach an I2C bus and register it as every live MCU's `on_i2c` handler.
     /// The bus is shared (Arc) so the same instance is both driven by the
     /// firmware's TWI activity and readable for assertions (EEPROM contents,

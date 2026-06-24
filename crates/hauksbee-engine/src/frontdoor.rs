@@ -481,11 +481,50 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
     faults.dedup_by(|a, b| a.component == b.component && a.kind.as_str() == b.kind.as_str());
 
     let plain = plain_faults(&faults);
-    let findings: Vec<WebFinding> = plain.findings.iter().map(WebFinding::from).collect();
+    let mut findings: Vec<WebFinding> = plain.findings.iter().map(WebFinding::from).collect();
 
     // Per-net activity table (top movers first), mirroring the CLI toggle table.
     let sched = engine.scheduler();
     let seconds_simulated = sched.sim_time;
+    // Co-sim honesty parity with the CLI/TUI surfaces. Without these two notes the
+    // web path is the ONE surface that gives false comfort: an empty `findings`
+    // list renders as "No electrical-stress faults during the run." even when the
+    // firmware never executed or ran on a substitute chip. Prepended so they lead.
+    let total_toggles: u64 = sched.stats.values().map(|s| s.toggles).sum();
+    let uart_empty = last_uart.is_empty();
+    // A pin driven high and HELD shows zero net toggles yet clearly ran, so the
+    // refusal must also consult whether the firmware drove any GPIO at all.
+    let any_gpio_driven = sched.any_gpio_driven();
+    // Chip-substitution: the firmware was emulated on a less-specific core.
+    for sub in sched.substitutions() {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: "MCU modelled on a substitute core".to_string(),
+                why: sub.message(),
+                fix: "Peripherals/clock/flash may differ on the real part; treat \
+                      the co-sim as approximate for this MCU."
+                    .to_string(),
+            },
+        );
+    }
+    // Zero-activity refusal: a run that drove nothing proves nothing.
+    if total_toggles == 0 && uart_empty && !any_gpio_driven {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: "Firmware was not exercised".to_string(),
+                why: "Co-sim saw zero net toggles and no UART output; this result \
+                      cannot vouch for firmware behaviour (the MCU may have stalled \
+                      at boot, run no I/O, or the firmware may not match this board)."
+                    .to_string(),
+                fix: "Confirm the firmware matches this MCU and actually drives I/O."
+                    .to_string(),
+            },
+        );
+    }
     let net_volts = sched.net_voltages();
     let mut gpio_nets: Vec<WebGpioNet> = sched
         .stats

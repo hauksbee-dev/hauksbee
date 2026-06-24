@@ -745,11 +745,14 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         // stats the text table reads, so every surface agrees.
         let cosim = build_cosim_json(&engine, uart_seen);
         let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
-        // A co-sim that saw zero net toggles AND no UART output did not exercise
-        // the firmware. Determined BEFORE emitting so it reaches every surface —
-        // including --json when no MCU was instantiated (cosim is None there), so
-        // the refusal is never stderr-only for a machine consumer.
-        let zero_activity = total_toggles == 0 && !uart_seen;
+        // A co-sim that drove no GPIO, produced no net toggles, AND emitted no
+        // UART did not exercise the firmware. `any_gpio_driven()` is essential:
+        // a firmware that drives a control line high and HOLDS it (boot-gate style)
+        // has zero net toggles yet clearly ran, so a toggles-only test would cry
+        // wolf on it. Determined BEFORE emitting so the refusal reaches every
+        // surface — including --json when no MCU was instantiated (cosim is None).
+        let zero_activity =
+            total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
 
         if args.json {
             let mut jr = JsonReport::new(&board_name, summary);
