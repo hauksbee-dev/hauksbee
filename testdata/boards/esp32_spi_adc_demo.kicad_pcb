@@ -1,0 +1,38 @@
+(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "FLAG")
+  (net 4 "HSPI_CLK")
+  (net 5 "HSPI_MISO")
+  (net 6 "HSPI_MOSI")
+  (net 7 "HSPI_CS")
+
+  ; ESP32-WROOM-32 with HSPI (SPI2) master wired to an MCP3008 ADC and a GPIO
+  ; indicator. HSPI: SCLK=GPIO14 (pad 14), MISO=GPIO12 (pad 14 -- see model),
+  ; MOSI=GPIO13 (pad 18 not modeled), CS=GPIO15 (pad 23). The SPI nets are for
+  ; physical traceability; interception is at the SPI peripheral level (not yet
+  ; wired for QEMU backend).
+  ; GPIO4 (pad 26, role "p04") -> net "FLAG": the observable threshold output.
+  ; Pad numbering per KiCad RF_Module:ESP32-WROOM-32.
+  (module Package_RF:ESP32-WROOM-32 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP32-WROOM-32 (at 0 2) (layer F.Fab))
+    (pad 1  smd rect (at -3 0) (net 1 "GND"))
+    (pad 2  smd rect (at -3 1) (net 2 "+3V3"))
+    (pad 26 smd rect (at 3 0) (net 3 "FLAG"))
+    (pad 34 smd rect (at 3 1) (net 0 ""))
+    (pad 33 smd rect (at 3 2) (net 0 ""))
+  )
+
+  ; FLAG -> 10k pulldown to ground so the output net has a resolved DC level
+  ; the solver can compute each chunk.
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 105 110)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 3 "FLAG"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+)
