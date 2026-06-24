@@ -12,6 +12,11 @@
 # building aarch64-linux on x86) because that is untested here and would ship
 # binaries no one ran. The matrix can be extended with real runners (e.g. a
 # macos-13 x86 runner, an arm64 linux runner) when they are available.
+#
+# Dependency note: the workspace Cargo.toml has path deps into the sibling
+# kicad-forge repo (../kicad-forge/crates/forge-sexpr etc). Both repos must
+# be checked out before cargo build runs. This mirrors docker.yml which also
+# materialises both repos before invoking the Dockerfile build stages.
 
 name: release
 
@@ -28,6 +33,10 @@ on:
 permissions:
   contents: write   # needed to create the release and upload assets
 
+env:
+  FORGE_REPO: ETM-Code/kicad-forge
+  FORGE_REF: main
+
 jobs:
   build:
     name: build ${{ matrix.label }}
@@ -41,7 +50,25 @@ jobs:
             label: darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      # Checkout hauksbee into a sibling directory so the ../kicad-forge path dep
+      # resolves correctly at build time. The working directory for subsequent
+      # steps defaults to the repo root (GITHUB_WORKSPACE), so we cd there
+      # explicitly in the build step.
+      - name: Checkout hauksbee
+        uses: actions/checkout@v4
+        with:
+          path: hauksbee
+
+      # The workspace Cargo.toml references forge-sexpr, forge-model, and
+      # forge-codegen via path = "../kicad-forge/crates/...". docker.yml handles
+      # this by building inside a shared ctx/ tree; here we mirror that pattern
+      # by checking out kicad-forge as a sibling of the hauksbee checkout.
+      - name: Checkout kicad-forge sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FORGE_REPO }}
+          ref: ${{ env.FORGE_REF }}
+          path: kicad-forge
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -53,10 +80,47 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            target
-          key: release-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+            hauksbee/target
+          key: release-${{ matrix.os }}-${{ hashFiles('hauksbee/Cargo.lock') }}
           restore-keys: |
             release-${{ matrix.os }}-
+
+      # -----------------------------------------------------------------------
+      # Linux: replicate Dockerfile.slim Stage 1+2 build environment.
+      # Stage 1: apt build-essential + git + libelf-dev + zlib1g-dev for simavr.
+      # Stage 2: clang + libclang-dev for bindgen; build simavr from source;
+      #          export the env vars the hauksbee build.rs expects.
+      # -----------------------------------------------------------------------
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            git \
+            libelf-dev \
+            zlib1g-dev \
+            clang \
+            libclang-dev \
+            pkg-config
+
+      - name: Build simavr from source (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          git clone --depth 1 --branch v1.8 https://github.com/buserror/simavr.git /tmp/simavr-src
+          make -C /tmp/simavr-src CC=gcc RELEASE=1 build-simavr
+          sudo make -C /tmp/simavr-src CC=gcc RELEASE=1 DESTDIR=/usr/local PREFIX=/usr/local install-simavr
+          sudo ldconfig
+
+      # -----------------------------------------------------------------------
+      # macOS: simavr and llvm (for libclang / bindgen) via Homebrew.
+      # build.rs already sets /opt/homebrew/include/simavr in its include path;
+      # LIBCLANG_PATH tells bindgen where to find libclang.dylib.
+      # -----------------------------------------------------------------------
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install simavr llvm
 
       - name: Resolve version
         id: ver
@@ -76,10 +140,29 @@ jobs:
           fi
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build bundle
+      - name: Build bundle (Linux)
+        if: runner.os == 'Linux'
         shell: bash
+        env:
+          LIBRARY_PATH: /usr/local/lib
+          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+          BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/local/include -I/usr/local/include/simavr"
         run: |
-          chmod +x scripts/*.sh
+          chmod +x hauksbee/scripts/*.sh
+          cd hauksbee
+          scripts/bundle.sh \
+            --version "${{ steps.ver.outputs.version }}" \
+            --target "${{ matrix.label }}" \
+            --out dist
+
+      - name: Build bundle (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          LIBCLANG_PATH: "/opt/homebrew/opt/llvm/lib"
+        run: |
+          chmod +x hauksbee/scripts/*.sh
+          cd hauksbee
           scripts/bundle.sh \
             --version "${{ steps.ver.outputs.version }}" \
             --target "${{ matrix.label }}" \
@@ -90,8 +173,8 @@ jobs:
         with:
           name: hauksbee-${{ matrix.label }}
           path: |
-            dist/*.tar.gz
-            dist/*.sha256
+            hauksbee/dist/*.tar.gz
+            hauksbee/dist/*.sha256
           if-no-files-found: error
 
   release:

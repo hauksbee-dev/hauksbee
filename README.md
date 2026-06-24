@@ -6,6 +6,8 @@ Software runs its tests on every commit. Hardware never got that loop: you chang
 
 No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/COMPARISON.md`](docs/COMPARISON.md) for the full matrix.
 
+**New here? Read [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) first** — it is the authoritative scope document: what every layer does, which MCU architectures the firmware co-sim covers (AVR built in; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section that explicitly addresses the two most frequent misunderstandings of the tool.
+
 [**Watch the showcase**](frontend/capture/out/hauksbee_showcase.mp4) (a dozen boards running headless, ~2.5 min).
 
 ![A board, live in 2D with net activity](frontend/screenshots/beauty/2d-live.png)
@@ -38,22 +40,64 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
+**Download a prebuilt binary (fastest):**
+
 ```bash
-scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
+curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+```
+
+This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`.
+
+**Then use it:**
+
+```bash
 hauksbee serve                                       # web front door: open the page, drop a board, read the report
 hauksbee run my_board.kicad_pcb --report             # extract, bind, and report on any board
 hauksbee run my_board.kicad_pcb --drc --plain        # the copper-short report, in plain language
 hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
-hauksbee-ci run ci/power-up.toml                      # run a CI spec the way a pipeline would
+hauksbee-ci run ci/power-up.toml                     # run a CI spec the way a pipeline would
 ```
 
 Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/TEST_CAMPAIGN.md`](docs/TEST_CAMPAIGN.md).
+
+**Building from source:**
+
+```bash
+scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
+```
+
+---
+
+## Simulators / firmware co-sim
+
+AVR (ATmega328P) co-simulation is built in — nothing to install. For STM32,
+nRF52, SiFive RISC-V, ESP32, and ESP32-C3 you need the external simulator
+backends:
+
+```bash
+scripts/install-sims.sh          # install Renode + Espressif QEMU
+scripts/install-sims.sh --check  # verify hauksbee will find them
+```
+
+Renode covers STM32 / nRF52 / RISC-V; the Espressif QEMU fork covers the full
+ESP32 family. Both are detected from an external install (GPL/size; not bundled)
+using the same detect-don't-bundle pattern as the KiCad and ngspice oracles.
+Full details — discovery order, env-var overrides, manual install steps, and the
+Gatekeeper note for macOS — are in [`docs/SIMULATORS.md`](docs/SIMULATORS.md).
 
 ---
 
 ## The honest verdict on the hunt
 
 Pointed at two dozen famous open-hardware boards over five rounds, hauksbee found no unreported defect, and zero false positives from the lint. These are shipped, reviewed, working boards, so a clean electrical verdict is the correct one. The real yield was about ten bugs in hauksbee itself, surprises that turned out to be tool defects rather than board defects, each chased to ground and fixed. The clean sweep is evidence of the tool's honesty; the known-fault table is the proof of its teeth. Full write-up: [`docs/FAMOUS_SWEEP.md`](docs/FAMOUS_SWEEP.md).
+
+Then we pointed it where unknown bugs actually survive: **thin-review, single-maintainer, freshly-shipped boards with no issue history** — the opposite of the famous survivors. Across five such boards, hauksbee turned up **three genuine, previously-unreported findings**, each chased to the design file, hand-verified, prior-art-checked, and put past a fresh context-isolated skeptic:
+
+- **FPV-Drone-STM32F411 ESC board** — a **+3.3 V-to-GND copper short** on the bottom copper (GND pour overlaps the 3.3 V trace, actual clearance 0.0000 mm), confirmed independently by KiCad's own DRC and present byte-for-byte in the exported gerber. Built as drawn, the ESC is dead on arrival. (A DRC-class defect: KiCad's built-in DRC catches it too — the board was simply never DRC'd before shipping.)
+- **LibreSolar mppt-1210-hus** — the input bulk electrolytic runs at **~1.66x its ripple-current rating** (~5.0 A rms vs 3.0 A) at the board's rated 10 A charge: a lifetime/derating overstress, not a power-up failure. Hauksbee-assisted hand finding (it extracted the topology and part values; the ripple physics is the analyst's).
+- **INGBZGMBH PD-Sink-Trigger-Board** — the rotary voltage selector **mis-codes its top two detents** against the CYPD3177 EZ-PD BCR decode table ("15 V" requests 12 V; "20 V" never reaches 20 V), so the advertised 20 V / 100 W is unreachable. Functional defect, no safety hazard.
+
+Three real findings, zero false positives shipped, on boards nobody had reviewed. The targeting thesis (bugs survive on unproven boards, not on shipped survivors) held. Per-board write-ups and the tooling-gap backlog the hunt exposed are in [`docs/hunts/`](docs/hunts/) ([`SUMMARY.md`](docs/hunts/SUMMARY.md)).
 
 ## A note on speed
 
