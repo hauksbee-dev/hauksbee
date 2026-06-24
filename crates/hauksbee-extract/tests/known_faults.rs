@@ -43,7 +43,9 @@ fn require_corpus(what: &str) {
 
 fn lint_pcb(path: &PathBuf) -> hauksbee_extract::NetLintReport {
     let text = std::fs::read_to_string(path).expect("read board");
-    ExtractedBoard::from_auto(&text).expect("parse board").net_lint()
+    ExtractedBoard::from_auto(&text)
+        .expect("parse board")
+        .net_lint()
 }
 
 fn i2c_findings(r: &hauksbee_extract::NetLintReport) -> usize {
@@ -100,7 +102,9 @@ fn zswatch_devkit_i2c_pullup_flagged_in_faulty_clean_in_fixed() {
         i2c_findings(&rfx),
         0,
         "fixed DevKit 1.2.1 added R504/R505 and should be I2C-clean, got: {:?}",
-        rfx.of_check(LintCheck::MissingI2cPullup).map(|f| &f.message).collect::<Vec<_>>()
+        rfx.of_check(LintCheck::MissingI2cPullup)
+            .map(|f| &f.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -128,7 +132,9 @@ fn zswatch_mainboard_rtc_i2c_is_clean() {
         i2c_medium_plus(&r),
         0,
         "shipped ZSWatch mainboard should have no on-board missing-pull-up findings, got: {:?}",
-        r.of_check(LintCheck::MissingI2cPullup).map(|f| &f.message).collect::<Vec<_>>()
+        r.of_check(LintCheck::MissingI2cPullup)
+            .map(|f| &f.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -170,7 +176,8 @@ fn fixed_control_pull_revisions_are_lint_clean() {
         let r = lint_pcb(&b);
         let floating = r.of_check(LintCheck::FloatingControlPin).count();
         assert_eq!(
-            floating, 0,
+            floating,
+            0,
             "fixed revision {} should have no floating-control-pin findings, got {floating}",
             b.display()
         );

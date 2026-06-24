@@ -19,13 +19,20 @@
 use hauksbee_extract::ExtractedBoard;
 
 fn norm(name: &str) -> String {
-    name.trim().rsplit('/').next().unwrap_or(name).trim().to_ascii_uppercase()
+    name.trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .to_ascii_uppercase()
 }
 
 fn is_ground(name: &str) -> bool {
     let n = norm(name);
-    matches!(n.as_str(), "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "0")
-        || n.starts_with("GND")
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "0"
+    ) || n.starts_with("GND")
 }
 
 fn is_rail(name: &str) -> bool {
@@ -59,8 +66,10 @@ fn control_role(function: &str) -> Option<&'static str> {
     if f.contains('/') && !f.starts_with('/') {
         return None;
     }
-    let core: String =
-        f.trim_start_matches('~').trim_start_matches('/').replace(['~', '{', '}', '/', '#'], "");
+    let core: String = f
+        .trim_start_matches('~')
+        .trim_start_matches('/')
+        .replace(['~', '{', '}', '/', '#'], "");
     let core = core.trim_start_matches('N').to_string();
     let core = core.trim_end_matches("_N").to_string();
     let c = core.trim();
@@ -81,7 +90,9 @@ fn control_role(function: &str) -> Option<&'static str> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args().nth(1).expect("usage: ctrl_input_probe <board-file>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: ctrl_input_probe <board-file>");
     let text = std::fs::read_to_string(&path)?;
     let board = if path.ends_with(".kicad_sch") {
         ExtractedBoard::from_kicad_schematic_path(std::path::Path::new(&path))?

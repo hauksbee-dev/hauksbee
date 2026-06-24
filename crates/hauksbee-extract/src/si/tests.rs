@@ -101,7 +101,9 @@ fn crystal_known_cl_within_tolerance_is_info_not_finding() {
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
     assert_eq!(r.finding_count(), 0, "within tolerance must not fire");
-    assert!(r.of_check(SiCheck::CrystalLoadCap).any(|f| f.severity == SiSeverity::Info));
+    assert!(r
+        .of_check(SiCheck::CrystalLoadCap)
+        .any(|f| f.severity == SiSeverity::Info));
 }
 
 #[test]
@@ -112,7 +114,10 @@ fn crystal_known_cl_far_off_fires() {
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
     assert_eq!(r.finding_count(), 1, "far-off CL must fire");
-    assert_eq!(r.of_check(SiCheck::CrystalLoadCap).next().unwrap().check, SiCheck::CrystalLoadCap);
+    assert_eq!(
+        r.of_check(SiCheck::CrystalLoadCap).next().unwrap().check,
+        SiCheck::CrystalLoadCap
+    );
 }
 
 #[test]
@@ -130,28 +135,28 @@ fn crystal_unknown_cl_is_info_only() {
 #[test]
 fn crystal_missing_both_caps_fires() {
     // A discrete crystal with no load caps at all on either terminal.
-    let b = pcb(
-        r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
+    let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
         (footprint "Crystal:Crystal_SMD_3225-4Pin"
           (at 10 10) (layer "F.Cu")
           (property "Reference" "Y1") (property "Value" "16MHz")
           (pad "1" smd rect (at -1 0) (net 1 "XIN"))
           (pad "2" smd rect (at -1 1) (net 3 "GND"))
           (pad "3" smd rect (at 1 0) (net 2 "XOUT"))
-          (pad "4" smd rect (at 1 1) (net 3 "GND")))"#,
-    );
+          (pad "4" smd rect (at 1 1) (net 3 "GND")))"#);
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
     assert_eq!(r.finding_count(), 1, "no load caps must fire");
-    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::Medium);
+    assert_eq!(
+        r.findings_only().next().unwrap().severity,
+        SiSeverity::Medium
+    );
 }
 
 #[test]
 fn rtc_with_integrated_caps_no_cap_is_silent() {
     // A 32.768 kHz crystal on a PCF8523 RTC (integrated load caps): no external
     // caps is CORRECT, must not fire. (The MNT Reform Y4 topology.)
-    let b = pcb(
-        r#"(net 1 "OSCI") (net 2 "OSCO") (net 3 "GND")
+    let b = pcb(r#"(net 1 "OSCI") (net 2 "OSCO") (net 3 "GND")
         (footprint "Crystal:Crystal_SMD_3215-2Pin"
           (at 10 10) (layer "F.Cu")
           (property "Reference" "Y4") (property "Value" "32.768 kHz")
@@ -161,8 +166,7 @@ fn rtc_with_integrated_caps_no_cap_is_silent() {
           (at 14 10) (layer "F.Cu")
           (property "Reference" "U5") (property "Value" "PCF8523T")
           (pad "1" smd rect (at 0 0) (net 1 "OSCI"))
-          (pad "2" smd rect (at 0 1) (net 2 "OSCO")))"#,
-    );
+          (pad "2" smd rect (at 0 1) (net 2 "OSCO")))"#);
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
     assert_eq!(r.finding_count(), 0, "RTC integrates caps; must be silent");
@@ -172,18 +176,20 @@ fn rtc_with_integrated_caps_no_cap_is_silent() {
 fn ceramic_resonator_no_caps_is_silent() {
     // A 3-terminal ceramic resonator (CSTCE / RESONATOR footprint) integrates
     // its load caps; no external caps is correct. (Arduino Uno Y2 topology.)
-    let b = pcb(
-        r#"(net 1 "XTAL1") (net 2 "XTAL2") (net 3 "GND")
+    let b = pcb(r#"(net 1 "XTAL1") (net 2 "XTAL2") (net 3 "GND")
         (footprint "Resonator:RESONATOR"
           (at 10 10) (layer "F.Cu")
           (property "Reference" "Y2") (property "Value" "CSTCE16M0V53-R0 16MHZ")
           (pad "1" smd rect (at -1 0) (net 1 "XTAL1"))
           (pad "2" smd rect (at 0 0) (net 3 "GND"))
-          (pad "3" smd rect (at 1 0) (net 2 "XTAL2")))"#,
-    );
+          (pad "3" smd rect (at 1 0) (net 2 "XTAL2")))"#);
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
-    assert_eq!(r.findings.len(), 0, "ceramic resonator must be entirely silent");
+    assert_eq!(
+        r.findings.len(),
+        0,
+        "ceramic resonator must be entirely silent"
+    );
 }
 
 #[test]
@@ -191,8 +197,7 @@ fn split_keyboard_mirror_prefix_caps_are_traced() {
     // The right half of a Corne carries `r`-prefixed mirror refs (rY1, rC1,
     // rC2). The type classifiers must see Y1/C1/C2 underneath, so the load caps
     // trace and the crystal is INFO (not a false "no caps" finding).
-    let b = pcb(
-        r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
+    let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
         (footprint "Crystal:Crystal_SMD_3225-4Pin" (at 10 10) (layer "F.Cu")
           (property "Reference" "rY1") (property "Value" "12MHz")
           (pad "1" smd rect (at -1 0) (net 1 "XIN"))
@@ -206,11 +211,14 @@ fn split_keyboard_mirror_prefix_caps_are_traced() {
         (footprint "Capacitor_SMD:C_0402" (at 12 10) (layer "F.Cu")
           (property "Reference" "rC2") (property "Value" "27p")
           (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND")))"#,
-    );
+          (pad "2" smd rect (at 1 0) (net 3 "GND")))"#);
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
-    assert_eq!(r.finding_count(), 0, "mirror-prefix caps must trace, no false finding");
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "mirror-prefix caps must trace, no false finding"
+    );
     assert!(r
         .of_check(SiCheck::CrystalLoadCap)
         .any(|f| f.severity == SiSeverity::Info && f.message.contains("17.5")));
@@ -221,8 +229,7 @@ fn eagle_double_pad_capacitor_still_counts_as_two_terminal() {
     // The Eagle .brd extractor lists each pad once per signal contact, so a
     // 2-terminal cap can show four pin entries (pad 1 x2, pad 2 x2). The
     // distinct-pad count must still see two terminals so the load cap traces.
-    let b = pcb(
-        r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
+    let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
         (footprint "Crystal:Crystal_SMD_2Pin" (at 10 10) (layer "F.Cu")
           (property "Reference" "Y2") (property "Value" "16MHz")
           (pad "1" smd rect (at -1 0) (net 1 "XIN"))
@@ -238,24 +245,27 @@ fn eagle_double_pad_capacitor_still_counts_as_two_terminal() {
           (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
           (pad "1" smd rect (at 0 0) (net 2 "XOUT"))
           (pad "2" smd rect (at 1 0) (net 3 "GND"))
-          (pad "2" smd rect (at 1 0) (net 3 "GND")))"#,
-    );
+          (pad "2" smd rect (at 1 0) (net 3 "GND")))"#);
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
-    assert_eq!(r.finding_count(), 0, "double-pad caps must trace, no false 'no caps' finding");
-    assert!(r.of_check(SiCheck::CrystalLoadCap).any(|f| f.severity == SiSeverity::Info));
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "double-pad caps must trace, no false 'no caps' finding"
+    );
+    assert!(r
+        .of_check(SiCheck::CrystalLoadCap)
+        .any(|f| f.severity == SiSeverity::Info));
 }
 
 #[test]
 fn dnp_crystal_is_skipped() {
-    let b = pcb(
-        r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
+    let b = pcb(r#"(net 1 "XIN") (net 2 "XOUT") (net 3 "GND")
         (footprint "Crystal:Crystal_SMD_3225-4Pin"
           (at 10 10) (layer "F.Cu") (attr smd dnp)
           (property "Reference" "Y1") (property "Value" "16MHz")
           (pad "1" smd rect (at -1 0) (net 1 "XIN"))
-          (pad "3" smd rect (at 1 0) (net 2 "XOUT")))"#,
-    );
+          (pad "3" smd rect (at 1 0) (net 2 "XOUT")))"#);
     let mut r = SiReport::default();
     check_crystal_load_cap(&b, &mut r);
     assert_eq!(r.findings.len(), 0, "DNP crystal must be entirely skipped");
@@ -293,7 +303,9 @@ fn i2c_strong_pull_low_device_count_is_ok() {
     let mut r = SiReport::default();
     check_i2c_rise_time(&b, &mut r);
     assert_eq!(r.finding_count(), 0, "strong pull / few devices must be ok");
-    assert!(r.of_check(SiCheck::I2cRiseTime).any(|f| f.severity == SiSeverity::Info));
+    assert!(r
+        .of_check(SiCheck::I2cRiseTime)
+        .any(|f| f.severity == SiSeverity::Info));
 }
 
 #[test]
@@ -310,18 +322,20 @@ fn i2c_weak_pull_heavy_bus_fires() {
 fn i2c_no_pullup_is_not_our_finding() {
     // No pull-up at all: that's netlint's presence check, not the rise-time
     // sufficiency check. We stay silent.
-    let b = pcb(
-        r#"(net 1 "SDA")
+    let b = pcb(r#"(net 1 "SDA")
         (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
           (property "Reference" "U1") (property "Value" "S")
           (pad "1" smd rect (at 0 0) (net 1 "SDA")))
         (footprint "Package_SO:SOIC-8" (at 12 8) (layer "F.Cu")
           (property "Reference" "U2") (property "Value" "S")
-          (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
-    );
+          (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#);
     let mut r = SiReport::default();
     check_i2c_rise_time(&b, &mut r);
-    assert_eq!(r.findings.len(), 0, "no pull-up -> rise-time check is silent");
+    assert_eq!(
+        r.findings.len(),
+        0,
+        "no pull-up -> rise-time check is silent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +369,9 @@ fn antenna_keepout_clear_is_info() {
     // x -9..9) maps to board y 22.25..37.25, x 41..59 at (50,50,0).
     let r = run_keepout(&wroom_text(""));
     assert_eq!(r.finding_count(), 0, "clear keepout must not fire");
-    assert!(r.of_check(SiCheck::AntennaKeepout).any(|f| f.severity == SiSeverity::Info));
+    assert!(r
+        .of_check(SiCheck::AntennaKeepout)
+        .any(|f| f.severity == SiSeverity::Info));
 }
 
 #[test]
@@ -374,7 +390,11 @@ fn antenna_keepout_track_outside_is_silent() {
     // A signal track far from the keepout (board y 70, well below the module).
     let intruder = r#"(segment (start 40 70) (end 60 70) (width 0.2) (layer "F.Cu") (net 1))"#;
     let r = run_keepout(&wroom_text(intruder));
-    assert_eq!(r.finding_count(), 0, "copper outside keepout must be silent");
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "copper outside keepout must be silent"
+    );
 }
 
 #[test]
@@ -393,7 +413,12 @@ fn antenna_unknown_module_no_keepout() {
 // USB diff-pair check.
 // ---------------------------------------------------------------------------
 
-fn usb_board(plus_len: f64, minus_len: f64, plus_w: f64, minus_w: f64) -> (ExtractedBoard, forge_sexpr::Document) {
+fn usb_board(
+    plus_len: f64,
+    minus_len: f64,
+    plus_w: f64,
+    minus_w: f64,
+) -> (ExtractedBoard, forge_sexpr::Document) {
     let body = format!(
         r#"(net 1 "USB_DP") (net 2 "USB_DM")
         (segment (start 0 0) (end {plus_len} 0) (width {plus_w}) (layer "F.Cu") (net 1))
@@ -430,7 +455,11 @@ fn usb_width_mismatch_is_info_note_not_a_finding() {
     let (b, doc) = usb_board(20.0, 20.1, 0.2, 0.3);
     let mut r = SiReport::default();
     check_usb_diff_pair(&b, doc.root().unwrap(), &mut r);
-    assert_eq!(r.finding_count(), 0, "a width mismatch alone must not be a finding");
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "a width mismatch alone must not be a finding"
+    );
     let f = r.of_check(SiCheck::UsbDiffPair).next().unwrap();
     assert_eq!(f.severity, SiSeverity::Info);
     assert!(f.message.contains("width mismatch"));
@@ -438,13 +467,48 @@ fn usb_width_mismatch_is_info_note_not_a_finding() {
 
 #[test]
 fn usb_polarity_classifier_rejects_non_usb() {
-    // VDD, LED-, DDR must not be classified as USB polarity.
-    assert_eq!(super::usb_polarity("VDD").1, None);
-    assert_eq!(super::usb_polarity("LED").1, None);
-    // genuine forms:
-    assert_eq!(super::usb_polarity("USB_DP").1, Some('+'));
-    assert_eq!(super::usb_polarity("D+").1, Some('+'));
-    assert_eq!(super::usb_polarity("UD-").1, Some('-'));
+    // `usb_polarity` now takes an uppercased leaf and returns the stem + polarity
+    // (None when not a USB data line). VDD, LED-, DDR must not classify.
+    assert!(super::usb_polarity("VDD").is_none());
+    assert!(super::usb_polarity("LED").is_none());
+    // genuine forms classify with the right polarity:
+    assert_eq!(super::usb_polarity("USB_DP").map(|(_, p)| p), Some('+'));
+    assert_eq!(super::usb_polarity("D+").map(|(_, p)| p), Some('+'));
+    assert_eq!(super::usb_polarity("UD-").map(|(_, p)| p), Some('-'));
+    // DN (minus) is now recognised so it can pair with a DP leg.
+    assert_eq!(super::usb_polarity("USB_DN").map(|(_, p)| p), Some('-'));
+    // The stem is what must match between the two legs (the prefix before the
+    // polarity token): USB_DP and USB_DN share stem "USB_".
+    assert_eq!(super::usb_polarity("USB_DP").map(|(s, _)| s), Some("USB_".to_string()));
+    assert_eq!(super::usb_polarity("USB_DN").map(|(s, _)| s), Some("USB_".to_string()));
+}
+
+#[test]
+fn usb_pair_key_scopes_by_sheet_and_stem() {
+    // Two legs of the SAME logical pair (same sheet, same stem, opposite
+    // polarity) must produce keys that differ only in polarity, so they pair.
+    let (k_dp, p_dp) = super::usb_pair_key("/USB_DP").unwrap();
+    let (k_dn, p_dn) = super::usb_pair_key("/USB_DN").unwrap();
+    assert_eq!(k_dp, k_dn, "connector-side DP/DN share a scope key");
+    assert_eq!((p_dp, p_dn), ('+', '-'));
+
+    // The MCU-side legs on a different sheet must produce a DIFFERENT key, so the
+    // matcher can never pair across the series ESD device.
+    let (k_mcu_p, _) = super::usb_pair_key("/ESP32-C3-02/USB_D+").unwrap();
+    let (k_mcu_m, _) = super::usb_pair_key("/ESP32-C3-02/USB_D-").unwrap();
+    assert_eq!(k_mcu_p, k_mcu_m, "MCU-side D+/D- share a scope key");
+    assert_ne!(
+        k_dp, k_mcu_p,
+        "connector-side and MCU-side legs (across the ESD array) must NOT share a key"
+    );
+    assert_ne!(
+        k_dp, k_mcu_m,
+        "the exact false-positive cross-pair (/USB_DP x /ESP32-C3-02/USB_D-) must never key-match"
+    );
+
+    // A non-USB net yields no key.
+    assert!(super::usb_pair_key("/VBUS").is_none());
+    assert!(super::usb_pair_key("GND").is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -462,14 +526,23 @@ fn microstrip_z0_matches_reference_calculator() {
     // -> Z0 = 53.5 ohm. Our closed form must match the calculator to within a
     // few percent (it is the same formula, so it matches to < 0.1%).
     let z = microstrip_z0(0.3, 0.2, 0.035, 4.3).unwrap();
-    assert!((z - 53.5).abs() < 0.5, "IPC-2141 microstrip 0.3/0.2 = {z} ohm, want ~53.5");
+    assert!(
+        (z - 53.5).abs() < 0.5,
+        "IPC-2141 microstrip 0.3/0.2 = {z} ohm, want ~53.5"
+    );
     // A second reference point: W=0.25 mm same stack -> 59.3 ohm (calculator).
     let z2 = microstrip_z0(0.25, 0.2, 0.035, 4.3).unwrap();
-    assert!((z2 - 59.3).abs() < 0.6, "IPC-2141 microstrip 0.25/0.2 = {z2} ohm, want ~59.3");
+    assert!(
+        (z2 - 59.3).abs() < 0.6,
+        "IPC-2141 microstrip 0.25/0.2 = {z2} ohm, want ~59.3"
+    );
     // A near-50-ohm wide trace on 1.6 mm 2-layer FR4 (W=2.9 mm, H=1.51, Er=4.5)
     // -> ~48 ohm, the classic "wide trace on a thick board is ~50 ohm".
     let z3 = microstrip_z0(2.9, 1.51, 0.035, 4.5).unwrap();
-    assert!((z3 - 48.0).abs() < 2.0, "wide-trace 50-ohm-ish case = {z3} ohm");
+    assert!(
+        (z3 - 48.0).abs() < 2.0,
+        "wide-trace 50-ohm-ish case = {z3} ohm"
+    );
 }
 
 #[test]
@@ -498,11 +571,17 @@ fn differential_microstrip_matches_hand_value() {
     //   factor = 1 - 0.48*0.3829 = 0.8162; Zdiff = 2*53.52*0.8162 = 87.4 ohm.
     let z0 = microstrip_z0(0.3, 0.2, 0.035, 4.3).unwrap();
     let zd = differential_microstrip_z(z0, 0.2, 0.2).unwrap();
-    assert!((zd - 87.4).abs() < 1.0, "USB diff = {zd} ohm, want ~87.4 (within 90 +-15%)");
+    assert!(
+        (zd - 87.4).abs() < 1.0,
+        "USB diff = {zd} ohm, want ~87.4 (within 90 +-15%)"
+    );
     // Tighter spacing lowers Zdiff (more coupling); wider spacing raises it.
     let tight = differential_microstrip_z(z0, 0.1, 0.2).unwrap();
     let wide = differential_microstrip_z(z0, 0.4, 0.2).unwrap();
-    assert!(tight < zd && zd < wide, "coupling monotonicity: {tight} < {zd} < {wide}");
+    assert!(
+        tight < zd && zd < wide,
+        "coupling monotonicity: {tight} < {zd} < {wide}"
+    );
 }
 
 /// A USB pair routed on F.Cu over a known stackup, with a controllable trace
@@ -554,9 +633,16 @@ fn controlled_impedance_in_band_usb_is_info() {
     let mut r = SiReport::default();
     super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
     assert_eq!(r.finding_count(), 0, "in-band USB diff must not fire");
-    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("a note");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("a note");
     assert_eq!(f.severity, SiSeverity::Info);
-    assert!(f.message.contains("ok"), "in-band must read ok: {}", f.message);
+    assert!(
+        f.message.contains("ok"),
+        "in-band must read ok: {}",
+        f.message
+    );
 }
 
 #[test]
@@ -569,10 +655,18 @@ fn controlled_impedance_out_of_band_usb_fires() {
     let doc = forge_sexpr::parse(&text).unwrap();
     let mut r = SiReport::default();
     super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    assert_eq!(r.finding_count(), 1, "grossly out-of-band USB diff must fire");
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "grossly out-of-band USB diff must fire"
+    );
     let f = r.findings_only().next().unwrap();
     assert_eq!(f.check, SiCheck::ControlledImpedance);
-    assert!(f.message.contains("deviation"), "finding cites the deviation: {}", f.message);
+    assert!(
+        f.message.contains("deviation"),
+        "finding cites the deviation: {}",
+        f.message
+    );
 }
 
 #[test]
@@ -588,10 +682,16 @@ fn controlled_impedance_uncontrolled_board_is_info_even_out_of_band() {
     let mut r = SiReport::default();
     super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
     assert_eq!(r.finding_count(), 0, "uncontrolled board must never fire");
-    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("an info note");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an info note");
     assert_eq!(f.severity, SiSeverity::Info);
-    assert!(f.message.contains("does not declare controlled impedance"),
-        "must explain why it is info: {}", f.message);
+    assert!(
+        f.message.contains("does not declare controlled impedance"),
+        "must explain why it is info: {}",
+        f.message
+    );
 }
 
 #[test]
@@ -609,10 +709,16 @@ fn controlled_impedance_no_stackup_is_info_never_finding() {
     let mut r = SiReport::default();
     super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
     assert_eq!(r.finding_count(), 0, "no stackup -> never a finding");
-    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("an info estimate");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an info estimate");
     assert_eq!(f.severity, SiSeverity::Info);
-    assert!(f.message.contains("ASSUMED") && f.message.contains("info"),
-        "must flag the assumed stackup: {}", f.message);
+    assert!(
+        f.message.contains("ASSUMED") && f.message.contains("info"),
+        "must flag the assumed stackup: {}",
+        f.message
+    );
 }
 
 #[test]
@@ -630,7 +736,13 @@ fn controlled_impedance_ethernet_pair_targets_100_ohm() {
     let doc = forge_sexpr::parse(text).unwrap();
     let mut r = SiReport::default();
     super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    let f = r.of_check(SiCheck::ControlledImpedance).next().expect("a note");
-    assert!(f.message.contains("100 ohm") && f.message.contains("Ethernet"),
-        "Ethernet pair must target 100 ohm: {}", f.message);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("a note");
+    assert!(
+        f.message.contains("100 ohm") && f.message.contains("Ethernet"),
+        "Ethernet pair must target 100 ohm: {}",
+        f.message
+    );
 }

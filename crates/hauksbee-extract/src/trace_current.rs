@@ -121,7 +121,8 @@ impl NetCopper {
     /// discrete tracks (e.g. pure pour or no copper). Reported only for
     /// `Traces` nets in the flagging path, but exposed for any net for probing.
     pub fn bottleneck_ampacity(&self, oz: f64, dt_c: f64, external: bool) -> Option<f64> {
-        self.min_trace_width_mm.map(|w| ipc2221_ampacity(w, oz, dt_c, external))
+        self.min_trace_width_mm
+            .map(|w| ipc2221_ampacity(w, oz, dt_c, external))
     }
 }
 
@@ -176,9 +177,16 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         // Only copper-layer zones count (keepouts on edge cuts do not conduct).
         let on_copper = zone
             .find("layers")
-            .map(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| n.ends_with(".Cu")))
+            .map(|l| {
+                (0..)
+                    .map_while(|i| l.arg_value(i))
+                    .any(|n| n.ends_with(".Cu"))
+            })
             .unwrap_or(false)
-            || zone.find_value("layer").map(|l| l.ends_with(".Cu")).unwrap_or(false);
+            || zone
+                .find_value("layer")
+                .map(|l| l.ends_with(".Cu"))
+                .unwrap_or(false);
         if !on_copper {
             continue;
         }
@@ -249,6 +257,19 @@ pub struct TraceCurrentFinding {
     pub citation: String,
 }
 
+/// Capacity-only row for a power-looking net when no current attribution exists.
+#[derive(Debug, Clone)]
+pub struct TraceCapacityRow {
+    pub net_id: i64,
+    pub net: String,
+    pub kind: CopperKind,
+    pub min_width_mm: Option<f64>,
+    pub segment_count: usize,
+    pub zone_count: usize,
+    pub capacity_10c_a: f64,
+    pub capacity_20c_a: f64,
+}
+
 /// Audit parameters (copper weight, target rise, layer side). Defaults are the
 /// defensible external-1oz-10C ballpark; callers can tighten them.
 #[derive(Debug, Clone, Copy)]
@@ -263,7 +284,12 @@ pub struct TraceAudit {
 
 impl Default for TraceAudit {
     fn default() -> Self {
-        TraceAudit { oz: 1.0, dt_c: 10.0, external: true, margin: 1.0 }
+        TraceAudit {
+            oz: 1.0,
+            dt_c: 10.0,
+            external: true,
+            margin: 1.0,
+        }
     }
 }
 
@@ -286,7 +312,9 @@ pub fn audit_trace_currents(
         if nc.kind != CopperKind::Traces {
             continue;
         }
-        let Some(min_w) = nc.min_trace_width_mm else { continue };
+        let Some(min_w) = nc.min_trace_width_mm else {
+            continue;
+        };
         let ampacity = ipc2221_ampacity(min_w, audit.oz, audit.dt_c, audit.external);
         if ampacity <= 0.0 {
             continue;
@@ -298,13 +326,146 @@ pub fn audit_trace_currents(
                 min_width_mm: min_w,
                 ampacity_a: ampacity,
                 cited_current_a: *current,
-                required_width_mm: ipc2221_min_width_mm(*current, audit.oz, audit.dt_c, audit.external),
+                required_width_mm: ipc2221_min_width_mm(
+                    *current,
+                    audit.oz,
+                    audit.dt_c,
+                    audit.external,
+                ),
                 citation: citation.clone(),
             });
         }
     }
     findings.sort_by(|a, b| a.net_id.cmp(&b.net_id));
     findings
+}
+
+/// Capacity-only report for power-looking nets. This never produces pass/fail:
+/// without a cited current the honest output is "this routed bottleneck can
+/// carry roughly N amps", or "poured net: out of reach".
+pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<TraceCapacityRow> {
+    let mut rows = Vec::new();
+    for nc in copper {
+        if !power_like_net(&nc.name) {
+            continue;
+        }
+        let (capacity_10c_a, capacity_20c_a) = if nc.kind == CopperKind::Traces {
+            (
+                nc.min_trace_width_mm
+                    .map(|w| ipc2221_ampacity(w, audit.oz, 10.0, audit.external))
+                    .unwrap_or(f64::NAN),
+                nc.min_trace_width_mm
+                    .map(|w| ipc2221_ampacity(w, audit.oz, 20.0, audit.external))
+                    .unwrap_or(f64::NAN),
+            )
+        } else {
+            (f64::NAN, f64::NAN)
+        };
+        rows.push(TraceCapacityRow {
+            net_id: nc.net_id,
+            net: nc.name.clone(),
+            kind: nc.kind,
+            min_width_mm: nc.min_trace_width_mm,
+            segment_count: nc.segment_count,
+            zone_count: nc.zone_count,
+            capacity_10c_a,
+            capacity_20c_a,
+        });
+    }
+    rows.sort_by(|a, b| a.net_id.cmp(&b.net_id).then(a.net.cmp(&b.net)));
+    rows
+}
+
+fn power_like_net(name: &str) -> bool {
+    let n = name
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .to_ascii_uppercase();
+    n.starts_with('+')
+        || matches!(
+            n.as_str(),
+            "GND"
+                | "GNDA"
+                | "GNDD"
+                | "PGND"
+                | "VBUS"
+                | "VBAT"
+                | "VBATT"
+                | "BATT"
+                | "VIN"
+                | "VOUT"
+                | "VSYS"
+                | "VCC"
+                | "VDD"
+        )
+        || n.contains("BATT")
+        || n.contains("VBUS")
+        || n.contains("VMOT")
+        || n.contains("VCC")
+        || n.contains("VDD")
+        || n.contains("POWER")
+        || n.contains("PWR")
+}
+
+pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
+    let mut out = String::new();
+    out.push_str("ampacity: IPC-2221 capacity only; supply a current for pass/fail.\n");
+    if rows.is_empty() {
+        out.push_str("no power-like routed nets found.\n");
+        return out;
+    }
+    out.push_str(
+        "┌──────────────────────────┬────────┬──────────┬──────────┬───────────────┐\n\
+         │ Net                      │ Copper │ Min width│ Cap @10C │ Note          │\n\
+         ├──────────────────────────┼────────┼──────────┼──────────┼───────────────┤\n",
+    );
+    for r in rows {
+        let (width, cap, note) = match r.kind {
+            CopperKind::Traces => (
+                r.min_width_mm
+                    .map(|w| format!("{w:.3} mm"))
+                    .unwrap_or_else(|| "-".to_string()),
+                if r.capacity_10c_a.is_finite() {
+                    format!("{:.2} A", r.capacity_10c_a)
+                } else {
+                    "-".to_string()
+                },
+                format!("20C {:.2} A", r.capacity_20c_a),
+            ),
+            CopperKind::Poured => (
+                r.min_width_mm
+                    .map(|w| format!("{w:.3} mm"))
+                    .unwrap_or_else(|| "-".to_string()),
+                "-".to_string(),
+                format!("poured ({} zone)", r.zone_count),
+            ),
+            CopperKind::None => ("-".to_string(), "-".to_string(), "no copper".to_string()),
+        };
+        out.push_str(&format!(
+            "│ {:<24} │ {:<6} │ {:>8} │ {:>8} │ {:<13} │\n",
+            truncate(&r.net, 24),
+            match r.kind {
+                CopperKind::Traces => "traces",
+                CopperKind::Poured => "poured",
+                CopperKind::None => "none",
+            },
+            width,
+            cap,
+            truncate(&note, 13),
+        ));
+    }
+    out.push_str("└──────────────────────────┴────────┴──────────┴──────────┴───────────────┘\n");
+    out
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect()
+    }
 }
 
 #[cfg(test)]
@@ -329,7 +490,10 @@ mod tests {
         for amps in [0.5, 1.0, 2.0, 4.0] {
             let w = ipc2221_min_width_mm(amps, 1.0, 10.0, true);
             let back = ipc2221_ampacity(w, 1.0, 10.0, true);
-            assert!((back - amps).abs() < 1e-6, "roundtrip {amps} -> {w} -> {back}");
+            assert!(
+                (back - amps).abs() < 1e-6,
+                "roundtrip {amps} -> {w} -> {back}"
+            );
         }
     }
 
@@ -374,13 +538,20 @@ mod tests {
         "#;
         let copper = pcb(body);
         let mut cited = HashMap::new();
-        cited.insert("MOTOR".to_string(), (2.0, "TMC2226 2.0 A RMS coil".to_string()));
+        cited.insert(
+            "MOTOR".to_string(),
+            (2.0, "TMC2226 2.0 A RMS coil".to_string()),
+        );
         let f = audit_trace_currents(&copper, &cited, &TraceAudit::default());
         assert_eq!(f.len(), 1, "the undersized motor trace must fire");
         let fd = &f[0];
         assert_eq!(fd.net, "MOTOR");
         assert!((fd.min_width_mm - 0.25).abs() < 1e-9);
-        assert!(fd.ampacity_a < 1.0, "0.25mm ampacity {} should be <1A", fd.ampacity_a);
+        assert!(
+            fd.ampacity_a < 1.0,
+            "0.25mm ampacity {} should be <1A",
+            fd.ampacity_a
+        );
         assert!(fd.required_width_mm > 0.25, "fix needs a wider trace");
     }
 
@@ -399,7 +570,10 @@ mod tests {
         let vdc = copper.iter().find(|n| n.name == "VDC").unwrap();
         assert_eq!(vdc.kind, CopperKind::Poured, "VDC carries a zone -> Poured");
         let mut cited = HashMap::new();
-        cited.insert("VDC".to_string(), (8.0, "6x TMC2226 motor supply".to_string()));
+        cited.insert(
+            "VDC".to_string(),
+            (8.0, "6x TMC2226 motor supply".to_string()),
+        );
         let f = audit_trace_currents(&copper, &cited, &TraceAudit::default());
         assert!(f.is_empty(), "a poured net must never be flagged: {f:?}");
     }
@@ -415,7 +589,10 @@ mod tests {
         let mut cited = HashMap::new();
         cited.insert("VMOT".to_string(), (2.0, "one stepper".to_string()));
         let f = audit_trace_currents(&copper, &cited, &TraceAudit::default());
-        assert!(f.is_empty(), "an adequately-sized trace must not fire: {f:?}");
+        assert!(
+            f.is_empty(),
+            "an adequately-sized trace must not fire: {f:?}"
+        );
     }
 
     #[test]
@@ -430,5 +607,40 @@ mod tests {
         let cited = HashMap::new();
         let f = audit_trace_currents(&copper, &cited, &TraceAudit::default());
         assert!(f.is_empty());
+    }
+
+    #[test]
+    fn capacity_report_includes_power_like_trace_nets_without_claiming_pass_fail() {
+        let body = r#"
+          (net 1 "+BATT")
+          (net 2 "SDA")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+          (segment (start 0 2) (end 10 2) (width 0.15) (layer "F.Cu") (net 2))
+        "#;
+        let copper = pcb(body);
+        let report = trace_capacity_report(&copper, &TraceAudit::default());
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].net, "+BATT");
+        assert!(report[0].capacity_10c_a > 1.0);
+        let rendered = render_trace_capacity_report(&report);
+        assert!(rendered.contains("capacity only"));
+        assert!(rendered.contains("supply a current"));
+        assert!(!rendered.contains("SDA"));
+    }
+
+    #[test]
+    fn capacity_report_marks_poured_power_nets_out_of_reach() {
+        let body = r#"
+          (net 1 "VBUS")
+          (segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net 1))
+          (zone (net 1) (net_name "VBUS") (layers "F.Cu")
+            (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))))
+        "#;
+        let copper = pcb(body);
+        let report = trace_capacity_report(&copper, &TraceAudit::default());
+        assert_eq!(report.len(), 1);
+        assert_eq!(report[0].kind, CopperKind::Poured);
+        assert!(report[0].capacity_10c_a.is_nan());
+        assert!(render_trace_capacity_report(&report).contains("poured"));
     }
 }

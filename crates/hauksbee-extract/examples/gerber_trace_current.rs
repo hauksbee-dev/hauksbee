@@ -61,8 +61,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind,
             nc.track_count,
             nc.region_count,
-            nc.min_track_width_mm.map(|w| format!("{w:.3}")).unwrap_or_else(|| "-".into()),
-            nc.max_track_width_mm.map(|w| format!("{w:.3}")).unwrap_or_else(|| "-".into()),
+            nc.min_track_width_mm
+                .map(|w| format!("{w:.3}"))
+                .unwrap_or_else(|| "-".into()),
+            nc.max_track_width_mm
+                .map(|w| format!("{w:.3}"))
+                .unwrap_or_else(|| "-".into()),
             amp
         );
     }

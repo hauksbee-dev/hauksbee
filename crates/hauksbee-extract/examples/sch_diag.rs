@@ -86,8 +86,12 @@ fn main() {
                 println!(
                     "SPLIT PCB {:?} pins {:?} -> SCH {:?}",
                     np.get(p).unwrap_or(&"?"),
-                    mem.iter().map(|k| format!("{}-{}", k.0, k.1)).collect::<Vec<_>>(),
-                    s.iter().map(|x| ns.get(x).copied().unwrap_or("?")).collect::<Vec<_>>()
+                    mem.iter()
+                        .map(|k| format!("{}-{}", k.0, k.1))
+                        .collect::<Vec<_>>(),
+                    s.iter()
+                        .map(|x| ns.get(x).copied().unwrap_or("?"))
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -99,8 +103,12 @@ fn main() {
                 println!(
                     "MERGE SCH {:?} pins {:?} -> PCB {:?}",
                     ns.get(s).unwrap_or(&"?"),
-                    mem.iter().map(|k| format!("{}-{}", k.0, k.1)).collect::<Vec<_>>(),
-                    p.iter().map(|x| np.get(x).copied().unwrap_or("?")).collect::<Vec<_>>()
+                    mem.iter()
+                        .map(|k| format!("{}-{}", k.0, k.1))
+                        .collect::<Vec<_>>(),
+                    p.iter()
+                        .map(|x| np.get(x).copied().unwrap_or("?"))
+                        .collect::<Vec<_>>()
                 );
             }
         }

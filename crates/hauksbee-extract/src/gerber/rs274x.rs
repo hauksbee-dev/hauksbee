@@ -27,9 +27,7 @@
 
 use std::io::BufReader;
 
-use gerber_types::{
-    Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity,
-};
+use gerber_types::{Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity};
 use gerber_types::{Circle, Polygon as GPolygon, Rectangular};
 use gerber_types::{CoordinateNumber, Coordinates, InterpolationMode};
 
@@ -184,8 +182,16 @@ impl<'a> Plotter<'a> {
     }
 
     fn coord(&self, c: &Coordinates) -> (f64, f64) {
-        let nx = c.x.as_ref().map(num).map(|v| v * self.to_mm).unwrap_or(self.x);
-        let ny = c.y.as_ref().map(num).map(|v| v * self.to_mm).unwrap_or(self.y);
+        let nx =
+            c.x.as_ref()
+                .map(num)
+                .map(|v| v * self.to_mm)
+                .unwrap_or(self.x);
+        let ny =
+            c.y.as_ref()
+                .map(num)
+                .map(|v| v * self.to_mm)
+                .unwrap_or(self.y);
         (nx, ny)
     }
 
@@ -280,7 +286,9 @@ impl<'a> Plotter<'a> {
 
     fn flash(&mut self) {
         let Some(code) = self.aperture else { return };
-        let Some(ap) = self.doc.apertures.get(&code) else { return };
+        let Some(ap) = self.doc.apertures.get(&code) else {
+            return;
+        };
         let (cx, cy) = (self.x, self.y);
         let s = self.to_mm;
         let shape = match ap {
@@ -311,9 +319,18 @@ impl<'a> Plotter<'a> {
                     })
                 }
             }
-            Aperture::Polygon(GPolygon { diameter, vertices, rotation, .. }) => {
-                regular_polygon(cx, cy, diameter * s / 2.0, *vertices, rotation.unwrap_or(0.0))
-            }
+            Aperture::Polygon(GPolygon {
+                diameter,
+                vertices,
+                rotation,
+                ..
+            }) => regular_polygon(
+                cx,
+                cy,
+                diameter * s / 2.0,
+                *vertices,
+                rotation.unwrap_or(0.0),
+            ),
             Aperture::Macro(name, args) => {
                 match self.doc.commands().iter().find_map(|c| match c {
                     Command::ExtendedCode(ExtendedCode::ApertureMacro(m)) if &m.name == name => {
@@ -336,7 +353,10 @@ impl<'a> Plotter<'a> {
                 }
             }
         };
-        self.out.push(CopperPrim { shape, kind: PrimKind::Flash });
+        self.out.push(CopperPrim {
+            shape,
+            kind: PrimKind::Flash,
+        });
     }
 
     fn push_capsule(&mut self, ax: f64, ay: f64, bx: f64, by: f64, r: f64) {
@@ -347,7 +367,17 @@ impl<'a> Plotter<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn push_arc(&mut self, sx: f64, sy: f64, ex: f64, ey: f64, ox: f64, oy: f64, ccw: bool, r: f64) {
+    fn push_arc(
+        &mut self,
+        sx: f64,
+        sy: f64,
+        ex: f64,
+        ey: f64,
+        ox: f64,
+        oy: f64,
+        ccw: bool,
+        r: f64,
+    ) {
         let cx = sx + ox;
         let cy = sy + oy;
         let radius = (ox * ox + oy * oy).sqrt();

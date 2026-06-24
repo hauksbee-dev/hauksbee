@@ -424,8 +424,10 @@ fn is_single_ended_50(name: &str) -> bool {
     // RF feedline conventions only. These are the nets a designer routes to a
     // deliberate 50 ohm; an ordinary digital signal is not assumed controlled.
     toks.iter().any(|t| {
-        matches!(*t, "RF" | "RFIN" | "RFOUT" | "RFOUTPUT" | "ANT" | "ANTENNA" | "RF_IN" | "RF_OUT")
-            || t.starts_with("RFIO")
+        matches!(
+            *t,
+            "RF" | "RFIN" | "RFOUT" | "RFOUTPUT" | "ANT" | "ANTENNA" | "RF_IN" | "RF_OUT"
+        ) || t.starts_with("RFIO")
             || t.starts_with("ANT")
     })
 }
@@ -486,7 +488,8 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             continue;
         };
 
-        let Some(z0) = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er) else {
+        let Some(z0) = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er)
+        else {
             continue;
         };
         let Some(zdiff) = differential_microstrip_z(z0, s, stackup.h_microstrip_mm) else {
@@ -518,7 +521,9 @@ fn emit_diff_info_no_spacing(
     report: &mut SiReport,
 ) {
     let z0 = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er);
-    let z0s = z0.map(|z| format!("{z:.0} ohm")).unwrap_or_else(|| "n/a".into());
+    let z0s = z0
+        .map(|z| format!("{z:.0} ohm"))
+        .unwrap_or_else(|| "n/a".into());
     report.findings.push(SiFinding {
         check: SiCheck::ControlledImpedance,
         severity: SiSeverity::Info,
@@ -538,7 +543,12 @@ fn emit_diff_info_no_spacing(
 }
 
 /// Single-ended 50 ohm lines (RF feeds): estimate microstrip Z0 and judge.
-fn check_single_ended(board: &ExtractedBoard, root: &List, stackup: &Stackup, report: &mut SiReport) {
+fn check_single_ended(
+    board: &ExtractedBoard,
+    root: &List,
+    stackup: &Stackup,
+    report: &mut SiReport,
+) {
     for net in &board.nets {
         if net.id == 0 || !is_single_ended_50(&net.name) {
             continue;
@@ -553,7 +563,8 @@ fn check_single_ended(board: &ExtractedBoard, root: &List, stackup: &Stackup, re
         if w <= 0.0 {
             continue;
         }
-        let Some(z0) = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er) else {
+        let Some(z0) = microstrip_z0(w, stackup.h_microstrip_mm, stackup.t_cu_mm, stackup.er)
+        else {
             continue;
         };
         judge(

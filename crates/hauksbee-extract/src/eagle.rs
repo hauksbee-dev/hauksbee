@@ -148,8 +148,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                         .map(|(pname, dx, dy)| {
                             let dx = if el.mirrored { -dx } else { *dx };
                             // Eagle rotation is counter-clockwise, y up.
-                            let abs =
-                                (el.x + dx * cos - dy * sin, el.y + dx * sin + dy * cos);
+                            let abs = (el.x + dx * cos - dy * sin, el.y + dx * sin + dy * cos);
                             Pin {
                                 number: pname.clone(),
                                 net: pad_net.get(&(el.name.clone(), pname.clone())).copied(),

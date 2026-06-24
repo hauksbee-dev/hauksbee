@@ -30,7 +30,13 @@ pub enum Shape {
 
 impl Shape {
     pub fn disc(x: f64, y: f64, r: f64) -> Shape {
-        Shape::Capsule(Capsule { ax: x, ay: y, bx: x, by: y, r })
+        Shape::Capsule(Capsule {
+            ax: x,
+            ay: y,
+            bx: x,
+            by: y,
+            r,
+        })
     }
 
     /// Inflated AABB (minx, miny, maxx, maxy).
@@ -43,7 +49,12 @@ impl Shape {
                 c.ay.max(c.by) + c.r,
             ],
             Shape::Polygon { pts, r } => {
-                let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+                let mut b = [
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::NEG_INFINITY,
+                ];
                 for &(x, y) in pts {
                     b[0] = b[0].min(x);
                     b[1] = b[1].min(y);
@@ -171,8 +182,12 @@ fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
 pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
     match (a, b) {
         (Shape::Capsule(ca), Shape::Capsule(cb)) => {
-            seg_seg_dist((ca.ax, ca.ay), (ca.bx, ca.by), (cb.ax, cb.ay), (cb.bx, cb.by))
-                - ca.r
+            seg_seg_dist(
+                (ca.ax, ca.ay),
+                (ca.bx, ca.by),
+                (cb.ax, cb.ay),
+                (cb.bx, cb.by),
+            ) - ca.r
                 - cb.r
         }
         (Shape::Capsule(c), Shape::Polygon { pts, r })
@@ -300,7 +315,15 @@ impl<'a> PolyGrid<'a> {
             }
         }
 
-        PolyGrid { pts, minx, miny, inv_cell, nx, ny, cells }
+        PolyGrid {
+            pts,
+            minx,
+            miny,
+            inv_cell,
+            nx,
+            ny,
+            cells,
+        }
     }
 
     fn stamp_edge(
@@ -384,9 +407,18 @@ mod tests {
 
     #[test]
     fn track_into_pad() {
-        let pad = Shape::Polygon { pts: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], r: 0.0 };
+        let pad = Shape::Polygon {
+            pts: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            r: 0.0,
+        };
         // Track ending inside the pad.
-        let track = Shape::Capsule(Capsule { ax: 0.5, ay: 0.5, bx: 3.0, by: 0.5, r: 0.1 });
+        let track = Shape::Capsule(Capsule {
+            ax: 0.5,
+            ay: 0.5,
+            bx: 3.0,
+            by: 0.5,
+            r: 0.1,
+        });
         assert!(shape_gap(&pad, &track) < 0.0);
     }
 }

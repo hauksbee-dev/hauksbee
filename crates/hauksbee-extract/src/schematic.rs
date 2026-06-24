@@ -463,10 +463,7 @@ impl NetlistBuilder {
 
         // Board name: top sheet only.
         let name = name_hint
-            .or_else(|| {
-                root.find("title_block")
-                    .and_then(|t| t.find_value("title"))
-            })
+            .or_else(|| root.find("title_block").and_then(|t| t.find_value("title")))
             .unwrap_or_default();
         Ok(name)
     }
@@ -507,8 +504,7 @@ impl NetlistBuilder {
         // power symbols, so the reference test is what catches them. The
         // power_in/power_out distinction (handled per pin below) then decides
         // whether it actually *names* the net or merely flags it.
-        let is_power = def.map(|d| d.is_power).unwrap_or(false)
-            || reference.starts_with("#PWR");
+        let is_power = def.map(|d| d.is_power).unwrap_or(false) || reference.starts_with("#PWR");
 
         // Power symbols and other "#"-referenced symbols (PWR_FLAG, mounting
         // holes are real refs) are not simulation components in the usual
@@ -706,12 +702,7 @@ impl NetlistBuilder {
             if let Ok(text) = std::fs::read_to_string(&child) {
                 if let Ok(doc) = forge_sexpr::parse(&text) {
                     let child_dir = child.parent().map(Path::to_path_buf);
-                    self.add_sheet_doc(
-                        &doc,
-                        &child_path,
-                        child_dir.as_deref(),
-                        None,
-                    )?;
+                    self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None)?;
                 }
             } else {
                 // Missing sub-sheet file: not fatal, just an incomplete board.
@@ -1020,7 +1011,10 @@ impl NetlistBuilder {
             let id = next_id;
             next_id += 1;
             net_id_of_root.insert(r, id);
-            nets.push(Net { id, name: net_name[&r].clone() });
+            nets.push(Net {
+                id,
+                name: net_name[&r].clone(),
+            });
         }
 
         // 5. Write net ids back onto pins.
@@ -1042,8 +1036,7 @@ impl NetlistBuilder {
         //    from the component list: they are not devices, only net sources,
         //    exactly as KiCad omits them from the netlist's component section.
         //    Their pins already imposed net names in step 2.
-        self.components
-            .retain(|c| !c.reference.starts_with('#'));
+        self.components.retain(|c| !c.reference.starts_with('#'));
 
         // Re-number nets to be contiguous and drop nets that now have zero
         // real members (a power net with only a #PWR pin still has its name
@@ -1059,7 +1052,11 @@ impl NetlistBuilder {
         }
         nets.retain(|n| used.contains(&n.id));
 
-        Ok(ExtractedBoard { name, nets, components: self.components })
+        Ok(ExtractedBoard {
+            name,
+            nets,
+            components: self.components,
+        })
     }
 }
 
@@ -1089,9 +1086,7 @@ fn merge_units(components: Vec<Component>) -> Vec<Component> {
                     // A duplicated pin number from a unit-0 (common) pin keeps
                     // the first occurrence; if a later one carries a net while
                     // the first did not, prefer the connected one.
-                    if let Some(slot) =
-                        existing.pins.iter_mut().find(|e| e.number == p.number)
-                    {
+                    if let Some(slot) = existing.pins.iter_mut().find(|e| e.number == p.number) {
                         if slot.net.is_none() {
                             slot.net = p.net;
                         }
@@ -1172,7 +1167,9 @@ impl LibSymbols {
         let mut defs = HashMap::new();
         if let Some(lib) = root.find("lib_symbols") {
             for sym in lib.find_all("symbol") {
-                let Some(lib_id) = sym.arg_value(0) else { continue };
+                let Some(lib_id) = sym.arg_value(0) else {
+                    continue;
+                };
                 let is_power = sym.find("power").is_some();
                 let mut pins = Vec::new();
                 // Pins live in sub-symbol units named "<base>_<unit>_<style>".
@@ -1234,13 +1231,23 @@ fn lib_pin(p: &List) -> Option<LibPin> {
         ),
         None => return None,
     };
-    let name = p.find("name").and_then(|n| n.arg_value(0)).unwrap_or_default();
+    let name = p
+        .find("name")
+        .and_then(|n| n.arg_value(0))
+        .unwrap_or_default();
     let number = p
         .find("number")
         .and_then(|n| n.arg_value(0))
         .unwrap_or_default();
     let hidden = p.has_flag("hide");
-    Some(LibPin { at, number, name, etype, unit: 0, hidden })
+    Some(LibPin {
+        at,
+        number,
+        name,
+        etype,
+        unit: 0,
+        hidden,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,15 +1312,14 @@ fn at_xy(list: &List) -> Option<Pt> {
 /// excluding the endpoints). Coordinates are integer micrometres, so the cross
 /// product is exact.
 fn point_strictly_inside(p: Pt, a: Pt, b: Pt) -> bool {
-    let cross = (b.0 - a.0) as i128 * (p.1 - a.1) as i128
-        - (b.1 - a.1) as i128 * (p.0 - a.0) as i128;
+    let cross =
+        (b.0 - a.0) as i128 * (p.1 - a.1) as i128 - (b.1 - a.1) as i128 * (p.0 - a.0) as i128;
     if cross != 0 {
         return false; // not collinear
     }
-    let dot = (p.0 - a.0) as i128 * (b.0 - a.0) as i128
-        + (p.1 - a.1) as i128 * (b.1 - a.1) as i128;
-    let len2 = (b.0 - a.0) as i128 * (b.0 - a.0) as i128
-        + (b.1 - a.1) as i128 * (b.1 - a.1) as i128;
+    let dot = (p.0 - a.0) as i128 * (b.0 - a.0) as i128 + (p.1 - a.1) as i128 * (b.1 - a.1) as i128;
+    let len2 =
+        (b.0 - a.0) as i128 * (b.0 - a.0) as i128 + (b.1 - a.1) as i128 * (b.1 - a.1) as i128;
     dot > 0 && dot < len2
 }
 
@@ -1347,7 +1353,10 @@ fn expand_bus(name: &str) -> Option<Vec<String>> {
 /// as KiCad expands `MEM{ADDR}` when `ADDR` is an alias for `A[7..0] WE`).
 ///
 /// Returns `None` for a plain (non-bus) label.
-fn expand_bus_aliased(name: &str, alias: &dyn Fn(&str) -> Option<Vec<String>>) -> Option<Vec<String>> {
+fn expand_bus_aliased(
+    name: &str,
+    alias: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Option<Vec<String>> {
     // Group bus: optional prefix then `{ ... }`.
     if let Some(open) = name.find('{') {
         if name.ends_with('}') {
@@ -1573,11 +1582,17 @@ mod tests {
     fn group_bus_mixes_alias_with_inline_members() {
         // `{ADDR DATA[1..0]}` (anonymous group): ADDR resolves via the alias,
         // DATA[1..0] expands as a vector, no prefix qualification.
-        let alias =
-            |tok: &str| -> Option<Vec<String>> { (tok == "ADDR").then(|| vec!["A0".into(), "A1".into()]) };
+        let alias = |tok: &str| -> Option<Vec<String>> {
+            (tok == "ADDR").then(|| vec!["A0".into(), "A1".into()])
+        };
         assert_eq!(
             expand_bus_aliased("{ADDR DATA[1..0]}", &alias),
-            Some(vec!["A0".into(), "A1".into(), "DATA1".into(), "DATA0".into()])
+            Some(vec![
+                "A0".into(),
+                "A1".into(),
+                "DATA1".into(),
+                "DATA0".into()
+            ])
         );
     }
 

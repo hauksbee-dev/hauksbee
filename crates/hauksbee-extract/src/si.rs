@@ -416,7 +416,14 @@ fn is_ceramic_resonator(c: &Component) -> bool {
 fn has_integrated_xtal_caps(value: &str) -> bool {
     let v = value.to_ascii_uppercase();
     [
-        "PCF8523", "PCF8563", "PCF85063", "RV-8263", "RV8263", "RV-3028", "RV3028", "DS3231",
+        "PCF8523",
+        "PCF8563",
+        "PCF85063",
+        "RV-8263",
+        "RV8263",
+        "RV-3028",
+        "RV3028",
+        "DS3231",
         "ABRACON AB18",
     ]
     .iter()
@@ -442,7 +449,12 @@ fn is_crystal(c: &Component) -> bool {
     let crystal_fp = lib.contains("crystal") || fp.contains("crystal") || fp.contains("xtal");
     // Y is the unambiguous crystal designator. X is overloaded (connectors), so
     // an X-ref only counts as a crystal with a crystal footprint.
-    if r.starts_with('Y') && r.chars().nth(1).map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if r.starts_with('Y')
+        && r.chars()
+            .nth(1)
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+    {
         return true;
     }
     crystal_fp && connected_pads(c) >= 2 && !r.starts_with('J') && !r.starts_with("CN")
@@ -760,7 +772,11 @@ fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
 /// Estimate bus capacitance (pF) on an I2C net from device count plus optional
 /// routed trace length. Devices = non-resistor, non-connector parts with a pin
 /// on the net (each ~C_PIN_PF). Trace length, when known, adds 1.0 pF/mm.
-fn bus_capacitance_pf(board: &ExtractedBoard, net_id: i64, trace_len_mm: Option<f64>) -> (f64, usize) {
+fn bus_capacitance_pf(
+    board: &ExtractedBoard,
+    net_id: i64,
+    trace_len_mm: Option<f64>,
+) -> (f64, usize) {
     let mut devices = 0usize;
     for (c, _p) in board.net_members(net_id) {
         if is_resistor(c) || is_connector_like(c) {
@@ -805,7 +821,11 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
 
         if t_r > limit {
             // Even the assumed (lenient) mode fails: a real finding.
-            let sev = if t_r > limit * 1.5 { SiSeverity::High } else { SiSeverity::Medium };
+            let sev = if t_r > limit * 1.5 {
+                SiSeverity::High
+            } else {
+                SiSeverity::Medium
+            };
             report.findings.push(SiFinding {
                 check: SiCheck::I2cRiseTime,
                 severity: sev,
@@ -906,7 +926,12 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
         // therefore ships as a calibrated guard that fires only on a genuine
         // copper intrusion under/near the antenna, never on this corpus.
         return Some((
-            KeepoutRect { x_min: -9.0, x_max: 9.0, y_min: -20.3, y_max: -5.3 },
+            KeepoutRect {
+                x_min: -9.0,
+                x_max: 9.0,
+                y_min: -20.3,
+                y_max: -5.3,
+            },
             "Espressif ESP32-WROOM-32 hardware design guidelines: 15 mm antenna keepout",
         ));
     }
@@ -1019,20 +1044,30 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                 if !layer.ends_with(".Cu") {
                     continue;
                 }
-                let Some(id) = seg.find("net").and_then(|n| n.arg_i64(0)) else { continue };
+                let Some(id) = seg.find("net").and_then(|n| n.arg_i64(0)) else {
+                    continue;
+                };
                 if own_nets.contains(&id) {
                     continue;
                 }
                 let (Some(start), Some(end)) = (seg.find("start"), seg.find("end")) else {
                     continue;
                 };
-                let (sx, sy) = (start.arg_f64(0).unwrap_or(0.0), start.arg_f64(1).unwrap_or(0.0));
+                let (sx, sy) = (
+                    start.arg_f64(0).unwrap_or(0.0),
+                    start.arg_f64(1).unwrap_or(0.0),
+                );
                 let (ex, ey) = (end.arg_f64(0).unwrap_or(0.0), end.arg_f64(1).unwrap_or(0.0));
                 let mx = (sx + ex) / 2.0;
                 let my = (sy + ey) / 2.0;
                 for (x, y) in [(sx, sy), (ex, ey), (mx, my)] {
                     if in_box(x, y) && point_in_poly(x, y, &poly_v) {
-                        intrusions.push(Intrusion { net: id, x, y, kind: "track" });
+                        intrusions.push(Intrusion {
+                            net: id,
+                            x,
+                            y,
+                            kind: "track",
+                        });
                         break;
                     }
                 }
@@ -1041,14 +1076,21 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
 
         // 2. Vias.
         for via in root.find_all("via") {
-            let Some(id) = via.find("net").and_then(|n| n.arg_i64(0)) else { continue };
+            let Some(id) = via.find("net").and_then(|n| n.arg_i64(0)) else {
+                continue;
+            };
             if own_nets.contains(&id) {
                 continue;
             }
             let Some(at) = via.find("at") else { continue };
             let (x, y) = (at.arg_f64(0).unwrap_or(0.0), at.arg_f64(1).unwrap_or(0.0));
             if in_box(x, y) && point_in_poly(x, y, &poly_v) {
-                intrusions.push(Intrusion { net: id, x, y, kind: "via" });
+                intrusions.push(Intrusion {
+                    net: id,
+                    x,
+                    y,
+                    kind: "via",
+                });
             }
         }
 
@@ -1064,23 +1106,37 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                     continue;
                 }
                 if in_box(x, y) && point_in_poly(x, y, &poly_v) {
-                    intrusions.push(Intrusion { net: id, x, y, kind: "pad" });
+                    intrusions.push(Intrusion {
+                        net: id,
+                        x,
+                        y,
+                        kind: "pad",
+                    });
                 }
             }
         }
 
         // 4. Zone (ground / power pour) fill polygons crossing the keepout.
         for zone in root.find_all("zone") {
-            let Some(id) = zone.find("net").and_then(|n| n.arg_i64(0)) else { continue };
+            let Some(id) = zone.find("net").and_then(|n| n.arg_i64(0)) else {
+                continue;
+            };
             if own_nets.contains(&id) {
                 continue;
             }
             // On a copper layer?
             let on_cu = zone
                 .find("layers")
-                .map(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| n.ends_with(".Cu")))
+                .map(|l| {
+                    (0..)
+                        .map_while(|i| l.arg_value(i))
+                        .any(|n| n.ends_with(".Cu"))
+                })
                 .unwrap_or(false)
-                || zone.find_value("layer").map(|l| l.ends_with(".Cu")).unwrap_or(false);
+                || zone
+                    .find_value("layer")
+                    .map(|l| l.ends_with(".Cu"))
+                    .unwrap_or(false);
             if !on_cu {
                 continue;
             }
@@ -1103,7 +1159,12 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                 }
             }
             if let Some((x, y)) = hit {
-                intrusions.push(Intrusion { net: id, x, y, kind: "zone" });
+                intrusions.push(Intrusion {
+                    net: id,
+                    x,
+                    y,
+                    kind: "zone",
+                });
             }
         }
 
@@ -1127,9 +1188,12 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         nets.sort_unstable();
         nets.dedup();
         let any_ground = nets.iter().any(|id| is_ground(&net_name(*id)));
-        let kinds: std::collections::HashSet<&str> =
-            intrusions.iter().map(|i| i.kind).collect();
-        let sev = if any_ground { SiSeverity::High } else { SiSeverity::Medium };
+        let kinds: std::collections::HashSet<&str> = intrusions.iter().map(|i| i.kind).collect();
+        let sev = if any_ground {
+            SiSeverity::High
+        } else {
+            SiSeverity::Medium
+        };
         let net_names: Vec<String> = nets.iter().map(|id| net_name(*id)).collect();
         let sample = &intrusions[0];
         report.findings.push(SiFinding {
@@ -1186,7 +1250,9 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         if seg.find("net").and_then(|n| n.arg_i64(0)) != Some(net_id) {
             continue;
         }
-        let (Some(s), Some(e)) = (seg.find("start"), seg.find("end")) else { continue };
+        let (Some(s), Some(e)) = (seg.find("start"), seg.find("end")) else {
+            continue;
+        };
         let (sx, sy) = (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0));
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
         total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
@@ -1199,7 +1265,9 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
         if arc.find("net").and_then(|n| n.arg_i64(0)) != Some(net_id) {
             continue;
         }
-        let (Some(s), Some(e)) = (arc.find("start"), arc.find("end")) else { continue };
+        let (Some(s), Some(e)) = (arc.find("start"), arc.find("end")) else {
+            continue;
+        };
         let (sx, sy) = (s.arg_f64(0).unwrap_or(0.0), s.arg_f64(1).unwrap_or(0.0));
         let (ex, ey) = (e.arg_f64(0).unwrap_or(0.0), e.arg_f64(1).unwrap_or(0.0));
         total += ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt();
@@ -1233,54 +1301,108 @@ fn track_width_range(root: &List, net_id: i64) -> Option<(f64, f64)> {
 
 /// Find USB D+/D- pairs by net name. Returns (plus_net_id, minus_net_id,
 /// base_label) for each pair on the board.
+///
+/// A pair is only the two polarity legs of the *same logical net*: they must
+/// share an identical scope key (the hierarchical sheet path PLUS the leaf stem
+/// with the polarity token removed) and differ only in polarity. This is what
+/// keeps the matcher from pairing two electrically-distinct nets that merely
+/// look USB-ish — in particular the connector-side and MCU-side legs on opposite
+/// sides of a series device (an ESD array, common-mode choke, or series R), which
+/// KiCad gives different names (different sheet path and/or different stem). See
+/// the regression note in `usb_pair_key` and
+/// `tests::usb_pair_key_scopes_by_sheet_and_stem`.
 fn usb_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, String)> {
-    // Index nets by a normalized "base" name with the polarity stripped, so DP
-    // and DM (or D+ and D-, USB_D+ / USB_D-) under the same base pair up.
+    // Index nets by their full scope key (sheet path + stem) with the polarity
+    // stripped. Two legs pair only when this key is identical, so DP and DN (or
+    // D+ and D-, USB_D+ / USB_D-) under the *same* scope pair up, while two
+    // distinct nodes that happen to both be USB-ish (across a series device) get
+    // different keys and never pair.
     let mut plus: HashMap<String, i64> = HashMap::new();
     let mut minus: HashMap<String, i64> = HashMap::new();
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
             continue;
         }
-        let n = norm(&net.name);
-        // Identify a USB data line and its polarity.
-        let (base, pol) = usb_polarity(&n);
+        // Identify a USB data line, its polarity, and its full scope key. The key
+        // is derived from the RAW net name (not `norm`), so the hierarchical sheet
+        // path is preserved and two different sheets cannot collide.
+        let Some((key, pol)) = usb_pair_key(&net.name) else {
+            continue;
+        };
         match pol {
-            Some('+') => {
-                plus.entry(base).or_insert(net.id);
+            '+' => {
+                plus.entry(key).or_insert(net.id);
             }
-            Some('-') => {
-                minus.entry(base).or_insert(net.id);
+            '-' => {
+                minus.entry(key).or_insert(net.id);
             }
             _ => {}
         }
     }
     let mut out = Vec::new();
-    for (base, pid) in &plus {
-        if let Some(mid) = minus.get(base) {
-            out.push((*pid, *mid, base.clone()));
+    for (key, pid) in &plus {
+        if let Some(mid) = minus.get(key) {
+            out.push((*pid, *mid, key.clone()));
         }
     }
     out.sort_by_key(|(p, _, _)| *p);
     out
 }
 
-/// Classify a normalized net name as a USB data line: return (base, polarity).
-/// Recognises D+/D-, DP/DM, USB_DP/USB_DM, UD+/UD- (MNT), USBDP/USBDM, *_DP/_DN.
-fn usb_polarity(n: &str) -> (String, Option<char>) {
-    // Must look USB-ish or be a bare D+/D- pair. Reject DDR/LCD/etc by requiring
-    // the token to end in the polarity right after a 'D'.
-    let candidates: [(&str, char); 8] = [
-        ("D+", '+'),
-        ("D-", '-'),
-        ("DP", '+'),
-        ("DM", '-'),
+/// The polarity-stripped scope key + polarity of a USB data net, or `None` if the
+/// net is not a USB data line.
+///
+/// The key is `<sheet-path>\u{1}<leaf-stem>`, both uppercased: the hierarchical
+/// path up to and including the final `/` (KiCad's sheet scope) joined to the leaf
+/// name with the recognised polarity token removed. Two nets pair iff their keys
+/// are identical and their polarities are opposite — i.e. they are the `+`/`-`
+/// legs of the *same* logical signal in the *same* sheet scope.
+///
+/// Why the scope, not just the stem: across a series device (ESD array,
+/// common-mode choke, series resistor) the two sides are electrically distinct
+/// nodes with distinct names. On the klp5e-esp32 board the connector side is
+/// `/USB_DP` + `/USB_DN` (root sheet `/`, stem `USB_`) and the MCU side is
+/// `/ESP32-C3-02/USB_D+` + `/ESP32-C3-02/USB_D-` (sheet `/ESP32-C3-02/`, stem
+/// `USB_`). Keying on sheet path + stem keeps those two real pairs separate, so
+/// the matcher never compares geometry across the ESD device. The previous
+/// implementation collapsed every USB-ish net to the constant base `"USB"`, which
+/// paired `/USB_DP` with `/ESP32-C3-02/USB_D-` across the ESD array and reported a
+/// bogus width/spacing/skew mismatch — the false positive this guards against.
+fn usb_pair_key(raw_name: &str) -> Option<(String, char)> {
+    let trimmed = raw_name.trim();
+    // Split the raw name into the sheet path (up to and including the final '/')
+    // and the leaf. A leading-'/'-only name keeps that '/' as its scope so two
+    // root-sheet nets still share a scope, while a name under a sub-sheet keeps
+    // the distinguishing sub-sheet path.
+    let (sheet, leaf) = match trimmed.rfind('/') {
+        Some(idx) => (&trimmed[..=idx], &trimmed[idx + 1..]),
+        None => ("", trimmed),
+    };
+    let leaf = leaf.trim().to_ascii_uppercase();
+    let (stem, pol) = usb_polarity(&leaf)?;
+    Some((format!("{}\u{1}{}", sheet.to_ascii_uppercase(), stem), pol))
+}
+
+/// Classify an uppercased leaf net name as a USB data line: return
+/// (leaf-stem-with-polarity-removed, polarity). The stem preserves whatever
+/// distinguishes one logical USB net from another within a sheet (e.g. `USB1_` vs
+/// `USB2_`), so two legs only pair when their stems also match.
+///
+/// Recognises D+/D-, DP/DN, DM, USB_D+/USB_D-, UD+/UD- (MNT), USBDP/USBDM,
+/// *_DP/_DN, D_P/D_N. `None` when the leaf is not a USB data line.
+fn usb_polarity(n: &str) -> Option<(String, char)> {
+    // Longest suffixes first so e.g. "DPLUS" is not shadowed by "DP".
+    let candidates: [(&str, char); 9] = [
         ("DPLUS", '+'),
         ("DMINUS", '-'),
         ("D_P", '+'),
         ("D_N", '-'),
+        ("D+", '+'),
+        ("D-", '-'),
+        ("DP", '+'),
+        ("DM", '-'),
+        ("DN", '-'),
     ];
-    // Tokenize on non-alphanumerics but keep +/-.
     for (suf, pol) in candidates {
         if n == suf || n.ends_with(&format!("_{suf}")) || n.ends_with(suf) {
             // Guard: the char before the matched 'D...' must not be a letter that
@@ -1292,15 +1414,18 @@ fn usb_polarity(n: &str) -> (String, Option<char>) {
                 || prefix.contains("USB")
                 || prefix.ends_with('_')
                 || prefix.ends_with('P')   // PD+ on MNT (peripheral USB)
+                || prefix.ends_with('-')   // Net-(U3-USB-DP) style
                 || prefix.ends_with("HS")
                 || prefix.ends_with("FS");
             if usbish {
-                let base = format!("{prefix}USB");
-                return (base, Some(pol));
+                // The stem is the prefix (everything before the polarity token).
+                // It is what must match between the + and - legs, in addition to
+                // the sheet scope, for them to be the same logical pair.
+                return Some((prefix.to_string(), pol));
             }
         }
     }
-    (n.to_string(), None)
+    None
 }
 
 fn check_usb_diff_pair(board: &ExtractedBoard, root: &List, report: &mut SiReport) {

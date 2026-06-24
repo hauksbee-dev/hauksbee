@@ -13,9 +13,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use hauksbee_extract::{
-    audit_trace_currents, net_copper_from_root, CopperKind, TraceAudit,
-};
+use hauksbee_extract::{audit_trace_currents, net_copper_from_root, CopperKind, TraceAudit};
 
 fn corpus_famous() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
@@ -90,7 +88,10 @@ fn lumenpnp_motor_supply_is_poured_and_coil_traces_are_adequately_sized() {
         {
             cited.insert(
                 nc.name.clone(),
-                (2.0, "TMC2226 2.0 A RMS max coil (datasheet rev 1.10)".to_string()),
+                (
+                    2.0,
+                    "TMC2226 2.0 A RMS max coil (datasheet rev 1.10)".to_string(),
+                ),
             );
         }
     }

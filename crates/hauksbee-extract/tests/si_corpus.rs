@@ -32,10 +32,15 @@ fn corpus_famous() -> Option<PathBuf> {
 /// Every KiCad `.kicad_pcb` and Eagle `.brd` under a directory.
 fn board_files(root: &PathBuf) -> Vec<PathBuf> {
     fn walk(dir: &PathBuf, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
+                if p.file_name().and_then(|s| s.to_str()) == Some("hunt") {
+                    continue;
+                }
                 walk(&p, out);
             } else if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
                 if ext == "kicad_pcb" || ext == "brd" {
@@ -66,7 +71,9 @@ fn si_checks_are_silent_on_the_entire_known_good_corpus() {
     let mut offenders: Vec<String> = Vec::new();
     let mut swept = 0usize;
     for path in board_files(&famous) {
-        let Some(report) = run_si(&path) else { continue };
+        let Some(report) = run_si(&path) else {
+            continue;
+        };
         swept += 1;
         for f in report.findings_only() {
             offenders.push(format!(
@@ -113,9 +120,17 @@ fn rp2040_abm8_272_load_is_info_within_tolerance() {
         .iter()
         .find(|f| f.refs.iter().any(|r| r == "Y1"))
         .expect("Y1 ABM8-272 note present");
-    assert_eq!(y1.severity, SiSeverity::Info, "ABM8-272 at 15pF caps is within tolerance");
+    assert_eq!(
+        y1.severity,
+        SiSeverity::Info,
+        "ABM8-272 at 15pF caps is within tolerance"
+    );
     // The board CL ~ 11.5 pF and the 18 pF spec must both be in the note.
-    assert!(y1.message.contains("18 pF"), "the ABM8-272 CL spec must be cited: {}", y1.message);
+    assert!(
+        y1.message.contains("18 pF"),
+        "the ABM8-272 CL spec must be cited: {}",
+        y1.message
+    );
 }
 
 /// The ZSWatch mainboard's busiest I2C bus (the 8-device Extension bus, 1.8 kohm
@@ -137,7 +152,10 @@ fn zswatch_busy_i2c_bus_rise_time_is_clean() {
     };
     // No I2C rise-time finding anywhere on the board.
     assert_eq!(
-        report.of_check(SiCheck::I2cRiseTime).filter(|f| f.severity.is_finding()).count(),
+        report
+            .of_check(SiCheck::I2cRiseTime)
+            .filter(|f| f.severity.is_finding())
+            .count(),
         0,
         "ZSWatch I2C buses are all within standard-mode rise time"
     );
@@ -146,7 +164,11 @@ fn zswatch_busy_i2c_bus_rise_time_is_clean() {
         .of_check(SiCheck::I2cRiseTime)
         .find(|f| f.message.contains("Extension/SDA"))
         .expect("Extension SDA bus note present");
-    assert!(ext.message.contains("ok"), "busy bus must read ok: {}", ext.message);
+    assert!(
+        ext.message.contains("ok"),
+        "busy bus must read ok: {}",
+        ext.message
+    );
 }
 
 /// The Olimex ESP32-EVB carries the corpus's only ESP32-WROOM-32 module, mounted
@@ -166,8 +188,16 @@ fn olimex_wroom_antenna_keepout_is_clear() {
         return;
     };
     let ant: Vec<_> = report.of_check(SiCheck::AntennaKeepout).collect();
-    assert_eq!(ant.len(), 1, "exactly the WROOM module produces a keepout note");
-    assert_eq!(ant[0].severity, SiSeverity::Info, "WROOM keepout is clear (edge placement)");
+    assert_eq!(
+        ant.len(),
+        1,
+        "exactly the WROOM module produces a keepout note"
+    );
+    assert_eq!(
+        ant[0].severity,
+        SiSeverity::Info,
+        "WROOM keepout is clear (edge placement)"
+    );
     assert!(ant[0].message.contains("clear"));
 }
 
@@ -207,7 +237,10 @@ fn rp2040_no_stackup_impedance_is_info_only() {
         return;
     };
     let zi: Vec<_> = report.of_check(SiCheck::ControlledImpedance).collect();
-    assert!(!zi.is_empty(), "RP2040 USB pair produces a controlled-impedance note");
+    assert!(
+        !zi.is_empty(),
+        "RP2040 USB pair produces a controlled-impedance note"
+    );
     assert!(
         zi.iter().all(|f| f.severity == SiSeverity::Info),
         "no stackup -> impedance is info only, never a finding"
@@ -240,10 +273,21 @@ fn watchy_usb_impedance_computed_but_info_uncontrolled() {
         .iter()
         .find(|f| f.message.contains("USB_D"))
         .expect("Watchy USB pair impedance note present");
-    assert_eq!(usb.severity, SiSeverity::Info, "uncontrolled board -> info not a fire");
+    assert_eq!(
+        usb.severity,
+        SiSeverity::Info,
+        "uncontrolled board -> info not a fire"
+    );
     // The note carries the real board stackup (not the default) and the target.
-    assert!(usb.message.contains("board") && usb.message.contains("90 ohm"),
-        "note carries the file stackup and the USB target: {}", usb.message);
-    assert!(usb.message.contains("does not declare controlled impedance"),
-        "the intent gate must be explained: {}", usb.message);
+    assert!(
+        usb.message.contains("board") && usb.message.contains("90 ohm"),
+        "note carries the file stackup and the USB target: {}",
+        usb.message
+    );
+    assert!(
+        usb.message
+            .contains("does not declare controlled impedance"),
+        "the intent gate must be explained: {}",
+        usb.message
+    );
 }

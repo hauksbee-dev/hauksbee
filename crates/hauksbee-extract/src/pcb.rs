@@ -91,7 +91,11 @@ impl NetTable {
 /// A pad/segment net reference: `(net 4 "GND")` in ≤v9, `(net "GND")` in v10.
 fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
     let net = list.find("net")?;
-    if let Some(id) = net.arg(0).filter(|t| !t.is_string()).and_then(|t| t.as_i64()) {
+    if let Some(id) = net
+        .arg(0)
+        .filter(|t| !t.is_string())
+        .and_then(|t| t.as_i64())
+    {
         return Some(id);
     }
     let name = net.arg_value(0)?;
@@ -142,9 +146,7 @@ fn extract_footprint(fp: &List, table: &mut NetTable) -> Component {
         pins.push(Pin {
             number,
             net,
-            function: pad
-                .find_value("pinfunction")
-                .unwrap_or_default(),
+            function: pad.find_value("pinfunction").unwrap_or_default(),
             kind: pad.find_value("pintype").unwrap_or_default(),
             position: Some(abs),
         });

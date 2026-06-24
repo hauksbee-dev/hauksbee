@@ -47,7 +47,11 @@ fn uconsole_mainboard_reconstructs() {
     // ground net. These are loose floors so cosmetic geometry changes don't
     // break the test, but a real regression (e.g. the FS normaliser breaking)
     // would collapse them to ~0.
-    assert!(s.n_components > 180, "components placed: {}", s.n_components);
+    assert!(
+        s.n_components > 180,
+        "components placed: {}",
+        s.n_components
+    );
     assert!(s.n_nets > 250, "nets reconstructed: {}", s.n_nets);
     assert!(s.n_holes > 800, "plated holes: {}", s.n_holes);
     assert!(s.gnd_detected, "a GND-class net should be labelled");
@@ -167,14 +171,22 @@ fn cm4_adapter_reconstructs_and_planes_are_poured() {
         s.n_layers, s.n_holes, s.n_nets, s.gnd_detected
     );
     assert_eq!(s.n_layers, 4, "TOP, GND02, PWR03, BOTTOM");
-    assert!(s.n_holes > 500, "gerber-format drill must stitch, got {}", s.n_holes);
+    assert!(
+        s.n_holes > 500,
+        "gerber-format drill must stitch, got {}",
+        s.n_holes
+    );
     assert!(s.n_nets > 100, "nets reconstructed: {}", s.n_nets);
     assert!(s.gnd_detected, "a GND-class net should be labelled");
     assert_eq!(s.n_components, 0, "no P&P ships in the adapter zip");
 
     // The plane films (GND02 / PWR03) must surface as Poured nets, and the
     // routed traces carry plausible widths.
-    let poured = s.net_copper.iter().filter(|c| c.kind == GerberCopperKind::Poured).count();
+    let poured = s
+        .net_copper
+        .iter()
+        .filter(|c| c.kind == GerberCopperKind::Poured)
+        .count();
     assert!(poured > 5, "plane nets should be Poured, got {poured}");
     let narrowest = s
         .net_copper

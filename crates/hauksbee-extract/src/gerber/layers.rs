@@ -136,18 +136,30 @@ pub fn classify(path: &Path) -> LayerRole {
     }
 
     // ── Outline / edge ──────────────────────────────────────────────────────
-    if n.has("edge") || n.has("outline") || n.has("boardoutline") || n.has("-gko") || n.has("margin")
-        || n.ext_is("gko") || n.ext_is("gm1") || n.ext_is("gml")
+    if n.has("edge")
+        || n.has("outline")
+        || n.has("boardoutline")
+        || n.has("-gko")
+        || n.has("margin")
+        || n.ext_is("gko")
+        || n.ext_is("gm1")
+        || n.ext_is("gml")
     {
         return LayerRole::Outline;
     }
 
     // ── Copper by Protel/Altium extension ───────────────────────────────────
     if n.ext_is("gtl") {
-        return LayerRole::Copper { index: 0, name: top_label(n.original) };
+        return LayerRole::Copper {
+            index: 0,
+            name: top_label(n.original),
+        };
     }
     if n.ext_is("gbl") {
-        return LayerRole::Copper { index: usize::MAX, name: bottom_label(n.original) };
+        return LayerRole::Copper {
+            index: usize::MAX,
+            name: bottom_label(n.original),
+        };
     }
     // Inner copper: .G1L/.G2L… or .GP1/.GP2… or .G1/.G2…
     if let Some(idx) = protel_inner_index(&n) {
@@ -160,15 +172,27 @@ pub fn classify(path: &Path) -> LayerRole {
     // ── Copper by KiCad/long name ───────────────────────────────────────────
     // `*-F_Cu.gbr`, `*-B_Cu.gbr`, `*-In1_Cu.gbr` (case-insensitive).
     let has_copper = |n: &Name| n.has("cu") || n.has("copper");
-    if n.has("f_cu") || n.has("f.cu") || (n.has("top") && has_copper(&n)) || n.has("toplayer")
+    if n.has("f_cu")
+        || n.has("f.cu")
+        || (n.has("top") && has_copper(&n))
+        || n.has("toplayer")
         || n.has("top layer")
     {
-        return LayerRole::Copper { index: 0, name: top_label(n.original) };
+        return LayerRole::Copper {
+            index: 0,
+            name: top_label(n.original),
+        };
     }
-    if n.has("b_cu") || n.has("b.cu") || (n.has("bottom") && has_copper(&n)) || n.has("bottomlayer")
+    if n.has("b_cu")
+        || n.has("b.cu")
+        || (n.has("bottom") && has_copper(&n))
+        || n.has("bottomlayer")
         || n.has("bottom layer")
     {
-        return LayerRole::Copper { index: usize::MAX, name: bottom_label(n.original) };
+        return LayerRole::Copper {
+            index: usize::MAX,
+            name: bottom_label(n.original),
+        };
     }
     if let Some(idx) = kicad_inner_index(&n) {
         return LayerRole::Copper {
@@ -186,23 +210,38 @@ pub fn classify(path: &Path) -> LayerRole {
     if n.ext_is("art") {
         let stem = &n.full;
         if stem.starts_with("top") {
-            return LayerRole::Copper { index: 0, name: "TOP".to_string() };
+            return LayerRole::Copper {
+                index: 0,
+                name: "TOP".to_string(),
+            };
         }
         if stem.starts_with("bottom") || stem.starts_with("bot.") {
-            return LayerRole::Copper { index: usize::MAX, name: "BOTTOM".to_string() };
+            return LayerRole::Copper {
+                index: usize::MAX,
+                name: "BOTTOM".to_string(),
+            };
         }
         // Inner plane with an embedded stack number: gnd02, pwr04, gnd05, l3 …
-        if stem.starts_with("gnd") || stem.starts_with("pwr") || stem.starts_with("pgnd")
-            || stem.starts_with("power") || stem.starts_with("plane")
+        if stem.starts_with("gnd")
+            || stem.starts_with("pwr")
+            || stem.starts_with("pgnd")
+            || stem.starts_with("power")
+            || stem.starts_with("plane")
         {
             let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
             if let Ok(k) = digits.parse::<usize>() {
                 if k >= 1 {
-                    return LayerRole::Copper { index: k, name: n.original.to_string() };
+                    return LayerRole::Copper {
+                        index: k,
+                        name: n.original.to_string(),
+                    };
                 }
             }
             // No number: still a copper plane, drop it after top, before bottom.
-            return LayerRole::Copper { index: 1, name: n.original.to_string() };
+            return LayerRole::Copper {
+                index: 1,
+                name: n.original.to_string(),
+            };
         }
     }
 
@@ -228,15 +267,23 @@ pub fn parse_mapping(text: &str) -> std::collections::HashMap<String, LayerRole>
         if line.is_empty() {
             continue;
         }
-        let Some((name, role)) = line.split_once('=') else { continue };
+        let Some((name, role)) = line.split_once('=') else {
+            continue;
+        };
         let name = name.trim().to_string();
         let role = role.trim().to_ascii_lowercase();
         let parsed = if let Some(idx) = role.strip_prefix("copper:") {
             let idx = idx.trim();
             if idx == "bottom" {
-                LayerRole::Copper { index: usize::MAX, name: name.clone() }
+                LayerRole::Copper {
+                    index: usize::MAX,
+                    name: name.clone(),
+                }
             } else if let Ok(k) = idx.parse::<usize>() {
-                LayerRole::Copper { index: k, name: name.clone() }
+                LayerRole::Copper {
+                    index: k,
+                    name: name.clone(),
+                }
             } else {
                 continue;
             }
@@ -254,10 +301,18 @@ pub fn parse_mapping(text: &str) -> std::collections::HashMap<String, LayerRole>
 }
 
 fn top_label(orig: &str) -> String {
-    if orig.is_empty() { "F.Cu".to_string() } else { orig.to_string() }
+    if orig.is_empty() {
+        "F.Cu".to_string()
+    } else {
+        orig.to_string()
+    }
 }
 fn bottom_label(orig: &str) -> String {
-    if orig.is_empty() { "B.Cu".to_string() } else { orig.to_string() }
+    if orig.is_empty() {
+        "B.Cu".to_string()
+    } else {
+        orig.to_string()
+    }
 }
 
 /// Protel inner-copper extension: `.g1l`/`.g2l`…, `.gp1`/`.gp2`…, `.g1`/`.g2`…
@@ -345,10 +400,25 @@ mod tests {
 
     #[test]
     fn kicad_names() {
-        assert!(matches!(role("board-F_Cu.gbr"), LayerRole::Copper { index: 0, .. }));
-        assert!(matches!(role("board-B_Cu.gbr"), LayerRole::Copper { index: usize::MAX, .. }));
-        assert!(matches!(role("board-In1_Cu.gbr"), LayerRole::Copper { index: 1, .. }));
-        assert!(matches!(role("board-In2_Cu.gbr"), LayerRole::Copper { index: 2, .. }));
+        assert!(matches!(
+            role("board-F_Cu.gbr"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        assert!(matches!(
+            role("board-B_Cu.gbr"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
+        assert!(matches!(
+            role("board-In1_Cu.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
+        assert!(matches!(
+            role("board-In2_Cu.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
         assert_eq!(role("board-F_Mask.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Silkscreen.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Paste.gbr"), LayerRole::Ignored);
@@ -359,9 +429,21 @@ mod tests {
 
     #[test]
     fn protel_extensions() {
-        assert!(matches!(role("design.GTL"), LayerRole::Copper { index: 0, .. }));
-        assert!(matches!(role("design.gbl"), LayerRole::Copper { index: usize::MAX, .. }));
-        assert!(matches!(role("design.G1L"), LayerRole::Copper { index: 1, .. }));
+        assert!(matches!(
+            role("design.GTL"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        assert!(matches!(
+            role("design.gbl"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
+        assert!(matches!(
+            role("design.G1L"),
+            LayerRole::Copper { index: 1, .. }
+        ));
         assert_eq!(role("design.GTS"), LayerRole::Ignored);
         assert_eq!(role("design.GTO"), LayerRole::Ignored);
         assert_eq!(role("design.GKO"), LayerRole::Outline);
@@ -372,16 +454,40 @@ mod tests {
 
     #[test]
     fn generic_words() {
-        assert!(matches!(role("TopLayer.gbr"), LayerRole::Copper { index: 0, .. }));
-        assert!(matches!(role("Bottom Copper.gbr"), LayerRole::Copper { index: usize::MAX, .. }));
+        assert!(matches!(
+            role("TopLayer.gbr"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        assert!(matches!(
+            role("Bottom Copper.gbr"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn allegro_art_names() {
-        assert!(matches!(role("top.art"), LayerRole::Copper { index: 0, .. }));
-        assert!(matches!(role("bottom.art"), LayerRole::Copper { index: usize::MAX, .. }));
-        assert!(matches!(role("gnd02.art"), LayerRole::Copper { index: 2, .. }));
-        assert!(matches!(role("pwr04.art"), LayerRole::Copper { index: 4, .. }));
+        assert!(matches!(
+            role("top.art"),
+            LayerRole::Copper { index: 0, .. }
+        ));
+        assert!(matches!(
+            role("bottom.art"),
+            LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            }
+        ));
+        assert!(matches!(
+            role("gnd02.art"),
+            LayerRole::Copper { index: 2, .. }
+        ));
+        assert!(matches!(
+            role("pwr04.art"),
+            LayerRole::Copper { index: 4, .. }
+        ));
         assert_eq!(role("drill-1-6.art"), LayerRole::Drill);
         assert_eq!(role("silk_top.art"), LayerRole::Ignored);
         assert_eq!(role("solder_bot.art"), LayerRole::Ignored);
@@ -398,11 +504,20 @@ weird_bot.gbr = copper:bottom\n\
 holes.txt = drill\n\
 edge.gbr = outline\n";
         let m = parse_mapping(text);
-        assert!(matches!(m.get("weird_top.gbr"), Some(LayerRole::Copper { index: 0, .. })));
-        assert!(matches!(m.get("weird_in1.gbr"), Some(LayerRole::Copper { index: 1, .. })));
+        assert!(matches!(
+            m.get("weird_top.gbr"),
+            Some(LayerRole::Copper { index: 0, .. })
+        ));
+        assert!(matches!(
+            m.get("weird_in1.gbr"),
+            Some(LayerRole::Copper { index: 1, .. })
+        ));
         assert!(matches!(
             m.get("weird_bot.gbr"),
-            Some(LayerRole::Copper { index: usize::MAX, .. })
+            Some(LayerRole::Copper {
+                index: usize::MAX,
+                ..
+            })
         ));
         assert_eq!(m.get("holes.txt"), Some(&LayerRole::Drill));
         assert_eq!(m.get("edge.gbr"), Some(&LayerRole::Outline));
@@ -411,10 +526,34 @@ edge.gbr = outline\n";
     #[test]
     fn dense_reorder() {
         let coppers = vec![
-            (LayerRole::Copper { index: usize::MAX, name: "B".into() }, 0),
-            (LayerRole::Copper { index: 0, name: "F".into() }, 1),
-            (LayerRole::Copper { index: 2, name: "In2".into() }, 2),
-            (LayerRole::Copper { index: 1, name: "In1".into() }, 3),
+            (
+                LayerRole::Copper {
+                    index: usize::MAX,
+                    name: "B".into(),
+                },
+                0,
+            ),
+            (
+                LayerRole::Copper {
+                    index: 0,
+                    name: "F".into(),
+                },
+                1,
+            ),
+            (
+                LayerRole::Copper {
+                    index: 2,
+                    name: "In2".into(),
+                },
+                2,
+            ),
+            (
+                LayerRole::Copper {
+                    index: 1,
+                    name: "In1".into(),
+                },
+                3,
+            ),
         ];
         let out = assign_inner_indices(coppers);
         // Order: F(0), In1(1), In2(2), B(3)

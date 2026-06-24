@@ -52,8 +52,12 @@ fn main() {
             }
         }
     }
-    let recon_by_ref: HashMap<&str, usize> =
-        recon.board.components.iter().map(|c| (c.reference.as_str(), c.pins.len())).collect();
+    let recon_by_ref: HashMap<&str, usize> = recon
+        .board
+        .components
+        .iter()
+        .map(|c| (c.reference.as_str(), c.pins.len()))
+        .collect();
     let mut cmatch = 0;
     for c in &native.components {
         let n = c.pins.iter().filter(|p| p.position.is_some()).count();

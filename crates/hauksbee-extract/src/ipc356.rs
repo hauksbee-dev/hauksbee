@@ -36,9 +36,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         saw_record = true;
         // Columns (1-based, per IPC-D-356): 4-17 net name, 21-26 ref des,
         // 27 '-', 28-31 pin number. Coordinates follow after column 32.
-        let get = |a: usize, b: usize| -> &str {
-            line.get(a..b.min(line.len())).unwrap_or("").trim()
-        };
+        let get =
+            |a: usize, b: usize| -> &str { line.get(a..b.min(line.len())).unwrap_or("").trim() };
         let net_name = get(3, 17).to_string();
         let reference = get(20, 26).to_string();
         let pin_number = get(27, 31).to_string();

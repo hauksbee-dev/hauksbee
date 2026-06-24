@@ -72,7 +72,10 @@ fn output_contention_is_silent_on_known_good_corpus() {
         }
     }
 
-    assert!(scanned >= 10, "expected to scan the known-good corpus, scanned {scanned}");
+    assert!(
+        scanned >= 10,
+        "expected to scan the known-good corpus, scanned {scanned}"
+    );
     assert!(
         offenders.is_empty(),
         "output_contention must be silent on known-good boards, but fired:\n  {}",

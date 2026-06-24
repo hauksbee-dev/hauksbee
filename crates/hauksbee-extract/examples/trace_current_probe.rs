@@ -44,8 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind,
             nc.segment_count,
             nc.zone_count,
-            nc.min_trace_width_mm.map(|w| format!("{w:.3}")).unwrap_or_else(|| "-".into()),
-            nc.max_trace_width_mm.map(|w| format!("{w:.3}")).unwrap_or_else(|| "-".into()),
+            nc.min_trace_width_mm
+                .map(|w| format!("{w:.3}"))
+                .unwrap_or_else(|| "-".into()),
+            nc.max_trace_width_mm
+                .map(|w| format!("{w:.3}"))
+                .unwrap_or_else(|| "-".into()),
             amp
         );
     }

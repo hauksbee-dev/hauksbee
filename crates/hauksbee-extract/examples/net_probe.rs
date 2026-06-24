@@ -13,11 +13,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     for net in &board.nets {
         let up = net.name.to_ascii_uppercase();
-        if !needles.iter().any(|n| up.contains(n.as_str())) { continue; }
+        if !needles.iter().any(|n| up.contains(n.as_str())) {
+            continue;
+        }
         println!("NET {} (id {})", net.name, net.id);
         for (c, p) in board.net_members(net.id) {
-            println!("   {:8} val='{}' fp='{}' pad={} func='{}' type='{}'",
-                c.reference, c.value, c.footprint, p.number, p.function, p.kind);
+            println!(
+                "   {:8} val='{}' fp='{}' pad={} func='{}' type='{}'",
+                c.reference, c.value, c.footprint, p.number, p.function, p.kind
+            );
         }
     }
     Ok(())

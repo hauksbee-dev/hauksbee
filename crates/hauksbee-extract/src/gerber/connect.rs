@@ -54,7 +54,10 @@ struct Leaf {
 impl RTreeObject for Leaf {
     type Envelope = AABB<[f64; 2]>;
     fn envelope(&self) -> Self::Envelope {
-        AABB::from_corners([self.bounds[0], self.bounds[1]], [self.bounds[2], self.bounds[3]])
+        AABB::from_corners(
+            [self.bounds[0], self.bounds[1]],
+            [self.bounds[2], self.bounds[3]],
+        )
     }
 }
 
@@ -83,7 +86,11 @@ impl Dsu {
         if ra == rb {
             return;
         }
-        let (big, small) = if self.size[ra] >= self.size[rb] { (ra, rb) } else { (rb, ra) };
+        let (big, small) = if self.size[ra] >= self.size[rb] {
+            (ra, rb)
+        } else {
+            (rb, ra)
+        };
         self.parent[small] = big;
         self.size[big] += self.size[small];
     }
@@ -118,7 +125,11 @@ pub fn reconstruct(
     for (li, layer) in layers.into_iter().enumerate() {
         for cp in layer {
             let bounds = cp.shape.bounds();
-            prims.push(LayerPrim { shape: cp.shape, kind: cp.kind, bounds });
+            prims.push(LayerPrim {
+                shape: cp.shape,
+                kind: cp.kind,
+                bounds,
+            });
             prim_layer.push(li);
         }
     }
@@ -132,7 +143,11 @@ pub fn reconstruct(
             let shape = Shape::disc(h.x, h.y, (h.diameter / 2.0).max(0.05));
             let bounds = shape.bounds();
             let gi = prims.len();
-            prims.push(LayerPrim { shape, kind: PrimKind::Via, bounds });
+            prims.push(LayerPrim {
+                shape,
+                kind: PrimKind::Via,
+                bounds,
+            });
             prim_layer.push(li);
             // Extend that layer's range to include the hole disc. Holes are
             // appended after all layer primitives, so we widen the end marker.
@@ -169,7 +184,10 @@ pub fn reconstruct(
             .collect();
         let leaves: Vec<Leaf> = solids
             .iter()
-            .map(|&gi| Leaf { bounds: prims[gi].bounds, idx: gi })
+            .map(|&gi| Leaf {
+                bounds: prims[gi].bounds,
+                idx: gi,
+            })
             .collect();
         let tree = RTree::bulk_load(leaves);
         for &gi in &solids {
@@ -211,7 +229,10 @@ pub fn reconstruct(
             let region_tree = RTree::bulk_load(
                 regions
                     .iter()
-                    .map(|&rgi| Leaf { bounds: prims[rgi].bounds, idx: rgi })
+                    .map(|&rgi| Leaf {
+                        bounds: prims[rgi].bounds,
+                        idx: rgi,
+                    })
                     .collect(),
             );
             // Grid-accelerate containment only for *large* pours: a board-
@@ -299,13 +320,11 @@ pub fn reconstruct(
                         // it (caught by containment), so the costly poly-poly is
                         // confined to the comparatively few pad primitives, which
                         // keeps board-sized pours from making this quadratic.
-                        let penetrates = !inside
-                            && prims[gi].kind == PrimKind::Flash
-                            && {
-                                let bp = prims[gi].bounds;
-                                !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
-                                    && shape_gap(&prims[gi].shape, &prims[rgi].shape) < -0.04
-                            };
+                        let penetrates = !inside && prims[gi].kind == PrimKind::Flash && {
+                            let bp = prims[gi].bounds;
+                            !(bp[2] < b[0] || bp[0] > b[2] || bp[3] < b[1] || bp[1] > b[3])
+                                && shape_gap(&prims[gi].shape, &prims[rgi].shape) < -0.04
+                        };
                         if inside || penetrates {
                             dsu.union(gi, rgi);
                         }
@@ -385,15 +404,26 @@ pub fn reconstruct(
     impl RTreeObject for CompLeaf {
         type Envelope = AABB<[f64; 2]>;
         fn envelope(&self) -> Self::Envelope {
-            AABB::from_corners([self.bounds[0], self.bounds[1]], [self.bounds[2], self.bounds[3]])
+            AABB::from_corners(
+                [self.bounds[0], self.bounds[1]],
+                [self.bounds[2], self.bounds[3]],
+            )
         }
     }
-    let half_extents: Vec<f64> = placements.iter().map(|p| footprint_half_extent(&p.package)).collect();
+    let half_extents: Vec<f64> = placements
+        .iter()
+        .map(|p| footprint_half_extent(&p.package))
+        .collect();
     let comp_leaves: Vec<CompLeaf> = placements
         .iter()
         .enumerate()
         .map(|(i, p)| CompLeaf {
-            bounds: [p.x - half_extents[i], p.y - half_extents[i], p.x + half_extents[i], p.y + half_extents[i]],
+            bounds: [
+                p.x - half_extents[i],
+                p.y - half_extents[i],
+                p.x + half_extents[i],
+                p.y + half_extents[i],
+            ],
             idx: i,
         })
         .collect();
@@ -459,8 +489,7 @@ pub fn reconstruct(
     // bottleneck width. This is computed here, where `net_of_prim` and the
     // primitive shapes are both in scope, and surfaced for the gerber
     // trace-current sweep.
-    let net_name_of: HashMap<i64, String> =
-        nets.iter().map(|n| (n.id, n.name.clone())).collect();
+    let net_name_of: HashMap<i64, String> = nets.iter().map(|n| (n.id, n.name.clone())).collect();
     let mut min_w: HashMap<i64, f64> = HashMap::new();
     let mut max_w: HashMap<i64, f64> = HashMap::new();
     let mut track_count: HashMap<i64, usize> = HashMap::new();
@@ -725,7 +754,10 @@ mod tests {
     use crate::gerber::geo::Capsule;
 
     fn cap(ax: f64, ay: f64, bx: f64, by: f64, r: f64, kind: PrimKind) -> CopperPrim {
-        CopperPrim { shape: Shape::Capsule(Capsule { ax, ay, bx, by, r }), kind }
+        CopperPrim {
+            shape: Shape::Capsule(Capsule { ax, ay, bx, by, r }),
+            kind,
+        }
     }
 
     #[test]
@@ -759,7 +791,11 @@ mod tests {
         let (_b, s0) = reconstruct("t", vec![top.clone(), bot.clone()], vec![], vec![]);
         assert_eq!(s0.n_nets, 2);
         // With a plated hole at the shared point: 1 net.
-        let hole = PlatedHole { x: 0.0, y: 0.0, diameter: 0.3 };
+        let hole = PlatedHole {
+            x: 0.0,
+            y: 0.0,
+            diameter: 0.3,
+        };
         let (_b, s1) = reconstruct("t", vec![top, bot], vec![hole], vec![]);
         assert_eq!(s1.n_nets, 1, "via stitches top and bottom into one net");
     }

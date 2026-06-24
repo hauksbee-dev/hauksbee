@@ -57,6 +57,14 @@ pub enum LintCheck {
     /// once. Produced by `resource_conflict.rs`, reported through this same
     /// `NetLintReport` shape.
     McuResourceConflict,
+    /// A passive reference designator disagrees with the passive footprint
+    /// family, e.g. R1 on `Capacitor_SMD:C_0603`.
+    DesignatorFootprintMismatch,
+    /// A passive value is physically implausible for the stated package.
+    ValuePackageSanity,
+    /// A passive still has a placeholder / unset value (`R`, `C`, `L`, `?`,
+    /// empty), so downstream physics cannot know the actual part.
+    PlaceholderValue,
 }
 
 impl LintCheck {
@@ -68,6 +76,9 @@ impl LintCheck {
             LintCheck::OutputContention => "output_contention",
             LintCheck::StrapPin => "strap_pin",
             LintCheck::McuResourceConflict => "mcu_resource_conflict",
+            LintCheck::DesignatorFootprintMismatch => "designator_footprint_mismatch",
+            LintCheck::ValuePackageSanity => "value_package_sanity",
+            LintCheck::PlaceholderValue => "placeholder_value",
         }
     }
 }
@@ -118,6 +129,7 @@ impl ExtractedBoard {
         check_floating_control_pins(self, &mut report);
         check_led_current(self, &mut report);
         check_output_contention(self, &mut report);
+        check_design_file_qc(self, &mut report);
         report
     }
 }
@@ -137,8 +149,10 @@ fn norm(name: &str) -> String {
 /// Ground net?
 fn is_ground(name: &str) -> bool {
     let n = norm(name);
-    matches!(n.as_str(), "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0")
-        || n.starts_with("GND")
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
+    ) || n.starts_with("GND")
 }
 
 /// Power-rail nominal voltage by net name, mirroring the engine binder's table.
@@ -165,7 +179,10 @@ fn rail_voltage(name: &str) -> Option<f64> {
                 Some(3.3)
             } else if n.contains("1V8") {
                 Some(1.8)
-            } else if n == "VBAT" || n.ends_with("/VBAT") || n.contains("VBAT") || n.contains("VSYS")
+            } else if n == "VBAT"
+                || n.ends_with("/VBAT")
+                || n.contains("VBAT")
+                || n.contains("VSYS")
             {
                 Some(3.7)
             } else {
@@ -196,10 +213,7 @@ fn is_resistor(c: &Component) -> bool {
         && !r.starts_with("RN")
         && !r.starts_with("RP")
         && !r.starts_with("RM");
-    is_r_ref
-        && connected_pads(c) == 2
-        && !lib.contains("ferrite")
-        && !lib.contains("inductor")
+    is_r_ref && connected_pads(c) == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
 }
 
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
@@ -211,7 +225,9 @@ fn is_resistor(c: &Component) -> bool {
 /// it is deliberately excluded.
 fn has_integrated_i2c_pullups(c: &Component) -> bool {
     let v = c.value.to_ascii_uppercase();
-    const FAMILIES: [&str; 7] = ["NTS010", "TXS010", "TXB010", "PCA9517", "PCA9617", "LTC4311", "NVT2010"];
+    const FAMILIES: [&str; 7] = [
+        "NTS010", "TXS010", "TXB010", "PCA9517", "PCA9617", "LTC4311", "NVT2010",
+    ];
     FAMILIES.iter().any(|f| v.contains(f))
 }
 
@@ -307,10 +323,19 @@ fn is_pin_array_package(fp: &str) -> bool {
             let before = &f[..idx];
             let after = &f[idx + 1..];
             let a_ok = !before.is_empty()
-                && before.chars().rev().take_while(|c| c.is_ascii_digit()).count() >= 1;
+                && before
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count()
+                    >= 1;
             let b_ok = after.chars().take_while(|c| c.is_ascii_digit()).count() >= 1;
             // require the digit immediately before X (e.g. "1X10")
-            let imm = before.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false);
+            let imm = before
+                .chars()
+                .last()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false);
             if a_ok && b_ok && imm {
                 return true;
             }
@@ -328,6 +353,158 @@ fn members<'a>(board: &'a ExtractedBoard, net_id: i64) -> Vec<(&'a Component, &'
 fn is_capacitor(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && connected_pads(c) == 2
+}
+
+fn passive_prefix(reference: &str) -> Option<char> {
+    let r = reference.to_ascii_uppercase();
+    let first = r.chars().next()?;
+    match first {
+        'R' if !r.starts_with("RV") && !r.starts_with("RT") && !r.starts_with("RN") => Some('R'),
+        'C' if !r.starts_with("CN") && !r.starts_with("CON") => Some('C'),
+        'L' => Some('L'),
+        _ => None,
+    }
+}
+
+fn footprint_family(footprint: &str) -> Option<char> {
+    let fp = footprint.to_ascii_lowercase();
+    if fp.contains("capacitor") || fp.contains(":c_") || fp.contains("/c_") {
+        Some('C')
+    } else if fp.contains("resistor") || fp.contains(":r_") || fp.contains("/r_") {
+        Some('R')
+    } else if fp.contains("inductor") || fp.contains(":l_") || fp.contains("/l_") {
+        Some('L')
+    } else {
+        None
+    }
+}
+
+fn package_code(footprint: &str) -> Option<&'static str> {
+    let fp = footprint.to_ascii_lowercase();
+    for code in ["0201", "0402", "0603", "0805", "1206", "1210"] {
+        if fp.contains(code) {
+            return Some(code);
+        }
+    }
+    None
+}
+
+fn parse_capacitance_uf(value: &str) -> Option<f64> {
+    let s = value.trim().replace('µ', "u").replace('μ', "u");
+    if s.is_empty() {
+        return None;
+    }
+    // Parse only the LEADING number+unit token. Collecting every digit in the
+    // whole string mis-reads values that carry a voltage rating or a package
+    // suffix: "10uF 25V" or "10u_0402" would otherwise concatenate to 1025 / 100402
+    // uF and false-positive the package-ceiling check (a zero-false-positive
+    // violation). Stop the number at the first non-numeric char, then take only
+    // the immediately-following letters as the unit, ignoring any trailing text.
+    let mut chars = s.chars().peekable();
+    let mut num = String::new();
+    while let Some(&ch) = chars.peek() {
+        if ch.is_ascii_digit() || ch == '.' {
+            num.push(ch);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    let n: f64 = num.parse().ok()?;
+    let mut unit = String::new();
+    while let Some(&ch) = chars.peek() {
+        if ch.is_ascii_alphabetic() {
+            unit.push(ch.to_ascii_lowercase());
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if unit.starts_with("pf") || unit == "p" {
+        Some(n / 1_000_000.0)
+    } else if unit.starts_with("nf") || unit == "n" {
+        Some(n / 1000.0)
+    } else if unit.starts_with("uf") || unit.starts_with('u') {
+        Some(n)
+    } else if unit.starts_with("mf") || unit == "m" {
+        Some(n * 1000.0)
+    } else {
+        None
+    }
+}
+
+fn mlcc_ceiling_uf(package: &str) -> Option<f64> {
+    match package {
+        "0201" => Some(1.0),
+        "0402" => Some(22.0),
+        "0603" => Some(100.0),
+        "0805" => Some(220.0),
+        _ => None,
+    }
+}
+
+fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
+    for c in &board.components {
+        if c.dnp {
+            continue;
+        }
+        let Some(prefix) = passive_prefix(&c.reference) else {
+            continue;
+        };
+        let value_trimmed = c.value.trim();
+        let value_upper = value_trimmed.to_ascii_uppercase();
+        if value_trimmed.is_empty()
+            || value_upper == "?"
+            || (value_upper.len() == 1 && matches!(value_upper.as_str(), "R" | "C" | "L"))
+        {
+            report.findings.push(LintFinding {
+                check: LintCheck::PlaceholderValue,
+                severity: Severity::Medium,
+                message: format!(
+                    "{} has placeholder value '{}'; set the actual {} value before BOM/simulation",
+                    c.reference, c.value, prefix
+                ),
+                refs: vec![c.reference.clone()],
+                nets: Vec::new(),
+            });
+        }
+
+        if let Some(family) = footprint_family(&c.footprint) {
+            if family != prefix {
+                report.findings.push(LintFinding {
+                    check: LintCheck::DesignatorFootprintMismatch,
+                    severity: Severity::Medium,
+                    message: format!(
+                        "{} is a {} designator but uses {} footprint '{}'",
+                        c.reference, prefix, family, c.footprint
+                    ),
+                    refs: vec![c.reference.clone()],
+                    nets: Vec::new(),
+                });
+            }
+        }
+
+        if prefix == 'C' {
+            if let (Some(pkg), Some(uf)) =
+                (package_code(&c.footprint), parse_capacitance_uf(&c.value))
+            {
+                if let Some(max_uf) = mlcc_ceiling_uf(pkg) {
+                    if uf > max_uf {
+                        report.findings.push(LintFinding {
+                            check: LintCheck::ValuePackageSanity,
+                            severity: Severity::Medium,
+                            message: format!(
+                                "{} value {} is implausible in {} (conservative ceiling {:.0}uF)",
+                                c.reference, c.value, pkg, max_uf
+                            ),
+                            refs: vec![c.reference.clone()],
+                            nets: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A net is *rail-like* if its name is a recognised rail, OR it structurally
@@ -473,7 +650,10 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 "bus breaks out to a header; pull-ups conventionally on the attached module",
             )
         } else if active_devices >= 2 {
-            (Severity::Medium, "on-board master and peripheral, no pull-up present")
+            (
+                Severity::Medium,
+                "on-board master and peripheral, no pull-up present",
+            )
         } else {
             // A single on-board device with no header and no pull: ambiguous,
             // skip rather than risk a false positive.
@@ -483,7 +663,10 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         report.findings.push(LintFinding {
             check: LintCheck::MissingI2cPullup,
             severity: sev,
-            message: format!("I2C {role} net '{}' has no pull-up to a rail: {note}", net.name),
+            message: format!(
+                "I2C {role} net '{}' has no pull-up to a rail: {note}",
+                net.name
+            ),
             refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
             nets: vec![net.name.clone()],
         });
@@ -512,8 +695,8 @@ fn control_role(function: &str) -> Option<&'static str> {
     // A multiplexed / signal name (Ethernet, SPI, GPIO mux, etc.) is not a
     // dedicated control pin even if a sub-token looks like "EN".
     const SIGNAL_KEYWORDS: [&str; 12] = [
-        "GPIO", "EMAC", "RMII", "TX_EN", "RX_EN", "CLKEN", "VSPI", "HSPI", "UART", "PWM",
-        "SENSE", "OPEN",
+        "GPIO", "EMAC", "RMII", "TX_EN", "RX_EN", "CLKEN", "VSPI", "HSPI", "UART", "PWM", "SENSE",
+        "OPEN",
     ];
     if SIGNAL_KEYWORDS.iter().any(|k| f.contains(k)) {
         return None;
@@ -608,7 +791,10 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 /// Parse a resistor value string ("330", "1k", "4k7", "1.2K", "0R") to ohms.
 fn parse_ohms(v: &str) -> Option<f64> {
     let s = v.trim().to_ascii_uppercase();
-    let s = s.trim_end_matches('Ω').trim_end_matches("OHM").trim_end_matches('R');
+    let s = s
+        .trim_end_matches('Ω')
+        .trim_end_matches("OHM")
+        .trim_end_matches('R');
     // Handle "4K7" style (R/K/M as decimal point).
     for (suffix, mult) in [("K", 1e3), ("M", 1e6), ("R", 1.0)] {
         if let Some(idx) = s.find(suffix) {
@@ -659,7 +845,10 @@ fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
         for (anode_net, cathode_net) in [(na, nb), (nb, na)] {
             // series resistor on the anode side reaching a rail
             let rail_v = resistor_to_rail(board, anode_net, led.reference.as_str());
-            let cathode_is_gnd = board.net(cathode_net).map(|n| is_ground(&n.name)).unwrap_or(false);
+            let cathode_is_gnd = board
+                .net(cathode_net)
+                .map(|n| is_ground(&n.name))
+                .unwrap_or(false);
             if let Some((rref, ohms, vrail)) = rail_v {
                 if cathode_is_gnd && ohms > 0.0 {
                     let i = (vrail - LED_VF) / ohms;
@@ -738,7 +927,10 @@ fn resistor_to_rail(
 /// A push-pull driver type. `tri_state` / `open_collector` / `open_emitter` are
 /// deliberately NOT here: those are wired-OR safe and resolve contention.
 fn is_pushpull_output(kind: &str) -> bool {
-    matches!(kind.trim().to_ascii_lowercase().as_str(), "output" | "power_out")
+    matches!(
+        kind.trim().to_ascii_lowercase().as_str(),
+        "output" | "power_out"
+    )
 }
 
 /// A member that can legitimately resolve two outputs sharing a net: a passive
@@ -761,9 +953,11 @@ fn resolves_contention(kind: &str) -> bool {
 /// positives.
 fn is_wired_or_name(name: &str) -> bool {
     let n = norm(name);
-    ["IRQ", "INT", "ALERT", "RDY", "READY", "BUSY", "NMI", "PG", "PGOOD", "FAULT", "NFLT"]
-        .iter()
-        .any(|k| n.contains(k))
+    [
+        "IRQ", "INT", "ALERT", "RDY", "READY", "BUSY", "NMI", "PG", "PGOOD", "FAULT", "NFLT",
+    ]
+    .iter()
+    .any(|k| n.contains(k))
 }
 
 fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
@@ -818,7 +1012,11 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
             .iter()
             .filter(|(_, p)| p.kind.eq_ignore_ascii_case("power_out"))
             .count();
-        let sev = if power_out >= 2 { Severity::High } else { Severity::Medium };
+        let sev = if power_out >= 2 {
+            Severity::High
+        } else {
+            Severity::Medium
+        };
 
         let drv_desc: Vec<String> = drivers
             .iter()

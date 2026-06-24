@@ -37,7 +37,12 @@ fn require_corpus() -> bool {
 
 /// Locate a usable `kicad-cli` (PATH or the macOS app bundle).
 fn kicad_cli() -> Option<PathBuf> {
-    if Command::new("kicad-cli").arg("version").output().map(|o| o.status.success()).unwrap_or(false) {
+    if Command::new("kicad-cli")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         return Some(PathBuf::from("kicad-cli"));
     }
     let bundle = PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli");
@@ -53,7 +58,15 @@ fn export_fab(cli: &Path, pcb: &Path, tag: &str) -> Option<PathBuf> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).ok()?;
     let ok = Command::new(cli)
-        .args(["pcb", "export", "gerbers", "--no-x2", "--no-netlist", "--no-protel-ext", "-o"])
+        .args([
+            "pcb",
+            "export",
+            "gerbers",
+            "--no-x2",
+            "--no-netlist",
+            "--no-protel-ext",
+            "-o",
+        ])
         .arg(format!("{}/", dir.display()))
         .arg(pcb)
         .output()
@@ -68,7 +81,9 @@ fn export_fab(cli: &Path, pcb: &Path, tag: &str) -> Option<PathBuf> {
         .arg(pcb)
         .output();
     let _ = Command::new(cli)
-        .args(["pcb", "export", "pos", "--format", "csv", "--units", "mm", "--side", "both", "-o"])
+        .args([
+            "pcb", "export", "pos", "--format", "csv", "--units", "mm", "--side", "both", "-o",
+        ])
         .arg(dir.join("pos.csv"))
         .arg(pcb)
         .output();
@@ -204,8 +219,16 @@ fn rp2040_minimal_exact_nets() {
         eprintln!("skipping rp2040_minimal (no corpus/kicad-cli)");
         return;
     };
-    assert!(a.pads_located > 150, "too few pads located: {}", a.pads_located);
-    assert!(pct(&a) >= 99.0, "net partition only {:.2}% on rp2040_minimal", pct(&a));
+    assert!(
+        a.pads_located > 150,
+        "too few pads located: {}",
+        a.pads_located
+    );
+    assert!(
+        pct(&a) >= 99.0,
+        "net partition only {:.2}% on rp2040_minimal",
+        pct(&a)
+    );
 }
 
 /// The full sweep of boards that `kicad-cli` can round-trip, small to large.
@@ -223,13 +246,43 @@ fn rp2040_minimal_exact_nets() {
 fn corpus_sweep_partition_floor() {
     // (path, tag, partition-floor %, located-pad floor)
     let boards = [
-        ("famous/mnt_reform/reform2-oled-pcb/reform2-oled.kicad_pcb", "reform_oled", 99.0, 0.85),
-        ("famous/lumenpnp/ring-light/ringLight.kicad_pcb", "ringlight", 99.0, 0.80),
+        (
+            "famous/mnt_reform/reform2-oled-pcb/reform2-oled.kicad_pcb",
+            "reform_oled",
+            99.0,
+            0.85,
+        ),
+        (
+            "famous/lumenpnp/ring-light/ringLight.kicad_pcb",
+            "ringlight",
+            99.0,
+            0.80,
+        ),
         ("famous/watchy/Watchy.kicad_pcb", "watchy", 99.0, 0.80),
-        ("famous/mnt_reform/reform2-trackball2-pcb/reform2-trackball2.kicad_pcb", "reform_trackball2", 99.0, 0.75),
-        ("famous/crkbd/pcbs/corne-cherry.kicad_pcb", "corne", 99.0, 0.45),
-        ("famous/lily58/Pro_V2/Pro_V2.kicad_pcb", "lily58prov2", 98.5, 0.50),
-        ("famous/mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb", "reform_mobo", 99.0, 0.85),
+        (
+            "famous/mnt_reform/reform2-trackball2-pcb/reform2-trackball2.kicad_pcb",
+            "reform_trackball2",
+            99.0,
+            0.75,
+        ),
+        (
+            "famous/crkbd/pcbs/corne-cherry.kicad_pcb",
+            "corne",
+            99.0,
+            0.45,
+        ),
+        (
+            "famous/lily58/Pro_V2/Pro_V2.kicad_pcb",
+            "lily58prov2",
+            98.5,
+            0.50,
+        ),
+        (
+            "famous/mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb",
+            "reform_mobo",
+            99.0,
+            0.85,
+        ),
     ];
     let mut ran = 0;
     for (rel, tag, part_floor, loc_floor) in boards {
@@ -253,7 +306,10 @@ fn corpus_sweep_partition_floor() {
         }
     }
     if require_corpus() {
-        assert!(ran >= 1, "corpus required but no board could be round-tripped");
+        assert!(
+            ran >= 1,
+            "corpus required but no board could be round-tripped"
+        );
     } else if ran == 0 {
         eprintln!("skipping closed-loop sweep (no corpus/kicad-cli)");
     }

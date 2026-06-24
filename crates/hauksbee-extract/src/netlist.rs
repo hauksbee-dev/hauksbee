@@ -35,14 +35,16 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 .map(|ls| {
                     let lib = ls.find_value("lib").unwrap_or_default();
                     let part = ls.find_value("part").unwrap_or_default();
-                    if lib.is_empty() { part } else { format!("{lib}:{part}") }
+                    if lib.is_empty() {
+                        part
+                    } else {
+                        format!("{lib}:{part}")
+                    }
                 })
                 .unwrap_or_default();
             let mut properties = Vec::new();
             for prop in comp.find_all("property") {
-                if let (Some(k), Some(v)) =
-                    (prop.find_value("name"), prop.find_value("value"))
-                {
+                if let (Some(k), Some(v)) = (prop.find_value("name"), prop.find_value("value")) {
                     properties.push((k, v));
                 }
             }
@@ -78,8 +80,12 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 name: net.find_value("name").unwrap_or_default(),
             });
             for node in net.find_all("node") {
-                let Some(reference) = node.find_value("ref") else { continue };
-                let Some(&ci) = index.get(&reference) else { continue };
+                let Some(reference) = node.find_value("ref") else {
+                    continue;
+                };
+                let Some(&ci) = index.get(&reference) else {
+                    continue;
+                };
                 components[ci].pins.push(Pin {
                     number: node.find_value("pin").unwrap_or_default(),
                     net: Some(id),
@@ -92,5 +98,9 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
     }
     nets.sort_by_key(|n| n.id);
 
-    Ok(ExtractedBoard { name, nets, components })
+    Ok(ExtractedBoard {
+        name,
+        nets,
+        components,
+    })
 }

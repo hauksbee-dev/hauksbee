@@ -35,6 +35,73 @@ fn count(r: &hauksbee_extract::NetLintReport, c: LintCheck) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// Model-free design-file QC checks.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resistor_designator_on_capacitor_footprint_is_flagged() {
+    let comps = r#"
+    (comp (ref R1) (value 4k7) (footprint Capacitor_SMD:C_0603))"#;
+    let r = lint(comps, "");
+    assert_eq!(count(&r, LintCheck::DesignatorFootprintMismatch), 1);
+    let f = r
+        .of_check(LintCheck::DesignatorFootprintMismatch)
+        .next()
+        .unwrap();
+    assert_eq!(f.severity, Severity::Medium);
+    assert!(f.message.contains("R1"));
+}
+
+#[test]
+fn impossible_capacitance_for_0603_is_flagged() {
+    let comps = r#"
+    (comp (ref C6) (value 220uF) (footprint Capacitor_SMD:C_0603))"#;
+    let r = lint(comps, "");
+    assert_eq!(count(&r, LintCheck::ValuePackageSanity), 1);
+    let f = r.of_check(LintCheck::ValuePackageSanity).next().unwrap();
+    assert_eq!(f.severity, Severity::Medium);
+    assert!(f.message.contains("220uF"));
+}
+
+#[test]
+fn capacitor_value_with_voltage_rating_or_package_suffix_is_not_misparsed() {
+    // Regression: parse_capacitance_uf used to collect every digit in the whole
+    // string, so "10uF25V" -> 1025 uF and "10u_0402" -> 100402 uF, both falsely
+    // tripping the 0402 ceiling (a zero-false-positive violation seen on a real
+    // board's "10u_0402" value). Only the leading number+unit token counts, so
+    // these are correctly read as 10 uF and not flagged.
+    let comps = r#"
+    (comp (ref C1) (value 10uF25V) (footprint Capacitor_SMD:C_0402))
+    (comp (ref C2) (value 10u_0402) (footprint Capacitor_SMD:C_0402))"#;
+    let r = lint(comps, "");
+    assert_eq!(
+        count(&r, LintCheck::ValuePackageSanity),
+        0,
+        "10 uF is within the 0402 ceiling regardless of a trailing voltage rating or package suffix"
+    );
+}
+
+#[test]
+fn placeholder_passive_value_is_flagged() {
+    let comps = r#"
+    (comp (ref R13) (value R) (footprint Resistor_SMD:R_0402))
+    (comp (ref C7) (value C) (footprint Capacitor_SMD:C_0402))"#;
+    let r = lint(comps, "");
+    assert_eq!(count(&r, LintCheck::PlaceholderValue), 2);
+}
+
+#[test]
+fn ordinary_passive_values_and_matching_footprints_are_clean() {
+    let comps = r#"
+    (comp (ref R1) (value 4k7) (footprint Resistor_SMD:R_0603))
+    (comp (ref C1) (value 10uF) (footprint Capacitor_SMD:C_0603))"#;
+    let r = lint(comps, "");
+    assert_eq!(count(&r, LintCheck::DesignatorFootprintMismatch), 0);
+    assert_eq!(count(&r, LintCheck::ValuePackageSanity), 0);
+    assert_eq!(count(&r, LintCheck::PlaceholderValue), 0);
+}
+
+// ---------------------------------------------------------------------------
 // I2C pull-up check.
 // ---------------------------------------------------------------------------
 
@@ -54,7 +121,11 @@ fn i2c_with_named_rail_pullup_is_clean() {
     (net (code 3) (name "SCL")
       (node (ref U1) (pin 2)) (node (ref U2) (pin 2)) (node (ref R2) (pin 2)))"#;
     let r = lint(comps, nets);
-    assert_eq!(count(&r, LintCheck::MissingI2cPullup), 0, "named-rail pull-up should be clean");
+    assert_eq!(
+        count(&r, LintCheck::MissingI2cPullup),
+        0,
+        "named-rail pull-up should be clean"
+    );
 }
 
 /// An on-board bus with no pull-up anywhere fires at medium.
@@ -70,7 +141,9 @@ fn i2c_without_pullup_on_board_fires_medium() {
       (node (ref U1) (pin 2)) (node (ref U2) (pin 2)))"#;
     let r = lint(comps, nets);
     assert_eq!(count(&r, LintCheck::MissingI2cPullup), 2);
-    assert!(r.of_check(LintCheck::MissingI2cPullup).all(|f| f.severity == Severity::Medium));
+    assert!(r
+        .of_check(LintCheck::MissingI2cPullup)
+        .all(|f| f.severity == Severity::Medium));
 }
 
 /// The real Olimex case: the pull-up's far pad is a CAD-auto-named local rail
@@ -134,7 +207,9 @@ fn i2c_header_breakout_is_low() {
       (node (ref U1) (pin 2)) (node (ref J1) (pin 2)))"#;
     let r = lint(comps, nets);
     assert_eq!(count(&r, LintCheck::MissingI2cPullup), 2);
-    assert!(r.of_check(LintCheck::MissingI2cPullup).all(|f| f.severity == Severity::Low));
+    assert!(r
+        .of_check(LintCheck::MissingI2cPullup)
+        .all(|f| f.severity == Severity::Low));
 }
 
 /// A resistor with extra net-less footprint pads (the 0201 case that hid the

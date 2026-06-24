@@ -5,7 +5,9 @@
 use hauksbee_extract::ExtractedBoard;
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: resource_probe <board>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: resource_probe <board>");
     let text = std::fs::read_to_string(&path).expect("read board");
     let board = if path.ends_with("kicad_sch") {
         ExtractedBoard::from_kicad_schematic_path(std::path::Path::new(&path)).unwrap()
@@ -17,5 +19,8 @@ fn main() {
         println!("{a:14} pad={b:5} net={c:28} res={d:10} {e}");
     }
     println!("--- findings ---");
-    print!("{}", hauksbee_extract::render_netlint(&board.resource_conflicts()));
+    print!(
+        "{}",
+        hauksbee_extract::render_netlint(&board.resource_conflicts())
+    );
 }

@@ -44,7 +44,8 @@ fn corpus() -> Option<PathBuf> {
 fn load(p: &Path) -> ExtractedBoard {
     let text = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("read {p:?}: {e}"));
     if p.extension().and_then(|e| e.to_str()) == Some("kicad_sch") {
-        ExtractedBoard::from_kicad_schematic_path(p).unwrap_or_else(|e| panic!("extract {p:?}: {e}"))
+        ExtractedBoard::from_kicad_schematic_path(p)
+            .unwrap_or_else(|e| panic!("extract {p:?}: {e}"))
     } else {
         ExtractedBoard::from_auto(&text).unwrap_or_else(|e| panic!("extract {p:?}: {e}"))
     }
@@ -75,12 +76,18 @@ fn olimex_rp2040_pico_pc_pwm_slice_6a_conflict_flagged_rev_c_and_d() {
         let m = &msgs[0];
         // The documented evidence chain: slice 6A, GP12 DVI clock vs GP28 audio.
         assert!(m.contains("6A"), "rev {rev}: not slice 6A: {m}");
-        assert!(m.contains("GP12") && m.contains("GP28"), "rev {rev}: pins missing: {m}");
+        assert!(
+            m.contains("GP12") && m.contains("GP28"),
+            "rev {rev}: pins missing: {m}"
+        );
         assert!(
             m.contains("PWM audio") && m.contains("PicoDVI PWM pixel clock"),
             "rev {rev}: both functions must be named: {m}"
         );
-        assert!(m.contains("HDMI") && m.contains("AUDIO_JACK"), "rev {rev}: targets missing: {m}");
+        assert!(
+            m.contains("HDMI") && m.contains("AUDIO_JACK"),
+            "rev {rev}: targets missing: {m}"
+        );
     }
 }
 
@@ -95,14 +102,24 @@ fn olimex_rp2040_pico_pc_rev_b_is_clean_dvi_clock_on_slice_7() {
         &c,
         "olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision B/RP2040-PICO-PC_rev_B.net",
     );
-    assert!(msgs.is_empty(), "rev B must be clean (DVI clock on slice 7), got: {msgs:#?}");
+    assert!(
+        msgs.is_empty(),
+        "rev B must be clean (DVI clock on slice 7), got: {msgs:#?}"
+    );
 }
 
 #[test]
 fn sparkfun_samd51_thing_plus_qspi_flash_conflict_flagged() {
     let Some(c) = corpus() else { return };
-    let msgs = conflicts(&c, "sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd");
-    assert_eq!(msgs.len(), 1, "expected exactly the QSPI flash conflict, got {msgs:#?}");
+    let msgs = conflicts(
+        &c,
+        "sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd",
+    );
+    assert_eq!(
+        msgs.len(),
+        1,
+        "expected exactly the QSPI flash conflict, got {msgs:#?}"
+    );
     let m = &msgs[0];
     assert!(m.contains("qspi_data"), "must name the QSPI group: {m}");
     assert!(m.contains("SPI flash"), "must name the flash function: {m}");
@@ -136,10 +153,7 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     // bug, but CORRECTLY (driven over the QSPI controller, quad-IO net naming).
     // These are the false-positive case the discriminator must reject; they live
     // in a separate list because their .brd filenames carry the board name.
-    let clean_qspi_flash: &[&str] = &[
-        "adafruit_metro_m4",
-        "adafruit_qtpy",
-    ];
+    let clean_qspi_flash: &[&str] = &["adafruit_metro_m4", "adafruit_qtpy"];
     // Under HAUKSBEE_REQUIRE_CORPUS=1, a board that should be present but is not
     // is a HARD failure, not a silent skip: the calibration gate cannot pass
     // vacuously by missing the very boards (esp. the Metro M4 QSPI discriminator)
