@@ -43,6 +43,28 @@ fn main() -> Result<()> {
     // 1. Extract text from PDF
     let pdf_text = extract_pdf_text(&args.pdf)?;
 
+    // Declarative register-map sensor kinds (`i2c_sensor` / `spi_sensor`) emit a
+    // `[sensor]` spec validated against hauksbee-models::sensor_spec, NOT the
+    // SPICE `[[models]]` schema, so they take a separate prompt + validation
+    // path that round-trips through `SensorSpec`.
+    if is_sensor_kind(&args.kind_str) {
+        let prompt = build_sensor_prompt(&args.part, &args.kind_str, &pdf_text);
+        let raw = call_backend(&prompt, &args)?;
+        let spec = validate_sensor_reply(&raw, &args.part, &args.kind_str)?;
+
+        let default_dir = default_out_dir();
+        let out_dir: &Path = args.out_dir.as_deref().unwrap_or(&default_dir);
+        std::fs::create_dir_all(out_dir)
+            .with_context(|| format!("creating output directory {}", out_dir.display()))?;
+        let out_path = out_dir.join(format!("{}.sensor.toml", sanitise_filename(&args.part)));
+        std::fs::write(&out_path, &raw)
+            .with_context(|| format!("writing output to {}", out_path.display()))?;
+
+        println!("Written: {}", out_path.display());
+        println!("{}", spec.sensor.name);
+        return Ok(());
+    }
+
     // 2. Build the extraction prompt
     let prompt = build_prompt(&args.part, &args.kind_str, &pdf_text);
 
@@ -64,6 +86,146 @@ fn main() -> Result<()> {
     println!("Written: {}", out_path.display());
     println!("{}", entry.id);
     Ok(())
+}
+
+// ── Declarative register-map sensor extraction (i2c_sensor / spi_sensor) ──────
+
+/// Is this a declarative register-map sensor kind?
+fn is_sensor_kind(kind: &str) -> bool {
+    matches!(kind.trim(), "i2c_sensor" | "spi_sensor")
+}
+
+/// Build the LLM prompt that instructs the model to read a sensor datasheet and
+/// emit a `[sensor]` declarative register-map spec (the format defined in
+/// hauksbee-models::sensor_spec). The reply is validated by parsing it as a
+/// `SensorSpec` and round-tripping it through TOML.
+fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
+    let bus = if kind.trim() == "spi_sensor" { "spi" } else { "i2c" };
+    let bus_specifics = if bus == "spi" {
+        r#"This is a SPI sensor. Set:
+    bus = "spi"
+  and a [sensor.protocol] block:
+    style = "spi_reg"          # first transfer byte = (rw_bit<<7 | register_addr)
+    rw_read_is_high = true     # true if a READ sets the high command bit to 1
+                               # (most ST / InvenSense parts). false otherwise.
+    addr_mask = 0x7f           # mask to recover the register address
+  Do NOT set i2c_address."#
+    } else {
+        r#"This is an I2C sensor. Set:
+    bus = "i2c"
+    i2c_address = 0x??         # the 7-bit address (default/all-pins-low value)
+  and a [sensor.protocol] block:
+    style = "i2c_pointer"      # master writes the register addr, then reads N bytes"#
+    };
+
+    format!(
+        r#"You are a sensor register-map extraction assistant. Read the datasheet
+text below for the part: {part}
+
+Emit a DECLARATIVE register-map sensor spec in TOML — NOT a SPICE model. The goal
+is to capture how firmware reads this sensor over the bus: its address/framing,
+the key registers, and how each register's bytes encode a physical value.
+
+{bus_specifics}
+
+THE SPEC FORMAT (emit exactly this shape):
+
+  [sensor]
+  name = "{part}"
+  bus = "{bus}"
+  # (address / protocol per the bus specifics above)
+
+  # Settable physical inputs the simulator can drive (the sweepable quantities,
+  # e.g. temperature, a gyro axis, a pressure). One [[sensor.input]] each.
+  [[sensor.input]]
+  name = "temperature_c"      # snake_case; referenced by register `expr`s
+  default = 25.0
+
+  # Registers. EITHER a const register (identity / config) OR an encoded one.
+  # WHO_AM_I / device-ID register — a constant the firmware checks:
+  [[sensor.register]]
+  addr = 0x0f
+  const = [0x42]              # the exact identity byte(s) from the datasheet
+
+  # A data register encoded from an input expression:
+  [[sensor.register]]
+  addr = 0x00
+  bytes = 2                   # bytes returned by a read of this register
+  encoding = "i16_be"        # see ENCODINGS below
+  expr = "temperature_c"     # arithmetic over the declared input names
+  # optional: scale =, offset =  (encoded = expr*scale + offset)
+
+ENCODINGS (pick the one matching the datasheet's register format):
+  u8, u16_be, u16_le, i16_be, i16_le   — plain integers, big/little endian
+  q7.1_be                              — LM75-style temperature: signed,
+                                         0.125 C/LSB, count left-justified by 5
+                                         into a big-endian 16-bit word
+  raw                                  — const-only register (no expr/encoding)
+
+RULES:
+1. Include the WHO_AM_I / device-ID register if the part has one (with its exact
+   constant), plus the primary data register(s) firmware actually reads.
+2. Every `expr` may only reference names declared in a [[sensor.input]].
+3. Output ONLY the TOML, starting with `[sensor]` — no prose, no markdown fences.
+4. Use only values stated in the datasheet; do not invent register addresses.
+
+DATASHEET TEXT (truncated):
+---
+{pdf_text}
+---
+
+OUTPUT (TOML only, starting with [sensor]):
+"#,
+        part = part,
+        bus = bus,
+        bus_specifics = bus_specifics,
+        pdf_text = &pdf_text[..pdf_text.len().min(40_000)],
+    )
+}
+
+/// Validate a sensor-spec reply: it must start with `[sensor]`, parse as a
+/// `SensorSpec` (which validates structure), round-trip losslessly through TOML,
+/// and agree with the requested bus.
+fn validate_sensor_reply(
+    raw: &str,
+    part: &str,
+    kind: &str,
+) -> Result<hauksbee_models::sensor_spec::SensorSpec> {
+    use hauksbee_models::sensor_spec::{Bus, SensorSpec};
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("empty reply for {part}: the backend returned no TOML at all");
+    }
+    if !trimmed.contains("[sensor]") {
+        bail!(
+            "reply for {part} contains no [sensor] table; the backend likely \
+             answered with prose instead of TOML. First 200 chars: {:.200}",
+            trimmed
+        );
+    }
+
+    let spec = SensorSpec::from_toml(trimmed)
+        .with_context(|| format!("parsing/validating sensor spec for {part}"))?;
+
+    // Round-trip: serialise back and re-parse, ensuring the spec is stable.
+    let back = spec
+        .to_toml()
+        .with_context(|| format!("serialising sensor spec for {part}"))?;
+    SensorSpec::from_toml(&back)
+        .with_context(|| format!("round-trip re-parse of sensor spec for {part} failed"))?;
+
+    // Bus must match the requested kind.
+    let want_bus = if kind.trim() == "spi_sensor" { Bus::Spi } else { Bus::I2c };
+    if spec.sensor.bus != want_bus {
+        bail!(
+            "bus mismatch for {part}: requested '{kind}' but the spec declares \
+             bus = {:?}",
+            spec.sensor.bus
+        );
+    }
+
+    Ok(spec)
 }
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -129,7 +291,9 @@ OPTIONS:
                           passive|diode|bjt_npn|bjt_pnp|nmos|pmos|
                           vreg|opamp|comparator|analog_switch|digital|
                           dac|adc|shift_register|mcu|connector|ignore|
-                          charger|pmic|balancer  (behavioural families)
+                          charger|pmic|balancer  (behavioural families)|
+                          i2c_sensor|spi_sensor  (declarative register-map
+                          sensors → a [sensor] spec, not a SPICE model)
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
 
 ENVIRONMENT:
@@ -1092,5 +1256,113 @@ rs = 0.5
         // (Full "no backend" behaviour is covered by the binary's runtime
         // error, which lists codex / HAUKSBEE_LLM_API_KEY / mock as options.)
         assert!(!which("definitely_not_a_real_command_xyz"));
+    }
+
+    // ── Declarative sensor extractor (i2c_sensor / spi_sensor) ──
+
+    #[test]
+    fn sensor_kinds_are_recognised() {
+        assert!(is_sensor_kind("i2c_sensor"));
+        assert!(is_sensor_kind("spi_sensor"));
+        assert!(!is_sensor_kind("bjt_npn"));
+        assert!(!is_sensor_kind("adc"));
+    }
+
+    #[test]
+    fn sensor_prompt_mentions_format() {
+        let p = build_sensor_prompt("LM75", "i2c_sensor", "datasheet text here");
+        assert!(p.contains("[sensor]"));
+        assert!(p.contains("i2c_pointer"));
+        assert!(p.contains("q7.1_be"));
+        assert!(p.contains("WHO_AM_I"));
+        let sp = build_sensor_prompt("MPU", "spi_sensor", "datasheet text here");
+        assert!(sp.contains("spi_reg"));
+        assert!(sp.contains("rw_read_is_high"));
+    }
+
+    /// The validator must accept a well-formed i2c_sensor reply and round-trip
+    /// it through the SensorSpec schema (this is the documented stand-in for a
+    /// live PDF extraction).
+    #[test]
+    fn validate_sensor_reply_round_trips_i2c() {
+        let reply = r#"
+[sensor]
+name = "LM75"
+bus = "i2c"
+i2c_address = 0x48
+
+[[sensor.input]]
+name = "temperature_c"
+default = 25.0
+
+[[sensor.register]]
+addr = 0x00
+bytes = 2
+encoding = "q7.1_be"
+expr = "temperature_c"
+
+[[sensor.register]]
+addr = 0x01
+const = [0x00]
+
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+        let spec = validate_sensor_reply(reply, "LM75", "i2c_sensor").unwrap();
+        assert_eq!(spec.sensor.name, "LM75");
+        assert_eq!(spec.sensor.i2c_address, Some(0x48));
+    }
+
+    #[test]
+    fn validate_sensor_reply_round_trips_spi() {
+        let reply = r#"
+[sensor]
+name = "MINIMU"
+bus = "spi"
+
+[[sensor.input]]
+name = "gyro_x"
+default = 0.0
+
+[[sensor.register]]
+addr = 0x0f
+const = [0x42]
+
+[[sensor.register]]
+addr = 0x22
+bytes = 2
+encoding = "i16_le"
+expr = "gyro_x"
+
+[sensor.protocol]
+style = "spi_reg"
+rw_read_is_high = true
+addr_mask = 0x7f
+"#;
+        let spec = validate_sensor_reply(reply, "MINIMU", "spi_sensor").unwrap();
+        assert_eq!(spec.sensor.name, "MINIMU");
+    }
+
+    #[test]
+    fn validate_sensor_reply_rejects_prose() {
+        let prose = "Here is the LM75 sensor model you asked for:";
+        assert!(validate_sensor_reply(prose, "LM75", "i2c_sensor").is_err());
+    }
+
+    #[test]
+    fn validate_sensor_reply_rejects_bus_mismatch() {
+        let i2c_reply = r#"
+[sensor]
+name = "LM75"
+bus = "i2c"
+i2c_address = 0x48
+[[sensor.register]]
+addr = 0x00
+const = [0x00]
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+        // Requested spi_sensor but the spec is i2c → reject.
+        assert!(validate_sensor_reply(i2c_reply, "LM75", "spi_sensor").is_err());
     }
 }

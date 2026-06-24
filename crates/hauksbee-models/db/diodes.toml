@@ -7,7 +7,10 @@ kind = "diode"
 description = "1N4148 small-signal switching diode, DO-35"
 
 [models.match]
-value_re = "(?i)^1N4148$"
+# Same small-signal switching die across SMD packages: 1N4148W (SOD-123),
+# 1N4148WS (SOD-323), 1N4148WT, 1N4148-7-F. The distinct parts 1N4448 / 1N4150
+# / 1N914 differ before the suffix and are correctly rejected.
+value_re = "(?i)^1N4148[A-Z0-9-]*$"
 
 [models.params]
 # Source: Vishay 1N4148 datasheet Rev. 14, SPICE model parameters

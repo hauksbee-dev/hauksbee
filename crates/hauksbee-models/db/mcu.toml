@@ -130,17 +130,26 @@ backend = "renode:stm32f103"
 "3"  = "pc15"
 "8"  = "vss"
 "9"  = "vdd"
-"10" = "pa0_adc0"
+"10" = "pa0_adc0"  # LQFP-48 pin 10 = PA0 (PA0-WKUP / ADC1_IN0) per ST DS5319; matches the
+                   # pa1_adc1/pa2_adc2 convention. Package-faithful.
 "11" = "pa1_adc1"
 "12" = "pa2_adc2"
 "14" = "pa4_adc4"
-"15" = "pa5"       # alive indicator into the analog circuit (GPIO output)
+"15" = "pa5"       # alive indicator (GPIO output); SPI1_SCK on the SPI ADC demo board. LQFP-48 pin 15 = PA5.
+"16" = "pa6"       # SPI1_MISO on the SPI ADC demo board. LQFP-48 pin 16 = PA6.
+"17" = "pa7"       # LQFP-48 pin 17 = PA7 (ADC1_IN7 / SPI1_MOSI) per ST DS5319; matches the
+                   # plain pa5/pa6 convention. Package-faithful.
+"18" = "pb0"       # LQFP-48 pin 18 = PB0 (ST DS5319). Package-faithful; not wired by the demos.
 "23" = "vss2"
 "24" = "vdd2"
+"29" = "pa8"       # PA8: firmware threshold/FLAG output. LQFP-48 pin 29 = PA8 (ST DS5319). The SPI ADC
+                   # demo board routes firmware PA8 here to its "FLAG" net (package-faithful).
 "30" = "pa9"       # USART1 TX
 "31" = "pa10"      # USART1 RX
 "35" = "vss3"
 "36" = "vdd3"
+"37" = "pb6_i2c1_scl"
+"38" = "pb7_i2c1_sda"
 "44" = "boot0"     # BOOT0 strapping pin (LQFP-48 pin 44; RM0008 boot config)
 "48" = "vdd4"      # VDDA
 

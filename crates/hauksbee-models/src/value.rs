@@ -69,8 +69,16 @@ fn normalise_comma_decimal(s: &str) -> String {
         let before_comma = &s[..idx];
         let after_comma = &s[idx + 1..];
         // Check: last char before comma is digit AND first char after is digit
-        let prev_digit = before_comma.chars().next_back().map(|c| c.is_ascii_digit()).unwrap_or(false);
-        let next_digit = after_comma.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false);
+        let prev_digit = before_comma
+            .chars()
+            .next_back()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false);
+        let next_digit = after_comma
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false);
         if prev_digit && next_digit {
             return format!("{}.{}", before_comma, after_comma);
         }
@@ -80,10 +88,10 @@ fn normalise_comma_decimal(s: &str) -> String {
 
 /// Normalise unicode characters that appear in BOM values.
 fn normalise_unicode(s: &str) -> String {
-    s.replace('\u{00b5}', "u")  // µ → u (micro sign)
-     .replace('\u{03bc}', "u")  // μ → u (greek mu)
-     .replace('\u{03a9}', "R")  // Ω → R
-     .replace('\u{2126}', "R")  // Ω (ohm sign) → R
+    s.replace('\u{00b5}', "u") // µ → u (micro sign)
+        .replace('\u{03bc}', "u") // μ → u (greek mu)
+        .replace('\u{03a9}', "R") // Ω → R
+        .replace('\u{2126}', "R") // Ω (ohm sign) → R
 }
 
 /// Core parser, operating on an ASCII string (after unicode normalisation).
@@ -142,7 +150,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let frac_digits = &after_suffix[..j];
         let after_frac = &after_suffix[j..];
         let _ = frac_start; // suppress warning
-        // Rebuild as "4.7"
+                            // Rebuild as "4.7"
         let combined = format!("{}.{}", before, frac_digits);
         let unit = parse_unit(after_frac.trim());
         (combined, unit)
@@ -235,13 +243,16 @@ mod tests {
     use super::*;
 
     fn check(s: &str, expected_si: f64) {
-        let v = parse_value(s)
-            .unwrap_or_else(|| panic!("parse_value({:?}) returned None", s));
+        let v = parse_value(s).unwrap_or_else(|| panic!("parse_value({:?}) returned None", s));
         let rel_err = (v.si - expected_si).abs() / expected_si.max(1e-30);
         assert!(
             rel_err < 1e-9,
             "parse_value({:?}) = {} (si={:.6e}), expected {:.6e} (rel_err={:.2e})",
-            s, v, v.si, expected_si, rel_err
+            s,
+            v,
+            v.si,
+            expected_si,
+            rel_err
         );
     }
 
@@ -256,55 +267,55 @@ mod tests {
 
     #[test]
     fn test_multipliers() {
-        check("1p",    1e-12);
-        check("1n",    1e-9);
-        check("1u",    1e-6);
-        check("1m",    1e-3);
-        check("1k",    1e3);
-        check("1MEG",  1e6);
-        check("1meg",  1e6);
-        check("1M",    1e6);
-        check("1G",    1e9);
+        check("1p", 1e-12);
+        check("1n", 1e-9);
+        check("1u", 1e-6);
+        check("1m", 1e-3);
+        check("1k", 1e3);
+        check("1MEG", 1e6);
+        check("1meg", 1e6);
+        check("1M", 1e6);
+        check("1G", 1e9);
     }
 
     #[test]
     fn test_interleaved_decimal() {
         // "4k7" style: suffix acts as decimal point
-        check("4k7",   4_700.0);
-        check("4K7",   4_700.0);
-        check("2R2",   2.2);
-        check("0R1",   0.1);
-        check("1n5",   1.5e-9);
-        check("2k2",   2_200.0);
-        check("4M7",   4.7e6);
+        check("4k7", 4_700.0);
+        check("4K7", 4_700.0);
+        check("2R2", 2.2);
+        check("0R1", 0.1);
+        check("1n5", 1.5e-9);
+        check("2k2", 2_200.0);
+        check("4M7", 4.7e6);
     }
 
     #[test]
     fn test_with_units() {
-        check("10k",    10_000.0);
-        check("0.1uF",  1e-7);
-        check("100nF",  100e-9);
-        check("100n",   100e-9);
-        check("22uH",   22e-6);
-        check("4.7nF",  4.7e-9);
-        check("220uF",  220e-6);
-        check("10nF",   10e-9);
-        check("220nF",  220e-9);
+        check("10k", 10_000.0);
+        check("0.1uF", 1e-7);
+        check("100nF", 100e-9);
+        check("100n", 100e-9);
+        check("22uH", 22e-6);
+        check("4.7nF", 4.7e-9);
+        check("220uF", 220e-6);
+        check("10nF", 10e-9);
+        check("220nF", 220e-9);
         check("22uF/25V", 22e-6); // tolerate /25V suffix
     }
 
     #[test]
     fn test_resistor_values() {
-        check("220",    220.0);
-        check("470",    470.0);
-        check("1K",     1_000.0);
-        check("2.2K",   2_200.0);
-        check("5,1K",   5_100.0);  // comma as decimal separator (European BOM)
-        check("6.2K",   6_200.0);
-        check("10K",    10_000.0);
-        check("22K",    22_000.0);
-        check("62K",    62_000.0);
-        check("10MEG",  10e6);
+        check("220", 220.0);
+        check("470", 470.0);
+        check("1K", 1_000.0);
+        check("2.2K", 2_200.0);
+        check("5,1K", 5_100.0); // comma as decimal separator (European BOM)
+        check("6.2K", 6_200.0);
+        check("10K", 10_000.0);
+        check("22K", 22_000.0);
+        check("62K", 62_000.0);
+        check("10MEG", 10e6);
     }
 
     #[test]
@@ -330,8 +341,8 @@ mod tests {
 
     #[test]
     fn test_edge_cases() {
-        check("0",      0.0); // actually zero resistance (jumper)
-        check("0R",     0.0);
-        check("0R0",    0.0);
+        check("0", 0.0); // actually zero resistance (jumper)
+        check("0R", 0.0);
+        check("0R0", 0.0);
     }
 }

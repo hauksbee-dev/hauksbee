@@ -27,11 +27,17 @@ vout_setpoint = 12.0
     std::fs::write(dir.join("crazy.toml"), toml).unwrap();
 
     let lib = ModelLibrary::builtin_with_user_dirs(&[dir.as_path()]);
-    let q = ComponentQuery { value: Some("CRAZYCHG999".into()), ..Default::default() };
+    let q = ComponentQuery {
+        value: Some("CRAZYCHG999".into()),
+        ..Default::default()
+    };
     let r = lib.resolve(&q);
     let m = r.model.expect("user part should resolve from --models-dir");
     assert_eq!(m.id, "my_crazy_charger");
-    assert!(!m.behavioral.is_empty(), "user part carries its behavioural block");
+    assert!(
+        !m.behavioral.is_empty(),
+        "user part carries its behavioural block"
+    );
     assert_eq!(r.source.as_deref(), Some("user"));
 
     let _ = std::fs::remove_dir_all(&dir);

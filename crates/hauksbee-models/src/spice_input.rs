@@ -122,10 +122,7 @@ fn parse_dot_model(line: &str) -> Option<SpiceCard> {
     };
 
     // Strip surrounding parens if present
-    let param_str = rest
-        .trim_start_matches('(')
-        .trim_end_matches(')')
-        .trim();
+    let param_str = rest.trim_start_matches('(').trim_end_matches(')').trim();
 
     let params = parse_kv_params(param_str);
 
