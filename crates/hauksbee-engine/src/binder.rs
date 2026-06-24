@@ -39,6 +39,12 @@ pub struct McuBinding {
     pub reference: String,
     /// hauksbee-mcu backend string, e.g. `"simavr:atmega328p"`.
     pub backend: String,
+    /// The exact part the board asked for (the component value, e.g.
+    /// `"STM32F411RET6"`), captured BEFORE `route_mcu_family_str` collapses it to
+    /// a coarse family backend. Used by the scheduler to emit a chip-substitution
+    /// warning when the modelled core is less specific than the requested part
+    /// (Track B). May be empty when the board gives no value string.
+    pub requested_part: String,
     /// Pad number -> role string from the model pin map (e.g. "19"->"pb5_sck").
     pub pad_roles: HashMap<String, String>,
     /// Role string -> net node it is wired to (only connected pins).
@@ -314,7 +320,8 @@ fn bind_behavioral(
         // floating at 0 V (mb2.5+ NC).
         let empty_pins = std::collections::BTreeMap::new();
         let model_pins = model.as_ref().map(|m| &m.pins).unwrap_or(&empty_pins);
-        let role_nets = role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
+        let role_nets =
+            role_node_map_pins(comp, model_pins, model.as_ref().map(|m| m.kind), node_of);
         let role_map: std::collections::BTreeMap<String, NodeId> = role_nets
             .into_iter()
             .filter(|(_role, node)| !circuit.node_name(*node).starts_with("unconnected-"))
@@ -554,6 +561,29 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
+    if let Some(route) = route_mcu_family(comp) {
+        if let McuFamilyRoute::Backend { family, backend } = route {
+            let mut params = hauksbee_models::Params::default();
+            params.set_str("backend", backend);
+            params.set_str("auto_bind", "family_router");
+            params.set_str("auto_bind_family", family);
+            let derived = derive_mcu_pin_roles(comp);
+            params.set_int("auto_bind_pin_names", derived.named_pin_count as i64);
+            params.set_int("auto_bind_derived_pins", derived.roles.len() as i64);
+            params.set_str("auto_bind_pin_summary", pin_role_summary(&derived.roles));
+            return Some(make_entry(
+                &format!(
+                    "{}_family_router",
+                    family.to_ascii_lowercase().replace('-', "_")
+                ),
+                ComponentKind::Mcu,
+                &format!("{family} MCU (engine family-router fallback)"),
+                params,
+                derived.roles,
+            ));
+        }
+    }
+
     // Connector-class references: not simulatable parts; classify so they
     // don't count against resolution (J5 "Power", P1, test points, jumpers).
     if matches!(prefix.as_str(), "J" | "P" | "X" | "JP" | "TP" | "MP" | "H")
@@ -616,6 +646,235 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     None
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McuFamilyRoute {
+    Backend {
+        family: &'static str,
+        backend: &'static str,
+    },
+    NoPlatform {
+        family: &'static str,
+    },
+}
+
+fn route_mcu_family(comp: &Component) -> Option<McuFamilyRoute> {
+    if !looks_like_mcu_candidate(comp) {
+        return None;
+    }
+    mcu_identity_strings(comp)
+        .iter()
+        .find_map(|s| route_mcu_family_str(s))
+}
+
+fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
+    for token in family_tokens(s) {
+        let compact = token.replace(['-', '_', ' '], "");
+        if compact.starts_with("STM32F4") {
+            return Some(McuFamilyRoute::Backend {
+                family: "STM32F4",
+                backend: "renode:stm32f4",
+            });
+        }
+        if compact.starts_with("STM32F1") {
+            return Some(McuFamilyRoute::Backend {
+                family: "STM32F1",
+                backend: "renode:stm32f103",
+            });
+        }
+        if compact.starts_with("ESP32C3") {
+            return Some(McuFamilyRoute::Backend {
+                family: "ESP32-C3",
+                backend: "qemu:esp32c3",
+            });
+        }
+        if compact.starts_with("ESP32S3") {
+            return Some(McuFamilyRoute::Backend {
+                family: "ESP32-S3",
+                backend: "qemu:esp32s3",
+            });
+        }
+        if compact.starts_with("ESP32S2") {
+            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-S2" });
+        }
+        if compact.starts_with("ESP32")
+            || compact.starts_with("ESPWROOM32")
+            || compact.starts_with("ESP32WROOM32")
+            || compact.starts_with("ESP32WROVER")
+        {
+            return Some(McuFamilyRoute::Backend {
+                family: "ESP32",
+                backend: "qemu:esp32",
+            });
+        }
+        if compact.starts_with("NRF52") {
+            return Some(McuFamilyRoute::Backend {
+                family: "nRF52",
+                backend: "renode:nrf52840",
+            });
+        }
+    }
+    None
+}
+
+fn looks_like_mcu_candidate(comp: &Component) -> bool {
+    let prefix: String = comp
+        .reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if matches!(prefix.as_str(), "U" | "IC" | "MCU") {
+        return true;
+    }
+    let lib = comp.lib_id.to_ascii_uppercase();
+    lib.contains("MCU") || lib.contains("MICROCONTROLLER") || lib.contains("RF_MODULE")
+}
+
+fn mcu_identity_strings(comp: &Component) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(v) = non_empty(&comp.value) {
+        out.push(v);
+    }
+    for (k, v) in &comp.properties {
+        let key = k.to_ascii_lowercase().replace([' ', '-'], "_");
+        if key.contains("mpn")
+            || key.contains("manufacturer_part")
+            || key == "part_number"
+            || key == "mfr_part"
+        {
+            if let Some(v) = non_empty(v) {
+                out.push(v);
+            }
+        }
+    }
+    if let Some(v) = non_empty(&comp.lib_id) {
+        out.push(v);
+    }
+    out
+}
+
+fn family_tokens(s: &str) -> Vec<String> {
+    let upper = s.to_ascii_uppercase();
+    let mut tokens = vec![upper.clone()];
+    tokens.extend(
+        upper
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .filter(|t| !t.is_empty())
+            .map(str::to_string),
+    );
+    tokens
+}
+
+struct DerivedMcuPins {
+    roles: std::collections::BTreeMap<String, String>,
+    named_pin_count: usize,
+}
+
+fn derive_mcu_pin_roles(comp: &Component) -> DerivedMcuPins {
+    let mut roles = std::collections::BTreeMap::new();
+    let mut named_pin_count = 0usize;
+    for pin in &comp.pins {
+        if pin.function.trim().is_empty() {
+            continue;
+        }
+        named_pin_count += 1;
+        if let Some(role) = role_from_mcu_pinfunction(&pin.function) {
+            roles.insert(pin.number.clone(), role);
+        }
+    }
+    DerivedMcuPins {
+        roles,
+        named_pin_count,
+    }
+}
+
+fn role_from_mcu_pinfunction(function: &str) -> Option<String> {
+    let f = function.trim();
+    if f.is_empty() {
+        return None;
+    }
+    let upper = f.to_ascii_uppercase();
+    let mut base = None;
+    for token in pinfunction_tokens(&upper) {
+        if let Some(role) = role_from_mcu_pinfunction_token(&token) {
+            base = Some(role);
+            break;
+        }
+    }
+    let mut role = base?;
+    let tx = upper.contains("USART") && upper.contains("TX")
+        || upper.contains("UART") && upper.contains("TX")
+        || upper.contains("TXD");
+    let rx = upper.contains("USART") && upper.contains("RX")
+        || upper.contains("UART") && upper.contains("RX")
+        || upper.contains("RXD");
+    if tx && !role.ends_with("_txd") && (role.starts_with('p') || role.starts_with("gpio")) {
+        role.push_str("_txd");
+    } else if rx && !role.ends_with("_rxd") && (role.starts_with('p') || role.starts_with("gpio")) {
+        role.push_str("_rxd");
+    }
+    Some(role)
+}
+
+fn pinfunction_tokens(upper: &str) -> Vec<String> {
+    let mut tokens = vec![upper.to_string()];
+    tokens.extend(
+        upper
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(str::to_string),
+    );
+    tokens
+}
+
+fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
+    if token == "BOOT0" {
+        return Some("boot0".to_string());
+    }
+    if token.starts_with("VDD") || token.starts_with("VCC") {
+        return Some("vdd".to_string());
+    }
+    if token.starts_with("VSS") || token == "GND" {
+        return Some("vss".to_string());
+    }
+    if let Some(rest) = token.strip_prefix('P') {
+        let mut chars = rest.chars();
+        let port = chars.next()?;
+        if !matches!(port, 'A'..='E') {
+            return None;
+        }
+        let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() || digits.len() > 2 {
+            return None;
+        }
+        if digits.parse::<u8>().ok()? < 32 {
+            return Some(format!("p{}{}", port.to_ascii_lowercase(), digits));
+        }
+    }
+    if let Some(rest) = token.strip_prefix("GPIO") {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && digits.parse::<u8>().ok()? < 64 {
+            return Some(format!("gpio{digits}"));
+        }
+    }
+    None
+}
+
+fn pin_role_summary(pins: &std::collections::BTreeMap<String, String>) -> String {
+    let mut roles: Vec<&str> = pins
+        .values()
+        .filter(|role| gpio_of_role(role, false).is_some())
+        .map(String::as_str)
+        .collect();
+    roles.sort_unstable();
+    roles.dedup();
+    match (roles.first(), roles.last()) {
+        (Some(first), Some(last)) if first != last => format!("{first}..{last}"),
+        (Some(only), _) => (*only).to_string(),
+        _ => "no GPIO roles".to_string(),
+    }
+}
+
 /// Construct a [`ModelEntry`] for an engine-layer fallback. Centralised so a
 /// schema change (new optional fields) is handled in one place.
 fn make_entry(
@@ -629,8 +888,7 @@ fn make_entry(
     // This keeps us forward-compatible with new `#[serde(default)]` fields on
     // ModelEntry without hand-listing them.
     let stub = format!("id = \"{id}\"\nkind = \"{}\"\n", kind_str(kind));
-    let mut entry: ModelEntry =
-        toml::from_str(&stub).expect("fallback ModelEntry stub parses");
+    let mut entry: ModelEntry = toml::from_str(&stub).expect("fallback ModelEntry stub parses");
     entry.description = description.to_string();
     entry.params = params;
     entry.pins = pins;
@@ -665,14 +923,34 @@ fn kind_str(kind: ComponentKind) -> &'static str {
 /// The ATmega328P DIP-28 / TQFP-32 pad→role map (mirrors db/mcu.toml).
 fn atmega328p_pin_map() -> std::collections::BTreeMap<String, String> {
     [
-        ("1", "pc6_reset"), ("2", "pd0_rxd"), ("3", "pd1_txd"), ("4", "pd2_int0"),
-        ("5", "pd3_int1_oc2b"), ("6", "pd4_t0_xck"), ("7", "vcc"), ("8", "gnd"),
-        ("9", "pb6_xtal1"), ("10", "pb7_xtal2"), ("11", "pd5_t1_oc0b"),
-        ("12", "pd6_ain0_oc0a"), ("13", "pd7_ain1"), ("14", "pb0_icp1"),
-        ("15", "pb1_oc1a"), ("16", "pb2_ss_oc1b"), ("17", "pb3_mosi_oc2a"),
-        ("18", "pb4_miso"), ("19", "pb5_sck"), ("20", "avcc"), ("21", "aref"),
-        ("22", "gnd2"), ("23", "pc0_adc0"), ("24", "pc1_adc1"), ("25", "pc2_adc2"),
-        ("26", "pc3_adc3"), ("27", "pc4_adc4_sda"), ("28", "pc5_adc5_scl"),
+        ("1", "pc6_reset"),
+        ("2", "pd0_rxd"),
+        ("3", "pd1_txd"),
+        ("4", "pd2_int0"),
+        ("5", "pd3_int1_oc2b"),
+        ("6", "pd4_t0_xck"),
+        ("7", "vcc"),
+        ("8", "gnd"),
+        ("9", "pb6_xtal1"),
+        ("10", "pb7_xtal2"),
+        ("11", "pd5_t1_oc0b"),
+        ("12", "pd6_ain0_oc0a"),
+        ("13", "pd7_ain1"),
+        ("14", "pb0_icp1"),
+        ("15", "pb1_oc1a"),
+        ("16", "pb2_ss_oc1b"),
+        ("17", "pb3_mosi_oc2a"),
+        ("18", "pb4_miso"),
+        ("19", "pb5_sck"),
+        ("20", "avcc"),
+        ("21", "aref"),
+        ("22", "gnd2"),
+        ("23", "pc0_adc0"),
+        ("24", "pc1_adc1"),
+        ("25", "pc2_adc2"),
+        ("26", "pc3_adc3"),
+        ("27", "pc4_adc4_sda"),
+        ("28", "pc5_adc5_scl"),
     ]
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -692,6 +970,20 @@ fn unresolved_outcome(
     comp: &Component,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (Option<String>, BindOutcome, Option<String>) {
+    if let Some(McuFamilyRoute::NoPlatform { family }) = route_mcu_family(comp) {
+        let msg = format!(
+            "[auto-bind] {} \"{}\" recognized {family} but no co-sim platform; leaving UNRESOLVED. Override with a --models-dir entry.",
+            comp.reference, comp.value
+        );
+        eprintln!("{msg}");
+        return (
+            None,
+            BindOutcome::Unresolved {
+                reason: format!("recognized {family} but no co-sim platform"),
+            },
+            Some(msg),
+        );
+    }
     let connected = comp.pins.iter().any(|p| node_of(p.net).is_some());
     let two_terminal = comp.pins.len() == 2;
     let warning = if connected {
@@ -775,8 +1067,8 @@ fn bind_component(
                 .get_str("backend")
                 .unwrap_or("simavr:atmega328p")
                 .to_string();
-            bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
-            (BindOutcome::Mcu { backend }, None)
+            let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
+            (BindOutcome::Mcu { backend }, warning)
         }
         Connector => (
             BindOutcome::Skipped {
@@ -820,7 +1112,9 @@ fn role_node_map_pins(
     let mut m = HashMap::new();
     if let Some(kind) = kind {
         for pin in &comp.pins {
-            let Some(node) = node_of(pin.net) else { continue };
+            let Some(node) = node_of(pin.net) else {
+                continue;
+            };
             if let Some(role) = role_from_pinfunction(kind, &pin.function) {
                 m.entry(role).or_insert(node);
             }
@@ -1037,8 +1331,7 @@ fn bind_bjt(
         let mut stamped = 0;
         for suffix in &suffixes {
             let get = |role: &str| roles.get(&format!("{role}{suffix}")).copied();
-            let (Some(c), Some(b), Some(e)) =
-                (get("collector"), get("base"), get("emitter"))
+            let (Some(c), Some(b), Some(e)) = (get("collector"), get("base"), get("emitter"))
             else {
                 continue;
             };
@@ -1062,9 +1355,15 @@ fn bind_bjt(
         );
     }
 
-    let c = roles.get("collector").or_else(|| pick(roles, &["c"])).copied();
+    let c = roles
+        .get("collector")
+        .or_else(|| pick(roles, &["c"]))
+        .copied();
     let b = roles.get("base").or_else(|| pick(roles, &["b"])).copied();
-    let e = roles.get("emitter").or_else(|| pick(roles, &["e"])).copied();
+    let e = roles
+        .get("emitter")
+        .or_else(|| pick(roles, &["e"]))
+        .copied();
     let (Some(c), Some(b), Some(e)) = (c, b, e) else {
         return open_warning(comp, "BJT pins not all connected");
     };
@@ -1270,7 +1569,9 @@ fn bind_analog_switch(
     let s0 = pick(roles, &["s0", "b1"]).copied();
     let s1 = pick(roles, &["s1", "b2"]).copied();
     let sel = pick(roles, &["ctrl", "s", "in"]).copied();
-    let vss = pick(roles, &["vss", "gnd"]).copied().unwrap_or(NodeId::GROUND);
+    let vss = pick(roles, &["vss", "gnd"])
+        .copied()
+        .unwrap_or(NodeId::GROUND);
     if let (Some(com), Some(s0), Some(s1), Some(sel), Some(vcc)) =
         (com, s0, s1, sel, pick(roles, &["vcc"]).copied())
     {
@@ -1331,7 +1632,9 @@ fn bind_analog_switch(
         }
     };
     let ctrl = pick(roles, &["ctrl", "ctrl_1", "in"]).copied();
-    let ctrl_n = pick(roles, &["vss", "gnd"]).copied().unwrap_or(NodeId::GROUND);
+    let ctrl_n = pick(roles, &["vss", "gnd"])
+        .copied()
+        .unwrap_or(NodeId::GROUND);
     let Some(ctrl) = ctrl else {
         return open_warning(comp, "analog switch control not connected");
     };
@@ -1399,18 +1702,27 @@ fn bind_mcu(
     pad_nodes: &dyn Fn(&str) -> Option<NodeId>,
     _power_nets: &HashMap<String, f64>,
     mcus: &mut Vec<McuBinding>,
-) {
+) -> Option<String> {
     let backend = model
         .params
         .get_str("backend")
         .unwrap_or("simavr:atmega328p")
         .to_string();
     let module = model.params.0.get("module").is_some();
+    let derived_when_empty = if model.pins.is_empty() {
+        Some(derive_mcu_pin_roles(comp))
+    } else {
+        None
+    };
+    let effective_pins = derived_when_empty
+        .as_ref()
+        .map(|d| &d.roles)
+        .unwrap_or(&model.pins);
 
     let mut pad_roles = HashMap::new();
     let mut role_nets = HashMap::new();
     for pin in &comp.pins {
-        if let Some(role) = model.pins.get(&pin.number) {
+        if let Some(role) = effective_pins.get(&pin.number) {
             pad_roles.insert(pin.number.clone(), role.clone());
             if let Some(node) = node_of(pin.net) {
                 role_nets.insert(role.clone(), node);
@@ -1458,12 +1770,89 @@ fn bind_mcu(
     mcus.push(McuBinding {
         reference: comp.reference.clone(),
         backend,
+        // The raw requested part string, captured before family routing collapsed
+        // e.g. STM32F411RET6 -> the stm32f4 backend. Empty when the board gives no
+        // value (we still bind, but cannot name what was asked for).
+        requested_part: comp.value.trim().to_string(),
         pad_roles,
         role_nets,
         gpio_drivers,
         adc_nets,
         module,
     });
+    log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
+}
+
+fn log_mcu_auto_decision(
+    comp: &Component,
+    model: &ModelEntry,
+    derived_when_empty: Option<&DerivedMcuPins>,
+) -> Option<String> {
+    let backend = model
+        .params
+        .get_str("backend")
+        .unwrap_or("simavr:atmega328p");
+    let auto_router = model.params.get_str("auto_bind") == Some("family_router");
+    if auto_router {
+        let family = model.params.get_str("auto_bind_family").unwrap_or("MCU");
+        let named = model
+            .params
+            .0
+            .get("auto_bind_pin_names")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as usize;
+        let derived = model
+            .params
+            .0
+            .get("auto_bind_derived_pins")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as usize;
+        let summary = model
+            .params
+            .get_str("auto_bind_pin_summary")
+            .unwrap_or("no GPIO roles");
+        let pin_msg = if named == 0 {
+            "GPIO map cannot be derived: no schematic pin names; leaving GPIO unmapped".to_string()
+        } else if derived == 0 {
+            format!(
+                "GPIO map cannot be derived from {named} schematic pin names; leaving GPIO unmapped"
+            )
+        } else {
+            format!("GPIO map derived from {derived} schematic pin names ({summary})")
+        };
+        let msg = format!(
+            "[auto-bind] {} \"{}\" recognized {family} -> backend {backend} (no DB model); {pin_msg}. Override with a --models-dir entry.",
+            comp.reference, comp.value
+        );
+        eprintln!("{msg}");
+        return if derived == 0 { Some(msg) } else { None };
+    }
+
+    if let Some(derived) = derived_when_empty {
+        if derived.roles.is_empty() {
+            let pin_reason = if derived.named_pin_count == 0 {
+                "no schematic pin names".to_string()
+            } else {
+                format!("{} schematic pin names", derived.named_pin_count)
+            };
+            let msg = format!(
+                "[auto-bind] {} \"{}\" explicit model has no pins; GPIO map cannot be derived from {pin_reason}; leaving GPIO unmapped. Override with a --models-dir entry.",
+                comp.reference, comp.value
+            );
+            eprintln!("{msg}");
+            return Some(msg);
+        }
+        let summary = pin_role_summary(&derived.roles);
+        let msg = format!(
+            "[auto-bind] {} \"{}\" explicit model has no pins; GPIO map derived from {} schematic pin names ({}). Override with a --models-dir entry.",
+            comp.reference,
+            comp.value,
+            derived.roles.len(),
+            summary
+        );
+        eprintln!("{msg}");
+    }
+    None
 }
 
 // ── Role/pin helpers ─────────────────────────────────────────────────────────
@@ -1477,7 +1866,10 @@ fn open_warning(comp: &Component, why: &str) -> (BindOutcome, Option<String>) {
         BindOutcome::Unresolved {
             reason: why.to_string(),
         },
-        Some(format!("{} ({}): {why}, left open", comp.reference, comp.value)),
+        Some(format!(
+            "{} ({}): {why}, left open",
+            comp.reference, comp.value
+        )),
     )
 }
 
@@ -1602,8 +1994,10 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// True for ground-family net names.
 fn is_ground(name: &str) -> bool {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    matches!(n.as_str(), "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "VSS" | "0" | "VEE")
-        || n.ends_with("GND")
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "VSS" | "0" | "VEE"
+    ) || n.ends_with("GND")
 }
 
 /// If `name` is a recognised supply rail, return its nominal voltage.

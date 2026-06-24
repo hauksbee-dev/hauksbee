@@ -36,8 +36,15 @@ hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features =
 hauksbee-server = { version = "0.1.0", path = "../hauksbee-server" }
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
+forge-sexpr.workspace = true
+tempfile = { workspace = true }
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "0.8"
+# Interactive TUI: the default human-facing surface when `hauksbee run <board>`
+# is invoked with no output flag on a TTY. Adapts ratatui + crossterm rather
+# than hand-rolling a terminal renderer.
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 # Sandboxed arithmetic/boolean expression evaluator for behavioural-model laws
 # and FSM guards. Chosen over rhai: the laws here are pure arithmetic over a
 # bound context (pin voltages, active state, params) with no need for a scripting

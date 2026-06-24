@@ -18,12 +18,12 @@
 //! SPR/SPI2X prescaler sets and is not bounded by the analog chunk rate. A
 //! *bit-banged* SPI master (software-toggled SCK/MOSI on GPIO) is bounded by
 //! the chunk poll rate exactly like any GPIO and is out of scope here, matching
-//! the limitation documented for I2C and in docs/MCU.md. The Renode `on_spi`
-//! hook is a documented no-op, so these slaves bind to the AVR backend today.
+//! the limitation documented for I2C and in docs/MCU.md. These slaves bind to
+//! both the AVR backend (simavr SPI IRQ) and the Renode backend (the C# SPI
+//! bridge in `hauksbee-mcu/src/renode`), routing every reply byte through
+//! `on_spi` either way.
 
 use std::collections::HashMap;
-
-
 
 use super::{Peripheral, TickCtx};
 
@@ -36,6 +36,16 @@ pub trait SpiSlave: Send {
     /// surface CS, so the engine calls this between co-sim chunks as a frame
     /// boundary heuristic; well-formed transfers complete within a chunk.
     fn deselect(&mut self) {}
+
+    /// True if the slave is partway through a multi-byte transaction (i.e. it
+    /// has consumed at least one byte but not yet seen a deselect). The engine
+    /// uses this only as a debug-time sanity check: a chunk-boundary deselect
+    /// that lands here means a transfer spanned the boundary, which the
+    /// chunk-cadence deselect heuristic cannot frame correctly. Default `false`
+    /// for stateless slaves.
+    fn mid_transaction(&self) -> bool {
+        false
+    }
 
     fn state(&self) -> HashMap<String, f64> {
         HashMap::new()
@@ -65,6 +75,26 @@ impl SpiBus {
         self.slave.transfer(mosi)
     }
 
+    /// Deselect the slave (chip-select deassert). Called either from the
+    /// `on_spi` closure when the backend surfaces a CS-deassert event
+    /// (Renode `FinishTransmission`), or from `post_solve` at each chunk
+    /// boundary for backends that don't surface CS.
+    pub fn slave_deselect(&mut self) {
+        self.slave.deselect();
+    }
+
+    /// True if the active slave is partway through a transaction. See
+    /// [`SpiSlave::mid_transaction`]; used for the scheduler's debug-time
+    /// chunk-boundary sanity check.
+    pub fn slave_mid_transaction(&self) -> bool {
+        self.slave.mid_transaction()
+    }
+
+    /// The bus identifier (the reference designator passed to [`SpiBus::new`]).
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     pub fn slave<T: 'static>(&self) -> Option<&T> {
         self.slave.as_any().downcast_ref::<T>()
     }
@@ -75,7 +105,7 @@ impl SpiBus {
 
 impl Peripheral for SpiBus {
     fn id(&self) -> &str {
-        &self.id
+        SpiBus::id(self)
     }
     fn kind(&self) -> &'static str {
         "spi_bus"
@@ -148,39 +178,37 @@ impl Spi25Eeprom {
 impl SpiSlave for Spi25Eeprom {
     fn transfer(&mut self, mosi: u8) -> u8 {
         match self.state {
-            SpiCmd::Idle => {
-                match mosi {
-                    0x06 => {
-                        self.wel = true;
-                        0xFF
-                    }
-                    0x04 => {
-                        self.wel = false;
-                        0xFF
-                    }
-                    0x05 => {
-                        self.state = SpiCmd::Rdsr;
-                        0xFF
-                    }
-                    0x01 => {
-                        self.state = SpiCmd::Wrsr;
-                        0xFF
-                    }
-                    0x03 => {
-                        self.state = SpiCmd::Read;
-                        self.addr_bytes = 0;
-                        self.addr = 0;
-                        0xFF
-                    }
-                    0x02 => {
-                        self.state = SpiCmd::Write;
-                        self.addr_bytes = 0;
-                        self.addr = 0;
-                        0xFF
-                    }
-                    _ => 0xFF,
+            SpiCmd::Idle => match mosi {
+                0x06 => {
+                    self.wel = true;
+                    0xFF
                 }
-            }
+                0x04 => {
+                    self.wel = false;
+                    0xFF
+                }
+                0x05 => {
+                    self.state = SpiCmd::Rdsr;
+                    0xFF
+                }
+                0x01 => {
+                    self.state = SpiCmd::Wrsr;
+                    0xFF
+                }
+                0x03 => {
+                    self.state = SpiCmd::Read;
+                    self.addr_bytes = 0;
+                    self.addr = 0;
+                    0xFF
+                }
+                0x02 => {
+                    self.state = SpiCmd::Write;
+                    self.addr_bytes = 0;
+                    self.addr = 0;
+                    0xFF
+                }
+                _ => 0xFF,
+            },
             SpiCmd::Rdsr => {
                 // Status: WEL in bit 1.
                 let sr = if self.wel { 0x02 } else { 0x00 };
@@ -197,7 +225,11 @@ impl SpiSlave for Spi25Eeprom {
                     self.addr_bytes += 1;
                     0xFF
                 } else {
-                    let b = self.mem.get(self.addr as usize % self.mem.len()).copied().unwrap_or(0xFF);
+                    let b = self
+                        .mem
+                        .get(self.addr as usize % self.mem.len())
+                        .copied()
+                        .unwrap_or(0xFF);
                     self.addr = self.addr.wrapping_add(1);
                     b
                 }
@@ -225,6 +257,10 @@ impl SpiSlave for Spi25Eeprom {
         }
         self.state = SpiCmd::Idle;
         self.addr_bytes = 0;
+    }
+
+    fn mid_transaction(&self) -> bool {
+        self.state != SpiCmd::Idle
     }
 
     fn state(&self) -> HashMap<String, f64> {
@@ -304,6 +340,10 @@ impl SpiSlave for Mcp3008 {
 
     fn deselect(&mut self) {
         self.seq = 0;
+    }
+
+    fn mid_transaction(&self) -> bool {
+        self.seq != 0
     }
 
     fn state(&self) -> HashMap<String, f64> {

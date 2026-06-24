@@ -104,7 +104,11 @@ impl DigitalComponent {
         drivers: HashMap<String, PinDriver>,
     ) -> Self {
         let kind = classify(model);
-        let bits = model.params.get_f64("bits").map(|b| b as usize).unwrap_or(8);
+        let bits = model
+            .params
+            .get_f64("bits")
+            .map(|b| b as usize)
+            .unwrap_or(8);
         DigitalComponent {
             reference,
             kind,
@@ -248,9 +252,7 @@ impl DigitalComponent {
                 let outs: Vec<(String, bool)> = self
                     .drivers
                     .keys()
-                    .filter_map(|k| {
-                        self.input_state.get(k).map(|v| (k.clone(), *v))
-                    })
+                    .filter_map(|k| self.input_state.get(k).map(|v| (k.clone(), *v)))
                     .collect();
                 for (role, v) in outs {
                     if let Some(drv) = self.drivers.get(&role) {
@@ -295,12 +297,10 @@ fn classify(model: &ModelEntry) -> DigitalKind {
 /// Used by the binder to decide which pins to stamp Thevenin drivers on.
 pub fn output_roles(model: &ModelEntry) -> Vec<String> {
     match classify(model) {
-        DigitalKind::Hc595 => [
-            "qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
+        DigitalKind::Hc595 => ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         DigitalKind::Hc165 => ["qh", "qh_n"].iter().map(|s| s.to_string()).collect(),
         DigitalKind::Buffer => {
             // Any pin role starting with 'y' (74HCxx convention) is an output.

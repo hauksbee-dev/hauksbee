@@ -122,7 +122,10 @@ pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
         return 250.0;
     }
     // Diode-specific small bodies (run hot; check before generic SOD).
-    if f.contains("SOD-523") || f.contains("SOD523") || f.contains("SOD-323") || f.contains("SOD323")
+    if f.contains("SOD-523")
+        || f.contains("SOD523")
+        || f.contains("SOD-323")
+        || f.contains("SOD323")
     {
         return 450.0;
     }
@@ -143,7 +146,8 @@ pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
         return 100.0;
     }
     // SOIC / SO bodies.
-    if f.contains("SOIC-16") || f.contains("SOIC-14") || f.contains("SO-16") || f.contains("SO-14") {
+    if f.contains("SOIC-16") || f.contains("SOIC-14") || f.contains("SO-16") || f.contains("SO-14")
+    {
         return 90.0;
     }
     if f.contains("SOIC-8") || f.contains("SOIC8") || f.contains("SO-8") || f.contains("SOIC_8") {
@@ -237,10 +241,8 @@ mod tests {
 
     #[test]
     fn to220_free_air_default() {
-        let theta = theta_ja_from_footprint(
-            "Package_TO_SOT_THT:TO-220-3_Vertical",
-            ComponentKind::Vreg,
-        );
+        let theta =
+            theta_ja_from_footprint("Package_TO_SOT_THT:TO-220-3_Vertical", ComponentKind::Vreg);
         assert_eq!(theta, 62.0);
         // A 1 W TO-220 in 25 C air: 25 + 62 = 87 C, comfortably under its 150 C limit.
         let tj = junction_temp_c(25.0, 1.0, theta);

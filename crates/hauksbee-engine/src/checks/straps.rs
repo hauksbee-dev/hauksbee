@@ -142,7 +142,11 @@ fn examine_strap(
     let want_low = matches!(level, StrapLevel::Low);
     if boot_select && (want_high || want_low) {
         if let Some((rref, to_ground)) = wrong_pull(board, net_id, &members, want_high) {
-            let dir = if to_ground { "pull-down to ground" } else { "pull-up to a rail" };
+            let dir = if to_ground {
+                "pull-down to ground"
+            } else {
+                "pull-up to a rail"
+            };
             report.findings.push(LintFinding {
                 check: LintCheck::StrapPin,
                 severity: Severity::Medium,
@@ -343,8 +347,10 @@ fn norm(name: &str) -> String {
 
 fn is_ground_name(name: &str) -> bool {
     let n = norm(name);
-    matches!(n.as_str(), "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0")
-        || n.starts_with("GND")
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
+    ) || n.starts_with("GND")
 }
 
 fn rail_voltage_name(name: &str) -> Option<f64> {
@@ -357,7 +363,9 @@ fn rail_voltage_name(name: &str) -> Option<f64> {
         _ => {
             if n.contains("3V3") || n.contains("3.3V") {
                 Some(3.3)
-            } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
+            } else if n.contains("5V")
+                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
+            {
                 Some(5.0)
             } else {
                 None

@@ -64,13 +64,19 @@ fn drc_detects_then_simulation_applies_the_short() {
         last_v5 = *frame.net_voltages.get("+5V").unwrap_or(&0.0);
         last_sig = *frame.net_voltages.get("SIG").unwrap_or(&0.0);
     }
-    assert!(saw_short_fault, "a `short` fault is surfaced for the applied bridge");
+    assert!(
+        saw_short_fault,
+        "a `short` fault is surfaced for the applied bridge"
+    );
     // +5V is an ideal rail; the milliohm bridge drags SIG up to it.
     assert!(
         (last_v5 - last_sig).abs() < 0.05,
         "+5V ({last_v5:.3}) and SIG ({last_sig:.3}) are bridged to the same potential"
     );
-    assert!(last_sig > 4.5, "SIG is pulled up near the +5V rail ({last_sig:.3})");
+    assert!(
+        last_sig > 4.5,
+        "SIG is pulled up near the +5V rail ({last_sig:.3})"
+    );
 }
 
 #[test]
@@ -110,7 +116,10 @@ fn whatif_short_rail_to_ground_overdrives_series_resistor() {
     // Warm up healthy: no fault.
     for _ in 0..10 {
         let frame = engine.step(1e-4);
-        assert!(frame.faults.is_empty(), "healthy board does not fault before the short");
+        assert!(
+            frame.faults.is_empty(),
+            "healthy board does not fault before the short"
+        );
     }
 
     // Apply the what-if short: SENSE straight to GND, so the full rail voltage
@@ -133,7 +142,10 @@ fn whatif_short_rail_to_ground_overdrives_series_resistor() {
         }
     }
     assert!(short_fault, "the applied short is surfaced as a fault");
-    assert!(overpower, "shorting the rail across R1 raises an overpower fault on R1");
+    assert!(
+        overpower,
+        "shorting the rail across R1 raises an overpower fault on R1"
+    );
 }
 
 #[test]
@@ -149,5 +161,9 @@ fn clean_board_applies_no_shorts() {
     let report = ExtractedBoard::drc(board).expect("drc");
     assert_eq!(report.short_count(), 0);
     let mut engine = HauksbeeEngine::from_board_file(board, None, "/b.kicad_pcb").expect("engine");
-    assert_eq!(engine.apply_drc_shorts(&report), 0, "no bridges on a clean board");
+    assert_eq!(
+        engine.apply_drc_shorts(&report),
+        0,
+        "no bridges on a clean board"
+    );
 }

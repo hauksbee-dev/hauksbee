@@ -65,8 +65,7 @@ impl PinDriver {
         if !self.enabled {
             return;
         }
-        if let Some(Device::Vsource { kind, .. }) =
-            circuit.devices.get_mut(self.vsource.0 as usize)
+        if let Some(Device::Vsource { kind, .. }) = circuit.devices.get_mut(self.vsource.0 as usize)
         {
             *kind = SourceKind::Dc(volts);
         }

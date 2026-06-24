@@ -26,6 +26,14 @@ use hauksbee_engine::HauksbeeEngine;
 use hauksbee_mcu::qemu::{is_available, QemuArch};
 use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+fn qemu_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 fn board_text() -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -82,7 +90,11 @@ fn run_cosim() -> (String, f64, usize, u32) {
             led_high_samples += 1;
         }
 
-        let blink = frame.net_voltages.get("GPIO4_BLINK").copied().unwrap_or(0.0);
+        let blink = frame
+            .net_voltages
+            .get("GPIO4_BLINK")
+            .copied()
+            .unwrap_or(0.0);
         let logic = if blink > 2.0 {
             Some(true)
         } else if blink < 1.0 {
@@ -108,6 +120,7 @@ fn run_cosim() -> (String, f64, usize, u32) {
 
 #[test]
 fn esp32_full_cosim_through_solved_circuit() {
+    let _guard = qemu_test_lock();
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
         return;
@@ -157,6 +170,7 @@ fn esp32_full_cosim_through_solved_circuit() {
 
 #[test]
 fn esp32_cosim_is_deterministic_across_runs() {
+    let _guard = qemu_test_lock();
     if !is_available(QemuArch::Xtensa) || flash_image().is_none() {
         eprintln!("SKIP: Espressif QEMU or flash.bin absent");
         return;
@@ -190,6 +204,7 @@ fn c3_flash_image() -> Option<PathBuf> {
 
 #[test]
 fn esp32c3_full_cosim_through_solved_circuit() {
+    let _guard = qemu_test_lock();
     if !is_available(QemuArch::Riscv32) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-riscv32) not installed");
         return;
@@ -205,12 +220,9 @@ fn esp32c3_full_cosim_through_solved_circuit() {
     )
     .expect("read esp32c3 board");
 
-    let mut engine = HauksbeeEngine::from_board_file(
-        &board,
-        Some(&fw),
-        "/boards/esp32c3_devkit_demo.kicad_pcb",
-    )
-    .expect("build ESP32-C3 engine");
+    let mut engine =
+        HauksbeeEngine::from_board_file(&board, Some(&fw), "/boards/esp32c3_devkit_demo.kicad_pcb")
+            .expect("build ESP32-C3 engine");
     engine.scheduler_mut().chunk_s = 5e-3;
 
     let frame_dt = 5e-3_f64;
@@ -232,7 +244,11 @@ fn esp32c3_full_cosim_through_solved_circuit() {
         if led > 1.0 {
             led_high += 1;
         }
-        let blink = frame.net_voltages.get("GPIO4_BLINK").copied().unwrap_or(0.0);
+        let blink = frame
+            .net_voltages
+            .get("GPIO4_BLINK")
+            .copied()
+            .unwrap_or(0.0);
         let logic = if blink > 2.0 {
             Some(true)
         } else if blink < 1.0 {
@@ -250,7 +266,10 @@ fn esp32c3_full_cosim_through_solved_circuit() {
 
     let text = String::from_utf8_lossy(&uart).to_string();
     eprintln!("ESP32-C3 QEMU co-sim results:");
-    eprintln!("  UART has 'hello from esp32': {}", text.contains("hello from esp32"));
+    eprintln!(
+        "  UART has 'hello from esp32': {}",
+        text.contains("hello from esp32")
+    );
     eprintln!("  max R1 current: {max_r1_ma:.3} mA");
     eprintln!("  LED_A high samples: {led_high}");
     eprintln!("  GPIO4 transitions: {transitions}");

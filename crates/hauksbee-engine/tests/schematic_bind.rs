@@ -26,8 +26,7 @@ fn pic_programmer_schematic_binds() {
         eprintln!("corpus missing; skipping");
         return;
     }
-    let board = ExtractedBoard::from_kicad_schematic_path(&sch_path)
-        .expect("schematic extraction");
+    let board = ExtractedBoard::from_kicad_schematic_path(&sch_path).expect("schematic extraction");
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
 
@@ -61,8 +60,7 @@ fn schematic_and_pcb_bind_the_same_components() {
         return;
     }
     let sch = ExtractedBoard::from_kicad_schematic_path(&sch_path).unwrap();
-    let pcb =
-        ExtractedBoard::from_kicad_pcb(&std::fs::read_to_string(&pcb_path).unwrap()).unwrap();
+    let pcb = ExtractedBoard::from_kicad_pcb(&std::fs::read_to_string(&pcb_path).unwrap()).unwrap();
     let lib = ModelLibrary::builtin();
 
     let sb = bind_board(&sch, &lib);

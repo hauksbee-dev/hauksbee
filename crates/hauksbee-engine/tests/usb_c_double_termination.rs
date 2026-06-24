@@ -32,7 +32,10 @@ fn famous_root() -> Option<PathBuf> {
         return Some(p);
     }
     if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing at {}", p.display());
+        panic!(
+            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing at {}",
+            p.display()
+        );
     }
     eprintln!("corpus absent; skipping (set HAUKSBEE_REQUIRE_CORPUS=1 to fail)");
     None
@@ -69,10 +72,21 @@ fn devkit_external_cc_rd_is_dnp_so_no_double_termination() {
         );
         for (name, t) in [("CC1", &audit.cc1), ("CC2", &audit.cc2)] {
             // External Rd is unpopulated => not counted.
-            assert_eq!(t.external_rd_ohms, None, "{rel} {name}: DNP Rd must not be counted");
+            assert_eq!(
+                t.external_rd_ohms, None,
+                "{rel} {name}: DNP Rd must not be counted"
+            );
             // The nPM1300 internal Rd is the sole, correct termination.
-            assert_eq!(t.internal_rd_ohms, Some(5100.0), "{rel} {name}: nPM1300 Rd expected");
-            assert_eq!(t.effective_rd_ohms(), Some(5100.0), "{rel} {name}: effective Rd must be 5.1k");
+            assert_eq!(
+                t.internal_rd_ohms,
+                Some(5100.0),
+                "{rel} {name}: nPM1300 Rd expected"
+            );
+            assert_eq!(
+                t.effective_rd_ohms(),
+                Some(5100.0),
+                "{rel} {name}: effective Rd must be 5.1k"
+            );
         }
     }
 }
@@ -82,7 +96,10 @@ fn devkit_external_cc_resistors_are_marked_dnp() {
     // Directly assert the populate status the audit depends on, so the test
     // documents the ground truth rather than trusting the audit's internals.
     let Some(root) = famous_root() else { return };
-    let board = load(&root, "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb");
+    let board = load(
+        &root,
+        "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb",
+    );
     let find = |r: &str| board.components.iter().find(|c| c.reference == r).cloned();
     for r in ["R603", "R604"] {
         let c = find(r).unwrap_or_else(|| panic!("{r} not found"));
@@ -125,9 +142,19 @@ fn lily58_dual_receptacle_both_halves_terminated() {
     let audit = audit_cc_termination(&board).expect("lily58 CC termination found");
 
     // Two distinct receptacles, both credited.
-    let refs: Vec<&str> = audit.receptacles.iter().map(|r| r.reference.as_str()).collect();
-    assert!(refs.contains(&"J1"), "J1 receptacle must be audited, got {refs:?}");
-    assert!(refs.contains(&"J6"), "J6 receptacle must be audited, got {refs:?}");
+    let refs: Vec<&str> = audit
+        .receptacles
+        .iter()
+        .map(|r| r.reference.as_str())
+        .collect();
+    assert!(
+        refs.contains(&"J1"),
+        "J1 receptacle must be audited, got {refs:?}"
+    );
+    assert!(
+        refs.contains(&"J6"),
+        "J6 receptacle must be audited, got {refs:?}"
+    );
 
     for rec in &audit.receptacles {
         for (name, t) in [("CC1", &rec.cc1), ("CC2", &rec.cc2)] {
@@ -137,11 +164,18 @@ fn lily58_dual_receptacle_both_halves_terminated() {
                 "{} {name}: independent 5.1k Rd expected",
                 rec.reference
             );
-            assert!(!t.is_double_terminated(), "{} {name}: no PMIC, must not double", rec.reference);
+            assert!(
+                !t.is_double_terminated(),
+                "{} {name}: no PMIC, must not double",
+                rec.reference
+            );
         }
     }
     // Both halves terminated, and clean of any double-termination.
-    assert!(audit.all_receptacles_terminated(), "both Lily58 halves must be terminated");
+    assert!(
+        audit.all_receptacles_terminated(),
+        "both Lily58 halves must be terminated"
+    );
     assert!(!audit.has_double_termination(), "Lily58 is clean");
 }
 
@@ -159,8 +193,18 @@ fn rpi4_external_rd_without_integrated_pmic_is_not_doubled() {
         let board = load(&root, rel);
         let audit = audit_cc_termination(&board)
             .unwrap_or_else(|| panic!("{rel}: no CC termination found"));
-        assert!(!audit.has_double_termination(), "{rel}: must not double-terminate");
-        assert_eq!(audit.cc1.external_rd_ohms, Some(5100.0), "{rel}: populated external Rd seen");
-        assert_eq!(audit.cc1.internal_rd_ohms, None, "{rel}: no integrated-Rd PMIC");
+        assert!(
+            !audit.has_double_termination(),
+            "{rel}: must not double-terminate"
+        );
+        assert_eq!(
+            audit.cc1.external_rd_ohms,
+            Some(5100.0),
+            "{rel}: populated external Rd seen"
+        );
+        assert_eq!(
+            audit.cc1.internal_rd_ohms, None,
+            "{rel}: no integrated-Rd PMIC"
+        );
     }
 }

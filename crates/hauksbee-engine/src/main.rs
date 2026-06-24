@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! hauksbee run        <board-file> [--firmware <hex>] [--seconds N] [--headless]
-//!                                 [--port 3001] [--report] [--drc] [--lint] [--si]
+//!                                 [--port 3001] [--report] [--drc] [--ampacity] [--lint] [--si]
 //!                                 [--resources] [--plain] [--strict]
 //!                                 [--apply-shorts] [--models-dir <dir>]
 //! hauksbee serve      [--port 3001]
@@ -40,6 +40,12 @@ use clap::{Parser, Subcommand};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::boardcode::{
     check_code, decompile_board_to_code, load_code, render_check_report, CheckOptions,
+};
+use hauksbee_engine::result::{
+    self, ac_is_all_sentinel, coverage_open_active_refs, lint_findings_json, no_signal_path_reason,
+    si_findings_json, thermal_coverage, thermal_validity, AcJson, AcNetJson, BindSummary,
+    CheckCoverage, CosimJson, DrcStructured, JsonNote, JsonNoteKind, JsonReport, NetActivity,
+    ThermalDeviceJson, ThermalJson, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
@@ -127,7 +133,7 @@ enum Command {
 // rather than the old parser's silent first-wins behaviour).
 #[command(group(
     clap::ArgGroup::new("report_mode")
-        .args(["report", "drc", "lint", "si", "resources", "thermal"])
+        .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal"])
         .multiple(false)
 ))]
 struct RunArgs {
@@ -154,6 +160,11 @@ struct RunArgs {
     /// Print the geometric copper short / clearance (DRC) report and exit.
     #[arg(long, group = "report_mode")]
     drc: bool,
+
+    /// Print IPC-2221 trace-current capacity for power-like routed nets and exit.
+    /// This is capacity-only unless a future spec supplies per-net current.
+    #[arg(long, group = "report_mode")]
+    ampacity: bool,
 
     /// Print the connectivity lint + strap-pin + resource-conflict report and exit.
     #[arg(long, group = "report_mode")]
@@ -182,6 +193,14 @@ struct RunArgs {
     #[arg(long, visible_alias = "explain")]
     plain: bool,
 
+    /// Emit machine-readable JSON instead of the box-drawing tables, for any of
+    /// --report/--drc/--lint/--si/--resources/--thermal/--ac. Implies
+    /// non-interactive, stable output (see docs schema §4.1). `valid:false` +
+    /// `reason` is set on AC/thermal results that are meaningless; the bind
+    /// section reports critical_parts_bound + active_path_unresolved by role.
+    #[arg(long)]
+    json: bool,
+
     /// Exit non-zero if a report (--drc/--lint/--si/--resources) finds problems,
     /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
     /// only read the text are unaffected). Counts shorts + serious/medium lint &
@@ -189,11 +208,40 @@ struct RunArgs {
     #[arg(long, visible_alias = "fail-on-findings")]
     strict: bool,
 
+    /// Opt-in: escalate a PARTIAL-coverage thermal result to exit 3 (invalid for
+    /// analysis). By default a thermal table that is real but incomplete (rows
+    /// exist while an active power IC on the live circuit is open/unresolved)
+    /// emits a non-gating coverage caveat and still exits 0, so existing CI exit
+    /// codes are unchanged. Pass this only when partial coverage must FAIL.
+    #[arg(long)]
+    strict_thermal: bool,
+
+    /// Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc` (the
+    /// oracle) and print whether they agree, so a copper finding is self-confirming
+    /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
+    /// in a standard install location (newest version preferred); KiCad is NOT
+    /// bundled (see `docs/ORACLES.md`). No-op unless paired with `--drc`.
+    #[arg(long)]
+    oracle: bool,
+
     /// Bridge every detected copper short before simulating (show the consequences).
     #[arg(long)]
     apply_shorts: bool,
 
-    /// Port for the live frontend websocket server (default flow).
+    /// Serve the live 2D/3D websocket frontend (the historical bare-`run`
+    /// behaviour). With no report/serve flag on a TTY, `run` now launches the
+    /// interactive terminal UI instead; pass `--serve` to keep the web frontend,
+    /// or use the `hauksbee serve` subcommand.
+    #[arg(long)]
+    serve: bool,
+
+    /// Force the interactive terminal UI even when stdout is not a TTY (mainly
+    /// for testing under a PTY). Normally the TUI is the auto-default for bare
+    /// `run` on a TTY; this never triggers when a report flag is given.
+    #[arg(long)]
+    tui: bool,
+
+    /// Port for the live frontend websocket server (`--serve`).
     #[arg(long, default_value_t = 3001, value_name = "PORT")]
     port: u16,
 
@@ -292,6 +340,11 @@ struct CheckCodeArgs {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Fix #3 (LOW): under `--json`, an AI/CI consumer expects parseable output on
+    // EVERY path, including a hard error. Emit `{"ok": false, "error": "..."}`
+    // instead of the plaintext `error:` line so the failure is still valid JSON.
+    // Only `run --json` produces JSON at all, so this is the only place it applies.
+    let json = matches!(&cli.command, Command::Run(args) if args.json);
     let result = match cli.command {
         Command::Run(args) => cmd_run(args),
         Command::ToCode(args) => cmd_to_code(args),
@@ -300,7 +353,13 @@ fn main() -> anyhow::Result<()> {
         Command::Serve(args) => cmd_serve(args),
     };
     if let Err(e) = &result {
-        eprintln!("error: {e}");
+        if json {
+            // serde_json escapes the message so the object is always well-formed.
+            let obj = serde_json::json!({ "ok": false, "error": e.to_string() });
+            println!("{obj}");
+        } else {
+            eprintln!("error: {e}");
+        }
         std::process::exit(1);
     }
     result
@@ -364,9 +423,18 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
 
     if args.report {
         // The bind table is a description of the board, not a pass/fail check, so
-        // --plain / --strict do not apply to it; print the table as before.
+        // --plain / --strict do not apply to it. We now augment it with an honest
+        // role-aware summary (Fix #5): critical_parts_bound + active_path_unresolved,
+        // and a loud WARNING when the active circuit is open, instead of a bare %.
         let bound = bind_board(&board, &lib);
-        print!("{}", bound.report.render_table());
+        let summary = BindSummary::from_report(&bound.report);
+        if args.json {
+            let report = JsonReport::new(&bound.name, summary);
+            println!("{}", report.to_json());
+        } else {
+            print!("{}", bound.report.render_table());
+            print!("{}", summary.render_banner());
+        }
         return Ok(());
     }
 
@@ -375,17 +443,63 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let report = if altium.is_some() {
             ExtractedBoard::altium_drc(&raw)?
         } else {
-            ExtractedBoard::drc(&text)?
+            // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
+            // concrete net names here (the CLI has both the board path and the
+            // extracted netlist), then hand the DRC a pairwise clearance resolver.
+            ExtractedBoard::drc_with_clearance_rules(
+                &text,
+                kicad_pro_clearance_rules(&args.board, &board),
+            )?
         };
-        if args.plain {
-            print!("{}", hauksbee_engine::plain_drc(&report).render());
+        if args.json {
+            // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
+            // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
+            let bound = bind_board(&board, &lib);
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            jr.drc = Some(DrcStructured::from_report(&report));
+            println!("{}", jr.to_json());
+        } else if args.plain {
+            // Plain mode renders from the SAME grouped structure as text/json so
+            // all surfaces agree: duplicates collapsed, and gap==rule labelled
+            // "at minimum clearance (no margin)" rather than the wrong "below".
+            print!(
+                "{}",
+                hauksbee_engine::plain_drc_structured(&DrcStructured::from_report(&report)).render()
+            );
         } else {
-            print!("{}", render_drc(&report));
+            // Grouped, honest DRC: one line per (net pair + cause) with a count,
+            // and gap==rule labelled "at minimum clearance (no margin)" rather
+            // than the wrong "below the spacing the board asks for" (Fix #8).
+            print!("{}", DrcStructured::from_report(&report).render());
+        }
+        if args.oracle && !args.json {
+            print!("{}", oracle_cross_check(&args.board, &report));
         }
         // Strict: any true short fails the gate (clearance-only does not).
         if args.strict && report.short_count() > 0 {
             std::process::exit(2);
         }
+        return Ok(());
+    }
+
+    // --ampacity: IPC-2221 capacity-only report. No current is fabricated here:
+    // without a per-net current spec this tells the user the bottleneck capacity
+    // and explicitly asks for a current before pass/fail.
+    if args.ampacity {
+        let rows = if altium.is_some() {
+            Vec::new()
+        } else {
+            let doc = forge_sexpr::parse(&text)?;
+            let copper = doc
+                .root()
+                .map(hauksbee_extract::net_copper_from_root)
+                .unwrap_or_default();
+            hauksbee_extract::trace_capacity_report(
+                &copper,
+                &hauksbee_extract::TraceAudit::default(),
+            )
+        };
+        print!("{}", hauksbee_extract::render_trace_capacity_report(&rows));
         return Ok(());
     }
 
@@ -397,7 +511,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let straps = hauksbee_engine::checks::straps::strap_lint(&board, &lib);
         report.findings.extend(straps.findings);
         report.findings.extend(board.resource_conflicts().findings);
-        if args.plain {
+        if args.json {
+            let bound = bind_board(&board, &lib);
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            jr.findings = Some(lint_findings_json(&report));
+            println!("{}", jr.to_json());
+        } else if args.plain {
             print!("{}", hauksbee_engine::plain_netlint(&report).render());
         } else {
             print!("{}", hauksbee_extract::render_netlint(&report));
@@ -411,7 +530,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if args.resources {
         let report = board.resource_conflicts();
-        if args.plain {
+        if args.json {
+            let bound = bind_board(&board, &lib);
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            jr.findings = Some(lint_findings_json(&report));
+            println!("{}", jr.to_json());
+        } else if args.plain {
             print!("{}", hauksbee_engine::plain_netlint(&report).render());
         } else {
             print!("{}", hauksbee_extract::render_netlint(&report));
@@ -428,9 +552,18 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     if args.si {
         // Altium geometry is not yet threaded into the SI text checks, so pass
         // None there; the connectivity-based SI checks still run on `board`.
-        let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
+        let geo_text = if altium.is_some() {
+            None
+        } else {
+            Some(text.as_str())
+        };
         let report = board.si_checks(geo_text);
-        if args.plain {
+        if args.json {
+            let bound = bind_board(&board, &lib);
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            jr.findings = Some(si_findings_json(&report));
+            println!("{}", jr.to_json());
+        } else if args.plain {
             print!("{}", hauksbee_engine::plain_si(&report).render());
         } else {
             print!("{}", hauksbee_extract::render_si(&report));
@@ -445,7 +578,72 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // loop-stability margins, then exit. Informational like the other reports.
     if let Some(ac_arg) = &args.ac {
         let bound = bind_board(&board, &lib);
-        return cmd_ac(&bound, ac_arg, &args.ac_node, args.ac_csv.as_deref(), args.ac_loop.as_deref());
+        return cmd_ac(
+            &bound,
+            ac_arg,
+            &args.ac_node,
+            args.ac_csv.as_deref(),
+            args.ac_loop.as_deref(),
+            args.json,
+        );
+    }
+
+    // Bare `--json` with no specific report selector: emit a COMBINED machine
+    // report (bind + DRC + lint/straps/resources + SI) and exit. Without this,
+    // `--json` alone falls through to the TUI/websocket default below and hangs a
+    // piped / CI / AI caller (the regression a bare `run <board> --json` hit).
+    // `--json` is an explicit machine-intent flag, so it must never launch the TUI.
+    // `--thermal`/`--headless` are selectors handled further down with their OWN
+    // JSON emitters (thermal coverage, co-sim notes); they must fall THROUGH this
+    // combined branch or those JSON paths become unreachable dead code.
+    if args.json && !args.thermal && !args.headless {
+        let bound = bind_board(&board, &lib);
+        let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+        let drc = if altium.is_some() {
+            ExtractedBoard::altium_drc(&raw)?
+        } else {
+            ExtractedBoard::drc_with_clearance_rules(
+                &text,
+                kicad_pro_clearance_rules(&args.board, &board),
+            )?
+        };
+        jr.drc = Some(DrcStructured::from_report(&drc));
+        let mut lint = board.net_lint();
+        lint.findings
+            .extend(hauksbee_engine::checks::straps::strap_lint(&board, &lib).findings);
+        lint.findings.extend(board.resource_conflicts().findings);
+        let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
+        let si = board.si_checks(geo_text);
+        let mut findings = lint_findings_json(&lint);
+        findings.extend(si_findings_json(&si));
+        jr.findings = Some(findings);
+        println!("{}", jr.to_json());
+        return Ok(());
+    }
+
+    // Default flow (no report/headless/ac flag). The interactive terminal UI is
+    // the new human-facing default: bare `run <board>` on a TTY launches it. Any
+    // explicit report flag was handled above, so reaching here means none was
+    // given. `--serve` keeps the historical websocket frontend; a non-TTY stdout
+    // (piped / CI) also keeps the websocket behaviour untouched, so existing
+    // scripts and tests are unaffected.
+    //
+    // `--firmware`/`--apply-shorts` only matter for the simulating paths; the TUI
+    // honours `--firmware` for its co-sim pane. We branch to the TUI before
+    // building the websocket engine so we never spin up tokio for the TUI path.
+    let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    // Altium boards reach here with an empty `text` (binary parsed from bytes);
+    // the TUI's text-based build path can't analyse those, so they keep the
+    // websocket flow.
+    let launch_tui =
+        !args.serve && !args.headless && altium.is_none() && (args.tui || stdout_is_tty);
+    if launch_tui {
+        return hauksbee_engine::tui::run(
+            &args.board,
+            &text,
+            args.models_dir.as_deref(),
+            args.firmware.clone(),
+        );
     }
 
     // Bind with the layered library (so a --models-dir / user-dir custom part is
@@ -462,7 +660,10 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let report = if altium.is_some() {
             ExtractedBoard::altium_drc(&raw)?
         } else {
-            ExtractedBoard::drc(&text)?
+            ExtractedBoard::drc_with_clearance_rules(
+                &text,
+                kicad_pro_clearance_rules(&args.board, &board),
+            )?
         };
         let applied = engine.apply_drc_shorts(&report);
         eprintln!(
@@ -473,19 +674,123 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     }
 
     // --thermal: run a short co-sim, then print the steady-state junction
-    // temperature per dissipating device and exit.
+    // temperature per dissipating device and exit. Fix #1: a thermal table that
+    // covers ~no dissipating devices because the power ICs are UNRESOLVED is a
+    // meaningless result, not a "runs cool" pass — flag it invalid and exit 3.
     if args.thermal {
         engine.scheduler_mut().set_ambient_c(args.ambient);
-        run_thermal(&mut engine, args.seconds.max(0.05), args.ambient);
+        let summary = BindSummary::from_report(engine.report());
+        let board_name = engine.report().board_name.clone();
+        let rows = collect_thermal(&mut engine, args.seconds.max(0.05));
+        let validity = thermal_validity(rows.len(), &summary);
+        // Coverage is the honest "N of M" companion to validity. It is NON-gating
+        // by default (the partial case stays exit 0); only --strict-thermal
+        // escalates a partial-coverage table to exit 3. validity stays unchanged.
+        let coverage = thermal_coverage(rows.len(), &summary);
+        // The open active ICs to NAME in the caveat, computed before `summary` is
+        // moved into the JSON report.
+        let coverage_refs = coverage_open_active_refs(&summary);
+        if args.json {
+            let mut jr = JsonReport::new(&board_name, summary);
+            // Surface the partial-coverage caveat as an info note too, so a JSON
+            // consumer that ignores `coverage` still sees the honesty annotation.
+            if coverage.partial {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: thermal_coverage_caveat(&coverage),
+                });
+            }
+            jr.thermal = Some(ThermalJson {
+                validity: validity.clone(),
+                ambient_c: args.ambient,
+                devices: rows
+                    .iter()
+                    .map(|(r, tj, over)| ThermalDeviceJson {
+                        reference: r.clone(),
+                        tj_c: *tj,
+                        over_limit: *over,
+                    })
+                    .collect(),
+                coverage: Some(coverage.clone()),
+            });
+            println!("{}", jr.to_json());
+        } else {
+            render_thermal_text(&rows, args.ambient, &validity);
+            // Partial-coverage caveat (text path): the table is real but some
+            // active power IC on the live circuit is open/unresolved, so the
+            // result understates the true thermal load. Naming the parts keeps
+            // this from being a silent false-comfort pass.
+            if coverage.partial {
+                emit_thermal_coverage_caveat(&coverage, &coverage_refs);
+            }
+        }
+        if !validity.valid {
+            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        }
+        // Opt-in escalation: partial coverage fails only under --strict-thermal.
+        if coverage.partial && args.strict_thermal {
+            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        }
         return Ok(());
     }
 
     if args.headless {
-        let faults = run_headless(&mut engine, args.seconds);
-        if args.plain {
+        let board_name = engine.report().board_name.clone();
+        let summary = BindSummary::from_report(engine.report());
+        let mut uart_seen = false;
+        let faults = run_headless(&mut engine, args.seconds, &mut uart_seen, args.json);
+
+        // Co-sim honesty summary (Track B): total net toggles, UART activity, and
+        // any chip substitution detected at build time. Built from the SAME run
+        // stats the text table reads, so every surface agrees.
+        let cosim = build_cosim_json(&engine, uart_seen);
+        let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
+        // A co-sim that saw zero net toggles AND no UART output did not exercise
+        // the firmware. Determined BEFORE emitting so it reaches every surface —
+        // including --json when no MCU was instantiated (cosim is None there), so
+        // the refusal is never stderr-only for a machine consumer.
+        let zero_activity = total_toggles == 0 && !uart_seen;
+
+        if args.json {
+            let mut jr = JsonReport::new(&board_name, summary);
+            // A substitution is an info-level note that must never be silently
+            // absent (it changes how much the co-sim result can be trusted).
+            for sub in engine.scheduler().substitutions() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::CosimSubstitution,
+                    message: sub.message(),
+                });
+            }
+            if zero_activity {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: "co-sim saw zero net toggles and no UART output; the \
+                              firmware was not exercised — this result cannot vouch \
+                              for firmware behaviour"
+                        .to_string(),
+                });
+            }
+            jr.cosim = cosim;
+            println!("{}", jr.to_json());
+        } else if args.plain {
             println!();
             print!("{}", hauksbee_engine::plain_faults(&faults).render());
         }
+
+        // 0-activity refusal (Track B): warn always; under --strict this is a hard
+        // refusal (exit 3), not a clean pass. The UART-AND-toggles guard avoids
+        // false positives on firmware that is busy on the bus but quiet on GPIO.
+        if zero_activity {
+            eprintln!(
+                "WARNING: co-sim saw zero net toggles; cannot vouch for firmware \
+                 behaviour (the MCU may have stalled at boot, run no I/O, or the \
+                 firmware may not match this board)."
+            );
+            if args.strict {
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            }
+        }
+
         // Strict: any fault raised during the run fails the gate.
         if args.strict && !faults.is_empty() {
             std::process::exit(2);
@@ -512,6 +817,7 @@ fn cmd_ac(
     ac_nodes: &[String],
     csv: Option<&Path>,
     ac_loop: Option<&str>,
+    json: bool,
 ) -> anyhow::Result<()> {
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions};
 
@@ -531,11 +837,172 @@ fn cmd_ac(
         .run(circuit, &spec)
         .map_err(|e| anyhow::anyhow!("AC analysis: {e}"))?;
 
-    // Print a Bode table per requested node.
-    for net in &nodes {
-        let bode = resp.bode(circuit, net);
+    // Collect the bode rows once so both the validity check and the renderers
+    // read the SAME data (one structured result, no forked logic).
+    let summary = BindSummary::from_report(&bound.report);
+    let per_net: Vec<(String, Vec<(f64, f64, f64)>)> = nodes
+        .iter()
+        .map(|net| (net.clone(), resp.bode(circuit, net)))
+        .collect();
+
+    // Fix #1 (CRITICAL): an AC sweep where EVERY reported net is at the -6000 dB
+    // sentinel has no signal path — it is a meaningless result, not data. Refuse
+    // to present it as a Bode table; name the unresolved driving ICs and exit 3
+    // ("board invalid for the requested analysis"), never 0.
+    let nonempty: Vec<&(String, Vec<(f64, f64, f64)>)> =
+        per_net.iter().filter(|(_, b)| !b.is_empty()).collect();
+
+    // Fix #1b (HIGH honesty hole): if EVERY requested net produced no data at all
+    // (none exist in the circuit), `nonempty` is empty. Previously this slipped
+    // past the all-sentinel guard (which requires `!nonempty.is_empty()`) and the
+    // JSON path emitted `ac: { valid: true, nets: [] }` with exit 0 — a meaningless
+    // result reported as valid. Refuse it: name the missing requested nodes, emit
+    // valid:false, and exit 3, exactly like the all-sentinel path. Only fires when
+    // the user explicitly asked for nodes; the "every node" default never lands
+    // here because at least one real node exists in any bound circuit.
+    if nonempty.is_empty() {
+        let missing = nodes.join(", ");
+        let reason = format!("no requested AC nodes found in the circuit: {missing}");
+        if json {
+            let mut jr = JsonReport::new(&bound.name, summary);
+            jr.ac = Some(AcJson {
+                validity: Validity::invalid(reason),
+                nets: Vec::new(),
+                no_signal_path_nets: Vec::new(),
+                coverage: None,
+            });
+            println!("{}", jr.to_json());
+        } else {
+            eprintln!("WARNING: AC result not valid — {reason}");
+            eprintln!(
+                "  (none of the requested --ac-node nets exist in this circuit; \
+                 check the net names against the board, then re-run.)"
+            );
+        }
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
+
+    let all_sentinel =
+        !nonempty.is_empty() && nonempty.iter().all(|(_, b)| ac_is_all_sentinel(b));
+
+    if all_sentinel {
+        // Name a representative net for the reason (the first reported one).
+        let net = nonempty
+            .first()
+            .map(|(n, _)| n.as_str())
+            .unwrap_or("the requested node");
+        let reason = no_signal_path_reason(net, &summary);
+        if json {
+            let mut jr = JsonReport::new(&bound.name, summary);
+            jr.ac = Some(AcJson {
+                validity: Validity::invalid(reason),
+                nets: Vec::new(),
+                no_signal_path_nets: Vec::new(),
+                coverage: None,
+            });
+            println!("{}", jr.to_json());
+        } else {
+            eprintln!("WARNING: AC result not valid — {reason}");
+            eprintln!(
+                "  (every reported net is at the {:.0} dB floor: no path to drive it. \
+                 Bind the driving ICs with --models-dir, then re-run.)",
+                result::AC_FLOOR_DB
+            );
+        }
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
+
+    // Loop-net validity guard (degeneracy) — applied to BOTH --json and text
+    // BEFORE either emits. A loop/break net that is missing from the circuit OR
+    // sits at the dB floor has no feedback path to measure: LoopStability would
+    // yield a meaningless ~-6000 dB gain on the text path, while the --json path
+    // (which returns just below) would emit valid:true and exit 0 — a structured
+    // false-pass. Refuse it identically on both surfaces with exit 3.
+    if let Some(loop_net) = ac_loop {
+        let loop_bode = resp.bode(circuit, loop_net);
+        if loop_bode.is_empty() || ac_is_all_sentinel(&loop_bode) {
+            let reason = if loop_bode.is_empty() {
+                format!("loop/break net '{loop_net}' not found in the circuit")
+            } else {
+                no_signal_path_reason(loop_net, &summary)
+            };
+            eprintln!("WARNING: --ac-loop result not valid — {reason}");
+            eprintln!(
+                "  (no feedback path to measure at '{loop_net}'. Bind the driving \
+                 ICs with --models-dir, then re-run.)"
+            );
+            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        }
+    }
+
+    if json {
+        // Valid sweep: emit the structured bode per net. Skip empty/not-found
+        // nets AND any individual net that is all-sentinel (no path to THIS net),
+        // so a JSON consumer never sees -6000 dB rows presented as real data
+        // alongside valid:true. The skipped nets are listed so the omission is
+        // explicit, never silent.
+        let mut jr = JsonReport::new(&bound.name, summary);
+        let nets: Vec<AcNetJson> = per_net
+            .iter()
+            .filter(|(_, b)| !b.is_empty() && !ac_is_all_sentinel(b))
+            .map(|(net, b)| AcNetJson {
+                net: net.clone(),
+                points: b.iter().map(|(f, db, ph)| [*f, *db, *ph]).collect(),
+            })
+            .collect();
+        let no_path: Vec<String> = per_net
+            .iter()
+            .filter(|(_, b)| !b.is_empty() && ac_is_all_sentinel(b))
+            .map(|(net, _)| net.clone())
+            .collect();
+        // Honest coverage for a partially-valid sweep: some requested nets carry
+        // signal, others sit at the floor. Non-gating; mirrors `no_signal_path_nets`.
+        let requested = nets.len() + no_path.len();
+        let coverage = if no_path.is_empty() {
+            None
+        } else {
+            let frac = if requested == 0 {
+                1.0
+            } else {
+                (nets.len() as f64 / requested as f64).clamp(0.0, 1.0)
+            };
+            Some(CheckCoverage {
+                resolved_fraction: frac,
+                dissipating_count: nets.len(),
+                total_active_count: requested,
+                open_active_on_live_circuit: no_path.len(),
+                partial: true,
+            })
+        };
+        jr.ac = Some(AcJson {
+            validity: Validity::valid(),
+            nets,
+            no_signal_path_nets: no_path,
+            coverage,
+        });
+        println!("{}", jr.to_json());
+        return Ok(());
+    }
+
+    // Print a Bode table per requested node. Track how many of the requested
+    // nets had no signal path so we can print an end-of-run summary that matches
+    // the JSON surface's `no_signal_path_nets` list (text/JSON parity).
+    let mut no_path_nets: Vec<String> = Vec::new();
+    let mut requested_nets = 0usize;
+    for (net, bode) in &per_net {
         if bode.is_empty() {
             eprintln!("warning: net '{net}' not found in circuit; skipping");
+            continue;
+        }
+        requested_nets += 1;
+        // A single net at the floor amid others that carry signal is still a
+        // local "no path here" — caveat it rather than presenting -6000 as data.
+        if ac_is_all_sentinel(bode) {
+            no_path_nets.push(net.clone());
+            println!(
+                "\nAC sweep: net '{net}' — NO SIGNAL PATH (all points at the {:.0} dB floor); result not meaningful for this net.",
+                result::AC_FLOOR_DB
+            );
             continue;
         }
         println!("\nAC sweep: net '{net}' ({} points)", bode.len());
@@ -544,13 +1011,28 @@ fn cmd_ac(
              │ Freq (Hz)      │ Mag (dB)      │ Phase (deg)   │\n\
              ├────────────────┼───────────────┼───────────────┤"
         );
-        for (f, db, ph) in &bode {
+        for (f, db, ph) in bode {
             println!("│ {f:>14.4} │ {db:>13.4} │ {ph:>13.3} │");
         }
         println!("└────────────────┴───────────────┴───────────────┘");
     }
 
-    // Optional loop-stability report.
+    // End-of-run partial-sentinel summary (text/JSON parity): name how many of
+    // the requested nets had no signal path, matching JSON's no_signal_path_nets.
+    // Non-gating: a partially-valid sweep still exits 0 on the text path.
+    if !no_path_nets.is_empty() {
+        println!(
+            "\nAC coverage: {} of {} requested net(s) had no signal path (at the {:.0} dB floor): {}.",
+            no_path_nets.len(),
+            requested_nets,
+            result::AC_FLOOR_DB,
+            no_path_nets.join(", "),
+        );
+    }
+
+    // Optional loop-stability report (text only). The loop-net validity guard
+    // above already refused a missing/floored loop net (exit 3) for both surfaces,
+    // so by here the net carries signal and LoopStability has a real response.
     if let Some(loop_net) = ac_loop {
         let st = LoopStability::from_response(&resp, circuit, loop_net)
             .map_err(|e| anyhow::anyhow!("--ac-loop: {e}"))?;
@@ -757,22 +1239,30 @@ fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     rt.block_on(async move {
         let addr = format!("127.0.0.1:{}", args.port);
         // Inject the engine's analysis as the server's analyzer callback, so the
-        // server crate needs no dependency on the engine/extract crates.
-        let analyze: hauksbee_server::frontdoor::Analyzer =
-            Arc::new(|name: &str, contents: &str| hauksbee_engine::analyze_json(name, contents));
-        hauksbee_server::frontdoor::serve(&addr, analyze).await
+        // server crate needs no dependency on the engine/extract crates. The
+        // firmware-aware callback handles both the board-only path (firmware ==
+        // None -> analyze_json) and the firmware co-sim path.
+        let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
+            |name: &str, contents: &str, fw: Option<(&str, &[u8])>| match fw {
+                Some((fw_name, fw_bytes)) => {
+                    hauksbee_engine::analyze_with_firmware_json(name, contents, fw_name, fw_bytes)
+                }
+                None => hauksbee_engine::analyze_json(name, contents),
+            },
+        );
+        hauksbee_server::frontdoor::serve_with_firmware(&addr, analyze).await
     })
 }
 
-/// Run a short headless co-sim and print the steady-state junction-temperature
-/// estimate per dissipating device. Surfaces any over-temperature fault raised
-/// (the same fault channel the live monitor uses) and exits 0 (informational,
-/// like the other `run` reports).
-fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
+/// Run a short headless co-sim and collect the steady-state junction-temperature
+/// estimate per dissipating device. Returns `(reference, peak_Tj_C, over_limit)`
+/// rows, sorted hottest-first. The caller decides how to render (text / JSON) and
+/// whether the empty-table case is a meaningless result (Fix #1).
+fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f64, bool)> {
     use hauksbee_server::engine::Engine;
     use std::collections::HashMap;
 
-    eprintln!("thermal: {seconds:.2}s co-sim at {ambient_c:.0} C ambient...");
+    eprintln!("thermal: {seconds:.2}s co-sim...");
     let frame_dt = 1.0 / 1000.0;
     let mut t = 0.0;
     // Peak temperature seen per device over the run (steady state is reached
@@ -782,7 +1272,9 @@ fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
     while t < seconds {
         let frame = engine.step(frame_dt);
         for (reference, &tj) in &engine.scheduler().temp_states() {
-            let e = peak_temp.entry(reference.clone()).or_insert(f64::NEG_INFINITY);
+            let e = peak_temp
+                .entry(reference.clone())
+                .or_insert(f64::NEG_INFINITY);
             if tj > *e {
                 *e = tj;
             }
@@ -795,15 +1287,70 @@ fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
         t += frame_dt;
     }
 
-    let mut rows: Vec<(String, f64)> =
-        peak_temp.into_iter().filter(|(_, v)| v.is_finite()).collect();
+    let mut rows: Vec<(String, f64, bool)> = peak_temp
+        .into_iter()
+        .filter(|(_, v)| v.is_finite())
+        .map(|(r, tj)| {
+            let over = overtemp.contains_key(&r);
+            (r, tj, over)
+        })
+        .collect();
     rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    rows
+}
 
-    println!(
-        "\nsteady-state junction temperature (Tj = {ambient_c:.0} C + P * theta_JA):"
-    );
+/// Render the thermal result as text. When the result is invalid (empty table
+/// because the dissipating devices are unresolved/open), print a loud WARNING
+/// naming the reason rather than a near-empty table that reads as "runs cool".
+/// The one-line partial-coverage caveat text (shared by JSON note + stderr).
+fn thermal_coverage_caveat(coverage: &CheckCoverage) -> String {
+    // `covered` is the active ICs that actually made it into the table; the bug to
+    // avoid is mixing it with `dissipating_count` (which counts ALL dissipating
+    // rows, mostly passives) — that produced nonsense like "40 of 7 active ICs".
+    let covered = coverage
+        .total_active_count
+        .saturating_sub(coverage.open_active_on_live_circuit);
+    format!(
+        "thermal coverage is PARTIAL: only {covered} of {} active power IC(s) on the \
+         live circuit are in the table ({} open/unresolved). The {} dissipating part(s) \
+         shown are real, but the result UNDERSTATES the true load: open power ICs \
+         dissipate nothing in simulation.",
+        coverage.total_active_count,
+        coverage.open_active_on_live_circuit,
+        coverage.dissipating_count,
+    )
+}
+
+/// Emit the partial-coverage caveat on the text path, naming the open active
+/// ICs. Non-gating by default (does not change the exit code unless
+/// `--strict-thermal` is set by the caller).
+fn emit_thermal_coverage_caveat(coverage: &CheckCoverage, open_refs: &[String]) {
+    eprintln!("CAVEAT: {}", thermal_coverage_caveat(coverage));
+    if !open_refs.is_empty() {
+        eprintln!(
+            "  open/unresolved active IC(s): {}. Bind them with --models-dir, then re-run \
+             (or pass --strict-thermal to FAIL on partial coverage).",
+            open_refs.join(", ")
+        );
+    }
+}
+
+fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &Validity) {
+    if !validity.valid {
+        let reason = validity
+            .reason
+            .as_deref()
+            .unwrap_or("no resolved dissipating devices");
+        eprintln!("WARNING: thermal result not valid — {reason}");
+        eprintln!(
+            "  (a thermal table covering no dissipating devices is NOT a 'runs cool' pass. \
+             Bind the power ICs with --models-dir, then re-run.)"
+        );
+        return;
+    }
+    println!("\nsteady-state junction temperature (Tj = {ambient_c:.0} C + P * theta_JA):");
     if rows.is_empty() {
-        println!("  no dissipating device reached a measurable temperature.");
+        println!("  no dissipating device reached a measurable temperature (board carries no static load).");
         return;
     }
     println!(
@@ -811,9 +1358,11 @@ fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
          │ Component          │  Tj (C)   │  status  │\n\
          ├────────────────────┼───────────┼──────────┤"
     );
-    for (reference, tj) in &rows {
-        let status = if let Some((_, limit)) = overtemp.get(reference) {
-            format!("OVER {limit:.0}")
+    let mut n_over = 0;
+    for (reference, tj, over) in rows {
+        let status = if *over {
+            n_over += 1;
+            "OVER".to_string()
         } else {
             "ok".to_string()
         };
@@ -825,11 +1374,8 @@ fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
         );
     }
     println!("└────────────────────┴───────────┴──────────┘");
-    if !overtemp.is_empty() {
-        println!(
-            "\n{} device(s) over their junction-temperature limit.",
-            overtemp.len()
-        );
+    if n_over > 0 {
+        println!("\n{n_over} device(s) over their junction-temperature limit.");
     } else {
         println!("\nall dissipating devices within their junction-temperature limit.");
     }
@@ -838,9 +1384,63 @@ fn run_thermal(engine: &mut HauksbeeEngine, seconds: f64, ambient_c: f64) {
 /// Run the co-sim headless for `seconds`, print the activity summary, and return
 /// the faults raised (de-duplicated by component+kind, worst value kept) so the
 /// caller can render them in plain language and/or gate on them under --strict.
+/// Build the machine-readable co-sim summary (Track B) from a finished run.
+/// Returns `None` when no MCU core ran (no co-sim happened, so there is nothing
+/// to summarise). Reads the scheduler's per-net stats for the total toggle count
+/// and the top-N most-active nets, and the MCU binding identities for the
+/// requested part / backend / substitution flag.
+fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJson> {
+    let sched = engine.scheduler();
+    let identities = sched.mcu_identities();
+    // No live MCU => no co-sim ran (e.g. a renode/qemu board with no firmware).
+    let (mcu_ref, backend, requested_part) = identities.into_iter().next()?;
+    // A substitution is recorded against this reference iff its requested part
+    // was collapsed onto a less-specific modelled core.
+    let substituted = sched
+        .substitutions()
+        .iter()
+        .any(|s| s.reference == mcu_ref);
+
+    let total_toggles: u64 = sched.stats.values().map(|s| s.toggles).sum();
+
+    // Top-N nets by activity (toggles, then voltage range), mirroring the text
+    // table's ordering so JSON and text agree on "most active".
+    let mut rows: Vec<_> = sched.stats.iter().collect();
+    rows.sort_by(|a, b| {
+        b.1.toggles.cmp(&a.1.toggles).then(
+            (b.1.max_v - b.1.min_v)
+                .partial_cmp(&(a.1.max_v - a.1.min_v))
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+    let activity_summary: Vec<NetActivity> = rows
+        .iter()
+        .take(10)
+        .filter(|(_, st)| st.toggles > 0)
+        .map(|(name, st)| NetActivity {
+            net: (*name).clone(),
+            toggles: st.toggles,
+            v_min: if st.min_v.is_finite() { st.min_v } else { 0.0 },
+            v_max: if st.max_v.is_finite() { st.max_v } else { 0.0 },
+        })
+        .collect();
+
+    Some(CosimJson {
+        mcu_ref,
+        backend,
+        requested_part,
+        substituted,
+        total_toggles,
+        uart_seen,
+        activity_summary,
+    })
+}
+
 fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
+    uart_seen: &mut bool,
+    quiet: bool,
 ) -> Vec<hauksbee_engine::FaultEvent> {
     use hauksbee_engine::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
@@ -867,37 +1467,53 @@ fn run_headless(
         t += frame_dt;
     }
 
-    let sched = engine.scheduler();
-    println!("\nsimulated {:.3}s over {} nets", sched.sim_time, sched.stats.len());
-    // Sort nets by activity (toggle count then range).
-    let mut rows: Vec<_> = sched.stats.iter().collect();
-    rows.sort_by(|a, b| {
-        b.1.toggles
-            .cmp(&a.1.toggles)
-            .then((b.1.max_v - b.1.min_v).partial_cmp(&(a.1.max_v - a.1.min_v)).unwrap())
-    });
-    println!("\nmost active nets:");
-    println!(
-        "┌────────────────────────────┬──────────┬──────────┬──────────┐\n\
-         │ Net                        │ min (V)  │ max (V)  │ toggles  │\n\
-         ├────────────────────────────┼──────────┼──────────┼──────────┤"
-    );
-    for (name, st) in rows.iter().take(15) {
-        let min_v = if st.min_v.is_finite() { st.min_v } else { 0.0 };
-        let max_v = if st.max_v.is_finite() { st.max_v } else { 0.0 };
+    *uart_seen = !last_uart.is_empty();
+    // The activity table + UART dump are human-facing. Under `--json` (quiet) the
+    // SAME data is emitted structurally via CosimJson.activity_summary, so printing
+    // it here would corrupt stdout for a machine consumer. Suppress when quiet.
+    if !quiet {
+        let sched = engine.scheduler();
         println!(
-            "│ {:<26} │ {:>8.3} │ {:>8.3} │ {:>8} │",
-            truncate(name, 26),
-            min_v,
-            max_v,
-            st.toggles
+            "\nsimulated {:.3}s over {} nets",
+            sched.sim_time,
+            sched.stats.len()
         );
-    }
-    println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
+        // Sort nets by activity (toggle count then range).
+        let mut rows: Vec<_> = sched.stats.iter().collect();
+        rows.sort_by(|a, b| {
+            b.1.toggles.cmp(&a.1.toggles).then(
+                (b.1.max_v - b.1.min_v)
+                    .partial_cmp(&(a.1.max_v - a.1.min_v))
+                    .unwrap(),
+            )
+        });
+        println!("\nmost active nets:");
+        println!(
+            "┌────────────────────────────┬──────────┬──────────┬──────────┐\n\
+             │ Net                        │ min (V)  │ max (V)  │ toggles  │\n\
+             ├────────────────────────────┼──────────┼──────────┼──────────┤"
+        );
+        for (name, st) in rows.iter().take(15) {
+            let min_v = if st.min_v.is_finite() { st.min_v } else { 0.0 };
+            let max_v = if st.max_v.is_finite() { st.max_v } else { 0.0 };
+            println!(
+                "│ {:<26} │ {:>8.3} │ {:>8.3} │ {:>8} │",
+                truncate(name, 26),
+                min_v,
+                max_v,
+                st.toggles
+            );
+        }
+        println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
 
-    if !last_uart.is_empty() {
-        let s = String::from_utf8_lossy(&last_uart);
-        println!("\nUART output ({} bytes):\n{}", last_uart.len(), s.trim_end());
+        if !last_uart.is_empty() {
+            let s = String::from_utf8_lossy(&last_uart);
+            println!(
+                "\nUART output ({} bytes):\n{}",
+                last_uart.len(),
+                s.trim_end()
+            );
+        }
     }
 
     // De-duplicate faults by (component, kind), keeping the worst value, so a
@@ -906,7 +1522,11 @@ fn run_headless(
         a.component
             .cmp(&b.component)
             .then(a.kind.as_str().cmp(b.kind.as_str()))
-            .then(b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                b.value
+                    .partial_cmp(&a.value)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
     });
     faults.dedup_by(|a, b| a.component == b.component && a.kind.as_str() == b.kind.as_str());
     faults
@@ -964,43 +1584,200 @@ fn serve(
     })
 }
 
-/// Render a geometric DRC report as a Unicode table plus a summary line.
-fn render_drc(report: &hauksbee_extract::DrcReport) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "DRC: {} primitive(s), clearance rule {:.3} mm\n",
-        report.primitive_count, report.clearance_mm
-    ));
-    if report.findings.is_empty() {
-        out.push_str("no shorts or clearance violations.\n");
-        return out;
+/// Read project-file netclass clearances and resolve them to this board's
+/// concrete net names. KiCad 10 stores this in the sibling `.kicad_pro` rather
+/// than the `.kicad_pcb`; missing/malformed project files simply leave DRC on
+/// the board/default rules.
+fn kicad_pro_clearance_rules(
+    board_path: &std::path::Path,
+    board: &hauksbee_extract::ExtractedBoard,
+) -> Option<hauksbee_extract::ClearanceRules> {
+    let text = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok()?;
+    hauksbee_extract::clearance_rules_from_kicad_pro(
+        &text,
+        board.nets.iter().map(|n| n.name.as_str()),
+    )
+}
+
+/// Parse a version string like "10.0.3" (or "KiCad 9.0.3") into a comparable
+/// (major, minor, patch) tuple, ignoring any surrounding text.
+fn parse_version(s: &str) -> (u32, u32, u32) {
+    let n: Vec<u32> = s
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|x| x.parse().ok())
+        .collect();
+    (
+        n.first().copied().unwrap_or(0),
+        n.get(1).copied().unwrap_or(0),
+        n.get(2).copied().unwrap_or(0),
+    )
+}
+
+/// Extract the "actual N mm" distance from a kicad-cli DRC violation description
+/// like "Clearance violation (zone clearance 0.5000 mm; actual 0.0000 mm)".
+fn actual_mm(desc: &str) -> Option<f64> {
+    let rest = &desc[desc.find("actual ")? + "actual ".len()..];
+    rest.split_whitespace().next()?.parse().ok()
+}
+
+/// Locate a usable `kicad-cli` (the geometric-DRC oracle): PATH first, then the
+/// standard macOS / Linux / Homebrew install locations, preferring the highest
+/// version (a KiCad-10 cli is needed to read v20260206 boards). KiCad is NOT
+/// bundled with hauksbee; this finds an existing install. Returns (path, version).
+fn find_kicad_cli() -> Option<(String, String)> {
+    let mut candidates: Vec<String> = vec!["kicad-cli".to_string()];
+    let home = std::env::var("HOME").unwrap_or_default();
+    for base in ["/Applications".to_string(), format!("{home}/Applications")] {
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                if name.to_str().is_some_and(|n| n.starts_with("KiCad")) {
+                    // Handles both `<base>/KiCad*.app/...` (entry is the bundle) and
+                    // `<base>/KiCad*/KiCad.app/...` (entry is a folder holding it,
+                    // the macOS .dmg / cask layout).
+                    for sub in [
+                        "Contents/MacOS/kicad-cli",
+                        "KiCad.app/Contents/MacOS/kicad-cli",
+                    ] {
+                        let cli = e.path().join(sub);
+                        if cli.exists() {
+                            candidates.push(cli.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+            }
+        }
     }
-    out.push_str(
-        "┌──────────┬──────────────────────────┬──────────────────────────┬────────┬──────────┬───────────────┐\n\
-         │ Kind     │ Net A                    │ Net B                    │ Layer  │ Gap (mm) │ Location      │\n\
-         ├──────────┼──────────────────────────┼──────────────────────────┼────────┼──────────┼───────────────┤\n",
-    );
-    for f in &report.findings {
-        out.push_str(&format!(
-            "│ {:<8} │ {:<24} │ {:<24} │ {:<6} │ {:>8.4} │ {:>5.1},{:<7.1} │\n",
-            f.kind.as_str(),
-            truncate(&f.net_a_name, 24),
-            truncate(&f.net_b_name, 24),
-            truncate(&f.layer, 6),
-            f.gap_mm,
-            f.x,
-            f.y,
-        ));
+    for p in [
+        "/usr/bin/kicad-cli",
+        "/usr/local/bin/kicad-cli",
+        "/opt/homebrew/bin/kicad-cli",
+    ] {
+        if std::path::Path::new(p).exists() {
+            candidates.push(p.to_string());
+        }
     }
-    out.push_str(
-        "└──────────┴──────────────────────────┴──────────────────────────┴────────┴──────────┴───────────────┘\n",
-    );
-    out.push_str(&format!(
-        "\n{} short(s), {} clearance violation(s).\n",
-        report.short_count(),
-        report.clearance_violations().count(),
+    let mut best: Option<(String, String, (u32, u32, u32))> = None;
+    for c in candidates {
+        let Ok(out) = std::process::Command::new(&c).arg("version").output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let parsed = parse_version(&ver);
+        if best.as_ref().is_none_or(|b| parsed > b.2) {
+            best = Some((c, ver, parsed));
+        }
+    }
+    best.map(|(p, v, _)| (p, v))
+}
+
+/// Cross-check hauksbee's geometric DRC against KiCad's own `kicad-cli pcb drc`,
+/// so a copper finding is self-confirming without running a second tool by hand.
+/// Honest about the two tools' different scopes (KiCad's violation count includes
+/// clearance / annular-ring / etc.), and flags the one case that matters: hauksbee
+/// reporting a short the oracle does not (a likely hauksbee false positive).
+fn oracle_cross_check(board: &std::path::Path, report: &hauksbee_extract::DrcReport) -> String {
+    let Some((cli, ver)) = find_kicad_cli() else {
+        return "\noracle: no kicad-cli found (PATH or /Applications). Install KiCad to \
+                cross-check geometric DRC; see docs/ORACLES.md.\n"
+            .to_string();
+    };
+    let tmp = std::env::temp_dir().join(format!(
+        "hauksbee_oracle_drc_{}_{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     ));
-    out
+    let _ = std::fs::remove_file(&tmp);
+    let run = std::process::Command::new(&cli)
+        .args(["pcb", "drc", "--severity-error", "--format", "json", "-o"])
+        .arg(&tmp)
+        .arg(board)
+        .output();
+    let Ok(out) = run else {
+        return format!("\noracle (kicad-cli {ver}): failed to launch.\n");
+    };
+    let Ok(text) = std::fs::read_to_string(&tmp) else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let mut detail = Vec::new();
+        if let Some(code) = out.status.code() {
+            detail.push(format!("exit status {code}"));
+        } else {
+            detail.push("terminated by signal".to_string());
+        }
+        if !stderr.trim().is_empty() {
+            detail.push(stderr.trim().to_string());
+        }
+        if !stdout.trim().is_empty() {
+            detail.push(stdout.trim().to_string());
+        }
+        let why = detail.join("; ");
+        return format!(
+            "\noracle (kicad-cli {ver}): could not load this board{}. A KiCad-10 (>= 10.0) \
+             cli is required for v20260206 boards.\n",
+            if why.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", why.trim())
+            }
+        );
+    };
+    let _ = std::fs::remove_file(&tmp);
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    let violations = v.get("violations").and_then(|x| x.as_array());
+    let nviol = violations.map_or(0, |a| a.len());
+    let nunconn = v
+        .get("unconnected_items")
+        .and_then(|x| x.as_array())
+        .map_or(0, |a| a.len());
+    // What "a short" means in each tool: hauksbee = copper of two nets at gap <= 0
+    // (touching). KiCad expresses the same fact two ways — a `shorting_items`
+    // violation (its connectivity merged the nets) OR a `clearance`/`hole_clearance`
+    // at actual ~0 mm (geometrically touching but not merged). Count both as the
+    // oracle's confirmed touches; KiCad's other violations (annular, mask-bridge,
+    // courtyard, sub-rule-but-positive clearance) are not net shorts. Counts do not
+    // map 1:1 (the tools decompose a touch into different numbers of rows), so the
+    // verdict is about presence/over-reporting, not exact equality.
+    let confirmed = violations.map_or(0, |a| {
+        a.iter()
+            .filter(|x| {
+                let ty = x.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty == "shorting_items" {
+                    return true;
+                }
+                (ty == "clearance" || ty == "hole_clearance")
+                    && x.get("description")
+                        .and_then(|d| d.as_str())
+                        .and_then(actual_mm)
+                        .is_some_and(|a| a < 0.005)
+            })
+            .count()
+    });
+    let (shorts, clear) = (report.short_count(), report.clearance_violations().count());
+    let verdict = if shorts == 0 && confirmed == 0 {
+        "agree: neither finds touching copper".to_string()
+    } else if shorts > 0 && confirmed == 0 {
+        format!("hauksbee finds {shorts} short(s) the oracle does not — likely false positives, investigate")
+    } else if shorts == 0 && confirmed > 0 {
+        format!(
+            "oracle finds {confirmed} touching-copper violation(s) hauksbee missed — investigate"
+        )
+    } else if shorts > confirmed * 2 {
+        format!("both find touching copper, but hauksbee's {shorts} >> the oracle's {confirmed} — hauksbee likely over-reports; compare by location")
+    } else {
+        format!("agree: both find touching copper ({shorts} hauksbee / {confirmed} oracle; counts differ by decomposition)")
+    };
+    format!(
+        "\noracle (kicad-cli {ver}): {confirmed} touching-copper violation(s), {nviol} total DRC \
+         violation(s), {nunconn} unconnected.\n\
+         hauksbee: {shorts} short(s), {clear} clearance. -> {verdict}.\n"
+    )
 }
 
 fn file_name(p: &Path) -> String {

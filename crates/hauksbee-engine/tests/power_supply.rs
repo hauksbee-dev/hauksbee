@@ -74,19 +74,21 @@ fn bench_supply_current_limit_foldback() {
     assert!(
         bound.supplies.iter().any(|s| s.net_name == "+5V"),
         "supply nets: {:?}",
-        bound.supplies.iter().map(|s| &s.net_name).collect::<Vec<_>>()
+        bound
+            .supplies
+            .iter()
+            .map(|s| &s.net_name)
+            .collect::<Vec<_>>()
     );
 
     let mut engine = engine_for("1");
-    let set = engine
-        .scheduler_mut()
-        .set_power_supply(
-            "+5V",
-            PowerSupply::Bench {
-                volts: 5.0,
-                current_limit_a: 0.5,
-            },
-        );
+    let set = engine.scheduler_mut().set_power_supply(
+        "+5V",
+        PowerSupply::Bench {
+            volts: 5.0,
+            current_limit_a: 0.5,
+        },
+    );
     assert!(set, "bench supply applied to +5V");
 
     let (v, i) = settle(&mut engine, 1e-4, 200);
@@ -96,7 +98,10 @@ fn bench_supply_current_limit_foldback() {
         "rail current {i:.4} A not within 5% of 0.5 A limit (V={v:.3})"
     );
     // The rail voltage folds down toward I*Rload = 0.5 V (well below 5 V).
-    assert!(v < 1.0, "rail folded back to {v:.3} V (want < 1 V under CC)");
+    assert!(
+        v < 1.0,
+        "rail folded back to {v:.3} V (want < 1 V under CC)"
+    );
 }
 
 #[test]
@@ -180,5 +185,8 @@ fn battery_soc_depletes_at_expected_rate() {
         (soc - expected_soc).abs() < 0.02,
         "battery SoC {soc:.4} not within 2% of expected {expected_soc:.4} (I={i:.3} A)"
     );
-    assert!(soc < 1.0 && soc > 0.90, "SoC {soc:.4} depleted into ~0.95 band");
+    assert!(
+        soc < 1.0 && soc > 0.90,
+        "SoC {soc:.4} depleted into ~0.95 band"
+    );
 }

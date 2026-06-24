@@ -94,6 +94,42 @@ pub struct Scheduler {
     i2c_buses: Vec<Arc<Mutex<I2cBus>>>,
     /// SPI bus slaves, shared with each MCU's `on_spi` callback.
     spi_buses: Vec<Arc<Mutex<SpiBus>>>,
+    /// Per-controller SPI bus map (controller name -> bus). Populated by
+    /// [`attach_spi_bus_on`]; not populated by the legacy [`attach_spi_bus`]
+    /// path. Used for look-up by controller name after the run.
+    spi_controller_map: HashMap<String, Arc<Mutex<SpiBus>>>,
+    /// MCU chip-substitution events detected at build time (Track B): the board
+    /// asked for a more specific part than the emulator core models. Surfaced as
+    /// a co-sim warning + JSON note; never gates an exit code on its own.
+    substitutions: Vec<McuSubstitution>,
+}
+
+/// A chip-substitution event: the board asked for `requested_part` but the
+/// available emulator core models a less-specific platform (`modelled_core`).
+/// Recorded at scheduler-build time so every surface (CLI text, JSON, TUI) can
+/// warn that co-sim results stand in for the requested silicon (Track B).
+#[derive(Debug, Clone)]
+pub struct McuSubstitution {
+    /// The MCU reference designator (e.g. `"U1"`).
+    pub reference: String,
+    /// The backend string actually instantiated (e.g. `"renode:stm32f4"`).
+    pub backend: String,
+    /// The exact part the board asked for (e.g. `"STM32F411RET6"`).
+    pub requested_part: String,
+    /// Human label of the core that was actually modelled (e.g. `"STM32F407"`).
+    pub modelled_core: String,
+}
+
+impl McuSubstitution {
+    /// A one-line warning sentence suitable for stderr or a JSON note.
+    pub fn message(&self) -> String {
+        format!(
+            "co-sim: {} requested {} but it is modelled as an {} core; \
+             firmware behaviour is emulated on the substitute and may differ on \
+             the real part (e.g. peripheral set, flash/RAM size, clock tree).",
+            self.reference, self.requested_part, self.modelled_core
+        )
+    }
 }
 
 /// Running statistics for one net across a run.
@@ -136,6 +172,7 @@ impl Scheduler {
         } = bound;
 
         let mut live = Vec::new();
+        let mut substitutions = Vec::new();
         for binding in mcus {
             // External emulator backends (renode/qemu) boot from a program
             // image; with no firmware given there is nothing to run, so the
@@ -144,10 +181,17 @@ impl Scheduler {
             // DRC, stress, transient scenarios) working on boards whose MCU
             // happens to have an external backend mapping. The in-process AVR
             // core keeps its historical always-instantiated behaviour.
-            let external = binding.backend.starts_with("renode:")
-                || binding.backend.starts_with("qemu:");
+            let external =
+                binding.backend.starts_with("renode:") || binding.backend.starts_with("qemu:");
             if external && firmware.is_none() {
                 continue;
+            }
+            // Detect (and warn about) a chip substitution before the core is
+            // consumed: the board asked for a more specific part than the
+            // emulator models (e.g. STM32F411 -> the STM32F407 Discovery core).
+            if let Some(sub) = detect_substitution(&binding) {
+                eprintln!("WARNING: {}", sub.message());
+                substitutions.push(sub);
             }
             let core = instantiate_mcu(&binding, firmware)?;
             live.push(core_with_hooks(core, binding));
@@ -175,7 +219,15 @@ impl Scheduler {
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
+            spi_controller_map: HashMap::new(),
+            substitutions,
         })
+    }
+
+    /// Chip-substitution events detected at build time (Track B). Empty when
+    /// every instantiated MCU was modelled by its exact requested part.
+    pub fn substitutions(&self) -> &[McuSubstitution] {
+        &self.substitutions
     }
 
     /// Attach an I2C bus and register it as every live MCU's `on_i2c` handler.
@@ -183,7 +235,9 @@ impl Scheduler {
     /// firmware's TWI activity and readable for assertions (EEPROM contents,
     /// sensor temperature).
     pub fn attach_i2c_bus(&mut self, bus: Arc<Mutex<I2cBus>>) {
+        let addresses = bus.lock().unwrap_or_else(|e| e.into_inner()).addresses();
         for m in &mut self.mcus {
+            m.core.set_i2c_slave_addresses(&addresses);
             let b = bus.clone();
             m.core.on_i2c(Box::new(move |ev| {
                 b.lock().unwrap_or_else(|e| e.into_inner()).dispatch(ev)
@@ -197,10 +251,54 @@ impl Scheduler {
         for m in &mut self.mcus {
             let b = bus.clone();
             m.core.on_spi(Box::new(move |ev| {
-                b.lock().unwrap_or_else(|e| e.into_inner()).transfer(ev.mosi)
+                let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
+                if ev.deselect {
+                    // Chip-select deasserted: reset the slave state machine.
+                    guard.slave_deselect();
+                    0xFF
+                } else {
+                    guard.transfer(ev.mosi)
+                }
             }));
         }
         self.spi_buses.push(bus);
+    }
+
+    /// Attach a SPI bus to a specific named SPI controller.
+    ///
+    /// Calls `on_spi_controller(controller, cb)` on each live MCU core so
+    /// transfers from that controller route to this slave. On single-controller
+    /// backends (AVR, QEMU), `on_spi_controller` falls back to `on_spi`, so
+    /// calling this is safe even when there is only one physical SPI peripheral.
+    ///
+    /// The bus is also added to `spi_buses` so the chunk-boundary deselect
+    /// loop (which is controller-agnostic) can reach it.
+    pub fn attach_spi_bus_on(&mut self, controller: &str, bus: Arc<Mutex<SpiBus>>) {
+        for m in &mut self.mcus {
+            let b = bus.clone();
+            let ctrl = controller.to_string();
+            m.core.on_spi_controller(&ctrl, Box::new(move |ev| {
+                let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
+                if ev.deselect {
+                    guard.slave_deselect();
+                    0xFF
+                } else {
+                    guard.transfer(ev.mosi)
+                }
+            }));
+        }
+        self.spi_controller_map.insert(controller.to_string(), bus.clone());
+        self.spi_buses.push(bus);
+    }
+
+    /// Look up the SPI bus attached to a specific named controller.
+    ///
+    /// Returns `None` if no bus was attached to that controller via
+    /// [`attach_spi_bus_on`]. Buses attached via the controller-agnostic
+    /// [`attach_spi_bus`] are not findable by name (they carry no controller
+    /// key in the map).
+    pub fn spi_bus_for_controller(&self, controller: &str) -> Option<&Arc<Mutex<SpiBus>>> {
+        self.spi_controller_map.get(controller)
     }
 
     /// Mutable access to the circuit so a caller can stamp a control's devices
@@ -280,7 +378,26 @@ impl Scheduler {
 
     /// Reference strings of the live MCUs (for serial routing).
     pub fn mcu_refs(&self) -> Vec<String> {
-        self.mcus.iter().map(|m| m.binding.reference.clone()).collect()
+        self.mcus
+            .iter()
+            .map(|m| m.binding.reference.clone())
+            .collect()
+    }
+
+    /// `(reference, backend, requested_part)` for each live MCU, in board order.
+    /// The co-sim summary (Track B) reads this to report what part the board
+    /// asked for alongside the backend that actually ran it.
+    pub fn mcu_identities(&self) -> Vec<(String, String, String)> {
+        self.mcus
+            .iter()
+            .map(|m| {
+                (
+                    m.binding.reference.clone(),
+                    m.binding.backend.clone(),
+                    m.binding.requested_part.clone(),
+                )
+            })
+            .collect()
     }
 
     /// True if any live MCU runs on an external, wall-time-bounded emulator
@@ -402,6 +519,51 @@ impl Scheduler {
             self.peripherals.post_solve(&mut ctx);
         }
 
+        // 3c. SPI bus chunk-boundary deselect (chunk-cadence CS heuristic).
+        //
+        // This resets each SPI slave's command state machine so the next
+        // transaction starts fresh. It is a HEURISTIC standing in for a real
+        // chip-select edge, inherited from the AVR backend: simavr's SPI IRQ
+        // surfaces only byte transfers, never CS, so the chunk boundary is used
+        // as a frame boundary. The Renode backend has the same gap for software-
+        // NSS firmware (SSM=1, SSI=1 in STM32 SPI CR1): `STM32SPI` only fires
+        // `FinishTransmission` on a hardware NSS toggle, so soft-NSS firmware
+        // never produces a real CS edge and the chunk boundary is the only
+        // reliable reset point. Backends that DO surface CS (hardware NSS ->
+        // `FinishTransmission`) reset earlier and more precisely via the
+        // `deselect` SpiEvent in `attach_spi_bus`; this call is then idempotent.
+        //
+        // LIMITATIONS (where the heuristic is wrong):
+        //   * Two CS-framed transactions inside one chunk are NOT separated: the
+        //     second transaction's bytes are appended to the first slave state,
+        //     because no reset happens between them.
+        //   * A single transaction that SPANS a chunk boundary is reset mid-way:
+        //     the slave is deselected with bytes still pending, corrupting the
+        //     reply. The debug guard below flags exactly this case.
+        // Both are avoided in practice by keeping the chunk period larger than a
+        // full transaction's wall-time and firmware that issues at most one
+        // transaction per chunk. A correct fix needs a real per-edge CS path
+        // from the backend (hardware NSS or a software-NSS GPIO watch).
+        for bus in &self.spi_buses {
+            let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
+            // Debug-only: a slave still mid-transaction at the chunk boundary
+            // means a transfer spanned the boundary — the heuristic cannot frame
+            // it. Warn loudly in debug builds rather than silently truncating.
+            // (Not an assert/panic: spanning is a known limitation, not a bug to
+            // abort on, and some firmware cadences may legitimately hit it.)
+            #[cfg(debug_assertions)]
+            if guard.slave_mid_transaction() {
+                eprintln!(
+                    "WARN: SPI bus '{}' deselected mid-transaction at chunk boundary \
+                     (transfer spans the {:.3} ms chunk); reply may be truncated. \
+                     Increase chunk_s or use a backend that surfaces chip-select.",
+                    guard.id(),
+                    chunk * 1e3,
+                );
+            }
+            guard.slave_deselect();
+        }
+
         // 4. Update running stats and advance time.
         self.sim_time += chunk;
         self.update_stats();
@@ -423,7 +585,11 @@ impl Scheduler {
             let i = self
                 .layout
                 .branch(s.vsource)
-                .and_then(|b| self.branch_x.get(b.saturating_sub(self.layout.n_nodes)).copied())
+                .and_then(|b| {
+                    self.branch_x
+                        .get(b.saturating_sub(self.layout.n_nodes))
+                        .copied()
+                })
                 .unwrap_or(0.0);
             // Branch current of a Vsource flows p->n internally; the current
             // *delivered to the net* is the negative of that. Use magnitude.
@@ -475,7 +641,12 @@ impl Scheduler {
     /// reflected input draw exceeds the budget. Returns true if the device
     /// existed. The scheduler calls the per-device budget check each chunk once
     /// a budget is set.
-    pub fn set_behavioral_input_budget(&mut self, reference: &str, vin: f64, budget_w: f64) -> bool {
+    pub fn set_behavioral_input_budget(
+        &mut self,
+        reference: &str,
+        vin: f64,
+        budget_w: f64,
+    ) -> bool {
         for d in &mut self.behavioral {
             if d.reference == reference {
                 d.set_input_budget(vin, budget_w);
@@ -487,7 +658,9 @@ impl Scheduler {
 
     /// Mutable access to a behavioural device by reference (tests/sweeps).
     pub fn behavioral_device(&mut self, reference: &str) -> Option<&mut BehavioralDevice> {
-        self.behavioral.iter_mut().find(|d| d.reference == reference)
+        self.behavioral
+            .iter_mut()
+            .find(|d| d.reference == reference)
     }
 
     /// Read the current value (A) of a named current-law on a behavioural device
@@ -847,6 +1020,79 @@ fn instantiate_avr(_backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
     )
 }
 
+/// Detect whether the modelled core is less specific than the part the board
+/// asked for. Returns `Some(McuSubstitution)` only when (a) we recognise the
+/// backend's modelled core, (b) the board gave a non-empty requested part, and
+/// (c) the requested part normalises to something OTHER than the modelled core.
+/// Conservative by design: an unknown/empty requested part or an exact match
+/// yields `None`, so a vanilla `STM32F407` board never spuriously warns.
+fn detect_substitution(binding: &McuBinding) -> Option<McuSubstitution> {
+    let requested = binding.requested_part.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    // The canonical core each renode backend actually loads. The first element
+    // is the normalised identity of the modelled part; the second is the human
+    // label to print.
+    let modelled: (&str, &str) = match binding.backend.as_str() {
+        // The stm32f4 / stm32f4_discovery backend always loads the F407 Discovery
+        // core, regardless of which F4 variant the board specified.
+        "renode:stm32f4" | "renode:stm32f4_discovery" => ("STM32F407", "STM32F407"),
+        "renode:stm32f103" => ("STM32F103", "STM32F103"),
+        "renode:nrf52840" | "renode:nrf52" => ("NRF52840", "nRF52840"),
+        "renode:sifive_fe310" | "renode:fe310" => ("FE310", "SiFive FE310"),
+        // simavr / qemu backends model the requested part directly; no
+        // family-collapse substitution applies.
+        _ => return None,
+    };
+
+    let norm = normalise_part(requested);
+    // The board asked for the exact modelled core (possibly with a package/temp
+    // suffix, e.g. STM32F407VGT6): not a substitution.
+    if norm.starts_with(modelled.0) {
+        return None;
+    }
+    // Only warn when the requested part looks like the SAME family but a
+    // different member (e.g. STM32F411 vs STM32F407). A requested part that does
+    // not share the modelled family's stem is a binding the router should not
+    // have produced; do not invent a substitution narrative for it.
+    let family_stem = family_stem(modelled.0);
+    if !norm.starts_with(family_stem) {
+        return None;
+    }
+    Some(McuSubstitution {
+        reference: binding.reference.clone(),
+        backend: binding.backend.clone(),
+        requested_part: requested.to_string(),
+        modelled_core: modelled.1.to_string(),
+    })
+}
+
+/// Uppercase + strip non-alphanumerics so "STM32F411RET6" and "stm32-f411"
+/// compare equal up to a prefix.
+fn normalise_part(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// The family stem shared by every member of a series: "STM32F407" -> "STM32F4",
+/// "STM32F103" -> "STM32F1", "NRF52840" -> "NRF52", "FE310" -> "FE3".
+fn family_stem(modelled_norm: &str) -> &str {
+    if let Some(rest) = modelled_norm.strip_prefix("STM32F") {
+        // Keep the series digit (the first char after STM32F).
+        return &modelled_norm[..("STM32F".len() + rest.chars().next().map_or(0, |_| 1))];
+    }
+    if modelled_norm.starts_with("NRF52") {
+        return "NRF52";
+    }
+    if modelled_norm.starts_with("FE3") {
+        return "FE3";
+    }
+    modelled_norm
+}
+
 /// Build a Renode-backed core for a `renode:<part>` backend string.
 #[cfg(feature = "renode")]
 fn instantiate_renode(part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
@@ -894,8 +1140,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     }));
     // Tell a polling backend which ports the board actually wired, so it only
     // reads those output registers each chunk (no effect on push backends).
-    let mut active_ports: Vec<char> =
-        binding.gpio_drivers.keys().map(|(p, _)| *p).collect();
+    let mut active_ports: Vec<char> = binding.gpio_drivers.keys().map(|(p, _)| *p).collect();
     active_ports.sort_unstable();
     active_ports.dedup();
     core.set_active_ports(&active_ports);

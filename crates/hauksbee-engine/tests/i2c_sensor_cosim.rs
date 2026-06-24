@@ -66,8 +66,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
     let bound = bind_board(&board, &lib);
 
     let fw = firmware();
-    let mut engine =
-        HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine");
+    let mut engine = HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine");
 
     // Attach the LM75 at its default address and set the swept temperature.
     let bus = Arc::new(Mutex::new(
@@ -127,7 +126,8 @@ fn gpio_follows_temperature_sweep() {
     for (t, high, v) in &highs {
         let expect = *t >= 30.0;
         assert_eq!(
-            *high, expect,
+            *high,
+            expect,
             "at {t} C expected GPIO {}, got {:.3} V",
             if expect { "HIGH" } else { "LOW" },
             v

@@ -73,13 +73,34 @@ impl EsrEsl {
     /// are deliberately representative, not a per-MPN table.
     pub fn for_class(class: CapClass) -> EsrEsl {
         match class {
-            CapClass::Mlcc0201 => EsrEsl { esr_ohms: 0.080, esl_henries: 0.3e-9 },
-            CapClass::Mlcc0402 => EsrEsl { esr_ohms: 0.050, esl_henries: 0.4e-9 },
-            CapClass::Mlcc0603 => EsrEsl { esr_ohms: 0.030, esl_henries: 0.6e-9 },
-            CapClass::Mlcc0805 => EsrEsl { esr_ohms: 0.020, esl_henries: 0.8e-9 },
-            CapClass::Mlcc1206 => EsrEsl { esr_ohms: 0.015, esl_henries: 1.2e-9 },
-            CapClass::Electrolytic => EsrEsl { esr_ohms: 1.0, esl_henries: 5e-9 },
-            CapClass::Tantalum => EsrEsl { esr_ohms: 0.5, esl_henries: 3e-9 },
+            CapClass::Mlcc0201 => EsrEsl {
+                esr_ohms: 0.080,
+                esl_henries: 0.3e-9,
+            },
+            CapClass::Mlcc0402 => EsrEsl {
+                esr_ohms: 0.050,
+                esl_henries: 0.4e-9,
+            },
+            CapClass::Mlcc0603 => EsrEsl {
+                esr_ohms: 0.030,
+                esl_henries: 0.6e-9,
+            },
+            CapClass::Mlcc0805 => EsrEsl {
+                esr_ohms: 0.020,
+                esl_henries: 0.8e-9,
+            },
+            CapClass::Mlcc1206 => EsrEsl {
+                esr_ohms: 0.015,
+                esl_henries: 1.2e-9,
+            },
+            CapClass::Electrolytic => EsrEsl {
+                esr_ohms: 1.0,
+                esl_henries: 5e-9,
+            },
+            CapClass::Tantalum => EsrEsl {
+                esr_ohms: 0.5,
+                esl_henries: 3e-9,
+            },
         }
     }
 
@@ -184,7 +205,14 @@ pub fn apply_parasitics(circuit: &mut Circuit, cap_name: &str, p: EsrEsl) -> boo
     // Find the capacitor's endpoints and value.
     let mut found: Option<(usize, NodeId, NodeId, f64, Option<f64>)> = None;
     for (i, d) in circuit.devices.iter().enumerate() {
-        if let Device::Capacitor { name, a, b, farads, ic } = d {
+        if let Device::Capacitor {
+            name,
+            a,
+            b,
+            farads,
+            ic,
+        } = d
+        {
             if name == cap_name {
                 found = Some((i, *a, *b, *farads, *ic));
                 break;
@@ -221,8 +249,13 @@ pub fn apply_parasitics(circuit: &mut Circuit, cap_name: &str, p: EsrEsl) -> boo
     }
     // Rewrite the original capacitor in place to span the (possibly new) left
     // node to b, keeping its name/value/IC.
-    if let Some(Device::Capacitor { a: ca, b: cb, farads: cf, ic: cic, .. }) =
-        circuit.devices.get_mut(idx)
+    if let Some(Device::Capacitor {
+        a: ca,
+        b: cb,
+        farads: cf,
+        ic: cic,
+        ..
+    }) = circuit.devices.get_mut(idx)
     {
         *ca = left;
         *cb = b;
@@ -318,7 +351,13 @@ mod tests {
     fn ideal_leaves_capacitor_untouched() {
         let mut c = Circuit::new();
         let a = c.node("A");
-        c.add(Device::Capacitor { name: "C1".into(), a, b: NodeId::GROUND, farads: 1e-6, ic: None });
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a,
+            b: NodeId::GROUND,
+            farads: 1e-6,
+            ic: None,
+        });
         let before = c.devices.len();
         assert!(apply_parasitics(&mut c, "C1", EsrEsl::IDEAL));
         assert_eq!(c.devices.len(), before, "ideal must add no devices");
@@ -328,12 +367,27 @@ mod tests {
     fn parasitics_insert_series_rlc() {
         let mut c = Circuit::new();
         let a = c.node("RAIL");
-        c.add(Device::Capacitor { name: "C1".into(), a, b: NodeId::GROUND, farads: 10e-6, ic: None });
-        let p = EsrEsl { esr_ohms: 0.02, esl_henries: 1e-9 };
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a,
+            b: NodeId::GROUND,
+            farads: 10e-6,
+            ic: None,
+        });
+        let p = EsrEsl {
+            esr_ohms: 0.02,
+            esl_henries: 1e-9,
+        };
         assert!(apply_parasitics(&mut c, "C1", p));
         // One R, one L added; the C is rewritten to start at the ESL node.
-        let r = c.devices.iter().find(|d| matches!(d, Device::Resistor { name, .. } if name == "C1_esr"));
-        let l = c.devices.iter().find(|d| matches!(d, Device::Inductor { name, .. } if name == "C1_esl"));
+        let r = c
+            .devices
+            .iter()
+            .find(|d| matches!(d, Device::Resistor { name, .. } if name == "C1_esr"));
+        let l = c
+            .devices
+            .iter()
+            .find(|d| matches!(d, Device::Inductor { name, .. } if name == "C1_esl"));
         assert!(r.is_some(), "ESR leg missing");
         assert!(l.is_some(), "ESL leg missing");
         // The R leg starts at the original rail node.
@@ -341,7 +395,11 @@ mod tests {
             assert_eq!(*ra, a, "ESR should start at the cap's original pad");
         }
         // The capacitor no longer touches the rail directly.
-        let cap = c.devices.iter().find(|d| matches!(d, Device::Capacitor { name, .. } if name == "C1")).unwrap();
+        let cap = c
+            .devices
+            .iter()
+            .find(|d| matches!(d, Device::Capacitor { name, .. } if name == "C1"))
+            .unwrap();
         if let Device::Capacitor { a: ca, b: cb, .. } = cap {
             assert_ne!(*ca, a, "cap should now start at the ESL internal node");
             assert_eq!(*cb, NodeId::GROUND);
