@@ -18,7 +18,9 @@ pub enum ServerMessage {
         volts: Vec<f64>,
     },
     Status(Status),
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,24 +212,46 @@ impl Default for SolverControls {
 pub enum ClientMessage {
     Play,
     Pause,
-    Step { dt: f64 },
+    Step {
+        dt: f64,
+    },
     Reset,
-    SetSpeed { factor: f64 },
+    SetSpeed {
+        factor: f64,
+    },
     SetControls(SolverControls),
-    LoadBoard { path: String },
+    LoadBoard {
+        path: String,
+    },
     /// Bytes typed at the virtual serial console of an MCU.
-    Serial { mcu: String, data: Vec<u8> },
+    Serial {
+        mcu: String,
+        data: Vec<u8>,
+    },
     /// Drive an alternative input source bound to a net (slider, signal
     /// generator, file). The engine decides what "value" means per source.
-    SetInput { source: String, value: f64 },
+    SetInput {
+        source: String,
+        value: f64,
+    },
     /// Configure the power supply driving a supply net (Feature 1).
-    SetPowerSupply { net: String, supply: PowerSupplyConfig },
+    SetPowerSupply {
+        net: String,
+        supply: PowerSupplyConfig,
+    },
     /// Live-control a peripheral by id (button press/release, pot/encoder
     /// position, sensor temperature, stimulus level). `value` is interpreted
     /// per peripheral kind. Additive; older clients never send it. The existing
     /// `SetInput` is also routed to peripherals as a fallback so a frontend
     /// slider wired to a peripheral id works without changes.
-    SetPeripheral { id: String, value: f64 },
-    AddProbe { net: String },
-    RemoveProbe { net: String },
+    SetPeripheral {
+        id: String,
+        value: f64,
+    },
+    AddProbe {
+        net: String,
+    },
+    RemoveProbe {
+        net: String,
+    },
 }
