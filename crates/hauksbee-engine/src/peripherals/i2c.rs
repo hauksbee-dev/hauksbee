@@ -86,13 +86,22 @@ impl I2cBus {
         self.slaves.push(slave);
     }
 
+    /// 7-bit addresses currently modeled on this bus.
+    pub fn addresses(&self) -> Vec<u8> {
+        self.slaves.iter().map(|s| s.address()).collect()
+    }
+
     /// Dispatch one I2C event to the matching slave. Returns the reply byte for
     /// a Read event (`None` otherwise). This is the body of the `on_i2c`
     /// closure the engine installs.
     pub fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
         match ev {
             I2cEvent::Start { addr, read } => {
-                self.active = self.slaves.iter().any(|s| s.address() == addr).then_some(addr);
+                self.active = self
+                    .slaves
+                    .iter()
+                    .any(|s| s.address() == addr)
+                    .then_some(addr);
                 if let Some(s) = self.slave_mut(addr) {
                     s.on_start(read);
                 }
@@ -423,9 +432,18 @@ mod tests {
     fn lm75_encodes_and_reads_temperature() {
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, 25.0)));
         // Point to temp register (0x00) then read two bytes.
-        bus.dispatch(I2cEvent::Start { addr: 0x48, read: false });
-        bus.dispatch(I2cEvent::Write { addr: 0x48, data: 0x00 });
-        bus.dispatch(I2cEvent::Start { addr: 0x48, read: true });
+        bus.dispatch(I2cEvent::Start {
+            addr: 0x48,
+            read: false,
+        });
+        bus.dispatch(I2cEvent::Write {
+            addr: 0x48,
+            data: 0x00,
+        });
+        bus.dispatch(I2cEvent::Start {
+            addr: 0x48,
+            read: true,
+        });
         let msb = bus.dispatch(I2cEvent::Read { addr: 0x48 }).unwrap();
         let lsb = bus.dispatch(I2cEvent::Read { addr: 0x48 }).unwrap();
         bus.dispatch(I2cEvent::Stop { addr: 0x48 });
@@ -447,11 +465,26 @@ mod tests {
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(Eeprom24c::new(0x50, 256)));
         // Write "Hi" at address 0x0010.
         for ev in [
-            I2cEvent::Start { addr: 0x50, read: false },
-            I2cEvent::Write { addr: 0x50, data: 0x00 },
-            I2cEvent::Write { addr: 0x50, data: 0x10 },
-            I2cEvent::Write { addr: 0x50, data: b'H' },
-            I2cEvent::Write { addr: 0x50, data: b'i' },
+            I2cEvent::Start {
+                addr: 0x50,
+                read: false,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x00,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x10,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: b'H',
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: b'i',
+            },
             I2cEvent::Stop { addr: 0x50 },
         ] {
             bus.dispatch(ev);
@@ -466,7 +499,10 @@ mod tests {
     fn unaddressed_slave_ignored() {
         let mut bus = I2cBus::new("I2C").with_slave(Box::new(Lm75::new(0x48, 25.0)));
         // No slave at 0x20: read returns None (no injection -> firmware sees 0xFF).
-        bus.dispatch(I2cEvent::Start { addr: 0x20, read: true });
+        bus.dispatch(I2cEvent::Start {
+            addr: 0x20,
+            read: true,
+        });
         assert_eq!(bus.dispatch(I2cEvent::Read { addr: 0x20 }), None);
     }
 }

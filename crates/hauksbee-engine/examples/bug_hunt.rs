@@ -17,7 +17,9 @@ use std::path::Path;
 const TARSKI: &str = "/Users/hauksbee-user/Tarski/Tarski-Repos/Tarski-Schematics/Neuron/InputSystem/InputSystem.kicad_pcb";
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| TARSKI.to_string());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| TARSKI.to_string());
     if !Path::new(&path).exists() {
         eprintln!("board not found: {path}");
         std::process::exit(1);
@@ -118,7 +120,11 @@ fn main() {
                         } else {
                             "?".into()
                         };
-                        let flag = if n_this * 10 <= n_slot { " <== RARE" } else { "" };
+                        let flag = if n_this * 10 <= n_slot {
+                            " <== RARE"
+                        } else {
+                            ""
+                        };
                         println!(
                             "  [{label}] {reference} slot{slot} VALUE expected={expected:?} found={found:?}  ({rarity}){flag}"
                         );

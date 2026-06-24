@@ -9,9 +9,10 @@ use hauksbee_models::{Confidence, ModelLibrary};
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let corpus = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus")
-    });
+    let corpus = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus"));
     let mut boards: Vec<PathBuf> = Vec::new();
     collect(&corpus, &mut boards);
     boards.sort();
@@ -66,8 +67,8 @@ fn main() {
                 resolved += 1;
             }
             match kind {
-                "passive" | "diode" | "bjtnpn" | "bjtpnp" | "nmos" | "pmos"
-                | "analogswitch" | "opamp" | "comparator" | "vreg" => analog += 1,
+                "passive" | "diode" | "bjtnpn" | "bjtpnp" | "nmos" | "pmos" | "analogswitch"
+                | "opamp" | "comparator" | "vreg" => analog += 1,
                 "digital" | "shiftregister" | "dac" | "adc" => digi += 1,
                 _ => {}
             }
@@ -97,12 +98,17 @@ fn main() {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             // Skip the upstream-corrupt demo.
-            if path.to_str().is_some_and(|p| p.contains("royalblue54L_feather")) {
+            if path
+                .to_str()
+                .is_some_and(|p| p.contains("royalblue54L_feather"))
+            {
                 continue;
             }
             collect(&path, out);

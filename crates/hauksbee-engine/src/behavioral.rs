@@ -104,7 +104,10 @@ pub trait CustomBehavior: Send {
 /// instead of (or alongside) the declarative one.
 #[derive(Default)]
 pub struct CustomRegistry {
-    factories: Vec<(String, Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>)>,
+    factories: Vec<(
+        String,
+        Box<dyn Fn() -> Box<dyn CustomBehavior> + Send + Sync>,
+    )>,
 }
 
 impl CustomRegistry {
@@ -121,7 +124,8 @@ impl CustomRegistry {
         key: impl Into<String>,
         factory: impl Fn() -> Box<dyn CustomBehavior> + Send + Sync + 'static,
     ) {
-        self.factories.push((key.into().to_ascii_lowercase(), Box::new(factory)));
+        self.factories
+            .push((key.into().to_ascii_lowercase(), Box::new(factory)));
     }
 
     /// Build a custom device for `keys` (any of the component's id/value/MPN), or
@@ -464,8 +468,7 @@ impl BehavioralDevice {
                     n: NodeId::GROUND,
                     kind: SourceKind::Dc(0.0),
                 });
-                let iin_limit_a =
-                    resolve_iin_limit(c, board_resistor).unwrap_or(f64::INFINITY);
+                let iin_limit_a = resolve_iin_limit(c, board_resistor).unwrap_or(f64::INFINITY);
                 dev.converter = Some(ConverterLeg {
                     cfg: c.clone(),
                     out_vsource,
@@ -556,7 +559,10 @@ impl BehavioralDevice {
         if let Some(c) = &self.custom {
             return c.state();
         }
-        self.fsm_states.get(self.state_idx).map(String::as_str).unwrap_or("")
+        self.fsm_states
+            .get(self.state_idx)
+            .map(String::as_str)
+            .unwrap_or("")
     }
 
     /// The effective input-current limit of the converter (A), or None.
@@ -580,8 +586,14 @@ impl BehavioralDevice {
     pub fn law_value(&self, circuit: &Circuit, name: &str) -> Option<f64> {
         let leg = self.laws.iter().find(|l| l.law.name == name)?;
         match circuit.devices.get(leg.source.0 as usize) {
-            Some(Device::Isource { kind: SourceKind::Dc(v), .. })
-            | Some(Device::Vsource { kind: SourceKind::Dc(v), .. }) => Some(*v),
+            Some(Device::Isource {
+                kind: SourceKind::Dc(v),
+                ..
+            })
+            | Some(Device::Vsource {
+                kind: SourceKind::Dc(v),
+                ..
+            }) => Some(*v),
             _ => None,
         }
     }
@@ -716,7 +728,10 @@ impl BehavioralDevice {
 
         // Open drains: assert (on_ohms) when the active state lists od_assert.
         for od in &self.open_drains {
-            let assert = overrides.get(&od.pin_role).map(|b| b.od_assert).unwrap_or(false);
+            let assert = overrides
+                .get(&od.pin_role)
+                .map(|b| b.od_assert)
+                .unwrap_or(false);
             let ohms = if assert { od.on_ohms } else { OFF_OHMS };
             set_resistor_ohms(circuit, od.resistor, ohms);
         }
@@ -825,10 +840,7 @@ impl BehavioralDevice {
 /// Compute the input-current limit from a converter's sense program, reading
 /// board resistor values where references are given. Returns None if a literal
 /// limit should be used instead (no program present).
-fn resolve_iin_limit(
-    c: &Converter,
-    board_resistor: &dyn Fn(&str) -> Option<f64>,
-) -> Option<f64> {
+fn resolve_iin_limit(c: &Converter, board_resistor: &dyn Fn(&str) -> Option<f64>) -> Option<f64> {
     if let Some(sp) = &c.iin_program {
         return Some(program_iin_limit(sp, board_resistor));
     }
@@ -855,10 +867,7 @@ fn resolve_iin_limit(
 /// (100k saturates well above 60 W, 7.15k lands at ~60 W). `rsense` and `prog`
 /// are read off the actual board (R49 and R8), so the limit moves when the board
 /// resistor moves, with no model edit, which is exactly the fix.
-pub fn program_iin_limit(
-    sp: &SenseProgram,
-    board_resistor: &dyn Fn(&str) -> Option<f64>,
-) -> f64 {
+pub fn program_iin_limit(sp: &SenseProgram, board_resistor: &dyn Fn(&str) -> Option<f64>) -> f64 {
     let rsense = sp
         .rsense_ref
         .as_ref()
@@ -874,7 +883,9 @@ pub fn program_iin_limit(
         .unwrap_or(sp.prog_ref_ohms)
         .max(1.0);
     let prog_ref = sp.prog_ref_ohms.max(1.0);
-    let v_sense = (sp.vprog_ref * prog / prog_ref).min(sp.v_sense_full).max(0.0);
+    let v_sense = (sp.vprog_ref * prog / prog_ref)
+        .min(sp.v_sense_full)
+        .max(0.0);
     v_sense / rsense
 }
 
@@ -921,4 +932,3 @@ fn guard_true(
         _ => false,
     }
 }
-

@@ -131,7 +131,12 @@ mod tests {
         let volts = vec![0.0; c.node_count()];
         // Burst train starts ~1 ms in (after the 1 ms baseline ramp); hold peak
         // around t = 1ms + 0.5ms.
-        let mut ctx = TickCtx { circuit: &mut c, node_volts: &volts, t: 0.0016, dt: 1e-5 };
+        let mut ctx = TickCtx {
+            circuit: &mut c,
+            node_volts: &volts,
+            t: 0.0016,
+            dt: 1e-5,
+        };
         load.pre_solve(&mut ctx);
         assert!(
             (load.last_i - 0.240).abs() < 1e-3,

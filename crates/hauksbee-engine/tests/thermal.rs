@@ -247,7 +247,10 @@ fn healthy_board_no_overtemp() {
             }
         }
     }
-    assert_eq!(overtemp, 0, "healthy board raised {overtemp} overtemp faults");
+    assert_eq!(
+        overtemp, 0,
+        "healthy board raised {overtemp} overtemp faults"
+    );
     // Every measured junction temp must be modest (well under 60 C).
     for (r, tj) in &max_tj {
         assert!(

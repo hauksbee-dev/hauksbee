@@ -79,10 +79,7 @@ fn synthetic_cosim_runs() {
 
     for _ in 0..n {
         let frame = engine.step(frame_dt);
-        let led_v = *frame
-            .net_voltages
-            .get("LED_A")
-            .expect("LED_A net present");
+        let led_v = *frame.net_voltages.get("LED_A").expect("LED_A net present");
         // Logic decision with hysteresis around the diode clamp (~1 V mid).
         let logic = if led_v > 1.4 {
             Some(true)

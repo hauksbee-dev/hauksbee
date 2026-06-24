@@ -146,7 +146,10 @@ fn end_to_end_as_designed_schematic() {
 
     // The defect is visible in the topology alone: CC1 and CC2 are one net.
     let term = extract_sink_termination(&board).expect("CC termination found");
-    assert!(term.shared_net, "as-designed must show CC1==CC2 (shared R79)");
+    assert!(
+        term.shared_net,
+        "as-designed must show CC1==CC2 (shared R79)"
+    );
     near(term.cc1_rd_ohms.unwrap(), 5100.0, 1.0, "R79 ohms");
 
     // Passive cable: powers.
@@ -170,7 +173,10 @@ fn end_to_end_repaired_schematic() {
     };
 
     let term = extract_sink_termination(&board).expect("CC termination found");
-    assert!(!term.shared_net, "repaired must show independent CC1/CC2 nets");
+    assert!(
+        !term.shared_net,
+        "repaired must show independent CC1/CC2 nets"
+    );
     near(term.cc1_rd_ohms.unwrap(), 5100.0, 1.0, "R1 ohms");
     near(term.cc2_rd_ohms.unwrap(), 5100.0, 1.0, "R2 ohms");
 

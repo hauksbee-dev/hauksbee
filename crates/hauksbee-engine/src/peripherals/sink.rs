@@ -136,7 +136,11 @@ impl VcdSink {
         s.push_str("$scope module hauksbee $end\n");
         for n in &self.nets {
             // 1-bit wire per net.
-            s.push_str(&format!("$var wire 1 {} {} $end\n", n.code, sanitize(&n.name)));
+            s.push_str(&format!(
+                "$var wire 1 {} {} $end\n",
+                n.code,
+                sanitize(&n.name)
+            ));
         }
         s.push_str("$upscope $end\n");
         s.push_str("$enddefinitions $end\n");
@@ -172,7 +176,13 @@ impl VcdSink {
 
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

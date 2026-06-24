@@ -201,7 +201,11 @@ impl Peripheral for ToggleSwitch {
     }
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
-        let r = if self.closed { CONTACT_RON } else { CONTACT_ROFF };
+        let r = if self.closed {
+            CONTACT_RON
+        } else {
+            CONTACT_ROFF
+        };
         set_resistor(ctx.circuit, self.contact, r);
     }
 
@@ -275,7 +279,11 @@ impl Potentiometer {
 
     fn apply(&self, circuit: &mut Circuit) {
         set_resistor(circuit, self.r_aw, (self.r_total * self.pos).max(1e-3));
-        set_resistor(circuit, self.r_wb, (self.r_total * (1.0 - self.pos)).max(1e-3));
+        set_resistor(
+            circuit,
+            self.r_wb,
+            (self.r_total * (1.0 - self.pos)).max(1e-3),
+        );
     }
 }
 
@@ -331,13 +339,7 @@ pub struct Encoder {
 const GRAY: [(bool, bool); 4] = [(false, false), (false, true), (true, true), (true, false)];
 
 impl Encoder {
-    pub fn new(
-        circuit: &mut Circuit,
-        id: &str,
-        a: NodeId,
-        b: NodeId,
-        vhigh: f64,
-    ) -> Self {
+    pub fn new(circuit: &mut Circuit, id: &str, a: NodeId, b: NodeId, vhigh: f64) -> Self {
         // Each output is an ideal source behind a small series resistor.
         let drv_a = stamp_driver(circuit, a, &format!("{id}_A"), 0.0);
         let drv_b = stamp_driver(circuit, b, &format!("{id}_B"), 0.0);
@@ -355,8 +357,16 @@ impl Encoder {
 
     fn drive_phase(&self, circuit: &mut Circuit) {
         let (a, b) = GRAY[self.phase as usize];
-        set_vsource(circuit, self.drv_a, SourceKind::Dc(if a { self.vhigh } else { 0.0 }));
-        set_vsource(circuit, self.drv_b, SourceKind::Dc(if b { self.vhigh } else { 0.0 }));
+        set_vsource(
+            circuit,
+            self.drv_a,
+            SourceKind::Dc(if a { self.vhigh } else { 0.0 }),
+        );
+        set_vsource(
+            circuit,
+            self.drv_b,
+            SourceKind::Dc(if b { self.vhigh } else { 0.0 }),
+        );
     }
 }
 
@@ -413,7 +423,11 @@ pub enum StimulusKind {
     Wave(SourceKind),
     /// Band-limited-ish white noise: `offset + amplitude * U(-1,1)`, reseeded
     /// deterministically each chunk from a counter.
-    Noise { offset: f64, amplitude: f64, seed: u64 },
+    Noise {
+        offset: f64,
+        amplitude: f64,
+        seed: u64,
+    },
 }
 
 /// A generic stimulus driving one net. With `is_current = false` it is a
@@ -492,7 +506,11 @@ impl Peripheral for Stimulus {
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
         let v = match &self.kind {
             StimulusKind::Wave(k) => k.eval(ctx.t),
-            StimulusKind::Noise { offset, amplitude, seed } => {
+            StimulusKind::Noise {
+                offset,
+                amplitude,
+                seed,
+            } => {
                 self.counter = self.counter.wrapping_add(1);
                 offset + amplitude * noise_sample(*seed, self.counter)
             }
@@ -511,9 +529,12 @@ impl Peripheral for Stimulus {
 
     fn set_value(&mut self, value: f64) {
         // Live override: shift the offset (DC level) to `value`.
-        self.kind = match std::mem::replace(&mut self.kind, StimulusKind::Wave(SourceKind::Dc(0.0))) {
+        self.kind = match std::mem::replace(&mut self.kind, StimulusKind::Wave(SourceKind::Dc(0.0)))
+        {
             StimulusKind::Wave(_) => StimulusKind::Wave(SourceKind::Dc(value)),
-            StimulusKind::Noise { amplitude, seed, .. } => StimulusKind::Noise {
+            StimulusKind::Noise {
+                amplitude, seed, ..
+            } => StimulusKind::Noise {
                 offset: value,
                 amplitude,
                 seed,
@@ -569,7 +590,12 @@ mod tests {
         let net = c.node("BTN");
         let mut b = Pushbutton::new(&mut c, "BTN1", net, NodeId::GROUND, 0.0);
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx { circuit: &mut c, node_volts: &volts, t: 0.0, dt: 1e-4 };
+        let mut ctx = TickCtx {
+            circuit: &mut c,
+            node_volts: &volts,
+            t: 0.0,
+            dt: 1e-4,
+        };
         b.pre_solve(&mut ctx);
         // Released = open (high resistance).
         if let Device::Resistor { ohms, .. } = &c.devices[b.contact.0 as usize] {
@@ -579,7 +605,12 @@ mod tests {
         }
         b.set_value(1.0);
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx { circuit: &mut c, node_volts: &volts, t: 1e-4, dt: 1e-4 };
+        let mut ctx = TickCtx {
+            circuit: &mut c,
+            node_volts: &volts,
+            t: 1e-4,
+            dt: 1e-4,
+        };
         b.pre_solve(&mut ctx);
         if let Device::Resistor { ohms, .. } = &c.devices[b.contact.0 as usize] {
             assert!(*ohms < 10.0, "pressed button should be closed, got {ohms}");
@@ -620,7 +651,10 @@ mod tests {
             enc.set_value(step as f64);
             seq.push(GRAY[enc.phase as usize]);
         }
-        assert_eq!(seq, vec![(false, true), (true, true), (true, false), (false, false)]);
+        assert_eq!(
+            seq,
+            vec![(false, true), (true, true), (true, false), (false, false)]
+        );
     }
 
     #[test]
@@ -641,9 +675,18 @@ mod tests {
             }),
         );
         let volts = vec![0.0; c.node_count()];
-        let mut ctx = TickCtx { circuit: &mut c, node_volts: &volts, t: 250e-6, dt: 1e-5 };
+        let mut ctx = TickCtx {
+            circuit: &mut c,
+            node_volts: &volts,
+            t: 250e-6,
+            dt: 1e-5,
+        };
         s.pre_solve(&mut ctx);
         // Quarter period of a 1 kHz sine -> peak ~5.0 V.
-        assert!((s.last_value - 5.0).abs() < 0.1, "sine peak {}", s.last_value);
+        assert!(
+            (s.last_value - 5.0).abs() < 0.1,
+            "sine peak {}",
+            s.last_value
+        );
     }
 }

@@ -305,7 +305,13 @@ impl StressMonitor {
 
                 if chk.surge {
                     // Surge ceiling: trips instantly.
-                    if frac > 1.0 && !self.tracks[i].raised.get(chk.kind.as_str()).copied().unwrap_or(false) {
+                    if frac > 1.0
+                        && !self.tracks[i]
+                            .raised
+                            .get(chk.kind.as_str())
+                            .copied()
+                            .unwrap_or(false)
+                    {
                         self.tracks[i].raised.insert(chk.kind.as_str(), true);
                         let destroyed = self.maybe_destroy(circuit, &meta);
                         if destroyed {
@@ -324,7 +330,10 @@ impl StressMonitor {
                 }
 
                 // Continuous rating: needs to be sustained.
-                let counter = self.tracks[i].over_chunks.entry(chk.kind.as_str()).or_insert(0);
+                let counter = self.tracks[i]
+                    .over_chunks
+                    .entry(chk.kind.as_str())
+                    .or_insert(0);
                 if frac > 1.0 {
                     *counter += 1;
                 } else {
@@ -332,7 +341,11 @@ impl StressMonitor {
                 }
                 let sustained = *counter >= SUSTAIN_CHUNKS;
                 if sustained
-                    && !self.tracks[i].raised.get(chk.kind.as_str()).copied().unwrap_or(false)
+                    && !self.tracks[i]
+                        .raised
+                        .get(chk.kind.as_str())
+                        .copied()
+                        .unwrap_or(false)
                 {
                     self.tracks[i].raised.insert(chk.kind.as_str(), true);
                     let destroyed = self.maybe_destroy(circuit, &meta);

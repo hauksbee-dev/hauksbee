@@ -283,7 +283,10 @@ fn siblings_all_neurons_share_one_timing_value_set() {
         for (r, v) in &m {
             // family member: ref starts with the family name followed by digits
             if r.starts_with(fam)
-                && r[fam.len()..].chars().next().map_or(false, |c| c.is_ascii_digit())
+                && r[fam.len()..]
+                    .chars()
+                    .next()
+                    .map_or(false, |c| c.is_ascii_digit())
             {
                 let got = si(v).unwrap_or(f64::NAN);
                 if (got - want).abs() / want > 0.001 {

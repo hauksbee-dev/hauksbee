@@ -205,7 +205,8 @@ impl Engine for HauksbeeEngine {
     fn set_controls(&mut self, controls: SolverControls) {
         self.controls = controls.clone();
         self.sched.opts = controls_to_options(&controls);
-        self.sched.set_destructive_faults(controls.destructive_faults);
+        self.sched
+            .set_destructive_faults(controls.destructive_faults);
         if controls.fixed_dt > 0.0 {
             self.sched.chunk_s = controls.fixed_dt;
         }

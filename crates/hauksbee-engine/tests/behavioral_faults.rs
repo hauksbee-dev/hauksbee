@@ -48,7 +48,9 @@ fn focused(path: &PathBuf, keep: &[&str]) -> Option<hauksbee_engine::BoundBoard>
     }
     let text = std::fs::read_to_string(path).expect("read board");
     let mut board = ExtractedBoard::from_auto(&text).expect("parse board");
-    board.components.retain(|c| keep.contains(&c.reference.as_str()));
+    board
+        .components
+        .retain(|c| keep.contains(&c.reference.as_str()));
     Some(bind_board(&board, &ModelLibrary::builtin()))
 }
 
@@ -58,7 +60,11 @@ fn pin_net_name(path: &PathBuf, refdes: &str, pad: &str) -> Option<String> {
     let board = ExtractedBoard::from_auto(&text).ok()?;
     let comp = board.components.iter().find(|c| c.reference == refdes)?;
     let net = comp.pins.iter().find(|p| p.number == pad)?.net?;
-    board.nets.iter().find(|n| n.id == net).map(|n| n.name.clone())
+    board
+        .nets
+        .iter()
+        .find(|n| n.id == net)
+        .map(|n| n.name.clone())
 }
 
 /// References sitting on the same net as `refdes`'s pad `pad` (for the SHPHLD
@@ -73,7 +79,12 @@ fn net_members(path: &PathBuf, refdes: &str, pad: &str) -> Vec<String> {
     let Some(comp) = board.components.iter().find(|c| c.reference == refdes) else {
         return Vec::new();
     };
-    let Some(net) = comp.pins.iter().find(|p| p.number == pad).and_then(|p| p.net) else {
+    let Some(net) = comp
+        .pins
+        .iter()
+        .find(|p| p.number == pad)
+        .and_then(|p| p.net)
+    else {
         return Vec::new();
     };
     board
@@ -328,13 +339,20 @@ fn behavioral_parts_do_not_manufacture_faults_on_clean_board() {
         .into_iter()
         .map(|(r, ..)| r)
         .collect();
-    assert!(refs.iter().any(|r| r == "U2"), "LTC4020 (U2) should bind on mb3.0");
+    assert!(
+        refs.iter().any(|r| r == "U2"),
+        "LTC4020 (U2) should bind on mb3.0"
+    );
 
     let mut total_faults = 0usize;
     for _ in 0..20 {
         let frame = eng.step(1e-3);
         // No behavioural overdraw/overpower fault should fire without a budget.
-        total_faults += frame.faults.iter().filter(|f| f.component == "U2" || f.component == "U4").count();
+        total_faults += frame
+            .faults
+            .iter()
+            .filter(|f| f.component == "U2" || f.component == "U4")
+            .count();
     }
     assert_eq!(
         total_faults, 0,

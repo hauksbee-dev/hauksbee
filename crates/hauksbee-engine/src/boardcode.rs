@@ -41,8 +41,7 @@ use crate::stress::FaultEvent;
 
 /// Decompile a parsed-or-raw `.kicad_pcb` text into editable Board-as-Code.
 pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
-    let pcb = Pcb::parse(kicad_pcb_text)
-        .map_err(|e| anyhow::anyhow!("parsing board: {e:?}"))?;
+    let pcb = Pcb::parse(kicad_pcb_text).map_err(|e| anyhow::anyhow!("parsing board: {e:?}"))?;
     Ok(to_code(&pcb))
 }
 
@@ -147,9 +146,8 @@ pub fn load_code(path: &Path) -> anyhow::Result<String> {
                 found = Some(p);
             }
         }
-        let f = found.ok_or_else(|| {
-            anyhow::anyhow!("no .board file found in {}", path.display())
-        })?;
+        let f =
+            found.ok_or_else(|| anyhow::anyhow!("no .board file found in {}", path.display()))?;
         Ok(std::fs::read_to_string(f)?)
     } else {
         Ok(std::fs::read_to_string(path)?)
@@ -256,7 +254,11 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         a.component
             .cmp(&b.component)
             .then(a.kind.as_str().cmp(b.kind.as_str()))
-            .then(b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                b.value
+                    .partial_cmp(&a.value)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
     });
     faults.dedup_by(|a, b| a.component == b.component && a.kind.as_str() == b.kind.as_str());
 

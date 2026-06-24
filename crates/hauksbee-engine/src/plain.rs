@@ -15,8 +15,8 @@
 use std::fmt::Write as _;
 
 use hauksbee_extract::{
-    DrcReport, ItemKind, LintCheck, NetLintReport, Severity, SiCheck, SiReport, SiSeverity,
-    ViolationKind,
+    DrcReport, ItemKind, LintCheck, NetLintReport, Severity, SiCheck, SiFinding, SiReport,
+    SiSeverity, ViolationKind,
 };
 
 use crate::stress::{FaultEvent, FaultKind};
@@ -63,6 +63,13 @@ pub struct PlainReport {
     /// What was checked, e.g. "Copper spacing (DRC)". Drives the verdict line.
     pub subject: String,
     pub findings: Vec<PlainFinding>,
+    /// Actionable info-level notes promoted into a "Heads up:" section. These are
+    /// NOT counted as findings (they don't change the verdict), but they are also
+    /// NEVER silently dropped in `--plain` mode: the 171-ohm USB-impedance note
+    /// the hobbyist persona lost is exactly this (Fix #3 / Theme A). A "Looks
+    /// healthy" verdict that hides the only actionable observation is the breach
+    /// of trust we refuse to ship.
+    pub heads_up: Vec<String>,
 }
 
 impl PlainReport {
@@ -70,6 +77,7 @@ impl PlainReport {
         PlainReport {
             subject: subject.to_string(),
             findings: Vec::new(),
+            heads_up: Vec::new(),
         }
     }
 
@@ -101,7 +109,10 @@ impl PlainReport {
     pub fn verdict(&self) -> String {
         let n = self.findings.len();
         if n == 0 {
-            return format!("Looks healthy: no {} problems found.", self.subject.to_lowercase());
+            return format!(
+                "Looks healthy: no {} problems found.",
+                self.subject.to_lowercase()
+            );
         }
         let serious = self.serious_count();
         let issues = if n == 1 { "issue" } else { "issues" };
@@ -117,15 +128,22 @@ impl PlainReport {
     pub fn render(&self) -> String {
         let mut s = String::new();
         let _ = writeln!(s, "{}", self.verdict());
-        if self.findings.is_empty() {
-            return s;
-        }
-        let _ = writeln!(s);
-        for (i, f) in self.sorted().iter().enumerate() {
-            let _ = writeln!(s, "{}. [{}] {}", i + 1, f.level.tag(), f.what);
-            let _ = writeln!(s, "     Why it matters: {}", f.why);
-            let _ = writeln!(s, "     What to do:     {}", f.fix);
+        if !self.findings.is_empty() {
             let _ = writeln!(s);
+            for (i, f) in self.sorted().iter().enumerate() {
+                let _ = writeln!(s, "{}. [{}] {}", i + 1, f.level.tag(), f.what);
+                let _ = writeln!(s, "     Why it matters: {}", f.why);
+                let _ = writeln!(s, "     What to do:     {}", f.fix);
+                let _ = writeln!(s);
+            }
+        }
+        // Actionable info notes are NEVER dropped, even when the verdict reads
+        // "healthy". This is the anti-false-comfort guarantee (Fix #3).
+        if !self.heads_up.is_empty() {
+            let _ = writeln!(s, "\nHeads up (worth knowing, not a failure):");
+            for note in &self.heads_up {
+                let _ = writeln!(s, "  - {note}");
+            }
         }
         s
     }
@@ -179,8 +197,16 @@ fn item_noun(kind: ItemKind) -> &'static str {
 pub fn plain_drc(report: &DrcReport) -> PlainReport {
     let mut out = PlainReport::new("Copper spacing (DRC)");
     for f in &report.findings {
-        let a = if f.net_a_name.is_empty() { "an unnamed net" } else { &f.net_a_name };
-        let b = if f.net_b_name.is_empty() { "an unnamed net" } else { &f.net_b_name };
+        let a = if f.net_a_name.is_empty() {
+            "an unnamed net"
+        } else {
+            &f.net_a_name
+        };
+        let b = if f.net_b_name.is_empty() {
+            "an unnamed net"
+        } else {
+            &f.net_b_name
+        };
         let where_ = format!("near x={:.1} mm, y={:.1} mm on layer {}", f.x, f.y, f.layer);
         match f.kind {
             ViolationKind::Short => out.push(
@@ -199,13 +225,94 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
                 PlainLevel::Warning,
                 format!(
                     "\"{a}\" and \"{b}\" are very close but not quite touching ({:.3} mm apart, your rule wants {:.3} mm), {where_}.",
-                    f.gap_mm, report.clearance_mm,
+                    f.gap_mm, f.required_clearance_mm,
                 ),
                 "They are not shorted today, but the gap is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.".to_string(),
                 "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.".to_string(),
             ),
         }
     }
+    out
+}
+
+/// Translate the *grouped* DRC ([`DrcStructured`]) for the plain / web surfaces.
+///
+/// This is the single source of truth shared with the default text and `--json`
+/// paths: duplicates are collapsed by (net pair + layer), and — crucially — a
+/// group whose gap is exactly *at* the rule (`gap == rule`) is described as "at
+/// minimum clearance (no margin)", NOT "below the spacing the board asks for".
+/// Saying "below" when the gap merely equals the rule is the dishonest wording
+/// the honesty change removed; this renderer keeps `--plain` and the web report
+/// in step with that.
+pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
+    let mut out = PlainReport::new("Copper spacing (DRC)");
+
+    // Real shorts first — the things that actually break a board.
+    for sh in &st.shorts {
+        let a = if sh.net_a.is_empty() { "an unnamed net" } else { &sh.net_a };
+        let b = if sh.net_b.is_empty() { "an unnamed net" } else { &sh.net_b };
+        let where_ = format!(
+            "near x={:.1} mm, y={:.1} mm on layer {}",
+            sh.loc_mm[0], sh.loc_mm[1], sh.layer
+        );
+        out.push(
+            PlainLevel::Serious,
+            format!("Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}."),
+            format!(
+                "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
+            ),
+            "Pull the two pieces of copper apart so there is a clear gap between them, or remove the bit of copper that bridges them. If they really are supposed to connect, give them the same net name.".to_string(),
+        );
+    }
+
+    // Genuinely below-rule clearance groups (gap < rule).
+    for g in &st.violations {
+        let a = if g.net_a.is_empty() { "an unnamed net" } else { &g.net_a };
+        let b = if g.net_b.is_empty() { "an unnamed net" } else { &g.net_b };
+        let places = format!(
+            "{} location{}",
+            g.count,
+            if g.count == 1 { "" } else { "s" }
+        );
+        let what = if g.below_count == g.count {
+            format!(
+                "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {:.3} mm, below your {:.3} mm rule).",
+                g.layer, g.min_gap_mm, g.rule_mm
+            )
+        } else {
+            format!(
+                "\"{a}\" and \"{b}\" are close at {places} on {}: {} below your {:.3} mm rule (tightest {:.3} mm), the rest exactly at the limit.",
+                g.layer, g.below_count, g.rule_mm, g.min_gap_mm,
+            )
+        };
+        out.push(
+            PlainLevel::Warning,
+            what,
+            "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.".to_string(),
+            "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.".to_string(),
+        );
+    }
+
+    // At-the-limit groups (gap == rule, no margin). NOT "below" the rule.
+    for g in &st.at_limit {
+        let a = if g.net_a.is_empty() { "an unnamed net" } else { &g.net_a };
+        let b = if g.net_b.is_empty() { "an unnamed net" } else { &g.net_b };
+        let places = format!(
+            "{} location{}",
+            g.count,
+            if g.count == 1 { "" } else { "s" }
+        );
+        out.push(
+            PlainLevel::Warning,
+            format!(
+                "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly your {:.3} mm rule).",
+                g.layer, g.min_gap_mm, g.rule_mm
+            ),
+            "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation — but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string(),
+            "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is — just be aware there is no slack.".to_string(),
+        );
+    }
+
     out
 }
 
@@ -251,6 +358,21 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A microcontroller has a fixed number of internal blocks (timers/PWM channels, communication units, pin groups). Two board features have been wired to pins that share one block, so the chip physically cannot run both at the same time — one feature will not work.".to_string(),
                 "Move one of the functions to a different pin that maps to a free internal block, or give up one of the two features. The chip's datasheet pin-mux table shows which pins share which block.".to_string(),
             ),
+            LintCheck::DesignatorFootprintMismatch => (
+                f.message.clone(),
+                "The reference designator tells the BOM and assembly process what kind of part this is, while the footprint points at a different passive family. The board may route electrically, but the assembly house can load the wrong bin or stop for clarification.".to_string(),
+                "Make the reference/value and footprint agree: use a resistor footprint for R parts, a capacitor footprint for C parts, and regenerate the BOM from the corrected design.".to_string(),
+            ),
+            LintCheck::ValuePackageSanity => (
+                f.message.clone(),
+                "The value is far outside what that small package can physically provide. This is usually a typo in the value or footprint, and it can turn into a wrong purchased part or an impossible BOM line.".to_string(),
+                "Check the intended value against the selected package and manufacturer part. Either lower the value, pick a larger package, or correct the copied value field.".to_string(),
+            ),
+            LintCheck::PlaceholderValue => (
+                f.message.clone(),
+                "A placeholder passive value leaves the BOM and any physics checks without the actual resistor, capacitor, or inductor value. On charge-current, divider, or timing parts, that can hide the behavior that matters.".to_string(),
+                "Replace the placeholder with the actual value before ordering or relying on simulation results.".to_string(),
+            ),
         };
         out.push(level, what, why, fix);
     }
@@ -295,16 +417,64 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
         };
         out.push(level, what, why, fix);
     }
+
+    // Fix #3: promote ACTIONABLE info notes into "Heads up" rather than dropping
+    // them. An info note is actionable when it reports a real off-target value
+    // (the controlled-impedance "+N% from target" note — the 171-ohm USB case),
+    // as opposed to a within-tolerance "ok" or a "no judgement" observation.
+    for f in info_only(report) {
+        if let Some(note) = actionable_info_note(f) {
+            out.heads_up.push(note);
+        }
+    }
     out
+}
+
+/// Info-severity findings (the auditable computed values), in report order.
+fn info_only(report: &SiReport) -> impl Iterator<Item = &SiFinding> {
+    report
+        .findings
+        .iter()
+        .filter(|f| f.severity == SiSeverity::Info)
+}
+
+/// A plain one-liner for an actionable info note, or `None` if the note is a
+/// pure observation that should not nag the user. The honest rule: a note is
+/// actionable iff it expresses a deviation from a target (its message says
+/// "from target") and is not a within-tolerance "ok".
+fn actionable_info_note(f: &SiFinding) -> Option<String> {
+    let m = &f.message;
+    let off_target = m.contains("from target") && !m.contains("within");
+    if !off_target {
+        return None;
+    }
+    let parts = join_refs(&f.refs);
+    Some(match f.check {
+        SiCheck::ControlledImpedance => format!(
+            "Controlled-impedance estimate is off target ({}). {}. This is informational \
+             (the board did not formally declare a controlled-impedance stackup), but if \
+             this is a USB / high-speed link, check the trace width and spacing.",
+            short_msg(m),
+            if parts == "the part" {
+                String::from("Affected trace pair noted above")
+            } else {
+                format!("Affected: {parts}")
+            }
+        ),
+        _ => format!("{} ({}).", short_msg(m), parts),
+    })
 }
 
 /// Keep an embedded expert message short enough to sit inside a plain sentence
 /// without dumping a whole table row.
 fn short_msg(msg: &str) -> String {
     let m = msg.trim();
-    let first = m.split(['.', ';']).next().unwrap_or(m).trim();
-    let truncated: String = first.chars().take(90).collect();
-    truncated
+    // Split only on clause boundaries ("; ", ". "), NOT a bare ".", so decimal
+    // numbers like "0.200 mm" and "Zdiff ~ 171 ohm [target 90 ohm]" survive intact
+    // — a bare "." chopped the controlled-impedance note down to "W~0".
+    let first = m.split("; ").next().unwrap_or(m).trim();
+    let first = first.split(". ").next().unwrap_or(first).trim();
+    first.chars().take(160).collect()
 }
 
 // ── Stress / datasheet-rating faults ──────────────────────────────────────────
@@ -435,14 +605,26 @@ mod tests {
             x: 12.3,
             y: 45.6,
             gap_mm: -0.05,
-            item_a: Item { kind: ItemKind::Track, net: 1, owner: String::new() },
-            item_b: Item { kind: ItemKind::Pad, net: 2, owner: "U1".to_string() },
+            required_clearance_mm: 0.2,
+            item_a: Item {
+                kind: ItemKind::Track,
+                net: 1,
+                owner: String::new(),
+            },
+            item_b: Item {
+                kind: ItemKind::Pad,
+                net: 2,
+                owner: "U1".to_string(),
+            },
         }
     }
 
     #[test]
     fn drc_short_is_serious_with_why_and_fix() {
-        let mut report = DrcReport { clearance_mm: 0.2, ..Default::default() };
+        let mut report = DrcReport {
+            clearance_mm: 0.2,
+            ..Default::default()
+        };
         report.findings.push(drc_short());
         let plain = plain_drc(&report);
         assert_eq!(plain.findings.len(), 1);
@@ -474,8 +656,76 @@ mod tests {
     }
 
     #[test]
+    fn plain_structured_drc_groups_and_uses_at_limit_wording() {
+        use crate::result::DrcStructured;
+        // Three findings for the SAME net pair + layer, all with gap == rule
+        // (exactly at minimum clearance, NOT below). The structured plain
+        // renderer must (a) collapse them into ONE finding, and (b) describe
+        // them as "at minimum clearance (no margin)" — never "below".
+        let at_limit = || {
+            let mut f = drc_short();
+            f.kind = ViolationKind::Clearance;
+            f.net_a_name = "SIG_A".to_string();
+            f.net_b_name = "SIG_B".to_string();
+            f.layer = "F.Cu".to_string();
+            f.required_clearance_mm = 0.2;
+            f.gap_mm = 0.2; // exactly at the rule
+            f
+        };
+        let report = DrcReport {
+            clearance_mm: 0.2,
+            findings: vec![at_limit(), at_limit(), at_limit()],
+            primitive_count: 6,
+        };
+        let st = DrcStructured::from_report(&report);
+        let plain = plain_drc_structured(&st);
+
+        // Grouped: 3 raw findings -> 1 plain finding.
+        assert_eq!(
+            plain.findings.len(),
+            1,
+            "duplicates were not grouped: {:?}",
+            plain.findings
+        );
+        let f = &plain.findings[0];
+        // gap == rule is at-limit, not below: not serious, and worded correctly.
+        assert_eq!(f.level, PlainLevel::Warning);
+        assert!(
+            f.what.contains("at minimum clearance (no margin)"),
+            "expected at-limit wording, got: {}",
+            f.what
+        );
+        assert!(
+            !f.what.to_lowercase().contains("below"),
+            "at-limit finding must not say 'below': {}",
+            f.what
+        );
+        // The count reflects all three locations.
+        assert!(f.what.contains("3 locations"), "missing grouped count: {}", f.what);
+        // Genuinely-below findings DO say "below".
+        let mut below = at_limit();
+        below.gap_mm = 0.10; // below the 0.2 rule
+        let below_report = DrcReport {
+            clearance_mm: 0.2,
+            findings: vec![below],
+            primitive_count: 2,
+        };
+        let below_plain =
+            plain_drc_structured(&DrcStructured::from_report(&below_report));
+        assert_eq!(below_plain.findings.len(), 1);
+        assert!(
+            below_plain.findings[0].what.to_lowercase().contains("below"),
+            "below-rule finding should say 'below': {}",
+            below_plain.findings[0].what
+        );
+    }
+
+    #[test]
     fn empty_drc_reads_healthy() {
-        let plain = plain_drc(&DrcReport { clearance_mm: 0.2, ..Default::default() });
+        let plain = plain_drc(&DrcReport {
+            clearance_mm: 0.2,
+            ..Default::default()
+        });
         assert!(plain.verdict().to_lowercase().contains("healthy"));
         assert!(plain.render().to_lowercase().contains("healthy"));
     }
@@ -491,6 +741,9 @@ mod tests {
             (LintCheck::OutputContention, Severity::High),
             (LintCheck::StrapPin, Severity::High),
             (LintCheck::McuResourceConflict, Severity::High),
+            (LintCheck::DesignatorFootprintMismatch, Severity::Medium),
+            (LintCheck::ValuePackageSanity, Severity::Medium),
+            (LintCheck::PlaceholderValue, Severity::Medium),
         ];
         for (check, sev) in checks {
             let report = NetLintReport {
@@ -534,6 +787,50 @@ mod tests {
             let f = &plain.findings[0];
             assert!(!f.what.is_empty() && !f.why.is_empty() && !f.fix.is_empty());
         }
+    }
+
+    #[test]
+    fn actionable_info_note_is_promoted_to_heads_up_even_when_healthy() {
+        // Fix #3: an off-target controlled-impedance info note (the 171-ohm USB
+        // case) must NOT be silently dropped by --plain. The verdict can still be
+        // "healthy" (it is not a finding), but the note appears under "Heads up".
+        let report = SiReport {
+            findings: vec![SiFinding {
+                check: SiCheck::ControlledImpedance,
+                severity: SiSeverity::Info,
+                message: "/USB_D+ / /USB_D-: Zdiff ~ 171 ohm [target 90 ohm USB]: estimate +90% from target - info only (defaulted stackup)".to_string(),
+                refs: vec!["J1".to_string()],
+                nets: vec!["/USB_D+".to_string(), "/USB_D-".to_string()],
+            }],
+        };
+        let plain = plain_si(&report);
+        // Not a finding -> verdict reads healthy, but the note survives.
+        assert!(plain.findings.is_empty());
+        assert_eq!(plain.heads_up.len(), 1, "off-target info promoted");
+        let rendered = plain.render();
+        assert!(rendered.to_lowercase().contains("healthy"));
+        assert!(
+            rendered.contains("Heads up"),
+            "render must include the Heads up section: {rendered}"
+        );
+        assert!(rendered.contains("171 ohm"), "the value is shown: {rendered}");
+    }
+
+    #[test]
+    fn within_tolerance_info_note_is_not_promoted() {
+        // A "- ok" / within-tolerance info note is a pure observation; it must
+        // NOT nag the user in plain mode.
+        let report = SiReport {
+            findings: vec![SiFinding {
+                check: SiCheck::ControlledImpedance,
+                severity: SiSeverity::Info,
+                message: "Zdiff ~ 92 ohm vs target 90 ohm (+2%, within +-10%) - ok".to_string(),
+                refs: vec!["J1".to_string()],
+                nets: vec![],
+            }],
+        };
+        let plain = plain_si(&report);
+        assert!(plain.heads_up.is_empty(), "within-tolerance note not promoted");
     }
 
     #[test]
@@ -633,6 +930,9 @@ mod tests {
         let rendered = plain.render();
         let serious_pos = rendered.find("SERIOUS").unwrap();
         let note_pos = rendered.find("note").unwrap();
-        assert!(serious_pos < note_pos, "serious finding should render first");
+        assert!(
+            serious_pos < note_pos,
+            "serious finding should render first"
+        );
     }
 }

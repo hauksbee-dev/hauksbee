@@ -38,14 +38,18 @@ fn famous_root() -> Option<PathBuf> {
         return Some(p);
     }
     if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is missing: {}", p.display());
+        panic!(
+            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is missing: {}",
+            p.display()
+        );
     }
     eprintln!("board-corpus/famous absent; skipping strap-lint corpus test");
     None
 }
 
 fn strap_report(path: &PathBuf) -> NetLintReport {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let board = ExtractedBoard::from_auto(&text).expect("parse board");
     let lib = ModelLibrary::builtin();
     strap_lint(&board, &lib)
@@ -67,10 +71,24 @@ fn olimex_rev_d_gpio0_clock_flagged() {
     }
     let r = strap_report(&pcb);
     let f = strap_findings(&r);
-    assert_eq!(f.len(), 1, "exactly one strap finding (GPIO0), got: {:?}", f.iter().map(|x| &x.message).collect::<Vec<_>>());
-    assert!(matches!(f[0].severity, Severity::High), "the clock-on-strap is High severity");
-    assert!(f[0].nets.iter().any(|n| n.contains("GPIO0")), "the finding names GPIO0");
-    assert!(f[0].message.to_uppercase().contains("CR1") || f[0].message.contains("clock"), "names the clock source");
+    assert_eq!(
+        f.len(),
+        1,
+        "exactly one strap finding (GPIO0), got: {:?}",
+        f.iter().map(|x| &x.message).collect::<Vec<_>>()
+    );
+    assert!(
+        matches!(f[0].severity, Severity::High),
+        "the clock-on-strap is High severity"
+    );
+    assert!(
+        f[0].nets.iter().any(|n| n.contains("GPIO0")),
+        "the finding names GPIO0"
+    );
+    assert!(
+        f[0].message.to_uppercase().contains("CR1") || f[0].message.contains("clock"),
+        "names the clock source"
+    );
 }
 
 /// The honest reach limit, pinned: the rev-E-FIXED revision (rev L) STILL fires
@@ -88,7 +106,11 @@ fn olimex_rev_l_still_fires_fix_is_not_netlist_visible() {
     }
     let r = strap_report(&pcb);
     let f = strap_findings(&r);
-    assert_eq!(f.len(), 1, "rev L still carries the 50 MHz clock on GPIO0 in the netlist");
+    assert_eq!(
+        f.len(),
+        1,
+        "rev L still carries the 50 MHz clock on GPIO0 in the netlist"
+    );
     assert!(f[0].nets.iter().any(|n| n.contains("GPIO0")));
 }
 
@@ -109,7 +131,10 @@ fn watchy_esp32_straps_are_clean() {
         strap_findings(&r).len(),
         0,
         "Watchy ESP32 straps are correctly biased: {:?}",
-        strap_findings(&r).iter().map(|x| &x.message).collect::<Vec<_>>()
+        strap_findings(&r)
+            .iter()
+            .map(|x| &x.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -125,13 +150,11 @@ fn rp2040_minimal_bootsel_is_clean() {
         return;
     }
     // Pick the first .kicad_pcb in the dir.
-    let pcb = std::fs::read_dir(&dir)
-        .ok()
-        .and_then(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .find(|p| p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb"))
-        });
+    let pcb = std::fs::read_dir(&dir).ok().and_then(|rd| {
+        rd.filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb"))
+    });
     let Some(pcb) = pcb else {
         eprintln!("no rp2040_minimal .kicad_pcb; skipping");
         return;
@@ -141,7 +164,10 @@ fn rp2040_minimal_bootsel_is_clean() {
         strap_findings(&r).len(),
         0,
         "RP2040 BOOTSEL strap is correctly biased: {:?}",
-        strap_findings(&r).iter().map(|x| &x.message).collect::<Vec<_>>()
+        strap_findings(&r)
+            .iter()
+            .map(|x| &x.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -158,7 +184,9 @@ fn strap_lint_only_fires_on_olimex_gpio0_across_corpus() {
     // full walk is the strongest statement.
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_dir() {
@@ -170,8 +198,12 @@ fn strap_lint_only_fires_on_olimex_gpio0_across_corpus() {
                 continue;
             }
             // Read + parse defensively; skip files the extractor cannot handle.
-            let Ok(text) = std::fs::read_to_string(&p) else { continue };
-            let Ok(board) = ExtractedBoard::from_auto(&text) else { continue };
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(board) = ExtractedBoard::from_auto(&text) else {
+                continue;
+            };
             let lib = ModelLibrary::builtin();
             let r = strap_lint(&board, &lib);
             for f in r.of_check(LintCheck::StrapPin) {

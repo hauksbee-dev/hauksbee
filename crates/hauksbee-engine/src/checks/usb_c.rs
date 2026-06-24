@@ -83,11 +83,23 @@ impl Rp {
     pub fn thresholds(self) -> CcThresholds {
         match self {
             // Table 4-28: vRa max 0.20 V, vRd 0.25..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
-            Rp::Default => CcThresholds { vra_max: 0.20, vrd_max: 1.60, vopen: 1.65 },
+            Rp::Default => CcThresholds {
+                vra_max: 0.20,
+                vrd_max: 1.60,
+                vopen: 1.65,
+            },
             // Table 4-29: vRa max 0.40 V, vRd 0.45..1.50 V (threshold 1.60 V), vOPEN 1.65 V.
-            Rp::Med1A5 => CcThresholds { vra_max: 0.40, vrd_max: 1.60, vopen: 1.65 },
+            Rp::Med1A5 => CcThresholds {
+                vra_max: 0.40,
+                vrd_max: 1.60,
+                vopen: 1.65,
+            },
             // Table 4-30: vRa max 0.80 V, vRd 0.85..2.45 V (threshold 2.60 V), vOPEN 2.75 V.
-            Rp::High3A => CcThresholds { vra_max: 0.80, vrd_max: 2.60, vopen: 2.75 },
+            Rp::High3A => CcThresholds {
+                vra_max: 0.80,
+                vrd_max: 2.60,
+                vopen: 2.75,
+            },
         }
     }
 }
@@ -266,7 +278,11 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 
     // The sink CC node(s). Shared => one node both pins land on.
     let cc1_sink = c.node("CC1");
-    let cc2_sink = if term.shared_net { cc1_sink } else { c.node("CC2") };
+    let cc2_sink = if term.shared_net {
+        cc1_sink
+    } else {
+        c.node("CC2")
+    };
 
     // Sink Rd terminations to GND (the board's pulldowns).
     if let Some(r) = term.cc1_rd_ohms {
@@ -543,11 +559,18 @@ fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
             }
         }
         if let (Some(cc1_net), Some(cc2_net)) = (c1, c2) {
-            let rec = ReceptacleNets { reference: comp.reference.clone(), cc1_net, cc2_net };
+            let rec = ReceptacleNets {
+                reference: comp.reference.clone(),
+                cc1_net,
+                cc2_net,
+            };
             // De-dupe by the (cc1, cc2) net pair: two receptacles wired to the
             // *same* CC nets (a mirrored footprint of one logical port) count
             // once, so we do not double-report.
-            if !out.iter().any(|r| r.cc1_net == rec.cc1_net && r.cc2_net == rec.cc2_net) {
+            if !out
+                .iter()
+                .any(|r| r.cc1_net == rec.cc1_net && r.cc2_net == rec.cc2_net)
+            {
                 out.push(rec);
             }
         }
@@ -701,9 +724,10 @@ impl CcTerminationAudit {
     /// distinguish "all halves terminated" from "primary terminated only".
     pub fn all_receptacles_terminated(&self) -> bool {
         !self.receptacles.is_empty()
-            && self.receptacles.iter().all(|r| {
-                r.cc1.effective_rd_ohms().is_some() || r.cc2.effective_rd_ohms().is_some()
-            })
+            && self
+                .receptacles
+                .iter()
+                .all(|r| r.cc1.effective_rd_ohms().is_some() || r.cc2.effective_rd_ohms().is_some())
     }
 }
 
@@ -742,7 +766,11 @@ pub fn audit_cc_termination(board: &ExtractedBoard) -> Option<CcTerminationAudit
     }
 
     let primary = receptacles[0].clone();
-    Some(CcTerminationAudit { cc1: primary.cc1, cc2: primary.cc2, receptacles })
+    Some(CcTerminationAudit {
+        cc1: primary.cc1,
+        cc2: primary.cc2,
+        receptacles,
+    })
 }
 
 fn audit_one_cc(
@@ -774,7 +802,11 @@ fn audit_one_cc(
             }
         }
     }
-    CcPinTermination { external_rd_ohms, internal_rd_ohms, controller_ref }
+    CcPinTermination {
+        external_rd_ohms,
+        internal_rd_ohms,
+        controller_ref,
+    }
 }
 
 /// The set of net ids electrically continuous with `start` through 0 Ω resistors
@@ -857,7 +889,10 @@ fn receptacle_score(comp: &hauksbee_extract::Component) -> i32 {
     let r = comp.reference.to_ascii_uppercase();
     let mut s = 0;
     // Strongest signal: a footprint that names a USB-C / Type-C receptacle.
-    if fp.contains("usb_c") || fp.contains("type_c") || fp.contains("type-c") || fp.contains("usb-c")
+    if fp.contains("usb_c")
+        || fp.contains("type_c")
+        || fp.contains("type-c")
+        || fp.contains("usb-c")
     {
         s += 100;
     }
@@ -917,7 +952,10 @@ mod tests {
     fn emarked_cable_ra_in_spec_band() {
         // Table 4-22: Ra is 800 Ohm to 1.2 kOhm. The canonical helper uses 1 kOhm.
         if let Cable::EMarked { ra_ohms } = Cable::emarked() {
-            assert!((800.0..=1200.0).contains(&ra_ohms), "Ra {ra_ohms} out of 800..1200");
+            assert!(
+                (800.0..=1200.0).contains(&ra_ohms),
+                "Ra {ra_ohms} out of 800..1200"
+            );
         } else {
             panic!("emarked() must be an e-marked cable");
         }
@@ -961,8 +999,14 @@ mod tests {
     fn ra_threshold_scales_with_rp() {
         // At High Rp (330 µA) the same 0.30 V that would be Rd at Default is
         // still Ra, because the vRa window widens to 0.80 V (Table 4-30).
-        assert_eq!(PinState::classify(0.30, Rp::Default.thresholds()), PinState::Rd);
-        assert_eq!(PinState::classify(0.30, Rp::High3A.thresholds()), PinState::Ra);
+        assert_eq!(
+            PinState::classify(0.30, Rp::Default.thresholds()),
+            PinState::Rd
+        );
+        assert_eq!(
+            PinState::classify(0.30, Rp::High3A.thresholds()),
+            PinState::Ra
+        );
     }
 
     // --- Table 4-10 Source Perspective pair mapping -------------------------
@@ -1004,7 +1048,12 @@ mod tests {
         };
         let r = classify_attach(term, Rp::Default, Cable::Passive);
         let want = 80e-6 * 5100.0; // 0.408 V
-        assert!((r.cc1_v - want).abs() < 1e-4, "got {} want {}", r.cc1_v, want);
+        assert!(
+            (r.cc1_v - want).abs() < 1e-4,
+            "got {} want {}",
+            r.cc1_v,
+            want
+        );
     }
 
     // --- CC double-termination audit (pure-logic) --------------------------
@@ -1055,7 +1104,9 @@ mod tests {
     #[test]
     fn ground_names_recognise_the_gnd_family_only() {
         // The system grounds a USB-C Rd can legitimately return to.
-        for g in ["GND", "GNDA", "AGND", "GNDD", "DGND", "GNDPWR", "PGND", "VSS", "VSSA"] {
+        for g in [
+            "GND", "GNDA", "AGND", "GNDD", "DGND", "GNDPWR", "PGND", "VSS", "VSSA",
+        ] {
             assert!(is_ground_name(g), "{g} should be a ground");
         }
         // Numeric / separated suffixes still reduce to a ground core.
@@ -1064,7 +1115,15 @@ mod tests {
         }
         // Things that merely *contain* "GND" but are not the system ground must
         // not be credited as a Rd return (the false-positive shape to avoid).
-        for n in ["GND_SENSE", "GNDLED", "VBUS", "CC1", "USB_DP", "EARTH", "GNDSW"] {
+        for n in [
+            "GND_SENSE",
+            "GNDLED",
+            "VBUS",
+            "CC1",
+            "USB_DP",
+            "EARTH",
+            "GNDSW",
+        ] {
             assert!(!is_ground_name(n), "{n} must not be treated as ground");
         }
     }
@@ -1080,7 +1139,17 @@ mod tests {
         let r = classify_attach(term, Rp::Default, Cable::emarked());
         let rpar = 1.0 / (1.0 / 5100.0 + 1.0 / 1000.0); // 836.066 Ohm
         let want = (80e-6 + 80e-6) * rpar; // 0.133771 V
-        assert!((r.cc1_v - want).abs() < 1e-4, "got {} want {}", r.cc1_v, want);
-        assert!((r.cc2_v - want).abs() < 1e-4, "got {} want {}", r.cc2_v, want);
+        assert!(
+            (r.cc1_v - want).abs() < 1e-4,
+            "got {} want {}",
+            r.cc1_v,
+            want
+        );
+        assert!(
+            (r.cc2_v - want).abs() < 1e-4,
+            "got {} want {}",
+            r.cc2_v,
+            want
+        );
     }
 }

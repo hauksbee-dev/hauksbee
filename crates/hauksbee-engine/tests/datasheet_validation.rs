@@ -579,8 +579,7 @@ fn extracted_1n4148_physical() {
 #[test]
 fn extracted_ams1117_physical() {
     // model-extract sanitises '.' in the part name to '_' for the filename.
-    let m = load_extracted("AMS1117-3_3.toml")
-        .or_else(|| load_extracted("AMS1117-3.3.toml"));
+    let m = load_extracted("AMS1117-3_3.toml").or_else(|| load_extracted("AMS1117-3.3.toml"));
     let Some(m) = m else {
         eprintln!("no testdata/extracted/AMS1117-3_3.toml — run model-extract; skipping");
         return;

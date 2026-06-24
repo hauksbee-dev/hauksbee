@@ -487,8 +487,7 @@ impl SupplyLeg {
     }
 
     fn set_internal_volts(&self, circuit: &mut Circuit, v: f64) {
-        if let Some(Device::Vsource { kind, .. }) =
-            circuit.devices.get_mut(self.vsource.0 as usize)
+        if let Some(Device::Vsource { kind, .. }) = circuit.devices.get_mut(self.vsource.0 as usize)
         {
             *kind = SourceKind::Dc(v);
         }
@@ -536,7 +535,10 @@ mod tests {
         ] {
             let full = chem.ocv_per_cell(1.0);
             let empty = chem.ocv_per_cell(0.0);
-            assert!(full > empty, "{chem:?} full {full} should exceed empty {empty}");
+            assert!(
+                full > empty,
+                "{chem:?} full {full} should exceed empty {empty}"
+            );
             // Monotonic non-decreasing in SoC.
             let mut prev = empty;
             for k in 1..=10 {
@@ -606,6 +608,9 @@ mod tests {
         for _ in 0..10 {
             s.update(0.0, 0.0, 0.0, dt);
         }
-        assert!(!s.protection_tripped(), "protection should re-arm on load removal");
+        assert!(
+            !s.protection_tripped(),
+            "protection should re-arm on load removal"
+        );
     }
 }

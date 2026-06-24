@@ -100,7 +100,10 @@ fn destructive_led_opens_and_current_collapses() {
             break;
         }
     }
-    assert!(destroyed_at.is_some(), "LED should be destroyed in destructive mode");
+    assert!(
+        destroyed_at.is_some(),
+        "LED should be destroyed in destructive mode"
+    );
     // With the diode open, no current flows, so the drop across R1 is ~0 and
     // LED_A sits near +5V.
     assert!(
@@ -130,8 +133,7 @@ fn resistor_overpower_faults() {
     );
     // Confirm the footprint-derived rating is the 0402 value.
     assert!(
-        (resistor_power_from_footprint("Resistor_SMD:R_0402_1005Metric") - 1.0 / 16.0).abs()
-            < 1e-9
+        (resistor_power_from_footprint("Resistor_SMD:R_0402_1005Metric") - 1.0 / 16.0).abs() < 1e-9
     );
 
     let mut engine = engine_for(&board, false);
@@ -153,7 +155,10 @@ fn resistor_overpower_faults() {
     }
     let (component, power) = overpower.expect("0402 resistor at 1 W should raise overpower");
     assert_eq!(component, "R1");
-    assert!(power > 0.5, "reported power {power:.3} W is the real dissipation");
+    assert!(
+        power > 0.5,
+        "reported power {power:.3} W is the real dissipation"
+    );
 }
 
 #[test]
@@ -245,7 +250,10 @@ fn healthy_board_raises_no_faults() {
     }
     assert_eq!(total_faults, 0, "healthy board must not fault");
     // The 330 Ω LED branch runs ~10 mA; stress should stay well under 1.0.
-    assert!(max_stress < 1.0, "no component should be at its limit ({max_stress:.2})");
+    assert!(
+        max_stress < 1.0,
+        "no component should be at its limit ({max_stress:.2})"
+    );
 }
 
 /// Path to the demo firmware (mirrors tests/common but kept local so this test
@@ -324,7 +332,15 @@ fn dbg_led() {
     for i in 0..20 {
         let frame = engine.step(1e-4);
         let v = *frame.net_voltages.get("LED_A").unwrap_or(&0.0);
-        let stress = frame.component_states.get("D1").and_then(|m| m.get("stress")).copied().unwrap_or(-1.0);
-        eprintln!("step {i}: LED_A={v:.3} stress(D1)={stress:.3} faults={}", frame.faults.len());
+        let stress = frame
+            .component_states
+            .get("D1")
+            .and_then(|m| m.get("stress"))
+            .copied()
+            .unwrap_or(-1.0);
+        eprintln!(
+            "step {i}: LED_A={v:.3} stress(D1)={stress:.3} faults={}",
+            frame.faults.len()
+        );
     }
 }

@@ -144,8 +144,10 @@ pull_ohms = 100000.0
     let mut roles = BTreeMap::new();
     roles.insert("shphld".to_string(), pin);
     roles.insert("vsys".to_string(), vsys);
-    let dev = BehavioralDevice::stamp(&mut c, "IC401", &model, &Params::default(), &roles, &|_| None)
-        .expect("pull stamps a device");
+    let dev = BehavioralDevice::stamp(&mut c, "IC401", &model, &Params::default(), &roles, &|_| {
+        None
+    })
+    .expect("pull stamps a device");
 
     let mut h = Harness::new(c, dev);
     h.run(20, 1e-4);
@@ -205,7 +207,11 @@ od_assert = true
     // The FSM advances on the PREVIOUS chunk's solved voltages, so the EN net
     // is first seen high on the second chunk (the first solve establishes it).
     h.run(2, 1e-4);
-    assert_eq!(h.dev.state(), "charging", "EN high should move FSM to charging");
+    assert_eq!(
+        h.dev.state(),
+        "charging",
+        "EN high should move FSM to charging"
+    );
     // After the assert, STAT is pulled low through the 50 ohm OD vs 10k pullup.
     h.run(10, 1e-4);
     let v_stat = h.v("STAT");
@@ -249,8 +255,8 @@ od_assert = true
     let mut roles = BTreeMap::new();
     roles.insert("stat".to_string(), stat);
     roles.insert("en".to_string(), en);
-    let dev =
-        BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &|_| None).unwrap();
+    let dev = BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &|_| None)
+        .unwrap();
     let mut h = Harness::new(c, dev);
     h.run(10, 1e-4);
     assert_eq!(h.dev.state(), "idle");
@@ -304,7 +310,10 @@ expr = "v_cell / 1000.0"
         (2.7..=3.15).contains(&v_cell),
         "law-driven leak should settle the cell near a 100/1k divider (~3.0 V), got {v_cell:.3} V"
     );
-    assert!(v_cell < 3.29, "the leak law must pull the cell BELOW the open 3.3 V");
+    assert!(
+        v_cell < 3.29,
+        "the leak law must pull the cell BELOW the open 3.3 V"
+    );
 }
 
 // ── 4. Averaged converter: regulation + limits (LTC4020 ILIMIT shape) ───────
@@ -366,8 +375,8 @@ v_sense_full = 0.05
     roles.insert("pvin".to_string(), pvin);
     roles.insert("bat".to_string(), bat);
     let board_r = move |r: &str| if r == "R8" { Some(prog_ohms) } else { None };
-    let dev =
-        BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &board_r).unwrap();
+    let dev = BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &board_r)
+        .unwrap();
     let mut h = Harness::new(c, dev);
     h.run(60, 5e-4);
     h
@@ -384,7 +393,10 @@ fn converter_regulates_output_under_light_load() {
         "converter should regulate BAT to ~14.4 V under light load, got {v_bat:.3} V"
     );
     let iin = h.dev.converter_iin().unwrap();
-    assert!(iin < 5.0, "light-load input draw should be under the 5 A limit, got {iin:.3} A");
+    assert!(
+        iin < 5.0,
+        "light-load input draw should be under the 5 A limit, got {iin:.3} A"
+    );
 }
 
 #[test]
@@ -394,13 +406,19 @@ fn converter_input_limit_caps_the_draw() {
     let h = converter_harness(400_000.0, 2.0); // prog=400k => 5 A limit, heavy load
     let iin = h.dev.converter_iin().unwrap();
     let limit = h.dev.converter_iin_limit().unwrap();
-    assert!((limit - 5.0).abs() < 0.5, "programmed limit should be ~5 A, got {limit:.3}");
+    assert!(
+        (limit - 5.0).abs() < 0.5,
+        "programmed limit should be ~5 A, got {limit:.3}"
+    );
     assert!(
         iin <= limit + 0.2,
         "input draw {iin:.3} A must be held at/under the programmed limit {limit:.3} A"
     );
     // And it should actually be PULLING near the limit (the load wants more).
-    assert!(iin > limit * 0.7, "heavy load should drive the input draw up to the limit, got {iin:.3}");
+    assert!(
+        iin > limit * 0.7,
+        "heavy load should drive the input draw up to the limit, got {iin:.3}"
+    );
 }
 
 #[test]
@@ -410,11 +428,26 @@ fn program_resistor_changes_the_limit_with_no_model_edit() {
     // model edit. With prog_ref_ohms = 400k: prog = 400k => 5 A (full scale);
     // prog = 200k => 2.5 A (half). A LARGER programming resistor RAISES the
     // limit, exactly the LTC4020 ILIMIT direction (drop R8 to lower the limit).
-    let lim_400k = converter_harness(400_000.0, 2.0).dev.converter_iin_limit().unwrap();
-    let lim_200k = converter_harness(200_000.0, 2.0).dev.converter_iin_limit().unwrap();
-    assert!((lim_400k - 5.0).abs() < 0.3, "prog=400k => ~5 A, got {lim_400k:.3}");
-    assert!((lim_200k - 2.5).abs() < 0.3, "prog=200k => ~2.5 A, got {lim_200k:.3}");
-    assert!(lim_200k < lim_400k, "a smaller programming resistor lowers the limit");
+    let lim_400k = converter_harness(400_000.0, 2.0)
+        .dev
+        .converter_iin_limit()
+        .unwrap();
+    let lim_200k = converter_harness(200_000.0, 2.0)
+        .dev
+        .converter_iin_limit()
+        .unwrap();
+    assert!(
+        (lim_400k - 5.0).abs() < 0.3,
+        "prog=400k => ~5 A, got {lim_400k:.3}"
+    );
+    assert!(
+        (lim_200k - 2.5).abs() < 0.3,
+        "prog=200k => ~2.5 A, got {lim_200k:.3}"
+    );
+    assert!(
+        lim_200k < lim_400k,
+        "a smaller programming resistor lowers the limit"
+    );
 }
 
 // ── 5. Escape-hatch custom-behaviour trait ──────────────────────────────────
@@ -488,7 +521,11 @@ fn custom_behavior_escape_hatch_binds_and_runs() {
 
     let mut reg = CustomRegistry::new();
     reg.register("CRAZYPART", || {
-        Box::new(RunawaySink { out: None, isrc: None, accum: 0.0 })
+        Box::new(RunawaySink {
+            out: None,
+            isrc: None,
+            accum: 0.0,
+        })
     });
     // The custom part's pin 1 must map to role "out": custom parts use the
     // model's [models.pins]; with no DB entry we supply none, so map by giving
@@ -496,12 +533,19 @@ fn custom_behavior_escape_hatch_binds_and_runs() {
     // role_node_map yields nothing; to exercise binding we rely on the value
     // key match and a hand role. Instead, assert the registry built a device.
     let built = reg.build_for(&["CRAZYPART"]);
-    assert!(built.is_some(), "registry should build a device for CRAZYPART");
+    assert!(
+        built.is_some(),
+        "registry should build a device for CRAZYPART"
+    );
 
     // Bind through the custom path: the device is created (even with an empty
     // role map, the escape hatch still binds it so its update() runs).
     let lib = hauksbee_models::ModelLibrary::builtin();
     let bound = bind_board_with(&board, &lib, &reg);
-    assert_eq!(bound.behavioral.len(), 1, "the custom CRAZYPART should bind");
+    assert_eq!(
+        bound.behavioral.len(),
+        1,
+        "the custom CRAZYPART should bind"
+    );
     assert_eq!(bound.behavioral[0].state(), "runaway");
 }
