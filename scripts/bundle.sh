@@ -67,6 +67,10 @@ if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust or pass --no-build."
   log "Building release binaries"
   ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci )
+  log "Stripping release binaries"
+  for bin in hauksbee hauksbee-ci; do
+    strip "$SRC/$bin" 2>/dev/null || true
+  done
 fi
 for bin in hauksbee hauksbee-ci; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."

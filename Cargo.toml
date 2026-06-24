@@ -26,6 +26,14 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 num-complex = "0.4"
+# Temp-file handling for the web firmware drop zone: uploaded ELF/HEX bytes are
+# written to a NamedTempFile so the path-based MCU loader can read them.
+tempfile = "3"
+# Interactive terminal UI (the default human-facing surface for `hauksbee run`).
+# ratatui + crossterm are the battle-tested standard; we adapt them rather than
+# hand-rolling a terminal renderer.
+ratatui = "0.29"
+crossterm = "0.28"
 
 [profile.release]
 lto = "thin"
