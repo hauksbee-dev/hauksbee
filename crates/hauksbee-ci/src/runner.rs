@@ -130,15 +130,15 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     // Validate any component reference the spec names (overrides + max_current
     // assertions) against the board, so a typo'd ref is a loud error rather
     // than a silently-green protection check.
-    let known_refs: Vec<String> = base.components.iter().map(|c| c.reference.clone()).collect();
+    let known_refs: Vec<String> = base
+        .components
+        .iter()
+        .map(|c| c.reference.clone())
+        .collect();
     check_component_refs(spec, &known_refs)?;
 
     // Distinct after_ms thresholds (plus 0) that windows are bucketed by.
-    let mut thresholds: Vec<f64> = spec
-        .asserts
-        .iter()
-        .filter_map(|a| a.after_ms)
-        .collect();
+    let mut thresholds: Vec<f64> = spec.asserts.iter().filter_map(|a| a.after_ms).collect();
     thresholds.push(0.0);
     thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
     thresholds.dedup();
@@ -416,8 +416,11 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
             .iter_mut()
             .find(|c| c.reference == ov.reference)
             .ok_or_else(|| {
-                let refs: Vec<String> =
-                    base.components.iter().map(|c| c.reference.clone()).collect();
+                let refs: Vec<String> = base
+                    .components
+                    .iter()
+                    .map(|c| c.reference.clone())
+                    .collect();
                 let near = crate::error::near_matches(&ov.reference, &refs, 5);
                 let hint = if near.is_empty() {
                     String::new()
@@ -477,7 +480,27 @@ fn run_one(
     // monitorable for peak-current (resistors/diodes by name).
     let net_node: HashMap<String, NodeId> = bound.net_nodes.clone();
 
-    let firmware = spec.firmware_path();
+    // Resolve the firmware path to an absolute path before handing it to the
+    // engine: the Renode backend passes the path verbatim to Renode's
+    // `sysbus LoadELF @<path>`, and Renode resolves relative paths against
+    // its own working directory (a temp dir), not the repo root. Canonicalize
+    // here so ELF loading works regardless of where the CLI is invoked from.
+    let firmware = spec.firmware_path().map(|p| {
+        p.canonicalize().unwrap_or(p)
+    });
+
+    // Capture the QEMU backend strings before `bound` is consumed by
+    // `from_bound`. We use these below to warn when bus-slave peripherals or
+    // declarative sensors are attached to a QEMU-backed board: the QEMU I2C/SPI
+    // bridge is deferred, so those slaves will silently not respond.
+    // AVR (simavr) and Renode backends have a working bus bridge — no warning.
+    let qemu_backends: Vec<String> = bound
+        .mcus
+        .iter()
+        .filter(|m| m.backend.starts_with("qemu:"))
+        .map(|m| m.backend.clone())
+        .collect();
+
     let mut engine = HauksbeeEngine::from_bound(bound, firmware.as_deref(), "/ci")
         .map_err(|e| SpecError::Invalid(format!("building engine: {e}")))?;
 
@@ -487,6 +510,21 @@ fn run_one(
     // Attach this spec's peripherals (controls, bus slaves, sinks) and their
     // timeline events to the engine's scheduler.
     let vcd_targets = attach_peripherals(spec, &board, &net_node, engine.scheduler_mut())?;
+
+    // Attach declarative sensors (RegisterMapSensor) to their buses.
+    attach_sensors(spec, engine.scheduler_mut())?;
+
+    // Warn when bus-slave peripherals or declarative sensors are attached on a
+    // QEMU backend. The QEMU I2C/SPI bus bridge is not yet implemented, so
+    // these slaves are a no-op: the firmware's bus transactions will time-out or
+    // receive garbage, potentially causing failures that look unrelated to the
+    // missing sensor. Surface the mismatch now, before the co-sim starts, so the
+    // user doesn't spend 45 minutes chasing an unrelated assertion failure.
+    //
+    // AVR (simavr) and Renode backends have a working bus bridge — no warning.
+    for msg in qemu_bus_slave_warnings(spec, &qemu_backends) {
+        eprintln!("{msg}");
+    }
 
     // Attach this spec's transient scenarios: dynamic load profiles stamped as
     // current sinks on the parts' supply nets.
@@ -569,10 +607,7 @@ fn run_one(
             if t_ms + 1e-9 >= thr {
                 for (name, &v) in &frame.net_voltages {
                     let key = (name.clone(), thr.to_bits());
-                    windows
-                        .entry(key)
-                        .or_insert_with(NetWindow::new)
-                        .observe(v);
+                    windows.entry(key).or_insert_with(NetWindow::new).observe(v);
                 }
             }
         }
@@ -607,7 +642,9 @@ fn run_one(
             if leg.supply.protection_ever_tripped() {
                 protection_tripped.insert(leg.net_name.clone(), true);
             } else {
-                protection_tripped.entry(leg.net_name.clone()).or_insert(false);
+                protection_tripped
+                    .entry(leg.net_name.clone())
+                    .or_insert(false);
             }
         }
 
@@ -868,8 +905,11 @@ fn resolve_net(
             if let Some(comp) = board.components.iter().find(|c| &c.reference == reference) {
                 if let Some(p) = comp.pins.iter().find(|p| &p.number == pin) {
                     if let Some(net_id) = p.net {
-                        if let Some(net) =
-                            board.nets.iter().find(|n| n.id == net_id).map(|n| n.name.clone())
+                        if let Some(net) = board
+                            .nets
+                            .iter()
+                            .find(|n| n.id == net_id)
+                            .map(|n| n.name.clone())
                         {
                             return net_node.get(&net).copied();
                         }
@@ -892,10 +932,8 @@ fn attach_peripherals(
     use std::sync::{Arc, Mutex};
 
     use hauksbee_engine::peripherals::controls::{pwl as pwl_source, StimulusKind};
-    use hauksbee_engine::{
-        Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch, VcdSink,
-    };
     use hauksbee_engine::{Eeprom24c, I2cBus, Lm75, Mcp3008, Spi25Eeprom, SpiBus};
+    use hauksbee_engine::{Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch, VcdSink};
     use hauksbee_ir::{NodeId as N, SourceKind};
 
     let mut vcd_targets = Vec::new();
@@ -906,11 +944,10 @@ fn attach_peripherals(
             "pushbutton" => {
                 let net = resolve_net(p, board, net_node, None)
                     .ok_or_else(|| err("net not found".into()))?;
-                let to = p
-                    .to
-                    .as_ref()
-                    .and_then(|t| net_node.get(t).copied())
-                    .unwrap_or(N::GROUND);
+                let to =
+                    p.to.as_ref()
+                        .and_then(|t| net_node.get(t).copied())
+                        .unwrap_or(N::GROUND);
                 let b = Pushbutton::new(
                     sched.circuit_mut(),
                     &p.id,
@@ -923,11 +960,10 @@ fn attach_peripherals(
             "toggle" => {
                 let net = resolve_net(p, board, net_node, None)
                     .ok_or_else(|| err("net not found".into()))?;
-                let to = p
-                    .to
-                    .as_ref()
-                    .and_then(|t| net_node.get(t).copied())
-                    .unwrap_or(N::GROUND);
+                let to =
+                    p.to.as_ref()
+                        .and_then(|t| net_node.get(t).copied())
+                        .unwrap_or(N::GROUND);
                 let t = ToggleSwitch::new(
                     sched.circuit_mut(),
                     &p.id,
@@ -941,16 +977,14 @@ fn attach_peripherals(
                 let w = resolve_net(p, board, net_node, p.wiper.as_deref())
                     .or_else(|| resolve_net(p, board, net_node, None))
                     .ok_or_else(|| err("wiper net not found".into()))?;
-                let a = p
-                    .a
-                    .as_ref()
-                    .and_then(|n| net_node.get(n).copied())
-                    .ok_or_else(|| err("pot terminal `a` net not found".into()))?;
-                let b = p
-                    .b
-                    .as_ref()
-                    .and_then(|n| net_node.get(n).copied())
-                    .unwrap_or(N::GROUND);
+                let a =
+                    p.a.as_ref()
+                        .and_then(|n| net_node.get(n).copied())
+                        .ok_or_else(|| err("pot terminal `a` net not found".into()))?;
+                let b =
+                    p.b.as_ref()
+                        .and_then(|n| net_node.get(n).copied())
+                        .unwrap_or(N::GROUND);
                 let pot = Potentiometer::new(
                     sched.circuit_mut(),
                     &p.id,
@@ -1061,6 +1095,110 @@ fn attach_peripherals(
     Ok(vcd_targets)
 }
 
+/// Parse and attach every `[[sensor]]` entry from the spec to the scheduler's
+/// bus system. Each sensor is parsed via `RegisterMapSensor::from_toml`, has
+/// its declared inputs overridden per the spec, then is attached to an
+/// `I2cBus` (for `bus = "i2c"`) or a `SpiBus` (for `bus = "spi"`).
+///
+/// The resulting buses are registered with the scheduler exactly the same way
+/// the `i2c_lm75` / `spi_mcp3008` peripheral kinds do it in `attach_peripherals`,
+/// and the declarative co-sim tests (`declarative_sensor_cosim.rs`) wire it.
+/// The Renode / simavr I2C+SPI bridge picks them up automatically without any
+/// further changes.
+fn attach_sensors(
+    spec: &Spec,
+    sched: &mut hauksbee_engine::scheduler::Scheduler,
+) -> Result<(), SpecError> {
+    use std::sync::{Arc, Mutex};
+
+    use hauksbee_engine::{I2cBus, RegisterMapSensor, SpiBus};
+    use hauksbee_models::sensor_spec::Bus;
+
+    for sa in &spec.sensors {
+        let toml_src = sa.toml_source(&spec.base_dir)?;
+
+        let mut sensor = RegisterMapSensor::from_toml(&toml_src).map_err(|e| {
+            SpecError::Invalid(format!(
+                "sensor '{}': failed to parse sensor spec: {e}",
+                sa.id
+            ))
+        })?;
+
+        // Apply per-run input overrides.
+        for (name, &value) in &sa.inputs {
+            sensor.set_input(name, value);
+        }
+
+        // Attach to the correct bus type (I2C or SPI) the same way the
+        // hand-coded slaves are attached in `attach_peripherals`.
+        match sensor.bus() {
+            Bus::I2c => {
+                let bus = I2cBus::new(&sa.id).with_slave(Box::new(sensor));
+                sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
+            }
+            Bus::Spi => {
+                let arc = Arc::new(Mutex::new(SpiBus::new(&sa.id, Box::new(sensor))));
+                if let Some(controller) = &sa.controller {
+                    sched.attach_spi_bus_on(controller, arc);
+                } else {
+                    sched.attach_spi_bus(arc);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Return warning strings for any bus-slave peripheral or declarative sensor
+/// that was attached to a QEMU-backed board.
+///
+/// The QEMU I2C/SPI bus bridge is deferred (not yet implemented): these slaves
+/// are silently a no-op on `qemu:*` backends. The warnings are surfaced before
+/// the co-sim starts so users understand why bus-dependent assertions fail.
+///
+/// AVR (simavr) and Renode backends have a working bus bridge and produce no
+/// warnings here.
+///
+/// Extracted into its own function so the logic is unit-testable without
+/// capturing `eprintln!` output.
+pub(crate) fn qemu_bus_slave_warnings(spec: &Spec, qemu_backends: &[String]) -> Vec<String> {
+    if qemu_backends.is_empty() {
+        return Vec::new();
+    }
+
+    const BUS_SLAVE_KINDS: &[&str] = &[
+        "i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008",
+    ];
+    let backend_str = qemu_backends.join(", ");
+    let mut warnings = Vec::new();
+
+    for p in &spec.peripherals {
+        if BUS_SLAVE_KINDS.contains(&p.kind.as_str()) {
+            let bus_kind = if p.kind.starts_with("i2c") { "I2C" } else { "SPI" };
+            warnings.push(format!(
+                "WARNING: peripheral '{}' ({} {}) is a NO-OP on backend {} \
+                 — I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
+                 Renode backends only. The peripheral will not respond; firmware \
+                 that depends on it may fail for that reason.",
+                p.id, bus_kind, p.kind, backend_str
+            ));
+        }
+    }
+
+    for sa in &spec.sensors {
+        warnings.push(format!(
+            "WARNING: sensor '{}' (declarative bus sensor) is a NO-OP on backend {} \
+             — I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
+             Renode backends only. The sensor will not respond; firmware \
+             that depends on it may fail for that reason.",
+            sa.id, backend_str
+        ));
+    }
+
+    warnings
+}
+
 /// Snapshot every peripheral's end-of-run state and dump VCD files.
 fn snapshot_peripherals(
     spec: &Spec,
@@ -1127,7 +1265,9 @@ fn update_peak_currents(
     let v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
     for dev in &sched.circuit.devices {
         let (name, i) = match dev {
-            Device::Resistor { name, a, b, ohms, .. } => {
+            Device::Resistor {
+                name, a, b, ohms, ..
+            } => {
                 let i = if *ohms > 0.0 {
                     ((v(*a) - v(*b)) / *ohms).abs()
                 } else {
@@ -1265,9 +1405,9 @@ fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
                 "lifepo4" | "lfp" => Chemistry::LiFePO4,
                 other => {
                     return Err(SpecError::Invalid(format!(
-                        "supply on '{}': unknown chemistry '{}' (expected liion|alkaline|nimh|lifepo4)",
-                        s.net, other
-                    )))
+                    "supply on '{}': unknown chemistry '{}' (expected liion|alkaline|nimh|lifepo4)",
+                    s.net, other
+                )))
                 }
             },
             cells: s.cells.unwrap_or(1),
@@ -1276,11 +1416,10 @@ fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
             r_internal_ohms: s.r_internal_ohms.unwrap_or(0.1),
             protection: match (s.protection_trip_a, s.protection_delay_ms) {
                 (Some(trip_a), delay_ms) => {
-                    let mut p =
-                        hauksbee_engine::power_supply::BatteryProtection::new(
-                            trip_a,
-                            delay_ms.unwrap_or(0.0) / 1000.0,
-                        );
+                    let mut p = hauksbee_engine::power_supply::BatteryProtection::new(
+                        trip_a,
+                        delay_ms.unwrap_or(0.0) / 1000.0,
+                    );
                     if let Some(reset) = s.protection_reset_a {
                         p.reset_a = reset;
                     }
@@ -1368,7 +1507,8 @@ mod tests {
         assert!(!references_sheetfile(near, "power.kicad_sch"));
 
         // Multiple Sheetfile entries: any one matching is enough.
-        let many = r#"(property "Sheetfile" "a.kicad_sch") ... (property "Sheetfile" "b.kicad_sch")"#;
+        let many =
+            r#"(property "Sheetfile" "a.kicad_sch") ... (property "Sheetfile" "b.kicad_sch")"#;
         assert!(references_sheetfile(many, "b.kicad_sch"));
         assert!(!references_sheetfile(many, "c.kicad_sch"));
     }
@@ -1378,6 +1518,202 @@ mod tests {
         assert_eq!(
             normalize_path(Path::new("a/./b/../c")),
             PathBuf::from("a/c")
+        );
+    }
+
+    // ── qemu_bus_slave_warnings unit tests ───────────────────────────────────
+
+    /// Helper: write a minimal board + spec to temp with a unique name, load
+    /// and return the Spec. Tests run in parallel so each gets its own file.
+    fn load_spec_str(test_name: &str, spec_toml: &str) -> Spec {
+        let dir = std::env::temp_dir().join("hauksbee_ci_warn_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Minimal board: a single pull-down resistor. No MCU footprint here —
+        // `qemu_bus_slave_warnings` receives the backend list as an argument
+        // rather than discovering it from the board, so the board content does
+        // not need an MCU part.
+        let board_content = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 100 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 2 "+3V3"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+)
+"#;
+        // Give each test its own board path so parallel runs don't collide.
+        let board_path = dir.join(format!("{test_name}_board.kicad_pcb"));
+        std::fs::write(&board_path, board_content).unwrap();
+
+        // Build the spec TOML: board path first (required field), then the
+        // caller-supplied body. Use a unique file name per test.
+        let full_spec = format!(
+            "board = \"{}\"\n{}",
+            board_path.display(),
+            spec_toml
+        );
+        let spec_path = dir.join(format!("{test_name}.toml"));
+        std::fs::write(&spec_path, &full_spec).unwrap();
+
+        Spec::load(&spec_path).expect("spec should load")
+    }
+
+    // Minimal assert block required by Spec::validate (a spec with no asserts
+    // is rejected as vacuously passing). Append this to every test spec body.
+    const MINIMAL_ASSERT: &str = r#"
+[[assert]]
+kind = "voltage"
+net = "+3V3"
+min = 3.0
+"#;
+
+    /// No QEMU backends -> no warnings regardless of peripherals.
+    #[test]
+    fn no_qemu_backends_produces_no_warnings() {
+        let body = format!("duration_ms = 10\n{MINIMAL_ASSERT}");
+        let spec = load_spec_str("no_qemu_warn", &body);
+        let warnings = qemu_bus_slave_warnings(&spec, &[]);
+        assert!(
+            warnings.is_empty(),
+            "no qemu backends -> no warnings, got: {warnings:?}"
+        );
+    }
+
+    /// QEMU backend + i2c_lm75 peripheral -> warning produced naming both.
+    #[test]
+    fn qemu_backend_with_i2c_lm75_warns() {
+        let body = format!(r#"duration_ms = 10
+
+[[peripheral]]
+id = "BME280"
+type = "i2c_lm75"
+address = 0x76
+{MINIMAL_ASSERT}"#);
+        let spec = load_spec_str("i2c_lm75_qemu", &body);
+        let backends = vec!["qemu:esp32c3".to_string()];
+        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        assert_eq!(warnings.len(), 1, "exactly one warning for one bus slave");
+        let w = &warnings[0];
+        assert!(w.contains("BME280"), "warning names the peripheral id: {w}");
+        assert!(w.contains("i2c_lm75"), "warning names the kind: {w}");
+        assert!(w.contains("qemu:esp32c3"), "warning names the backend: {w}");
+        assert!(w.contains("NO-OP"), "warning says NO-OP: {w}");
+        assert!(w.contains("I2C"), "warning names bus type: {w}");
+    }
+
+    /// QEMU backend + spi_mcp3008 peripheral -> warning produced.
+    #[test]
+    fn qemu_backend_with_spi_mcp3008_warns() {
+        let body = format!(r#"duration_ms = 10
+
+[[peripheral]]
+id = "ADC1"
+type = "spi_mcp3008"
+vref = 3.3
+{MINIMAL_ASSERT}"#);
+        let spec = load_spec_str("spi_mcp3008_qemu", &body);
+        let backends = vec!["qemu:esp32".to_string()];
+        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        assert_eq!(warnings.len(), 1);
+        let w = &warnings[0];
+        assert!(w.contains("ADC1"), "names peripheral: {w}");
+        assert!(w.contains("spi_mcp3008"), "names kind: {w}");
+        assert!(w.contains("SPI"), "names bus type: {w}");
+        assert!(w.contains("qemu:esp32"), "names backend: {w}");
+    }
+
+    /// QEMU backend + declarative [[sensor]] -> warning produced.
+    #[test]
+    fn qemu_backend_with_declarative_sensor_warns() {
+        let body = format!(r#"duration_ms = 10
+
+[[sensor]]
+id = "U2_bme280"
+spec = """
+[sensor]
+name = "BME280_stub"
+bus  = "i2c"
+i2c_address = 0x76
+"""
+{MINIMAL_ASSERT}"#);
+        let spec = load_spec_str("sensor_qemu", &body);
+        let backends = vec!["qemu:esp32c3".to_string()];
+        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        assert_eq!(warnings.len(), 1, "one warning for the declarative sensor");
+        let w = &warnings[0];
+        assert!(w.contains("U2_bme280"), "names sensor id: {w}");
+        assert!(w.contains("qemu:esp32c3"), "names backend: {w}");
+        assert!(w.contains("NO-OP"), "says NO-OP: {w}");
+    }
+
+    /// Non-bus-slave peripheral kinds (pushbutton, stimulus, vcd_sink) on a
+    /// QEMU backend must NOT produce warnings.
+    #[test]
+    fn qemu_backend_non_bus_slave_no_warning() {
+        let body = format!(r#"duration_ms = 10
+
+[[peripheral]]
+id = "BTN1"
+type = "pushbutton"
+net  = "+3V3"
+{MINIMAL_ASSERT}"#);
+        let spec = load_spec_str("pushbutton_qemu", &body);
+        let backends = vec!["qemu:esp32c3".to_string()];
+        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        assert!(
+            warnings.is_empty(),
+            "pushbutton on qemu should not warn: {warnings:?}"
+        );
+    }
+
+    /// Multiple bus-slave items -> one warning per item.
+    #[test]
+    fn qemu_backend_multiple_slaves_warn_per_item() {
+        let body = format!(r#"duration_ms = 10
+
+[[peripheral]]
+id = "EEPROM1"
+type = "i2c_eeprom"
+address = 0x50
+
+[[peripheral]]
+id = "ADC1"
+type = "spi_mcp3008"
+vref = 3.3
+{MINIMAL_ASSERT}"#);
+        let spec = load_spec_str("multi_slave_qemu", &body);
+        let backends = vec!["qemu:esp32s3".to_string()];
+        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        assert_eq!(warnings.len(), 2, "one warning per bus slave, got: {warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("EEPROM1")));
+        assert!(warnings.iter().any(|w| w.contains("ADC1")));
+    }
+
+    /// Renode backend (not QEMU) with a bus slave -> NO warning.
+    /// `qemu_bus_slave_warnings` takes the backends list as a parameter;
+    /// an empty list means no QEMU backends (as would be the case for Renode
+    /// or AVR), so no warnings should fire.
+    #[test]
+    fn renode_backend_no_warning() {
+        let body = format!(r#"duration_ms = 10
+
+[[peripheral]]
+id = "TEMP_SENSOR"
+type = "i2c_lm75"
+address = 0x48
+{MINIMAL_ASSERT}"#);
+        let spec = load_spec_str("renode_no_warn", &body);
+        // Empty list = no QEMU backends (Renode/AVR boards).
+        let backends: Vec<String> = vec![];
+        let warnings = qemu_bus_slave_warnings(&spec, &backends);
+        assert!(
+            warnings.is_empty(),
+            "non-qemu backends must not warn: {warnings:?}"
         );
     }
 }

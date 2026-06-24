@@ -7,7 +7,10 @@ use std::fmt;
 #[derive(Debug)]
 pub enum SpecError {
     Io(String),
-    Toml { file: String, message: String },
+    Toml {
+        file: String,
+        message: String,
+    },
     Invalid(String),
     /// One or more referenced nets do not exist on the board. Each entry is
     /// (net, context, near-matches).
@@ -52,7 +55,11 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
             // Substring containment is a strong signal; give it a big bonus.
             let contains = n_lower.contains(&t_lower) || t_lower.contains(&n_lower);
             let dist = levenshtein(&t_lower, &n_lower);
-            let score = if contains { dist.saturating_sub(3) } else { dist };
+            let score = if contains {
+                dist.saturating_sub(3)
+            } else {
+                dist
+            };
             (score, name)
         })
         .collect();

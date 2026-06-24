@@ -1,0 +1,58 @@
+# hauksbee-ci example: LM75 declarative sensor — STM32 I2C thermostat cold run.
+#
+# At 20 C the firmware reads < 30 C from the LM75 and must NOT drive FLAG HIGH.
+# The 4k7 pull-down on FLAG keeps the net near 0 V when the GPIO is not driven.
+#
+#   ./target/release/hauksbee-ci run crates/hauksbee-ci/examples/lm75_thermostat_cold.toml
+
+name       = "STM32 I2C thermostat — declarative LM75 at 20 C (FLAG LOW)"
+board      = "../../../testdata/boards/stm32_i2c_thermostat.kicad_pcb"
+firmware   = "../../../testdata/firmware/stm32_i2c_thermostat/thermostat.elf"
+duration_ms = 500
+frame_ms    = 5.0
+
+[[supply]]
+net   = "+3V3"
+kind  = "ideal"
+volts = 3.3
+
+# ── Declarative LM75 sensor at 20 C ──────────────────────────────────────────
+[[sensor]]
+id = "U2_lm75"
+spec = """
+[sensor]
+name        = "LM75_declarative"
+bus         = "i2c"
+i2c_address = 0x48
+
+[[sensor.input]]
+name    = "temperature_c"
+default = 25.0
+
+[[sensor.register]]
+addr     = 0x00
+bytes    = 2
+encoding = "q7.1_be"
+expr     = "temperature_c"
+
+[[sensor.register]]
+addr  = 0x01
+const = [0x00]
+
+[sensor.protocol]
+style = "i2c_pointer"
+"""
+
+[sensor.inputs]
+temperature_c = 20.0
+
+# ── Assertion: FLAG must stay LOW (firmware reads 20 C < 30 C threshold) ─────
+#
+# At 20 C the firmware never drives FLAG HIGH: the 4k7 pull-down holds it near
+# 0 V for the entire run.  We sample after 100 ms (firmware fully booted) and
+# require the net to remain below 1.0 V.
+[[assert]]
+kind     = "voltage"
+net      = "FLAG"
+max      = 1.0
+after_ms = 100.0

@@ -25,10 +25,7 @@ fn empty_assertions_is_rejected() {
         "name = \"x\"\nboard = \"b.kicad_pcb\"\nduration_ms = 1\n",
     );
     let err = Spec::load(&p).unwrap_err();
-    assert!(
-        err.to_string().contains("no [[assert]]"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("no [[assert]]"), "got: {err}");
 }
 
 #[test]
@@ -38,7 +35,10 @@ fn unknown_assertion_kind_is_rejected() {
         "board=\"b\"\nduration_ms=1\n[[assert]]\nkind=\"smoke\"\n",
     );
     let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("unknown assertion kind"), "got: {err}");
+    assert!(
+        err.to_string().contains("unknown assertion kind"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -59,13 +59,16 @@ fn unknown_field_is_rejected() {
         "board=\"b\"\ndurations_ms=1\n[[assert]]\nkind=\"no_faults\"\n",
     );
     let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("durations_ms") || err.to_string().contains("unknown"), "got: {err}");
+    assert!(
+        err.to_string().contains("durations_ms") || err.to_string().contains("unknown"),
+        "got: {err}"
+    );
 }
 
 #[test]
 fn unknown_net_lists_near_matches() {
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/tarski_brownout_cell.net");
+    let board =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
     let p = write_tmp(
         "typonet.toml",
         &format!(
@@ -76,13 +79,16 @@ fn unknown_net_lists_near_matches() {
     let err = run(&RunConfig { spec: p }).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not found"), "got: {msg}");
-    assert!(msg.contains("ANALOG_VDD"), "should suggest the real net: {msg}");
+    assert!(
+        msg.contains("ANALOG_VDD"),
+        "should suggest the real net: {msg}"
+    );
 }
 
 #[test]
 fn typoed_max_current_ref_is_rejected_not_silently_green() {
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/tarski_brownout_cell.net");
+    let board =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
     let p = write_tmp(
         "typoref.toml",
         &format!(
@@ -93,7 +99,10 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
     let err = run(&RunConfig { spec: p }).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("unknown component"), "got: {msg}");
-    assert!(msg.contains("R_Shunt15301"), "should suggest the real ref: {msg}");
+    assert!(
+        msg.contains("R_Shunt15301"),
+        "should suggest the real ref: {msg}"
+    );
 }
 
 #[test]
@@ -129,7 +138,10 @@ fn github_annotations_emit_error_on_failure() {
     })
     .unwrap();
     let ann = result.render_github_annotations();
-    assert!(ann.contains("::error"), "a failing run must emit ::error: {ann}");
+    assert!(
+        ann.contains("::error"),
+        "a failing run must emit ::error: {ann}"
+    );
     // Percent signs in the detail must be escaped to %25.
     assert!(!ann.lines().any(|l| l.contains(" %") && !l.contains("%25")));
 }
@@ -152,8 +164,8 @@ fn demo_firmware_blink_uart_and_rail_all_pass() {
 
 #[test]
 fn boot_coverage_requires_net_min_and_deadline() {
-    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/tarski_brownout_cell.net");
+    let board =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");
     // Missing deadline_ms.
     let p = write_tmp(
         "bootcov_bad.toml",

@@ -111,17 +111,22 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
         ok &= dip_ms <= for_ms + 1e-6;
         parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
     }
-    if let (Some(d), Some(r), Some(within_ms)) =
-        (a.dip_below, a.recover_to, a.recover_within_ms)
-    {
+    if let (Some(d), Some(r), Some(within_ms)) = (a.dip_below, a.recover_to, a.recover_within_ms) {
         let rec_ms = win.recovery_s(d, r) * 1000.0;
         ok &= rec_ms <= within_ms + 1e-6;
-        parts.push(format!("recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"));
+        parts.push(format!(
+            "recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"
+        ));
     }
 
     (
         ok,
-        format!("{net} window: {} [min={:.3}V max={:.3}V]", parts.join(", "), win.min_v, win.max_v),
+        format!(
+            "{net} window: {} [min={:.3}V max={:.3}V]",
+            parts.join(", "),
+            win.min_v,
+            win.max_v
+        ),
     )
 }
 
@@ -230,16 +235,22 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 
     // Byte-contains check (EEPROM contents).
     if let Some(spec_bytes) = &a.bytes {
-        let needle = parse_hex_bytes(spec_bytes)
-            .unwrap_or_else(|| spec_bytes.as_bytes().to_vec());
+        let needle = parse_hex_bytes(spec_bytes).unwrap_or_else(|| spec_bytes.as_bytes().to_vec());
         let found = !needle.is_empty()
-            && snap.bytes.windows(needle.len()).any(|w| w == needle.as_slice());
+            && snap
+                .bytes
+                .windows(needle.len())
+                .any(|w| w == needle.as_slice());
         let ascii = String::from_utf8_lossy(&needle);
         return (
             found,
             format!(
                 "{id} memory {} bytes {spec_bytes} ({ascii:?})",
-                if found { "contains" } else { "does NOT contain" }
+                if found {
+                    "contains"
+                } else {
+                    "does NOT contain"
+                }
             ),
         );
     }
@@ -279,10 +290,7 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         );
     };
     if win.samples == 0 {
-        return (
-            false,
-            format!("net '{net}' had no samples after {thr}ms"),
-        );
+        return (false, format!("net '{net}' had no samples after {thr}ms"));
     }
     // For a >= bound we care about the worst (minimum) the rail dipped to in
     // the window; for a <= bound, the worst (maximum) it rose to.
@@ -305,7 +313,11 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     };
     (
         ok,
-        format!("{net}{when}: {} [settled {:.3}V]", parts.join(", "), win.last_v),
+        format!(
+            "{net}{when}: {} [settled {:.3}V]",
+            parts.join(", "),
+            win.last_v
+        ),
     )
 }
 
@@ -322,7 +334,10 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         let ok = text.contains(needle);
         return (
             ok,
-            format!("UART={preview:?} {} {needle:?}", if ok { "contains" } else { "does NOT contain" }),
+            format!(
+                "UART={preview:?} {} {needle:?}",
+                if ok { "contains" } else { "does NOT contain" }
+            ),
         );
     }
     if let Some(re) = &a.matches {
@@ -331,7 +346,10 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 let ok = rx.is_match(&text);
                 (
                     ok,
-                    format!("UART={preview:?} {} /{re}/", if ok { "matches" } else { "does NOT match" }),
+                    format!(
+                        "UART={preview:?} {} /{re}/",
+                        if ok { "matches" } else { "does NOT match" }
+                    ),
                 )
             }
             Err(e) => (false, format!("bad regex /{re}/: {e}")),
@@ -347,10 +365,7 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 
     if let Some(min) = a.min_toggles {
         let ok = toggles >= min;
-        return (
-            ok,
-            format!("{net}: {toggles} toggles (need >= {min})"),
-        );
+        return (ok, format!("{net}: {toggles} toggles (need >= {min})"));
     }
     if let Some(freq) = a.freq_hz {
         // A full square-wave period is two toggles, so frequency = toggles /
@@ -384,7 +399,10 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         return (false, "no AC analysis ran (missing [ac] block)".into());
     };
     let Some(m) = ac.margins.get(&net) else {
-        return (false, format!("net '{net}' produced no loop-stability margins"));
+        return (
+            false,
+            format!("net '{net}' produced no loop-stability margins"),
+        );
     };
     let Some(pm) = m.phase_margin_deg else {
         return (
@@ -408,7 +426,10 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     }
     (
         ok,
-        format!("loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})", parts.join(", ")),
+        format!(
+            "loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})",
+            parts.join(", ")
+        ),
     )
 }
 
@@ -420,7 +441,10 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         return (false, "no AC analysis ran (missing [ac] block)".into());
     };
     let Some(bode) = ac.bode.get(&net) else {
-        return (false, format!("net '{net}' was not sampled by the AC sweep"));
+        return (
+            false,
+            format!("net '{net}' was not sampled by the AC sweep"),
+        );
     };
     if bode.is_empty() {
         return (false, format!("net '{net}' has no AC data"));
@@ -435,7 +459,11 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         let min_db = bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
         let max_db = bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
         // Report whichever extreme the bound cares about (default min).
-        let v = if a.max.is_some() && a.min.is_none() { max_db } else { min_db };
+        let v = if a.max.is_some() && a.min.is_none() {
+            max_db
+        } else {
+            min_db
+        };
         (v, "over band".to_string())
     };
 
@@ -507,10 +535,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     match out.peak_current.get(&reference) {
         Some(&peak) => {
             let ok = peak <= limit + 1e-9;
-            (
-                ok,
-                format!("I({reference}) peak {peak:.4}A (<= {limit}A)"),
-            )
+            (ok, format!("I({reference}) peak {peak:.4}A (<= {limit}A)"))
         }
         None => (
             // No current data: only resistors/diodes are tracked. Treat absence

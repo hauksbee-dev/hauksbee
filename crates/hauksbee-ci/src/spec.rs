@@ -43,6 +43,48 @@ use serde::Deserialize;
 
 use crate::error::{near_matches, SpecError};
 
+// ── Declarative sensor ────────────────────────────────────────────────────────
+
+/// A declarative I2C or SPI sensor attached to the co-sim for one run.
+///
+/// The sensor is described by a `[sensor]` TOML spec (parsed by
+/// `RegisterMapSensor::from_toml`). Exactly one of `spec` (inline string) or
+/// `spec_file` (path relative to the CI spec file) must be present.
+///
+/// ```toml
+/// [[sensor]]
+/// id          = "U2_temp"
+/// spec_file   = "sensors/lm75.toml"      # or: spec = """ ... """
+///
+/// [sensor.inputs]
+/// temperature_c = 40.0                   # override the default for this run
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SensorAttach {
+    /// Stable identifier (used in error messages and future state assertions).
+    pub id: String,
+    /// Inline sensor spec string (the `[sensor]` TOML block verbatim).
+    #[serde(default)]
+    pub spec: Option<String>,
+    /// Path to a `.toml` file containing the `[sensor]` block, resolved
+    /// relative to the CI spec file's directory.
+    #[serde(default)]
+    pub spec_file: Option<String>,
+    /// Input overrides: map from input name to value. Applied after parsing,
+    /// before the run starts. Unknown names are silently ignored (they may be
+    /// valid for a different sensor or simply pre-set defaults).
+    #[serde(default)]
+    pub inputs: HashMap<String, f64>,
+    /// Optional SPI controller name (e.g. `"spi2"`). When set, the sensor is
+    /// attached to that specific controller via `attach_spi_bus_on` so it only
+    /// receives traffic from that bus. When absent (the default), `attach_spi_bus`
+    /// is used, which routes to the MCU's first/only SPI controller.
+    /// Only meaningful for SPI sensors (`bus = "spi"` in the sensor spec).
+    #[serde(default)]
+    pub controller: Option<String>,
+}
+
 /// A fully-parsed, validated spec.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +159,11 @@ pub struct Spec {
     /// The assertions, all of which must pass.
     #[serde(default, rename = "assert")]
     pub asserts: Vec<Assertion>,
+    /// Declarative sensors attached to the co-sim for this run. Each entry
+    /// describes one I2C or SPI sensor (via an inline spec string or a file
+    /// path) plus optional per-run input overrides.
+    #[serde(default, rename = "sensor")]
+    pub sensors: Vec<SensorAttach>,
 
     /// Directory the spec was loaded from (for resolving relative paths). Not
     /// part of the TOML; filled in by [`Spec::load`].
@@ -213,9 +260,7 @@ fn default_sweep() -> String {
 impl AcConfig {
     fn validate(&self) -> Result<(), SpecError> {
         if self.fstart <= 0.0 || self.fstop <= self.fstart {
-            return Err(SpecError::Invalid(
-                "[ac] needs 0 < fstart < fstop".into(),
-            ));
+            return Err(SpecError::Invalid("[ac] needs 0 < fstart < fstop".into()));
         }
         if self.points == 0 {
             return Err(SpecError::Invalid("[ac] points must be >= 1".into()));
@@ -385,6 +430,48 @@ impl PeripheralSpec {
             )));
         }
         Ok(())
+    }
+}
+
+impl SensorAttach {
+    /// Structural validation: one of `spec` / `spec_file` must be present.
+    /// Does NOT parse the sensor TOML — that happens in the runner so parse
+    /// errors are attributed to the sensor id and include context.
+    pub(crate) fn validate(&self) -> Result<(), SpecError> {
+        match (&self.spec, &self.spec_file) {
+            (None, None) => Err(SpecError::Invalid(format!(
+                "sensor '{}': needs either `spec = \"...\"` (inline) or \
+                 `spec_file = \"path/to/sensor.toml\"`",
+                self.id
+            ))),
+            (Some(_), Some(_)) => Err(SpecError::Invalid(format!(
+                "sensor '{}': `spec` and `spec_file` are mutually exclusive; \
+                 provide only one",
+                self.id
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Resolve the sensor TOML source against the spec's base directory and
+    /// return the raw string to hand to `RegisterMapSensor::from_toml`.
+    pub fn toml_source(&self, base_dir: &Path) -> Result<String, SpecError> {
+        if let Some(inline) = &self.spec {
+            return Ok(inline.clone());
+        }
+        let rel = self.spec_file.as_deref().expect("validated: one must be set");
+        let path = if Path::new(rel).is_absolute() {
+            PathBuf::from(rel)
+        } else {
+            base_dir.join(rel)
+        };
+        std::fs::read_to_string(&path).map_err(|e| {
+            SpecError::Io(format!(
+                "sensor '{}': reading spec_file '{}': {e}",
+                self.id,
+                path.display()
+            ))
+        })
     }
 }
 
@@ -584,6 +671,9 @@ impl Spec {
         for a in &self.asserts {
             a.validate()?;
         }
+        for s in &self.sensors {
+            s.validate()?;
+        }
         if let Some(ac) = &self.ac {
             ac.validate()?;
         }
@@ -688,9 +778,7 @@ impl Assertion {
         match self.kind.as_str() {
             "voltage" => {
                 if self.net.is_none() {
-                    return Err(SpecError::Invalid(
-                        "voltage assertion needs a `net`".into(),
-                    ));
+                    return Err(SpecError::Invalid("voltage assertion needs a `net`".into()));
                 }
                 if self.min.is_none() && self.max.is_none() {
                     return Err(SpecError::Invalid(format!(
@@ -754,8 +842,8 @@ impl Assertion {
                         "peripheral assertion needs an `id`".into(),
                     ));
                 }
-                let has_check =
-                    self.bytes.is_some() || (self.field.is_some() && (self.min.is_some() || self.max.is_some()));
+                let has_check = self.bytes.is_some()
+                    || (self.field.is_some() && (self.min.is_some() || self.max.is_some()));
                 if !has_check {
                     return Err(SpecError::Invalid(format!(
                         "peripheral assertion on '{}' needs `bytes` or a `field` with `min`/`max`",
@@ -783,7 +871,8 @@ impl Assertion {
                     && (self.dip_below.is_none() || self.recover_to.is_none())
                 {
                     return Err(SpecError::Invalid(
-                        "rail_window `recover_within_ms` needs both `dip_below` and `recover_to`".into(),
+                        "rail_window `recover_within_ms` needs both `dip_below` and `recover_to`"
+                            .into(),
                     ));
                 }
             }
@@ -814,9 +903,7 @@ impl Assertion {
             }
             "ac_gain" => {
                 if self.net.is_none() {
-                    return Err(SpecError::Invalid(
-                        "ac_gain assertion needs a `net`".into(),
-                    ));
+                    return Err(SpecError::Invalid("ac_gain assertion needs a `net`".into()));
                 }
                 if self.min.is_none() && self.max.is_none() {
                     return Err(SpecError::Invalid(format!(

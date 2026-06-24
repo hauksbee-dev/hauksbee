@@ -38,7 +38,10 @@ fn ci_button_press_drives_a_net() {
     // Specifically: the toggle assertion must be present and pass (proves the
     // net moved in response to the timed button).
     assert!(
-        result.results.iter().any(|r| r.kind == "toggle" && r.passed),
+        result
+            .results
+            .iter()
+            .any(|r| r.kind == "toggle" && r.passed),
         "the BTN toggle assertion must pass"
     );
 }
@@ -125,7 +128,10 @@ max = 25
 
     // The VCD file must exist and be well-formed.
     let vcd = std::fs::read_to_string(&vcd_out).expect("VCD written");
-    assert!(vcd.contains("$timescale 1ps"), "VCD has a timescale:\n{vcd}");
+    assert!(
+        vcd.contains("$timescale 1ps"),
+        "VCD has a timescale:\n{vcd}"
+    );
     assert!(vcd.contains("$var wire 1"), "VCD declares the CLK wire");
     assert!(vcd.contains("$enddefinitions"), "VCD header is complete");
     // Count value-change lines (e.g. "1!" / "0!").
