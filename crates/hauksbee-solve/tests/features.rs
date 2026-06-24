@@ -21,12 +21,47 @@ fn partitioning_off_is_deterministic_reference() {
         let mid = c.node("mid");
         let out = c.node("out");
         let leg = c.node("leg");
-        c.add(Device::Vsource { name: "V1".into(), p: vin, n: NodeId::GROUND, kind: SourceKind::Dc(1.0) });
-        c.add(Device::Resistor { name: "R1".into(), a: vin, b: mid, ohms: 50.0, tc1: None });
-        c.add(Device::Inductor { name: "L1".into(), a: mid, b: out, henries: 1e-3, ic: Some(0.0) });
-        c.add(Device::Capacitor { name: "C1".into(), a: out, b: NodeId::GROUND, farads: 1e-7, ic: Some(0.0) });
-        c.add(Device::Resistor { name: "R2".into(), a: vin, b: leg, ohms: 1e3, tc1: None });
-        c.add(Device::Capacitor { name: "C2".into(), a: leg, b: NodeId::GROUND, farads: 1e-9, ic: Some(0.0) });
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: mid,
+            ohms: 50.0,
+            tc1: None,
+        });
+        c.add(Device::Inductor {
+            name: "L1".into(),
+            a: mid,
+            b: out,
+            henries: 1e-3,
+            ic: Some(0.0),
+        });
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: out,
+            b: NodeId::GROUND,
+            farads: 1e-7,
+            ic: Some(0.0),
+        });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: vin,
+            b: leg,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "C2".into(),
+            a: leg,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: Some(0.0),
+        });
         c
     };
     let c = build();
@@ -45,7 +80,10 @@ fn partitioning_off_is_deterministic_reference() {
     assert_eq!(a.time, b.time);
 
     // The partitioned Auto path on the same circuit must agree within tolerance.
-    let opts_auto = SolverOptions { partitioning: Partitioning::Auto, ..opts };
+    let opts_auto = SolverOptions {
+        partitioning: Partitioning::Auto,
+        ..opts
+    };
     let auto = Transient::new(opts_auto).run(&c, 5e-4).unwrap();
     let wauto = auto.node(&c, "out").unwrap();
     let mut max_abs = 0.0f64;
@@ -171,29 +209,47 @@ fn adaptive_takes_fewer_steps_than_fixed() {
 fn temperature_toggle_changes_diode_drop() {
     // A diode's forward drop falls ~2 mV/C as IS(T) rises. With the temperature
     // effect off, the drop should be the 27 C value regardless of temp_c.
-    let net = "d\nV1 a 0 DC 0.7\nR1 a n 100\nD1 n 0 DMOD\n.model DMOD D(IS=1e-14 N=1)\n.temp 100\n.end\n";
+    let net =
+        "d\nV1 a 0 DC 0.7\nR1 a n 100\nD1 n 0 DMOD\n.model DMOD D(IS=1e-14 N=1)\n.temp 100\n.end\n";
     let mut circuit = SpiceLoader::load(net).unwrap();
     circuit.temp_c = 100.0;
 
     let hot = {
         let opts = SolverOptions {
             temperature_c: 100.0,
-            effects: DeviceEffects { temperature: true, ..DeviceEffects::default() },
+            effects: DeviceEffects {
+                temperature: true,
+                ..DeviceEffects::default()
+            },
             ..SolverOptions::fixed(1e-6)
         };
-        Transient::new(opts).run(&circuit, 1e-6).unwrap().final_node(&circuit, "n").unwrap()
+        Transient::new(opts)
+            .run(&circuit, 1e-6)
+            .unwrap()
+            .final_node(&circuit, "n")
+            .unwrap()
     };
     let nominal = {
         let opts = SolverOptions {
             temperature_c: 100.0,
-            effects: DeviceEffects { temperature: false, ..DeviceEffects::default() },
+            effects: DeviceEffects {
+                temperature: false,
+                ..DeviceEffects::default()
+            },
             ..SolverOptions::fixed(1e-6)
         };
-        Transient::new(opts).run(&circuit, 1e-6).unwrap().final_node(&circuit, "n").unwrap()
+        Transient::new(opts)
+            .run(&circuit, 1e-6)
+            .unwrap()
+            .final_node(&circuit, "n")
+            .unwrap()
     };
     // Hotter diode conducts more -> lower node voltage at n than the nominal-T
     // model. The two must differ measurably.
-    assert!((hot - nominal).abs() > 5e-3, "temp toggle had no effect: {hot} vs {nominal}");
+    assert!(
+        (hot - nominal).abs() > 5e-3,
+        "temp toggle had no effect: {hot} vs {nominal}"
+    );
 }
 
 #[test]
@@ -235,7 +291,9 @@ fn voltage_switch_conducts_when_closed() {
         tc1: None,
     });
 
-    let wf = Transient::new(SolverOptions::fixed(1e-6)).run(&c, 1e-6).unwrap();
+    let wf = Transient::new(SolverOptions::fixed(1e-6))
+        .run(&c, 1e-6)
+        .unwrap();
     // Closed switch (1 ohm) + 1k load divider -> out ~ 5 * 1000/1001.
     let out_v = wf.final_node(&c, "out").unwrap();
     assert!(out_v > 4.9, "switch should conduct, out = {out_v}");

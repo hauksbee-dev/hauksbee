@@ -83,11 +83,7 @@ impl Transient {
         self.run_streaming(circuit, tstop, |s| {
             wf.time.push(s.time);
             for node in 0..n_nodes {
-                let v = if node == 0 {
-                    0.0
-                } else {
-                    s.x[node - 1]
-                };
+                let v = if node == 0 { 0.0 } else { s.x[node - 1] };
                 wf.node_voltages[node].push(v);
             }
             for (bi, slot) in wf.branch_currents.iter_mut().enumerate() {
@@ -137,7 +133,10 @@ impl Transient {
         };
 
         // Emit the operating point at t = 0.
-        sink(StepSample { time: 0.0, x: &ws.x });
+        sink(StepSample {
+            time: 0.0,
+            x: &ws.x,
+        });
 
         let mut first_step = true;
         let mut x_accepted = ws.x.clone();
@@ -158,15 +157,23 @@ impl Transient {
             ws.x.copy_from_slice(&x_accepted);
             let coeffs = IntegCoeffs::for_step(opts.integration, h, first_step);
             let r = newton_solve(
-                &mut ws, circuit, opts, t + h, h, coeffs, &state, false, false, opts.gmin, 1.0,
+                &mut ws,
+                circuit,
+                opts,
+                t + h,
+                h,
+                coeffs,
+                &state,
+                false,
+                false,
+                opts.gmin,
+                1.0,
             );
 
             if !r.converged {
                 // Cut the step hard and retry.
                 if h <= dt_min * 1.0001 {
-                    return Err(format!(
-                        "Newton failed at t={t} even at dt_min={dt_min}"
-                    ));
+                    return Err(format!("Newton failed at t={t} even at dt_min={dt_min}"));
                 }
                 dt = (h * 0.25).max(dt_min);
                 continue;
@@ -358,9 +365,13 @@ fn crossing_fraction(
     for (_, dev) in circuit.iter() {
         let (cp, cn, mid) = match dev {
             Device::Comparator { inp, inn, .. } => (*inp, *inn, 0.0),
-            Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } => {
-                (*ctrl_p, *ctrl_n, 0.5 * (von + voff))
-            }
+            Device::VSwitch {
+                ctrl_p,
+                ctrl_n,
+                von,
+                voff,
+                ..
+            } => (*ctrl_p, *ctrl_n, 0.5 * (von + voff)),
             _ => continue,
         };
         let d0 = vat(x0, cp) - vat(x0, cn) - mid;

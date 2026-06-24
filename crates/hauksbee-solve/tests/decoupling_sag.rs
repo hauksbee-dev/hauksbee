@@ -12,7 +12,13 @@ use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Tran
 /// samples (the t=0 operating point and the step edge, where a finite dt smears
 /// the discontinuity). `floor` is an absolute denominator floor so a near-zero
 /// reference is not penalised.
-fn max_rel_err(time: &[f64], got: &[f64], want: &dyn Fn(f64) -> f64, t_skip: f64, floor: f64) -> f64 {
+fn max_rel_err(
+    time: &[f64],
+    got: &[f64],
+    want: &dyn Fn(f64) -> f64,
+    t_skip: f64,
+    floor: f64,
+) -> f64 {
     time.iter()
         .zip(got)
         .filter(|(t, _)| **t >= t_skip)
@@ -73,7 +79,10 @@ fn ideal_cap_constant_current_discharge_with_esr() {
         kind: SourceKind::Pwl(vec![
             PwlPoint { t: 0.0, v: 0.0 },
             PwlPoint { t: t_edge, v: 0.0 },
-            PwlPoint { t: t_edge + 1e-9, v: i_step },
+            PwlPoint {
+                t: t_edge + 1e-9,
+                v: i_step,
+            },
             PwlPoint { t: 1.0, v: i_step },
         ]),
     });
@@ -98,7 +107,10 @@ fn ideal_cap_constant_current_discharge_with_esr() {
     };
     // Skip a couple of dt past the edge so the PWL ramp isn't penalised.
     let err = max_rel_err(&wf.time, got, &want, t_edge + 2.0 * (tstop / 4000.0), 0.1);
-    assert!(err < 0.01, "RC decoupling sag (ESR+ramp) rel err {err:.5} (>1%)");
+    assert!(
+        err < 0.01,
+        "RC decoupling sag (ESR+ramp) rel err {err:.5} (>1%)"
+    );
 
     // Spot-check the two pieces of physics independently.
     // 1. Instantaneous ESR sag right after the edge: ~ I*R_esr = 15 mV.
@@ -177,7 +189,10 @@ fn supplied_rail_step_sag_first_order() {
         kind: SourceKind::Pwl(vec![
             PwlPoint { t: 0.0, v: 0.0 },
             PwlPoint { t: t_edge, v: 0.0 },
-            PwlPoint { t: t_edge + 1e-9, v: i_step },
+            PwlPoint {
+                t: t_edge + 1e-9,
+                v: i_step,
+            },
             PwlPoint { t: 1.0, v: i_step },
         ]),
     });
@@ -199,7 +214,10 @@ fn supplied_rail_step_sag_first_order() {
         }
     };
     let err = max_rel_err(&wf.time, got, &want, t_edge + 4.0 * (tau / 500.0), 0.1);
-    assert!(err < 0.01, "first-order load-step sag rel err {err:.5} (>1%)");
+    assert!(
+        err < 0.01,
+        "first-order load-step sag rel err {err:.5} (>1%)"
+    );
 
     // Final sag should be I*R_s = 60 mV.
     let v_final = *got.last().unwrap();
@@ -257,7 +275,10 @@ fn profile_isource_agrees_in_both_solver_paths() {
             kind: SourceKind::Pwl(vec![
                 PwlPoint { t: 0.0, v: 0.0 },
                 PwlPoint { t: t_edge, v: 0.0 },
-                PwlPoint { t: t_edge + 1e-9, v: i_step },
+                PwlPoint {
+                    t: t_edge + 1e-9,
+                    v: i_step,
+                },
                 PwlPoint { t: 1.0, v: i_step },
             ]),
         });
@@ -302,6 +323,12 @@ fn profile_isource_agrees_in_both_solver_paths() {
         worst_self = worst_self.max((part[k] - want(t)).abs() / w);
         worst_pair = worst_pair.max((part[k] - mono[k]).abs() / w);
     }
-    assert!(worst_self < 0.01, "partitioned path vs hand math {worst_self:.5} (>1%)");
-    assert!(worst_pair < 1e-3, "partitioned vs monolithic disagree {worst_pair:.6}");
+    assert!(
+        worst_self < 0.01,
+        "partitioned path vs hand math {worst_self:.5} (>1%)"
+    );
+    assert!(
+        worst_pair < 1e-3,
+        "partitioned vs monolithic disagree {worst_pair:.6}"
+    );
 }

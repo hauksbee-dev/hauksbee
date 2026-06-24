@@ -113,7 +113,10 @@ pub fn newton_solve(
         }
 
         if !ws.symbolic.refactor(&ws.matrix) {
-            return NewtonResult { converged: false, iters };
+            return NewtonResult {
+                converged: false,
+                iters,
+            };
         }
         ws.symbolic.solve(&mut ws.rhs);
         // rhs now holds the new iterate x.
@@ -122,13 +125,22 @@ pub fn newton_solve(
         // A fully linear system is solved exactly in one shot; no need to
         // assemble and factor a second time just to watch the residual be zero.
         if ws.linear {
-            return NewtonResult { converged: true, iters };
+            return NewtonResult {
+                converged: true,
+                iters,
+            };
         }
         if converged(&ws.x, &ws.x_prev_iter, &ws.layout, opts) {
-            return NewtonResult { converged: true, iters };
+            return NewtonResult {
+                converged: true,
+                iters,
+            };
         }
         if iters >= opts.max_newton {
-            return NewtonResult { converged: false, iters };
+            return NewtonResult {
+                converged: false,
+                iters,
+            };
         }
     }
 }
@@ -178,7 +190,9 @@ fn dc_solve(
     let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
     let solve = |ws: &mut Workspace, gmin: f64, scale: f64| {
-        newton_solve(ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, use_ic, gmin, scale)
+        newton_solve(
+            ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, use_ic, gmin, scale,
+        )
     };
 
     // Attempt 1: direct.

@@ -124,7 +124,8 @@ impl PartitionedTransient {
             .unwrap_or(0);
 
         let many_islands = n_islands >= 4;
-        let small_linear_speedup = part.has_linear_island() && largest_linear <= SMALL_ISLAND_STATES;
+        let small_linear_speedup =
+            part.has_linear_island() && largest_linear <= SMALL_ISLAND_STATES;
         if !many_islands && !small_linear_speedup {
             // One big monolithic-friendly block (or a lone large ladder): let the
             // reference sparse engine handle it.
@@ -204,7 +205,10 @@ impl PartitionedTransient {
         // Emit t = 0.
         let mut xglobal = vec![0.0f64; self.global_x_len()];
         self.gather_into(&mut xglobal);
-        sink(StepSample { time: 0.0, x: &xglobal });
+        sink(StepSample {
+            time: 0.0,
+            x: &xglobal,
+        });
 
         let relax_sweeps = if self.opts.granularity >= 0.999 {
             3
@@ -234,7 +238,10 @@ impl PartitionedTransient {
 
             t = tnext;
             self.gather_into(&mut xglobal);
-            sink(StepSample { time: t, x: &xglobal });
+            sink(StepSample {
+                time: t,
+                x: &xglobal,
+            });
         }
         Ok(())
     }
@@ -255,9 +262,7 @@ impl PartitionedTransient {
                 buf[k] = self.vbuf[n.0 as usize];
             }
             for (k, (id, _, _)) in li.isources().iter().enumerate() {
-                if let hauksbee_ir::Device::Isource { kind, .. } =
-                    &circuit.devices[id.0 as usize]
-                {
+                if let hauksbee_ir::Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
                     buf[n_vin + k] = kind.eval(tnext);
                 }
             }
@@ -301,7 +306,11 @@ impl PartitionedTransient {
         dc_operating_point(&mut ws, circuit, &self.opts)?;
         // Fill exchange buffer with node voltages (ground stays 0).
         for ni in 1..=self.n_nodes {
-            let v = ws.layout.node(NodeId(ni as u32)).map(|i| ws.x[i]).unwrap_or(0.0);
+            let v = ws
+                .layout
+                .node(NodeId(ni as u32))
+                .map(|i| ws.x[i])
+                .unwrap_or(0.0);
             self.vbuf[ni] = v;
         }
         // Seed linear island states (cap voltages, inductor currents).
@@ -310,16 +319,16 @@ impl PartitionedTransient {
             for (k, (id, is_cap)) in li.state_devices().enumerate() {
                 st[k] = if is_cap {
                     match &circuit.devices[id.0 as usize] {
-                        Device::Capacitor { a, b, ic, .. } => ic.unwrap_or_else(|| {
-                            node_v(&ws, *a) - node_v(&ws, *b)
-                        }),
+                        Device::Capacitor { a, b, ic, .. } => {
+                            ic.unwrap_or_else(|| node_v(&ws, *a) - node_v(&ws, *b))
+                        }
                         _ => 0.0,
                     }
                 } else {
                     match &circuit.devices[id.0 as usize] {
-                        Device::Inductor { ic, .. } => {
-                            ic.unwrap_or_else(|| ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0))
-                        }
+                        Device::Inductor { ic, .. } => ic.unwrap_or_else(|| {
+                            ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0)
+                        }),
                         _ => 0.0,
                     }
                 };
@@ -345,7 +354,11 @@ impl PartitionedTransient {
                 let val = kind.eval(t);
                 if !p.is_ground() {
                     // Fix v(p) relative to n's (ground or resolved) value.
-                    let vn = if n.is_ground() { 0.0 } else { self.vbuf[n.0 as usize] };
+                    let vn = if n.is_ground() {
+                        0.0
+                    } else {
+                        self.vbuf[n.0 as usize]
+                    };
                     self.vbuf[p.0 as usize] = vn + val;
                 } else if !n.is_ground() {
                     // Positive terminal on ground (negative rail): v(n) = -val.
@@ -436,7 +449,11 @@ impl NonlinearIsland {
         let mut l2g: Vec<NodeId> = vec![NodeId::GROUND]; // index 0 = ground
 
         // Map every node the island touches.
-        let map_node = |sub: &mut Circuit, g2l: &mut Vec<Option<NodeId>>, l2g: &mut Vec<NodeId>, gn: NodeId| -> NodeId {
+        let map_node = |sub: &mut Circuit,
+                        g2l: &mut Vec<Option<NodeId>>,
+                        l2g: &mut Vec<NodeId>,
+                        gn: NodeId|
+         -> NodeId {
             if gn.is_ground() {
                 return NodeId::GROUND;
             }
@@ -456,9 +473,10 @@ impl NonlinearIsland {
         // Copy devices, remapping nodes.
         for &id in &isl.devices {
             let dev = &circuit.devices[id.0 as usize];
-            let remap = |g2l: &mut Vec<Option<NodeId>>, l2g: &mut Vec<NodeId>, sub: &mut Circuit, n: NodeId| {
-                map_node(sub, g2l, l2g, n)
-            };
+            let remap = |g2l: &mut Vec<Option<NodeId>>,
+                         l2g: &mut Vec<NodeId>,
+                         sub: &mut Circuit,
+                         n: NodeId| { map_node(sub, g2l, l2g, n) };
             let nd = clone_remapped(dev, |n| {
                 // closure capturing requires the helper; do it inline.
                 remap(&mut g2l, &mut l2g, &mut sub, n)
@@ -527,7 +545,13 @@ impl NonlinearIsland {
     }
 
     /// Solve the sub-circuit for the trial state at `tnext`.
-    fn step(&mut self, h: f64, _tnext: f64, first: bool, opts: &SolverOptions) -> Result<(), String> {
+    fn step(
+        &mut self,
+        h: f64,
+        _tnext: f64,
+        first: bool,
+        opts: &SolverOptions,
+    ) -> Result<(), String> {
         if first {
             self.ws.x.copy_from_slice(&self.x_accepted);
         }
@@ -571,7 +595,14 @@ impl NonlinearIsland {
 
     /// Commit accepted state and advance reactive history.
     fn commit(&mut self, h: f64, opts: &SolverOptions) {
-        advance_sub_reactive(&mut self.state, &self.sub, &self.ws, h, opts, self.first_step);
+        advance_sub_reactive(
+            &mut self.state,
+            &self.sub,
+            &self.ws,
+            h,
+            opts,
+            self.first_step,
+        );
         self.x_accepted.copy_from_slice(&self.ws.x);
         self.first_step = false;
     }
@@ -580,22 +611,84 @@ impl NonlinearIsland {
 /// Clone a device with each NodeId passed through `f` (node remapping).
 fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
     match dev.clone() {
-        Device::Resistor { name, a, b, ohms, tc1 } => {
-            Device::Resistor { name, a: f(a), b: f(b), ohms, tc1 }
-        }
-        Device::Capacitor { name, a, b, farads, ic } => {
-            Device::Capacitor { name, a: f(a), b: f(b), farads, ic }
-        }
-        Device::Inductor { name, a, b, henries, ic } => {
-            Device::Inductor { name, a: f(a), b: f(b), henries, ic }
-        }
-        Device::Vsource { name, p, n, kind } => Device::Vsource { name, p: f(p), n: f(n), kind },
-        Device::Isource { name, p, n, kind } => Device::Isource { name, p: f(p), n: f(n), kind },
-        Device::Diode { name, a, k, model } => Device::Diode { name, a: f(a), k: f(k), model },
-        Device::Bjt { name, c, b, e, model } => {
-            Device::Bjt { name, c: f(c), b: f(b), e: f(e), model }
-        }
-        Device::Mosfet { name, d, g, s, b, model } => Device::Mosfet {
+        Device::Resistor {
+            name,
+            a,
+            b,
+            ohms,
+            tc1,
+        } => Device::Resistor {
+            name,
+            a: f(a),
+            b: f(b),
+            ohms,
+            tc1,
+        },
+        Device::Capacitor {
+            name,
+            a,
+            b,
+            farads,
+            ic,
+        } => Device::Capacitor {
+            name,
+            a: f(a),
+            b: f(b),
+            farads,
+            ic,
+        },
+        Device::Inductor {
+            name,
+            a,
+            b,
+            henries,
+            ic,
+        } => Device::Inductor {
+            name,
+            a: f(a),
+            b: f(b),
+            henries,
+            ic,
+        },
+        Device::Vsource { name, p, n, kind } => Device::Vsource {
+            name,
+            p: f(p),
+            n: f(n),
+            kind,
+        },
+        Device::Isource { name, p, n, kind } => Device::Isource {
+            name,
+            p: f(p),
+            n: f(n),
+            kind,
+        },
+        Device::Diode { name, a, k, model } => Device::Diode {
+            name,
+            a: f(a),
+            k: f(k),
+            model,
+        },
+        Device::Bjt {
+            name,
+            c,
+            b,
+            e,
+            model,
+        } => Device::Bjt {
+            name,
+            c: f(c),
+            b: f(b),
+            e: f(e),
+            model,
+        },
+        Device::Mosfet {
+            name,
+            d,
+            g,
+            s,
+            b,
+            model,
+        } => Device::Mosfet {
             name,
             d: f(d),
             g: f(g),
@@ -603,7 +696,17 @@ fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
             b: b.map(&mut f),
             model,
         },
-        Device::VSwitch { name, a, b, ctrl_p, ctrl_n, von, voff, ron, roff } => Device::VSwitch {
+        Device::VSwitch {
+            name,
+            a,
+            b,
+            ctrl_p,
+            ctrl_n,
+            von,
+            voff,
+            ron,
+            roff,
+        } => Device::VSwitch {
             name,
             a: f(a),
             b: f(b),
@@ -614,7 +717,15 @@ fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
             ron,
             roff,
         },
-        Device::OpAmp { name, out, inp, inn, gain, rail_lo, rail_hi } => Device::OpAmp {
+        Device::OpAmp {
+            name,
+            out,
+            inp,
+            inn,
+            gain,
+            rail_lo,
+            rail_hi,
+        } => Device::OpAmp {
             name,
             out: f(out),
             inp: f(inp),
@@ -623,7 +734,15 @@ fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
             rail_lo,
             rail_hi,
         },
-        Device::Comparator { name, out, inp, inn, out_lo, out_hi, hysteresis } => Device::Comparator {
+        Device::Comparator {
+            name,
+            out,
+            inp,
+            inn,
+            out_lo,
+            out_hi,
+            hysteresis,
+        } => Device::Comparator {
             name,
             out: f(out),
             inp: f(inp),

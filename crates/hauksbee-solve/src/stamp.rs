@@ -187,18 +187,20 @@ pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
 
 fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix, rhs: &mut [f64]) {
     match dev {
-        Device::Resistor { a, b, ohms, tc1, .. } => {
+        Device::Resistor {
+            a, b, ohms, tc1, ..
+        } => {
             let r = resistor_value(*ohms, *tc1, ctx);
             if r > 0.0 {
                 stamp_cond(g, ctx.layout, *a, *b, 1.0 / r);
             }
         }
-        Device::Capacitor { a, b, farads, ic, .. } => {
-            stamp_capacitor(ctx, id, *a, *b, *farads, *ic, g, rhs)
-        }
-        Device::Inductor { a, b, henries, ic, .. } => {
-            stamp_inductor(ctx, id, *a, *b, *henries, *ic, g, rhs)
-        }
+        Device::Capacitor {
+            a, b, farads, ic, ..
+        } => stamp_capacitor(ctx, id, *a, *b, *farads, *ic, g, rhs),
+        Device::Inductor {
+            a, b, henries, ic, ..
+        } => stamp_inductor(ctx, id, *a, *b, *henries, *ic, g, rhs),
         Device::Vsource { p, n, kind, .. } => stamp_vsource(ctx, id, *p, *n, kind, g, rhs),
         Device::Isource { p, n, kind, .. } => {
             let val = source_value(ctx, kind);
@@ -206,18 +208,44 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
         }
         Device::Diode { a, k, model, .. } => stamp_diode(ctx, *a, *k, model, g, rhs),
         Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, *c, *b, *e, model, g, rhs),
-        Device::Mosfet { d, g: gate, s, model, .. } => {
-            stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs)
-        }
-        Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => {
-            stamp_vswitch(ctx, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs)
-        }
-        Device::OpAmp { out, inp, inn, gain, rail_lo, rail_hi, .. } => {
-            stamp_opamp(ctx, *out, *inp, *inn, *gain, *rail_lo, *rail_hi, g, rhs)
-        }
-        Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => {
-            stamp_comparator(ctx, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs)
-        }
+        Device::Mosfet {
+            d,
+            g: gate,
+            s,
+            model,
+            ..
+        } => stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs),
+        Device::VSwitch {
+            a,
+            b,
+            ctrl_p,
+            ctrl_n,
+            von,
+            voff,
+            ron,
+            roff,
+            ..
+        } => stamp_vswitch(
+            ctx, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs,
+        ),
+        Device::OpAmp {
+            out,
+            inp,
+            inn,
+            gain,
+            rail_lo,
+            rail_hi,
+            ..
+        } => stamp_opamp(ctx, *out, *inp, *inn, *gain, *rail_lo, *rail_hi, g, rhs),
+        Device::Comparator {
+            out,
+            inp,
+            inn,
+            out_lo,
+            out_hi,
+            hysteresis,
+            ..
+        } => stamp_comparator(ctx, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs),
     }
 }
 
@@ -296,7 +324,10 @@ fn stamp_inductor(
     g: &mut SparseMatrix,
     rhs: &mut [f64],
 ) {
-    let br = ctx.layout.branch(id).expect("inductor has a branch unknown");
+    let br = ctx
+        .layout
+        .branch(id)
+        .expect("inductor has a branch unknown");
     let ai = ctx.layout.node(a);
     let bi = ctx.layout.node(b);
     // KCL: the branch current enters the two node equations (matrix columns).
@@ -572,13 +603,18 @@ fn stamp_mosfet(
         let gm = id / (nsub * vt);
         (id.min(1e3), gm.max(ctx.opts.gmin), ctx.opts.gmin)
     } else {
-        let lambda = if ctx.opts.effects.early_effect { model.lambda } else { 0.0 };
+        let lambda = if ctx.opts.effects.early_effect {
+            model.lambda
+        } else {
+            0.0
+        };
         let vov = vgs - vth;
         if vds < vov {
             // Triode.
             let id = beta * (vov * vds - 0.5 * vds * vds) * (1.0 + lambda * vds);
             let gm = beta * vds * (1.0 + lambda * vds);
-            let gds = beta * ((vov - vds) * (1.0 + lambda * vds) + (vov * vds - 0.5 * vds * vds) * lambda);
+            let gds = beta
+                * ((vov - vds) * (1.0 + lambda * vds) + (vov * vds - 0.5 * vds * vds) * lambda);
             (id, gm.max(ctx.opts.gmin), gds.max(ctx.opts.gmin))
         } else {
             // Saturation.
@@ -591,7 +627,11 @@ fn stamp_mosfet(
 
     // Map back through the swap and polarity. The drain current flows d->s in
     // N-channel space; after a swap it flows the other way.
-    let (di, gi, si) = (ctx.layout.node(d), ctx.layout.node(gnode), ctx.layout.node(s));
+    let (di, gi, si) = (
+        ctx.layout.node(d),
+        ctx.layout.node(gnode),
+        ctx.layout.node(s),
+    );
     let (dn, sn) = if swap { (si, di) } else { (di, si) };
 
     // Conductances: gds between drain-source, gm couples drain current to vgs.

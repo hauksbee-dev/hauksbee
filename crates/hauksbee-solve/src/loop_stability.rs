@@ -89,7 +89,10 @@ impl<'a> LoopStability<'a> {
                 "node '{output_node}' not found in AC response (cannot measure loop gain)"
             ));
         }
-        Ok(LoopStability { bode, _marker: std::marker::PhantomData })
+        Ok(LoopStability {
+            bode,
+            _marker: std::marker::PhantomData,
+        })
     }
 
     /// Compute the stability margins from the Bode data.

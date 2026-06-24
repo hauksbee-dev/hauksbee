@@ -104,7 +104,12 @@ impl Csr {
             }
             row_ptr[i + 1] = col.len();
         }
-        Csr { n, row_ptr, col, val }
+        Csr {
+            n,
+            row_ptr,
+            col,
+            val,
+        }
     }
 
     /// `y = A x`.
@@ -158,7 +163,13 @@ impl Rect {
             }
             row_ptr[i + 1] = col.len();
         }
-        Rect { rows, cols, row_ptr, col, val }
+        Rect {
+            rows,
+            cols,
+            row_ptr,
+            col,
+            val,
+        }
     }
 
     /// `y = M x` where `x` has `cols` entries and `y` has `rows`.
@@ -270,10 +281,24 @@ impl LinearIsland {
         for &id in &island.devices {
             match &circuit.devices[id.0 as usize] {
                 Device::Capacitor { a, b, farads, .. } => {
-                    states.push((id, StateKind::Cap { a: *a, b: *b, c: *farads }));
+                    states.push((
+                        id,
+                        StateKind::Cap {
+                            a: *a,
+                            b: *b,
+                            c: *farads,
+                        },
+                    ));
                 }
                 Device::Inductor { a, b, henries, .. } => {
-                    states.push((id, StateKind::Ind { a: *a, b: *b, l: *henries }));
+                    states.push((
+                        id,
+                        StateKind::Ind {
+                            a: *a,
+                            b: *b,
+                            l: *henries,
+                        },
+                    ));
                 }
                 _ => {}
             }
@@ -522,7 +547,11 @@ impl LinearIsland {
             } else {
                 0
             };
-            self.mf = Some(MatrixFree { dt, substeps: 1usize << s, order: 16 });
+            self.mf = Some(MatrixFree {
+                dt,
+                substeps: 1usize << s,
+                order: 16,
+            });
             return;
         }
         if let Some(c) = &self.cache {
@@ -861,8 +890,20 @@ mod tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "R".into(), a: vin, b: out, ohms: 1e3, tc1: None });
-        c.add(Device::Capacitor { name: "C".into(), a: out, b: NodeId::GROUND, farads: 1e-6, ic: Some(0.0) });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a: vin,
+            b: out,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "C".into(),
+            a: out,
+            b: NodeId::GROUND,
+            farads: 1e-6,
+            ic: Some(0.0),
+        });
         c
     }
 
@@ -907,9 +948,27 @@ mod tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "R".into(), a: vin, b: mid, ohms: 50.0, tc1: None });
-        c.add(Device::Inductor { name: "L".into(), a: mid, b: out, henries: 1e-3, ic: Some(0.0) });
-        c.add(Device::Capacitor { name: "C".into(), a: out, b: NodeId::GROUND, farads: 1e-7, ic: Some(0.0) });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a: vin,
+            b: mid,
+            ohms: 50.0,
+            tc1: None,
+        });
+        c.add(Device::Inductor {
+            name: "L".into(),
+            a: mid,
+            b: out,
+            henries: 1e-3,
+            ic: Some(0.0),
+        });
+        c.add(Device::Capacitor {
+            name: "C".into(),
+            a: out,
+            b: NodeId::GROUND,
+            farads: 1e-7,
+            ic: Some(0.0),
+        });
         let part = crate::partition::Partition::analyze(&c);
         let li = LinearIsland::compile(&c, &part.islands[0], 0.0).expect("compile");
         assert_eq!(li.n_states(), 2);

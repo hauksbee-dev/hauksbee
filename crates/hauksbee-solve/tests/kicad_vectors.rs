@@ -112,8 +112,10 @@ fn run_ngspice(netlist: &str) -> Option<NgResult> {
         }
     }
     if t.is_empty() {
-        eprintln!("ngspice produced no table; stderr: {}",
-            String::from_utf8_lossy(&out.stderr));
+        eprintln!(
+            "ngspice produced no table; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         None
     } else {
         Some(NgResult { t, v })
@@ -163,8 +165,7 @@ fn cross_check(file: &str, tran: &str, probe: &str, tstop: f64) -> Option<f64> {
         }
     };
 
-    let circuit = SpiceLoader::load(&net)
-        .unwrap_or_else(|e| panic!("{file}: loader failed: {e}"));
+    let circuit = SpiceLoader::load(&net).unwrap_or_else(|e| panic!("{file}: loader failed: {e}"));
     let opts = SolverOptions {
         step: StepControl::Fixed { dt: tstop / 4000.0 },
         ..SolverOptions::default()
@@ -176,11 +177,7 @@ fn cross_check(file: &str, tran: &str, probe: &str, tstop: f64) -> Option<f64> {
         .node(&circuit, probe)
         .unwrap_or_else(|| panic!("{file}: probe {probe} missing from results"));
 
-    let full_scale = ng
-        .v
-        .iter()
-        .fold(0.0f64, |m, &x| m.max(x.abs()))
-        .max(1e-9);
+    let full_scale = ng.v.iter().fold(0.0f64, |m, &x| m.max(x.abs())).max(1e-9);
     let floor = 0.01 * full_scale;
     let skip = tstop * 0.05; // both engines settle initial transients
     let mut worst = 0.0f64;

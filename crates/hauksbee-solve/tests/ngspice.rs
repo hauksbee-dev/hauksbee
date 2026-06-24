@@ -42,11 +42,7 @@ fn run_ngspice(netlist: &str) -> Option<NgResult> {
         let mut f = std::fs::File::create(&path).ok()?;
         f.write_all(netlist.as_bytes()).ok()?;
     }
-    let out = Command::new(NGSPICE)
-        .arg("-b")
-        .arg(&path)
-        .output()
-        .ok()?;
+    let out = Command::new(NGSPICE).arg("-b").arg(&path).output().ok()?;
     let _ = std::fs::remove_file(&path);
     let text = String::from_utf8_lossy(&out.stdout);
     parse_print_table(&text)
@@ -182,7 +178,8 @@ C1 out 0 10u
 
     // Skip the first quarter period while the cap charges from the IC.
     let err = compare(&wf.time, out, &ng, 5.0, 1e-3);
-    eprintln!("RECTIFIER err = {err:.4}"); assert!(err < 0.01, "rectifier max rel err {err:.4} (>1%)");
+    eprintln!("RECTIFIER err = {err:.4}");
+    assert!(err < 0.01, "rectifier max rel err {err:.4} (>1%)");
 }
 
 #[test]
@@ -267,5 +264,6 @@ fn rc_ladder_20_stages() {
     let last = wf.node(&circuit, "n20").unwrap();
 
     let err = compare(&wf.time, last, &ng, 1.0, 5e-5);
-    eprintln!("RC_LADDER err = {err:.4}"); assert!(err < 0.01, "RC ladder max rel err {err:.4} (>1%)");
+    eprintln!("RC_LADDER err = {err:.4}");
+    assert!(err < 0.01, "RC ladder max rel err {err:.4} (>1%)");
 }
