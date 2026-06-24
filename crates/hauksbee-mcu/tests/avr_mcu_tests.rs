@@ -28,7 +28,11 @@ fn t1_firmware_hex() -> Option<PathBuf> {
         "/Users/hauksbee-user/Tarski/Tarski-Repos/Project-Tarski/T1-devboard/interface\
          /.pio/build/nanoatmega328new/firmware.hex",
     );
-    if p.exists() { Some(p) } else { None }
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 /// Build a fresh ATmega328P at 16 MHz with the T1 firmware loaded, or skip.
@@ -109,9 +113,7 @@ fn test_uart_port_sig_response() {
 
     // The response must contain the five-byte signature frame somewhere.
     let expected = &[PORT_ACK, 0x30, 0x31, 0x30, PORT_TRN_END];
-    let found = response
-        .windows(expected.len())
-        .any(|w| w == expected);
+    let found = response.windows(expected.len()).any(|w| w == expected);
 
     assert!(
         found,

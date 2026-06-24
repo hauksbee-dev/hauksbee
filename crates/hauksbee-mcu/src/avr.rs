@@ -5,8 +5,8 @@
 //! module only deals in plain IRQ hooks and byte streams.
 
 use crate::ffi;
-use crate::traits::{I2cEvent, McuState, Mcu, PinId, SpiEvent};
-use anyhow::{Result, bail};
+use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+use anyhow::{bail, Result};
 use std::ffi::CString;
 use std::path::Path;
 use std::ptr;
@@ -36,11 +36,16 @@ const UART_IRQ_INPUT: i32 = 0;
 const UART_IRQ_OUTPUT: i32 = 1;
 const TWI_IRQ_INPUT: i32 = 0;
 const TWI_IRQ_OUTPUT: i32 = 1;
-const SPI_IRQ_INPUT: i32 = 0;   // MISO (from peripheral into MCU)
-const SPI_IRQ_OUTPUT: i32 = 1;  // MOSI (from MCU to peripheral)
+const SPI_IRQ_INPUT: i32 = 0; // MISO (from peripheral into MCU)
+const SPI_IRQ_OUTPUT: i32 = 1; // MOSI (from MCU to peripheral)
 
-/// Index into ioport IRQ array for the whole PORT register.
-const IOPORT_IRQ_REG_PORT: i32 = 11;
+/// Index into the ioport IRQ array for the whole PORT register. This is NOT a
+/// fixed constant: simavr's `IOPORT_IRQ_*` enum reorders between versions (the
+/// addition of `IOPORT_IRQ_PIN_ALL_IN` shifts this from 10 to 11), so it is
+/// sourced from whatever simavr the build linked (via bindgen) rather than
+/// hardcoded — a hardcoded 11 subscribed to the wrong IRQ on an older simavr,
+/// making GPIO output read as "never driven" (GREEN on one host, RED on another).
+const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
 
 // TWI message condition flags (from avr_twi.h)
 const TWI_COND_START: u32 = 1 << 0;
@@ -140,7 +145,13 @@ macro_rules! make_port_hook {
                         for bit in 0u8..8 {
                             if (changed >> bit) & 1 != 0 {
                                 let high = (new_val >> bit) & 1 != 0;
-                                cb(PinId { port: $port_char, bit }, high);
+                                cb(
+                                    PinId {
+                                        port: $port_char,
+                                        bit,
+                                    },
+                                    high,
+                                );
                             }
                         }
                     }
@@ -215,7 +226,10 @@ unsafe extern "C" fn twi_hook(
             // Fire user callback and use its return value (if any); for START
             // events the return value is meaningless, but we keep the API uniform.
             if let Some(cb) = &mut s.callbacks.on_i2c {
-                let _ = cb(I2cEvent::Start { addr: addr7, read: read_flag });
+                let _ = cb(I2cEvent::Start {
+                    addr: addr7,
+                    read: read_flag,
+                });
             }
 
             // Send ACK so the firmware's Wire library doesn't stall.
@@ -251,7 +265,11 @@ unsafe extern "C" fn twi_hook(
             // Data byte written by firmware.
             let addr7 = s.twi_addr;
             let _reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
-                cb(I2cEvent::Write { addr: addr7, data: data_byte }).unwrap_or(0)
+                cb(I2cEvent::Write {
+                    addr: addr7,
+                    data: data_byte,
+                })
+                .unwrap_or(0)
             } else {
                 0
             };
@@ -287,7 +305,7 @@ unsafe extern "C" fn spi_output_hook(
         let avr = s.avr_ptr;
 
         let miso = if let Some(cb) = &mut s.callbacks.on_spi {
-            cb(SpiEvent { mosi })
+            cb(SpiEvent { mosi, deselect: false })
         } else {
             0xFF
         };
@@ -493,6 +511,10 @@ impl AvrMcu {
 
     /// Load an `.elf` file using simavr's ELF loader.
     fn load_elf(&mut self, path: &Path) -> Result<()> {
+        // Arch gate: refuse a non-AVR ELF before simavr maps it into flash and
+        // silently runs garbage. Raw images without an ELF header are skipped.
+        crate::elf::validate_arch(path, crate::elf::EM_AVR, "atmega (AVR)")?;
+
         let elf_cstr = CString::new(
             path.to_str()
                 .ok_or_else(|| anyhow::anyhow!("non-UTF-8 firmware path"))?,
@@ -502,7 +524,11 @@ impl AvrMcu {
             let mut fp = std::mem::zeroed::<ffi::elf_firmware_t>();
             let rc = ffi::elf_read_firmware(elf_cstr.as_ptr(), &mut fp);
             if rc != 0 {
-                bail!("elf_read_firmware failed (rc={}) for '{}'", rc, path.display());
+                bail!(
+                    "elf_read_firmware failed (rc={}) for '{}'",
+                    rc,
+                    path.display()
+                );
             }
             ffi::avr_load_firmware(self.avr, &mut fp);
         }
@@ -547,7 +573,10 @@ impl Mcu for AvrMcu {
         match ext.as_str() {
             "hex" => self.load_hex(path)?,
             "elf" => self.load_elf(path)?,
-            other => bail!("unsupported firmware extension '.{}'; use .hex or .elf", other),
+            other => bail!(
+                "unsupported firmware extension '.{}'; use .hex or .elf",
+                other
+            ),
         }
 
         self.firmware_loaded = true;
@@ -640,7 +669,11 @@ impl Mcu for AvrMcu {
             let pc = (*self.avr).pc;
             let cycles = (*self.avr).cycle;
             let sleeping = (*self.avr).state == ffi::cpu_Sleeping as i32;
-            McuState { pc, cycles, sleeping }
+            McuState {
+                pc,
+                cycles,
+                sleeping,
+            }
         }
     }
 }

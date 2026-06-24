@@ -8,8 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 fn demo_hex() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/demo/demo.hex");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex");
     p.exists().then_some(p)
 }
 
@@ -52,7 +51,11 @@ fn uart_echo_and_ident() {
 
     mcu.uart_write(b"x");
     mcu.run_millis(30).unwrap();
-    assert!(uart_string(&rx).contains('x'), "echo failed: {:?}", uart_string(&rx));
+    assert!(
+        uart_string(&rx).contains('x'),
+        "echo failed: {:?}",
+        uart_string(&rx)
+    );
 
     rx.lock().unwrap().clear();
     mcu.uart_write(b"i");

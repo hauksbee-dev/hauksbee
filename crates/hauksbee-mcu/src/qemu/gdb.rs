@@ -51,7 +51,9 @@ impl GdbStub {
                 }
             }
         };
-        stream.set_read_timeout(Some(Duration::from_millis(200))).ok();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
         stream.set_nodelay(true).ok();
         let mut g = GdbStub {
             stream,

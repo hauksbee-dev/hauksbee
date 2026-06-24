@@ -184,9 +184,7 @@ impl QemuProcess {
         uart_port: u16,
     ) -> Result<Self> {
         let bin = find_qemu(arch)?;
-        let flash = flash_image
-            .to_str()
-            .context("non-UTF-8 flash image path")?;
+        let flash = flash_image.to_str().context("non-UTF-8 flash image path")?;
 
         let mut cmd = Command::new(&bin);
         cmd.arg("-nographic")

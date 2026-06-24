@@ -21,7 +21,10 @@ pub fn find_renode() -> Result<PathBuf> {
         if p.exists() {
             return Ok(p);
         }
-        bail!("HAUKSBEE_RENODE is set to '{}' but it does not exist", p.display());
+        bail!(
+            "HAUKSBEE_RENODE is set to '{}' but it does not exist",
+            p.display()
+        );
     }
 
     // `renode` on PATH.
@@ -32,8 +35,7 @@ pub fn find_renode() -> Result<PathBuf> {
     // Conventional portable install (macOS app bundle / extracted tarball).
     if let Some(home) = std::env::var_os("HOME") {
         let candidates = [
-            PathBuf::from(&home)
-                .join("renode-portable/Renode.app/Contents/MacOS/renode"),
+            PathBuf::from(&home).join("renode-portable/Renode.app/Contents/MacOS/renode"),
             PathBuf::from(&home).join("renode-portable/renode"),
             PathBuf::from(&home).join("renode_portable/renode"),
         ];
