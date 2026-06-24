@@ -2,9 +2,7 @@
 //! the test itself and checks the solver against it. Linear circuits hold to
 //! ~1e-6 relative; nonlinear DC points to ~1e-3.
 
-use hauksbee_ir::{
-    BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity, SourceKind,
-};
+use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, Polarity, SourceKind};
 use hauksbee_solve::{Integration, SolverOptions, StepControl, Transient};
 
 /// Max error of `got` vs `want`, normalized by `reltol*|signal| + atol` so a
@@ -58,10 +56,17 @@ fn rc_step_response() {
     let wf = Transient::new(opts).run(&circuit, 5.0 * tau).unwrap();
 
     let got = wf.node(&circuit, "out").unwrap();
-    let want: Vec<f64> = wf.time.iter().map(|&t| v * (1.0 - (-t / tau).exp())).collect();
+    let want: Vec<f64> = wf
+        .time
+        .iter()
+        .map(|&t| v * (1.0 - (-t / tau).exp()))
+        .collect();
     // Normalized to full scale `v`: passing => within ~0.1% of 5 V everywhere.
     let err = max_norm_err(got, &want, v);
-    assert!(err < 2.0, "RC step normalized err {err:.3} (>2 means >~0.2% off)");
+    assert!(
+        err < 2.0,
+        "RC step normalized err {err:.3} (>2 means >~0.2% off)"
+    );
 }
 
 #[test]
@@ -125,11 +130,7 @@ fn series_rlc_underdamped() {
     let want: Vec<f64> = wf
         .time
         .iter()
-        .map(|&t| {
-            v * (1.0
-                - (-alpha * t).exp()
-                    * ((wd * t).cos() + (alpha / wd) * (wd * t).sin()))
-        })
+        .map(|&t| v * (1.0 - (-alpha * t).exp() * ((wd * t).cos() + (alpha / wd) * (wd * t).sin())))
         .collect();
     let err = max_norm_err(got, &want, v);
     assert!(err < 5.0, "RLC underdamped normalized err {err:.3}");
@@ -190,7 +191,10 @@ fn diode_resistor_dc_operating_point() {
     let wf = Transient::new(opts).run(&circuit, 1e-6).unwrap();
     let got = wf.node(&circuit, "d").unwrap()[0];
     let rel = (got - vd).abs() / vd.abs();
-    assert!(rel < 1e-3, "diode Vd got {got:.6} want {vd:.6} (rel {rel:.2e})");
+    assert!(
+        rel < 1e-3,
+        "diode Vd got {got:.6} want {vd:.6} (rel {rel:.2e})"
+    );
 }
 
 #[test]

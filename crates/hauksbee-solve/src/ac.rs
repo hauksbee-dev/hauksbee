@@ -88,7 +88,12 @@ impl AcSpec {
         if points == 0 {
             return Err("points must be >= 1".into());
         }
-        Ok(AcSpec { fstart, fstop, points, sweep })
+        Ok(AcSpec {
+            fstart,
+            fstop,
+            points,
+            sweep,
+        })
     }
 
     /// The list of frequencies (Hz) this sweep visits.
@@ -203,7 +208,10 @@ impl AcAnalysis {
                     node_phasor[node] = x[idx];
                 }
             }
-            points.push(AcPoint { freq: f, node_phasor });
+            points.push(AcPoint {
+                freq: f,
+                node_phasor,
+            });
         }
         Ok(AcResponse { points })
     }
@@ -227,7 +235,10 @@ impl AcAnalysis {
             stamp_ac(&mut sys, layout, op, dev, id, w, &self.opts);
         }
         sys.solve().ok_or_else(|| {
-            format!("AC system singular at w={w:.4} rad/s (f={:.4} Hz)", w / std::f64::consts::TAU)
+            format!(
+                "AC system singular at w={w:.4} rad/s (f={:.4} Hz)",
+                w / std::f64::consts::TAU
+            )
         })
     }
 }
@@ -270,7 +281,9 @@ fn stamp_ac(
 ) {
     let n = |node: NodeId| layout.node(node);
     match dev {
-        Device::Resistor { a, b, ohms, tc1, .. } => {
+        Device::Resistor {
+            a, b, ohms, tc1, ..
+        } => {
             let r = resistor_value(*ohms, *tc1, opts);
             if r > 0.0 {
                 sys.stamp_admittance(n(*a), n(*b), Complex64::new(1.0 / r, 0.0));
@@ -328,12 +341,28 @@ fn stamp_ac(
         Device::Mosfet { d, g, s, model, .. } => {
             stamp_mosfet_ac(sys, layout, op, *d, *g, *s, model, opts)
         }
-        Device::OpAmp { out, inp, inn, gain, rail_lo, rail_hi, .. } => {
-            stamp_opamp_ac(sys, layout, op, *out, *inp, *inn, *gain, *rail_lo, *rail_hi)
-        }
+        Device::OpAmp {
+            out,
+            inp,
+            inn,
+            gain,
+            rail_lo,
+            rail_hi,
+            ..
+        } => stamp_opamp_ac(sys, layout, op, *out, *inp, *inn, *gain, *rail_lo, *rail_hi),
         // No continuous small-signal model: a switch sits at its quiescent
         // conductance; a comparator output is a fixed rail (open small-signal).
-        Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => {
+        Device::VSwitch {
+            a,
+            b,
+            ctrl_p,
+            ctrl_n,
+            von,
+            voff,
+            ron,
+            roff,
+            ..
+        } => {
             let g = vswitch_g(op.v(*ctrl_p) - op.v(*ctrl_n), *von, *voff, *ron, *roff);
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(g, 0.0));
         }
@@ -453,12 +482,16 @@ fn stamp_mosfet_ac(
         let id = i0 * ((vgs - vth) / (nsub * vt)).exp();
         ((id / (nsub * vt)).max(opts.gmin), opts.gmin)
     } else {
-        let lambda = if opts.effects.early_effect { model.lambda } else { 0.0 };
+        let lambda = if opts.effects.early_effect {
+            model.lambda
+        } else {
+            0.0
+        };
         let vov = vgs - vth;
         if vds < vov {
             let gm = beta * vds * (1.0 + lambda * vds);
-            let gds =
-                beta * ((vov - vds) * (1.0 + lambda * vds) + (vov * vds - 0.5 * vds * vds) * lambda);
+            let gds = beta
+                * ((vov - vds) * (1.0 + lambda * vds) + (vov * vds - 0.5 * vds * vds) * lambda);
             (gm.max(opts.gmin), gds.max(opts.gmin))
         } else {
             let gm = beta * vov * (1.0 + lambda * vds);

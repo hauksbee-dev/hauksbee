@@ -164,8 +164,14 @@ mod tests {
         s.add_rhs(0, c(3.0, 0.0));
         s.add_rhs(1, c(5.0, 0.0));
         let x = s.solve().unwrap();
-        assert!((x[0].re - 0.8).abs() < 1e-12 && x[0].im.abs() < 1e-12, "{x:?}");
-        assert!((x[1].re - 1.4).abs() < 1e-12 && x[1].im.abs() < 1e-12, "{x:?}");
+        assert!(
+            (x[0].re - 0.8).abs() < 1e-12 && x[0].im.abs() < 1e-12,
+            "{x:?}"
+        );
+        assert!(
+            (x[1].re - 1.4).abs() < 1e-12 && x[1].im.abs() < 1e-12,
+            "{x:?}"
+        );
     }
 
     #[test]

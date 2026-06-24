@@ -213,10 +213,7 @@ impl Partition {
             }
         }
 
-        let mut islands: Vec<Island> = roots
-            .iter()
-            .map(|r| by_root.remove(r).unwrap())
-            .collect();
+        let mut islands: Vec<Island> = roots.iter().map(|r| by_root.remove(r).unwrap()).collect();
 
         for (idx, isl) in islands.iter_mut().enumerate() {
             let mut bin = Vec::new();
@@ -243,7 +240,9 @@ impl Partition {
 
     /// True if any island is purely linear and worth the state-space path.
     pub fn has_linear_island(&self) -> bool {
-        self.islands.iter().any(|i| i.linear && !i.devices.is_empty())
+        self.islands
+            .iter()
+            .any(|i| i.linear && !i.devices.is_empty())
     }
 
     /// Number of nonlinear islands.
@@ -322,10 +321,34 @@ mod tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "Ra".into(), a: rail, b: a, ohms: 1e3, tc1: None });
-        c.add(Device::Capacitor { name: "Ca".into(), a, b: NodeId::GROUND, farads: 1e-9, ic: Some(0.0) });
-        c.add(Device::Resistor { name: "Rb".into(), a: rail, b, ohms: 1e3, tc1: None });
-        c.add(Device::Capacitor { name: "Cb".into(), a: b, b: NodeId::GROUND, farads: 1e-9, ic: Some(0.0) });
+        c.add(Device::Resistor {
+            name: "Ra".into(),
+            a: rail,
+            b: a,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "Ca".into(),
+            a,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: Some(0.0),
+        });
+        c.add(Device::Resistor {
+            name: "Rb".into(),
+            a: rail,
+            b,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "Cb".into(),
+            a: b,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: Some(0.0),
+        });
         let p = Partition::analyze(&c);
         // rail is shared between the two branches but it's source-driven, so the
         // two RC legs are independent islands.
@@ -344,7 +367,13 @@ mod tests {
             kind: SourceKind::Dc(1.0),
         });
         let d = c.node("d");
-        c.add(Device::Resistor { name: "R".into(), a: n, b: d, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a: n,
+            b: d,
+            ohms: 1e3,
+            tc1: None,
+        });
         c.add(Device::Diode {
             name: "D".into(),
             a: d,

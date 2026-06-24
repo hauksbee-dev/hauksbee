@@ -20,8 +20,20 @@ fn rc_lowpass(r: f64, c: f64) -> (Circuit, f64) {
         n: NodeId::GROUND,
         kind: SourceKind::Dc(0.0),
     });
-    ckt.add(Device::Resistor { name: "R1".into(), a: vin, b: out, ohms: r, tc1: None });
-    ckt.add(Device::Capacitor { name: "C1".into(), a: out, b: NodeId::GROUND, farads: c, ic: None });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: out,
+        ohms: r,
+        tc1: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
     let fc = 1.0 / (std::f64::consts::TAU * r * c);
     (ckt, fc)
 }
@@ -29,17 +41,31 @@ fn rc_lowpass(r: f64, c: f64) -> (Circuit, f64) {
 #[test]
 fn decade_sweep_includes_endpoints_for_non_integer_decades() {
     // 100 Hz .. 3 kHz is ~1.477 decades: the endpoint must still be present.
-    let spec = AcSpec { fstart: 100.0, fstop: 3000.0, points: 10, sweep: Sweep::Decade };
+    let spec = AcSpec {
+        fstart: 100.0,
+        fstop: 3000.0,
+        points: 10,
+        sweep: Sweep::Decade,
+    };
     let f = spec.frequencies();
     assert_eq!(f[0], 100.0, "first point should be fstart");
-    assert!((f.last().copied().unwrap() - 3000.0).abs() < 1e-6, "last={:?}", f.last());
+    assert!(
+        (f.last().copied().unwrap() - 3000.0).abs() < 1e-6,
+        "last={:?}",
+        f.last()
+    );
     // Monotonic increasing.
     assert!(f.windows(2).all(|w| w[1] > w[0]), "not monotonic: {f:?}");
 }
 
 #[test]
 fn linear_sweep_hits_both_endpoints() {
-    let spec = AcSpec { fstart: 10.0, fstop: 100.0, points: 5, sweep: Sweep::Linear };
+    let spec = AcSpec {
+        fstart: 10.0,
+        fstop: 100.0,
+        points: 5,
+        sweep: Sweep::Linear,
+    };
     let f = spec.frequencies();
     assert_eq!(f.len(), 5);
     assert!((f[0] - 10.0).abs() < 1e-9);
@@ -54,14 +80,25 @@ fn rc_lowpass_corner_is_minus_3db_minus_45deg() {
     let (ckt, fc) = rc_lowpass(r, c);
     assert!((fc - 1000.0).abs() < 1.0, "fc={fc}");
 
-    let spec = AcSpec { fstart: fc, fstop: fc, points: 1, sweep: Sweep::Linear };
+    let spec = AcSpec {
+        fstart: fc,
+        fstop: fc,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let bode = resp.bode(&ckt, "out");
     let (_f, db, phase) = bode[0];
 
     // At the corner, |H| = 1/sqrt(2) -> -3.0103 dB, phase = -45 deg.
-    assert!((db + 3.0103).abs() < 1e-3, "corner gain {db} dB (want -3.01)");
-    assert!((phase + 45.0).abs() < 1e-3, "corner phase {phase} deg (want -45)");
+    assert!(
+        (db + 3.0103).abs() < 1e-3,
+        "corner gain {db} dB (want -3.01)"
+    );
+    assert!(
+        (phase + 45.0).abs() < 1e-3,
+        "corner phase {phase} deg (want -45)"
+    );
 }
 
 #[test]
@@ -70,11 +107,19 @@ fn rc_lowpass_rolloff_is_minus_20db_per_decade() {
     // Two points a decade apart, well above the corner where the asymptote holds.
     let f1 = fc * 100.0;
     let f2 = fc * 1000.0;
-    let spec = AcSpec { fstart: f1, fstop: f2, points: 2, sweep: Sweep::Linear };
+    let spec = AcSpec {
+        fstart: f1,
+        fstop: f2,
+        points: 2,
+        sweep: Sweep::Linear,
+    };
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let bode = resp.bode(&ckt, "out");
     let slope = bode[1].1 - bode[0].1; // dB change over one decade
-    assert!((slope + 20.0).abs() < 0.1, "rolloff {slope} dB/decade (want -20)");
+    assert!(
+        (slope + 20.0).abs() < 0.1,
+        "rolloff {slope} dB/decade (want -20)"
+    );
 }
 
 #[test]
@@ -82,7 +127,12 @@ fn rc_lowpass_matches_closed_form_across_sweep() {
     let r = 4.7e3;
     let c = 22e-9;
     let (ckt, _fc) = rc_lowpass(r, c);
-    let spec = AcSpec { fstart: 10.0, fstop: 1e6, points: 20, sweep: Sweep::Decade };
+    let spec = AcSpec {
+        fstart: 10.0,
+        fstop: 1e6,
+        points: 20,
+        sweep: Sweep::Decade,
+    };
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     for p in &resp.points {
         let v = p.node(&ckt, "out").unwrap();
@@ -90,7 +140,13 @@ fn rc_lowpass_matches_closed_form_across_sweep() {
         let w = std::f64::consts::TAU * p.freq;
         let denom = num_complex::Complex64::new(1.0, w * r * c);
         let h = num_complex::Complex64::new(1.0, 0.0) / denom;
-        assert!((v.norm() - h.norm()).abs() < 1e-6, "f={} |V|={} want {}", p.freq, v.norm(), h.norm());
+        assert!(
+            (v.norm() - h.norm()).abs() < 1e-6,
+            "f={} |V|={} want {}",
+            p.freq,
+            v.norm(),
+            h.norm()
+        );
         let dphase = (v.arg() - h.arg()).to_degrees().abs();
         assert!(dphase < 1e-3, "f={} phase off by {dphase} deg", p.freq);
     }
@@ -114,40 +170,90 @@ fn series_rlc_resonant_frequency_and_q() {
     let vin = ckt.node("in");
     let mid = ckt.node("mid");
     let out = ckt.node("out");
-    ckt.add(Device::Vsource { name: "VIN".into(), p: vin, n: NodeId::GROUND, kind: SourceKind::Dc(0.0) });
-    ckt.add(Device::Resistor { name: "R1".into(), a: vin, b: mid, ohms: r, tc1: None });
-    ckt.add(Device::Inductor { name: "L1".into(), a: mid, b: out, henries: l, ic: None });
-    ckt.add(Device::Capacitor { name: "C1".into(), a: out, b: NodeId::GROUND, farads: c, ic: None });
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: mid,
+        ohms: r,
+        tc1: None,
+    });
+    ckt.add(Device::Inductor {
+        name: "L1".into(),
+        a: mid,
+        b: out,
+        henries: l,
+        ic: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
 
     // Sweep finely around f0.
-    let spec = AcSpec { fstart: f0 * 0.1, fstop: f0 * 10.0, points: 400, sweep: Sweep::Decade };
+    let spec = AcSpec {
+        fstart: f0 * 0.1,
+        fstop: f0 * 10.0,
+        points: 400,
+        sweep: Sweep::Decade,
+    };
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let bode = resp.bode(&ckt, "out");
 
     // Peak magnitude and its frequency.
-    let (peak_f, peak_db) = bode
-        .iter()
-        .map(|&(f, db, _)| (f, db))
-        .fold((0.0, f64::NEG_INFINITY), |acc, x| if x.1 > acc.1 { x } else { acc });
+    let (peak_f, peak_db) =
+        bode.iter()
+            .map(|&(f, db, _)| (f, db))
+            .fold(
+                (0.0, f64::NEG_INFINITY),
+                |acc, x| if x.1 > acc.1 { x } else { acc },
+            );
 
     // The peaking frequency of the |V_C| response is fr = f0*sqrt(1 - 1/(2Q^2)),
     // which for Q=3.16 is ~0.975*f0. Allow a small sweep-resolution tolerance.
     let fr = f0 * (1.0 - 1.0 / (2.0 * q * q)).max(0.0).sqrt();
-    assert!((peak_f - fr).abs() / fr < 0.02, "peak at {peak_f} Hz, want ~{fr} (f0={f0})");
+    assert!(
+        (peak_f - fr).abs() / fr < 0.02,
+        "peak at {peak_f} Hz, want ~{fr} (f0={f0})"
+    );
 
     // Peak magnitude of V_C at resonance ~ Q (in dB, 20 log10 Q), for high Q.
     // Closed form peak |H| = Q / sqrt(1 - 1/(4Q^2)).
     let peak_mag = q / (1.0 - 1.0 / (4.0 * q * q)).sqrt();
     let want_db = 20.0 * peak_mag.log10();
-    assert!((peak_db - want_db).abs() < 0.2, "peak {peak_db} dB, want {want_db} (Q={q})");
+    assert!(
+        (peak_db - want_db).abs() < 0.2,
+        "peak {peak_db} dB, want {want_db} (Q={q})"
+    );
 
     // Verify exact closed form at f0 itself: H(jw0) = 1/(jw0 R C) -> |H| = Q.
-    let spec0 = AcSpec { fstart: f0, fstop: f0, points: 1, sweep: Sweep::Linear };
+    let spec0 = AcSpec {
+        fstart: f0,
+        fstop: f0,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
     let r0 = AcAnalysis::new(opts()).run(&ckt, &spec0).unwrap();
     let v0 = r0.points[0].node(&ckt, "out").unwrap();
-    assert!((v0.norm() - q).abs() / q < 1e-4, "|H(f0)|={} want Q={q}", v0.norm());
+    assert!(
+        (v0.norm() - q).abs() / q < 1e-4,
+        "|H(f0)|={} want Q={q}",
+        v0.norm()
+    );
     // At resonance the cap voltage lags the source by 90 deg.
-    assert!((v0.arg().to_degrees() + 90.0).abs() < 1e-2, "phase {} deg", v0.arg().to_degrees());
+    assert!(
+        (v0.arg().to_degrees() + 90.0).abs() < 1e-2,
+        "phase {} deg",
+        v0.arg().to_degrees()
+    );
 }
 
 /// RLC notch (band-stop): output taken across the series L+C tank to ground is a
@@ -164,17 +270,49 @@ fn series_lc_notch_at_resonance() {
     let vin = ckt.node("in");
     let out = ckt.node("out");
     let tank = ckt.node("tank");
-    ckt.add(Device::Vsource { name: "VIN".into(), p: vin, n: NodeId::GROUND, kind: SourceKind::Dc(0.0) });
-    ckt.add(Device::Resistor { name: "R1".into(), a: vin, b: out, ohms: r, tc1: None });
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: out,
+        ohms: r,
+        tc1: None,
+    });
     // Series L then C from out to ground: a series LC trap.
-    ckt.add(Device::Inductor { name: "L1".into(), a: out, b: tank, henries: l, ic: None });
-    ckt.add(Device::Capacitor { name: "C1".into(), a: tank, b: NodeId::GROUND, farads: c, ic: None });
+    ckt.add(Device::Inductor {
+        name: "L1".into(),
+        a: out,
+        b: tank,
+        henries: l,
+        ic: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: tank,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
 
-    let spec = AcSpec { fstart: f0, fstop: f0, points: 1, sweep: Sweep::Linear };
+    let spec = AcSpec {
+        fstart: f0,
+        fstop: f0,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     let v = resp.points[0].node(&ckt, "out").unwrap();
     // At f0 the series LC is ~0 ohms, so out is pulled to ground: deep notch.
-    assert!(v.norm() < 1e-6, "notch depth |V|={} at f0={f0} (want ~0)", v.norm());
+    assert!(
+        v.norm() < 1e-6,
+        "notch depth |V|={} at f0={f0} (want ~0)",
+        v.norm()
+    );
 }
 
 /// Textbook op-amp feedback loop with a known phase margin.
@@ -206,7 +344,12 @@ fn opamp_unity_buffer_phase_margin_about_90() {
     let out = ckt.node("out"); // after the dominant-pole RC
 
     // Loop-break injection: a unit AC source from ground into `fb`.
-    ckt.add(Device::Vsource { name: "VINJ".into(), p: fb, n: NodeId::GROUND, kind: SourceKind::Dc(0.0) });
+    ckt.add(Device::Vsource {
+        name: "VINJ".into(),
+        p: fb,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
     // Op-amp: non-inverting input grounded, inverting input = fb. Large gain.
     // out = A0 * (vp - vn) = A0 * (0 - fb) = -A0 * fb.
     ckt.add(Device::OpAmp {
@@ -219,11 +362,28 @@ fn opamp_unity_buffer_phase_margin_about_90() {
         rail_hi: 1e9,
     });
     // Dominant pole: R from oa to out, C from out to ground.
-    ckt.add(Device::Resistor { name: "RP".into(), a: oa, b: out, ohms: r, tc1: None });
-    ckt.add(Device::Capacitor { name: "CP".into(), a: out, b: NodeId::GROUND, farads: c, ic: None });
+    ckt.add(Device::Resistor {
+        name: "RP".into(),
+        a: oa,
+        b: out,
+        ohms: r,
+        tc1: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "CP".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
 
     // Sweep wide enough to capture crossover at A0*fp = 10 MHz.
-    let spec = AcSpec { fstart: 1.0, fstop: 1e8, points: 50, sweep: Sweep::Decade };
+    let spec = AcSpec {
+        fstart: 1.0,
+        fstop: 1e8,
+        points: 50,
+        sweep: Sweep::Decade,
+    };
     let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
     // Read the loop gain T = -V_out at the break point (the LoopStability path
     // applies the summing-junction sign convention).
@@ -232,7 +392,11 @@ fn opamp_unity_buffer_phase_margin_about_90() {
 
     let fc = m.gain_crossover_hz.expect("loop should cross 0 dB");
     // Unity-gain crossover ~ A0 * fp.
-    assert!((fc - a0 * fp).abs() / (a0 * fp) < 0.1, "fc={fc}, want ~{}", a0 * fp);
+    assert!(
+        (fc - a0 * fp).abs() / (a0 * fp) < 0.1,
+        "fc={fc}, want ~{}",
+        a0 * fp
+    );
     let pm = m.phase_margin_deg.expect("phase margin");
     // Single dominant pole -> ~90 deg phase margin (allowing the inverting sign
     // and a little numerical slack). The buffer is unconditionally stable.

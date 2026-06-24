@@ -59,7 +59,10 @@ impl StampPlan {
         };
 
         for (_, dev) in circuit.iter() {
-            if let Device::Resistor { a, b, ohms, tc1, .. } = dev {
+            if let Device::Resistor {
+                a, b, ohms, tc1, ..
+            } = dev
+            {
                 // Only fold in temperature-independent resistors; tc1 resistors
                 // depend on options.temperature so they stay interpreted.
                 if tc1.is_none() && *ohms > 0.0 {
@@ -75,7 +78,10 @@ impl StampPlan {
             }
         }
 
-        StampPlan { cond_ops, gmin_diag }
+        StampPlan {
+            cond_ops,
+            gmin_diag,
+        }
     }
 
     /// Apply the constant conductance backbone into `m` (which must have the
@@ -115,8 +121,20 @@ mod tests {
         let mut c = Circuit::new();
         let a = c.node("a");
         let b = c.node("b");
-        c.add(Device::Resistor { name: "R1".into(), a, b, ohms: 1e3, tc1: None });
-        c.add(Device::Resistor { name: "R2".into(), a: b, b: NodeId::GROUND, ohms: 2e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a,
+            b,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 2e3,
+            tc1: None,
+        });
 
         let layout = Layout::new(&c);
         let mut m = SparseMatrix::new(layout.size);
