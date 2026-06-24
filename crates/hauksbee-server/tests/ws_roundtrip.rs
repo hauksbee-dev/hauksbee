@@ -8,8 +8,7 @@ use hauksbee_server::Server;
 use std::path::PathBuf;
 
 fn demo_hex() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/firmware/demo/demo.hex");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/firmware/demo/demo.hex");
     p.exists().then_some(p)
 }
 
@@ -51,10 +50,7 @@ async fn ws_protocol_roundtrip() {
         let n = stream.read(&mut buf).await.unwrap();
         assert!(n > 0, "server closed during handshake");
         handshake.extend_from_slice(&buf[..n]);
-        if let Some(pos) = handshake
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-        {
+        if let Some(pos) = handshake.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos + 4;
         }
     };
@@ -92,11 +88,7 @@ async fn ws_protocol_roundtrip() {
     assert!(saw_frame, "no SimFrame received");
 
     // Serial command: 'i' returns the ident string via frame uart payloads.
-    write_ws_text(
-        &mut stream,
-        r#"{"type":"Serial","mcu":"U1","data":[105]}"#,
-    )
-    .await;
+    write_ws_text(&mut stream, r#"{"type":"Serial","mcu":"U1","data":[105]}"#).await;
     let mut uart_text = String::new();
     for _ in 0..240 {
         let payload = read_ws_text(&mut stream, &mut residue).await;
@@ -164,11 +156,6 @@ async fn write_ws_text(stream: &mut tokio::net::TcpStream, text: &str) {
         frame.extend((payload.len() as u16).to_be_bytes());
     }
     frame.extend(mask);
-    frame.extend(
-        payload
-            .iter()
-            .enumerate()
-            .map(|(i, b)| b ^ mask[i % 4]),
-    );
+    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
     stream.write_all(&frame).await.unwrap();
 }

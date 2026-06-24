@@ -32,9 +32,8 @@ impl Server {
     pub fn new(engine: Box<dyn Engine>) -> Server {
         let (tx, _) = broadcast::channel::<String>(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(64);
-        let board_info =
-            serde_json::to_string(&ServerMessage::BoardInfo(engine.board_info()))
-                .expect("board info serializes");
+        let board_info = serde_json::to_string(&ServerMessage::BoardInfo(engine.board_info()))
+            .expect("board info serializes");
         let shared = Arc::new(Shared {
             tx: tx.clone(),
             cmd: cmd_tx,
@@ -65,7 +64,13 @@ impl Server {
             router = router.route(
                 &url_path,
                 get(move || async move {
-                    ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], contents)
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/plain; charset=utf-8",
+                        )],
+                        contents,
+                    )
                 }),
             );
         }
@@ -96,10 +101,7 @@ impl Server {
     }
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(shared): State<Arc<Shared>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(shared): State<Arc<Shared>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, shared))
 }
 
@@ -153,8 +155,7 @@ async fn sim_loop(
     let mut running = false;
     let mut speed = 1.0f64;
     let frame_dt = 1.0 / FRAME_RATE_HZ;
-    let mut ticker =
-        tokio::time::interval(std::time::Duration::from_secs_f64(frame_dt));
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs_f64(frame_dt));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let broadcast_msg = |msg: &ServerMessage| {
