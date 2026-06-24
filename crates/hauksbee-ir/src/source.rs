@@ -56,18 +56,35 @@ impl SourceKind {
     pub fn eval(&self, t: f64) -> f64 {
         match self {
             SourceKind::Dc(v) => *v,
-            SourceKind::Sin { offset, amplitude, freq, delay, theta, phase } => {
+            SourceKind::Sin {
+                offset,
+                amplitude,
+                freq,
+                delay,
+                theta,
+                phase,
+            } => {
                 if t < *delay {
                     *offset + amplitude * (phase.to_radians()).sin()
                 } else {
                     let td = t - delay;
-                    let damp = if *theta != 0.0 { (-theta * td).exp() } else { 1.0 };
+                    let damp = if *theta != 0.0 {
+                        (-theta * td).exp()
+                    } else {
+                        1.0
+                    };
                     offset + amplitude * damp * (TAU * freq * td + phase.to_radians()).sin()
                 }
             }
-            SourceKind::Pulse { v1, v2, delay, rise, fall, width, period } => {
-                pulse(*v1, *v2, *delay, *rise, *fall, *width, *period, t)
-            }
+            SourceKind::Pulse {
+                v1,
+                v2,
+                delay,
+                rise,
+                fall,
+                width,
+                period,
+            } => pulse(*v1, *v2, *delay, *rise, *fall, *width, *period, t),
             SourceKind::Pwl(points) => pwl(points, t),
         }
     }
@@ -81,7 +98,16 @@ impl SourceKind {
     }
 }
 
-fn pulse(v1: f64, v2: f64, delay: f64, rise: f64, fall: f64, width: f64, period: f64, t: f64) -> f64 {
+fn pulse(
+    v1: f64,
+    v2: f64,
+    delay: f64,
+    rise: f64,
+    fall: f64,
+    width: f64,
+    period: f64,
+    t: f64,
+) -> f64 {
     if t < delay {
         return v1;
     }

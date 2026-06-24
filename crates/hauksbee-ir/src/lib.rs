@@ -84,7 +84,10 @@ impl Circuit {
 
     /// Name of a node, or `"?"` if the id is out of range.
     pub fn node_name(&self, id: NodeId) -> &str {
-        self.node_names.get(id.0 as usize).map(String::as_str).unwrap_or("?")
+        self.node_names
+            .get(id.0 as usize)
+            .map(String::as_str)
+            .unwrap_or("?")
     }
 
     /// Number of nodes including ground.
@@ -258,7 +261,13 @@ impl Device {
                 }
                 v
             }
-            Device::VSwitch { a, b, ctrl_p, ctrl_n, .. } => vec![*a, *b, *ctrl_p, *ctrl_n],
+            Device::VSwitch {
+                a,
+                b,
+                ctrl_p,
+                ctrl_n,
+                ..
+            } => vec![*a, *b, *ctrl_p, *ctrl_n],
             Device::OpAmp { out, inp, inn, .. } | Device::Comparator { out, inp, inn, .. } => {
                 vec![*out, *inp, *inn]
             }

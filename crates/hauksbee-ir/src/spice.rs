@@ -46,13 +46,25 @@ pub struct SpiceLoader;
 #[derive(Debug, Error)]
 pub enum SpiceError {
     #[error("line {line}: {msg}: `{text}`")]
-    Syntax { line: usize, msg: String, text: String },
+    Syntax {
+        line: usize,
+        msg: String,
+        text: String,
+    },
     #[error("line {line}: unknown element type `{ch}`: `{text}`")]
     UnknownElement { line: usize, ch: char, text: String },
     #[error("line {line}: references undefined .model `{model}`: `{text}`")]
-    MissingModel { line: usize, model: String, text: String },
+    MissingModel {
+        line: usize,
+        model: String,
+        text: String,
+    },
     #[error("line {line}: malformed number `{tok}`: `{text}`")]
-    BadNumber { line: usize, tok: String, text: String },
+    BadNumber {
+        line: usize,
+        tok: String,
+        text: String,
+    },
 }
 
 impl SpiceLoader {
@@ -463,7 +475,11 @@ fn parse_source_kind(line: usize, raw: &str, rest: &[String]) -> Result<SourceKi
     // `Vx n+ n- DC 5`, `Vx n+ n- 5`, or a function.
     match head.as_str() {
         "dc" => {
-            let v = rest.get(1).map(|t| number(line, t, raw)).transpose()?.unwrap_or(0.0);
+            let v = rest
+                .get(1)
+                .map(|t| number(line, t, raw))
+                .transpose()?
+                .unwrap_or(0.0);
             Ok(SourceKind::Dc(v))
         }
         "sin" | "sine" => {
@@ -494,7 +510,10 @@ fn parse_source_kind(line: usize, raw: &str, rest: &[String]) -> Result<SourceKi
             let mut points = Vec::new();
             for pair in nums.chunks(2) {
                 if pair.len() == 2 {
-                    points.push(PwlPoint { t: pair[0], v: pair[1] });
+                    points.push(PwlPoint {
+                        t: pair[0],
+                        v: pair[1],
+                    });
                 }
             }
             Ok(SourceKind::Pwl(points))
@@ -691,8 +710,16 @@ fn mosfet_from_card(card: &ModelCard, kv: &HashMap<String, f64>) -> MosfetModel 
         _ => Polarity::N,
     };
     // W/L from the instance line if present, else the model, else 1.
-    let l = kv.get("l").copied().or_else(|| card.get("l")).unwrap_or(1.0);
-    let w = kv.get("w").copied().or_else(|| card.get("w")).unwrap_or(1.0);
+    let l = kv
+        .get("l")
+        .copied()
+        .or_else(|| card.get("l"))
+        .unwrap_or(1.0);
+    let w = kv
+        .get("w")
+        .copied()
+        .or_else(|| card.get("w"))
+        .unwrap_or(1.0);
     let w_over_l = if l != 0.0 { w / l } else { 1.0 };
     MosfetModel {
         level: MosLevel::Level1,
@@ -764,7 +791,11 @@ fn parse_options(raw: &str, directives: &mut Directives) {
     }
 }
 
-fn parse_tran(line: usize, raw: &str, directives: &mut Directives) -> Result<TranDirective, SpiceError> {
+fn parse_tran(
+    line: usize,
+    raw: &str,
+    directives: &mut Directives,
+) -> Result<TranDirective, SpiceError> {
     let toks = tokenize(raw);
     let mut nums = Vec::new();
     for t in &toks[1..] {
@@ -847,7 +878,10 @@ mod tests {
         let net = "p\nV1 a 0 pulse(0 5 1m 1u 1u 2m 5m)\n.end\n";
         let c = SpiceLoader::load(net).unwrap();
         match &c.devices[0] {
-            Device::Vsource { kind: SourceKind::Pulse { v2, period, .. }, .. } => {
+            Device::Vsource {
+                kind: SourceKind::Pulse { v2, period, .. },
+                ..
+            } => {
                 assert_eq!(*v2, 5.0);
                 assert!((*period - 5e-3).abs() < 1e-12);
             }
