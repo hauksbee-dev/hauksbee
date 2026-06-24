@@ -247,6 +247,11 @@ fn event_loop(
         if let Some(h) = &cosim {
             while let Ok(u) = h.rx.try_recv() {
                 let done = u.done;
+                // Surface the chip-substitution caveat in AppState so both the
+                // idle and live cosim views show it (parity with CLI/web).
+                if let Some(sub) = &u.substitution {
+                    state.set_chip_substitution(sub.clone());
+                }
                 last_update = Some(u);
                 if done {
                     cosim = None;

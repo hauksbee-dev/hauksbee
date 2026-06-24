@@ -396,7 +396,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 // running we wait out a boot window; on completion we show it
                 // unconditionally (a finished run that produced nothing is the
                 // clearest stall of all — keep the pane honest, don't blank it).
-                let quiet = !u.gpio_active && !u.uart_seen;
+                let quiet = !u.gpio_active && !u.gpio_driven && !u.uart_seen;
                 if quiet && (u.done || u.wall_s > STALL_AFTER_WALL_S) {
                     let head = if u.done {
                         "no GPIO/UART activity — firmware never drove a peripheral."
