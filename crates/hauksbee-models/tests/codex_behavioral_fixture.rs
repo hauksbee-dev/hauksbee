@@ -20,11 +20,21 @@ fn codex_extracted_ltc4020_matches_hand_model_structurally() {
     let m = db.models.into_iter().next().expect("one model");
 
     // Agreement with the hand model:
-    assert_eq!(m.kind, hauksbee_models::ComponentKind::Vreg, "charger base kind");
+    assert_eq!(
+        m.kind,
+        hauksbee_models::ComponentKind::Vreg,
+        "charger base kind"
+    );
     assert!(!m.behavioral.is_empty(), "must carry a behavioural block");
 
     // Pin map: codex got the load-bearing pads right.
-    for (pad, role) in [("36", "pvin"), ("20", "bat"), ("25", "ilimit"), ("23", "csp"), ("22", "csn")] {
+    for (pad, role) in [
+        ("36", "pvin"),
+        ("20", "bat"),
+        ("25", "ilimit"),
+        ("23", "csp"),
+        ("22", "csn"),
+    ] {
         assert_eq!(m.pins.get(pad).map(String::as_str), Some(role), "pad {pad}");
     }
 
@@ -37,14 +47,26 @@ fn codex_extracted_ltc4020_matches_hand_model_structurally() {
     );
     assert_eq!(c.out_pin, "bat");
     assert_eq!(c.in_pin, "pvin");
-    assert!((c.vout_setpoint - 28.8).abs() < 0.1, "8S LiFePO4 28.8 V CV target");
-    assert!((c.efficiency.unwrap() - 0.92).abs() < 0.01, "92% efficiency");
+    assert!(
+        (c.vout_setpoint - 28.8).abs() < 0.1,
+        "8S LiFePO4 28.8 V CV target"
+    );
+    assert!(
+        (c.efficiency.unwrap() - 0.92).abs() < 0.01,
+        "92% efficiency"
+    );
 
     // The input-current-limit program structure is present (rsense + prog refs),
     // which is the load-bearing agreement: codex understood the ILIMIT/RSENSE
     // programming even though it (honestly) left the transfer-function constants
     // at 0 because the excerpt did not state the equation.
     let sp = c.iin_program.as_ref().expect("iin_program present");
-    assert!(sp.rsense_ref.is_some(), "codex bound an input sense resistor ref");
-    assert!(sp.prog_ref.is_some(), "codex bound an ILIMIT program resistor ref");
+    assert!(
+        sp.rsense_ref.is_some(),
+        "codex bound an input sense resistor ref"
+    );
+    assert!(
+        sp.prog_ref.is_some(),
+        "codex bound an ILIMIT program resistor ref"
+    );
 }

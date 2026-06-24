@@ -30,6 +30,7 @@ pub mod behavioral;
 pub mod matcher;
 pub mod profile;
 pub mod schema;
+pub mod sensor_spec;
 pub mod spice_input;
 pub mod validation;
 pub mod value;
@@ -43,6 +44,7 @@ use thiserror::Error;
 pub use matcher::ComponentQuery;
 pub use profile::{LoadProfile, Segment};
 pub use schema::{ComponentKind, ModelEntry, Params, StrapLevel, StrapPin};
+pub use sensor_spec::{Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError};
 pub use spice_input::SpiceCard;
 
 // ── Embedded database files ───────────────────────────────────────────────────

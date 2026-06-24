@@ -40,7 +40,12 @@ impl CompiledEntry {
             .as_deref()
             .map(|p| Regex::new(&format!("(?i){}", p)))
             .transpose()?;
-        Ok(CompiledEntry { entry, value_re, footprint_re, mpn_re })
+        Ok(CompiledEntry {
+            entry,
+            value_re,
+            footprint_re,
+            mpn_re,
+        })
     }
 
     /// Whether this entry's match rules fire for the given query fields.

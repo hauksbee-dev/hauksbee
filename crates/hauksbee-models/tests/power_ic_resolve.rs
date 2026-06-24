@@ -17,7 +17,10 @@ fn power_ics_resolve_and_carry_behavioral() {
         let r = lib.resolve(&q);
         let m = r.model.unwrap_or_else(|| panic!("{val} did not resolve"));
         assert_eq!(m.id, id, "{val} resolved to wrong id");
-        assert!(!m.behavioral.is_empty(), "{val} must carry a behavioural block");
+        assert!(
+            !m.behavioral.is_empty(),
+            "{val} must carry a behavioural block"
+        );
     }
 
     // LTC4020 converter reads R8 (ILIMIT) and R49 (input shunt) off the board.

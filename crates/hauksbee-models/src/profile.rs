@@ -139,7 +139,14 @@ impl LoadProfile {
                 }
                 let period = (seg.period_s + jitter(seed, i, seg.jitter_s)).max(1e-9);
                 let phase = local0.rem_euclid(period);
-                return ramp_hold(prev_level, seg.level_a, idle, seg.rise_s, seg.duration_s, phase);
+                return ramp_hold(
+                    prev_level,
+                    seg.level_a,
+                    idle,
+                    seg.rise_s,
+                    seg.duration_s,
+                    phase,
+                );
             }
 
             // Non-periodic segment. Its active span is rise + duration.
@@ -214,7 +221,11 @@ mod tests {
     #[test]
     fn builtin_profiles_parse_and_are_nonempty() {
         let ps = LoadProfile::builtin();
-        assert!(ps.len() >= 6, "expected at least 6 builtin profiles, got {}", ps.len());
+        assert!(
+            ps.len() >= 6,
+            "expected at least 6 builtin profiles, got {}",
+            ps.len()
+        );
         for p in &ps {
             assert!(!p.segments.is_empty(), "profile {} has no segments", p.id);
         }
@@ -253,7 +264,10 @@ mod tests {
             peak = peak.max(p.current_at(t, 0));
             t += 0.0002;
         }
-        assert!((peak - 0.240).abs() < 1e-6, "burst peak {peak} should hit 240 mA");
+        assert!(
+            (peak - 0.240).abs() < 1e-6,
+            "burst peak {peak} should hit 240 mA"
+        );
 
         // Late in the period (after the 10 ms burst) it idles at 40 mA.
         let idle = p.current_at(t0 + 0.050, 0);
@@ -287,8 +301,12 @@ mod tests {
         };
         // Same seed => identical waveform; different seed => may differ.
         assert_eq!(p.current_at(0.05, 7), p.current_at(0.05, 7));
-        let s0 = (0..200).map(|k| p.current_at(k as f64 * 0.0005, 0)).sum::<f64>();
-        let s1 = (0..200).map(|k| p.current_at(k as f64 * 0.0005, 1)).sum::<f64>();
+        let s0 = (0..200)
+            .map(|k| p.current_at(k as f64 * 0.0005, 0))
+            .sum::<f64>();
+        let s1 = (0..200)
+            .map(|k| p.current_at(k as f64 * 0.0005, 1))
+            .sum::<f64>();
         assert!((s0 - s1).abs() > 0.0, "jitter should make seeds differ");
     }
 }

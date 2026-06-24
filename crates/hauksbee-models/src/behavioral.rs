@@ -350,7 +350,9 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
     for (role, pin) in &b.pins {
         let has_pull = pin.pull_to.is_some() || pin.pull_to_volts.is_some();
         if has_pull && pin.pull_ohms.is_none() {
-            errs.push(format!("pin '{role}': pull target set but pull_ohms missing"));
+            errs.push(format!(
+                "pin '{role}': pull target set but pull_ohms missing"
+            ));
         }
         if let Some(r) = pin.pull_ohms {
             if r <= 0.0 {
@@ -379,7 +381,10 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         }
         for (i, tr) in fsm.transitions.iter().enumerate() {
             if !known.contains(tr.from.as_str()) {
-                errs.push(format!("fsm transition {i}: unknown from-state '{}'", tr.from));
+                errs.push(format!(
+                    "fsm transition {i}: unknown from-state '{}'",
+                    tr.from
+                ));
             }
             if !known.contains(tr.to.as_str()) {
                 errs.push(format!("fsm transition {i}: unknown to-state '{}'", tr.to));
@@ -437,7 +442,10 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             errs.push(format!("law '{}': empty 'a' pin", law.name));
         }
         if matches!(law.kind, LawKind::Current) && law.b.is_none() {
-            errs.push(format!("law '{}': current law needs a 'b' sink pin", law.name));
+            errs.push(format!(
+                "law '{}': current law needs a 'b' sink pin",
+                law.name
+            ));
         }
     }
 
@@ -510,7 +518,11 @@ v_sense_full = 0.05
         assert_eq!(c.topology, Topology::BuckBoost);
         let sp = c.iin_program.as_ref().unwrap();
         assert_eq!(sp.prog_ref.as_deref(), Some("R8"));
-        assert!(validate_behavioral(&b).is_empty(), "{:?}", validate_behavioral(&b));
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "{:?}",
+            validate_behavioral(&b)
+        );
     }
 
     #[test]

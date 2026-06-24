@@ -3,8 +3,8 @@
 //! Each entry describes how to match a KiCad component and what simulation
 //! model to produce for it.
 
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 // ── Top-level file container ──────────────────────────────────────────────────
 
@@ -59,7 +59,10 @@ pub struct ModelEntry {
     /// Optional declarative behavioural model (pins/pulls, FSM, averaged
     /// converter, expression laws) for power ICs the SPICE-level kinds cannot
     /// express. See [`crate::behavioral`].
-    #[serde(default, skip_serializing_if = "crate::behavioral::Behavioral::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::behavioral::Behavioral::is_empty"
+    )]
     pub behavioral: crate::behavioral::Behavioral,
 }
 
