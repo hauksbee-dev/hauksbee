@@ -94,7 +94,10 @@ fn main() -> ExitCode {
 
     if let Some(path) = &args.junit {
         if let Err(e) = std::fs::write(path, result.render_junit()) {
-            eprintln!("hauksbee-ci: could not write JUnit XML to {}: {e}", path.display());
+            eprintln!(
+                "hauksbee-ci: could not write JUnit XML to {}: {e}",
+                path.display()
+            );
             return ExitCode::from(2);
         }
         if !args.quiet {

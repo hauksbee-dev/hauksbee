@@ -65,7 +65,10 @@ fn bad_sweep_mode_is_rejected() {
         "board=\"b.kicad_pcb\"\nduration_ms=1\n[ac]\nfstart=10\nfstop=1e5\npoints=10\nsweep=\"octave\"\n[[assert]]\nkind=\"ac_gain\"\nnet=\"OUT\"\nmin=-3\n",
     );
     let err = Spec::load(&p).unwrap_err();
-    assert!(err.to_string().contains("dec") || err.to_string().contains("lin"), "got: {err}");
+    assert!(
+        err.to_string().contains("dec") || err.to_string().contains("lin"),
+        "got: {err}"
+    );
 }
 
 // --- end-to-end: representative compensated op-amp loop ----------------------
@@ -78,7 +81,12 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
     let fb = ckt.node("fb");
     let oa = ckt.node("oa");
     let out = ckt.node("out");
-    ckt.add(Device::Vsource { name: "VINJ".into(), p: fb, n: NodeId::GROUND, kind: SourceKind::Dc(0.0) });
+    ckt.add(Device::Vsource {
+        name: "VINJ".into(),
+        p: fb,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
     ckt.add(Device::OpAmp {
         name: "U1".into(),
         out: oa,
@@ -88,16 +96,35 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
         rail_lo: -1e9,
         rail_hi: 1e9,
     });
-    ckt.add(Device::Resistor { name: "RP".into(), a: oa, b: out, ohms: r, tc1: None });
-    ckt.add(Device::Capacitor { name: "CP".into(), a: out, b: NodeId::GROUND, farads: c, ic: None });
+    ckt.add(Device::Resistor {
+        name: "RP".into(),
+        a: oa,
+        b: out,
+        ohms: r,
+        tc1: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "CP".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
     ckt
 }
 
 /// Assemble a RunOutcome carrying the AC outcome the runner would build for the
 /// `out` net, so we can drive the assertion evaluator directly.
 fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
-    let spec = AcSpec { fstart: 1.0, fstop: 1e8, points: 50, sweep: Sweep::Decade };
-    let resp = AcAnalysis::new(SolverOptions::default()).run(ckt, &spec).unwrap();
+    let spec = AcSpec {
+        fstart: 1.0,
+        fstop: 1e8,
+        points: 50,
+        sweep: Sweep::Decade,
+    };
+    let resp = AcAnalysis::new(SolverOptions::default())
+        .run(ckt, &spec)
+        .unwrap();
     let st = LoopStability::from_response(&resp, ckt, net).unwrap();
     let mut ac = AcOutcome::default();
     ac.margins.insert(net.to_string(), st.margins());
@@ -139,7 +166,11 @@ fn stable_loop_passes_phase_margin_45() {
         "expected pass, detail: {}",
         results[0].detail
     );
-    assert!(results[0].detail.contains("phase margin"), "{}", results[0].detail);
+    assert!(
+        results[0].detail.contains("phase margin"),
+        "{}",
+        results[0].detail
+    );
 }
 
 #[test]
@@ -155,7 +186,11 @@ fn marginal_loop_fails_strict_phase_margin() {
     );
     let spec = Spec::load(&p).unwrap();
     let results = evaluate(&spec, &[out]);
-    assert!(!results[0].passed, "expected fail, detail: {}", results[0].detail);
+    assert!(
+        !results[0].passed,
+        "expected fail, detail: {}",
+        results[0].detail
+    );
 }
 
 #[test]
@@ -164,12 +199,36 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     let mut ckt = Circuit::new();
     let vin = ckt.node("in");
     let out = ckt.node("out");
-    ckt.add(Device::Vsource { name: "VIN".into(), p: vin, n: NodeId::GROUND, kind: SourceKind::Dc(0.0) });
-    ckt.add(Device::Resistor { name: "R1".into(), a: vin, b: out, ohms: 1.0e3, tc1: None });
-    ckt.add(Device::Capacitor { name: "C1".into(), a: out, b: NodeId::GROUND, farads: 159.155e-9, ic: None });
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: out,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: 159.155e-9,
+        ic: None,
+    });
 
-    let spec_ac = AcSpec { fstart: 10.0, fstop: 1e6, points: 30, sweep: Sweep::Decade };
-    let resp = AcAnalysis::new(SolverOptions::default()).run(&ckt, &spec_ac).unwrap();
+    let spec_ac = AcSpec {
+        fstart: 10.0,
+        fstop: 1e6,
+        points: 30,
+        sweep: Sweep::Decade,
+    };
+    let resp = AcAnalysis::new(SolverOptions::default())
+        .run(&ckt, &spec_ac)
+        .unwrap();
     let mut ac = AcOutcome::default();
     ac.bode.insert("out".to_string(), resp.bode(&ckt, "out"));
     let outcome = RunOutcome {
@@ -197,7 +256,11 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     );
     let spec = Spec::load(&pass).unwrap();
     let r = evaluate(&spec, &[outcome.clone()]);
-    assert!(r[0].passed, "expected pass at corner, detail: {}", r[0].detail);
+    assert!(
+        r[0].passed,
+        "expected pass at corner, detail: {}",
+        r[0].detail
+    );
 
     let fail = write_tmp(
         "acgain_fail.toml",
@@ -205,5 +268,9 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     );
     let spec = Spec::load(&fail).unwrap();
     let r = evaluate(&spec, &[outcome]);
-    assert!(!r[0].passed, "expected fail at corner, detail: {}", r[0].detail);
+    assert!(
+        !r[0].passed,
+        "expected fail at corner, detail: {}",
+        r[0].detail
+    );
 }

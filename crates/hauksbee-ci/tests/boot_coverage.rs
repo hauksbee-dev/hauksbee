@@ -28,7 +28,9 @@ use std::path::PathBuf;
 use hauksbee_ci::{run, RunConfig};
 
 fn example(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join(name)
 }
 
 /// The firmware hex files are committed, but rebuild them from source if a
@@ -42,7 +44,9 @@ fn ensure_firmware(variant: &str) {
     if hex.exists() {
         // Try to refresh if avr-gcc is available; ignore failure.
         if which_avr_gcc() {
-            let _ = std::process::Command::new("make").current_dir(&dir).output();
+            let _ = std::process::Command::new("make")
+                .current_dir(&dir)
+                .output();
         }
         return;
     }
@@ -54,7 +58,11 @@ fn ensure_firmware(variant: &str) {
         .current_dir(&dir)
         .output()
         .expect("run make");
-    assert!(out.status.success(), "building firmware {variant} failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "building firmware {variant} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn which_avr_gcc() -> bool {
@@ -70,8 +78,10 @@ fn which_avr_gcc() -> bool {
 #[test]
 fn gate_driven_promptly_passes() {
     ensure_firmware("a");
-    let result = run(&RunConfig { spec: example("boot_gate_pass.toml") })
-        .expect("PASS spec runs");
+    let result = run(&RunConfig {
+        spec: example("boot_gate_pass.toml"),
+    })
+    .expect("PASS spec runs");
     assert!(
         result.passed(),
         "variant A drives the gate within the deadline, so all assertions pass:\n{}",
@@ -84,7 +94,11 @@ fn gate_driven_promptly_passes() {
         .find(|r| r.kind == "boot-coverage")
         .expect("boot-coverage assertion present");
     assert!(bc.passed, "boot-coverage must pass: {}", bc.detail);
-    assert!(bc.detail.contains("GATE_CTRL"), "names the control net: {}", bc.detail);
+    assert!(
+        bc.detail.contains("GATE_CTRL"),
+        "names the control net: {}",
+        bc.detail
+    );
 }
 
 /// Variant B never drives the gate: the boot-coverage assertion FAILS, naming
@@ -93,8 +107,10 @@ fn gate_driven_promptly_passes() {
 #[test]
 fn gate_left_floating_fails_naming_the_net() {
     ensure_firmware("b");
-    let result = run(&RunConfig { spec: example("boot_gate_fail.toml") })
-        .expect("FAIL spec runs");
+    let result = run(&RunConfig {
+        spec: example("boot_gate_fail.toml"),
+    })
+    .expect("FAIL spec runs");
     assert!(
         !result.passed(),
         "variant B never drives the gate, so boot-coverage must FAIL:\n{}",
@@ -105,7 +121,10 @@ fn gate_left_floating_fails_naming_the_net() {
         .iter()
         .find(|r| r.kind == "boot-coverage")
         .expect("boot-coverage assertion present");
-    assert!(!bc.passed, "boot-coverage must fail for the never-driven gate");
+    assert!(
+        !bc.passed,
+        "boot-coverage must fail for the never-driven gate"
+    );
     assert!(
         bc.detail.contains("GATE_CTRL") && bc.detail.to_uppercase().contains("NEVER"),
         "the failure names the undriven control net: {}",
@@ -171,8 +190,10 @@ fn watchy_v15_display_res_driven_passes() {
         return;
     }
     let t0 = std::time::Instant::now();
-    let result = run(&RunConfig { spec: example("watchy_v15_display_res.toml") })
-        .expect("Watchy PASS spec runs");
+    let result = run(&RunConfig {
+        spec: example("watchy_v15_display_res.toml"),
+    })
+    .expect("Watchy PASS spec runs");
     let wall = t0.elapsed();
     let bc = result
         .results
@@ -184,7 +205,11 @@ fn watchy_v15_display_res_driven_passes() {
         "display-init firmware must drive RES in time on the real Watchy board:\n{}",
         result.render_human()
     );
-    assert!(bc.detail.contains("RES"), "names the RES net: {}", bc.detail);
+    assert!(
+        bc.detail.contains("RES"),
+        "names the RES net: {}",
+        bc.detail
+    );
     // Regression guard for the external-backend chunk coarsening
     // (Scheduler::has_external_backend -> runner sets chunk_s ~ frame size).
     // Without it, this 800 ms / 8 ms-frame co-sim sub-divides into ~80 QMP
@@ -212,8 +237,10 @@ fn watchy_v15_display_res_undriven_fails() {
         eprintln!("skipping watchy_v15 boot-coverage negative (Espressif QEMU not installed)");
         return;
     }
-    let result = run(&RunConfig { spec: example("watchy_v15_display_res_undriven.toml") })
-        .expect("Watchy FAIL spec runs");
+    let result = run(&RunConfig {
+        spec: example("watchy_v15_display_res_undriven.toml"),
+    })
+    .expect("Watchy FAIL spec runs");
     let bc = result
         .results
         .iter()

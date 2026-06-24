@@ -30,4 +30,6 @@ hauksbee-server = { version = "0.1.0", path = "../hauksbee-server" }
 # Boot-coverage tests reuse the backend's real Espressif-QEMU discovery
 # (is_available, which runs -machine help to confirm the esp32 fork) so the
 # heavy ESP32 co-sim cases skip cleanly on a stock-qemu host instead of failing.
-hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu"] }
+# The sensor-attach tests also check Renode availability so they skip cleanly
+# when Renode is not installed.
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }

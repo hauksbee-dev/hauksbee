@@ -19,8 +19,7 @@ const SUBSHEET_REF: &str = "U5";
 
 /// The checked-in schematic-stage example spec.
 fn schematic_example() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/pic_programmer_schematic.toml")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/pic_programmer_schematic.toml")
 }
 
 /// The corpus pic_programmer project directory, if the corpus symlink is
@@ -70,7 +69,10 @@ fn schematic_example_spec_passes() {
         eprintln!("corpus pic_programmer missing; skipping");
         return;
     }
-    let result = run(&RunConfig { spec: schematic_example() }).expect("schematic spec runs");
+    let result = run(&RunConfig {
+        spec: schematic_example(),
+    })
+    .expect("schematic spec runs");
     assert!(
         result.passed(),
         "schematic-stage CI must be GREEN:\n{}",
@@ -173,5 +175,8 @@ fn hierarchy_subsheet_components_are_loaded() {
     let res = run(&RunConfig { spec }).unwrap_or_else(|e| {
         panic!("sub-sheet ref {SUBSHEET_REF} not found, hierarchy not loaded: {e}")
     });
-    assert!(res.passed(), "sub-sheet component must be present and within its ceiling");
+    assert!(
+        res.passed(),
+        "sub-sheet component must be present and within its ceiling"
+    );
 }

@@ -1,0 +1,67 @@
+# hauksbee-ci example: LM75 declarative sensor driving the STM32 I2C thermostat.
+#
+# The firmware (`testdata/firmware/stm32_i2c_thermostat/thermostat.elf`) polls
+# an LM75 at I2C address 0x48 and drives PA8 (net "FLAG") HIGH when the
+# reported temperature is >= 30 C.
+#
+# This spec attaches a declarative RegisterMapSensor (inline TOML spec) to the
+# co-sim instead of the hand-coded Lm75.  Reply bytes come entirely from the
+# interpreter — no injection, no faking.
+#
+#   ./target/release/hauksbee-ci run crates/hauksbee-ci/examples/lm75_thermostat.toml
+
+name       = "STM32 I2C thermostat — declarative LM75 at 40 C (FLAG HIGH)"
+board      = "../../../testdata/boards/stm32_i2c_thermostat.kicad_pcb"
+firmware   = "../../../testdata/firmware/stm32_i2c_thermostat/thermostat.elf"
+duration_ms = 500
+frame_ms    = 5.0
+
+[[supply]]
+net   = "+3V3"
+kind  = "ideal"
+volts = 3.3
+
+# ── Declarative LM75 sensor at 40 C ──────────────────────────────────────────
+#
+# The sensor spec is inlined here.  `spec_file` is the alternative (a path to
+# a standalone `.toml` file resolved relative to this spec's directory).
+# Input `temperature_c` is fixed to 40.0 for this run, overriding the default.
+[[sensor]]
+id = "U2_lm75"
+spec = """
+[sensor]
+name        = "LM75_declarative"
+bus         = "i2c"
+i2c_address = 0x48
+
+[[sensor.input]]
+name    = "temperature_c"
+default = 25.0
+
+[[sensor.register]]
+addr     = 0x00
+bytes    = 2
+encoding = "q7.1_be"
+expr     = "temperature_c"
+
+[[sensor.register]]
+addr  = 0x01
+const = [0x00]
+
+[sensor.protocol]
+style = "i2c_pointer"
+"""
+
+[sensor.inputs]
+temperature_c = 40.0
+
+# ── Assertion: firmware must drive FLAG HIGH within 400 ms ────────────────────
+#
+# At 40 C the firmware reads >= 30 C from the LM75 over real I2C through the
+# Renode bridge and drives PA8 (FLAG) HIGH.  boot-coverage checks that the net
+# reaches >= 2.5 V within the deadline; on a 3.3 V rail that is a solid HIGH.
+[[assert]]
+kind        = "boot-coverage"
+net         = "FLAG"
+min         = 2.5
+deadline_ms = 400.0

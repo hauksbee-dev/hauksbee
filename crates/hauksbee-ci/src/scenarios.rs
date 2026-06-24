@@ -178,7 +178,11 @@ impl RailWindow {
     /// if the rail never dipped, and the full window length if it never
     /// recovered.
     pub fn recovery_s(&self, threshold: f64, recover_to: f64) -> f64 {
-        let first_dip = self.samples.iter().find(|(_, v)| *v < threshold).map(|(t, _)| *t);
+        let first_dip = self
+            .samples
+            .iter()
+            .find(|(_, v)| *v < threshold)
+            .map(|(t, _)| *t);
         let Some(t_dip) = first_dip else {
             return 0.0;
         };
@@ -246,7 +250,10 @@ mod tests {
         // Samples at 2,3 ms each own a 1 ms forward interval; the trailing 4 ms
         // sample owns one more 1 ms frame => 3 ms total below 3.0 V.
         let dip = w.dip_duration_s(3.0);
-        assert!((dip - 0.003).abs() < 1e-9, "trailing-dwell dip duration {dip}");
+        assert!(
+            (dip - 0.003).abs() < 1e-9,
+            "trailing-dwell dip duration {dip}"
+        );
     }
 
     #[test]
