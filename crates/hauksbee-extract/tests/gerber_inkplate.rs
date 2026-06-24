@@ -82,7 +82,11 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
         .iter()
         .find(|c| c.name == "GND")
         .expect("GND copper row present");
-    assert_eq!(gnd.kind, GerberCopperKind::Poured, "GND plane must be Poured");
+    assert_eq!(
+        gnd.kind,
+        GerberCopperKind::Poured,
+        "GND plane must be Poured"
+    );
     let traces = s
         .net_copper
         .iter()
@@ -97,7 +101,10 @@ fn inkplate6_reconstructs_with_altium_drill_stitching() {
         .iter()
         .filter(|c| c.kind == GerberCopperKind::Poured)
         .count();
-    assert!(poured > 100, "copper should be region-dominated, got {poured} poured");
+    assert!(
+        poured > 100,
+        "copper should be region-dominated, got {poured} poured"
+    );
 
     // No P&P in the published set, so no components are bound. This is the
     // documented honest limit, asserted so a future P&P addition is noticed.

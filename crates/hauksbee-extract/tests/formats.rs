@@ -17,7 +17,11 @@ fn eagle_metro_mini() {
         return;
     };
     let board = ExtractedBoard::from_eagle_brd(&src).unwrap();
-    assert!(board.components.len() > 20, "got {}", board.components.len());
+    assert!(
+        board.components.len() > 20,
+        "got {}",
+        board.components.len()
+    );
     assert!(board.nets.len() > 15, "got {}", board.nets.len());
     let gnd = board.net_by_name("GND").expect("GND signal");
     assert!(board.net_members(gnd.id).len() > 5);
@@ -42,7 +46,10 @@ fn eagle_metro_mini() {
 fn auto_sniff() {
     for (rel, expect_comps) in [
         ("eagle/MetroMiniRevB.brd", 20usize),
-        ("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb", 50),
+        (
+            "kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb",
+            50,
+        ),
     ] {
         let Some(src) = read(rel) else { continue };
         let board = ExtractedBoard::from_auto(&src).unwrap();
@@ -60,8 +67,8 @@ fn auto_sniff() {
 /// members must sit on exactly one net in the native extraction.
 #[test]
 fn ipc356_matches_native_kicad_extraction() {
-    let d356_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/pic_programmer.d356");
+    let d356_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pic_programmer.d356");
     let Ok(d356_src) = std::fs::read_to_string(&d356_path) else {
         eprintln!("d356 fixture missing; skipping");
         return;
@@ -94,7 +101,9 @@ fn ipc356_matches_native_kicad_extraction() {
         let native_ids: BTreeSet<i64> = members
             .iter()
             .filter_map(|(c, p)| {
-                native_net.get(&(c.reference.clone(), p.number.clone())).copied()
+                native_net
+                    .get(&(c.reference.clone(), p.number.clone()))
+                    .copied()
             })
             .collect();
         assert_eq!(

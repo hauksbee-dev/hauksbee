@@ -150,13 +150,23 @@ pub fn parse(text: &str) -> DrillFile {
             continue;
         }
         // Coordinate line: X..Y.. , or modal X-only / Y-only (keep last axis).
-        if let Some((x, y)) =
-            parse_xy_modal(line, metric, int_digits, dec_digits, leading_zero_omitted, &mut last_x, &mut last_y)
-        {
+        if let Some((x, y)) = parse_xy_modal(
+            line,
+            metric,
+            int_digits,
+            dec_digits,
+            leading_zero_omitted,
+            &mut last_x,
+            &mut last_y,
+        ) {
             // Skip mechanical (NPTH) holes: they carry no copper to stitch.
             if let Some(dia) = current {
                 if !current_is_npth {
-                    holes.push(Hole { x, y, diameter: dia });
+                    holes.push(Hole {
+                        x,
+                        y,
+                        diameter: dia,
+                    });
                 }
             }
             continue;
@@ -203,7 +213,10 @@ fn parse_tool_select(line: &str) -> Option<u32> {
     if !line.starts_with('T') {
         return None;
     }
-    let body: String = line[1..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let body: String = line[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     // Reject if there is a C (that's a definition) or extra junk.
     if line.contains('C') {
         return None;
@@ -238,8 +251,13 @@ fn parse_xy_modal(
         let end = rest
             .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
             .unwrap_or(rest.len());
-        parse_coord(rest[..end].trim(), int_digits, dec_digits, leading_zero_omitted)
-            .map(|v| v * scale)
+        parse_coord(
+            rest[..end].trim(),
+            int_digits,
+            dec_digits,
+            leading_zero_omitted,
+        )
+        .map(|v| v * scale)
     };
     if let Some(p) = xi {
         if let Some(v) = axis_tok(p) {

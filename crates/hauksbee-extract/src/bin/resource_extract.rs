@@ -48,7 +48,9 @@ fn parse_args() -> Result<Args, String> {
         match a.as_str() {
             "--pdf" => pdf = Some(PathBuf::from(it.next().ok_or("--pdf needs a value")?)),
             "--part" => part = it.next().ok_or("--part needs a value")?,
-            "--compare" => compare = Some(PathBuf::from(it.next().ok_or("--compare needs a value")?)),
+            "--compare" => {
+                compare = Some(PathBuf::from(it.next().ok_or("--compare needs a value")?))
+            }
             "-h" | "--help" => {
                 println!("resource-extract --pdf <path> [--part rp2040] [--compare <mcu_resources.toml>]");
                 std::process::exit(0);
@@ -56,18 +58,29 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown arg: {other}")),
         }
     }
-    Ok(Args { pdf: pdf.ok_or("--pdf is required")?, part, compare })
+    Ok(Args {
+        pdf: pdf.ok_or("--pdf is required")?,
+        part,
+        compare,
+    })
 }
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
-    eprintln!("[resource-extract] part={} pdf={}", args.part, args.pdf.display());
+    eprintln!(
+        "[resource-extract] part={} pdf={}",
+        args.part,
+        args.pdf.display()
+    );
 
     let pdf_text = extract_pdf_text(&args.pdf)?;
     let prompt = build_prompt(&args.part, &pdf_text);
     let raw = call_backend(&prompt, &args.pdf)?;
     let extracted = parse_pad_pwm_table(&raw)?;
-    eprintln!("[resource-extract] extracted {} PWM pad entries", extracted.len());
+    eprintln!(
+        "[resource-extract] extracted {} PWM pad entries",
+        extracted.len()
+    );
     println!("{raw}");
 
     if let Some(cmp) = &args.compare {
@@ -110,7 +123,11 @@ fn focus_on_pwm(text: &str) -> String {
     // densest cluster of "PWMk A/B" function entries (the table itself); fall back
     // to specific section headers, then to a bare "pwm" only as a last resort.
     let anchor_byte = densest_pwm_cluster(text)
-        .or_else(|| ["bank 0 (user gpio)", "gpio function", "function select"].iter().find_map(|k| lower.find(k)))
+        .or_else(|| {
+            ["bank 0 (user gpio)", "gpio function", "function select"]
+                .iter()
+                .find_map(|k| lower.find(k))
+        })
         .or_else(|| lower.find("pwm"));
     let start = match anchor_byte {
         Some(b) => text[..b].chars().count().saturating_sub(2_000),
@@ -201,7 +218,8 @@ fn take_chars(s: &str, n: usize) -> String {
 
 fn call_backend(prompt: &str, pdf: &Path) -> Result<String, String> {
     if let Ok(path) = std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY") {
-        let reply = std::fs::read_to_string(&path).map_err(|e| format!("mock reply {path}: {e}"))?;
+        let reply =
+            std::fs::read_to_string(&path).map_err(|e| format!("mock reply {path}: {e}"))?;
         return Ok(extract_toml_block(&reply));
     }
     if which("codex") {
@@ -217,7 +235,13 @@ fn call_codex(prompt: &str, pdf: &Path) -> Result<String, String> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let mut child = Command::new("codex")
-        .args(["exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--cd"])
+        .args([
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--skip-git-repo-check",
+            "--cd",
+        ])
         .arg(&workdir)
         .arg(prompt)
         .stdin(Stdio::piped())
@@ -236,22 +260,36 @@ fn call_codex(prompt: &str, pdf: &Path) -> Result<String, String> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("codex timed out after {}s", CODEX_TIMEOUT.as_secs()));
+                    return Err(format!(
+                        "codex timed out after {}s",
+                        CODEX_TIMEOUT.as_secs()
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(500));
             }
         }
     }
-    let out = child.wait_with_output().map_err(|e| format!("collect codex: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("collect codex: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("codex failed: {}", err.lines().rev().take(4).collect::<Vec<_>>().join(" | ")));
+        return Err(format!(
+            "codex failed: {}",
+            err.lines().rev().take(4).collect::<Vec<_>>().join(" | ")
+        ));
     }
     Ok(extract_toml_block(&String::from_utf8_lossy(&out.stdout)))
 }
 
 fn which(cmd: &str) -> bool {
-    Command::new("which").arg(cmd).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+    Command::new("which")
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn extract_toml_block(s: &str) -> String {
@@ -282,11 +320,21 @@ fn parse_pad_pwm_table(raw: &str) -> Result<BTreeMap<String, String>, String> {
         return Err("reply has no [[mcu]] table (model answered with prose?)".into());
     }
     let doc: toml::Value = toml::from_str(raw).map_err(|e| format!("parse TOML: {e}"))?;
-    let entry = doc.get("mcu").and_then(|m| m.as_array()).and_then(|a| a.first()).ok_or("no [[mcu]] entry")?;
-    let pins = entry.get("pins").and_then(|p| p.as_table()).ok_or("no [mcu.pins] table")?;
+    let entry = doc
+        .get("mcu")
+        .and_then(|m| m.as_array())
+        .and_then(|a| a.first())
+        .ok_or("no [[mcu]] entry")?;
+    let pins = entry
+        .get("pins")
+        .and_then(|p| p.as_table())
+        .ok_or("no [mcu.pins] table")?;
     let mut out = BTreeMap::new();
     for (k, v) in pins {
-        let pwm = v.get("pwm").and_then(|x| x.as_str()).ok_or_else(|| format!("{k}: no pwm value"))?;
+        let pwm = v
+            .get("pwm")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| format!("{k}: no pwm value"))?;
         validate_pwm(pwm).map_err(|e| format!("{k}: {e}"))?;
         out.insert(k.to_ascii_uppercase(), pwm.to_ascii_uppercase());
     }
@@ -298,8 +346,14 @@ fn validate_pwm(s: &str) -> Result<(), String> {
     // byte-split would panic on a multi-byte trailing char (e.g. a stray Ω / U+FFFD
     // that survived into the model's TOML string).
     let s = s.trim();
-    let chan = s.chars().last().ok_or_else(|| "empty pwm value".to_string())?;
-    let slice: String = s.chars().take(s.chars().count().saturating_sub(1)).collect();
+    let chan = s
+        .chars()
+        .last()
+        .ok_or_else(|| "empty pwm value".to_string())?;
+    let slice: String = s
+        .chars()
+        .take(s.chars().count().saturating_sub(1))
+        .collect();
     let n: u8 = slice.parse().map_err(|_| format!("bad slice in '{s}'"))?;
     if n > 7 {
         return Err(format!("slice {n} out of range 0..7"));
@@ -315,9 +369,13 @@ fn validate_pwm(s: &str) -> Result<(), String> {
 /// Load the GP-name -> "slice+channel" map from the hand table's
 /// `rp2040_pico_module` entry (its pins are labelled with the GPIO name).
 fn load_hand_table(path: &Path) -> Result<BTreeMap<String, String>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let doc: toml::Value = toml::from_str(&text).map_err(|e| format!("parse hand table: {e}"))?;
-    let arr = doc.get("mcu").and_then(|m| m.as_array()).ok_or("no [[mcu]] array")?;
+    let arr = doc
+        .get("mcu")
+        .and_then(|m| m.as_array())
+        .ok_or("no [[mcu]] array")?;
     let mut out = BTreeMap::new();
     for entry in arr {
         // Use the QFN table (GP0..GP29 complete) for the comparison.
@@ -361,13 +419,20 @@ fn diff_tables(hand: &BTreeMap<String, String>, machine: &BTreeMap<String, Strin
     let mut s = String::new();
     s.push_str(&format!("agree: {agree}/{} hand rows\n", hand.len()));
     if !disagree.is_empty() {
-        s.push_str(&format!("DISAGREE ({}):\n{}\n", disagree.len(), disagree.join("\n")));
+        s.push_str(&format!(
+            "DISAGREE ({}):\n{}\n",
+            disagree.len(),
+            disagree.join("\n")
+        ));
     }
     if !only_hand.is_empty() {
         s.push_str(&format!("only in hand table: {}\n", only_hand.join(", ")));
     }
     if !only_machine.is_empty() {
-        s.push_str(&format!("only in machine table: {}\n", only_machine.join(", ")));
+        s.push_str(&format!(
+            "only in machine table: {}\n",
+            only_machine.join(", ")
+        ));
     }
     if disagree.is_empty() && only_hand.is_empty() {
         s.push_str("VERDICT: machine extraction matches the hand table on every shared GPIO.\n");
@@ -479,6 +544,9 @@ id = "rp2040_extracted"
         let hand = load_hand_table(&repo("db/mcu_resources.toml")).unwrap();
         let report = diff_tables(&hand, &machine);
         println!("{report}");
-        assert!(report.contains("matches the hand table"), "live extraction disagreed:\n{report}");
+        assert!(
+            report.contains("matches the hand table"),
+            "live extraction disagreed:\n{report}"
+        );
     }
 }

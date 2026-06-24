@@ -53,7 +53,9 @@ pub struct GerberExtraction {
 /// copper / drill / assembly films in sub-directories, e.g. Allegro's
 /// `*_CAM` / `*_SMT` / `*_ASM` split).
 fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -81,7 +83,10 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     for p in &all_files {
         let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let is_map = n.eq_ignore_ascii_case("layer_map.txt")
-            || p.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("map")).unwrap_or(false);
+            || p.extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("map"))
+                .unwrap_or(false);
         if is_map {
             if let Ok(text) = std::fs::read_to_string(p) {
                 mapping.extend(layers::parse_mapping(&text));
@@ -95,7 +100,11 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     let mut loc_files: Vec<std::path::PathBuf> = Vec::new();
 
     for path in all_files {
-        let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let fname = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         // Mapping override first, else name-based classification.
         let role = mapping
             .get(&fname)
@@ -105,11 +114,20 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             r @ LayerRole::Copper { .. } => copper.push((r, path)),
             LayerRole::Drill => drills.push(path),
             _ => {
-                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 let lname = fname.to_ascii_lowercase();
                 if ext == "csv" || ext == "pos" {
                     csvs.push(path);
-                } else if lname.contains("loc") || lname.contains("place") || lname.contains("pos") || lname.contains("pnp") || lname.contains("xy") {
+                } else if lname.contains("loc")
+                    || lname.contains("place")
+                    || lname.contains("pos")
+                    || lname.contains("pnp")
+                    || lname.contains("xy")
+                {
                     // Allegro `smt_loc.txt` and similar component-location files.
                     loc_files.push(path);
                 }
@@ -135,7 +153,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // Parse each copper layer into primitives, in stack order.
     let mut layer_prims: Vec<Vec<rs274x::CopperPrim>> = vec![Vec::new(); ordered.len()];
     for (role, orig_idx) in &ordered {
-        let LayerRole::Copper { index, .. } = role else { continue };
+        let LayerRole::Copper { index, .. } = role else {
+            continue;
+        };
         let path = &copper[*orig_idx].1;
         let text = std::fs::read_to_string(path)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
@@ -159,13 +179,22 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     for d in &drills {
         let text = std::fs::read_to_string(d)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", d.display())))?;
-        let n = d.file_name().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+        let n = d
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
         let plated = !(n.contains("npth") || n.contains("non-plated") || n.contains("nonplated"));
         if !plated {
             continue;
         }
         let head: String = text.chars().take(256).collect();
-        let is_gerber = head.contains("%FS") || head.contains("Gerber") || d.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("art")).unwrap_or(false);
+        let is_gerber = head.contains("%FS")
+            || head.contains("Gerber")
+            || d.extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("art"))
+                .unwrap_or(false);
         if is_gerber {
             // Gerber-format drill: each flash is a hole; its disc radius is the
             // drill radius. Tracks/regions on a drill film are legend art.
@@ -177,7 +206,11 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
                             geo::Shape::Capsule(c) => c.r * 2.0,
                             geo::Shape::Polygon { .. } => 0.3,
                         };
-                        holes.push(PlatedHole { x, y, diameter: dia });
+                        holes.push(PlatedHole {
+                            x,
+                            y,
+                            diameter: dia,
+                        });
                     }
                 }
             }
@@ -197,9 +230,12 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // Parse P&P + BOM from the CSVs. A CSV that yields placements is the P&P;
     // the rest are tried as BOM.
     let mut placements: Vec<placement::Placement> = Vec::new();
-    let mut bom: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    let mut bom: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
     for c in &csvs {
-        let Ok(text) = std::fs::read_to_string(c) else { continue };
+        let Ok(text) = std::fs::read_to_string(c) else {
+            continue;
+        };
         let pnp = placement::parse_pnp(&text);
         if !pnp.is_empty() && placements.is_empty() {
             placements = pnp;
@@ -214,7 +250,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // P&P was found, or when a `*loc*`/`*place*` text file exists.
     if placements.is_empty() {
         for l in &loc_files {
-            let Ok(text) = std::fs::read_to_string(l) else { continue };
+            let Ok(text) = std::fs::read_to_string(l) else {
+                continue;
+            };
             let pnp = placement::parse_allegro_loc(&text);
             if !pnp.is_empty() {
                 placements = pnp;
@@ -260,8 +298,7 @@ pub fn from_gerber_zip(zip_path: &Path) -> Result<GerberExtraction, ExtractError
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    std::fs::create_dir_all(&tmp)
-        .map_err(|e| ExtractError::Xml(format!("mktemp: {e}")))?;
+    std::fs::create_dir_all(&tmp).map_err(|e| ExtractError::Xml(format!("mktemp: {e}")))?;
     unzip_into(&bytes, &tmp)?;
     // The zip may wrap a single sub-directory; descend if so.
     let root = single_subdir(&tmp).unwrap_or(tmp.clone());
@@ -286,8 +323,8 @@ fn single_subdir(dir: &Path) -> Option<std::path::PathBuf> {
 fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
     use std::io::Read;
     let reader = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader)
-        .map_err(|e| ExtractError::Xml(format!("zip open: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| ExtractError::Xml(format!("zip open: {e}")))?;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
@@ -315,7 +352,12 @@ impl ExtractedBoard {
     pub fn from_gerber(path: &Path) -> Result<Self, ExtractError> {
         if path.is_dir() {
             from_gerber_dir(path).map(|g| g.board)
-        } else if path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("zip")).unwrap_or(false) {
+        } else if path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
             from_gerber_zip(path).map(|g| g.board)
         } else {
             Err(ExtractError::WrongRoot {

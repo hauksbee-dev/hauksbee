@@ -2,7 +2,7 @@
 //! deliberate violation of each geometry kind, asserting exact detection, plus
 //! a corpus sweep asserting the known-good boards report zero true shorts.
 
-use hauksbee_extract::{ExtractedBoard, ViolationKind};
+use hauksbee_extract::{ClearanceRules, ExtractedBoard, NetClassRule, ViolationKind};
 
 /// Wrap copper items in a minimal KiCad 7+ board with two declared signal nets
 /// (`A`, `B`) plus GND, and a default-clearance setup.
@@ -28,11 +28,7 @@ fn drc(items: &str) -> hauksbee_extract::DrcReport {
 }
 
 /// A short between nets A and B exists with the expected item kinds.
-fn assert_short(
-    report: &hauksbee_extract::DrcReport,
-    want_a: &str,
-    want_b: &str,
-) {
+fn assert_short(report: &hauksbee_extract::DrcReport, want_a: &str, want_b: &str) {
     let found = report.shorts().any(|f| {
         let names = [f.net_a_name.as_str(), f.net_b_name.as_str()];
         names.contains(&want_a) && names.contains(&want_b)
@@ -61,7 +57,11 @@ fn segment_segment_overlap_is_a_short() {
     assert_short(&report, "A", "B");
     let f = report.shorts().next().unwrap();
     assert_eq!(f.layer, "F.Cu");
-    assert!(f.gap_mm <= 0.0, "overlap gap is non-positive ({})", f.gap_mm);
+    assert!(
+        f.gap_mm <= 0.0,
+        "overlap gap is non-positive ({})",
+        f.gap_mm
+    );
 }
 
 #[test]
@@ -95,7 +95,11 @@ fn well_separated_tracks_report_nothing() {
   (segment (start 0 5) (end 10 5) (width 0.25) (layer "F.Cu") (net 2))
 "#;
     let report = drc(items);
-    assert!(report.findings.is_empty(), "nothing reported: {:?}", report.findings.len());
+    assert!(
+        report.findings.is_empty(),
+        "nothing reported: {:?}",
+        report.findings.len()
+    );
 }
 
 #[test]
@@ -147,7 +151,11 @@ fn same_footprint_pads_do_not_short() {
   )
 "#;
     let report = drc(items);
-    assert_eq!(report.short_count(), 0, "intra-footprint abutment is not a short");
+    assert_eq!(
+        report.short_count(),
+        0,
+        "intra-footprint abutment is not a short"
+    );
 }
 
 #[test]
@@ -219,11 +227,112 @@ fn clearance_override_changes_classification() {
 "#;
     let doc = forge_sexpr::parse(&board(items)).unwrap();
     let lax = hauksbee_extract::run_drc(&doc, Some(0.2));
-    assert!(lax.is_clean() && lax.findings.is_empty(), "0.2 mm rule: clean");
+    assert!(
+        lax.is_clean() && lax.findings.is_empty(),
+        "0.2 mm rule: clean"
+    );
     let strict = hauksbee_extract::run_drc(&doc, Some(0.5));
     assert_eq!(strict.short_count(), 0);
     assert!(
         strict.clearance_violations().count() >= 1,
         "0.5 mm rule flags the 0.3 mm gap"
     );
+}
+
+fn named_board(items: &str) -> String {
+    format!(
+        r#"(kicad_pcb (version 20260206) (generator pcbnew)
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+  )
+  (net 0 "")
+  (net 1 "/USB/USB_D+")
+  (net 2 "/USB/USB_D-")
+  (net 3 "+BATT")
+{items}
+)
+"#
+    )
+}
+
+#[test]
+fn per_netclass_clearance_uses_max_of_the_two_nets() {
+    // Copper edges are 0.150 mm apart. The board default is 0.127 mm, but
+    // +BATT belongs to a 0.200 mm power class, so the pair must be reported.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net 1))
+  (segment (start 0 0.35) (end 10 0.35) (width 0.2) (layer "F.Cu") (net 3))
+"#;
+    let mut rules = ClearanceRules::new(0.127);
+    rules.add_class(NetClassRule {
+        name: "power".to_string(),
+        clearance_mm: 0.200,
+        diff_pair_gap_mm: None,
+    });
+    rules.assign_net("+BATT", "power");
+
+    let doc = forge_sexpr::parse(&named_board(items)).unwrap();
+    let report = hauksbee_extract::run_drc_with_clearance_rules(&doc, Some(rules));
+    assert_eq!(report.short_count(), 0);
+    assert_eq!(
+        report.clearance_violations().count(),
+        1,
+        "0.150 mm is legal for Default but illegal against +BATT's power class"
+    );
+    let f = report.clearance_violations().next().unwrap();
+    assert!((f.required_clearance_mm - 0.200).abs() < 1e-9);
+}
+
+#[test]
+fn same_class_diff_pair_uses_diff_pair_gap_not_full_clearance() {
+    // USB_D+ and USB_D- edges are 0.110 mm apart. Their class clearance is
+    // 0.200 mm, but the differential-pair gap is 0.090 mm, so this is legal.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net 1))
+  (segment (start 0 0.31) (end 10 0.31) (width 0.2) (layer "F.Cu") (net 2))
+"#;
+    let mut rules = ClearanceRules::new(0.127);
+    rules.add_class(NetClassRule {
+        name: "usb".to_string(),
+        clearance_mm: 0.200,
+        diff_pair_gap_mm: Some(0.090),
+    });
+    rules.assign_net("/USB/USB_D+", "usb");
+    rules.assign_net("/USB/USB_D-", "usb");
+
+    let doc = forge_sexpr::parse(&named_board(items)).unwrap();
+    let report = hauksbee_extract::run_drc_with_clearance_rules(&doc, Some(rules));
+    assert!(
+        report.findings.is_empty(),
+        "same-class diff pair at 0.110 mm must not be flagged against 0.200 mm clearance"
+    );
+}
+
+#[test]
+fn kicad_pro_rules_apply_assignments_and_wildcard_patterns() {
+    let pro = r#"{
+      "net_settings": {
+        "classes": [
+          {"name": "Default", "clearance": 0.127, "diff_pair_gap": 0.09},
+          {"name": "usb", "clearance": 0.2, "diff_pair_gap": 0.11}
+        ],
+        "netclass_assignments": {
+          "+BATT": ["Default"]
+        },
+        "netclass_patterns": [
+          {"netclass": "usb", "pattern": "/USB/USB_D?"},
+          {"netclass": "usb", "pattern": "/DDR/ddr-a[0-9]"}
+        ]
+      }
+    }"#;
+    let rules = hauksbee_extract::clearance_rules_from_kicad_pro(
+        pro,
+        ["/USB/USB_D+", "/USB/USB_D-", "+BATT", "/DDR/ddr-a7"],
+    )
+    .expect("project rules parse");
+    assert!((rules.clearance_for_net("/USB/USB_D+") - 0.2).abs() < 1e-9);
+    assert!((rules.clearance_for_net("/DDR/ddr-a7") - 0.2).abs() < 1e-9);
+    assert!((rules.clearance_for_net("+BATT") - 0.127).abs() < 1e-9);
+    assert!((rules.effective_clearance("/USB/USB_D+", "/USB/USB_D-") - 0.11).abs() < 1e-9);
 }

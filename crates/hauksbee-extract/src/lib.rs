@@ -34,8 +34,9 @@ pub mod si;
 pub mod trace_current;
 
 pub use drc::{
-    drc_from_text, eagle_drc_from_text, run_drc, DrcFinding, DrcReport, Item, ItemKind,
-    ViolationKind, DEFAULT_CLEARANCE_MM,
+    clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, run_drc,
+    run_drc_with_clearance_rules, ClearanceRules, DrcFinding, DrcReport, Item, ItemKind,
+    NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM,
 };
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 pub use si::{
@@ -43,8 +44,9 @@ pub use si::{
     SiReport, SiSeverity,
 };
 pub use trace_current::{
-    audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root, CopperKind,
-    NetCopper, TraceAudit, TraceCurrentFinding,
+    audit_trace_currents, ipc2221_ampacity, ipc2221_min_width_mm, net_copper_from_root,
+    render_trace_capacity_report, trace_capacity_report, CopperKind, NetCopper, TraceAudit,
+    TraceCapacityRow, TraceCurrentFinding,
 };
 
 use serde::{Deserialize, Serialize};
@@ -158,9 +160,31 @@ impl ExtractedBoard {
     /// ([`drc::eagle_drc_from_text`]); an unrecognised format returns an empty
     /// report.
     pub fn drc(text: &str) -> Result<drc::DrcReport, ExtractError> {
+        Self::drc_with_clearance(text, None)
+    }
+
+    /// [`Self::drc`] with an explicit copper clearance rule (mm) for the KiCad
+    /// path. KiCad 10 (format 20260206) stores the design-rule clearance in the
+    /// sibling `.kicad_pro` (`net_settings.classes[].clearance`), not the
+    /// `.kicad_pcb`, so a caller that knows the board path can read the
+    /// Default-class clearance and pass it here. `None` keeps the board's own /
+    /// default behaviour. The Eagle path reads its own rules and ignores this.
+    pub fn drc_with_clearance(
+        text: &str,
+        clearance_override: Option<f64>,
+    ) -> Result<drc::DrcReport, ExtractError> {
+        Self::drc_with_clearance_rules(text, clearance_override.map(drc::ClearanceRules::new))
+    }
+
+    /// [`Self::drc`] with project-derived per-net clearance rules for KiCad
+    /// boards. Other input formats keep their own scalar-rule behavior.
+    pub fn drc_with_clearance_rules(
+        text: &str,
+        rules: Option<drc::ClearanceRules>,
+    ) -> Result<drc::DrcReport, ExtractError> {
         let head: String = text.chars().take(512).collect();
         if head.contains("(kicad_pcb") {
-            Ok(drc::drc_from_text(text)?)
+            Ok(drc::drc_from_text_with_clearance_rules(text, rules)?)
         } else if head.contains("<eagle") {
             Ok(drc::eagle_drc_from_text(text))
         } else {

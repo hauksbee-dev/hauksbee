@@ -27,21 +27,32 @@ fn dnp_flag_parsed_from_pcb_attr_and_schematic_symbol() {
     (pad "1" smd roundrect (at 5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "N1"))))
 "#;
     let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
-    let r1 = board.components.iter().find(|c| c.reference == "R1").unwrap();
-    let r2 = board.components.iter().find(|c| c.reference == "R2").unwrap();
+    let r1 = board
+        .components
+        .iter()
+        .find(|c| c.reference == "R1")
+        .unwrap();
+    let r2 = board
+        .components
+        .iter()
+        .find(|c| c.reference == "R2")
+        .unwrap();
     assert!(r1.dnp, "R1 has `(attr ... dnp)`, must be DNP");
     assert!(!r2.dnp, "R2 has `(attr smd)` only, must not be DNP");
 }
 
 #[test]
 fn pic_programmer_pcb() {
-    let Some(src) = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb")
-    else {
+    let Some(src) = corpus("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_pcb") else {
         eprintln!("corpus missing; skipping");
         return;
     };
     let board = ExtractedBoard::from_kicad_pcb(&src).unwrap();
-    assert!(board.components.len() > 50, "got {}", board.components.len());
+    assert!(
+        board.components.len() > 50,
+        "got {}",
+        board.components.len()
+    );
     assert!(board.nets.len() > 50);
     let gnd = board.net_by_name("GND").expect("GND net");
     assert!(board.net_members(gnd.id).len() > 10);
@@ -60,7 +71,11 @@ fn kicad5_module_format() {
         return;
     };
     let board = ExtractedBoard::from_kicad_pcb(&src).unwrap();
-    assert!(board.components.len() > 20, "got {}", board.components.len());
+    assert!(
+        board.components.len() > 20,
+        "got {}",
+        board.components.len()
+    );
     assert!(
         board.components.iter().any(|c| !c.reference.is_empty()),
         "KiCad 5 fp_text references not extracted"
@@ -69,8 +84,7 @@ fn kicad5_module_format() {
 
 #[test]
 fn tarski_netlist() {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/tarski_inputsystem.net");
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_inputsystem.net");
     let Ok(src) = std::fs::read_to_string(p) else {
         eprintln!("tarski netlist missing; skipping");
         return;
@@ -79,8 +93,9 @@ fn tarski_netlist() {
     assert_eq!(board.components.len(), 3442);
     assert!(board.nets.len() > 2000, "got {}", board.nets.len());
     // The known Tarski structure: 90 shift registers, 19 comparators.
-    let count =
-        |pred: &dyn Fn(&hauksbee_extract::Component) -> bool| board.components.iter().filter(|c| pred(c)).count();
+    let count = |pred: &dyn Fn(&hauksbee_extract::Component) -> bool| {
+        board.components.iter().filter(|c| pred(c)).count()
+    };
     assert_eq!(count(&|c| c.lib_id.contains("74HC595")), 90);
     assert_eq!(count(&|c| c.value.contains("LMV7219")), 19);
     // Pin functions came through from the schematic.

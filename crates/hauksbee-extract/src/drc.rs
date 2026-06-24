@@ -52,6 +52,248 @@ pub const DEFAULT_CLEARANCE_MM: f64 = 0.2;
 /// cheap.
 const ARC_SEGMENTS: usize = 8;
 
+/// One KiCad net class's clearance-relevant DRC values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetClassRule {
+    pub name: String,
+    pub clearance_mm: f64,
+    pub diff_pair_gap_mm: Option<f64>,
+}
+
+/// Clearance resolver used by the KiCad DRC path.
+///
+/// The project file can assign nets to classes explicitly or by wildcard
+/// pattern. Once resolved to concrete net names, the pair rule is KiCad's
+/// conservative max(class A clearance, class B clearance), except the two
+/// halves of a same-class differential pair may use that class's
+/// `diff_pair_gap`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClearanceRules {
+    pub default_clearance_mm: f64,
+    classes: HashMap<String, NetClassRule>,
+    net_classes: HashMap<String, String>,
+}
+
+impl ClearanceRules {
+    pub fn new(default_clearance_mm: f64) -> Self {
+        let default = if default_clearance_mm > 0.0 {
+            default_clearance_mm
+        } else {
+            DEFAULT_CLEARANCE_MM
+        };
+        Self {
+            default_clearance_mm: default,
+            classes: HashMap::new(),
+            net_classes: HashMap::new(),
+        }
+    }
+
+    pub fn add_class(&mut self, rule: NetClassRule) {
+        if rule.clearance_mm > 0.0 {
+            self.classes.insert(rule.name.clone(), rule);
+        }
+    }
+
+    pub fn assign_net(&mut self, net: &str, class: &str) {
+        if self.classes.contains_key(class) || class == "Default" {
+            self.net_classes.insert(net.to_string(), class.to_string());
+        }
+    }
+
+    pub fn clearance_for_net(&self, net: &str) -> f64 {
+        self.net_classes
+            .get(net)
+            .and_then(|class| self.classes.get(class))
+            .map(|r| r.clearance_mm)
+            .unwrap_or(self.default_clearance_mm)
+    }
+
+    pub fn effective_clearance(&self, net_a: &str, net_b: &str) -> f64 {
+        if let Some(gap) = self.diff_pair_gap(net_a, net_b) {
+            return gap;
+        }
+        self.clearance_for_net(net_a)
+            .max(self.clearance_for_net(net_b))
+    }
+
+    fn max_clearance(&self) -> f64 {
+        self.classes
+            .values()
+            .map(|r| r.clearance_mm)
+            .fold(self.default_clearance_mm, f64::max)
+    }
+
+    fn diff_pair_gap(&self, net_a: &str, net_b: &str) -> Option<f64> {
+        let class_a = self.net_classes.get(net_a)?;
+        let class_b = self.net_classes.get(net_b)?;
+        if class_a != class_b {
+            return None;
+        }
+        if !diff_pair_halves(net_a, net_b) {
+            return None;
+        }
+        self.classes
+            .get(class_a)?
+            .diff_pair_gap_mm
+            .filter(|g| *g > 0.0)
+    }
+}
+
+impl Default for ClearanceRules {
+    fn default() -> Self {
+        Self::new(DEFAULT_CLEARANCE_MM)
+    }
+}
+
+fn diff_pair_halves(a: &str, b: &str) -> bool {
+    let strip = |s: &str| -> Option<String> {
+        let leaf = s.rsplit('/').next().unwrap_or(s);
+        if let Some(base) = leaf.strip_suffix('+') {
+            return Some(base.to_string());
+        }
+        if let Some(base) = leaf.strip_suffix('-') {
+            return Some(base.to_string());
+        }
+        let upper = leaf.to_ascii_uppercase();
+        for suffix in ["_P", "_N"] {
+            if upper.ends_with(suffix) {
+                return Some(leaf[..leaf.len() - suffix.len()].to_string());
+            }
+        }
+        None
+    };
+    let polarity = |s: &str| -> Option<char> {
+        let leaf = s.rsplit('/').next().unwrap_or(s);
+        if leaf.ends_with('+') {
+            Some('+')
+        } else if leaf.ends_with('-') {
+            Some('-')
+        } else {
+            let upper = leaf.to_ascii_uppercase();
+            if upper.ends_with("_P") {
+                Some('+')
+            } else if upper.ends_with("_N") {
+                Some('-')
+            } else {
+                None
+            }
+        }
+    };
+    strip(a).zip(strip(b)).is_some_and(|(ba, bb)| ba == bb)
+        && polarity(a)
+            .zip(polarity(b))
+            .is_some_and(|(pa, pb)| pa != pb)
+}
+
+/// Parse a KiCad `.kicad_pro` JSON file into concrete clearance rules for the
+/// given board net names.
+pub fn clearance_rules_from_kicad_pro<'a>(
+    text: &str,
+    net_names: impl IntoIterator<Item = &'a str>,
+) -> Option<ClearanceRules> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let settings = v.get("net_settings")?;
+    let classes = settings.get("classes")?.as_array()?;
+    let mut default_clearance = DEFAULT_CLEARANCE_MM;
+    let mut rules = ClearanceRules::default();
+    for class in classes {
+        let name = class.get("name")?.as_str()?.to_string();
+        let clearance = class
+            .get("clearance")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0);
+        let diff_gap = class
+            .get("diff_pair_gap")
+            .and_then(|x| x.as_f64())
+            .filter(|g| *g > 0.0);
+        if name == "Default" && clearance > 0.0 {
+            default_clearance = clearance;
+        }
+        rules.add_class(NetClassRule {
+            name,
+            clearance_mm: clearance,
+            diff_pair_gap_mm: diff_gap,
+        });
+    }
+    rules.default_clearance_mm = default_clearance;
+
+    if let Some(assignments) = settings
+        .get("netclass_assignments")
+        .and_then(|x| x.as_object())
+    {
+        for (net, class) in assignments {
+            if let Some(class) = class.as_str() {
+                rules.assign_net(net, class);
+            } else if let Some(classes) = class.as_array() {
+                if let Some(class) = classes.first().and_then(|x| x.as_str()) {
+                    rules.assign_net(net, class);
+                }
+            }
+        }
+    }
+
+    let nets: Vec<&str> = net_names.into_iter().collect();
+    if let Some(patterns) = settings.get("netclass_patterns").and_then(|x| x.as_array()) {
+        for pat in patterns {
+            let Some(class) = pat.get("netclass").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            let Some(pattern) = pat.get("pattern").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            for net in &nets {
+                if !rules.net_classes.contains_key(*net)
+                    && kicad_netclass_pattern_matches(pattern, net)
+                {
+                    rules.assign_net(net, class);
+                }
+            }
+        }
+    }
+
+    Some(rules)
+}
+
+fn kicad_netclass_pattern_matches(pattern: &str, net: &str) -> bool {
+    fn inner(p: &[char], n: &[char]) -> bool {
+        if p.is_empty() {
+            return n.is_empty();
+        }
+        match p[0] {
+            '*' => inner(&p[1..], n) || (!n.is_empty() && inner(p, &n[1..])),
+            '?' => !n.is_empty() && inner(&p[1..], &n[1..]),
+            '[' => {
+                let Some(end) = p.iter().position(|c| *c == ']') else {
+                    return !n.is_empty() && p[0] == n[0] && inner(&p[1..], &n[1..]);
+                };
+                !n.is_empty() && class_matches(&p[1..end], n[0]) && inner(&p[end + 1..], &n[1..])
+            }
+            c => !n.is_empty() && c == n[0] && inner(&p[1..], &n[1..]),
+        }
+    }
+    fn class_matches(class: &[char], c: char) -> bool {
+        let mut i = 0;
+        while i < class.len() {
+            if i + 2 < class.len() && class[i + 1] == '-' {
+                if class[i] <= c && c <= class[i + 2] {
+                    return true;
+                }
+                i += 3;
+            } else {
+                if class[i] == c {
+                    return true;
+                }
+                i += 1;
+            }
+        }
+        false
+    }
+    inner(
+        &pattern.chars().collect::<Vec<_>>(),
+        &net.chars().collect::<Vec<_>>(),
+    )
+}
+
 /// Whether a finding is a true short or only a clearance violation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViolationKind {
@@ -121,6 +363,8 @@ pub struct DrcFinding {
     /// Signed copper-edge gap (mm). <= 0 for an overlap, the penetration depth
     /// as a negative number; positive for a clearance violation.
     pub gap_mm: f64,
+    /// Effective clearance rule for this net pair (mm).
+    pub required_clearance_mm: f64,
     /// The two primitives that came closest.
     pub item_a: Item,
     pub item_b: Item,
@@ -234,7 +478,10 @@ struct Leaf {
 impl RTreeObject for Leaf {
     type Envelope = AABB<[f64; 2]>;
     fn envelope(&self) -> Self::Envelope {
-        AABB::from_corners([self.bounds[0], self.bounds[1]], [self.bounds[2], self.bounds[3]])
+        AABB::from_corners(
+            [self.bounds[0], self.bounds[1]],
+            [self.bounds[2], self.bounds[3]],
+        )
     }
 }
 
@@ -259,12 +506,7 @@ fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 
 }
 
 /// Minimum distance between two segments (centerlines), 0 if they cross.
-fn seg_seg_dist(
-    a1: (f64, f64),
-    a2: (f64, f64),
-    b1: (f64, f64),
-    b2: (f64, f64),
-) -> f64 {
+fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) -> f64 {
     if segments_intersect(a1, a2, b1, b2) {
         return 0.0;
     }
@@ -330,7 +572,9 @@ fn point_poly_edge_dist(px: f64, py: f64, poly: &[(f64, f64)]) -> f64 {
     let mut best = f64::INFINITY;
     let mut j = n - 1;
     for i in 0..n {
-        best = best.min(point_seg_dist2(px, py, poly[j].0, poly[j].1, poly[i].0, poly[i].1));
+        best = best.min(point_seg_dist2(
+            px, py, poly[j].0, poly[j].1, poly[i].0, poly[i].1,
+        ));
         j = i;
     }
     best.sqrt()
@@ -384,7 +628,8 @@ fn shape_gap(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
             );
             (d, mid)
         }
-        (Shape::Capsule(c), Shape::Polygon { pts, r }) | (Shape::Polygon { pts, r }, Shape::Capsule(c)) => {
+        (Shape::Capsule(c), Shape::Polygon { pts, r })
+        | (Shape::Polygon { pts, r }, Shape::Capsule(c)) => {
             // True centerline-to-boundary distance: the capsule segment against
             // every polygon edge (0 if it crosses the boundary). This catches a
             // track passing straight through a pad even when neither endpoint is
@@ -419,11 +664,12 @@ fn shape_gap(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
             // Containment either way is a hard overlap.
             let contained = pa.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pb))
                 || pb.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pa));
-            let gap = if contained { edge.min(0.0) - 1e-6 } else { edge };
-            let mid = pa
-                .first()
-                .copied()
-                .unwrap_or((0.0, 0.0));
+            let gap = if contained {
+                edge.min(0.0) - 1e-6
+            } else {
+                edge
+            };
+            let mid = pa.first().copied().unwrap_or((0.0, 0.0));
             (gap, mid)
         }
     }
@@ -489,7 +735,11 @@ impl NetResolver {
     fn net_ref(&mut self, list: &List) -> Option<i64> {
         let net = list.find("net")?;
         // Numeric id form.
-        if let Some(id) = net.arg(0).filter(|t| !t.is_string()).and_then(|t| t.as_i64()) {
+        if let Some(id) = net
+            .arg(0)
+            .filter(|t| !t.is_string())
+            .and_then(|t| t.as_i64())
+        {
             // Some zones carry both `(net N)` and `(net_name "X")`; declare the
             // name so reporting has it.
             if let Some(name) = list.find_value("net_name") {
@@ -533,7 +783,10 @@ struct LayerBuckets {
 
 impl LayerBuckets {
     fn push(&mut self, layer: &str, prim: Primitive) {
-        self.by_layer.entry(layer.to_string()).or_default().push(prim);
+        self.by_layer
+            .entry(layer.to_string())
+            .or_default()
+            .push(prim);
     }
 
     /// Add a zone polygon: its boundary edges become indexed capsules (radius 0)
@@ -575,7 +828,10 @@ impl LayerBuckets {
                     by: pts[i].1,
                     r: 0.0,
                 };
-                self.push(layer, make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()));
+                self.push(
+                    layer,
+                    make_prim(Shape::Capsule(cap), net, ItemKind::Zone, String::new()),
+                );
                 j = i;
             }
         }
@@ -583,13 +839,23 @@ impl LayerBuckets {
         self.zones
             .entry(layer.to_string())
             .or_default()
-            .push(ZonePoly { pts, net, bounds, filled });
+            .push(ZonePoly {
+                pts,
+                net,
+                bounds,
+                filled,
+            });
     }
 }
 
 /// Bounding box (minx, miny, maxx, maxy) of a point list.
 fn polygon_bounds(pts: &[(f64, f64)]) -> [f64; 4] {
-    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut b = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
     for &(x, y) in pts {
         b[0] = b[0].min(x);
         b[1] = b[1].min(y);
@@ -705,7 +971,9 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(net) = nets.net_ref(seg) else { continue };
+        let Some(net) = nets.net_ref(seg) else {
+            continue;
+        };
         let cap = Capsule {
             ax: start.0,
             ay: start.1,
@@ -713,7 +981,10 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             by: end.1,
             r: width / 2.0,
         };
-        buckets.push(&layer, make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new()));
+        buckets.push(
+            &layer,
+            make_prim(Shape::Capsule(cap), net, ItemKind::Track, String::new()),
+        );
     }
 
     // ── Arc tracks (KiCad 7+ `(arc (start)(mid)(end)(width)(layer)(net))`) ───
@@ -727,17 +998,26 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(net) = nets.net_ref(arc) else { continue };
+        let Some(net) = nets.net_ref(arc) else {
+            continue;
+        };
         for cap in flatten_arc(start, mid, end, width) {
-            buckets.push(&layer, make_prim(Shape::Capsule(cap), net, ItemKind::Arc, String::new()));
+            buckets.push(
+                &layer,
+                make_prim(Shape::Capsule(cap), net, ItemKind::Arc, String::new()),
+            );
         }
     }
 
     // ── Vias (multi-layer discs) ────────────────────────────────────────────
     for via in root.find_all("via") {
-        let Some(at) = xy_pair(via, "at") else { continue };
+        let Some(at) = xy_pair(via, "at") else {
+            continue;
+        };
         let size = via.find_f64("size").unwrap_or(0.0);
-        let Some(net) = nets.net_ref(via) else { continue };
+        let Some(net) = nets.net_ref(via) else {
+            continue;
+        };
         let layer_token = via
             .find("layers")
             .and_then(|l| {
@@ -761,13 +1041,18 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             r: size / 2.0,
         };
         for layer in &layer_token {
-            buckets.push(layer, make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new()));
+            buckets.push(
+                layer,
+                make_prim(Shape::Capsule(disc), net, ItemKind::Via, String::new()),
+            );
         }
     }
 
     // ── Filled zones (copper pours) ─────────────────────────────────────────
     for zone in root.find_all("zone") {
-        let Some(net) = nets.net_ref(zone) else { continue };
+        let Some(net) = nets.net_ref(zone) else {
+            continue;
+        };
         // A zone can fill several layers; each `(filled_polygon (layer ...))`
         // is the actual copper. Fall back to the zone's own `(layer ...)` and
         // its drawn `(polygon ...)` outline when no fill is present.
@@ -809,7 +1094,9 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         let rot_rad = frot.to_radians();
         let (fsin, fcos) = rot_rad.sin_cos();
         for pad in fp.find_all("pad") {
-            let Some(net) = nets.net_ref(pad) else { continue };
+            let Some(net) = nets.net_ref(pad) else {
+                continue;
+            };
             collect_pad(
                 pad,
                 net,
@@ -850,7 +1137,10 @@ fn collect_pad(
     // World transform for a pad-frame offset (KiCad y-down, footprint rotation
     // counter-clockwise: matches pcb.rs's pad placement).
     let to_world = |ox: f64, oy: f64| -> (f64, f64) {
-        (fx + px * fcos + py * fsin + ox, fy - px * fsin + py * fcos + oy)
+        (
+            fx + px * fcos + py * fsin + ox,
+            fy - px * fsin + py * fcos + oy,
+        )
     };
     let pad_origin = to_world(0.0, 0.0);
 
@@ -895,7 +1185,11 @@ fn collect_pad(
         "oval" => {
             // A stadium: a capsule whose segment runs along the longer axis,
             // radius = half the shorter dimension.
-            let (long, short, along_x) = if sx >= sy { (sx, sy, true) } else { (sy, sx, false) };
+            let (long, short, along_x) = if sx >= sy {
+                (sx, sy, true)
+            } else {
+                (sy, sx, false)
+            };
             let half = (long - short).max(0.0) / 2.0;
             let (a, b) = if along_x {
                 (outline_to_world(-half, 0.0), outline_to_world(half, 0.0))
@@ -930,12 +1224,20 @@ fn collect_pad(
             };
             // Inset the rectangle by the corner radius and carry `r` so the
             // rounded outline is represented as inset-poly + radius.
-            rect_polygon((sx - 2.0 * rr).max(0.0), (sy - 2.0 * rr).max(0.0), &outline_to_world, rr)
+            rect_polygon(
+                (sx - 2.0 * rr).max(0.0),
+                (sy - 2.0 * rr).max(0.0),
+                &outline_to_world,
+                rr,
+            )
         }
     };
 
     for layer in &layers {
-        buckets.push(layer, make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string()));
+        buckets.push(
+            layer,
+            make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string()),
+        );
     }
 }
 
@@ -954,7 +1256,10 @@ fn rect_polygon(w: f64, h: f64, to_world: &dyn Fn(f64, f64) -> (f64, f64), r: f6
 }
 
 /// Read a custom pad's polygon outline, transformed to world coordinates.
-fn custom_pad_polygon(pad: &List, to_world: &dyn Fn(f64, f64) -> (f64, f64)) -> Option<Vec<(f64, f64)>> {
+fn custom_pad_polygon(
+    pad: &List,
+    to_world: &dyn Fn(f64, f64) -> (f64, f64),
+) -> Option<Vec<(f64, f64)>> {
     let prim = pad.find("primitives")?;
     let poly = prim.find("gr_poly").or_else(|| prim.find("poly"))?;
     let pts = poly.find("pts")?;
@@ -978,7 +1283,12 @@ fn read_pts(list: &List) -> Option<Vec<(f64, f64)>> {
 
 /// Flatten an arc (start, optional mid, end) of the given width into a chain of
 /// capsule links. Without a mid point we approximate with the chord.
-fn flatten_arc(start: (f64, f64), mid: Option<(f64, f64)>, end: (f64, f64), width: f64) -> Vec<Capsule> {
+fn flatten_arc(
+    start: (f64, f64),
+    mid: Option<(f64, f64)>,
+    end: (f64, f64),
+    width: f64,
+) -> Vec<Capsule> {
     let r = width / 2.0;
     let Some(mid) = mid else {
         return vec![Capsule {
@@ -1131,6 +1441,13 @@ fn board_clearance(root: &List) -> f64 {
 /// Run geometric short / clearance detection on a parsed `.kicad_pcb` document.
 /// `clearance_override` forces the clearance rule (mm) when `Some`.
 pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
+    let rules = clearance_override.map(ClearanceRules::new);
+    run_drc_with_clearance_rules(doc, rules)
+}
+
+/// Run geometric short / clearance detection with project-derived per-net
+/// clearance rules.
+pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules>) -> DrcReport {
     let Some(root) = doc.root() else {
         return DrcReport::default();
     };
@@ -1138,7 +1455,7 @@ pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
         return DrcReport::default();
     }
     let mut nets = NetResolver::from_root(root);
-    let clearance = clearance_override.unwrap_or_else(|| board_clearance(root));
+    let rules = rules.unwrap_or_else(|| ClearanceRules::new(board_clearance(root)));
     let buckets = collect_primitives(root, &mut nets);
 
     // Nets that carry no real connectivity (net 0 and KiCad's per-pad
@@ -1152,7 +1469,7 @@ pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
         .collect();
 
     let net_owners = std::collections::HashMap::new();
-    sweep_buckets(buckets, clearance, &no_net, &net_owners, |id| nets.name_of(id))
+    sweep_buckets(buckets, &rules, &no_net, &net_owners, |id| nets.name_of(id))
 }
 
 /// The geometry-source-agnostic core of the DRC: take per-layer copper buckets
@@ -1174,13 +1491,14 @@ pub fn run_drc(doc: &Document, clearance_override: Option<f64>) -> DrcReport {
 /// Eagle caller fills it because Eagle tracks carry no owner of their own.
 fn sweep_buckets(
     buckets: LayerBuckets,
-    clearance: f64,
+    rules: &ClearanceRules,
     no_net: &std::collections::HashSet<i64>,
     net_owners: &std::collections::HashMap<i64, std::collections::HashSet<String>>,
     name_of: impl Fn(i64) -> String,
 ) -> DrcReport {
+    let max_clearance = rules.max_clearance();
     let mut report = DrcReport {
-        clearance_mm: clearance,
+        clearance_mm: rules.default_clearance_mm,
         findings: Vec::new(),
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
     };
@@ -1201,7 +1519,8 @@ fn sweep_buckets(
                       layer: &str,
                       cx: f64,
                       cy: f64,
-                      gap: f64| {
+                      gap: f64,
+                      required_clearance_mm: f64| {
         let (na, nb) = (pa.min(pb), pa.max(pb));
         let key = (
             na,
@@ -1213,7 +1532,11 @@ fn sweep_buckets(
         if !seen.insert(key) {
             return;
         }
-        let (item_a, item_b) = if pa <= pb { (item_a, item_b) } else { (item_b, item_a) };
+        let (item_a, item_b) = if pa <= pb {
+            (item_a, item_b)
+        } else {
+            (item_b, item_a)
+        };
         report.findings.push(DrcFinding {
             kind,
             net_a: na,
@@ -1224,6 +1547,7 @@ fn sweep_buckets(
             x: cx,
             y: cy,
             gap_mm: gap,
+            required_clearance_mm,
             item_a,
             item_b,
         });
@@ -1250,8 +1574,8 @@ fn sweep_buckets(
         for p in &prims {
             // Query window: this primitive's bounds inflated by the clearance.
             let query = AABB::from_corners(
-                [p.bounds[0] - clearance, p.bounds[1] - clearance],
-                [p.bounds[2] + clearance, p.bounds[3] + clearance],
+                [p.bounds[0] - max_clearance, p.bounds[1] - max_clearance],
+                [p.bounds[2] + max_clearance, p.bounds[3] + max_clearance],
             );
             for leaf in tree.locate_in_envelope_intersecting(query) {
                 let q = &prims[leaf.idx];
@@ -1294,8 +1618,27 @@ fn sweep_buckets(
                 {
                     continue;
                 }
+                let name_p = name_of(p.net);
+                let name_q = name_of(q.net);
+                let clearance = rules.effective_clearance(&name_p, &name_q);
                 let (gap, (cx, cy)) = shape_gap(&p.shape, &q.shape);
                 if gap >= clearance {
+                    continue;
+                }
+                // A zone boundary edge "overlapping" a different-net pad (gap <= 0)
+                // is almost always the antipad carve, not a short: KiCad always
+                // clears a pad out of a different-net pour, and KiCad-10 (format
+                // 20260206) fills represent that antipad with keyhole slits whose
+                // boundary edges run through the pad interior, producing spurious
+                // negative gaps (a 1668-short false-positive epidemic on one ESC,
+                // none on the same board's tracks/vias). A real pour incursion is a
+                // Track / Via / Arc crossing the boundary, which is still caught
+                // (the BMS REG1_3V3 and FPV-Drone shorts are Track/Via<->Zone). So
+                // a Zone<->Pad *overlap* is suppressed here; a positive sub-clearance
+                // Zone<->Pad gap is still kept as a normal clearance note.
+                let zone_pad = (p.kind == ItemKind::Zone && q.kind == ItemKind::Pad)
+                    || (p.kind == ItemKind::Pad && q.kind == ItemKind::Zone);
+                if zone_pad && gap <= 0.0 {
                     continue;
                 }
                 let kind = if gap <= 0.0 {
@@ -1303,7 +1646,18 @@ fn sweep_buckets(
                 } else {
                     ViolationKind::Clearance
                 };
-                record(kind, p.net, q.net, p.item(), q.item(), layer, cx, cy, gap);
+                record(
+                    kind,
+                    p.net,
+                    q.net,
+                    p.item(),
+                    q.item(),
+                    layer,
+                    cx,
+                    cy,
+                    gap,
+                    clearance,
+                );
             }
         }
 
@@ -1314,7 +1668,24 @@ fn sweep_buckets(
         // zone whose bounding box contains it.
         if !zones.is_empty() {
             for p in &prims {
-                if p.kind == ItemKind::Zone || no_net.contains(&p.net) {
+                // Skip zones (a pour is not "contained" in another) and no-net
+                // copper. Also skip Pads: KiCad always carves an antipad around a
+                // different-net pad, so a pad centre geometrically inside a pour is
+                // the expected fill geometry, not a short. On KiCad-10 (format
+                // 20260206) the antipad is an enclosed keyhole hole in the single
+                // fill contour that the even-odd point-in-polygon does not exclude,
+                // so a correctly-antipadded interior pad read as "inside the pour"
+                // and produced a false-positive epidemic (1668 phantom Zone<->Pad
+                // shorts on one ESC). A real pour incursion shows up as a Track /
+                // Via / Arc crossing the boundary (the BMS REG1_3V3 and FPV-Drone
+                // shorts are Track/Via<->Zone), which this pass still catches; a
+                // correctly-routed track sits in an open channel (a boundary
+                // concavity) the even-odd test handles, so tracks/vias do not
+                // false-fire. (A pad-only short to the wrong-net pour with no
+                // incursion copper is not caught here; it is rare and surfaces in
+                // connectivity. TODO: handle KiCad-10 keyhole antipads to restore
+                // a precise pad containment test.)
+                if p.kind == ItemKind::Zone || p.kind == ItemKind::Pad || no_net.contains(&p.net) {
                     continue;
                 }
                 let (rx, ry) = representative_point(&p.shape);
@@ -1322,7 +1693,8 @@ fn sweep_buckets(
                     if !z.filled || z.net == p.net || no_net.contains(&z.net) {
                         continue;
                     }
-                    if rx < z.bounds[0] || rx > z.bounds[2] || ry < z.bounds[1] || ry > z.bounds[3] {
+                    if rx < z.bounds[0] || rx > z.bounds[2] || ry < z.bounds[1] || ry > z.bounds[3]
+                    {
                         continue;
                     }
                     if point_in_polygon(rx, ry, &z.pts) {
@@ -1331,11 +1703,16 @@ fn sweep_buckets(
                             p.net,
                             z.net,
                             p.item(),
-                            Item { kind: ItemKind::Zone, net: z.net, owner: String::new() },
+                            Item {
+                                kind: ItemKind::Zone,
+                                net: z.net,
+                                owner: String::new(),
+                            },
                             layer,
                             rx,
                             ry,
-                            -clearance,
+                            -max_clearance,
+                            max_clearance,
                         );
                     }
                 }
@@ -1359,6 +1736,28 @@ fn sweep_buckets(
 pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
     let doc = forge_sexpr::parse(text)?;
     Ok(run_drc(&doc, None))
+}
+
+/// Like [`drc_from_text`] but with an explicit clearance rule (mm). KiCad 10
+/// (format 20260206) keeps the design-rule clearance in the sibling `.kicad_pro`
+/// (`net_settings.classes[].clearance`), not in the `.kicad_pcb` `(setup)` block,
+/// so `board_clearance` would otherwise fall back to [`DEFAULT_CLEARANCE_MM`]. The
+/// caller (which knows the board path) reads the project's Default-class clearance
+/// and passes it here. `None` keeps the board/`DEFAULT_CLEARANCE_MM` behaviour.
+pub fn drc_from_text_with_clearance(
+    text: &str,
+    clearance_override: Option<f64>,
+) -> Result<DrcReport, forge_sexpr::ParseError> {
+    drc_from_text_with_clearance_rules(text, clearance_override.map(ClearanceRules::new))
+}
+
+/// Like [`drc_from_text_with_clearance`] but with concrete per-net rules.
+pub fn drc_from_text_with_clearance_rules(
+    text: &str,
+    rules: Option<ClearanceRules>,
+) -> Result<DrcReport, forge_sexpr::ParseError> {
+    let doc = forge_sexpr::parse(text)?;
+    Ok(run_drc_with_clearance_rules(&doc, rules))
 }
 
 /// Convenience: run the geometric DRC on Eagle `.brd` XML text, using the
@@ -1387,8 +1786,8 @@ pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractEr
 /// so its smds and the side-specific copper swap 1↔16.
 pub mod eagle_drc {
     use super::{
-        make_prim, sweep_buckets, Capsule, DrcReport, ItemKind, LayerBuckets, Shape, ARC_SEGMENTS,
-        DEFAULT_CLEARANCE_MM,
+        make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
+        Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -1577,7 +1976,11 @@ pub mod eagle_drc {
     impl Default for ViaRestring {
         fn default() -> Self {
             // Eagle's stock defaults.
-            ViaRestring { rv: 0.25, min_mm: 0.2032, max_mm: 0.508 }
+            ViaRestring {
+                rv: 0.25,
+                min_mm: 0.2032,
+                max_mm: 0.508,
+            }
         }
     }
 
@@ -1737,8 +2140,12 @@ pub mod eagle_drc {
                             if let Some(si) = cur_signal {
                                 let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
                                 if is_copper_layer(layer) {
-                                    cur_poly =
-                                        Some((si, num(&a, "width").unwrap_or(0.0), layer, Vec::new()));
+                                    cur_poly = Some((
+                                        si,
+                                        num(&a, "width").unwrap_or(0.0),
+                                        layer,
+                                        Vec::new(),
+                                    ));
                                 }
                             }
                         }
@@ -1753,12 +2160,9 @@ pub mod eagle_drc {
                             if let Some(si) = cur_signal {
                                 let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
                                 if is_copper_layer(layer) {
-                                    if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (
-                                        num(&a, "x1"),
-                                        num(&a, "y1"),
-                                        num(&a, "x2"),
-                                        num(&a, "y2"),
-                                    ) {
+                                    if let (Some(x1), Some(y1), Some(x2), Some(y2)) =
+                                        (num(&a, "x1"), num(&a, "y1"), num(&a, "x2"), num(&a, "y2"))
+                                    {
                                         let (rot_deg, _) = parse_rot(
                                             a.get("rot").map(String::as_str).unwrap_or("R0"),
                                         );
@@ -1801,9 +2205,11 @@ pub mod eagle_drc {
                     b"polygon" => {
                         if let Some((si, width, layer, verts)) = cur_poly.take() {
                             if verts.len() >= 3 {
-                                out.signals[si]
-                                    .1
-                                    .push(SignalGeom::Polygon { width, layer, verts });
+                                out.signals[si].1.push(SignalGeom::Polygon {
+                                    width,
+                                    layer,
+                                    verts,
+                                });
                             }
                         }
                     }
@@ -1858,16 +2264,15 @@ pub mod eagle_drc {
 
     /// Flatten an Eagle `curve` arc (chord endpoints + signed included angle in
     /// degrees) into a chain of capsule links of the given radius.
-    fn flatten_curve(
-        x1: f64,
-        y1: f64,
-        x2: f64,
-        y2: f64,
-        curve_deg: f64,
-        r: f64,
-    ) -> Vec<Capsule> {
+    fn flatten_curve(x1: f64, y1: f64, x2: f64, y2: f64, curve_deg: f64, r: f64) -> Vec<Capsule> {
         if curve_deg.abs() < 1e-6 {
-            return vec![Capsule { ax: x1, ay: y1, bx: x2, by: y2, r }];
+            return vec![Capsule {
+                ax: x1,
+                ay: y1,
+                bx: x2,
+                by: y2,
+                r,
+            }];
         }
         // The included angle is `curve_deg`; the chord subtends it. Centre lies
         // off the chord midpoint by the sagitta direction.
@@ -1878,7 +2283,13 @@ pub mod eagle_drc {
         let dy = y2 - y1;
         let chord = (dx * dx + dy * dy).sqrt();
         if chord < 1e-9 {
-            return vec![Capsule { ax: x1, ay: y1, bx: x2, by: y2, r }];
+            return vec![Capsule {
+                ax: x1,
+                ay: y1,
+                bx: x2,
+                by: y2,
+                r,
+            }];
         }
         let radius = (chord / 2.0) / (theta / 2.0).sin().abs();
         // Distance from chord midpoint to centre.
@@ -1912,7 +2323,13 @@ pub mod eagle_drc {
             let t = i as f64 / ARC_SEGMENTS as f64;
             let a = a0 + theta * t;
             let p = (cx + radius * a.cos(), cy + radius * a.sin());
-            caps.push(Capsule { ax: prev.0, ay: prev.1, bx: p.0, by: p.1, r });
+            caps.push(Capsule {
+                ax: prev.0,
+                ay: prev.1,
+                bx: p.0,
+                by: p.1,
+                r,
+            });
             prev = p;
         }
         caps
@@ -1978,11 +2395,23 @@ pub mod eagle_drc {
             (el.x + mx * ecos - ly * esin, el.y + mx * esin + ly * ecos)
         };
         match item {
-            PkgItem::Pad { x, y, diameter, drill, shape, rot_deg, .. } => {
+            PkgItem::Pad {
+                x,
+                y,
+                diameter,
+                drill,
+                shape,
+                rot_deg,
+                ..
+            } => {
                 let (cx, cy) = to_world(*x, *y);
                 // Pads in the corpus all carry an explicit copper diameter; if one
                 // is absent, fall back to a 0.2 mm annular ring over the drill.
-                let d = if *diameter > 0.0 { *diameter } else { drill + 2.0 * 0.2032 };
+                let d = if *diameter > 0.0 {
+                    *diameter
+                } else {
+                    drill + 2.0 * 0.2032
+                };
                 // Pad rotation combines the element rotation with the pad's own;
                 // mirroring negates the pad rotation (it is reflected).
                 let pad_rot = if el.mirrored {
@@ -1991,8 +2420,14 @@ pub mod eagle_drc {
                     (el.rot_deg + rot_deg).to_radians()
                 };
                 let shape = match shape.as_str() {
-                    "square" => Shape::Polygon { pts: rect_pts(cx, cy, d, d, pad_rot), r: 0.0 },
-                    "octagon" => Shape::Polygon { pts: octagon(cx, cy, d, pad_rot), r: 0.0 },
+                    "square" => Shape::Polygon {
+                        pts: rect_pts(cx, cy, d, d, pad_rot),
+                        r: 0.0,
+                    },
+                    "octagon" => Shape::Polygon {
+                        pts: octagon(cx, cy, d, pad_rot),
+                        r: 0.0,
+                    },
                     "long" => {
                         // A "long" pad is a stadium: length 2*d along the pad's
                         // axis, width d. Model as a capsule.
@@ -2002,7 +2437,13 @@ pub mod eagle_drc {
                         let ay = cy - half * rs;
                         let bx = cx + half * rc;
                         let by = cy + half * rs;
-                        Shape::Capsule(Capsule { ax, ay, bx, by, r: d / 2.0 })
+                        Shape::Capsule(Capsule {
+                            ax,
+                            ay,
+                            bx,
+                            by,
+                            r: d / 2.0,
+                        })
                     }
                     "offset" => {
                         // Offset: like "long" but the hole sits at one end, so the
@@ -2010,10 +2451,22 @@ pub mod eagle_drc {
                         let (rs, rc) = pad_rot.sin_cos();
                         let bx = cx + d * rc;
                         let by = cy + d * rs;
-                        Shape::Capsule(Capsule { ax: cx, ay: cy, bx, by, r: d / 2.0 })
+                        Shape::Capsule(Capsule {
+                            ax: cx,
+                            ay: cy,
+                            bx,
+                            by,
+                            r: d / 2.0,
+                        })
                     }
                     // round (default): a disc.
-                    _ => Shape::Capsule(Capsule { ax: cx, ay: cy, bx: cx, by: cy, r: d / 2.0 }),
+                    _ => Shape::Capsule(Capsule {
+                        ax: cx,
+                        ay: cy,
+                        bx: cx,
+                        by: cy,
+                        r: d / 2.0,
+                    }),
                 };
                 for layer in copper_layers {
                     buckets.push(
@@ -2022,11 +2475,24 @@ pub mod eagle_drc {
                     );
                 }
             }
-            PkgItem::Smd { x, y, dx, dy, roundness, rot_deg, layer, .. } => {
+            PkgItem::Smd {
+                x,
+                y,
+                dx,
+                dy,
+                roundness,
+                rot_deg,
+                layer,
+                ..
+            } => {
                 let (cx, cy) = to_world(*x, *y);
                 // The smd's drawn layer (1 by default) flips with a mirrored
                 // element.
-                let layer = if el.mirrored { mirror_layer(*layer) } else { *layer };
+                let layer = if el.mirrored {
+                    mirror_layer(*layer)
+                } else {
+                    *layer
+                };
                 if !is_copper_layer(layer) {
                     return;
                 }
@@ -2041,7 +2507,13 @@ pub mod eagle_drc {
                 // roundrect).
                 let rr = (roundness / 100.0) * dx.min(*dy) / 2.0;
                 let shape = Shape::Polygon {
-                    pts: rect_pts(cx, cy, (dx - 2.0 * rr).max(0.0), (dy - 2.0 * rr).max(0.0), smd_rot),
+                    pts: rect_pts(
+                        cx,
+                        cy,
+                        (dx - 2.0 * rr).max(0.0),
+                        (dy - 2.0 * rr).max(0.0),
+                        smd_rot,
+                    ),
                     r: rr,
                 };
                 buckets.push(
@@ -2067,9 +2539,8 @@ pub mod eagle_drc {
 
         // Net ids: 1-based signal index, matching `eagle.rs`. Name lookup table.
         let names: Vec<String> = parsed.signals.iter().map(|(n, _)| n.clone()).collect();
-        let name_of = |id: i64| -> String {
-            names.get((id - 1) as usize).cloned().unwrap_or_default()
-        };
+        let name_of =
+            |id: i64| -> String { names.get((id - 1) as usize).cloned().unwrap_or_default() };
 
         // The two-layer copper stack these boards use; a TH pad / via sits on all
         // of them. (Inner layers would be added here for a multilayer board, but
@@ -2083,7 +2554,15 @@ pub mod eagle_drc {
             let net = si as i64 + 1;
             for g in geoms {
                 match g {
-                    SignalGeom::Wire { x1, y1, x2, y2, width, curve, layer } => {
+                    SignalGeom::Wire {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        width,
+                        curve,
+                        layer,
+                    } => {
                         let r = width / 2.0;
                         for cap in flatten_curve(*x1, *y1, *x2, *y2, *curve, r) {
                             buckets.push(
@@ -2092,13 +2571,29 @@ pub mod eagle_drc {
                             );
                         }
                     }
-                    SignalGeom::Via { x, y, diameter, drill, shape } => {
-                        let d = diameter.unwrap_or_else(|| parsed.via_restring.outer_diameter(*drill));
+                    SignalGeom::Via {
+                        x,
+                        y,
+                        diameter,
+                        drill,
+                        shape,
+                    } => {
+                        let d =
+                            diameter.unwrap_or_else(|| parsed.via_restring.outer_diameter(*drill));
                         // A via spans every copper layer (`extent="1-16"`).
                         let prim_shape = if shape == "octagon" {
-                            Shape::Polygon { pts: octagon(*x, *y, d, 0.0), r: 0.0 }
+                            Shape::Polygon {
+                                pts: octagon(*x, *y, d, 0.0),
+                                r: 0.0,
+                            }
                         } else {
-                            Shape::Capsule(Capsule { ax: *x, ay: *y, bx: *x, by: *y, r: d / 2.0 })
+                            Shape::Capsule(Capsule {
+                                ax: *x,
+                                ay: *y,
+                                bx: *x,
+                                by: *y,
+                                r: d / 2.0,
+                            })
                         };
                         for layer in &copper_layers {
                             buckets.push(
@@ -2107,7 +2602,11 @@ pub mod eagle_drc {
                             );
                         }
                     }
-                    SignalGeom::Polygon { width, layer, verts } => {
+                    SignalGeom::Polygon {
+                        width,
+                        layer,
+                        verts,
+                    } => {
                         // Signal polygon (copper pour). HONESTY CAVEAT: a `.brd`
                         // stores only the pour's *requested outline*, not the
                         // copper Eagle actually pours. The real fill carves an
@@ -2129,7 +2628,14 @@ pub mod eagle_drc {
                         let _ = (width, layer);
                         let _pour_outline = flatten_polygon(verts);
                     }
-                    SignalGeom::Rect { x1, y1, x2, y2, rot_deg, layer } => {
+                    SignalGeom::Rect {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        rot_deg,
+                        layer,
+                    } => {
                         let cx = (x1 + x2) / 2.0;
                         let cy = (y1 + y2) / 2.0;
                         let w = (x2 - x1).abs();
@@ -2145,7 +2651,13 @@ pub mod eagle_drc {
                             ),
                         );
                     }
-                    SignalGeom::Circle { x, y, radius, width, layer } => {
+                    SignalGeom::Circle {
+                        x,
+                        y,
+                        radius,
+                        width,
+                        layer,
+                    } => {
                         // A drawn circle on copper: the copper is the annulus of
                         // stroke `width` at `radius`, but for short detection the
                         // conservative solid disc of the outer radius is used.
@@ -2153,7 +2665,13 @@ pub mod eagle_drc {
                         buckets.push(
                             &layer_name(*layer),
                             make_prim(
-                                Shape::Capsule(Capsule { ax: *x, ay: *y, bx: *x, by: *y, r }),
+                                Shape::Capsule(Capsule {
+                                    ax: *x,
+                                    ay: *y,
+                                    bx: *x,
+                                    by: *y,
+                                    r,
+                                }),
                                 net,
                                 ItemKind::Zone,
                                 String::new(),
@@ -2175,7 +2693,9 @@ pub mod eagle_drc {
             net_owners.entry(*net).or_default().insert(el_name.clone());
         }
         for el in &parsed.elements {
-            let Some(items) = parsed.packages.get(&el.package) else { continue };
+            let Some(items) = parsed.packages.get(&el.package) else {
+                continue;
+            };
             for item in items {
                 let net = pad_net
                     .get(&(el.name.clone(), item.name().to_string()))
@@ -2189,7 +2709,8 @@ pub mod eagle_drc {
         // is never a short, exactly like KiCad's net 0.
         let no_net: std::collections::HashSet<i64> = std::iter::once(0).collect();
 
-        sweep_buckets(buckets, clearance, &no_net, &net_owners, name_of)
+        let rules = ClearanceRules::new(clearance);
+        sweep_buckets(buckets, &rules, &no_net, &net_owners, name_of)
     }
 
     /// Flatten a polygon's vertex ring, expanding any per-vertex `curve` (the arc
@@ -2265,12 +2786,10 @@ pub mod eagle_drc {
 /// `AARC6`, `AVIA6`, `APAD6`); see `altium.rs` for the field-by-field citation.
 pub mod altium_drc {
     use super::{
-        make_prim, sweep_buckets, Capsule, DrcReport, ItemKind, LayerBuckets, Shape, ARC_SEGMENTS,
-        DEFAULT_CLEARANCE_MM,
+        make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
+        Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
-    use crate::altium::{
-        self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16,
-    };
+    use crate::altium::{self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16};
     use crate::ExtractError;
     use std::collections::{HashMap, HashSet};
 
@@ -2309,7 +2828,10 @@ pub mod altium_drc {
             if id == 0 {
                 String::new()
             } else {
-                net_names.get((id - 1) as usize).cloned().unwrap_or_default()
+                net_names
+                    .get((id - 1) as usize)
+                    .cloned()
+                    .unwrap_or_default()
             }
         };
 
@@ -2456,7 +2978,14 @@ pub mod altium_drc {
         // Net 0 carries no connectivity, so it is never a short (KiCad net 0).
         let no_net: HashSet<i64> = std::iter::once(0).collect();
 
-        Ok(sweep_buckets(buckets, clearance, &no_net, &net_owners, name_of))
+        let rules = ClearanceRules::new(clearance);
+        Ok(sweep_buckets(
+            buckets,
+            &rules,
+            &no_net,
+            &net_owners,
+            name_of,
+        ))
     }
 
     // ── Binary record parsers (fixed layout, little-endian) ───────────────────

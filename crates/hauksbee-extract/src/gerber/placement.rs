@@ -73,7 +73,10 @@ fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
     }
     // Then prefix/contains (e.g. "centerxmm" contains "centerx").
     for a in aliases {
-        if let Some(i) = normed.iter().position(|h| h.starts_with(a) || h.contains(a)) {
+        if let Some(i) = normed
+            .iter()
+            .position(|h| h.starts_with(a) || h.contains(a))
+        {
             return Some(i);
         }
     }
@@ -88,7 +91,9 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     let inch = lower.ends_with("in") || lower.ends_with("\"");
     let cleaned: String = t
         .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E')
+        .filter(|c| {
+            c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E'
+        })
         .collect();
     let v: f64 = cleaned.parse().ok()?;
     if mil {
@@ -114,7 +119,10 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
     };
     let headers = split_csv(header_line);
 
-    let ref_col = find_col(&headers, &["ref", "reference", "designator", "refdes", "name", "part"]);
+    let ref_col = find_col(
+        &headers,
+        &["ref", "reference", "designator", "refdes", "name", "part"],
+    );
     let val_col = find_col(&headers, &["val", "value", "comment", "partvalue"]);
     let pkg_col = find_col(&headers, &["package", "footprint", "pattern", "pkg"]);
     let x_col = find_col(&headers, &["posx", "x", "midx", "centerx", "refx", "px"]);
@@ -133,7 +141,11 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
             continue;
         }
         let cells = split_csv(line);
-        let get = |i: Option<usize>| i.and_then(|i| cells.get(i)).map(|s| s.as_str()).unwrap_or("");
+        let get = |i: Option<usize>| {
+            i.and_then(|i| cells.get(i))
+                .map(|s| s.as_str())
+                .unwrap_or("")
+        };
         let reference = cells.get(rc).cloned().unwrap_or_default();
         if reference.is_empty() {
             continue;
@@ -200,7 +212,10 @@ pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
             y *= 0.0254;
         }
         let rotation = cells[3].parse().unwrap_or(0.0);
-        let mirror = cells.get(4).map(|s| s.eq_ignore_ascii_case("m")).unwrap_or(false);
+        let mirror = cells
+            .get(4)
+            .map(|s| s.eq_ignore_ascii_case("m"))
+            .unwrap_or(false);
         let package = cells.get(5).map(|s| s.to_string()).unwrap_or_default();
         out.push(Placement {
             reference,
@@ -227,12 +242,26 @@ pub fn parse_bom(text: &str) -> HashMap<String, (String, String)> {
     let headers = split_csv(header_line);
     let ref_col = find_col(
         &headers,
-        &["designator", "reference", "references", "refdes", "ref", "part"],
+        &[
+            "designator",
+            "reference",
+            "references",
+            "refdes",
+            "ref",
+            "part",
+        ],
     );
     let val_col = find_col(&headers, &["value", "comment", "val"]);
     let mpn_col = find_col(
         &headers,
-        &["mpn", "partnumber", "manufacturerpartnumber", "lcsc", "partno", "part"],
+        &[
+            "mpn",
+            "partnumber",
+            "manufacturerpartnumber",
+            "lcsc",
+            "partno",
+            "part",
+        ],
     );
     let Some(rc) = ref_col else {
         return out;
@@ -240,9 +269,19 @@ pub fn parse_bom(text: &str) -> HashMap<String, (String, String)> {
     for line in lines {
         let cells = split_csv(line);
         let Some(refs) = cells.get(rc) else { continue };
-        let value = val_col.and_then(|i| cells.get(i)).cloned().unwrap_or_default();
-        let mpn = mpn_col.and_then(|i| cells.get(i)).cloned().unwrap_or_default();
-        for r in refs.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()) {
+        let value = val_col
+            .and_then(|i| cells.get(i))
+            .cloned()
+            .unwrap_or_default();
+        let mpn = mpn_col
+            .and_then(|i| cells.get(i))
+            .cloned()
+            .unwrap_or_default();
+        for r in refs
+            .split([',', ' '])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             out.insert(r.to_string(), (value.clone(), mpn.clone()));
         }
     }

@@ -119,7 +119,11 @@ fn wire_wire_crossing_is_a_short() {
     assert_short(&report, "A", "B");
     let f = report.shorts().next().unwrap();
     assert_eq!(f.layer, "F.Cu");
-    assert!(f.gap_mm <= 0.0, "overlap gap is non-positive ({})", f.gap_mm);
+    assert!(
+        f.gap_mm <= 0.0,
+        "overlap gap is non-positive ({})",
+        f.gap_mm
+    );
 }
 
 #[test]
@@ -230,7 +234,11 @@ fn shared_footprint_pads_do_not_short() {
 </signal>
 "#;
     let report = drc(packages, elements, signals);
-    assert_eq!(report.short_count(), 0, "intra-footprint abutment is not a short");
+    assert_eq!(
+        report.short_count(),
+        0,
+        "intra-footprint abutment is not a short"
+    );
 }
 
 #[test]
@@ -327,7 +335,10 @@ fn mirrored_package_pad_is_placed_on_the_bottom() {
     // longer there.
     let top = bottom.replace(r#"layer="16""#, r#"layer="1""#);
     let r2 = drc(packages, elements, &top);
-    assert!(r2.is_clean(), "top-layer wire must not hit the mirrored (bottom) pad");
+    assert!(
+        r2.is_clean(),
+        "top-layer wire must not hit the mirrored (bottom) pad"
+    );
 }
 
 #[test]
@@ -367,7 +378,10 @@ fn mirror_reflects_x_not_y_for_offset_pads() {
 </signal>
 "#;
     let r2 = drc(packages, elements, at_flipy);
-    assert!(r2.is_clean(), "the pad must be at flip-X (7,4), not flip-Y (13,-4)");
+    assert!(
+        r2.is_clean(),
+        "the pad must be at flip-X (7,4), not flip-Y (13,-4)"
+    );
 }
 
 #[test]
@@ -383,16 +397,21 @@ fn designrules_clearance_is_respected() {
   <wire x1="0" y1="0.5" x2="10" y2="0.5" width="0.2" layer="1"/>
 </signal>
 "#;
-    let loose = r#"<designrules name="loose"><param name="mdWireWire" value="6mil"/></designrules>"#;
+    let loose =
+        r#"<designrules name="loose"><param name="mdWireWire" value="6mil"/></designrules>"#;
     let r_loose = drc_rules("", "", signals, loose);
     assert!(
         (r_loose.clearance_mm - 0.1524).abs() < 1e-3,
         "6 mil rule read as ~0.1524 mm, got {}",
         r_loose.clearance_mm
     );
-    assert!(r_loose.findings.is_empty(), "0.15 mm rule: the 0.3 mm gap is clean");
+    assert!(
+        r_loose.findings.is_empty(),
+        "0.15 mm rule: the 0.3 mm gap is clean"
+    );
 
-    let strict = r#"<designrules name="strict"><param name="mdWireWire" value="20mil"/></designrules>"#;
+    let strict =
+        r#"<designrules name="strict"><param name="mdWireWire" value="20mil"/></designrules>"#;
     let r_strict = drc_rules("", "", signals, strict);
     assert!(
         (r_strict.clearance_mm - 0.508).abs() < 1e-3,

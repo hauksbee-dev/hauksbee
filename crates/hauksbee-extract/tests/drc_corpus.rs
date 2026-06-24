@@ -22,7 +22,16 @@ use hauksbee_extract::ExtractedBoard;
 /// Locate board-corpus relative to this crate, if present.
 fn corpus_root() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus");
-    p.exists().then_some(p)
+    if p.exists() {
+        Some(p)
+    } else if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
+        panic!(
+            "HAUKSBEE_REQUIRE_CORPUS=1 but board-corpus is missing at {}",
+            p.display()
+        );
+    } else {
+        None
+    }
 }
 
 /// Recursively collect every `.kicad_pcb` under `dir`.
@@ -33,6 +42,13 @@ fn find_boards(dir: &Path, out: &mut Vec<PathBuf>) {
     for e in entries.flatten() {
         let path = e.path();
         if path.is_dir() {
+            // The `hunt/` area holds un-reviewed, actively-probed boards (some
+            // with genuine defects we are reporting upstream, e.g. the BMS
+            // REG1_3V3<->GND short). They are deliberately not "known-good", so
+            // they are excluded from this short-clean assertion.
+            if path.file_name().and_then(|s| s.to_str()) == Some("hunt") {
+                continue;
+            }
             find_boards(&path, out);
         } else if path.extension().and_then(|s| s.to_str()) == Some("kicad_pcb") {
             out.push(path);
@@ -94,11 +110,47 @@ fn corpus_boards_have_no_true_shorts() {
         "corpus DRC: scanned {scanned} board(s) ({skipped} skipped unparseable), \
          {total_prims} primitive(s), {total_clearance} clearance violation(s)"
     );
-    assert!(scanned >= 40, "the bulk of the corpus parsed and was scanned");
+    assert!(
+        scanned >= 40,
+        "the bulk of the corpus parsed and was scanned"
+    );
 
     assert!(
         offenders.is_empty(),
         "known-good corpus boards must report zero true shorts; offenders:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+#[test]
+fn hunt_sbc_a13_project_rules_resolve_netclasses_and_diff_pairs() {
+    let Some(root) = corpus_root() else {
+        eprintln!("board-corpus not present; skipping sbc-a13 project-rule regression");
+        return;
+    };
+    let board_path = root.join("famous/hunt/sbc-a13/hardware/module.kicad_pcb");
+    let pro_path = root.join("famous/hunt/sbc-a13/hardware/module.kicad_pro");
+    if !board_path.exists() || !pro_path.exists() {
+        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
+            panic!("HAUKSBEE_REQUIRE_CORPUS=1 but sbc-a13 hunt board/project files are missing");
+        }
+        eprintln!("sbc-a13 hunt board absent; skipping project-rule regression");
+        return;
+    }
+    let board_text = std::fs::read_to_string(&board_path).expect("read sbc-a13 board");
+    let project_text = std::fs::read_to_string(&pro_path).expect("read sbc-a13 project");
+    let board = ExtractedBoard::from_kicad_pcb(&board_text).expect("extract sbc-a13 board nets");
+    let rules = hauksbee_extract::clearance_rules_from_kicad_pro(
+        &project_text,
+        board.nets.iter().map(|n| n.name.as_str()),
+    )
+    .expect("parse sbc-a13 project rules");
+
+    assert!((rules.clearance_for_net("/DDR3 Memory/ddr-ck+") - 0.2).abs() < 1e-9);
+    assert!((rules.clearance_for_net("+3V3") - 0.2).abs() < 1e-9);
+    assert!((rules.clearance_for_net("USB0-D+") - 0.2).abs() < 1e-9);
+    assert!(
+        (rules.effective_clearance("/DDR3 Memory/ddr-ck+", "/DDR3 Memory/ddr-ck-") - 0.127).abs()
+            < 1e-9
     );
 }

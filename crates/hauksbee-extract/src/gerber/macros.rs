@@ -17,9 +17,7 @@
 
 use std::collections::HashMap;
 
-use gerber_types::{
-    ApertureMacro, MacroBoolean, MacroContent, MacroDecimal, MacroInteger,
-};
+use gerber_types::{ApertureMacro, MacroBoolean, MacroContent, MacroDecimal, MacroInteger};
 
 /// Evaluate a macro into the convex-hull polygon of its solid area, centred at
 /// the flash point `(cx, cy)` and scaled by `s` (inch->mm or 1.0). `args` are
@@ -138,7 +136,9 @@ pub fn instantiate_macro(
         return Vec::new();
     }
     let hull = convex_hull(pts);
-    hull.into_iter().map(|(x, y)| (cx + x * s, cy + y * s)).collect()
+    hull.into_iter()
+        .map(|(x, y)| (cx + x * s, cy + y * s))
+        .collect()
 }
 
 fn exposed(e: &MacroBoolean, vars: &HashMap<u32, f64>) -> bool {

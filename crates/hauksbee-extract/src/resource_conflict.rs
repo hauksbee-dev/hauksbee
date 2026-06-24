@@ -85,8 +85,11 @@ impl McuResources {
         // KiCad rescue-library id (`...RP2040-PICO-PC_rev_C-rescue:74LVC125...`)
         // would match a 14-pin buffer and a 1-pin mounting hole. The table's
         // highest pad number is the lower bound on a real instance's pin count.
-        let name_hit =
-            self.value_re.is_match(&c.value) || self.lib_re.as_ref().is_some_and(|re| re.is_match(&c.lib_id));
+        let name_hit = self.value_re.is_match(&c.value)
+            || self
+                .lib_re
+                .as_ref()
+                .is_some_and(|re| re.is_match(&c.lib_id));
         if !name_hit {
             return false;
         }
@@ -148,10 +151,25 @@ fn parse_resources(text: &str) -> Result<Vec<McuResources>, String> {
                 let pwm = v.get("pwm").and_then(|x| x.as_str()).map(str::to_string);
                 let qspi_group = v.get("group").and_then(|x| x.as_str()).map(str::to_string);
                 let qspi_data_pad = v.get("data").and_then(|x| x.as_bool()).unwrap_or(false);
-                pins.insert(pad.clone(), PinResources { label, pwm, qspi_group, qspi_data_pad });
+                pins.insert(
+                    pad.clone(),
+                    PinResources {
+                        label,
+                        pwm,
+                        qspi_group,
+                        qspi_data_pad,
+                    },
+                );
             }
         }
-        out.push(McuResources { id, value_re, lib_re, fully_routable, min_pins, pins });
+        out.push(McuResources {
+            id,
+            value_re,
+            lib_re,
+            fully_routable,
+            min_pins,
+            pins,
+        });
     }
     Ok(out)
 }
@@ -220,18 +238,34 @@ fn classify_target(c: &Component) -> Option<&'static str> {
     let r = c.reference.to_ascii_uppercase();
     let any = |hay: &str, needles: &[&str]| needles.iter().any(|n| hay.contains(n));
 
-    if any(&v, &["hdmi", "dvi"]) || any(&lib, &["hdmi", "dvi"]) || any(&fp, &["hdmi", "dvi"])
-        || r.starts_with("HDMI") || r.starts_with("DVI")
+    if any(&v, &["hdmi", "dvi"])
+        || any(&lib, &["hdmi", "dvi"])
+        || any(&fp, &["hdmi", "dvi"])
+        || r.starts_with("HDMI")
+        || r.starts_with("DVI")
     {
         return Some("display");
     }
-    if any(&v, &["audio", "headphone", "phone jack", "3.5mm", "pj-"]) || any(&lib, &["audio", "jack"])
-        || r.starts_with("AUDIO") || r.contains("JACK")
+    if any(&v, &["audio", "headphone", "phone jack", "3.5mm", "pj-"])
+        || any(&lib, &["audio", "jack"])
+        || r.starts_with("AUDIO")
+        || r.contains("JACK")
     {
         return Some("audio");
     }
-    if any(&v, &["flash", "25sf", "25q", "w25", "at25", "mx25", "spansion", "nor flash"])
-        || any(&lib, &["memory", "flash"])
+    if any(
+        &v,
+        &[
+            "flash",
+            "25sf",
+            "25q",
+            "w25",
+            "at25",
+            "mx25",
+            "spansion",
+            "nor flash",
+        ],
+    ) || any(&lib, &["memory", "flash"])
     {
         return Some("flash");
     }
@@ -242,7 +276,12 @@ fn classify_target(c: &Component) -> Option<&'static str> {
 /// MCU pin's own net name. The net name is the honest discriminator for which
 /// signal of a multi-function connector this pin carries.
 fn function_for(target: &str, start_net: &str) -> Option<Function> {
-    let n = start_net.trim().rsplit('/').next().unwrap_or(start_net).to_ascii_uppercase();
+    let n = start_net
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(start_net)
+        .to_ascii_uppercase();
     let has = |needles: &[&str]| needles.iter().any(|k| n.contains(k));
     match target {
         "display" => {
@@ -251,9 +290,15 @@ fn function_for(target: &str, start_net: &str) -> Option<Function> {
             // PIO-driven; DDC/CEC/HPD are I2C/GPIO. Only the clock is a PWM
             // demand.
             if has(&["CK", "CLK", "PIXCLK", "PIX_CLK"]) && !has(&["CLKEN"]) {
-                Some(Function { class: "PicoDVI PWM pixel clock".into(), peripheral: Peripheral::Pwm })
+                Some(Function {
+                    class: "PicoDVI PWM pixel clock".into(),
+                    peripheral: Peripheral::Pwm,
+                })
             } else {
-                Some(Function { class: "DVI link (non-PWM)".into(), peripheral: Peripheral::Other })
+                Some(Function {
+                    class: "DVI link (non-PWM)".into(),
+                    peripheral: Peripheral::Other,
+                })
             }
         }
         "audio" => {
@@ -269,12 +314,23 @@ fn function_for(target: &str, start_net: &str) -> Option<Function> {
             // BUT exclude a jack control/sense line - a headphone-detect,
             // insertion, or sense net that reaches the jack but carries no audio
             // - so such a pin is not mis-counted as a PWM-audio demand.
-            if has(&["DET", "SENSE", "SENS", "INS", "INSERT", "HPDET", "JACK_DET", "MIC_DET"]) {
-                return Some(Function { class: "jack sense (non-PWM)".into(), peripheral: Peripheral::Other });
+            if has(&[
+                "DET", "SENSE", "SENS", "INS", "INSERT", "HPDET", "JACK_DET", "MIC_DET",
+            ]) {
+                return Some(Function {
+                    class: "jack sense (non-PWM)".into(),
+                    peripheral: Peripheral::Other,
+                });
             }
-            Some(Function { class: "PWM audio".into(), peripheral: Peripheral::Pwm })
+            Some(Function {
+                class: "PWM audio".into(),
+                peripheral: Peripheral::Pwm,
+            })
         }
-        "flash" => Some(Function { class: "SPI flash".into(), peripheral: Peripheral::SpiLike }),
+        "flash" => Some(Function {
+            class: "SPI flash".into(),
+            peripheral: Peripheral::SpiLike,
+        }),
         _ => None,
     }
 }
@@ -287,21 +343,63 @@ fn function_for(target: &str, start_net: &str) -> Option<Function> {
 /// true ONLY for an unambiguous 4-wire-SPI role and false for quad-IO or
 /// anything else, so a flash net we cannot read does not fire.
 fn net_role_is_4wire_spi(name: &str) -> bool {
-    let n = name.trim().rsplit('/').next().unwrap_or(name).to_ascii_uppercase();
+    let n = name
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_uppercase();
     // Tokenise on non-alphanumerics so "FLASH_MOSI" -> ["FLASH","MOSI"].
-    let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    let toks: Vec<&str> = n
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
     // A quad-IO data lane is NOT a 4-wire SPI role (it is correct QSPI).
     let is_quad_io = toks.iter().any(|t| {
-        matches!(*t, "IO0" | "IO1" | "IO2" | "IO3" | "DAT0" | "DAT1" | "DAT2" | "DAT3"
-            | "SD0" | "SD1" | "SD2" | "SD3" | "D0" | "D1" | "D2" | "D3"
-            | "QSPI" | "QIO")
+        matches!(
+            *t,
+            "IO0"
+                | "IO1"
+                | "IO2"
+                | "IO3"
+                | "DAT0"
+                | "DAT1"
+                | "DAT2"
+                | "DAT3"
+                | "SD0"
+                | "SD1"
+                | "SD2"
+                | "SD3"
+                | "D0"
+                | "D1"
+                | "D2"
+                | "D3"
+                | "QSPI"
+                | "QIO"
+        )
     });
     if is_quad_io {
         return false;
     }
     toks.iter().any(|t| {
-        matches!(*t, "MOSI" | "MISO" | "SCK" | "SCLK" | "CS" | "NCS" | "SSEL" | "SS"
-            | "SI" | "SO" | "SDI" | "SDO" | "COPI" | "CIPO" | "CLK")
+        matches!(
+            *t,
+            "MOSI"
+                | "MISO"
+                | "SCK"
+                | "SCLK"
+                | "CS"
+                | "NCS"
+                | "SSEL"
+                | "SS"
+                | "SI"
+                | "SO"
+                | "SDI"
+                | "SDO"
+                | "COPI"
+                | "CIPO"
+                | "CLK"
+        )
     })
 }
 
@@ -310,7 +408,12 @@ fn net_role_is_4wire_spi(name: &str) -> bool {
 /// every MCU pin "reach" every connector (the false-positive factory the probe
 /// exposed). Mirrors the netlint rail/ground name conventions.
 fn is_rail_or_ground(name: &str) -> bool {
-    let leaf = name.trim().rsplit('/').next().unwrap_or(name).to_ascii_uppercase();
+    let leaf = name
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_uppercase();
     // A leading '+' is unambiguously a rail (+3V3, +5V, +VBAT).
     if leaf.starts_with('+') {
         return true;
@@ -319,7 +422,10 @@ fn is_rail_or_ground(name: &str) -> bool {
     // supply token - "5V_EN", "VDD_SENSE", "PWR_3V3_OK" - is NOT mistaken for a
     // rail (which would wrongly stop the signal trace). A leg of a divider on
     // such a net would otherwise be a silent false negative.
-    let toks: Vec<&str> = leaf.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    let toks: Vec<&str> = leaf
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
     // A pure voltage-code token like "3V3" / "1V8" / "5V0" / "5V" (digit V digit*).
     let is_voltage_code = |t: &str| {
         let b = t.as_bytes();
@@ -332,8 +438,21 @@ fn is_rail_or_ground(name: &str) -> bool {
         t.starts_with("GND")
             || matches!(
                 t,
-                "AGND" | "DGND" | "PGND" | "VSS" | "VCC" | "VDD" | "VBUS" | "VBAT" | "VSYS"
-                    | "VIN" | "VDDA" | "VDDIO" | "VREF" | "VCC3V3" | "VCC5V"
+                "AGND"
+                    | "DGND"
+                    | "PGND"
+                    | "VSS"
+                    | "VCC"
+                    | "VDD"
+                    | "VBUS"
+                    | "VBAT"
+                    | "VSYS"
+                    | "VIN"
+                    | "VDDA"
+                    | "VDDIO"
+                    | "VREF"
+                    | "VCC3V3"
+                    | "VCC5V"
             )
     };
     // A standalone supply token is a rail. A voltage code (5V, 3V3) is a rail
@@ -343,7 +462,9 @@ fn is_rail_or_ground(name: &str) -> bool {
     if toks.iter().any(|t| is_supply_token(t)) {
         return true;
     }
-    if toks.iter().all(|t| is_voltage_code(t) || is_supply_token(t) || *t == "0")
+    if toks
+        .iter()
+        .all(|t| is_voltage_code(t) || is_supply_token(t) || *t == "0")
         && toks.iter().any(|t| is_voltage_code(t))
     {
         return true;
@@ -379,7 +500,10 @@ fn infer_target(
     // Refuse to traverse a rail/ground net. (The starting pin's own net is a
     // signal net by construction - a GPIO carrying a function - so this only
     // ever blocks a *hop* onto a rail.)
-    let net_name = board.net(net_id).map(|n| n.name.clone()).unwrap_or_default();
+    let net_name = board
+        .net(net_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
     if is_rail_or_ground(&net_name) {
         return None;
     }
@@ -391,7 +515,10 @@ fn infer_target(
             continue;
         }
         if let Some(target) = classify_target(c) {
-            return Some((target, format!("net '{net_name}' reaches {} ({})", c.reference, c.value)));
+            return Some((
+                target,
+                format!("net '{net_name}' reaches {} ({})", c.reference, c.value),
+            ));
         }
     }
 
@@ -424,7 +551,10 @@ fn infer_target(
                 continue;
             }
             if let Some((target, chain)) = infer_target(board, is_mcu, oid, depth + 1, seen) {
-                return Some((target, format!("net '{net_name}' -> {} -> {chain}", c.reference)));
+                return Some((
+                    target,
+                    format!("net '{net_name}' -> {} -> {chain}", c.reference),
+                ));
             }
         }
     }
@@ -447,7 +577,11 @@ fn is_two_terminal_passive(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
     connected == 2
-        && ((r.starts_with('R') && !r.starts_with("RV") && !r.starts_with("RN") && !r.starts_with("RM") && !r.starts_with("RP"))
+        && ((r.starts_with('R')
+            && !r.starts_with("RV")
+            && !r.starts_with("RN")
+            && !r.starts_with("RM")
+            && !r.starts_with("RP"))
             || r.starts_with('L')
             || (r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON")))
 }
@@ -464,7 +598,11 @@ fn is_series_bridge(c: &Component) -> bool {
     let lib = c.lib_id.to_ascii_lowercase();
     let connected = c.pins.iter().filter(|p| p.net.is_some()).count();
     // Two-terminal series R / L / C.
-    if (r.starts_with('R') && !r.starts_with("RV") && !r.starts_with("RN") && !r.starts_with("RM") && !r.starts_with("RP"))
+    if (r.starts_with('R')
+        && !r.starts_with("RV")
+        && !r.starts_with("RN")
+        && !r.starts_with("RM")
+        && !r.starts_with("RP"))
         || r.starts_with('L')
         || (r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON"))
     {
@@ -473,7 +611,11 @@ fn is_series_bridge(c: &Component) -> bool {
     // A small logic line buffer (74LVC125 / 74LVC1Gxx) or a single level-shift
     // FET on the signal path. These have a supply pin, so we allow > 2 pins but
     // rely on the rail-skip above to stay on the signal.
-    if v.contains("74lvc125") || v.contains("74lvc1g") || v.contains("bss138") || lib.contains("buffer") {
+    if v.contains("74lvc125")
+        || v.contains("74lvc1g")
+        || v.contains("bss138")
+        || lib.contains("buffer")
+    {
         return true;
     }
     false
@@ -519,11 +661,15 @@ fn check_resource_conflicts(
                 continue;
             };
             let Some(net_id) = pin.net else { continue };
-            let net_name = board.net(net_id).map(|n| n.name.clone()).unwrap_or_default();
+            let net_name = board
+                .net(net_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
             let mut seen = Vec::new();
             let mcu_ref = mcu.reference.clone();
             let is_mcu = move |c: &Component| c.reference == mcu_ref;
-            let Some((target, evidence)) = infer_target(board, &is_mcu, net_id, 0, &mut seen) else {
+            let Some((target, evidence)) = infer_target(board, &is_mcu, net_id, 0, &mut seen)
+            else {
                 continue;
             };
             let Some(func) = function_for(target, &net_name) else {
@@ -600,7 +746,12 @@ fn report_pwm_slice_conflicts(
         }
         let chain = ds
             .iter()
-            .map(|d| format!("{} ({} pad {}, net '{}': {})", d.function, d.label, d.pad, d.net, d.evidence))
+            .map(|d| {
+                format!(
+                    "{} ({} pad {}, net '{}': {})",
+                    d.function, d.label, d.pad, d.net, d.evidence
+                )
+            })
             .collect::<Vec<_>>()
             .join("; and ");
         report.findings.push(LintFinding {
@@ -628,7 +779,10 @@ fn report_qspi_group_conflicts(
 ) {
     let mut by_group: BTreeMap<&str, Vec<&PinDemand>> = BTreeMap::new();
     for d in demands.iter().filter(|d| d.resource_kind == "qspi") {
-        by_group.entry(d.resource_inst.as_str()).or_default().push(d);
+        by_group
+            .entry(d.resource_inst.as_str())
+            .or_default()
+            .push(d);
     }
     for (group, ds) in by_group {
         // Any non-QSPI function on a QSPI-group pad is a conflict. (The board
@@ -642,7 +796,12 @@ fn report_qspi_group_conflicts(
         }
         let chain = ds
             .iter()
-            .map(|d| format!("{} on {} (pad {}, net '{}': {})", d.function, d.label, d.pad, d.net, d.evidence))
+            .map(|d| {
+                format!(
+                    "{} on {} (pad {}, net '{}': {})",
+                    d.function, d.label, d.pad, d.net, d.evidence
+                )
+            })
             .collect::<Vec<_>>()
             .join("; ");
         report.findings.push(LintFinding {
@@ -668,7 +827,9 @@ mod tests {
         let t = load_resources();
         assert!(t.iter().any(|m| m.id == "rp2040_pico_module"));
         assert!(t.iter().any(|m| m.id == "samd51j_tqfp64"));
-        assert!(t.iter().any(|m| m.id == "esp32_gpio_matrix" && m.fully_routable));
+        assert!(t
+            .iter()
+            .any(|m| m.id == "esp32_gpio_matrix" && m.fully_routable));
     }
 
     #[test]
@@ -686,7 +847,12 @@ mod tests {
     fn samd51_qspi_group_covers_pa08_pa11() {
         let t = load_resources();
         let m = t.iter().find(|m| m.id == "samd51j_tqfp64").unwrap();
-        for (pad, port) in [("17", "PA08"), ("18", "PA09"), ("19", "PA10"), ("20", "PA11")] {
+        for (pad, port) in [
+            ("17", "PA08"),
+            ("18", "PA09"),
+            ("19", "PA10"),
+            ("20", "PA11"),
+        ] {
             assert_eq!(m.pins[pad].label, port);
             assert_eq!(m.pins[pad].qspi_group.as_deref(), Some("qspi_data"));
         }
@@ -778,23 +944,44 @@ mod tests {
         // Pad 19 is otherwise a spare node here, so dropping it from the spare
         // net and giving it the clock keeps the pin count valid.
         let moved = conflict_net()
-            .replace("(node (ref U1) (pin 19)) (node (ref RES1) (pin 1))", "(node (ref RES1) (pin 1))")
+            .replace(
+                "(node (ref U1) (pin 19)) (node (ref RES1) (pin 1))",
+                "(node (ref RES1) (pin 1))",
+            )
             .replace("(node (ref U1) (pin 16))", "(node (ref U1) (pin 19))");
-        assert!(msgs(&moved).is_empty(), "clock on slice 7 must not collide with audio on 6A");
+        assert!(
+            msgs(&moved).is_empty(),
+            "clock on slice 7 must not collide with audio on 6A"
+        );
     }
 
     #[test]
     fn synthetic_audio_only_no_dvi_is_clean() {
         // Audio on slice 6A but NO DVI clock anywhere: one demand, no conflict.
-        let no_dvi = conflict_net()
-            .replace("(net (code 1) (name /CK) (node (ref U1) (pin 16)) (node (ref HDMI1) (pin 12)))", "");
-        assert!(msgs(&no_dvi).is_empty(), "a single PWM demand must not fire");
+        let no_dvi = conflict_net().replace(
+            "(net (code 1) (name /CK) (node (ref U1) (pin 16)) (node (ref HDMI1) (pin 12)))",
+            "",
+        );
+        assert!(
+            msgs(&no_dvi).is_empty(),
+            "a single PWM demand must not fire"
+        );
     }
 
     #[test]
     fn rail_or_ground_is_token_matched_not_substring() {
         // True rails / grounds.
-        for n in ["GND", "+3V3", "/Power/+5V", "VBUS", "3V3", "1V8", "AGND", "VDDA", "GNDPWR"] {
+        for n in [
+            "GND",
+            "+3V3",
+            "/Power/+5V",
+            "VBUS",
+            "3V3",
+            "1V8",
+            "AGND",
+            "VDDA",
+            "GNDPWR",
+        ] {
             assert!(is_rail_or_ground(n), "{n} should be a rail/ground");
         }
         // Signal nets that merely EMBED a *voltage code* must NOT be treated as
@@ -802,7 +989,14 @@ mod tests {
         // part of a signal name, not the rail itself. (A bare VCC/VDD/GND token
         // stays classed as a rail even in a compound - the safe direction, since
         // misclassifying a rail-ish net only ever yields a false negative.)
-        for n in ["5V_EN", "PWR_3V3_OK", "FLASH_MISO", "/PWM_L", "PG_5V", "CK_5V0_OK"] {
+        for n in [
+            "5V_EN",
+            "PWR_3V3_OK",
+            "FLASH_MISO",
+            "/PWM_L",
+            "PG_5V",
+            "CK_5V0_OK",
+        ] {
             assert!(!is_rail_or_ground(n), "{n} is a signal, not a rail");
         }
     }
@@ -810,12 +1004,28 @@ mod tests {
     #[test]
     fn net_role_4wire_spi_discriminates_from_quad_io() {
         // 4-wire SPI roles (the bug's naming on the QSPI data pads): fire.
-        for n in ["FLASH_MOSI", "FLASH_MISO", "/FLASH_SCK", "FLASH_CS", "SDI", "COPI"] {
+        for n in [
+            "FLASH_MOSI",
+            "FLASH_MISO",
+            "/FLASH_SCK",
+            "FLASH_CS",
+            "SDI",
+            "COPI",
+        ] {
             assert!(net_role_is_4wire_spi(n), "{n} should be a 4-wire SPI role");
         }
         // Quad-IO data lanes (a correct QSPI flash): do NOT fire.
-        for n in ["FLASH_IO0", "FLASH_IO3", "QSPI_D2", "FLASH_DAT1", "FLASH_SD0"] {
-            assert!(!net_role_is_4wire_spi(n), "{n} is quad-IO, not a 4-wire SPI role");
+        for n in [
+            "FLASH_IO0",
+            "FLASH_IO3",
+            "QSPI_D2",
+            "FLASH_DAT1",
+            "FLASH_SD0",
+        ] {
+            assert!(
+                !net_role_is_4wire_spi(n),
+                "{n} is quad-IO, not a 4-wire SPI role"
+            );
         }
         // Unrelated nets: do not fire.
         assert!(!net_role_is_4wire_spi("/PWM_L"));
@@ -847,16 +1057,37 @@ mod tests {
 
     #[test]
     fn synthetic_samd51_sercom_spi_flash_on_qspi_pads_fires() {
-        let m = msgs(&samd51_flash_net(["FLASH_MOSI", "FLASH_SCK", "FLASH_CS", "FLASH_MISO"]));
-        assert_eq!(m.len(), 1, "the SERCOM-SPI-on-QSPI bug must fire, got {m:#?}");
-        assert!(m[0].contains("qspi_data") && m[0].contains("SPI flash"), "{}", m[0]);
+        let m = msgs(&samd51_flash_net([
+            "FLASH_MOSI",
+            "FLASH_SCK",
+            "FLASH_CS",
+            "FLASH_MISO",
+        ]));
+        assert_eq!(
+            m.len(),
+            1,
+            "the SERCOM-SPI-on-QSPI bug must fire, got {m:#?}"
+        );
+        assert!(
+            m[0].contains("qspi_data") && m[0].contains("SPI flash"),
+            "{}",
+            m[0]
+        );
     }
 
     #[test]
     fn synthetic_samd51_correct_qspi_flash_is_silent() {
         // Same flash, same pads, but quad-IO naming: a correct QSPI flash.
-        let m = msgs(&samd51_flash_net(["FLASH_IO0", "FLASH_IO1", "FLASH_IO2", "FLASH_IO3"]));
-        assert!(m.is_empty(), "a correctly-wired QSPI flash must NOT fire, got {m:#?}");
+        let m = msgs(&samd51_flash_net([
+            "FLASH_IO0",
+            "FLASH_IO1",
+            "FLASH_IO2",
+            "FLASH_IO3",
+        ]));
+        assert!(
+            m.is_empty(),
+            "a correctly-wired QSPI flash must NOT fire, got {m:#?}"
+        );
     }
 }
 
@@ -870,7 +1101,9 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
     let tables = load_resources();
     let mut out = Vec::new();
     for mcu in &board.components {
-        let Some(table) = tables.iter().find(|t| t.matches(mcu)) else { continue };
+        let Some(table) = tables.iter().find(|t| t.matches(mcu)) else {
+            continue;
+        };
         out.push((
             format!("MATCH {}", table.id),
             mcu.reference.clone(),
@@ -878,11 +1111,18 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
             mcu.lib_id.clone(),
             format!("fully_routable={}", table.fully_routable),
         ));
-        if table.fully_routable { continue; }
+        if table.fully_routable {
+            continue;
+        }
         for pin in &mcu.pins {
-            let Some(res) = table.pins.get(&pin.number) else { continue };
+            let Some(res) = table.pins.get(&pin.number) else {
+                continue;
+            };
             let Some(net_id) = pin.net else { continue };
-            let net_name = board.net(net_id).map(|n| n.name.clone()).unwrap_or_default();
+            let net_name = board
+                .net(net_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
             let mut seen = Vec::new();
             let mcu_ref = mcu.reference.clone();
             let is_mcu = move |c: &Component| c.reference == mcu_ref;
@@ -892,7 +1132,10 @@ pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, Str
                 res.label.clone(),
                 pin.number.clone(),
                 net_name,
-                res.pwm.clone().or(res.qspi_group.clone()).unwrap_or_default(),
+                res.pwm
+                    .clone()
+                    .or(res.qspi_group.clone())
+                    .unwrap_or_default(),
                 match inf {
                     Some((f, ev)) => format!("{} [{:?}] <= {ev}", f.class, f.peripheral),
                     None => "(no function inferred)".into(),

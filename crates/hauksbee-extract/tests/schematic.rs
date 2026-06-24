@@ -39,10 +39,7 @@ fn partition(board: &ExtractedBoard) -> BTreeSet<BTreeSet<(String, String)>> {
             }
         }
     }
-    by_net
-        .into_values()
-        .filter(|s| s.len() >= 2)
-        .collect()
+    by_net.into_values().filter(|s| s.len() >= 2).collect()
 }
 
 /// (ref, pin) -> net id, for pointwise comparison.
@@ -85,17 +82,12 @@ fn diff_partitions(sch: &ExtractedBoard, pcb: &ExtractedBoard) -> Vec<String> {
     }
 
     let mut diffs = Vec::new();
-    let name_pcb: HashMap<i64, &str> =
-        pcb.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
-    let name_sch: HashMap<i64, &str> =
-        sch.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
+    let name_pcb: HashMap<i64, &str> = pcb.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
+    let name_sch: HashMap<i64, &str> = sch.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
 
     for (p, sset) in &pcb_to_sch {
         // Only multi-member PCB nets matter for partition equivalence.
-        let members: Vec<_> = shared
-            .iter()
-            .filter(|k| pcb_net[**k] == *p)
-            .collect();
+        let members: Vec<_> = shared.iter().filter(|k| pcb_net[**k] == *p).collect();
         if members.len() < 2 {
             continue;
         }
@@ -111,10 +103,7 @@ fn diff_partitions(sch: &ExtractedBoard, pcb: &ExtractedBoard) -> Vec<String> {
         }
     }
     for (s, pset) in &sch_to_pcb {
-        let members: Vec<_> = shared
-            .iter()
-            .filter(|k| sch_net[**k] == *s)
-            .collect();
+        let members: Vec<_> = shared.iter().filter(|k| sch_net[**k] == *s).collect();
         if members.len() < 2 {
             continue;
         }
@@ -154,10 +143,16 @@ fn assert_cross_validates(project_dir: &str, stem: &str, min_nets: usize) {
 
     // Component references should agree (modulo power/flag pseudo-components,
     // which the schematic drops and the PCB never had).
-    let sch_refs: BTreeSet<&str> =
-        sch.components.iter().map(|c| c.reference.as_str()).collect();
-    let pcb_refs: BTreeSet<&str> =
-        pcb.components.iter().map(|c| c.reference.as_str()).collect();
+    let sch_refs: BTreeSet<&str> = sch
+        .components
+        .iter()
+        .map(|c| c.reference.as_str())
+        .collect();
+    let pcb_refs: BTreeSet<&str> = pcb
+        .components
+        .iter()
+        .map(|c| c.reference.as_str())
+        .collect();
     let only_pcb: Vec<_> = pcb_refs.difference(&sch_refs).collect();
     let only_sch: Vec<_> = sch_refs.difference(&pcb_refs).collect();
     assert!(
@@ -419,8 +414,14 @@ fn fixture_bus_alias_crosses_sheet() {
     // The qualified member nets exist; the bus/alias expression never becomes a net.
     assert!(b.net_by_name("MEM.A1").is_some(), "MEM.A1 net present");
     assert!(b.net_by_name("MEM.A0").is_some(), "MEM.A0 net present");
-    assert!(b.net_by_name("MEM{ADDR}").is_none(), "the bus expression must not be a net");
-    assert!(b.net_by_name("MEM.ADDR").is_none(), "the alias must expand, not stay literal");
+    assert!(
+        b.net_by_name("MEM{ADDR}").is_none(),
+        "the bus expression must not be a net"
+    );
+    assert!(
+        b.net_by_name("MEM.ADDR").is_none(),
+        "the alias must expand, not stay literal"
+    );
 }
 
 #[test]

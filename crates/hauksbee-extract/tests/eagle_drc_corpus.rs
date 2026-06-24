@@ -56,8 +56,14 @@ const FAMOUS_EAGLE: &[(&str, &str)] = &[
         "adafruit_metro_m4/Adafruit Metro M4 Express.brd",
     ),
     ("Adafruit QT Py", "adafruit_qtpy/Adafruit QT Py.brd"),
-    ("Adafruit Trinket M0", "adafruit_trinket_m0/Trinket M0 rev D.brd"),
-    ("SparkFun RedBoard", "sparkfun_redboard/Hardware/RedBoard.brd"),
+    (
+        "Adafruit Trinket M0",
+        "adafruit_trinket_m0/Trinket M0 rev D.brd",
+    ),
+    (
+        "SparkFun RedBoard",
+        "sparkfun_redboard/Hardware/RedBoard.brd",
+    ),
     (
         "SparkFun Pro Micro",
         "sparkfun_pro_micro/Hardware/v20/SparkFun_Pro_Micro.brd",
