@@ -929,11 +929,24 @@ fn cmd_ac(
             } else {
                 no_signal_path_reason(loop_net, &summary)
             };
-            eprintln!("WARNING: --ac-loop result not valid — {reason}");
-            eprintln!(
-                "  (no feedback path to measure at '{loop_net}'. Bind the driving \
-                 ICs with --models-dir, then re-run.)"
-            );
+            if json {
+                // Structured refusal on the JSON surface too — a consumer reading
+                // stdout (not the exit code) must see valid:false, not empty output.
+                let mut jr = JsonReport::new(&bound.name, summary);
+                jr.ac = Some(AcJson {
+                    validity: Validity::invalid(reason),
+                    nets: vec![],
+                    no_signal_path_nets: vec![loop_net.to_string()],
+                    coverage: None,
+                });
+                println!("{}", jr.to_json());
+            } else {
+                eprintln!("WARNING: --ac-loop result not valid — {reason}");
+                eprintln!(
+                    "  (no feedback path to measure at '{loop_net}'. Bind the driving \
+                     ICs with --models-dir, then re-run.)"
+                );
+            }
             std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
         }
     }

@@ -43,6 +43,17 @@ pub struct CosimUpdate {
     /// boot — i.e. the firmware visibly drove something. While this stays false
     /// past the boot window the pane shows the stall note.
     pub gpio_active: bool,
+    /// True once the firmware has driven ANY GPIO output edge (from the
+    /// scheduler's pin-change record), even one that is set high and HELD with no
+    /// further movement. This is the honest "the firmware ran" signal: `gpio_active`
+    /// (net moved off baseline) misses a drive-and-hold boot line, so the stall
+    /// note must also consult this or it cries wolf on working boot firmware —
+    /// matching the CLI/web `Scheduler::any_gpio_driven()` behaviour.
+    pub gpio_driven: bool,
+    /// Chip-substitution caveat, if the firmware was emulated on a less-specific
+    /// core (e.g. STM32F411 modelled as F407). Mirrors the CLI/web note so the
+    /// TUI does not silently present substitute-chip results as exact.
+    pub substitution: Option<String>,
     /// True once the run has finished (reached the target or was stopped).
     pub done: bool,
     /// Set on a hard error (e.g. firmware failed to load).
@@ -197,8 +208,21 @@ fn run_worker(
         // Update the activity tracker and build the watched-net snapshot.
         tracker.observe(&frame.net_voltages);
 
+        // Honest "firmware ran" signal + substitution caveat, read from the
+        // scheduler (not just net movement), so a drive-and-hold boot line is not
+        // mistaken for a stall.
+        let gpio_driven = engine.scheduler().any_gpio_driven();
+        let substitution = engine
+            .scheduler()
+            .substitutions()
+            .first()
+            .map(|s| s.message());
+
         // If the UI has gone away, stop.
-        let update = build_update(t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, false);
+        let update = build_update(
+            t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven,
+            substitution, false,
+        );
         if tx.send(update).is_err() {
             return;
         }
@@ -206,8 +230,15 @@ fn run_worker(
 
     // Final snapshot marked done — keep the GPIO/UART state so the finished pane
     // still shows what the firmware drove (don't blank it on completion).
+    let gpio_driven = engine.scheduler().any_gpio_driven();
+    let substitution = engine
+        .scheduler()
+        .substitutions()
+        .first()
+        .map(|s| s.message());
     let _ = tx.send(build_update(
-        t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, true,
+        t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven, substitution,
+        true,
     ));
 }
 
@@ -222,6 +253,8 @@ fn build_update(
     uart_partial: &str,
     uart_seen: bool,
     tracker: &NetActivity,
+    gpio_driven: bool,
+    substitution: Option<String>,
     done: bool,
 ) -> CosimUpdate {
     CosimUpdate {
@@ -232,6 +265,8 @@ fn build_update(
         gpio_nets: tracker.snapshot(),
         uart_seen,
         gpio_active: tracker.any_driven(),
+        gpio_driven,
+        substitution,
         done,
         error: None,
     }
