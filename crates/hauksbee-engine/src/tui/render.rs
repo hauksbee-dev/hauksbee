@@ -47,7 +47,7 @@ const OVERLAY_PCT_Y: u16 = 60;
 /// The two-line note appended under the stall-honesty headline, pointing the
 /// user at the full-sensor co-sim path. Constant because it never varies with
 /// run state.
-const STALL_HINT_L1: &str = "TUI co-sim does not attach [[sensor]] models; use";
+const STALL_HINT_L1: &str = "TUI co-sim does not attach declarative sensor models; use";
 const STALL_HINT_L2: &str = "`hauksbee-ci run <spec>` for full sensor co-sim.";
 
 /// Colour for a severity, per the brief: serious=red, medium=amber, info=dim.
@@ -293,7 +293,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 Span::styled(" to run co-sim", Style::default().fg(Color::Gray)),
             ]));
             lines.push(Line::from(Span::styled(
-                "no firmware — pass --firmware <elf> or press [r] to run with auto-detect",
+                "co-sim runs the supplied --firmware, else auto-detects from the board",
                 Style::default().fg(Color::DarkGray),
             )));
             if let Some(b) = &state.backend {

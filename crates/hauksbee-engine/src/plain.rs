@@ -474,7 +474,14 @@ fn short_msg(msg: &str) -> String {
     // — a bare "." chopped the controlled-impedance note down to "W~0".
     let first = m.split("; ").next().unwrap_or(m).trim();
     let first = first.split(". ").next().unwrap_or(first).trim();
-    first.chars().take(160).collect()
+    if first.chars().count() <= 160 {
+        return first.to_string();
+    }
+    // Cut back to a word boundary so the summary never ends mid-word, then mark
+    // the elision with an ellipsis.
+    let truncated: String = first.chars().take(160).collect();
+    let cut = truncated.rsplit_once(' ').map(|(h, _)| h).unwrap_or(&truncated);
+    format!("{}…", cut.trim_end())
 }
 
 // ── Stress / datasheet-rating faults ──────────────────────────────────────────
