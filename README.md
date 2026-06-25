@@ -46,14 +46,19 @@ Point it at any PCB design and it will:
 curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
-This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`.
+This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`.
 
-**Then use it:**
+> **Note:** the prebuilt install needs a published, publicly-downloadable GitHub release. While hauksbee is in private beta there is none yet, so build from source (below) for now. `scripts/test-install-mock.sh` exercises the whole download/verify/install flow against a local mock so the installer is proven before any release goes out.
+
+**Then use it** — the friendliest path is the web front door (no terminal flags):
 
 ```bash
-hauksbee serve                                       # web front door: open the page, drop a board, read the report
-hauksbee run my_board.kicad_pcb --report             # extract, bind, and report on any board
+hauksbee serve                                       # web front door: open the page, drop a board (+ optional firmware), read the report
+hauksbee run my_board.kicad_pcb                       # no flags on a terminal: a full-screen dashboard (TUI)
+hauksbee run my_board.kicad_pcb --report --plain      # which parts were modelled, with a plain bottom line
 hauksbee run my_board.kicad_pcb --drc --plain        # the copper-short report, in plain language
+hauksbee run my_board.kicad_pcb --si --plain         # signal integrity (USB/Ethernet impedance, rise times)
+hauksbee run my_board.kicad_pcb --list-nets          # list net names (for --ac-node / --ac-loop)
 hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
 hauksbee-ci run ci/power-up.toml                     # run a CI spec the way a pipeline would
 ```
