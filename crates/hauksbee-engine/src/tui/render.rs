@@ -104,10 +104,15 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
         let (mark, style) = match p.status {
             PartStatus::Bound => ("bound ", Style::default().fg(Color::Green)),
             PartStatus::Family => ("family", Style::default().fg(Color::Cyan)),
-            PartStatus::Unresolved => (
+            // Reserve alarming bold-red for genuinely-unmodelled SILICON on the live
+            // circuit (critical_open). A part that is merely unresolved but not a
+            // live active IC (a passive, a part off the live net, open-by-design) is
+            // calmed to a dim "open" so the pane is not a wall of red on first sight.
+            PartStatus::Unresolved if p.critical_open => (
                 "UNRES ",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
+            PartStatus::Unresolved => ("open  ", Style::default().fg(Color::Yellow)),
             PartStatus::Ignored => ("ignore", Style::default().fg(Color::DarkGray)),
         };
         let crit = if p.critical_open {
