@@ -315,6 +315,63 @@ fn series_lc_notch_at_resonance() {
     );
 }
 
+#[test]
+fn dedicated_loop_injection_source_keeps_bias_rails_at_ac_ground() {
+    let mut ckt = Circuit::new();
+    let vcc = ckt.node("vcc");
+    let inj = ckt.node("inj");
+    let out = ckt.node("out");
+
+    ckt.add(Device::Vsource {
+        name: "VCC".into(),
+        p: vcc,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0),
+    });
+    ckt.add(Device::Vsource {
+        name: "VINJ".into(),
+        p: inj,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "RIN".into(),
+        a: inj,
+        b: out,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    ckt.add(Device::Resistor {
+        name: "RBIAS".into(),
+        a: vcc,
+        b: out,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    ckt.add(Device::Resistor {
+        name: "RLOAD".into(),
+        a: out,
+        b: NodeId::GROUND,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+
+    let spec = AcSpec {
+        fstart: 1.0,
+        fstop: 1.0,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let v = resp.points[0].node(&ckt, "out").unwrap();
+
+    assert!(
+        (v.re - 1.0 / 3.0).abs() < 1e-9,
+        "VCC should be AC grounded when VINJ is present, got {v}"
+    );
+    assert!(v.im.abs() < 1e-12, "unexpected imaginary output {v}");
+}
+
 /// Textbook op-amp feedback loop with a known phase margin.
 ///
 /// A single-pole op-amp model: open-loop gain A0 with a dominant pole at fp set
@@ -357,7 +414,9 @@ fn opamp_unity_buffer_phase_margin_about_90() {
         out: oa,
         inp: NodeId::GROUND,
         inn: fb,
+        reference: None,
         gain: a0,
+        pole_hz: None,
         rail_lo: -1e9,
         rail_hi: 1e9,
     });

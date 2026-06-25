@@ -8,9 +8,10 @@
 //! - resistor  -> real conductance `G = 1/R`
 //! - capacitor -> `jwC`
 //! - inductor  -> branch relation `v = jwL * i` (the MNA inductor row)
-//! - independent source -> its AC drive amplitude/phase on the RHS (every
-//!   `Vsource`/`Isource` is treated as a 1 + 0j unit AC source by default; the
-//!   transfer function `H(jw) = V_out / V_in` is read directly off the result)
+//! - independent source -> its AC drive amplitude/phase on the RHS. A circuit
+//!   with a dedicated injection source named `VINJ`, `VLOOP`, `IINJ`, or `ILOOP`
+//!   drives only that source and AC-grounds the DC bias rails. Otherwise every
+//!   source is treated as a 1 + 0j unit AC source for backwards compatibility.
 //! - diode / BJT / MOSFET / behavioral op-amp -> their linearized conductances
 //!   and transconductances evaluated at the DC bias, i.e. `g = dI/dV` and
 //!   `gm = dI/dV_control` at the operating point. These are the same tangents
@@ -185,9 +186,10 @@ impl AcAnalysis {
     }
 
     /// Run the sweep. Computes the DC operating point once, then solves the
-    /// complex system at every frequency. Every independent voltage / current
-    /// source is driven with unit AC amplitude (1 + 0j), so the node phasors are
-    /// the transfer function from that stimulus.
+    /// complex system at every frequency. When a dedicated loop injection source
+    /// is present, only that source is driven and other independent sources are
+    /// AC-grounded. Otherwise every independent voltage / current source is
+    /// driven with unit AC amplitude for backwards compatibility.
     pub fn run(&self, circuit: &Circuit, spec: &AcSpec) -> Result<AcResponse, String> {
         // 1. DC operating point (reusing the real solver verbatim).
         let mut ws = Workspace::new(circuit);
@@ -225,6 +227,7 @@ impl AcAnalysis {
         w: f64,
     ) -> Result<Vec<Complex64>, String> {
         let mut sys = ComplexSystem::new(layout.size);
+        let dedicated_ac_source = has_dedicated_ac_source(circuit);
         // gmin on every node diagonal, mirroring the real solver (keeps a
         // floating node solvable and matches the OP's conditioning).
         let gmin = self.opts.gmin;
@@ -232,7 +235,16 @@ impl AcAnalysis {
             sys.add(i, i, Complex64::new(gmin, 0.0));
         }
         for (id, dev) in circuit.iter() {
-            stamp_ac(&mut sys, layout, op, dev, id, w, &self.opts);
+            stamp_ac(
+                &mut sys,
+                layout,
+                op,
+                dev,
+                id,
+                w,
+                &self.opts,
+                dedicated_ac_source,
+            );
         }
         sys.solve().ok_or_else(|| {
             format!(
@@ -278,6 +290,7 @@ fn stamp_ac(
     id: hauksbee_ir::DeviceId,
     w: f64,
     opts: &SolverOptions,
+    dedicated_ac_source: bool,
 ) {
     let n = |node: NodeId| layout.node(node);
     match dev {
@@ -307,7 +320,9 @@ fn stamp_ac(
             }
             sys.add(br, br, Complex64::new(0.0, -w * *henries));
         }
-        Device::Vsource { p, n: neg, .. } => {
+        Device::Vsource {
+            name, p, n: neg, ..
+        } => {
             // Ideal AC voltage source of unit amplitude: branch row sets
             // v_p - v_n = 1.
             let br = layout.branch(id).expect("vsource has a branch unknown");
@@ -320,15 +335,18 @@ fn stamp_ac(
                 sys.add(ni, br, Complex64::new(-1.0, 0.0));
                 sys.add(br, ni, Complex64::new(-1.0, 0.0));
             }
-            sys.add_rhs(br, Complex64::new(1.0, 0.0));
+            sys.add_rhs(br, source_ac_drive(name, dedicated_ac_source));
         }
-        Device::Isource { p, n: neg, .. } => {
+        Device::Isource {
+            name, p, n: neg, ..
+        } => {
             // Unit AC current injected p -> n.
+            let drive = source_ac_drive(name, dedicated_ac_source);
             if let Some(pi) = n(*p) {
-                sys.add_rhs(pi, Complex64::new(-1.0, 0.0));
+                sys.add_rhs(pi, -drive);
             }
             if let Some(ni) = n(*neg) {
-                sys.add_rhs(ni, Complex64::new(1.0, 0.0));
+                sys.add_rhs(ni, drive);
             }
         }
         Device::Diode { a, k, model, .. } => {
@@ -345,11 +363,15 @@ fn stamp_ac(
             out,
             inp,
             inn,
+            reference,
             gain,
+            pole_hz,
             rail_lo,
             rail_hi,
             ..
-        } => stamp_opamp_ac(sys, layout, op, *out, *inp, *inn, *gain, *rail_lo, *rail_hi),
+        } => stamp_opamp_ac(
+            sys, layout, op, *out, *inp, *inn, *reference, *gain, *pole_hz, *rail_lo, *rail_hi, w,
+        ),
         // No continuous small-signal model: a switch sits at its quiescent
         // conductance; a comparator output is a fixed rail (open small-signal).
         Device::VSwitch {
@@ -368,6 +390,34 @@ fn stamp_ac(
         }
         Device::Comparator { .. } => { /* digital output: no small-signal path */ }
     }
+}
+
+fn has_dedicated_ac_source(circuit: &Circuit) -> bool {
+    circuit.iter().any(|(_, dev)| match dev {
+        Device::Vsource { name, .. } | Device::Isource { name, .. } => {
+            is_dedicated_ac_source(name)
+        }
+        _ => false,
+    })
+}
+
+fn source_ac_drive(name: &str, dedicated_ac_source: bool) -> Complex64 {
+    if !dedicated_ac_source || is_dedicated_ac_source(name) {
+        Complex64::new(1.0, 0.0)
+    } else {
+        Complex64::new(0.0, 0.0)
+    }
+}
+
+fn is_dedicated_ac_source(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "VINJ" | "VLOOP" | "VAC" | "IINJ" | "ILOOP" | "IAC"
+    ) || upper.contains("_VINJ")
+        || upper.contains("_VLOOP")
+        || upper.contains("_IINJ")
+        || upper.contains("_ILOOP")
 }
 
 // --- small-signal device tangents at the operating point --------------------
@@ -517,25 +567,45 @@ fn stamp_opamp_ac(
     out: NodeId,
     inp: NodeId,
     inn: NodeId,
+    reference: Option<NodeId>,
     gain: f64,
+    pole_hz: Option<f64>,
     rail_lo: f64,
     rail_hi: f64,
+    w: f64,
 ) {
     let gout = 1.0;
-    let target = (gain * (op.v(inp) - op.v(inn))).clamp(rail_lo, rail_hi);
+    let vref = reference.map(|n| op.v(n)).unwrap_or(0.0);
+    let target = (vref + gain * (op.v(inp) - op.v(inn))).clamp(rail_lo, rail_hi);
     let in_rail = target > rail_lo && target < rail_hi;
     let oi = layout.node(out);
     if let Some(oi) = oi {
         sys.add(oi, oi, Complex64::new(gout, 0.0));
         if in_rail {
+            if let Some(ri) = reference.and_then(|n| layout.node(n)) {
+                sys.add(oi, ri, Complex64::new(-gout, 0.0));
+            }
+            let gain = opamp_ac_gain(gain, pole_hz, w);
             if let Some(pi) = layout.node(inp) {
-                sys.add(oi, pi, Complex64::new(-gout * gain, 0.0));
+                sys.add(oi, pi, -gain * gout);
             }
             if let Some(ni) = layout.node(inn) {
-                sys.add(oi, ni, Complex64::new(gout * gain, 0.0));
+                sys.add(oi, ni, gain * gout);
             }
         }
     }
+}
+
+fn opamp_ac_gain(gain: f64, pole_hz: Option<f64>, w: f64) -> Complex64 {
+    let a0 = Complex64::new(gain, 0.0);
+    let Some(pole_hz) = pole_hz else {
+        return a0;
+    };
+    if pole_hz <= 0.0 || !pole_hz.is_finite() {
+        return a0;
+    }
+    let wp = std::f64::consts::TAU * pole_hz;
+    a0 / Complex64::new(1.0, w / wp)
 }
 
 fn vswitch_g(vctrl: f64, von: f64, voff: f64, ron: f64, roff: f64) -> f64 {

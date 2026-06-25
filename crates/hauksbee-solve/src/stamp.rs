@@ -232,11 +232,14 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
             out,
             inp,
             inn,
+            reference,
             gain,
             rail_lo,
             rail_hi,
             ..
-        } => stamp_opamp(ctx, *out, *inp, *inn, *gain, *rail_lo, *rail_hi, g, rhs),
+        } => stamp_opamp(
+            ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, g, rhs,
+        ),
         Device::Comparator {
             out,
             inp,
@@ -678,6 +681,7 @@ fn stamp_opamp(
     out: NodeId,
     inp: NodeId,
     inn: NodeId,
+    reference: Option<NodeId>,
     gain: f64,
     rail_lo: f64,
     rail_hi: f64,
@@ -689,7 +693,8 @@ fn stamp_opamp(
     let gout = 1.0; // output stage conductance (1 ohm), strong source
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
-    let target = (gain * (vp - vn)).clamp(rail_lo, rail_hi);
+    let vref = reference.map(|n| ctx.v(n)).unwrap_or(0.0);
+    let target = (vref + gain * (vp - vn)).clamp(rail_lo, rail_hi);
     // Linearize: out = target + gain*(d vp - d vn) within rails.
     let in_rail = target > rail_lo && target < rail_hi;
     let oi = ctx.layout.node(out);
@@ -697,6 +702,10 @@ fn stamp_opamp(
         g.add(oi, oi, gout);
         rhs[oi] += gout * target;
         if in_rail {
+            if let Some(ri) = reference.and_then(|n| ctx.layout.node(n)) {
+                g.add(oi, ri, -gout);
+                rhs[oi] -= gout * vref;
+            }
             // Couple output to inputs through the gain (tangent).
             if let Some(pi) = ctx.layout.node(inp) {
                 g.add(oi, pi, -gout * gain);

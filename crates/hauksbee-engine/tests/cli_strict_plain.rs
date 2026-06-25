@@ -31,6 +31,14 @@ fn clean_board() -> PathBuf {
     board("../../testdata/boards/button_pullup.kicad_pcb")
 }
 
+fn ac_loop_board() -> PathBuf {
+    board("tests/fixtures/ac_loop_one_pole.kicad_pcb")
+}
+
+fn ac_loop_models() -> PathBuf {
+    board("tests/fixtures/ac_loop_models")
+}
+
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(bin())
         .args(args)
@@ -221,6 +229,48 @@ fn ac_all_requested_nodes_missing_text_warns_and_exits_three() {
     assert!(
         stderr.contains("WARNING") && stderr.contains("not valid"),
         "expected a WARNING that the AC result is not valid; got: {stderr}"
+    );
+}
+
+#[test]
+fn ac_loop_cli_reports_real_one_pole_phase_margin() {
+    let b = ac_loop_board();
+    let models = ac_loop_models();
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--models-dir",
+        models.to_str().unwrap(),
+        "--ac",
+        "1:1e8:50",
+        "--ac-node",
+        "OUT",
+        "--ac-loop",
+        "OUT",
+    ]);
+
+    assert!(
+        out.status.success(),
+        "AC loop fixture should succeed; status={:?}; stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Loop stability at net 'OUT'"),
+        "missing loop report: {stdout}"
+    );
+    assert!(
+        stdout.contains("DC/low-f loop gain : 100.00 dB"),
+        "missing 100 dB low-frequency gain: {stdout}"
+    );
+    assert!(
+        stdout.contains("gain crossover     :") && stdout.contains("|T| = 0 dB"),
+        "missing gain crossover: {stdout}"
+    );
+    assert!(
+        stdout.contains("phase margin       :") && stdout.contains("90."),
+        "single-pole loop should report about 90 deg phase margin: {stdout}"
     );
 }
 
