@@ -23,8 +23,11 @@
 set -euo pipefail
 
 REPO="ETM-Code/hauksbee"
-API_BASE="https://api.github.com/repos/${REPO}"
-RELEASES_BASE="https://github.com/${REPO}/releases/download"
+# Base URLs are overridable so the installer can target a GitHub Enterprise host,
+# a self-hosted mirror, or a local mock (used to test the whole download/verify/
+# install flow while the repo is still private). Defaults are public GitHub.
+API_BASE="${HAUKSBEE_API_BASE:-https://api.github.com/repos/${REPO}}"
+RELEASES_BASE="${HAUKSBEE_RELEASES_BASE:-https://github.com/${REPO}/releases/download}"
 
 VERSION=""
 PREFIX="${HOME}/.local"
@@ -223,10 +226,10 @@ case ":${PATH}:" in
     echo "Add ${INSTALL_DIR} to your PATH to use the binaries:"
     echo ""
     echo "  # bash"
-    echo "  echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.bashrc && source ~/.bashrc"
+    echo "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
     echo ""
     echo "  # zsh"
-    echo "  echo 'export PATH=\"\${HOME}/.local/bin:\${PATH}\"' >> ~/.zshrc && source ~/.zshrc"
+    echo "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
     ;;
 esac
 
