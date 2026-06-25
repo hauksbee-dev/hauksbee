@@ -54,10 +54,40 @@ pub fn router(analyze: Analyzer) -> Router {
 }
 
 /// Serve the front-door on `addr`, printing a friendly banner.
+/// Bind `addr`, but if its port is already in use, fall back to the next few
+/// ports and finally an OS-assigned free port — so `serve` never dies with a
+/// bare "Address already in use (os error 48)" that reads as "the tool is
+/// broken". The caller prints the ACTUAL bound address via `local_addr()`.
+async fn bind_with_fallback(addr: &str) -> anyhow::Result<tokio::net::TcpListener> {
+    use std::net::SocketAddr;
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => Ok(l),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            if let Ok(mut sa) = addr.parse::<SocketAddr>() {
+                let base = sa.port();
+                for p in (base + 1)..=(base + 20) {
+                    sa.set_port(p);
+                    if let Ok(l) = tokio::net::TcpListener::bind(sa).await {
+                        eprintln!("  (port {base} was busy; using {p} instead)");
+                        return Ok(l);
+                    }
+                }
+                sa.set_port(0); // let the OS choose any free port
+                if let Ok(l) = tokio::net::TcpListener::bind(sa).await {
+                    return Ok(l);
+                }
+            }
+            Err(e.into())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub async fn serve(addr: &str, analyze: Analyzer) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = bind_with_fallback(addr).await?;
+    let bound = listener.local_addr()?;
     println!("\n  hauksbee is live. Open this in your browser:\n");
-    println!("      http://{addr}\n");
+    println!("      http://{bound}\n");
     println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / gerber zip) on the page");
     println!("  to get a plain-language report. Ctrl-C to stop.\n");
     axum::serve(listener, router(analyze)).await?;
@@ -87,9 +117,10 @@ pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
 
 /// Serve the firmware-aware front-door on `addr`, printing a friendly banner.
 pub async fn serve_with_firmware(addr: &str, analyze: FirmwareAnalyzer) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = bind_with_fallback(addr).await?;
+    let bound = listener.local_addr()?;
     println!("\n  hauksbee is live. Open this in your browser:\n");
-    println!("      http://{addr}\n");
+    println!("      http://{bound}\n");
     println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / gerber zip) on the page");
     println!("  to get a plain-language report. Optionally drop firmware (.elf / .hex)");
     println!("  alongside it to run a short co-sim. Ctrl-C to stop.\n");
@@ -182,7 +213,11 @@ async fn analyze_firmware_handler(
             }
         };
         match part.as_str() {
-            "board" => {
+            // Accept "board" or "file" for the PCB part. The browser form uses a
+            // `file` input id and the raw /api/analyze path is conceptually "the
+            // file", so a caller who reaches for either name should just work
+            // instead of hitting a confusing "expected a 'board' part" error.
+            "board" | "file" => {
                 if let Some(f) = filename {
                     board_name = f;
                 }
@@ -206,7 +241,7 @@ async fn analyze_firmware_handler(
         Some(b) => b,
         None => {
             let json =
-                "{\"ok\":false,\"error\":\"no board file in the upload (expected a 'board' part)\"}"
+                "{\"ok\":false,\"error\":\"no board file in the upload (expected a 'board' or 'file' part)\"}"
                     .to_string();
             return (
                 StatusCode::OK,

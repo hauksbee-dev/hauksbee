@@ -94,8 +94,33 @@ impl Server {
         static_dir: Option<&std::path::Path>,
         board_file: Option<(String, String)>,
     ) -> anyhow::Result<()> {
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        eprintln!("hauksbee-server listening on http://{addr}");
+        // Fall back to a nearby / OS-assigned port if the requested one is busy,
+        // rather than dying with a bare "Address already in use (os error 48)".
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => l,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                let mut chosen = None;
+                if let Ok(mut sa) = addr.parse::<std::net::SocketAddr>() {
+                    let base = sa.port();
+                    for p in (base + 1)..=(base + 20) {
+                        sa.set_port(p);
+                        if let Ok(l) = tokio::net::TcpListener::bind(sa).await {
+                            eprintln!("  (port {base} was busy; using {p} instead)");
+                            chosen = Some(l);
+                            break;
+                        }
+                    }
+                    if chosen.is_none() {
+                        sa.set_port(0);
+                        chosen = tokio::net::TcpListener::bind(sa).await.ok();
+                    }
+                }
+                chosen.ok_or(e)?
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let bound = listener.local_addr()?;
+        eprintln!("hauksbee-server listening on http://{bound}");
         axum::serve(listener, self.router_with_board(static_dir, board_file)).await?;
         Ok(())
     }
