@@ -184,7 +184,7 @@ struct RunArgs {
     thermal: bool,
 
     /// Ambient temperature (C) for the --thermal estimate. Default 25 C.
-    #[arg(long, default_value_t = 25.0, value_name = "C")]
+    #[arg(long, default_value_t = 25.0, value_name = "C", help_heading = "Advanced / analyses")]
     ambient: f64,
 
     /// Translate the report into plain language for a non-engineer: a one-line
@@ -213,7 +213,7 @@ struct RunArgs {
     /// exist while an active power IC on the live circuit is open/unresolved)
     /// emits a non-gating coverage caveat and still exits 0, so existing CI exit
     /// codes are unchanged. Pass this only when partial coverage must FAIL.
-    #[arg(long)]
+    #[arg(long, help_heading = "Advanced / analyses")]
     strict_thermal: bool,
 
     /// List the board's net names (sorted) and exit. Use it to find the exact net
@@ -231,32 +231,32 @@ struct RunArgs {
     /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
     /// in a standard install location (newest version preferred); KiCad is NOT
     /// bundled (see `docs/ORACLES.md`). No-op unless paired with `--drc`.
-    #[arg(long)]
+    #[arg(long, help_heading = "Advanced / analyses")]
     oracle: bool,
 
     /// Bridge every detected copper short before simulating (show the consequences).
-    #[arg(long)]
+    #[arg(long, help_heading = "Advanced / analyses")]
     apply_shorts: bool,
 
     /// Serve the live 2D/3D websocket frontend (the historical bare-`run`
     /// behaviour). With no report/serve flag on a TTY, `run` now launches the
     /// interactive terminal UI instead; pass `--serve` to keep the web frontend,
     /// or use the `hauksbee serve` subcommand.
-    #[arg(long)]
+    #[arg(long, help_heading = "Advanced / analyses")]
     serve: bool,
 
     /// Force the interactive terminal UI even when stdout is not a TTY (mainly
     /// for testing under a PTY). Normally the TUI is the auto-default for bare
     /// `run` on a TTY; this never triggers when a report flag is given.
-    #[arg(long)]
+    #[arg(long, help_heading = "Advanced / analyses")]
     tui: bool,
 
     /// Port for the live frontend websocket server (`--serve`).
-    #[arg(long, default_value_t = 3001, value_name = "PORT")]
+    #[arg(long, default_value_t = 3001, value_name = "PORT", help_heading = "Advanced / analyses")]
     port: u16,
 
     /// Extra model directory (highest priority), layered over the built-in DB.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", help_heading = "Advanced / analyses")]
     models_dir: Option<PathBuf>,
 
     /// Small-signal AC sweep: `<fstart>:<fstop>:<points>[:lin]` (Hz; points per
@@ -265,21 +265,21 @@ struct RunArgs {
     /// a unit AC source on every independent source in the circuit.
     ///
     /// Example: hauksbee run board.kicad_pcb --ac 10:1e6:20 --ac-node OUT
-    #[arg(long, value_name = "FSTART:FSTOP:POINTS")]
+    #[arg(long, value_name = "FSTART:FSTOP:POINTS", help_heading = "Advanced / analyses")]
     ac: Option<String>,
 
     /// Output net(s) to report for `--ac` (repeatable). Defaults to every net.
-    #[arg(long = "ac-node", value_name = "NET")]
+    #[arg(long = "ac-node", value_name = "NET", help_heading = "Advanced / analyses")]
     ac_node: Vec<String>,
 
     /// Write the full AC sweep (all reported nets) to this CSV file.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
     ac_csv: Option<PathBuf>,
 
     /// Measure loop stability at this break/output net: report gain crossover
     /// and phase margin. Use with `--ac`. The net is the far side of a loop
     /// broken by an injection `Vsource` (see docs/AC_ANALYSIS.md).
-    #[arg(long = "ac-loop", value_name = "NET")]
+    #[arg(long = "ac-loop", value_name = "NET", help_heading = "Advanced / analyses")]
     ac_loop: Option<String>,
 }
 
@@ -344,7 +344,7 @@ struct CheckCodeArgs {
 
     /// Ambient temperature (C) for the steady-state junction-temperature
     /// estimate (Tj = Tambient + P * theta_JA). Default 25 C.
-    #[arg(long, default_value_t = 25.0, value_name = "C")]
+    #[arg(long, default_value_t = 25.0, value_name = "C", help_heading = "Advanced / analyses")]
     ambient: f64,
 }
 
