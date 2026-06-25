@@ -1211,7 +1211,13 @@ namespace Antmicro.Renode.Peripherals.SPI
 
 impl Mcu for RenodeBackend {
     fn load_firmware(&mut self, path: &Path) -> Result<()> {
-        let p = path.to_str().context("non-UTF-8 firmware path")?;
+        // Renode resolves `@<path>` against ITS OWN working directory, not ours, so
+        // a relative firmware path (e.g. `../hunt-boards/.../fw.elf`) makes
+        // `sysbus LoadELF` fail with a cryptic "the following methods are
+        // available". Canonicalize to an absolute path so the load is cwd-proof.
+        let abs = std::fs::canonicalize(path)
+            .with_context(|| format!("firmware not found: {}", path.display()))?;
+        let p = abs.to_str().context("non-UTF-8 firmware path")?;
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
