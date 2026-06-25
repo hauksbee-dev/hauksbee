@@ -1460,12 +1460,34 @@ fn run_headless(
 ) -> Vec<hauksbee_engine::FaultEvent> {
     use hauksbee_engine::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
-    eprintln!("co-sim: {seconds:.2}s headless...");
-    let frame_dt = 1.0 / 1000.0; // 1 kHz frame cadence
+    // External emulator backends (Renode/QEMU) advance over a socket: a fine 1 ms
+    // chunk means thousands of round-trips and a co-sim that looks frozen for
+    // minutes. Use a coarse 10 ms chunk for them and print progress so a slow
+    // STM32 run is legible. In-process AVR stays at 1 kHz (fast, more resolution).
+    let external = engine
+        .scheduler()
+        .mcu_identities()
+        .iter()
+        .any(|(_, backend, _)| backend.starts_with("renode:") || backend.starts_with("qemu:"));
+    let frame_dt = if external { 10.0 / 1000.0 } else { 1.0 / 1000.0 };
+    if external {
+        engine.scheduler_mut().chunk_s = frame_dt;
+        eprintln!(
+            "co-sim: {seconds:.2}s on an external emulator (slow — roughly wall-clock \
+             per simulated second; this is normal for Renode/QEMU). Progress:"
+        );
+    } else {
+        eprintln!("co-sim: {seconds:.2}s headless...");
+    }
     let mut t = 0.0;
+    let mut next_progress = seconds / 5.0; // ~5 progress lines over the run
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
     while t < seconds {
+        if external && t >= next_progress {
+            eprintln!("  ... {t:.2} / {seconds:.2}s simulated");
+            next_progress += (seconds / 5.0).max(frame_dt);
+        }
         let frame = engine.step(frame_dt);
         for bytes in frame.uart.values() {
             last_uart.extend_from_slice(bytes);
