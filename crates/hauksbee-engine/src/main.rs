@@ -216,6 +216,11 @@ struct RunArgs {
     #[arg(long)]
     strict_thermal: bool,
 
+    /// List the board's net names (sorted) and exit. Use it to find the exact net
+    /// to pass to `--ac-node` / `--ac-loop` without grepping the layout file.
+    #[arg(long)]
+    list_nets: bool,
+
     /// Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc` (the
     /// oracle) and print whether they agree, so a copper finding is self-confirming
     /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
@@ -427,6 +432,29 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     let extra: Vec<&std::path::Path> = args.models_dir.as_deref().into_iter().collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
 
+    // --list-nets: print the board's net names so the user can pick one for
+    // --ac-node / --ac-loop without grepping the layout. One net per line on
+    // stdout (pipeable); a JSON array under --json.
+    if args.list_nets {
+        let bound = bind_board(&board, &lib);
+        let mut nets: Vec<String> = bound.net_names.clone();
+        nets.sort();
+        if args.json {
+            let body = nets
+                .iter()
+                .map(|n| format!("{n:?}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            println!("[{body}]");
+        } else {
+            eprintln!("{} net(s):", nets.len());
+            for n in &nets {
+                println!("{n}");
+            }
+        }
+        return Ok(());
+    }
+
     if args.report {
         // The bind table is a description of the board, not a pass/fail check, so
         // --plain / --strict do not apply to it. We now augment it with an honest
@@ -440,6 +468,31 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         } else {
             print!("{}", bound.report.render_table());
             print!("{}", summary.render_banner());
+            // Plain bottom line (Marco): a 74-row bind table that ends in scary
+            // "NOT trustworthy" warnings reads like the tool broke. Give --plain a
+            // one-line verdict that says what it means and what's still usable.
+            if args.plain {
+                let n = summary.critical_parts_bound_n;
+                let m = summary.critical_parts_total;
+                let open = summary
+                    .active_path_unresolved
+                    .iter()
+                    .filter(|u| u.active_ic)
+                    .count();
+                println!();
+                if open > 0 {
+                    println!(
+                        "Bottom line: {n} of {m} critical parts modelled. {open} active IC(s) above are \
+                         unresolved/open, so firmware/analog/AC/thermal results on their nets would be \
+                         INCOMPLETE — but the copper checks are unaffected (run --drc). Add models with \
+                         --models-dir to cover them."
+                    );
+                } else if m > 0 {
+                    println!("Bottom line: all {m} critical parts modelled; the board binds cleanly.");
+                } else {
+                    println!("Bottom line: no active ICs to model; this is a passive board.");
+                }
+            }
         }
         return Ok(());
     }
