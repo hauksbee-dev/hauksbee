@@ -223,26 +223,35 @@ fn draw_findings(f: &mut Frame, area: Rect, state: &AppState) {
     for (i, fdg) in state.findings.iter().enumerate() {
         let selected = state.focus == Pane::Findings && state.findings_sel == i;
         let st = severity_style(fdg.severity);
-        let marker = Span::raw(row_marker(selected));
-        let sev = Span::styled(format!("[{}] ", fdg.severity.label()), st);
-        let kind = Span::styled(
-            format!("{}/{} ", fdg.check, fdg.kind),
-            Style::default().fg(Color::DarkGray),
-        );
-        // Truncate the headline to whatever room is left on the row, so the cut
-        // lands on a `…` (not a garbled mid-word slice past the pane edge). The
-        // prefix width is the sum of the three leading spans we render below.
-        let prefix_w = marker.content.chars().count()
-            + sev.content.chars().count()
-            + kind.content.chars().count();
+        let marker_txt = row_marker(selected);
+        let sev_txt = format!("[{}] ", fdg.severity.label());
+        let kind_txt = format!("{}/{} ", fdg.check, fdg.kind);
+        let prefix_w =
+            marker_txt.chars().count() + sev_txt.chars().count() + kind_txt.chars().count();
         let avail = inner_w.saturating_sub(prefix_w).max(1);
-        let line = Line::from(vec![
-            marker,
-            sev,
-            kind,
-            Span::styled(truncate(&fdg.headline, avail), st),
-        ]);
-        items.push(ListItem::new(line));
+        let head = |s: &str| {
+            Line::from(vec![
+                Span::raw(marker_txt),
+                Span::styled(sev_txt.clone(), st),
+                Span::styled(kind_txt.clone(), Style::default().fg(Color::DarkGray)),
+                Span::styled(s.to_string(), st),
+            ])
+        };
+        if selected {
+            // The highlighted finding EXPANDS to its full headline, wrapped, so the
+            // key numbers (e.g. "Zdiff ~171 ohm vs 90 ohm") are visible in place
+            // without opening the modal. Others stay truncated to one row.
+            let wrapped = wrap_words(&fdg.headline, avail);
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(head(wrapped.first().map(String::as_str).unwrap_or("")));
+            let indent = " ".repeat(prefix_w);
+            for cont in wrapped.iter().skip(1) {
+                lines.push(Line::from(Span::styled(format!("{indent}{cont}"), st)));
+            }
+            items.push(ListItem::new(lines));
+        } else {
+            items.push(ListItem::new(head(&truncate(&fdg.headline, avail))));
+        }
     }
     if items.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
@@ -705,6 +714,42 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+/// Word-wrap `s` into lines no wider than `width`. A single word longer than
+/// `width` is hard-split so it never overflows the pane. Used to expand the
+/// highlighted finding to its full text in place.
+fn wrap_words(s: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in s.split_whitespace() {
+        let mut word = word.to_string();
+        // Hard-split an over-long token.
+        while word.chars().count() > width {
+            if !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+            }
+            let head: String = word.chars().take(width).collect();
+            lines.push(head);
+            word = word.chars().skip(width).collect();
+        }
+        let sep = usize::from(!cur.is_empty());
+        if cur.chars().count() + sep + word.chars().count() > width {
+            lines.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(&word);
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 /// A centered rect `pct_x` % wide and `pct_y` % tall, for the overlay.

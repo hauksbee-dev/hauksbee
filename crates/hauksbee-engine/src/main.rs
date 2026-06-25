@@ -221,6 +221,11 @@ struct RunArgs {
     #[arg(long)]
     list_nets: bool,
 
+    /// Run ALL the static checks at once (bind + DRC + lint + signal integrity) in
+    /// one report, instead of one flag at a time. Honours --plain / --json / --strict.
+    #[arg(long, visible_alias = "all")]
+    check: bool,
+
     /// Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc` (the
     /// oracle) and print whether they agree, so a copper finding is self-confirming
     /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
@@ -451,6 +456,61 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             for n in &nets {
                 println!("{n}");
             }
+        }
+        return Ok(());
+    }
+
+    // --check / --all: the whole static suite (bind + DRC + lint + SI) in ONE
+    // report, so a person (or an AI) gets everything in a single command instead
+    // of running one flag at a time. Honours --plain / --json / --strict.
+    if args.check {
+        let bound = bind_board(&board, &lib);
+        let summary = BindSummary::from_report(&bound.report);
+        let drc = if altium.is_some() {
+            ExtractedBoard::altium_drc(&raw)?
+        } else {
+            ExtractedBoard::drc_with_clearance_rules(
+                &text,
+                kicad_pro_clearance_rules(&args.board, &board),
+            )?
+        };
+        let drc_structured = DrcStructured::from_report(&drc);
+        let mut lint = board.net_lint();
+        lint.findings
+            .extend(hauksbee_engine::checks::straps::strap_lint(&board, &lib).findings);
+        lint.findings.extend(board.resource_conflicts().findings);
+        let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
+        let si = board.si_checks(geo_text);
+
+        if args.json {
+            let mut jr = JsonReport::new(&bound.name, summary);
+            jr.drc = Some(drc_structured);
+            let mut findings = lint_findings_json(&lint);
+            findings.extend(si_findings_json(&si));
+            jr.findings = Some(findings);
+            println!("{}", jr.to_json());
+        } else if args.plain {
+            println!("== Copper spacing (DRC) ==");
+            print!(
+                "{}",
+                hauksbee_engine::plain_drc_structured(&drc_structured).render()
+            );
+            println!("\n== Connectivity / lint ==");
+            print!("{}", hauksbee_engine::plain_netlint(&lint).render());
+            println!("\n== Signal integrity ==");
+            print!("{}", hauksbee_engine::plain_si(&si).render());
+        } else {
+            print!("{}", bound.report.render_table());
+            print!("{}", summary.render_banner());
+            println!("\n== Copper spacing (DRC) ==");
+            print!("{}", drc_structured.render());
+            println!("\n== Connectivity / lint ==");
+            print!("{}", hauksbee_extract::render_netlint(&lint));
+            println!("\n== Signal integrity ==");
+            print!("{}", hauksbee_extract::render_si(&si));
+        }
+        if args.strict && (drc.short_count() > 0 || lint_fails(&lint) || si_fails(&si)) {
+            std::process::exit(2);
         }
         return Ok(());
     }
