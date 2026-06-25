@@ -109,6 +109,18 @@ impl PlainReport {
     pub fn verdict(&self) -> String {
         let n = self.findings.len();
         if n == 0 {
+            // No failures, but if there are actionable heads-up notes (e.g. a USB
+            // pair off its impedance target), don't claim "no problems found" —
+            // that buries the one thing the user may have come to check. Point at
+            // the notes below without escalating them to a failure (cry wolf).
+            if !self.heads_up.is_empty() {
+                let hn = self.heads_up.len();
+                let things = if hn == 1 { "thing" } else { "things" };
+                return format!(
+                    "No {} failures, but {hn} {things} worth a look (see below).",
+                    self.subject.to_lowercase()
+                );
+            }
             return format!(
                 "Looks healthy: no {} problems found.",
                 self.subject.to_lowercase()
@@ -811,11 +823,17 @@ mod tests {
             }],
         };
         let plain = plain_si(&report);
-        // Not a finding -> verdict reads healthy, but the note survives.
+        // Not a finding (so it never escalates to a failure), but the verdict must
+        // ACKNOWLEDGE the note rather than claim "no problems found" — and the note
+        // itself survives under "Heads up".
         assert!(plain.findings.is_empty());
         assert_eq!(plain.heads_up.len(), 1, "off-target info promoted");
+        let verdict = plain.verdict().to_lowercase();
+        assert!(
+            verdict.contains("worth a look") && !verdict.contains("no signal-integrity problems"),
+            "verdict must point at the heads-up, not claim 'no problems found': {verdict}"
+        );
         let rendered = plain.render();
-        assert!(rendered.to_lowercase().contains("healthy"));
         assert!(
             rendered.contains("Heads up"),
             "render must include the Heads up section: {rendered}"
