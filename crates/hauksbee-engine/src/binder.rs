@@ -1500,10 +1500,12 @@ fn bind_opamp(
     let out = pick(roles, &["out_a", "out", "out_1"]).copied();
     let inp = pick(roles, &["in_plus_a", "in_plus", "inp", "in+"]).copied();
     let inn = pick(roles, &["in_minus_a", "in_minus", "inn", "in-"]).copied();
+    let reference = pick(roles, &["ref", "reference", "vref"]).copied();
     let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
         return open_warning(comp, "opamp pins not all connected");
     };
     let gain = model.params.get_f64("gain").unwrap_or(1e5);
+    let pole_hz = model.params.get_f64("pole_hz");
     let rail_lo = model.params.get_f64("rail_lo").unwrap_or(0.0);
     let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
     circuit.add(Device::OpAmp {
@@ -1511,15 +1513,21 @@ fn bind_opamp(
         out,
         inp,
         inn,
+        reference,
         gain,
+        pole_hz,
         rail_lo,
         rail_hi,
     });
+    let warning = model
+        .params
+        .get_str("warning")
+        .map(|w| format!("{} ({}): {w}", comp.reference, comp.value));
     (
         BindOutcome::Behavioral {
             device: "opamp".to_string(),
         },
-        None,
+        warning,
     )
 }
 

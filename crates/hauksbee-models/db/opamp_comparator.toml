@@ -28,6 +28,143 @@ rail_hi = 32.0      # output high rail (V) — single supply
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
+id = "ina186_dck_a1"
+kind = "opamp"
+description = "INA186A1 current-sense amplifier, gain 25 V/V, SC70-6"
+
+[models.match]
+value_re = "^INA186A1[A-Z0-9-]*$"
+
+[models.params]
+# Source: TI INA186 datasheet SBOS318B, DCK SC70 pinout and A1 gain/BW.
+gain = 25.0
+pole_hz = 45000.0
+rail_lo = 0.0
+rail_hi = 5.5
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[[models]]
+id = "ina186_dck_a2"
+kind = "opamp"
+description = "INA186A2 current-sense amplifier, gain 50 V/V, SC70-6"
+
+[models.match]
+value_re = "^INA186A2[A-Z0-9-]*$"
+
+[models.params]
+gain = 50.0
+pole_hz = 37000.0
+rail_lo = 0.0
+rail_hi = 5.5
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[[models]]
+id = "ina186_dck_a3"
+kind = "opamp"
+description = "INA186A3 current-sense amplifier, gain 100 V/V, SC70-6"
+
+[models.match]
+value_re = "^INA186A3[A-Z0-9-]*$"
+
+[models.params]
+gain = 100.0
+pole_hz = 35000.0
+rail_lo = 0.0
+rail_hi = 5.5
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[[models]]
+id = "ina186_dck_a4"
+kind = "opamp"
+description = "INA186A4 current-sense amplifier, gain 200 V/V, SC70-6"
+
+[models.match]
+value_re = "^INA186A4[A-Z0-9-]*$"
+
+[models.params]
+gain = 200.0
+pole_hz = 33000.0
+rail_lo = 0.0
+rail_hi = 5.5
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[[models]]
+id = "ina186_dck_a5"
+kind = "opamp"
+description = "INA186A5 current-sense amplifier, gain 500 V/V, SC70-6"
+
+[models.match]
+value_re = "^INA186A5[A-Z0-9-]*$"
+
+[models.params]
+gain = 500.0
+pole_hz = 27000.0
+rail_lo = 0.0
+rail_hi = 5.5
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+[[models]]
+id = "ina186_dck_a1_family"
+kind = "opamp"
+description = "INA186 current-sense amplifier family fallback, assumes A1 gain 25 V/V, SC70-6"
+
+[models.match]
+value_re = "^INA186$"
+footprint_re = "SOT-363|SC-70-6|SC70"
+
+[models.params]
+gain = 25.0
+pole_hz = 45000.0
+rail_lo = 0.0
+rail_hi = 5.5
+warning = "[auto-bind] generic INA186 value has no A1/A2/A3/A4/A5 gain suffix; assuming INA186A1 gain 25 V/V"
+
+[models.pins]
+"1" = "ref"
+"2" = "vss"
+"3" = "vcc"
+"4" = "in_plus"
+"5" = "in_minus"
+"6" = "out"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
 id = "lm393"
 kind = "comparator"
 description = "LM393 dual comparator, open-collector output"

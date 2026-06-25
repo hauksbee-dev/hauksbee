@@ -205,13 +205,16 @@ pub enum Device {
         ron: f64,
         roff: f64,
     },
-    /// Behavioral op-amp: `out = clamp(gain * (inp - inn), rails)`.
+    /// Behavioral op-amp: `out = clamp(reference + gain * (inp - inn), rails)`.
+    /// `pole_hz`, when present, applies a single AC pole to the gain path.
     OpAmp {
         name: String,
         out: NodeId,
         inp: NodeId,
         inn: NodeId,
+        reference: Option<NodeId>,
         gain: f64,
+        pole_hz: Option<f64>,
         rail_lo: f64,
         rail_hi: f64,
     },
@@ -268,7 +271,20 @@ impl Device {
                 ctrl_n,
                 ..
             } => vec![*a, *b, *ctrl_p, *ctrl_n],
-            Device::OpAmp { out, inp, inn, .. } | Device::Comparator { out, inp, inn, .. } => {
+            Device::OpAmp {
+                out,
+                inp,
+                inn,
+                reference,
+                ..
+            } => {
+                let mut nodes = vec![*out, *inp, *inn];
+                if let Some(reference) = reference {
+                    nodes.push(*reference);
+                }
+                nodes
+            }
+            Device::Comparator { out, inp, inn, .. } => {
                 vec![*out, *inp, *inn]
             }
         }

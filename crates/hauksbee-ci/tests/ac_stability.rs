@@ -92,7 +92,9 @@ fn representative_loop(a0: f64, r: f64, c: f64) -> Circuit {
         out: oa,
         inp: NodeId::GROUND,
         inn: fb,
+        reference: None,
         gain: a0,
+        pole_hz: None,
         rail_lo: -1e9,
         rail_hi: 1e9,
     });
