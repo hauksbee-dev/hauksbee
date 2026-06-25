@@ -835,8 +835,25 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             jr.cosim = cosim;
             println!("{}", jr.to_json());
         } else if args.plain {
+            // A co-sim with no stress faults is NOT plainly "healthy" if it ran on
+            // a substitute chip or never exercised the firmware. Surface those as
+            // heads-up notes so the verdict reads "no failures, but N worth a look"
+            // (via PlainReport::verdict) instead of a bare "Looks healthy".
+            let mut report = hauksbee_engine::plain_faults(&faults);
+            for sub in engine.scheduler().substitutions() {
+                report
+                    .heads_up
+                    .push(format!("co-sim ran on a SUBSTITUTE chip — {}", sub.message()));
+            }
+            if zero_activity {
+                report.heads_up.push(
+                    "co-sim saw zero net toggles and no UART output — the firmware was not \
+                     exercised, so this result cannot vouch for firmware behaviour"
+                        .to_string(),
+                );
+            }
             println!();
-            print!("{}", hauksbee_engine::plain_faults(&faults).render());
+            print!("{}", report.render());
         }
 
         // 0-activity refusal (Track B): warn always; under --strict this is a hard
@@ -1102,6 +1119,23 @@ fn cmd_ac(
             requested_nets,
             result::AC_FLOOR_DB,
             no_path_nets.join(", "),
+        );
+    }
+
+    // Active-circuit coverage caveat (the false-comfort case): the per-net sentinel
+    // check above only catches a net AT the dB floor. A board whose active devices
+    // (op-amps, drivers, MOSFETs, MCU) are UNRESOLVED -> OPEN still solves as a
+    // passive shell and prints a clean, authoritative-looking Bode that is NOT the
+    // real loop. The --json path carries this via the bind summary (active_path_
+    // unresolved); the TEXT path must say it too, or the result reads as trustworthy.
+    let ac_open = coverage_open_active_refs(&summary);
+    if !ac_open.is_empty() {
+        eprintln!(
+            "\nCAVEAT: this AC result is NOT trustworthy — {} active IC(s) on the live circuit \
+             are unresolved/open ({}), so the response/loop shown is a passive shell, not the real \
+             circuit. Bind them with --models-dir, then re-run.",
+            ac_open.len(),
+            ac_open.join(", "),
         );
     }
 
