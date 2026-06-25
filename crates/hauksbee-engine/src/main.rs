@@ -395,6 +395,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             anyhow::anyhow!("reading '{}': {e}", args.board.display())
         }
     })?;
+    // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
+    // product), say so — a clean verdict on one file is misleading if the user
+    // meant the whole thing. Human-facing only (stderr); skipped under --json.
+    if !args.json {
+        warn_sibling_boards(&args.board);
+    }
     // Binary board (Altium): auto-detected from the OLE2 magic + Altium streams,
     // exactly as the Eagle path is auto-detected from XML content. No new CLI
     // surface.
@@ -1450,6 +1456,75 @@ fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJso
         uart_seen,
         activity_summary,
     })
+}
+
+/// Warn (advisory, stderr) when the board sits among sibling `.kicad_pcb` files —
+/// a multi-board product (e.g. a main board with a separate ESC/daughter board in
+/// a sibling folder). A clean verdict on ONE file reads as "the product is fine"
+/// when the user may have meant the whole thing. Best-effort; never fails the run.
+fn warn_sibling_boards(board: &std::path::Path) {
+    let Ok(abs) = std::fs::canonicalize(board) else {
+        return;
+    };
+    let Some(dir) = abs.parent() else {
+        return;
+    };
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    let is_hidden = |p: &std::path::Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with('.'))
+            .unwrap_or(false)
+    };
+    let mut scan = |d: &std::path::Path| {
+        if let Ok(rd) = std::fs::read_dir(d) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb") && p != abs {
+                    found.push(p);
+                }
+            }
+        }
+    };
+    scan(dir);
+    // Immediate CHILD directories (e.g. a daughter board in `KiCad/ESC_Board/`)
+    // and SIBLING directories (children of the grandparent). One level only, and
+    // hidden dirs (`.history`, `.git`) are skipped so we don't surface backups.
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && !is_hidden(&p) {
+                scan(&p);
+            }
+        }
+    }
+    if let Some(gp) = dir.parent() {
+        if let Ok(rd) = std::fs::read_dir(gp) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() && p != dir && !is_hidden(&p) {
+                    scan(&p);
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    if found.is_empty() {
+        return;
+    }
+    eprintln!(
+        "note: {} other board file(s) found nearby — this run only checks '{}':",
+        found.len(),
+        board.display()
+    );
+    for p in found.iter().take(5) {
+        eprintln!("  - {}", p.display());
+    }
+    if found.len() > 5 {
+        eprintln!("  ... and {} more", found.len() - 5);
+    }
+    eprintln!("  If they are part of the same product, check each one separately.");
 }
 
 fn run_headless(
