@@ -172,4 +172,15 @@ pub trait Mcu {
     /// concrete bus peripherals with an external emulator use it to expose only
     /// the addresses the engine actually modeled.
     fn set_i2c_slave_addresses(&mut self, _addresses: &[u8]) {}
+
+    /// Push a temperature reading into an emulated I2C temperature device at
+    /// `addr` (7-bit), in milli-degrees Celsius, so the firmware reads it through
+    /// its own I2C controller.
+    ///
+    /// Default: no-op. The simavr / Renode backends answer I2C reads through the
+    /// `on_i2c` callback (the engine's modeled bytes). The QEMU backend, however,
+    /// runs the firmware against QEMU's own emulated I2C device (the ESP32 machine
+    /// ships a `tmp105` at 0x48), so it overrides this to set that device's
+    /// temperature each frame. Backends without such a device ignore it.
+    fn set_i2c_device_temperature(&mut self, _addr: u8, _milli_c: i32) {}
 }

@@ -55,6 +55,14 @@ pub trait I2cSlave: Send {
         HashMap::new()
     }
 
+    /// If this is a temperature sensor, its current reading in milli-degrees
+    /// Celsius. Lets a backend that runs the firmware against a real emulated
+    /// I2C device (the QEMU ESP32 `tmp105`) push the modeled temperature into
+    /// that device, instead of serving bytes through `on_read`. Default: None.
+    fn temperature_mc(&self) -> Option<i32> {
+        None
+    }
+
     fn as_any(&self) -> &dyn std::any::Any;
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
@@ -89,6 +97,16 @@ impl I2cBus {
     /// 7-bit addresses currently modeled on this bus.
     pub fn addresses(&self) -> Vec<u8> {
         self.slaves.iter().map(|s| s.address()).collect()
+    }
+
+    /// `(address, milli_celsius)` for every temperature sensor on the bus. Used by
+    /// a backend (QEMU) that pushes the modeled temperature into its own emulated
+    /// I2C device rather than serving bytes through the `on_i2c` callback.
+    pub fn temperature_sensors(&self) -> Vec<(u8, i32)> {
+        self.slaves
+            .iter()
+            .filter_map(|s| s.temperature_mc().map(|mc| (s.address(), mc)))
+            .collect()
     }
 
     /// Dispatch one I2C event to the matching slave. Returns the reply byte for
@@ -361,6 +379,10 @@ fn temp_to_be(t: f64) -> Vec<u8> {
 impl I2cSlave for Lm75 {
     fn address(&self) -> u8 {
         self.addr
+    }
+
+    fn temperature_mc(&self) -> Option<i32> {
+        Some((self.temp_c * 1000.0).round() as i32)
     }
 
     fn on_start(&mut self, read: bool) {

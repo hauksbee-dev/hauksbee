@@ -118,6 +118,27 @@ impl Qmp {
     // inputs through the gdbstub `M` packet (see `gdb.rs`). Keeping that split
     // explicit avoids a half-working HMP write path.
 
+    /// Set a QOM object property via `qom-set`. `value_json` is the raw JSON
+    /// value to assign (an integer literal like `"35000"`, or a quoted string).
+    /// Used to push a sensor reading into an emulated I2C device (e.g. the ESP32
+    /// machine's built-in `tmp105` temperature) so the firmware reads it over its
+    /// own I2C controller.
+    pub fn qom_set(&mut self, path: &str, property: &str, value_json: &str) -> Result<()> {
+        let req = format!(
+            "{{\"execute\":\"qom-set\",\"arguments\":{{\"path\":\"{path}\",\"property\":\"{property}\",\"value\":{value_json}}}}}\n"
+        );
+        self.send_and_collect(&req, Duration::from_secs(5)).map(|_| ())
+    }
+
+    /// Get a QOM object property via `qom-get`, returning the raw `return` field
+    /// as a string (a JSON scalar, e.g. `"72"` for an integer `address`).
+    pub fn qom_get(&mut self, path: &str, property: &str) -> Result<String> {
+        let req = format!(
+            "{{\"execute\":\"qom-get\",\"arguments\":{{\"path\":\"{path}\",\"property\":\"{property}\"}}}}\n"
+        );
+        self.send_and_collect(&req, Duration::from_secs(5))
+    }
+
     /// Send a request and collect the matching `return`/`error` reply, skipping
     /// any asynchronous events that arrive first.
     fn send_and_collect(&mut self, req: &str, timeout: Duration) -> Result<String> {
