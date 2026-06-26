@@ -452,6 +452,21 @@ impl Scheduler {
                 let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
                 m.core.set_analog_in(ch, v.max(0.0));
             }
+            // Push modeled I2C temperature-sensor readings into the backend's own
+            // emulated device (the QEMU ESP32 tmp105). The simavr/Renode backends
+            // ignore this (they answer I2C reads through the `on_i2c` byte
+            // callback); QEMU runs the firmware against a real device, so it reads
+            // the value through its own I2C controller. Done each chunk so a
+            // temperature sweep tracks.
+            for bus in &self.i2c_buses {
+                let sensors = bus
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .temperature_sensors();
+                for (addr, milli_c) in sensors {
+                    m.core.set_i2c_device_temperature(addr, milli_c);
+                }
+            }
             let _ = m.core.run_micros(micros);
 
             let (edges, bytes) = {

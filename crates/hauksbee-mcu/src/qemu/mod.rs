@@ -178,9 +178,24 @@ pub struct QemuConfig {
     pub expected_e_machine: u16,
     /// Human-readable MCU/board name for arch-mismatch error messages.
     pub mcu_label: String,
+    /// QOM paths of the machine's I2C buses, searched for an emulated I2C device
+    /// matching a modeled sensor's address so the engine can push readings into
+    /// it (e.g. the ESP32 machine's built-in `tmp105` on `i2c0`). Empty disables
+    /// the I2C-device bridge.
+    pub i2c_buses: Vec<String>,
 }
 
 impl QemuConfig {
+    /// The QOM bus paths the Espressif ESP32-family machines expose. The firmware
+    /// default I2C0 (GPIO21/22) is `i2c0`; `i2c1` is searched too for boards that
+    /// use it. The machine auto-instantiates a `tmp105` at 0x48 on `i2c0`.
+    fn esp_i2c_buses() -> Vec<String> {
+        vec![
+            "/machine/soc/i2c0/i2c".to_string(),
+            "/machine/soc/i2c1/i2c".to_string(),
+        ]
+    }
+
     /// Classic ESP32 (Xtensa LX6 dual-core), 240 MHz, single 32-bit GPIO bank
     /// for pins 0..31 (the demo and most products use only low pins). GPIO is
     /// observed through the RAM mailbox (the gpio model has no register
@@ -199,6 +214,7 @@ impl QemuConfig {
             frequency_hz: 240_000_000,
             expected_e_machine: crate::elf::EM_XTENSA,
             mcu_label: "ESP32 (Xtensa LX6)".to_string(),
+            i2c_buses: Self::esp_i2c_buses(),
         }
     }
 
@@ -217,6 +233,7 @@ impl QemuConfig {
             frequency_hz: 240_000_000,
             expected_e_machine: crate::elf::EM_XTENSA,
             mcu_label: "ESP32-S3 (Xtensa LX7)".to_string(),
+            i2c_buses: Self::esp_i2c_buses(),
         }
     }
 
@@ -235,6 +252,7 @@ impl QemuConfig {
             frequency_hz: 160_000_000,
             expected_e_machine: crate::elf::EM_RISCV,
             mcu_label: "ESP32-C3 (RISC-V RV32IMC)".to_string(),
+            i2c_buses: Self::esp_i2c_buses(),
         }
     }
 }
@@ -378,6 +396,10 @@ pub struct QemuBackend {
     firmware_loaded: bool,
     /// Virtual time advanced so far, in cycles-equivalent.
     cycles: u64,
+    /// Resolved QOM path of the emulated I2C device at each modeled sensor
+    /// address (`None` once searched and not found, so we do not re-walk QMP
+    /// every frame). Populated lazily by [`Mcu::set_i2c_device_temperature`].
+    i2c_temp_paths: HashMap<u8, Option<String>>,
 }
 
 impl QemuBackend {
@@ -472,6 +494,7 @@ impl QemuBackend {
             on_uart: None,
             firmware_loaded: true, // booted from the image
             cycles: 0,
+            i2c_temp_paths: HashMap::new(),
         })
     }
 
@@ -569,6 +592,40 @@ impl QemuBackend {
         self.pump_uart_out();
         Ok(())
     }
+
+    /// Walk the configured I2C buses for an emulated device whose `address`
+    /// property matches `addr`, returning its QOM path. One-time discovery
+    /// (cached by the caller). Children without an `address` property, or buses
+    /// the machine does not expose, simply yield QMP errors that are skipped.
+    fn resolve_i2c_device(&mut self, addr: u8) -> Option<String> {
+        let buses = self.config.i2c_buses.clone();
+        for bus in &buses {
+            for i in 0..8u32 {
+                let child = format!("{bus}/child[{i}]");
+                if let Ok(v) = self.qmp.qom_get(&child, "address") {
+                    if parse_leading_int(&v) == Some(i64::from(addr)) {
+                        return Some(child);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Parse the first signed integer out of a QMP `return` scalar string (e.g.
+/// `"72"` for an `address` property), tolerating surrounding quotes/whitespace.
+fn parse_leading_int(s: &str) -> Option<i64> {
+    let t = s.trim().trim_matches('"').trim();
+    if let Ok(v) = t.parse::<i64>() {
+        return Some(v);
+    }
+    let digits: String = t
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit() && *c != '-')
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    digits.parse().ok()
 }
 
 impl Mcu for QemuBackend {
@@ -638,9 +695,25 @@ impl Mcu for QemuBackend {
     }
 
     fn on_i2c(&mut self, _cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
-        // The installed Espressif QEMU hard-wires its own tmp105 on i2c0 and
-        // exposes no host-byte hook for the controller's internal RX FIFO.
-        // See docs/hunts/CODEX_QEMU_I2C_RESULTS.md for the investigation.
+        // The Espressif QEMU controller exposes no host-byte hook for its RX
+        // FIFO, so the byte-callback model used by simavr/Renode does not apply.
+        // Instead the engine pushes sensor readings into QEMU's OWN emulated I2C
+        // device (the machine ships a tmp105 at 0x48 on i2c0) via
+        // `set_i2c_device_temperature`, and the firmware reads it through its real
+        // I2C controller. So this callback is intentionally unused for QEMU.
+    }
+
+    fn set_i2c_device_temperature(&mut self, addr: u8, milli_c: i32) {
+        // Resolve (once, then cache) the QOM path of the emulated I2C device at
+        // this address, then set its `temperature`. The ESP32 machine's built-in
+        // tmp105 takes milli-degrees C; the firmware reads it over its own I2C0.
+        if !self.i2c_temp_paths.contains_key(&addr) {
+            let resolved = self.resolve_i2c_device(addr);
+            self.i2c_temp_paths.insert(addr, resolved);
+        }
+        if let Some(Some(path)) = self.i2c_temp_paths.get(&addr).cloned() {
+            let _ = self.qmp.qom_set(&path, "temperature", &milli_c.to_string());
+        }
     }
 
     fn on_spi(&mut self, _cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
