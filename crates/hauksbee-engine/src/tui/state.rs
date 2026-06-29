@@ -820,6 +820,7 @@ mod tests {
             shorts: Vec::new(),
             violations: Vec::new(),
             at_limit: Vec::new(),
+            version_warning: None,
         }
     }
 

@@ -259,6 +259,21 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
 pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     let mut out = PlainReport::new("Copper spacing (DRC)");
 
+    // On an unvalidated board format (KiCad 10+), the shorts may be phantom (an
+    // unhandled zone fill engulfing every net). Never claim them as SERIOUS:
+    // surface the caveat as a heads-up and present the shorts as notes, so the
+    // verdict is "worth a look", not a false "N serious shorts".
+    let short_level = if st.version_warning.is_some() {
+        PlainLevel::Note
+    } else {
+        PlainLevel::Serious
+    };
+    if let Some(w) = &st.version_warning {
+        out.heads_up.push(format!(
+            "The copper short results below are UNRELIABLE: {w}"
+        ));
+    }
+
     // Real shorts first — the things that actually break a board.
     for sh in &st.shorts {
         let a = if sh.net_a.is_empty() { "an unnamed net" } else { &sh.net_a };
@@ -268,7 +283,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             sh.loc_mm[0], sh.loc_mm[1], sh.layer
         );
         out.push(
-            PlainLevel::Serious,
+            short_level,
             format!("Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}."),
             format!(
                 "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
@@ -672,6 +687,7 @@ mod tests {
             clearance_mm: 0.2,
             findings: vec![f],
             primitive_count: 2,
+            version_warning: None,
         };
         let plain = plain_drc(&report);
         assert_eq!(plain.findings[0].level, PlainLevel::Warning);
@@ -700,6 +716,7 @@ mod tests {
             clearance_mm: 0.2,
             findings: vec![at_limit(), at_limit(), at_limit()],
             primitive_count: 6,
+            version_warning: None,
         };
         let st = DrcStructured::from_report(&report);
         let plain = plain_drc_structured(&st);
@@ -733,6 +750,7 @@ mod tests {
             clearance_mm: 0.2,
             findings: vec![below],
             primitive_count: 2,
+            version_warning: None,
         };
         let below_plain =
             plain_drc_structured(&DrcStructured::from_report(&below_report));

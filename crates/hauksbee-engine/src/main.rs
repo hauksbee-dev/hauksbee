@@ -525,8 +525,10 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             }
         }
         let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
-        if args.strict && (drc.short_count() > 0 || lint_fails(&lint) || si_fails(&si) || usbc_serious)
-        {
+        // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do
+        // not fail the gate on them (the caveat is still printed above).
+        let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+        if args.strict && (drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious) {
             std::process::exit(2);
         }
         return Ok(());
@@ -611,8 +613,10 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         if args.oracle && !args.json {
             print!("{}", oracle_cross_check(&args.board, &report));
         }
-        // Strict: any true short fails the gate (clearance-only does not).
-        if args.strict && report.short_count() > 0 {
+        // Strict: any true short fails the gate (clearance-only does not). An
+        // unvalidated board format (KiCad 10+) yields possibly-phantom shorts, so
+        // it does not gate (the printed caveat tells the user to cross-check).
+        if args.strict && report.version_warning.is_none() && report.short_count() > 0 {
             std::process::exit(2);
         }
         return Ok(());
