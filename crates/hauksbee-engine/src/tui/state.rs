@@ -369,11 +369,34 @@ impl AppState {
         net_parts: HashMap<String, Vec<String>>,
     ) -> AppState {
         let mut findings = Vec::new();
+        // On an unvalidated KiCad-10 board the shorts may be phantom; surface the
+        // caveat as an info finding so the (downgraded) shorts are not read as real.
+        if let Some(w) = &drc.version_warning {
+            findings.push(Finding {
+                severity: Severity::Info,
+                check: "drc".to_string(),
+                kind: "unreliable_version".to_string(),
+                headline: "Copper short results are UNRELIABLE on this KiCad version".to_string(),
+                plain: w.clone(),
+                nets: Vec::new(),
+                refs: Vec::new(),
+                location_mm: None,
+                layer: None,
+                actionable: true,
+                fix: Some(
+                    "Cross-check the copper with KiCad's own DRC; hauksbee does not yet read this \
+                     KiCad version's zone fills."
+                        .to_string(),
+                ),
+            });
+        }
         // DRC: shorts are serious; below-rule clearance groups are medium;
         // at-limit groups are info (grouped, not 42 identical rows).
         for s in &drc.shorts {
             findings.push(Finding {
-                severity: Severity::Serious,
+                // Reads the structured severity (downgraded to a note on an
+                // unvalidated KiCad-10 board where the short may be phantom).
+                severity: Severity::from_str(&s.severity),
                 check: "drc".to_string(),
                 kind: "short".to_string(),
                 headline: format!(

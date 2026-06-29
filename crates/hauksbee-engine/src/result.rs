@@ -607,6 +607,15 @@ impl DrcStructured {
         let mut groups: BTreeMap<(String, String, String), (usize, usize, f64, f64)> =
             BTreeMap::new();
 
+        // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
+        // they carry "note" severity, not "serious" — every structured consumer
+        // (JSON, TUI) inherits the downgrade from this single source.
+        let short_severity = if report.version_warning.is_some() {
+            "note"
+        } else {
+            "serious"
+        };
+
         for f in &report.findings {
             match f.kind {
                 ViolationKind::Short => shorts.push(DrcShort {
@@ -615,7 +624,7 @@ impl DrcStructured {
                     layer: f.layer.clone(),
                     gap_mm: f.gap_mm,
                     loc_mm: [f.x, f.y],
-                    severity: "serious".to_string(),
+                    severity: short_severity.to_string(),
                 }),
                 ViolationKind::Clearance => {
                     // A finding is "below" the rule when its gap is under it;
@@ -671,12 +680,6 @@ impl DrcStructured {
             at_limit,
             version_warning: report.version_warning.clone(),
         }
-    }
-
-    /// Whether the shorts in this report should drive a pass/fail verdict. They
-    /// must NOT when the board format is unvalidated (the shorts may be phantom).
-    pub fn shorts_are_reliable(&self) -> bool {
-        self.version_warning.is_none()
     }
 
     /// Render the grouped DRC as text (the honest, de-duplicated view). Shorts
@@ -1064,6 +1067,35 @@ mod tests {
                 owner: String::new(),
             },
         }
+    }
+
+    fn short(net_a: &str, net_b: &str) -> DrcFinding {
+        let mut f = clearance(net_a, net_b, 0.0, 0.2);
+        f.kind = ViolationKind::Short;
+        f
+    }
+
+    #[test]
+    fn unvalidated_version_downgrades_shorts_and_propagates_warning() {
+        // A KiCad-10 report (version_warning set) → shorts carry "note", not
+        // "serious", and the warning propagates to the structured form so every
+        // consumer (JSON, TUI) inherits the downgrade from one source.
+        let mut report = DrcReport {
+            clearance_mm: 0.2,
+            findings: vec![short("GND", "+3V3")],
+            primitive_count: 2,
+            version_warning: Some("unreliable on this version".into()),
+        };
+        let st = DrcStructured::from_report(&report);
+        assert_eq!(st.shorts.len(), 1);
+        assert_eq!(st.shorts[0].severity, "note", "phantom-prone short must not be 'serious'");
+        assert_eq!(st.version_warning.as_deref(), Some("unreliable on this version"));
+
+        // The same report on a validated version keeps "serious".
+        report.version_warning = None;
+        let st = DrcStructured::from_report(&report);
+        assert_eq!(st.shorts[0].severity, "serious");
+        assert!(st.version_warning.is_none());
     }
 
     use crate::report::{BindRow, BindOutcome};
