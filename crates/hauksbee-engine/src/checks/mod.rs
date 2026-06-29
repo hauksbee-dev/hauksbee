@@ -22,3 +22,25 @@
 pub mod mcu_coverage;
 pub mod straps;
 pub mod usb_c;
+
+use hauksbee_extract::{ExtractedBoard, NetLintReport};
+use hauksbee_models::ModelLibrary;
+
+/// The full engine-level lint: the connectivity net-lint plus the three
+/// model-aware checks — strap pins, MCU resource conflicts, and the
+/// unmodelled-MCU coverage note. Kept as one function so every surface (`--lint`,
+/// `--check`, the JSON aggregate) runs the identical set and no caller can
+/// reopen the "Looks healthy over an unexamined MCU" hole by forgetting one.
+pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    let mut report = board.net_lint();
+    report
+        .findings
+        .extend(straps::strap_lint(board, lib).findings);
+    report
+        .findings
+        .extend(board.resource_conflicts().findings);
+    report
+        .findings
+        .extend(mcu_coverage::mcu_coverage_lint(board, lib).findings);
+    report
+}
