@@ -195,19 +195,19 @@ struct RunArgs {
 
     /// Translate the report into plain language for a non-engineer: a one-line
     /// verdict, then each finding as what it is, why it matters, and what to do.
-    /// Applies to --drc/--lint/--si/--resources and to --headless faults.
+    /// Applies to --drc/--lint/--si/--resources/--usb-c and to --headless faults.
     #[arg(long, visible_alias = "explain")]
     plain: bool,
 
     /// Emit machine-readable JSON instead of the box-drawing tables, for any of
-    /// --report/--drc/--lint/--si/--resources/--thermal/--ac. Implies
+    /// --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies
     /// non-interactive, stable output (see docs schema §4.1). `valid:false` +
     /// `reason` is set on AC/thermal results that are meaningless; the bind
     /// section reports critical_parts_bound + active_path_unresolved by role.
     #[arg(long)]
     json: bool,
 
-    /// Exit non-zero if a report (--drc/--lint/--si/--resources) finds problems,
+    /// Exit non-zero if a report (--drc/--lint/--si/--resources/--usb-c) finds problems,
     /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
     /// only read the text are unaffected). Counts shorts + serious/medium lint &
     /// SI findings; clearance-only and low-severity notes do not fail the gate.

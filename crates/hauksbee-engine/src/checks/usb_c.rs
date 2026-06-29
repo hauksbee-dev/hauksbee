@@ -978,7 +978,15 @@ pub struct UsbcReport {
 pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     let term = extract_sink_termination(board)?;
     let audit = audit_cc_termination(board);
-    let has_discrete_rd = term.cc1_rd_ohms.is_some() || term.cc2_rd_ohms.is_some();
+    // "Intends to be a self-terminated sink" means a discrete pulldown in a
+    // *plausible Rd band*, not any resistor to GND. USB-C Rd is nominally 5.1 kΩ;
+    // anything well above that (a bleeder, an ESD/EMC resistor, a non-Rd part on
+    // the CC net) is not an Rd and must not push the verdict to SERIOUS — that
+    // would false-positive on a fine controller-terminated board. Trade-off: a
+    // grossly-wrong Rd (e.g. a 51 kΩ typo) reads as Info, not Serious.
+    const RD_PLAUSIBLE_MAX_OHMS: f64 = 10_000.0;
+    let plausible_rd = |r: Option<f64>| r.is_some_and(|ohms| ohms <= RD_PLAUSIBLE_MAX_OHMS);
+    let has_discrete_rd = plausible_rd(term.cc1_rd_ohms) || plausible_rd(term.cc2_rd_ohms);
 
     let passive = classify_attach(term, Rp::Default, Cable::Passive).attach;
     let emarked = classify_attach(term, Rp::Default, Cable::emarked()).attach;
@@ -1366,6 +1374,61 @@ mod tests {
         let (lvl, msg) = usbc_verdict(false, true, Nothing, Nothing);
         assert_eq!(lvl, UsbcLevel::Serious);
         assert!(!msg.contains("Raspberry Pi 4"), "{msg}");
+    }
+
+    #[test]
+    fn report_renderers_and_json_are_well_formed() {
+        // A Serious report with a None Rd on one pin exercises the `"null"` JSON
+        // branch and the e-marked/shared-net headline path.
+        let report = UsbcReport {
+            receptacles: vec![ReceptacleCc {
+                reference: "J1".into(),
+                cc1: CcPinTermination {
+                    external_rd_ohms: Some(5100.0),
+                    internal_rd_ohms: None,
+                    controller_ref: None,
+                },
+                cc2: CcPinTermination {
+                    external_rd_ohms: None,
+                    internal_rd_ohms: None,
+                    controller_ref: None,
+                },
+            }],
+            shared_net: true,
+            cc1_rd_ohms: Some(5100.0),
+            cc2_rd_ohms: None,
+            attach: Attach::AudioAccessory,
+            powers_vbus: false,
+            has_discrete_rd: true,
+            level: UsbcLevel::Serious,
+            headline: "headline with \"quotes\" and a \\ backslash".into(),
+        };
+        // JSON must parse as a single value, with the None Rd as JSON null and the
+        // headline correctly escaped.
+        let v: serde_json::Value = serde_json::from_str(&report.to_json()).expect("valid JSON");
+        assert_eq!(v["check"], "usb_c_cc");
+        assert_eq!(v["level"], "serious");
+        assert_eq!(v["powers_vbus"], false);
+        assert!(v["cc2_rd_ohms"].is_null());
+        assert_eq!(v["cc1_rd_ohms"], 5100.0);
+        assert_eq!(v["headline"], "headline with \"quotes\" and a \\ backslash");
+        // Renderers are non-empty and the plain one carries the fix line for Serious.
+        assert!(report.render().contains("SERIOUS"));
+        assert!(report.render_plain().contains("5.1 kΩ"));
+        assert!(report.render_plain().contains("What to do"));
+        assert!(report.is_serious());
+
+        // An Ok report's JSON also round-trips (different null/level branches).
+        let ok = UsbcReport {
+            level: UsbcLevel::Ok,
+            attach: Attach::SinkAttached,
+            powers_vbus: true,
+            shared_net: false,
+            ..report
+        };
+        let v: serde_json::Value = serde_json::from_str(&ok.to_json()).expect("valid JSON");
+        assert_eq!(v["level"], "ok");
+        assert!(!ok.is_serious());
     }
 
     #[test]
