@@ -260,14 +260,9 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     let mut out = PlainReport::new("Copper spacing (DRC)");
 
     // On an unvalidated board format (KiCad 10+), the shorts may be phantom (an
-    // unhandled zone fill engulfing every net). Never claim them as SERIOUS:
-    // surface the caveat as a heads-up and present the shorts as notes, so the
-    // verdict is "worth a look", not a false "N serious shorts".
-    let short_level = if st.version_warning.is_some() {
-        PlainLevel::Note
-    } else {
-        PlainLevel::Serious
-    };
+    // unhandled zone fill engulfing every net), so they carry a downgraded
+    // severity (set once in DrcStructured::from_report). Surface the caveat as a
+    // never-dropped heads-up so the verdict is "worth a look", not "N serious".
     if let Some(w) = &st.version_warning {
         out.heads_up.push(format!(
             "The copper short results below are UNRELIABLE: {w}"
@@ -282,8 +277,15 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             "near x={:.1} mm, y={:.1} mm on layer {}",
             sh.loc_mm[0], sh.loc_mm[1], sh.layer
         );
+        // Read the per-short severity (the single source); a downgraded short is
+        // a Note, a real one is Serious.
+        let level = if sh.severity == "serious" {
+            PlainLevel::Serious
+        } else {
+            PlainLevel::Note
+        };
         out.push(
-            short_level,
+            level,
             format!("Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}."),
             format!(
                 "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
