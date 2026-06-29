@@ -989,6 +989,9 @@ pub fn lint_fix_hint(check: LintCheck) -> Option<&'static str> {
         LintCheck::PlaceholderValue => {
             "Replace the placeholder with the actual passive value before ordering or trusting simulation."
         }
+        LintCheck::UncheckedMcu => {
+            "Verify the boot/strap pins and pin-mux by hand against the datasheet, or supply a model with --models-dir so the strap and resource-conflict checks can run."
+        }
     })
 }
 

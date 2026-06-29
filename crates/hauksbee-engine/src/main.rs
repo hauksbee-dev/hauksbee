@@ -479,6 +479,11 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         lint.findings
             .extend(hauksbee_engine::checks::straps::strap_lint(&board, &lib).findings);
         lint.findings.extend(board.resource_conflicts().findings);
+        // Coverage honesty: if an MCU isn't modelled, the strap + resource checks
+        // above silently found nothing. Say so, so "Looks healthy" is never
+        // printed over an MCU the tool never examined.
+        lint.findings
+            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
         let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
         let si = board.si_checks(geo_text);
 
@@ -630,6 +635,11 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let straps = hauksbee_engine::checks::straps::strap_lint(&board, &lib);
         report.findings.extend(straps.findings);
         report.findings.extend(board.resource_conflicts().findings);
+        // Coverage honesty: an unmodelled MCU makes both checks above silently
+        // empty; flag it so "Looks healthy" never hides an unchecked MCU.
+        report
+            .findings
+            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
         if args.json {
             let bound = bind_board(&board, &lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
@@ -648,7 +658,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if args.resources {
-        let report = board.resource_conflicts();
+        let mut report = board.resource_conflicts();
+        // An unmodelled MCU makes the resource-conflict check silently empty;
+        // flag it so a clean result is not mistaken for "checked and conflict-free".
+        report
+            .findings
+            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
         if args.json {
             let bound = bind_board(&board, &lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
@@ -731,6 +746,8 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         lint.findings
             .extend(hauksbee_engine::checks::straps::strap_lint(&board, &lib).findings);
         lint.findings.extend(board.resource_conflicts().findings);
+        lint.findings
+            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
         let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
         let si = board.si_checks(geo_text);
         let mut findings = lint_findings_json(&lint);
