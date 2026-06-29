@@ -286,10 +286,11 @@ mod tests {
         assert!(!is_probable_mcu(&c));
     }
 
-    /// End-to-end against the real model DB: an unmodelled MCU (STM32WL55) yields
-    /// exactly one UncheckedMcu note naming it; a modelled MCU (ATmega328P) and a
-    /// passive yield none. This is the guard that stops "Looks healthy" from being
-    /// printed over an MCU the strap/resource checks never examined.
+    /// End-to-end against the real model DB: an unmodelled strap-bearing MCU
+    /// (STM32WL55) yields exactly one UncheckedMcu note naming it; a DB-authored
+    /// strap-bearing MCU with a populated strap table (STM32F103C8 — straps WERE
+    /// examined) and a passive yield none. This is the guard that stops "Looks
+    /// healthy" from being printed over an MCU whose straps were never examined.
     #[test]
     fn flags_unmodelled_mcu_but_not_a_modelled_one() {
         let lib = ModelLibrary::builtin();
@@ -297,8 +298,8 @@ mod tests {
             name: "t".into(),
             nets: Vec::new(),
             components: vec![
-                comp("U4", "STM32WL55CCU6", "Package_QFP:LQFP-48"), // not in DB
-                comp("U1", "ATmega328P-AU", "Package_QFP:TQFP-32"), // in DB
+                comp("U4", "STM32WL55CCU6", "Package_QFP:LQFP-48"), // not in DB → flagged
+                comp("U1", "STM32F103C8T6", "Package_QFP:LQFP-48"), // DB-authored, has straps
                 comp("R1", "10k", "Device:R"),                      // passive
             ],
         };
@@ -376,6 +377,25 @@ mod tests {
             "ESP-WROOM-32",
             "RF_Module:ESP32-WROOM-32"
         )));
+    }
+
+    /// ESP32 positive path (the co-headline): an ESP32 value that misses the DB
+    /// but routes to a strapless engine fallback (e.g. a bare `ESP32-C3`) must be
+    /// flagged — its GPIO strapping pins were never examined.
+    #[test]
+    fn flags_fallback_routed_esp32() {
+        let lib = ModelLibrary::builtin();
+        let board = ExtractedBoard {
+            name: "t".into(),
+            nets: Vec::new(),
+            components: vec![comp("U1", "ESP32-C3FH4", "Package:QFN-32")],
+        };
+        let report = mcu_coverage_lint(&board, &lib);
+        assert_eq!(
+            report.findings.iter().map(|f| f.refs[0].as_str()).collect::<Vec<_>>(),
+            vec!["U1"],
+            "a fallback-routed ESP32 (strapless model) must be flagged"
+        );
     }
 
     /// AT32UC3 (Atmel AVR32) must NOT be treated as a strap-bearing STM32 clone:

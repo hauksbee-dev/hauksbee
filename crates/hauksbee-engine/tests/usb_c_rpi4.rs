@@ -163,6 +163,13 @@ fn end_to_end_as_designed_schematic() {
     near(e.cc2_v, 0.13377, 0.001, "e2e as-designed/e-marked CC2");
     assert_eq!(e.attach, Attach::AudioAccessory);
     assert!(!e.powers());
+
+    // The `--usb-c` board-level report (the new CLI surface) must call this
+    // SERIOUS and name the RPi 4 fault.
+    let report = hauksbee_engine::usb_c_report(&board).expect("usb-c report");
+    assert_eq!(report.level, hauksbee_engine::UsbcLevel::Serious);
+    assert!(report.is_serious());
+    assert!(report.headline.contains("Raspberry Pi 4"));
 }
 
 #[test]
@@ -189,4 +196,9 @@ fn end_to_end_repaired_schematic() {
     near(e.cc1_v, 0.408, 0.002, "e2e repaired/e-marked CC1");
     assert_eq!(e.attach, Attach::PoweredCableWithSink);
     assert!(e.powers());
+
+    // The `--usb-c` board-level report must clear the repaired board.
+    let report = hauksbee_engine::usb_c_report(&board).expect("usb-c report");
+    assert_eq!(report.level, hauksbee_engine::UsbcLevel::Ok);
+    assert!(!report.is_serious());
 }

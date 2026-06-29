@@ -133,7 +133,7 @@ enum Command {
 // rather than the old parser's silent first-wins behaviour).
 #[command(group(
     clap::ArgGroup::new("report_mode")
-        .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal"])
+        .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal", "usb_c"])
         .multiple(false)
 ))]
 struct RunArgs {
@@ -177,6 +177,12 @@ struct RunArgs {
     /// Print only the MCU internal resource-conflict report and exit.
     #[arg(long, group = "report_mode")]
     resources: bool,
+
+    /// Print the USB-C CC compliance report (the attach a compliant source sees
+    /// from the receptacle's CC termination, and whether it applies VBUS) and
+    /// exit. Flags the Raspberry-Pi-4-class shared-CC-pulldown fault.
+    #[arg(long = "usb-c", group = "report_mode")]
+    usb_c: bool,
 
     /// Run a short headless co-sim and print the steady-state junction-temperature
     /// estimate per dissipating device (Tj = Tambient + P * theta_JA), then exit.
@@ -642,12 +648,9 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if args.resources {
-        let mut report = board.resource_conflicts();
-        // An unmodelled MCU makes the resource-conflict check silently empty;
-        // flag it so a clean result is not mistaken for "checked and conflict-free".
-        report
-            .findings
-            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
+        // resources_lint = resource conflicts + the unchecked-MCU coverage note,
+        // so a clean result is not mistaken for "checked and conflict-free".
+        let report = hauksbee_engine::checks::resources_lint(&board, &lib);
         if args.json {
             let bound = bind_board(&board, &lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
@@ -660,6 +663,34 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         }
         if args.strict && lint_fails(&report) {
             std::process::exit(2);
+        }
+        return Ok(());
+    }
+
+    // --usb-c: run the USB-C CC attach classifier (the RPi 4 re-derivation) and
+    // print the compliance report. The capability existed but was unreachable from
+    // any user-facing surface; this is its CLI front door.
+    if args.usb_c {
+        match hauksbee_engine::usb_c_report(&board) {
+            None => {
+                if args.json {
+                    println!("{{\"check\":\"usb_c_cc\",\"level\":\"info\",\"headline\":\"no USB-C receptacle detected\"}}");
+                } else {
+                    println!("USB-C CC compliance: no USB-C receptacle with CC nets found on this board.");
+                }
+            }
+            Some(report) => {
+                if args.json {
+                    println!("{}", report.to_json());
+                } else if args.plain {
+                    print!("{}", report.render_plain());
+                } else {
+                    print!("{}", report.render());
+                }
+                if args.strict && report.is_serious() {
+                    std::process::exit(2);
+                }
+            }
         }
         return Ok(());
     }

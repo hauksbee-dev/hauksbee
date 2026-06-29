@@ -39,7 +39,16 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
         .extend(straps::strap_lint(board, lib).findings);
     report
         .findings
-        .extend(board.resource_conflicts().findings);
+        .extend(resources_lint(board, lib).findings);
+    report
+}
+
+/// The `--resources` view: the MCU internal resource-conflict check PLUS the
+/// unchecked-strap-bearing-MCU coverage note. A named chokepoint so neither the
+/// `--resources` path nor `engine_lint` can drop the coverage note by forgetting
+/// to append it.
+pub fn resources_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
+    let mut report = board.resource_conflicts();
     report
         .findings
         .extend(mcu_coverage::mcu_coverage_lint(board, lib).findings);
