@@ -588,6 +588,11 @@ pub struct DrcStructured {
     pub violations: Vec<DrcGroup>,
     /// Grouped findings that sit exactly AT the rule (no margin, not below).
     pub at_limit: Vec<DrcGroup>,
+    /// Set when the board's format is newer than hauksbee's validated copper
+    /// extraction (KiCad 10+), making the shorts above unreliable. Surfaced by
+    /// every renderer; CI gates ignore the shorts when it is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_warning: Option<String>,
 }
 
 impl DrcStructured {
@@ -664,7 +669,14 @@ impl DrcStructured {
             shorts,
             violations,
             at_limit,
+            version_warning: report.version_warning.clone(),
         }
+    }
+
+    /// Whether the shorts in this report should drive a pass/fail verdict. They
+    /// must NOT when the board format is unvalidated (the shorts may be phantom).
+    pub fn shorts_are_reliable(&self) -> bool {
+        self.version_warning.is_none()
     }
 
     /// Render the grouped DRC as text (the honest, de-duplicated view). Shorts
@@ -678,6 +690,9 @@ impl DrcStructured {
             "DRC: {} primitive(s), clearance rule {:.3} mm",
             self.primitive_count, self.clearance_rule_mm
         );
+        if let Some(w) = &self.version_warning {
+            let _ = writeln!(s, "\n⚠ UNRELIABLE: {w}");
+        }
         if self.shorts.is_empty() && self.violations.is_empty() && self.at_limit.is_empty() {
             let _ = writeln!(s, "no shorts or clearance violations.");
             return s;

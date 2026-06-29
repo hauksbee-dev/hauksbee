@@ -379,6 +379,48 @@ pub struct DrcReport {
     pub findings: Vec<DrcFinding>,
     /// Number of copper primitives indexed (diagnostics / perf reporting).
     pub primitive_count: usize,
+    /// Set when the board's `.kicad_pcb` format version is newer than the
+    /// newest one hauksbee's copper extraction is validated against (KiCad 10,
+    /// 20260206+). On those, the zone-fill geometry is not yet handled, so a
+    /// ground pour can appear to short every net it surrounds. The shorts below
+    /// are then UNRELIABLE; surfaces print this caveat and CI gates do not fail
+    /// on them. `None` on a validated version (no behaviour change).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_warning: Option<String>,
+}
+
+/// The newest `.kicad_pcb` format version hauksbee's copper extraction is
+/// validated against. KiCad 9 is `20241229`; KiCad 10 (`20260206`) changed both
+/// the net encoding (name-only, no numeric ids) and the baked zone-fill geometry,
+/// neither of which is handled yet — and the kicad-cli ≤ 9 oracle cannot load it
+/// to cross-check. So `>= 20260000` is treated as unvalidated.
+pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20260000;
+
+/// The `(version N)` format token from a `.kicad_pcb`, if present.
+pub fn kicad_pcb_format_version(text: &str) -> Option<u32> {
+    let head: String = text.chars().take(512).collect();
+    let i = head.find("(version")?;
+    head[i + "(version".len()..]
+        .trim_start()
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+}
+
+/// A caveat string when the board's format version is newer than hauksbee's
+/// validated range, else `None`.
+pub fn unvalidated_version_warning(text: &str) -> Option<String> {
+    let v = kicad_pcb_format_version(text)?;
+    if v < FIRST_UNVALIDATED_PCB_VERSION {
+        return None;
+    }
+    Some(format!(
+        "board format {v} is newer than hauksbee's validated copper extraction (KiCad 10 changed \
+         the net encoding and the baked zone-fill geometry). A ground pour may read as shorting \
+         every net it surrounds, so the shorts here are UNRELIABLE — cross-check with KiCad's own \
+         DRC. (kicad-cli \u{2264} 9 cannot load this version to cross-check either.)"
+    ))
 }
 
 impl DrcReport {
@@ -1501,6 +1543,7 @@ fn sweep_buckets(
         clearance_mm: rules.default_clearance_mm,
         findings: Vec::new(),
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
+        version_warning: None,
     };
 
     // De-dup findings on the same net pair + layer + rounded location, so a
@@ -1757,7 +1800,9 @@ pub fn drc_from_text_with_clearance_rules(
     rules: Option<ClearanceRules>,
 ) -> Result<DrcReport, forge_sexpr::ParseError> {
     let doc = forge_sexpr::parse(text)?;
-    Ok(run_drc_with_clearance_rules(&doc, rules))
+    let mut report = run_drc_with_clearance_rules(&doc, rules);
+    report.version_warning = unvalidated_version_warning(text);
+    Ok(report)
 }
 
 /// Convenience: run the geometric DRC on Eagle `.brd` XML text, using the
@@ -3285,5 +3330,43 @@ pub mod altium_drc {
             out.push(Polygon { layer, net, pts });
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod version_warning_tests {
+    use super::*;
+
+    #[test]
+    fn parses_format_version_from_header() {
+        assert_eq!(
+            kicad_pcb_format_version("(kicad_pcb (version 20260206) (generator pcbnew)"),
+            Some(20260206)
+        );
+        assert_eq!(
+            kicad_pcb_format_version("(kicad_pcb\n\t(version 20221018)\n"),
+            Some(20221018)
+        );
+        assert_eq!(kicad_pcb_format_version("(eagle><drawing>"), None);
+    }
+
+    #[test]
+    fn warns_only_on_unvalidated_kicad10_plus() {
+        // KiCad 10 (20260206) → warn.
+        assert!(unvalidated_version_warning("(kicad_pcb (version 20260206)").is_some());
+        // KiCad 9 (20241229) and KiCad 7 (20221018) → no warning.
+        assert!(unvalidated_version_warning("(kicad_pcb (version 20241229)").is_none());
+        assert!(unvalidated_version_warning("(kicad_pcb (version 20221018)").is_none());
+    }
+
+    #[test]
+    fn drc_report_carries_the_warning_for_kicad10() {
+        // A minimal v20260206 board → the report flags the version even with no copper.
+        let r = drc_from_text_with_clearance_rules("(kicad_pcb (version 20260206) (generator x))", None)
+            .expect("parses");
+        assert!(r.version_warning.is_some(), "KiCad 10 board must carry the caveat");
+        let r2 = drc_from_text_with_clearance_rules("(kicad_pcb (version 20221018) (generator x))", None)
+            .expect("parses");
+        assert!(r2.version_warning.is_none(), "validated board must not");
     }
 }
