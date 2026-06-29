@@ -635,21 +635,6 @@ impl ExtractedBoard {
         check_resource_conflicts(self, &tables, &mut report);
         report
     }
-
-    /// References of the components a built-in MCU resource table matches — i.e.
-    /// the parts the resource-conflict check is actually able to examine. The
-    /// resource map (`mcu_resources.toml`) is matched independently of the device
-    /// model DB, so an MCU absent from the model DB can still be resource-mapped
-    /// (e.g. SAMD51). The coverage lint uses this to avoid claiming "resource
-    /// conflicts were not checked" about such a part. Loads the tables once.
-    pub fn resource_checked_refs(&self) -> std::collections::HashSet<String> {
-        let tables = load_resources();
-        self.components
-            .iter()
-            .filter(|c| tables.iter().any(|t| t.matches(c)))
-            .map(|c| c.reference.clone())
-            .collect()
-    }
 }
 
 fn check_resource_conflicts(

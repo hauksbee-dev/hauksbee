@@ -15,9 +15,10 @@
 //! - [`straps`]: the boot strapping-pin lint. It reads each MCU's strap table
 //!   from the model db and flags a strap net that cannot hold the level the part
 //!   needs at reset (a free-running clock on it, or a pull to the wrong rail).
-//! - [`mcu_coverage`]: flags an MCU that is not in the model DB, so the strap
-//!   and resource-conflict checks above could not run on it — keeping a "Looks
-//!   healthy" verdict from being printed over an MCU the tool never examined.
+//! - [`mcu_coverage`]: flags a recognised MCU that has no authored device model,
+//!   so the strap and resource-conflict checks above could not run on it —
+//!   keeping a "Looks healthy" verdict from being printed over a recognised MCU
+//!   the tool never modelled.
 
 pub mod mcu_coverage;
 pub mod straps;

@@ -1,23 +1,23 @@
-//! MCU coverage lint: flag a component that looks like an MCU but has no model.
+//! Boot-strap coverage lint: flag a strap-bearing MCU whose straps were never
+//! checked.
 //!
-//! hauksbee's two *differentiated* lint checks — the boot strap-pin lint
-//! ([`straps`](super::straps)) and the internal resource-conflict check — both
-//! key off the per-part device model. When the MCU is not in the model DB it
-//! binds open and BOTH checks iterate to zero findings. In the report that is
-//! byte-identical to a board where the checks ran and found nothing, so a bare
-//! "Looks healthy" verdict ends up claiming coverage that never happened. On a
-//! real STM32WL55 board (phancak/LoRa-Board) the BOOT0 strap — a hardware-only
-//! boot-mode latch the firmware cannot override — was silently unchecked while
-//! `--lint` printed "Looks healthy".
+//! hauksbee's boot strap-pin lint ([`straps`](super::straps)) keys off the
+//! per-part device model's strap table. When a strap-bearing MCU (STM32 / ESP32
+//! class) has no such table — it is absent from the model DB, or resolved only
+//! to a strapless engine fallback — the strap lint iterates to zero findings. In
+//! the report that is byte-identical to a board where it ran and found nothing,
+//! so a bare "Looks healthy" verdict ends up claiming coverage that never
+//! happened. On a real STM32WL55 board (phancak/LoRa-Board) the BOOT0 strap — a
+//! hardware-only boot-mode latch the firmware cannot override — was silently
+//! unchecked while `--lint` printed "Looks healthy".
 //!
 //! This check closes that gap. It emits one informational
-//! [`LintCheck::UncheckedMcu`] finding per component that *looks like an MCU*
-//! (active-IC reference designator + a recognised MCU part-number family, or
-//! KiCad's `MCU_*` symbol-library convention) yet resolved to no model. The
-//! finding names the part and exactly which checks were skipped, so a "healthy"
-//! verdict is never printed over an MCU the tool never looked at. It is
-//! `Severity::Low`: an unmodelled part is a coverage gap, not a board defect, so
-//! it informs without failing a `--strict` gate.
+//! [`LintCheck::UncheckedMcu`] finding per strap-bearing MCU whose strap table
+//! was not examined, so a "healthy" verdict is not printed over a recognised
+//! boot-strap surface the tool never looked at. (It is a heuristic recogniser,
+//! so a part it does not recognise can still slip through; it does not claim to
+//! catch every unmodelled chip.) It is `Severity::Low`: a coverage gap, not a
+//! board defect, so it informs without failing a `--strict` gate.
 
 use hauksbee_extract::{Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
 use hauksbee_models::ModelLibrary;
@@ -58,19 +58,53 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
     "RA2", "RA4", "RA6", "FE310", "GD32VF", "NUC1", "MM32", "HT32", "HC32",
 ];
 
-/// Does this reference designator name an active IC (`U*` / `IC*`)? Guards
-/// against a connector or test point whose value happens to mention a chip.
+/// Does this reference designator name an active IC (`U*` / `IC*` / `MCU*`)?
+/// Guards against a connector or test point whose value happens to mention a
+/// chip. The set mirrors the binder's own MCU-candidate refdes prefixes so a
+/// part the binder treats as an MCU is not invisible to this check.
 fn is_active_ic_refdes(reference: &str) -> bool {
     let r = reference.to_ascii_uppercase();
     // Strip to the leading alphabetic prefix.
     let prefix: String = r.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-    prefix == "U" || prefix == "IC"
+    prefix == "U" || prefix == "IC" || prefix == "MCU"
 }
+
+/// Families with a boot-mode pin sampled by hardware at reset — the surface the
+/// strap lint exists for. STM32 and its pin-compatible clones latch BOOT0; the
+/// ESP32 family latches its strapping pins (GPIO0/2/12/15). These are the ONLY
+/// families for which "no strap table examined" is a real coverage gap: AVR
+/// (fuses), PIC, MSP430, SAMD, nRF and friends have no reset-sampled boot strap,
+/// so flagging them would be noise. A strict subset of [`MCU_FAMILY_PREFIXES`].
+const STRAP_BEARING_PREFIXES: &[&str] = &[
+    "STM32", "GD32", "APM32", "AT32", "CKS32", "HK32", "PY32", "MM32", // STM32 + BOOT0 clones
+    "ESP32", "ESP8266", "ESP8285", // Espressif strapping pins
+];
 
 /// True when `s`, uppercased and leading-trimmed, starts with a known MCU family.
 fn value_opens_with_mcu_family(s: &str) -> bool {
     let up = s.trim().to_ascii_uppercase();
     MCU_FAMILY_PREFIXES.iter().any(|p| up.starts_with(p))
+}
+
+/// True when this component identifies as a strap-bearing family (BOOT0 / ESP32
+/// strapping). Checks the value and MPN by prefix and the KiCad symbol library
+/// by substring (`MCU_ST_STM32WL`, `RF_Module:ESP32-WROOM`).
+fn is_strap_bearing_family(comp: &Component) -> bool {
+    let up = comp.value.trim().to_ascii_uppercase();
+    if STRAP_BEARING_PREFIXES.iter().any(|p| up.starts_with(p)) {
+        return true;
+    }
+    let lib = comp.lib_id.to_ascii_uppercase();
+    if STRAP_BEARING_PREFIXES.iter().any(|p| lib.contains(p)) {
+        return true;
+    }
+    comp.properties.iter().any(|(k, v)| {
+        let kl = k.to_ascii_lowercase();
+        (kl.contains("mpn") || kl.contains("part"))
+            && STRAP_BEARING_PREFIXES
+                .iter()
+                .any(|p| v.trim().to_ascii_uppercase().starts_with(p))
+    })
 }
 
 /// Heuristic: does this component look like an MCU? Conservative by design —
@@ -101,48 +135,56 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
     })
 }
 
-/// Emit one informational finding per probable-MCU component that bound open (no
-/// device model), so the model-driven checks' silence is never mistaken for a
+/// Emit one informational finding per **strap-bearing** MCU whose boot-strap
+/// pins were never examined, so the strap lint's silence is never mistaken for a
 /// clean bill of health.
 ///
-/// Scope is deliberately the *fully unmodelled* MCU — the airtight case where the
-/// part isn't in the model DB at all, so `--report` itself calls it "active IC
-/// left OPEN; NOT trustworthy". The boot strap-pin lint, which needs the model's
-/// strap table, definitely did not examine it. The resource-conflict check is
-/// matched independently from `mcu_resources.toml`, so it *may* still have run
-/// (e.g. an unmodelled SAMD51 is resource-mapped); the message names the resource
-/// surface only when that check truly did not cover the part. A *modelled* MCU
-/// that merely lacks a resource map is not flagged: hauksbee ships resource maps
-/// for only a handful of MCUs by design, so treating their absence as a coverage
-/// gap would fire on nearly every board and breach the zero-false-positive bar.
+/// Two predicates, both required:
+///
+/// 1. The part is a strap-bearing MCU ([`is_strap_bearing_family`]): STM32 + its
+///    BOOT0 clones, or the ESP32 family. These are the only families with a
+///    reset-sampled boot strap, so they are the only ones for which "no strap
+///    table" is a real gap. AVR (fuses), PIC, MSP430, SAMD, nRF, etc. are not
+///    flagged — they have no boot strap to check.
+///
+/// 2. Its strap table was not examined: the part resolved to no model, OR to a
+///    model with an empty strap table. The load-bearing subtlety is that "has a
+///    model" is NOT "the strap check ran": the binder's engine fallback router
+///    synthesises a model for STM32F1/F4 and ESP32 parts absent from the device
+///    DB, with a backend and pin roles but an **empty strap table**. `strap_lint`
+///    skips on `straps.is_empty()`, so an STM32F407's BOOT0 is never examined.
+///    Keying off `straps.is_empty()` (rather than `model.is_some()`) catches that
+///    case; a DB-authored part with a populated strap table (STM32F103C8) is not
+///    flagged because its straps genuinely were checked.
+///
+/// A mis-strapped boot pin is a reset-time hardware latch the firmware cannot
+/// override, so a false "Looks healthy" over an unchecked one is the worst kind
+/// of false comfort. `Severity::Low`: a coverage gap, not a board defect.
 pub fn mcu_coverage_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
-    let resource_checked = board.resource_checked_refs();
     for comp in &board.components {
-        if !is_probable_mcu(comp) {
+        if !is_probable_mcu(comp) || !is_strap_bearing_family(comp) {
             continue;
         }
-        if resolve(lib, comp).model.is_some() {
-            continue; // modelled → the strap lint had a table and ran
+        let straps_examined = resolve(lib, comp)
+            .model
+            .as_ref()
+            .is_some_and(|m| !m.straps.is_empty());
+        if straps_examined {
+            continue; // strap lint had a populated table and ran
         }
         let label = if comp.value.trim().is_empty() || comp.value.trim() == "~" {
             comp.reference.clone()
         } else {
             format!("{} ({})", comp.reference, comp.value.trim())
         };
-        // The strap check always misses an unmodelled MCU (no strap table). The
-        // resource check is independent, so only name it when it really skipped.
-        let skipped = if resource_checked.contains(&comp.reference) {
-            "its boot strap-pins (e.g. BOOT0/NRST) were NOT checked".to_string()
-        } else {
-            "its boot strap-pins (e.g. BOOT0/NRST) and internal resource conflicts were NOT checked"
-                .to_string()
-        };
         report.findings.push(LintFinding {
             check: LintCheck::UncheckedMcu,
             severity: Severity::Low,
             message: format!(
-                "{label} looks like an MCU but is not in the model database, so it bound open: {skipped}"
+                "{label} looks like a strap-bearing MCU (STM32/ESP32 class) but is not in the model \
+                 database, so its boot strap-pins (e.g. BOOT0 / ESP32 strapping pins) were NOT \
+                 checked — a mis-strapped boot pin is a reset-time latch firmware cannot override"
             ),
             refs: vec![comp.reference.clone()],
             nets: Vec::new(),
@@ -251,35 +293,52 @@ mod tests {
         assert_eq!(f.severity, Severity::Low);
         assert_eq!(f.refs, vec!["U4".to_string()]);
         assert!(f.message.contains("STM32WL55CCU6"));
-        // STM32WL55 has no resource table, so the note must name the resource
-        // surface as also unchecked.
-        assert!(
-            f.message.contains("internal resource conflicts"),
-            "unmapped MCU note must say resources were not checked: {}",
-            f.message
-        );
+        assert!(f.message.contains("boot strap-pins"));
     }
 
-    /// The message must NOT claim the resource-conflict check was skipped when it
-    /// actually ran. An unmodelled ATSAMD51 (absent from the device-model DB) is
-    /// still matched by the independent resource map, so its note names ONLY the
-    /// strap surface — this is the factual-accuracy guard the first cut failed.
+    /// The blocker case: a part absent from the device DB but routed to a strapless
+    /// engine fallback (STM32F407 → `route_mcu_family`) must STILL be flagged. The
+    /// fallback gives it a model with no strap table, so `strap_lint` skips its
+    /// BOOT0 silently; gating on `model.is_some()` would miss it and reprint "Looks
+    /// healthy" over an unchecked boot-mode latch — the exact bug this check exists
+    /// to prevent. A DB-authored STM32F103C8 (real strap table) must NOT be flagged.
     #[test]
-    fn resource_mapped_unmodelled_mcu_does_not_claim_resources_skipped() {
+    fn flags_fallback_routed_mcu_but_not_a_db_authored_one() {
         let lib = ModelLibrary::builtin();
-        // 40 pins clears the samd51j_tqfp64 table's min_pins guard.
         let board = ExtractedBoard {
             name: "t".into(),
             nets: Vec::new(),
-            components: vec![comp_n("U1", "ATSAMD51J20A-AU", "Package_QFP:LQFP-64", 40)],
+            components: vec![
+                comp("U1", "STM32F407VGT6", "Package_QFP:LQFP-100"), // DB-miss → fallback
+                comp("U2", "STM32F103C8T6", "Package_QFP:LQFP-48"),  // DB-authored, has straps
+            ],
         };
         let report = mcu_coverage_lint(&board, &lib);
-        assert_eq!(report.findings.len(), 1);
-        let msg = &report.findings[0].message;
-        assert!(msg.contains("boot strap-pins"), "names the real gap: {msg}");
+        let refs: Vec<&str> = report.findings.iter().map(|f| f.refs[0].as_str()).collect();
+        assert_eq!(
+            refs,
+            vec!["U1"],
+            "fallback-routed STM32F407 must be flagged; DB-authored STM32F103C8 must not"
+        );
+    }
+
+    /// A non-strap-bearing MCU must NOT be flagged, even when unmodelled. SAMD
+    /// (like AVR/PIC/nRF) has no reset-sampled boot strap, so "no strap table" is
+    /// not a coverage gap — flagging it would be the noise this check avoids.
+    #[test]
+    fn non_strap_bearing_unmodelled_mcu_is_not_flagged() {
+        let lib = ModelLibrary::builtin();
+        let board = ExtractedBoard {
+            name: "t".into(),
+            nets: Vec::new(),
+            components: vec![
+                comp_n("U1", "ATSAMD51J20A-AU", "Package_QFP:LQFP-64", 40), // not in DB, no boot strap
+                comp("U2", "ATmega2560-16AU", "Package_QFP:TQFP-100"),      // AVR, fuses not straps
+            ],
+        };
         assert!(
-            !msg.contains("internal resource conflicts"),
-            "must not claim the resource check was skipped (it ran via the resource map): {msg}"
+            mcu_coverage_lint(&board, &lib).findings.is_empty(),
+            "non-strap-bearing MCUs (SAMD, AVR) must not be flagged"
         );
     }
 }

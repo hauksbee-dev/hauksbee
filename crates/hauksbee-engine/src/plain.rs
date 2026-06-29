@@ -387,8 +387,8 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::UncheckedMcu => (
                 f.message.clone(),
-                "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so an MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps (or the other surfaces named above) were verified.".to_string(),
-                "Check the boot/strap pins (e.g. BOOT0, NRST) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
+                "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so a strap-bearing MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps were verified — and a mis-strapped boot pin is latched by hardware at reset, before any firmware runs.".to_string(),
+                "Check the boot/strap pins (e.g. BOOT0, or the ESP32 strapping pins) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
             ),
         };
         out.push(level, what, why, fix);
