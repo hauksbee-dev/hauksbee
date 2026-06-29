@@ -387,8 +387,8 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::UncheckedMcu => (
                 f.message.clone(),
-                "The boot strap-pin check (what level pins like BOOT0/NRST sit at when the chip resets) and the internal resource-conflict check only run on MCUs hauksbee has a model for. This part looks like an MCU but is not in the model database, so it bound open and both checks skipped it. A clean lint result therefore does NOT mean its boot straps or pin assignments were verified.".to_string(),
-                "Check the boot/strap pins (e.g. BOOT0, NRST) and the pin-mux assignments by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
+                "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so an MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps (or the other surfaces named above) were verified.".to_string(),
+                "Check the boot/strap pins (e.g. BOOT0, NRST) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
             ),
         };
         out.push(level, what, why, fix);
@@ -768,6 +768,7 @@ mod tests {
             (LintCheck::DesignatorFootprintMismatch, Severity::Medium),
             (LintCheck::ValuePackageSanity, Severity::Medium),
             (LintCheck::PlaceholderValue, Severity::Medium),
+            (LintCheck::UncheckedMcu, Severity::Low),
         ];
         for (check, sev) in checks {
             let report = NetLintReport {

@@ -475,15 +475,7 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             )?
         };
         let drc_structured = DrcStructured::from_report(&drc);
-        let mut lint = board.net_lint();
-        lint.findings
-            .extend(hauksbee_engine::checks::straps::strap_lint(&board, &lib).findings);
-        lint.findings.extend(board.resource_conflicts().findings);
-        // Coverage honesty: if an MCU isn't modelled, the strap + resource checks
-        // above silently found nothing. Say so, so "Looks healthy" is never
-        // printed over an MCU the tool never examined.
-        lint.findings
-            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
+        let lint = hauksbee_engine::checks::engine_lint(&board, &lib);
         let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
         let si = board.si_checks(geo_text);
 
@@ -631,15 +623,7 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
     if args.lint {
-        let mut report = board.net_lint();
-        let straps = hauksbee_engine::checks::straps::strap_lint(&board, &lib);
-        report.findings.extend(straps.findings);
-        report.findings.extend(board.resource_conflicts().findings);
-        // Coverage honesty: an unmodelled MCU makes both checks above silently
-        // empty; flag it so "Looks healthy" never hides an unchecked MCU.
-        report
-            .findings
-            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
+        let report = hauksbee_engine::checks::engine_lint(&board, &lib);
         if args.json {
             let bound = bind_board(&board, &lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
@@ -742,12 +726,7 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             )?
         };
         jr.drc = Some(DrcStructured::from_report(&drc));
-        let mut lint = board.net_lint();
-        lint.findings
-            .extend(hauksbee_engine::checks::straps::strap_lint(&board, &lib).findings);
-        lint.findings.extend(board.resource_conflicts().findings);
-        lint.findings
-            .extend(hauksbee_engine::checks::mcu_coverage::mcu_coverage_lint(&board, &lib).findings);
+        let lint = hauksbee_engine::checks::engine_lint(&board, &lib);
         let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
         let si = board.si_checks(geo_text);
         let mut findings = lint_findings_json(&lint);
