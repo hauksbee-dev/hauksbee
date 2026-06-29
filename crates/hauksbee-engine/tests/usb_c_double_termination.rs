@@ -177,6 +177,21 @@ fn lily58_dual_receptacle_both_halves_terminated() {
         "both Lily58 halves must be terminated"
     );
     assert!(!audit.has_double_termination(), "Lily58 is clean");
+
+    // The CLASSIFIER path (extract_sink_termination → usb_c_report) must agree
+    // with the audit: a J6 Rd that returns to GNDA (a secondary analog ground)
+    // must still be credited, so the board-level USB-C verdict is OK, not a false
+    // "no discrete Rd → INFO". (The audit fix above only fixed the audit; the
+    // classifier kept the single-GND lookup until this was caught via `--usb-c`.)
+    let report = hauksbee_engine::usb_c_report(&board).expect("usb-c report");
+    assert_eq!(
+        report.level,
+        hauksbee_engine::UsbcLevel::Ok,
+        "Lily58 is a correctly-terminated sink; verdict must be OK, not INFO. \
+         headline: {}",
+        report.headline
+    );
+    assert!(report.has_discrete_rd, "the GNDA-returned Rd must be credited");
 }
 
 #[test]
