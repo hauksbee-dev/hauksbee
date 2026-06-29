@@ -46,8 +46,8 @@ pub use boardcode::{
     program_from_extracted, render_check_report, CheckOptions, CheckReport,
 };
 pub use checks::usb_c::{
-    classify_attach, classify_board, extract_sink_termination, Attach, Cable, CcResult,
-    CcThresholds, PinState, Rp, SinkTermination,
+    classify_attach, classify_board, extract_sink_termination, usb_c_report, Attach, Cable,
+    CcResult, CcThresholds, PinState, Rp, SinkTermination, UsbcLevel, UsbcReport,
 };
 pub use decoupling::{apply_parasitics, CapClass, EsrEsl};
 pub use engine::HauksbeeEngine;

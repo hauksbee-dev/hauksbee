@@ -623,7 +623,7 @@ mod tests {
         let a = c.node("A");
         let w = c.node("W");
         let b = c.node("B");
-        let mut pot = Potentiometer::new(&mut c, "POT1", a, w, b, 10_000.0, 0.25);
+        let pot = Potentiometer::new(&mut c, "POT1", a, w, b, 10_000.0, 0.25);
         pot.apply(&mut c);
         let r_aw = if let Device::Resistor { ohms, .. } = &c.devices[pot.r_aw.0 as usize] {
             *ohms

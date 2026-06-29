@@ -928,6 +928,225 @@ pub fn classify_board(board: &ExtractedBoard, rp: Rp, cable: Cable) -> Option<Cc
     Some(classify_attach(term, rp, cable))
 }
 
+/// Severity of a board-level USB-C CC verdict ([`UsbcReport`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbcLevel {
+    /// A compliant source applies VBUS — the receptacle reads as a sink.
+    Ok,
+    /// No fault asserted, but the CC story can't be fully judged from copper
+    /// (e.g. termination is provided inside a PD-controller IC hauksbee can't see).
+    Info,
+    /// A definite misconfiguration: a compliant source withholds VBUS.
+    Serious,
+}
+
+/// A board-level USB-C CC compliance verdict for `hauksbee run --usb-c`. Built
+/// from the primary receptacle's termination classified against a default-Rp
+/// source through a passive cable — the standard "plug it into a charger" case.
+#[derive(Debug, Clone)]
+pub struct UsbcReport {
+    pub receptacles: Vec<ReceptacleCc>,
+    pub shared_net: bool,
+    pub cc1_rd_ohms: Option<f64>,
+    pub cc2_rd_ohms: Option<f64>,
+    pub attach: Attach,
+    pub powers_vbus: bool,
+    pub has_discrete_rd: bool,
+    pub level: UsbcLevel,
+    pub headline: String,
+}
+
+/// Run the USB-C CC compliance audit + attach classification for a board.
+/// `None` when the board has no identifiable USB-C receptacle CC nets.
+///
+/// The board is classified against a default-Rp source through BOTH a passive
+/// cable AND an e-marked (electronically-marked) cable, because the canonical
+/// failure — the RPi 4 rev-1.0/1.1 shared-CC-pulldown — only manifests with an
+/// e-marked cable: the e-marker's Ra drags the shared node into the Ra band so a
+/// compliant source declares an Audio Adapter Accessory and withholds VBUS, while
+/// a passive cable still reads the same node as a sink. (This is the real,
+/// historically-accurate behaviour: the RPi 4 failed to charge from USB-C-to-C
+/// cables but worked from A-to-C.) `attach`/`powers_vbus` report the e-marked
+/// case, the stricter and more modern one.
+///
+/// The verdict is conservative about false positives: a receptacle with **no
+/// discrete Rd** is `Info`, never a fault, because the Rd may live inside a
+/// PD-controller / sink IC (STUSB4500, FUSB302, CYPD…) whose internal termination
+/// hauksbee cannot see from copper. `Serious` is reserved for a board that
+/// clearly intends to be a self-terminated sink (a discrete Rd is present) yet a
+/// compliant cable still leaves it without VBUS.
+pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
+    let term = extract_sink_termination(board)?;
+    let audit = audit_cc_termination(board);
+    let has_discrete_rd = term.cc1_rd_ohms.is_some() || term.cc2_rd_ohms.is_some();
+
+    let passive = classify_attach(term, Rp::Default, Cable::Passive).attach;
+    let emarked = classify_attach(term, Rp::Default, Cable::emarked()).attach;
+    let (level, headline) = usbc_verdict(term.shared_net, has_discrete_rd, passive, emarked);
+
+    Some(UsbcReport {
+        receptacles: audit.map(|a| a.receptacles).unwrap_or_default(),
+        shared_net: term.shared_net,
+        cc1_rd_ohms: term.cc1_rd_ohms,
+        cc2_rd_ohms: term.cc2_rd_ohms,
+        attach: emarked,             // report the stricter, modern-cable case
+        powers_vbus: emarked.powers(),
+        has_discrete_rd,
+        level,
+        headline,
+    })
+}
+
+/// The verdict decision, factored out as a pure function over the two cable
+/// classifications so it can be unit-tested without synthesising a board.
+fn usbc_verdict(
+    shared_net: bool,
+    has_discrete_rd: bool,
+    passive: Attach,
+    emarked: Attach,
+) -> (UsbcLevel, String) {
+    let powers_passive = passive.powers();
+    let powers_emarked = emarked.powers();
+    if powers_passive && powers_emarked {
+        (
+            UsbcLevel::Ok,
+            format!(
+                "A compliant source sees a sink ({}) and applies VBUS, with both passive and \
+                 e-marked cables.",
+                emarked.as_str()
+            ),
+        )
+    } else if !has_discrete_rd {
+        (
+            UsbcLevel::Info,
+            "No discrete CC pulldown (Rd) is visible on the receptacle. If a USB-C PD controller / \
+             sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct — \
+             hauksbee cannot see termination inside an IC, so it cannot confirm it from copper."
+                .to_string(),
+        )
+    } else if shared_net && powers_passive && !powers_emarked {
+        (
+            UsbcLevel::Serious,
+            format!(
+                "CC1 and CC2 are the SAME net, so a single shared pulldown terminates both. With an \
+                 e-marked (USB-C-to-C) cable a compliant source classifies the port as {} and \
+                 withholds VBUS — the board will not charge from a modern cable (it would from a \
+                 passive A-to-C). This is the Raspberry Pi 4 rev-1.0/1.1 fault.",
+                emarked.as_str()
+            ),
+        )
+    } else {
+        (
+            UsbcLevel::Serious,
+            format!(
+                "The board carries a discrete CC pulldown (so it intends to be a self-terminated \
+                 sink) yet a compliant source classifies it as {} (e-marked cable) / {} (passive) \
+                 and withholds VBUS.",
+                emarked.as_str(),
+                passive.as_str()
+            ),
+        )
+    }
+}
+
+fn fmt_rd(r: Option<f64>) -> String {
+    match r {
+        Some(ohms) if ohms >= 1000.0 => format!("{:.1} kΩ", ohms / 1000.0),
+        Some(ohms) => format!("{ohms:.0} Ω"),
+        None => "none".to_string(),
+    }
+}
+
+impl UsbcReport {
+    /// True when a CI gate (`--strict`) should fail on this verdict.
+    pub fn is_serious(&self) -> bool {
+        self.level == UsbcLevel::Serious
+    }
+
+    /// One-line verdict tag.
+    fn tag(&self) -> &'static str {
+        match self.level {
+            UsbcLevel::Ok => "OK",
+            UsbcLevel::Info => "INFO",
+            UsbcLevel::Serious => "SERIOUS",
+        }
+    }
+
+    /// Per-receptacle Rd detail lines, shared by the text and plain renderers.
+    fn detail(&self) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        for r in &self.receptacles {
+            let _ = writeln!(
+                s,
+                "  {}: CC1 Rd={}, CC2 Rd={}{}",
+                if r.reference.is_empty() { "?" } else { &r.reference },
+                fmt_rd(r.cc1.effective_rd_ohms()),
+                fmt_rd(r.cc2.effective_rd_ohms()),
+                if r.has_double_termination() {
+                    "  [double-terminated]"
+                } else {
+                    ""
+                },
+            );
+        }
+        if self.shared_net {
+            let _ = writeln!(s, "  note: CC1 and CC2 resolve to a single shared net.");
+        }
+        s
+    }
+
+    /// The engineer-facing text report.
+    pub fn render(&self) -> String {
+        format!(
+            "USB-C CC compliance: [{}] {}\n  attach (default Rp, e-marked cable): {}; VBUS applied: {}\n{}",
+            self.tag(),
+            self.headline,
+            self.attach.as_str(),
+            if self.powers_vbus { "yes" } else { "no" },
+            self.detail()
+        )
+    }
+
+    /// The plain-language report (what / why / what-to-do for the serious case).
+    pub fn render_plain(&self) -> String {
+        let verdict = match self.level {
+            UsbcLevel::Ok => "USB-C looks healthy: a charger will power this board.",
+            UsbcLevel::Info => "USB-C: nothing wrong found, but one thing is worth knowing (below).",
+            UsbcLevel::Serious => "USB-C PROBLEM: a standards-compliant charger will NOT power this board.",
+        };
+        let mut s = format!("{verdict}\n\n{}\n\n{}", self.headline, self.detail());
+        if self.level == UsbcLevel::Serious {
+            s.push_str(
+                "\nWhat to do: give CC1 and CC2 each their own 5.1 kΩ pulldown to GND (never share \
+                 one, never tie them together), so a source sees a sink and applies VBUS.\n",
+            );
+        }
+        s
+    }
+
+    /// Machine-readable JSON (hand-built; the CC types are not `Serialize`).
+    pub fn to_json(&self) -> String {
+        let rd = |r: Option<f64>| match r {
+            Some(v) => format!("{v:.1}"),
+            None => "null".to_string(),
+        };
+        format!(
+            "{{\"check\":\"usb_c_cc\",\"level\":\"{}\",\"attach\":\"{}\",\"powers_vbus\":{},\
+             \"shared_net\":{},\"has_discrete_rd\":{},\"cc1_rd_ohms\":{},\"cc2_rd_ohms\":{},\
+             \"headline\":{}}}",
+            self.tag().to_ascii_lowercase(),
+            self.attach.as_str(),
+            self.powers_vbus,
+            self.shared_net,
+            self.has_discrete_rd,
+            rd(self.cc1_rd_ohms),
+            rd(self.cc2_rd_ohms),
+            serde_json::to_string(&self.headline).unwrap_or_else(|_| "\"\"".to_string()),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1126,6 +1345,27 @@ mod tests {
         ] {
             assert!(!is_ground_name(n), "{n} must not be treated as ground");
         }
+    }
+
+    #[test]
+    fn usbc_verdict_maps_the_canonical_cases() {
+        use Attach::*;
+        // RPi 4 as-designed: passive cable powers (SinkAttached), e-marked does
+        // not (AudioAccessory) → Serious, and it must name the RPi 4 fault.
+        let (lvl, msg) = usbc_verdict(true, true, SinkAttached, AudioAccessory);
+        assert_eq!(lvl, UsbcLevel::Serious);
+        assert!(msg.contains("Raspberry Pi 4"), "{msg}");
+        // Correctly-terminated sink: both cables power → Ok.
+        let (lvl, _) = usbc_verdict(false, true, SinkAttached, PoweredCableWithSink);
+        assert_eq!(lvl, UsbcLevel::Ok);
+        // Controller-provided termination (no discrete Rd): Info, never Serious.
+        let (lvl, _) = usbc_verdict(false, false, Nothing, Nothing);
+        assert_eq!(lvl, UsbcLevel::Info);
+        // Discrete Rd present but neither cable powers (genuinely mis-terminated):
+        // Serious, but NOT attributed to the RPi 4 shared-net fault.
+        let (lvl, msg) = usbc_verdict(false, true, Nothing, Nothing);
+        assert_eq!(lvl, UsbcLevel::Serious);
+        assert!(!msg.contains("Raspberry Pi 4"), "{msg}");
     }
 
     #[test]
