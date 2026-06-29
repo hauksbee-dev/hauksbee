@@ -86,14 +86,14 @@ pub fn build_state(
     let drc = ExtractedBoard::drc(board_text).unwrap_or_default();
     let drc_structured = DrcStructured::from_report(&drc);
 
-    // SI = the signal-integrity static checks (with geometry text). lint = net
-    // lint + strap lint + MCU resource conflicts, the exact --lint bundle.
+    // SI = the signal-integrity static checks (with geometry text). lint = the
+    // exact `--lint` bundle via the single `engine_lint` chokepoint (net lint +
+    // strap lint + MCU resource conflicts + the unchecked-strap-bearing-MCU
+    // coverage note), so the TUI never prints a clean verdict over a strap-bearing
+    // MCU whose BOOT0 was never examined.
     let si = board.si_checks(Some(board_text));
     let si_json = si_findings_json(&si);
-    let mut lint = board.net_lint();
-    let straps = crate::checks::straps::strap_lint(&board, &lib);
-    lint.findings.extend(straps.findings);
-    lint.findings.extend(board.resource_conflicts().findings);
+    let lint = crate::checks::engine_lint(&board, &lib);
     let lint_json = lint_findings_json(&lint);
 
     // Per-net DC voltages: build a transient engine and step 0 to get the DC
