@@ -1778,7 +1778,9 @@ fn sweep_buckets(
 /// rule (or the board's own rule when present).
 pub fn drc_from_text(text: &str) -> Result<DrcReport, forge_sexpr::ParseError> {
     let doc = forge_sexpr::parse(text)?;
-    Ok(run_drc(&doc, None))
+    let mut report = run_drc(&doc, None);
+    report.version_warning = unvalidated_version_warning(text);
+    Ok(report)
 }
 
 /// Like [`drc_from_text`] but with an explicit clearance rule (mm). KiCad 10

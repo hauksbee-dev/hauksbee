@@ -286,3 +286,68 @@ fn plain_and_strict_compose() {
         "plain text still printed"
     );
 }
+
+/// A board with two crossing F.Cu tracks on different nets (a real geometric
+/// short), written at the given `.kicad_pcb` format version.
+fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "hauksbee-vergate-{}-{}-{}.kicad_pcb",
+        std::process::id(),
+        version,
+        tag
+    ));
+    std::fs::write(
+        &path,
+        format!(
+            "(kicad_pcb (version {version}) (generator pcbnew)\n\
+             \x20 (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))\n\
+             \x20 (net 0 \"\")\n\
+             \x20 (net 1 \"GND\")\n\
+             \x20 (net 2 \"VCC\")\n\
+             \x20 (segment (start 0 5) (end 10 5) (width 1.0) (layer \"F.Cu\") (net 1))\n\
+             \x20 (segment (start 5 0) (end 5 10) (width 1.0) (layer \"F.Cu\") (net 2))\n)"
+        ),
+    )
+    .expect("write temp board");
+    path
+}
+
+/// The safety-critical CI-gating contract for unvalidated board formats: a real
+/// geometric short on a KiCad-10 (20260206) board must NOT fail `--strict` (its
+/// shorts may be phantom and can't be cross-checked), while the identical short
+/// on a validated KiCad-7 (20221018) board MUST fail `--strict`. Same geometry,
+/// only the format version differs — so this pins the version gate, not the DRC.
+#[test]
+fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
+    // Validated (KiCad 7): the short gates the build.
+    let validated = crossing_short_board(20221018, "validated");
+    let out = run(&["run", validated.to_str().unwrap(), "--drc", "--strict"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a real short on a validated board must fail --strict"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).to_lowercase().contains("short"));
+
+    // Unvalidated (KiCad 10): the same short does NOT gate (caveat printed).
+    let unvalidated = crossing_short_board(20260206, "unvalidated");
+    let out = run(&["run", unvalidated.to_str().unwrap(), "--drc", "--strict"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a possibly-phantom short on an unvalidated KiCad-10 board must NOT fail --strict"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("UNRELIABLE"),
+        "the unreliable-version caveat must be printed: {stdout}"
+    );
+
+    // And in --check the same divergence holds (the aggregate gate).
+    let out = run(&["run", unvalidated.to_str().unwrap(), "--check", "--strict"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "--check --strict must not fail on unvalidated-version shorts"
+    );
+}

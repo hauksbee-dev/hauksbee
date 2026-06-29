@@ -703,9 +703,17 @@ impl DrcStructured {
         if !self.shorts.is_empty() {
             let _ = writeln!(s, "\nSHORTS ({}):", self.shorts.len());
             for sh in &self.shorts {
+                // Honor the (possibly downgraded) severity from the structured
+                // form: on an unvalidated KiCad-10 board the shorts read "NOTE",
+                // not "SERIOUS", consistent with --plain / --json / the TUI.
+                let tag = if sh.severity == "serious" {
+                    "SERIOUS"
+                } else {
+                    "NOTE"
+                };
                 let _ = writeln!(
                     s,
-                    "  [SERIOUS] {} touches {} on {} (gap {:.4} mm) at x={:.1}, y={:.1}",
+                    "  [{tag}] {} touches {} on {} (gap {:.4} mm) at x={:.1}, y={:.1}",
                     sh.net_a, sh.net_b, sh.layer, sh.gap_mm, sh.loc_mm[0], sh.loc_mm[1]
                 );
             }
