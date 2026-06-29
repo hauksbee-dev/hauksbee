@@ -402,13 +402,20 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 /// of every resistor that bridges it to GND. Detects the shared-net defect when
 /// CC1 and CC2 resolve to one net.
 ///
+/// Rd is credited when it returns to ANY recognised ground (the GND family:
+/// GND/GNDA/AGND/DGND/PGND/…), the same ground set `audit_cc_termination` uses —
+/// not only the single net literally named "GND". A board whose CC pulldown
+/// returns to a secondary analog ground (e.g. the Lily58 keyboard's GNDA) would
+/// otherwise be mis-read as un-terminated, contradicting the audit and yielding a
+/// false "no VBUS" verdict.
+///
 /// Returns `None` if no receptacle with identifiable CC pins is found.
 pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTermination> {
-    let gnd_net = gnd_net_id(board);
+    let grounds = ground_net_ids(board);
     let (cc1_net, cc2_net) = receptacle_cc_nets(board)?;
     let shared_net = cc1_net == cc2_net;
 
-    let rd = |cc_net: i64| -> Option<f64> { net_resistance_to(board, cc_net, gnd_net) };
+    let rd = |cc_net: i64| -> Option<f64> { net_resistance_to_grounds(board, cc_net, &grounds) };
 
     Some(SinkTermination {
         cc1_rd_ohms: rd(cc1_net),
