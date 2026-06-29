@@ -484,6 +484,8 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let lint = hauksbee_engine::checks::engine_lint(&board, &lib);
         let geo_text = if altium.is_some() { None } else { Some(text.as_str()) };
         let si = board.si_checks(geo_text);
+        // USB-C CC compliance, only when the board has a USB-C receptacle.
+        let usbc = hauksbee_engine::usb_c_report(&board);
 
         if args.json {
             let mut jr = JsonReport::new(&bound.name, summary);
@@ -491,7 +493,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             let mut findings = lint_findings_json(&lint);
             findings.extend(si_findings_json(&si));
             jr.findings = Some(findings);
-            println!("{}", jr.to_json());
+            print!("{}", jr.to_json());
+            // USB-C is reported as a sibling object so the schema stays stable.
+            match &usbc {
+                Some(u) => println!("\n{}", u.to_json()),
+                None => println!(),
+            }
         } else if args.plain {
             println!("== Copper spacing (DRC) ==");
             print!(
@@ -502,6 +509,10 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             print!("{}", hauksbee_engine::plain_netlint(&lint).render());
             println!("\n== Signal integrity ==");
             print!("{}", hauksbee_engine::plain_si(&si).render());
+            if let Some(u) = &usbc {
+                println!("\n== USB-C CC compliance ==");
+                print!("{}", u.render_plain());
+            }
         } else {
             print!("{}", bound.report.render_table());
             print!("{}", summary.render_banner());
@@ -511,8 +522,14 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             print!("{}", hauksbee_extract::render_netlint(&lint));
             println!("\n== Signal integrity ==");
             print!("{}", hauksbee_extract::render_si(&si));
+            if let Some(u) = &usbc {
+                println!("\n== USB-C CC compliance ==");
+                print!("{}", u.render());
+            }
         }
-        if args.strict && (drc.short_count() > 0 || lint_fails(&lint) || si_fails(&si)) {
+        let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+        if args.strict && (drc.short_count() > 0 || lint_fails(&lint) || si_fails(&si) || usbc_serious)
+        {
             std::process::exit(2);
         }
         return Ok(());
