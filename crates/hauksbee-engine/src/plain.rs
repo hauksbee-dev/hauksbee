@@ -385,6 +385,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "A placeholder passive value leaves the BOM and any physics checks without the actual resistor, capacitor, or inductor value. On charge-current, divider, or timing parts, that can hide the behavior that matters.".to_string(),
                 "Replace the placeholder with the actual value before ordering or relying on simulation results.".to_string(),
             ),
+            LintCheck::UncheckedMcu => (
+                f.message.clone(),
+                "The boot strap-pin check (what level pins like BOOT0/NRST sit at when the chip resets) and the internal resource-conflict check only run on MCUs hauksbee has a model for. This part looks like an MCU but is not in the model database, so it bound open and both checks skipped it. A clean lint result therefore does NOT mean its boot straps or pin assignments were verified.".to_string(),
+                "Check the boot/strap pins (e.g. BOOT0, NRST) and the pin-mux assignments by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
+            ),
         };
         out.push(level, what, why, fix);
     }

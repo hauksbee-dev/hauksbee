@@ -65,6 +65,13 @@ pub enum LintCheck {
     /// A passive still has a placeholder / unset value (`R`, `C`, `L`, `?`,
     /// empty), so downstream physics cannot know the actual part.
     PlaceholderValue,
+    /// A component that looks like an MCU (by part-number family) resolved to no
+    /// device model, so the MCU-model-dependent checks — the boot strap-pin lint
+    /// and the internal resource-conflict check — could not run on it. Without
+    /// this note those checks are silently empty, which a bare "Looks healthy"
+    /// verdict would misread as "checked and clean". Informational, never a
+    /// `--strict` failure: an unmodelled part is a coverage gap, not a defect.
+    UncheckedMcu,
 }
 
 impl LintCheck {
@@ -79,6 +86,7 @@ impl LintCheck {
             LintCheck::DesignatorFootprintMismatch => "designator_footprint_mismatch",
             LintCheck::ValuePackageSanity => "value_package_sanity",
             LintCheck::PlaceholderValue => "placeholder_value",
+            LintCheck::UncheckedMcu => "unchecked_mcu",
         }
     }
 }
