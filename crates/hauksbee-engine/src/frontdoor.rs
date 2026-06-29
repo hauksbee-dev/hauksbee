@@ -235,12 +235,11 @@ pub fn analyze(file_name: &str, contents: &str) -> WebReport {
     // "at minimum clearance (no margin)" rather than the wrong "below the rule".
     let drc_plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&drc));
 
-    // Lint = connectivity checks + strap lint + MCU resource conflicts, the same
-    // bundle the `--lint` CLI surface assembles.
-    let mut lint = board.net_lint();
-    let straps = crate::checks::straps::strap_lint(&board, &lib);
-    lint.findings.extend(straps.findings);
-    lint.findings.extend(board.resource_conflicts().findings);
+    // Lint = the same bundle the `--lint` CLI surface assembles, via the single
+    // `engine_lint` chokepoint (connectivity + strap lint + MCU resource conflicts
+    // + the unchecked-strap-bearing-MCU coverage note), so the web report never
+    // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
+    let lint = crate::checks::engine_lint(&board, &lib);
     let lint_plain = plain_netlint(&lint);
 
     // SI needs the layout text for the geometry-bearing checks.
