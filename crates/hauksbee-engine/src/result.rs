@@ -807,6 +807,32 @@ pub fn si_findings_json(report: &SiReport) -> Vec<JsonFinding> {
         .collect()
 }
 
+/// Convert a USB-C CC compliance report to a uniform JSON finding for the
+/// `--check` aggregate, so the aggregate stays a single valid JSON document
+/// (the standalone `--usb-c --json` keeps the richer dedicated shape). `None`
+/// for an `Ok` verdict (nothing to report).
+pub fn usbc_finding_json(report: &crate::checks::usb_c::UsbcReport) -> Option<JsonFinding> {
+    use crate::checks::usb_c::UsbcLevel;
+    let (severity, actionable) = match report.level {
+        UsbcLevel::Ok => return None,
+        UsbcLevel::Serious => ("serious", true),
+        UsbcLevel::Info => ("info", false),
+    };
+    Some(JsonFinding {
+        check: "usb_c".to_string(),
+        kind: "cc_compliance".to_string(),
+        severity: severity.to_string(),
+        nets: Vec::new(),
+        location_mm: None,
+        layer: None,
+        refs: report.receptacles.iter().map(|r| r.reference.clone()).collect(),
+        actionable,
+        message: report.headline.clone(),
+        plain: report.headline.clone(),
+        fix: None,
+    })
+}
+
 /// Convert a [`NetLintReport`] to uniform JSON findings.
 pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
     report

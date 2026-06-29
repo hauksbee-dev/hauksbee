@@ -43,7 +43,7 @@ use hauksbee_engine::boardcode::{
 };
 use hauksbee_engine::result::{
     self, ac_is_all_sentinel, coverage_open_active_refs, lint_findings_json, no_signal_path_reason,
-    si_findings_json, thermal_coverage, thermal_validity, AcJson, AcNetJson, BindSummary,
+    si_findings_json, thermal_coverage, thermal_validity, usbc_finding_json, AcJson, AcNetJson, BindSummary,
     CheckCoverage, CosimJson, DrcStructured, JsonNote, JsonNoteKind, JsonReport, NetActivity,
     ThermalDeviceJson, ThermalJson, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
@@ -492,13 +492,10 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             jr.drc = Some(drc_structured);
             let mut findings = lint_findings_json(&lint);
             findings.extend(si_findings_json(&si));
+            // Fold USB-C in as a finding so the aggregate stays one valid JSON doc.
+            findings.extend(usbc.as_ref().and_then(usbc_finding_json));
             jr.findings = Some(findings);
-            print!("{}", jr.to_json());
-            // USB-C is reported as a sibling object so the schema stays stable.
-            match &usbc {
-                Some(u) => println!("\n{}", u.to_json()),
-                None => println!(),
-            }
+            println!("{}", jr.to_json());
         } else if args.plain {
             println!("== Copper spacing (DRC) ==");
             print!(
