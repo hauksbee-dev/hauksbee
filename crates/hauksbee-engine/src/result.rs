@@ -467,6 +467,11 @@ pub enum JsonNoteKind {
     CosimSubstitution,
     Coverage,
     SiInfo,
+    /// A boot-sequence hazard about a specific MCU control net: driven HIGH and
+    /// held from reset, or left floating the whole run, with no bias resistor.
+    /// A distinct kind (not `Coverage`) so CI can filter boot hazards on their
+    /// own. Serializes as `"boot_control_net"`.
+    BootControlNet,
 }
 
 /// Machine-readable co-sim summary (today only emitted as CLI text). Populated
@@ -1295,5 +1300,37 @@ mod tests {
         assert_eq!(st.at_limit.len(), 1, "9 identical findings -> 1 group");
         assert_eq!(st.at_limit[0].count, 9);
         assert!(st.at_limit[0].label().contains("9 locations"));
+    }
+
+    #[test]
+    fn boot_control_net_kind_serializes_as_snake_case() {
+        // The JSON contract is "boot_control_net" — a consumer filtering
+        // notes[].kind must see exactly that, not "BootControlNet".
+        let note = JsonNote {
+            kind: JsonNoteKind::BootControlNet,
+            message: "GATE left floating".to_string(),
+        };
+        let json = serde_json::to_string(&note).unwrap();
+        assert!(
+            json.contains("\"boot_control_net\""),
+            "expected snake_case kind, got: {json}"
+        );
+    }
+
+    #[test]
+    fn every_note_kind_serializes() {
+        for kind in [
+            JsonNoteKind::BindRole,
+            JsonNoteKind::CosimSubstitution,
+            JsonNoteKind::Coverage,
+            JsonNoteKind::SiInfo,
+            JsonNoteKind::BootControlNet,
+        ] {
+            let note = JsonNote {
+                kind,
+                message: "x".to_string(),
+            };
+            assert!(serde_json::to_string(&note).unwrap().contains("\"message\""));
+        }
     }
 }

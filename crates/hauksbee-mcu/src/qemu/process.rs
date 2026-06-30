@@ -10,7 +10,8 @@
 //! Discovery order, per architecture, is:
 //!   1. an explicit env override (`HAUKSBEE_QEMU_XTENSA` / `HAUKSBEE_QEMU_RISCV32`),
 //!   2. a generic `HAUKSBEE_QEMU_DIR` pointing at the fork's `bin/`,
-//!   3. the conventional unpacked location `~/.hauksbee-qemu-esp/qemu/bin/`,
+//!   3. the conventional unpacked location `~/.galvani-qemu-esp/qemu/bin/`
+//!      (or the legacy `~/.hauksbee-qemu-esp/qemu/bin/`),
 //!   4. the esp-idf tools install (`~/.espressif/tools/qemu-*/.../bin/`),
 //!   5. the binary on `PATH`.
 //!
@@ -77,6 +78,10 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(&home);
         // 3. Conventional unpacked location (what the docs tell you to use).
+        //    `.galvani-qemu-esp` is the current name; `.hauksbee-qemu-esp` is
+        //    kept as a fallback for installs predating the hauksbee->galvani
+        //    rename, so an existing unpacked fork keeps resolving.
+        candidates.push(home.join(".galvani-qemu-esp/qemu/bin").join(name));
         candidates.push(home.join(".hauksbee-qemu-esp/qemu/bin").join(name));
         // 4. esp-idf idf_tools install. The directory carries a version, so
         //    glob the qemu-* tool dirs.
@@ -115,7 +120,7 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     bail!(
         "Espressif QEMU ({name}) not found. Install the fork's prebuilt binary \
          (https://github.com/espressif/qemu/releases) and unpack it to \
-         ~/.hauksbee-qemu-esp/qemu, set {} to the binary, or install it via \
+         ~/.galvani-qemu-esp/qemu, set {} to the binary, or install it via \
          esp-idf `idf_tools.py install qemu-xtensa qemu-riscv32`. Homebrew's \
          mainline qemu-system-xtensa has no esp32 machine and will not work.",
         arch.env_override()

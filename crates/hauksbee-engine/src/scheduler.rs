@@ -858,6 +858,70 @@ impl Scheduler {
         out
     }
 
+    /// MCU GPIO control nets the firmware NEVER drove during the run: the pin
+    /// is wired as an MCU GPIO output (the binder stamped a Thevenin driver for
+    /// it) yet no pin-change edge ever enabled that driver, so the net is Hi-Z
+    /// for the whole simulation. This is the boot_gate-FAIL hazard — a control
+    /// net (a MOSFET gate, an enable, a reset) left floating because firmware
+    /// never asserted it — that the netlist alone cannot adjudicate.
+    ///
+    /// Advisory heads-up *data*, never a fault. The caller narrows it (no bias
+    /// resistor, and a switch on the net) so only genuinely unprotected control
+    /// nets are surfaced. Zero-FP guards here, in order:
+    ///  1. Only pins with a `gpio_drivers` entry (a wired GPIO output role);
+    ///     dedicated I2C/SPI/UART roles that don't map via `gpio_of_role` skip.
+    ///  2. If `last_levels` holds this pin at ANY level, firmware drove it.
+    ///  3. If the net toggled (>1 edge), an alternate-function peripheral is
+    ///     driving it through another path — not truly floating.
+    pub fn firmware_never_driven_nets(&self) -> Vec<String> {
+        let name_of = |target: NodeId| -> Option<&str> {
+            self.net_nodes
+                .iter()
+                .find(|(_, n)| n.0 == target.0)
+                .map(|(name, _)| name.as_str())
+        };
+        // A net any MCU drove (held at a level) is never "floating", even if a
+        // *different* MCU also maps it as an undriven GPIO (multi-MCU boards).
+        let driven_any: std::collections::HashSet<&str> = self
+            .mcus
+            .iter()
+            .flat_map(|m| {
+                m.last_levels.keys().filter_map(|&(port, bit)| {
+                    m.binding.role_nets.iter().find_map(|(role, &node)| {
+                        (gpio_of_role(role, m.binding.module) == Some((port, bit)))
+                            .then(|| name_of(node))
+                            .flatten()
+                    })
+                })
+            })
+            .collect();
+        let mut out = Vec::new();
+        for m in &self.mcus {
+            for (role, &node) in &m.binding.role_nets {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                    continue;
+                };
+                if !m.binding.gpio_drivers.contains_key(&(port, bit)) {
+                    continue;
+                }
+                if m.last_levels.contains_key(&(port, bit)) {
+                    continue;
+                }
+                let Some(name) = name_of(node) else { continue };
+                if driven_any.contains(name) {
+                    continue;
+                }
+                if self.stats.get(name).is_some_and(|st| st.toggles > 1) {
+                    continue;
+                }
+                out.push(name.to_string());
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Last GPIO levels per MCU, for component-state frames.
     pub fn mcu_states(&self) -> HashMap<String, HashMap<String, f64>> {
         let mut out = HashMap::new();
