@@ -168,7 +168,44 @@ max_voltage_v = 3.6
 role = "boot0"
 level = "low"
 boot_select = true   # latches the boot memory; firmware cannot undo it
+internal_pull = "none"   # STM32 BOOT0 has NO on-die pull: a floating net is undefined
 note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STM32F401C (UFQFPN48): the 48-pin F401 (F401CB/CC/CD/CE). Modelled primarily so
+# the boot strap-pin lint covers its BOOT0 — the rest of the modern STM32 line was
+# otherwise unmodelled (see docs/hunts). Co-sim, when wired, reuses the same
+# renode STM32F4 platform the binder's family fallback already selects, so adding
+# this DB entry does not change the co-sim path. The pin map is intentionally
+# limited to the strap pin (BOOT0 = UFQFPN48 pad 44, verified against the
+# STM32F401CCU6 footprint); the renode platform owns the rest for co-sim.
+[[models]]
+id = "stm32f401c"
+kind = "mcu"
+description = "STM32F401C Cortex-M4 MCU (UFQFPN48: F401CB/CC/CD/CE)"
+
+[models.match]
+value_re = "(?i)^STM32F401C[BCDE]?(U6|T6|C6)?$"
+mpn_re   = "(?i)^STM32F401C[BCDE]"
+
+[models.params]
+backend = "renode:stm32f4"
+
+[models.pins]
+"44" = "boot0"   # BOOT0 strapping pin, UFQFPN48 pad 44 (verified vs the footprint)
+
+# STM32F4 samples BOOT0 (with BOOT1=PB2) shortly after reset to pick the boot
+# memory. BOOT0=0 -> main flash (normal). BOOT0=1 -> system bootloader / SRAM.
+# The STM32F4 BOOT0 pin has NO internal pull, so a floating BOOT0 leaves the boot
+# source genuinely undefined and the part can come up in the bootloader instead
+# of the application — every ST reference design ties it through an external
+# resistor. Ref: ST RM0368 sec 2.4 "Boot configuration"; DS9716 pin definitions.
+[[models.straps]]
+role = "boot0"
+level = "low"
+boot_select = true
+internal_pull = "none"
+note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ESP32 family. The classic ESP32 and ESP32-C3 co-simulate through the

@@ -43,7 +43,9 @@ use thiserror::Error;
 
 pub use matcher::ComponentQuery;
 pub use profile::{LoadProfile, Segment};
-pub use schema::{ComponentKind, ModelEntry, Params, StrapLevel, StrapPin};
+pub use schema::{
+    ComponentKind, ModelEntry, Params, StrapInternalPull, StrapLevel, StrapPin,
+};
 pub use sensor_spec::{Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError};
 pub use spice_input::SpiceCard;
 

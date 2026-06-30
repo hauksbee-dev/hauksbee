@@ -92,6 +92,33 @@ pub struct StrapPin {
     /// message). E.g. "SPI boot when high; download mode when low".
     #[serde(default)]
     pub note: String,
+    /// Whether the *silicon* provides an internal pull on this strap pin. This is
+    /// what decides whether a *floating* strap net is a fault: ESP32 strapping
+    /// pins each carry a documented internal pull, so an undriven net settles to a
+    /// defined level and is fine — but an STM32 BOOT0 has **no** internal pull, so
+    /// a floating BOOT0 leaves the boot source genuinely undefined and the part
+    /// can enter the bootloader instead of the application. The lint's
+    /// floating-strap arm fires only when this is [`StrapInternalPull::None`].
+    /// Default [`StrapInternalPull::Unknown`] preserves the prior, conservative
+    /// behaviour (never fire on a floating net).
+    #[serde(default)]
+    pub internal_pull: StrapInternalPull,
+}
+
+/// The internal (on-die) pull a strap pin has, which determines whether leaving
+/// its net undriven is safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrapInternalPull {
+    /// No internal pull: a floating net is undefined at reset (STM32 BOOT0).
+    None,
+    /// An internal pull-down holds an undriven net low.
+    PullDown,
+    /// An internal pull-up holds an undriven net high.
+    PullUp,
+    /// Unknown / unspecified: be conservative and never treat floating as a fault.
+    #[default]
+    Unknown,
 }
 
 /// The level a strap pin must hold at reset for normal boot.
