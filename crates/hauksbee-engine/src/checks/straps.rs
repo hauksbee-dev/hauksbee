@@ -80,6 +80,12 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
             // firmware cannot override.
             if is_unconnected_net(&net.name) || net_is_isolated_to(board, net_id, comp) {
                 if strap.internal_pull == StrapInternalPull::None {
+                    // High (vs the wrong-pull arm's Medium): a wrong static pull at
+                    // least boots *deterministically* wrong, so it is caught on the
+                    // first power-up at the bench. A float boots correctly often
+                    // enough to pass the bench yet fail intermittently in the field
+                    // (humidity, EMI, a probe) — a latent, unrecoverable failure
+                    // that survives bring-up, which is the more dangerous outcome.
                     report.findings.push(LintFinding {
                         check: LintCheck::StrapPin,
                         severity: Severity::High,
@@ -613,6 +619,74 @@ mod tests {
         assert!(matches!(strap[0].severity, Severity::High));
         assert!(strap[0].message.contains("floating"));
         assert!(strap[0].nets.iter().any(|n| n.contains("Pad44")));
+    }
+
+    #[test]
+    fn isolated_named_boot0_net_fires_via_net_is_isolated_to() {
+        // The `net_is_isolated_to` branch (not the unconnected-* name branch): a
+        // BOOT0 net that carries a real name but has nothing on it except the MCU
+        // pin (someone labelled it, then forgot the pulldown) is just as floating.
+        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "/BOOT0")
+  (module Package_QFP:LQFP-48 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
+    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 8  smd rect (at 0 1) (net 1 "GND"))
+    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
+  )
+)"#;
+        let r = strap_findings(text);
+        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(strap.len(), 1, "a named-but-isolated BOOT0 must fire");
+        assert!(matches!(strap[0].severity, Severity::High));
+        assert!(strap[0].message.contains("floating"));
+    }
+
+    #[test]
+    fn jumper_selectable_boot0_does_not_fire() {
+        // The zero-false-positive guarantee: a BOOT0 routed through a resistor to a
+        // 3-pin selector header (the standard dev-board boot-mode jumper) has a
+        // non-MCU member on its net, so it is NOT isolated and must NOT fire — even
+        // though no static pull resolves it (the jumper does, at assembly).
+        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "/BOOT0")
+  (net 4 "/BOOT0_SEL")
+  (module Package_QFP:LQFP-48 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
+    (pad 44 smd rect (at 0 2) (net 3 "/BOOT0"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 1k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/BOOT0"))
+    (pad 2 smd rect (at 2 0) (net 4 "/BOOT0_SEL"))
+  )
+  (module Connector:Conn_01x03 (layer F.Cu)
+    (at 120 100)
+    (fp_text reference J1 (at 0 0) (layer F.SilkS))
+    (fp_text value BOOT_SEL (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 2 smd rect (at 1 0) (net 4 "/BOOT0_SEL"))
+    (pad 3 smd rect (at 2 0) (net 1 "GND"))
+  )
+)"#;
+        let r = strap_findings(text);
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "a jumper-selectable BOOT0 (resistor to a 3-pin header) must NOT fire"
+        );
     }
 
     #[test]
