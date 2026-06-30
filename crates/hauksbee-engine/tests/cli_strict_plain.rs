@@ -414,3 +414,83 @@ fn clean_firmware_raises_no_boot_advisory() {
         "--strict-boot must exit 0 when there is no boot advisory"
     );
 }
+
+/// The informational boot-state panel, end to end: a board with a transistor
+/// gate driven HIGH at boot (boot_gate + variant A) names that gate in the
+/// --plain panel and in --json `boot_gates`; variant B (gate never driven)
+/// reports it as floating. Reporting, not gating — exit stays 0 either way.
+#[test]
+fn boot_state_panel_reports_gate_drive_state() {
+    let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    let fw_a = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
+    let fw_b = board("../../testdata/firmware/boot_gate_b/boot_gate.hex");
+    if !fw_a.exists() || !fw_b.exists() {
+        eprintln!("skipping: boot_gate firmware not built");
+        return;
+    }
+    let b = b.to_str().unwrap();
+
+    // Variant A: gate driven HIGH and held -> plain panel + json say so.
+    let plain = run(&[
+        "run", b, "--firmware", fw_a.to_str().unwrap(), "--headless", "--seconds", "0.05", "--plain",
+    ]);
+    let p = String::from_utf8_lossy(&plain.stdout);
+    assert!(p.contains("Power-up state of MOSFET"), "expected a boot-state panel; got:\n{p}");
+    assert!(p.contains("GATE_CTRL") && p.contains("driven HIGH"), "panel must name the driven-high gate:\n{p}");
+    assert!(plain.status.success(), "the panel is informational and must not gate");
+
+    let js = run(&[
+        "run", b, "--firmware", fw_a.to_str().unwrap(), "--headless", "--seconds", "0.05", "--json",
+    ]);
+    let j = String::from_utf8_lossy(&js.stdout);
+    assert!(
+        j.contains("\"boot_gates\"") && j.contains("\"driven_high\""),
+        "json must carry boot_gates with the driven_high state:\n{j}"
+    );
+
+    // Variant B: gate never driven -> floating.
+    let floating = run(&[
+        "run", b, "--firmware", fw_b.to_str().unwrap(), "--headless", "--seconds", "0.05", "--plain",
+    ]);
+    let f = String::from_utf8_lossy(&floating.stdout);
+    assert!(
+        f.contains("GATE_CTRL") && f.contains("floating"),
+        "an undriven gate must report as floating:\n{f}"
+    );
+}
+
+/// Regression lock for the boot-state panel level-inversion bug: a gate that is
+/// driven HIGH and held but ALSO has a bias (pulldown) resistor must still
+/// report "driven HIGH" — earlier the panel reused the safety-filtered held-high
+/// set (which drops biased nets), inverting the label to LOW on ordinary boards.
+#[test]
+fn boot_panel_reports_high_even_with_a_gate_pulldown() {
+    let b = board("tests/fixtures/boot_gate_pulldown.kicad_pcb");
+    let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
+    if !fw.exists() {
+        eprintln!("skipping: boot_gate_a firmware not built");
+        return;
+    }
+    let out = run(&[
+        "run", b.to_str().unwrap(), "--firmware", fw.to_str().unwrap(),
+        "--headless", "--seconds", "0.05", "--plain",
+    ]);
+    let p = String::from_utf8_lossy(&out.stdout);
+    // The PANEL row (a GATE_CTRL line carrying a state label), not the activity
+    // table row (which also contains "GATE_CTRL" but no state word).
+    let gate_line = p
+        .lines()
+        .find(|l| {
+            l.contains("GATE_CTRL")
+                && (l.contains("driven") || l.contains("pulled") || l.contains("floating"))
+        })
+        .unwrap_or("");
+    assert!(
+        gate_line.contains("driven HIGH"),
+        "a held-high gate with a pulldown must report HIGH; got line: {gate_line:?}\nfull:\n{p}"
+    );
+    assert!(
+        !gate_line.contains("LOW") && !gate_line.contains("floating"),
+        "the gate level must not be inverted/mislabelled; got: {gate_line:?}"
+    );
+}

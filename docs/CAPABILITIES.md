@@ -148,15 +148,43 @@ only toggles a signal stays "healthy". The advisory also appears in `--json` as 
 note with `kind: "boot_control_net"`. Pass `--strict-boot` to fail CI (exit 2) on
 it; by default it does not affect the exit code.
 
-The complementary **floating-gate** case — a control net the firmware *never*
-drives, left undefined at power-up — is intentionally *not* auto-flagged here:
-without a device model to tell a forgotten gate-drive from a deliberate GPIO
-input on the same net, an automatic version is false-positive-prone, so it is
-served soundly by the deadline-gated, *named* `boot-coverage` assertion in
-`hauksbee-ci` (`boot_gate_pass.toml` / `boot_gate_fail.toml`). The held-high
-advisory is exactly how the `explosion33/RocketryIgniter` power-up ignition fault
-surfaces from one command (see
-[`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)).
+**The boot-state panel (`--plain` / `--json`).** Alongside the held-high warning,
+co-sim prints an informational panel of every MOSFET/transistor gate it can
+identify and what the firmware does to it at power-up — `driven HIGH and held`,
+`driven LOW and held`, or `never driven (floating)`:
+
+```
+Power-up state of MOSFET / transistor gates — what the firmware does to each
+switch the moment the board powers up. Verify each is the level you intend:
+  Q1  IgnitOne   pulled HIGH (weak internal pull-up)  <- switched at power-up
+  Q2  IgnitTwo   driven LOW and held
+  Q3  FanGate    never driven (floating)              <- undefined until firmware drives it
+```
+
+It distinguishes a strong push-pull `driven HIGH` from a weak `pulled HIGH (weak
+internal pull-up)` — the latter is exactly the igniter case (a serial RX pin
+mis-mapped onto the gate enables its pull-up), and naming the *mechanism* tells a
+non-engineer the gate went high by accident, not by design.
+
+This is **reported, not judged** — which is what makes it safe for a non-engineer
+and lets it cover the cases the *warning* can't. The held-high **warning** is a
+verdict (and the only thing `--strict-boot` gates on), so it must be zero-FP. The
+**panel** is data: it shows the floating case (a forgotten gate-drive) and the
+held-low case without ever asserting a fault, so an ambiguous net is just a line
+the user reads against what they know the board is for — no false alarm, no CI
+break. It deliberately makes no channel-type safety claim (a HIGH gate is "on"
+for a low-side N-MOSFET but "off" for a high-side P-MOSFET, which the copper can't
+disambiguate); it reports the level and flags the active/undefined ones to
+verify. Gates are identified by a `G`/`GATE`/`B`/`BASE` pad name where present,
+else by footprint convention (SOT-23 pin 1, Power-SO-8 pin 4, …); a transistor
+whose control terminal can't be reliably identified is omitted rather than
+mislabelled. In `--json` the same rows appear under `boot_gates`.
+
+For a deadline-gated, *named* pass/fail check on a specific net, use the
+`boot-coverage` assertion in `hauksbee-ci` (`boot_gate_pass.toml` /
+`boot_gate_fail.toml`). The held-high warning is exactly how the
+`explosion33/RocketryIgniter` power-up ignition fault surfaces from one command
+(see [`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)).
 
 ### The `Mcu` trait and three backends
 

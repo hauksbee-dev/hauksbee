@@ -47,6 +47,12 @@ const SPI_IRQ_OUTPUT: i32 = 1; // MOSI (from MCU to peripheral)
 /// making GPIO output read as "never driven" (GREEN on one host, RED on another).
 const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
 
+/// Index for the DDR (data-direction) register; bindgen-sourced for the same
+/// version-skew reason as `IOPORT_IRQ_REG_PORT`. Subscribed so a
+/// `pinMode(OUTPUT)` (a DDR write) is recorded as "ever configured output" —
+/// observation only, see `make_ddr_hook`.
+const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
+
 // TWI message condition flags (from avr_twi.h)
 const TWI_COND_START: u32 = 1 << 0;
 const TWI_COND_STOP: u32 = 1 << 1;
@@ -75,6 +81,15 @@ struct Callbacks {
 struct PortState {
     /// Current port byte value.
     current: u8,
+    /// Current DDR mask (1 = output). Tracks the *latest* direction, not an
+    /// accumulation, so a pin set OUTPUT then back to INPUT (open-drain release /
+    /// bus hand-off) reads as input again rather than stuck "output". METADATA
+    /// ONLY — it never enables a circuit driver or fires a pin-change; it just
+    /// lets a higher layer tell an output-low-held pin (driven LOW) from one the
+    /// firmware never configured (floating). Keeping it out of the drive path is
+    /// deliberate: an earlier version that drove the circuit from DDR edges
+    /// latched open-drain pins low and clamped SPI nets, so this is read-only.
+    output_dir: u8,
 }
 
 /// State shared between the Rust owner and C IRQ callbacks.
@@ -157,9 +172,42 @@ macro_rules! make_port_hook {
                     }
                     s.port_state
                         .entry($port_char)
-                        .or_insert(PortState { current: 0 })
+                        .or_insert(PortState {
+                            current: 0,
+                            output_dir: 0,
+                        })
                         .current = new_val;
                 }
+            }
+        }
+    };
+}
+
+/// Per-port DDR (direction) hook: records which bits have ever been configured
+/// as outputs. Observation only — it does NOT fire `on_pin_change` and does NOT
+/// touch the circuit, so it cannot latch open-drain pins or clamp bus nets. The
+/// boot-state panel uses it to distinguish a `pinMode(OUTPUT)` pin held LOW from
+/// a pin the firmware never configured (genuinely floating).
+macro_rules! make_ddr_hook {
+    ($fn_name:ident, $port_char:literal) => {
+        unsafe extern "C" fn $fn_name(
+            _irq: *mut ffi::avr_irq_t,
+            value: u32,
+            param: *mut std::os::raw::c_void,
+        ) {
+            let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
+            if let Ok(mut s) = state.lock() {
+                let new_ddr = value as u8;
+                // Latest direction wins (not accumulated): a pin released back to
+                // input clears its bit, so an open-drain / handed-off bus pin
+                // does not read as a permanent output.
+                s.port_state
+                    .entry($port_char)
+                    .or_insert(PortState {
+                        current: 0,
+                        output_dir: 0,
+                    })
+                    .output_dir = new_ddr;
             }
         }
     };
@@ -174,6 +222,15 @@ make_port_hook!(port_hook_f, 'F');
 make_port_hook!(port_hook_g, 'G');
 make_port_hook!(port_hook_h, 'H');
 
+make_ddr_hook!(ddr_hook_a, 'A');
+make_ddr_hook!(ddr_hook_b, 'B');
+make_ddr_hook!(ddr_hook_c, 'C');
+make_ddr_hook!(ddr_hook_d, 'D');
+make_ddr_hook!(ddr_hook_e, 'E');
+make_ddr_hook!(ddr_hook_f, 'F');
+make_ddr_hook!(ddr_hook_g, 'G');
+make_ddr_hook!(ddr_hook_h, 'H');
+
 /// Map a port letter to its pre-generated hook function pointer.
 fn port_hook_fn(
     port: char,
@@ -187,6 +244,23 @@ fn port_hook_fn(
         'F' => Some(port_hook_f),
         'G' => Some(port_hook_g),
         'H' => Some(port_hook_h),
+        _ => None,
+    }
+}
+
+/// Map a port letter to its pre-generated DDR (direction) hook function pointer.
+fn ddr_hook_fn(
+    port: char,
+) -> Option<unsafe extern "C" fn(*mut ffi::avr_irq_t, u32, *mut std::os::raw::c_void)> {
+    match port {
+        'A' => Some(ddr_hook_a),
+        'B' => Some(ddr_hook_b),
+        'C' => Some(ddr_hook_c),
+        'D' => Some(ddr_hook_d),
+        'E' => Some(ddr_hook_e),
+        'F' => Some(ddr_hook_f),
+        'G' => Some(ddr_hook_g),
+        'H' => Some(ddr_hook_h),
         _ => None,
     }
 }
@@ -455,6 +529,21 @@ impl AvrMcu {
                     }
                 }
             }
+            // Observation-only DDR hook: records "ever configured as output" so a
+            // pin held output-LOW is distinguishable from a never-configured
+            // (floating) one. It never drives the circuit (see make_ddr_hook).
+            if let Some(ddr_fn) = ddr_hook_fn(port) {
+                unsafe {
+                    let irq = ffi::avr_io_getirq(
+                        self.avr,
+                        ioport_getirq(port as u8),
+                        IOPORT_IRQ_DIRECTION_ALL,
+                    );
+                    if !irq.is_null() {
+                        ffi::avr_irq_register_notify(irq, Some(ddr_fn), self.callback_ptr);
+                    }
+                }
+            }
         }
     }
 
@@ -614,6 +703,19 @@ impl Mcu for AvrMcu {
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         self.set_pin_raw(pin.port, pin.bit, high);
+    }
+
+    fn pins_configured_output(&self) -> Vec<PinId> {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = Vec::new();
+        for (&port, ps) in &s.port_state {
+            for bit in 0u8..8 {
+                if (ps.output_dir >> bit) & 1 != 0 {
+                    out.push(PinId { port, bit });
+                }
+            }
+        }
+        out
     }
 
     fn set_analog_in(&mut self, channel: u8, volts: f64) {

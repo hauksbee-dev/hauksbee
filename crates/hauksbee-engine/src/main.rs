@@ -47,7 +47,7 @@ use hauksbee_engine::boardcode::{
 use hauksbee_engine::result::{
     self, ac_is_all_sentinel, coverage_open_active_refs, lint_findings_json, no_signal_path_reason,
     si_findings_json, thermal_coverage, thermal_validity, usbc_finding_json, AcJson, AcNetJson, BindSummary,
-    CheckCoverage, CosimJson, DrcStructured, JsonNote, JsonNoteKind, JsonReport, NetActivity,
+    BootGateJson, CheckCoverage, CosimJson, DrcStructured, JsonNote, JsonNoteKind, JsonReport, NetActivity,
     ThermalDeviceJson, ThermalJson, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_engine::HauksbeeEngine;
@@ -944,6 +944,36 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             .collect();
         let has_boot_advisory = !held_high_boot_nets.is_empty();
 
+        // Informational boot-state panel: what the firmware does to each
+        // transistor gate at power-up (driven HIGH / driven LOW / floating).
+        // Reported, not judged — so an ambiguous case is a line the user reads,
+        // never a false alarm. Computed once for both --plain and --json.
+        //
+        // Only meaningful when firmware actually ran: with no `--firmware`, or a
+        // firmware that never executed (`zero_activity`), every gate would read
+        // "floating" — which says nothing about the design, only that nothing
+        // drove the pins. Suppress the panel in those cases (the zero-activity
+        // warning already covers a stalled firmware).
+        let gate_rows = if args.firmware.is_some() && !zero_activity {
+            let gates = transistor_gate_nets(&board);
+            // The panel reports the actual level, so it uses the UNFILTERED
+            // held-high set — NOT `held_high_boot_nets`, whose switch/no-bias
+            // filter is for the *warning* only. (Filtering here inverted the
+            // label: a gate driven HIGH that also has a bias resistor would drop
+            // out of "held high" and be misread as LOW.) `configured` is the set
+            // of nets the firmware actively drove as outputs, which separates a
+            // strong output-high from a weak internal pull-up.
+            let held_high: std::collections::HashSet<String> =
+                engine.scheduler().firmware_held_high_nets().into_iter().collect();
+            let configured: std::collections::HashSet<String> =
+                engine.scheduler().firmware_output_configured_nets().into_iter().collect();
+            let driven: std::collections::HashSet<String> =
+                engine.scheduler().firmware_driven_nets().into_iter().collect();
+            boot_gate_states(&gates, &held_high, &configured, &driven)
+        } else {
+            Vec::new()
+        };
+
         if args.json {
             let mut jr = JsonReport::new(&board_name, summary);
             // A substitution is an info-level note that must never be silently
@@ -974,6 +1004,18 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
                          this is intended."
                     ),
                 });
+            }
+            if !gate_rows.is_empty() {
+                jr.boot_gates = Some(
+                    gate_rows
+                        .iter()
+                        .map(|(reference, net, state)| BootGateJson {
+                            reference: reference.clone(),
+                            net: net.clone(),
+                            state: state.json().to_string(),
+                        })
+                        .collect(),
+                );
             }
             jr.cosim = cosim;
             println!("{}", jr.to_json());
@@ -1013,6 +1055,9 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             }
             println!();
             print!("{}", report.render());
+            if !gate_rows.is_empty() {
+                print!("{}", render_boot_gate_panel(&gate_rows));
+            }
         }
 
         // 0-activity refusal (Track B): warn always; under --strict this is a hard
@@ -1747,6 +1792,192 @@ fn is_power_or_ground_net(board: &hauksbee_extract::ExtractedBoard, net_id: i64)
     v_named || voltage_named
 }
 
+/// The pad number of a transistor's *control* terminal (a MOSFET gate / BJT
+/// base), inferred from the footprint by package convention. Conservative:
+/// returns `None` for any package whose control-pad position isn't reliable
+/// (e.g. TO-92, whose lead order varies by part), so the boot-state panel simply
+/// omits that device rather than mislabelling a row.
+fn switch_control_pad(footprint: &str) -> Option<&'static str> {
+    let f = footprint.to_ascii_uppercase();
+    // 8-lead SINGLE power MOSFET (Power-SO-8 family): gate on pad 4, source on
+    // 1-3, drain on 5-8. Checked before the 3-lead group ("SOT-23-8" also
+    // contains "SOT-23"). SOT-23-8 is unambiguously a single power FET; a bare
+    // SO-8/SOIC-8 is more often a DUAL FET or a gate-driver IC (gates on other
+    // pads), so only treat those as pad-4 when the footprint says "power".
+    let eight_lead_single = f.contains("SOT-23-8")
+        || f.contains("SOT23-8")
+        || ((f.contains("SO-8") || f.contains("SOIC-8") || f.contains("SO8"))
+            && (f.contains("POWER") || f.contains("PWR")));
+    if eight_lead_single {
+        return Some("4");
+    }
+    // 3-lead discrete packages where the control terminal is pad 1 (MOSFET gate
+    // G-D-S, BJT base B-C-E/B-E-C — pad 1 is the control either way).
+    const THREE_LEAD: [&str; 12] = [
+        "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
+        "D2PAK", "TO-220", "TO-247",
+    ];
+    if THREE_LEAD.iter().any(|p| f.contains(p)) {
+        return Some("1");
+    }
+    None
+}
+
+/// A pad named as a MOSFET *gate* (`G`/`GATE`).
+fn is_gate_pad_name(s: &str) -> bool {
+    matches!(s.trim().to_ascii_uppercase().as_str(), "G" | "GATE")
+}
+
+/// A pad named as a BJT *base* (`B`/`BASE`). Kept separate from the gate name so
+/// a 4-terminal MOSFET with an explicit bulk/body pad labelled `B` never has its
+/// bulk picked over the real gate — gate names are tried first.
+fn is_base_pad_name(s: &str) -> bool {
+    matches!(s.trim().to_ascii_uppercase().as_str(), "B" | "BASE")
+}
+
+/// True for any transistor control-terminal pad name (gate or base). KiCad
+/// MOSFET symbols commonly name pads `G`/`D`/`S`, which is more reliable than
+/// footprint inference, so we prefer a name when present.
+fn is_control_pad_name(s: &str) -> bool {
+    is_gate_pad_name(s) || is_base_pad_name(s)
+}
+
+/// Every transistor (`Q…`) whose control terminal can be identified, paired with
+/// the net on that terminal — the rows of the boot-state panel. The control pad
+/// is found first by an explicit `G`/`GATE` pad name (then `B`/`BASE`), else by
+/// footprint convention. DNP transistors and unidentifiable parts are skipped
+/// (the panel omits a device rather than mislabel it).
+fn transistor_gate_nets(board: &hauksbee_extract::ExtractedBoard) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for c in &board.components {
+        if c.dnp
+            || c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) != Some('Q')
+        {
+            continue;
+        }
+        let named = |is: fn(&str) -> bool| {
+            c.pins
+                .iter()
+                .find(move |p| is(&p.number) || is(&p.function))
+        };
+        // 1. An explicit GATE pad, 2. an explicit BASE pad (gate wins over a
+        // bulk pad also labelled `B`), 3. else the footprint's control pad.
+        let pin = named(is_gate_pad_name).or_else(|| named(is_base_pad_name)).or_else(|| {
+            switch_control_pad(&c.footprint).and_then(|pad| c.pins.iter().find(|p| p.number == pad))
+        });
+        let Some(net_id) = pin.and_then(|p| p.net) else {
+            continue;
+        };
+        if let Some(net) = board.nets.iter().find(|n| n.id == net_id) {
+            if !net.name.is_empty() {
+                out.push((c.reference.clone(), net.name.clone()));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// What the firmware does to a gate net at power-up. Reported factually (no
+/// channel-type safety claim — a HIGH gate is "on" for a low-side N-MOSFET but
+/// "off" for a high-side P-MOSFET, which the netlist can't disambiguate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootGateState {
+    /// Strong push-pull HIGH (the pin is configured as an output and held high).
+    DrivenHigh,
+    /// HIGH via a weak internal pull-up (the firmware left the pin an input but
+    /// enabled its pull-up) — e.g. a serial RX pin mis-mapped onto a gate. The
+    /// gate still goes high, but by accident rather than an intended drive.
+    PulledHigh,
+    DrivenLow,
+    Floating,
+}
+
+impl BootGateState {
+    fn label(self) -> &'static str {
+        match self {
+            BootGateState::DrivenHigh => "driven HIGH and held",
+            BootGateState::PulledHigh => "pulled HIGH (weak internal pull-up)",
+            BootGateState::DrivenLow => "driven LOW and held",
+            BootGateState::Floating => "never driven (floating)",
+        }
+    }
+    /// A short marker for the states worth a look (active or undefined at reset);
+    /// LOW is reported without a marker (the common held-off case).
+    fn marker(self) -> &'static str {
+        match self {
+            BootGateState::DrivenHigh | BootGateState::PulledHigh => "  <- switched at power-up",
+            BootGateState::Floating => "  <- undefined until firmware drives it",
+            BootGateState::DrivenLow => "",
+        }
+    }
+    fn json(self) -> &'static str {
+        match self {
+            BootGateState::DrivenHigh => "driven_high",
+            BootGateState::PulledHigh => "pulled_high",
+            BootGateState::DrivenLow => "driven_low",
+            BootGateState::Floating => "floating",
+        }
+    }
+}
+
+/// Classify each transistor gate's power-up state from the co-sim drive sets.
+/// `held_high` is the UNFILTERED set of nets held high (a factual level, so it
+/// must not be the safety-filtered advisory list); `configured` is the set the
+/// firmware drove as outputs (used to split a strong HIGH from a pull-up);
+/// `driven` is the union (output-configured ∪ written) — a net in neither is
+/// floating. A `pinMode(OUTPUT)`-with-no-write pin appears in `driven` and
+/// reports "driven LOW"; note the analog solve leaves it tri-stated (it only
+/// enables a Thevenin leg on a PORT edge), so panel and solver intentionally
+/// disagree there — the panel is the more faithful account of the real pin.
+fn boot_gate_states(
+    gates: &[(String, String)],
+    held_high: &std::collections::HashSet<String>,
+    configured: &std::collections::HashSet<String>,
+    driven: &std::collections::HashSet<String>,
+) -> Vec<(String, String, BootGateState)> {
+    gates
+        .iter()
+        .map(|(reference, net)| {
+            let state = if held_high.contains(net) {
+                if configured.contains(net) {
+                    BootGateState::DrivenHigh
+                } else {
+                    BootGateState::PulledHigh
+                }
+            } else if driven.contains(net) {
+                BootGateState::DrivenLow
+            } else {
+                BootGateState::Floating
+            };
+            (reference.clone(), net.clone(), state)
+        })
+        .collect()
+}
+
+/// Render the informational boot-state panel for the `--plain` surface: aligned
+/// plain-language lines, one per transistor gate, reporting (not judging) what
+/// the firmware does to it at power-up. The arrows flag the active / undefined
+/// cases for a non-engineer to verify; LOW is reported without a flag.
+fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> String {
+    let ref_w = rows.iter().map(|(r, _, _)| r.len()).max().unwrap_or(3).max(2);
+    let net_w = rows.iter().map(|(_, n, _)| n.len()).max().unwrap_or(8).max(8);
+    let mut s = String::from(
+        "\nPower-up state of MOSFET / transistor gates — what the firmware does to each\n\
+         switch the moment the board powers up. Verify each is the level you intend\n\
+         (a HIGH or floating gate can switch a load on before the firmware means to):\n",
+    );
+    for (reference, net, state) in rows {
+        s.push_str(&format!(
+            "  {reference:<ref_w$}  {net:<net_w$}  {}{}\n",
+            state.label(),
+            state.marker(),
+        ));
+    }
+    s
+}
+
 /// Build the machine-readable co-sim summary (Track B) from a finished run.
 /// Returns `None` when no MCU core ran (no co-sim happened, so there is nothing
 /// to summarise). Reads the scheduler's per-net stats for the total toggle count
@@ -2251,7 +2482,10 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod boot_headsup_tests {
-    use super::{is_power_or_ground_net, net_drives_a_switch, net_has_no_bias_resistor};
+    use super::{
+        boot_gate_states, is_control_pad_name, is_power_or_ground_net, net_drives_a_switch,
+        net_has_no_bias_resistor, switch_control_pad, transistor_gate_nets, BootGateState,
+    };
     use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 
     fn pin(net: Option<i64>) -> Pin {
@@ -2372,5 +2606,106 @@ mod boot_headsup_tests {
         assert!(!net_drives_a_switch(&b, "HDR"));
         assert!(!net_drives_a_switch(&b, "DNPGATE"), "a DNP transistor must not count");
         assert!(!net_drives_a_switch(&b, "missing"));
+    }
+
+    #[test]
+    fn switch_control_pad_by_footprint() {
+        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23"), Some("1"));
+        assert_eq!(switch_control_pad("SOT-23-3"), Some("1"));
+        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:TO-252-3_DPAK"), Some("1"));
+        // 8-lead single power MOSFET: gate on pad 4 (checked before SOT-23).
+        assert_eq!(switch_control_pad("SOT-23-8_Handsoldering"), Some("4"));
+        assert_eq!(switch_control_pad("Package_SO:SO-8_Power"), Some("4"));
+        // Bare SO-8 / SOIC-8 is too often a dual FET or driver IC -> None.
+        assert_eq!(switch_control_pad("Package_SO:SO-8"), None);
+        assert_eq!(switch_control_pad("Package_SO:SOIC-8"), None);
+        // Unknown / unreliable packages: None (the panel omits the device).
+        assert_eq!(switch_control_pad("Package_TO_SOT_THT:TO-92"), None);
+        assert_eq!(switch_control_pad("Resistor_SMD:R_0402"), None);
+    }
+
+    #[test]
+    fn control_pad_names_recognised() {
+        for s in ["G", "GATE", "g", "Base", "B"] {
+            assert!(is_control_pad_name(s), "{s} should be a control pad name");
+        }
+        for s in ["D", "S", "1", "drain", ""] {
+            assert!(!is_control_pad_name(s), "{s} must not be a control pad name");
+        }
+    }
+
+    fn transistor(reference: &str, footprint: &str, pads: &[(&str, &str, i64)], dnp: bool) -> Component {
+        Component {
+            reference: reference.into(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp,
+            pins: pads
+                .iter()
+                .map(|(num, func, net)| Pin {
+                    number: (*num).into(),
+                    net: Some(*net),
+                    function: (*func).into(),
+                    kind: String::new(),
+                    position: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn transistor_gate_nets_prefers_named_pad_then_footprint() {
+        let b = board(
+            &[(1, "GATE_A"), (2, "DRN"), (3, "SRC"), (4, "GATE_B"), (5, "X"), (6, "BULK")],
+            vec![
+                // Named G/D/S pads: the 'G' pad's net wins regardless of footprint.
+                transistor("Q1", "whatever", &[("G", "", 1), ("D", "", 2), ("S", "", 3)], false),
+                // Numbered SOT-23 pads, no names: footprint says control = pad 1.
+                transistor("Q2", "SOT-23", &[("1", "", 4), ("2", "", 5), ("3", "", 2)], false),
+                // DNP transistor: skipped.
+                transistor("Q3", "SOT-23", &[("1", "", 1)], true),
+                // Unknown footprint, no named pad: skipped (no mislabel).
+                transistor("Q5", "TO-92", &[("1", "", 5)], false),
+                // 4-terminal MOSFET with a bulk pad labelled 'B': the GATE pad
+                // must win over the bulk, never picking BULK.
+                transistor("Q4", "SOT-23", &[("G", "", 1), ("S", "", 3), ("D", "", 2), ("B", "", 6)], false),
+            ],
+        );
+        let gates = transistor_gate_nets(&b);
+        assert_eq!(
+            gates,
+            vec![
+                ("Q1".to_string(), "GATE_A".to_string()),
+                ("Q2".to_string(), "GATE_B".to_string()),
+                ("Q4".to_string(), "GATE_A".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn boot_gate_states_classifies_high_low_floating() {
+        let gates = vec![
+            ("Q1".to_string(), "DrivenHi".to_string()),
+            ("Q2".to_string(), "PulledHi".to_string()),
+            ("Q3".to_string(), "LoNet".to_string()),
+            ("Q4".to_string(), "FloatNet".to_string()),
+        ];
+        let set = |xs: &[&str]| -> std::collections::HashSet<String> {
+            xs.iter().map(|s| s.to_string()).collect()
+        };
+        let held_high = set(&["DrivenHi", "PulledHi"]);
+        // DrivenHi is an output (strong high); PulledHi is NOT configured output
+        // (a weak pull-up). LoNet is an output held low.
+        let configured = set(&["DrivenHi", "LoNet"]);
+        let driven = set(&["DrivenHi", "PulledHi", "LoNet"]);
+        let rows = boot_gate_states(&gates, &held_high, &configured, &driven);
+        assert_eq!(rows[0].2, BootGateState::DrivenHigh);
+        assert_eq!(rows[1].2, BootGateState::PulledHigh);
+        assert_eq!(rows[2].2, BootGateState::DrivenLow);
+        assert_eq!(rows[3].2, BootGateState::Floating);
     }
 }

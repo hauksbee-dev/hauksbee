@@ -166,6 +166,19 @@ pub trait Mcu {
     /// registers each chunk instead of every port the platform defines.
     fn set_active_ports(&mut self, _ports: &[char]) {}
 
+    /// GPIO pins the firmware ever configured as outputs (DDR/direction set),
+    /// regardless of the level driven. Lets a caller tell an output-LOW-held pin
+    /// (driven low) from one the firmware never configured (floating). This is
+    /// observation metadata, not a drive: it never affects the analog solve.
+    ///
+    /// Default empty: a backend that cannot report direction state simply makes
+    /// every pin look "not configured" (the conservative direction — a
+    /// boot-state panel then reports "unknown/never driven" rather than asserting
+    /// "driven low").
+    fn pins_configured_output(&self) -> Vec<PinId> {
+        Vec::new()
+    }
+
     /// Hint which 7-bit I2C slave addresses are attached to the MCU-facing bus.
     ///
     /// Push-style backends can ignore this. Backends that need to register

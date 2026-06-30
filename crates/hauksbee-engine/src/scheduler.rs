@@ -858,6 +858,79 @@ impl Scheduler {
         out
     }
 
+    /// MCU GPIO nets the firmware drove to a *defined* level during the run —
+    /// either it wrote the pin (a `last_levels` entry, high or low) or it
+    /// configured the pin as an output (so an output-low-held pin counts as
+    /// driven LOW, not floating). A net NOT in this set was never driven by any
+    /// MCU: it floats. Used by the boot-state panel to classify each gate as
+    /// driven-high / driven-low / floating without enabling any circuit driver.
+    pub fn firmware_driven_nets(&self) -> Vec<String> {
+        let name_of = |target: NodeId| -> Option<&str> {
+            self.net_nodes
+                .iter()
+                .find(|(_, n)| n.0 == target.0)
+                .map(|(name, _)| name.as_str())
+        };
+        let mut out = Vec::new();
+        for m in &self.mcus {
+            let configured: std::collections::HashSet<(char, u8)> = m
+                .core
+                .pins_configured_output()
+                .into_iter()
+                .map(|p| (p.port, p.bit))
+                .collect();
+            for (role, &node) in &m.binding.role_nets {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                    continue;
+                };
+                if !m.last_levels.contains_key(&(port, bit)) && !configured.contains(&(port, bit)) {
+                    continue;
+                }
+                if let Some(name) = name_of(node) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// MCU GPIO nets whose pin the firmware actively configured as an OUTPUT
+    /// (DDR set, by latest direction). A net high in this set is a strong
+    /// push-pull drive; a net high but NOT in it is a weak internal pull-up.
+    /// Observation metadata (from `pins_configured_output`), never a drive.
+    pub fn firmware_output_configured_nets(&self) -> Vec<String> {
+        let name_of = |target: NodeId| -> Option<&str> {
+            self.net_nodes
+                .iter()
+                .find(|(_, n)| n.0 == target.0)
+                .map(|(name, _)| name.as_str())
+        };
+        let mut out = Vec::new();
+        for m in &self.mcus {
+            let configured: std::collections::HashSet<(char, u8)> = m
+                .core
+                .pins_configured_output()
+                .into_iter()
+                .map(|p| (p.port, p.bit))
+                .collect();
+            for (role, &node) in &m.binding.role_nets {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                    continue;
+                };
+                if configured.contains(&(port, bit)) {
+                    if let Some(name) = name_of(node) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Last GPIO levels per MCU, for component-state frames.
     pub fn mcu_states(&self) -> HashMap<String, HashMap<String, f64>> {
         let mut out = HashMap::new();

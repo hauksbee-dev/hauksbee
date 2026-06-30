@@ -460,6 +460,16 @@ pub struct JsonNote {
     pub message: String,
 }
 
+/// One row of the boot-state panel: a transistor gate and what the firmware does
+/// to it at power-up (`driven_high` / `driven_low` / `floating`). Informational
+/// (reported, not judged), so a consumer can read it without it being a verdict.
+#[derive(Debug, Clone, Serialize)]
+pub struct BootGateJson {
+    pub reference: String,
+    pub net: String,
+    pub state: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JsonNoteKind {
@@ -900,6 +910,9 @@ pub struct JsonReport {
     pub ac: Option<AcJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thermal: Option<ThermalJson>,
+    /// Boot-state panel: per-transistor-gate power-up state (informational).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_gates: Option<Vec<BootGateJson>>,
     /// Info-level notes (bind roles, co-sim substitution, coverage caveats, SI
     /// info) that must never be silently absent but never gate a CI pipeline.
     /// Additive + `skip_serializing_if` so the schema stays backward-compatible.
@@ -967,6 +980,7 @@ impl JsonReport {
             drc: None,
             ac: None,
             thermal: None,
+            boot_gates: None,
             notes: Vec::new(),
             cosim: None,
         }
