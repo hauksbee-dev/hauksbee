@@ -192,6 +192,25 @@ exactly why the ESP32 family is served by the `qemu:` backend (Espressif QEMU
 fork) rather than Renode. Both Xtensa (ESP32) and RISC-V (ESP32-C3) ESP32 parts
 are proven through QEMU above.
 
+### Co-sim fidelity notes (debugging all-zero or "never driven" results)
+
+- **Crystal-clocked boards.** A crystal/resonator is bound high-impedance
+  (`ComponentKind::Ignore`); the clock comes from the MCU model. Before this fix
+  a crystal valued `16Mhz` (or any `C`-referenced one) was mis-bound as a
+  16-gigafarad capacitor that made the solve singular and drove **every** net to
+  0 V / "never driven". If you see board-wide all-zero co-sim voltages, confirm
+  you are on a build with `39128bb`+ and check `--report` for any passive with an
+  absurd capacitance. See [`LIMITATIONS.md`](LIMITATIONS.md) Fixed #4.
+- **AVR `pinMode(OUTPUT)`.** The AVR backend hooks both the PORT and DDR
+  registers, so a pin set OUTPUT with PORT=0 is modelled as driven **LOW** (not
+  floating). A pin that never has DDR set and is never written stays Hi-Z — which
+  is what the boot-safety "never driven" advisory keys off. See
+  [`LIMITATIONS.md`](LIMITATIONS.md) Fixed #5.
+- **ESP32 GPIO needs the firmware mailbox** (stock third-party firmware is
+  GPIO-invisible). The exact, empirically-validated reason and the QEMU-fork
+  patch that would remove the requirement are in
+  [`hunts/esp32-qemu-i2c-status.md`](hunts/esp32-qemu-i2c-status.md).
+
 ## Recipes
 
 ### STM32F103 blue pill (the proven demo)

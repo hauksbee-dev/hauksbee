@@ -71,6 +71,46 @@ to be hauksbee defects.
   `footprint_inference_falls_back_to_default_mlcc`; the existing bucket and
   ordering tests are unchanged.
 
+### 4. Crystal / resonator mis-bound as a gigafarad capacitor, silently collapsing co-sim
+
+- **Was** (`crates/hauksbee-engine/src/binder.rs`): a 2-pin crystal whose
+  reference starts with `C` (`Crystal1`) hit the passive first-char fallback —
+  `C` → capacitor — and `parse_value("16Mhz")` read `16M` as 16e6 while dropping
+  the `hz`, binding the part as a **16-megafarad** capacitor (the `--report`
+  table literally showed `analog C 16000000000000.000µF`). A capacitor that
+  large makes the MNA solve singular/ill-conditioned, collapsing every node
+  voltage to ~0. In firmware co-sim that reads as **every** MCU-driven net
+  "never driven / Hi-Z" — a silent, board-wide false negative on essentially any
+  crystal-clocked MCU board.
+- **Chased to ground** on `explosion33/RocketryIgniter` (see
+  [`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)): a strong-output test
+  firmware on the same pin also read 0 V (ruling out the firmware), and a board
+  with the crystals stripped drove the pin to 5 V (isolating the cause).
+- **Fix** (`39128bb`): detect crystals/resonators **before** the passive
+  heuristic — a frequency-valued part (`value_is_frequency`, a whole-value match
+  so a `600@100MHz` ferrite bead is *not* caught) or a crystal reference prefix
+  (`Y`/`CRYSTAL`/`XTAL`/`RESONATOR`) — and bind them `ComponentKind::Ignore`
+  (high-impedance). The clock comes from the MCU model and a crystal's motional
+  R-L-C is negligible at the solver's operating point, so removal is exact here;
+  load caps (genuine passives) stay. Genuine capacitors are untouched.
+- **Tests.** frequency-vs-passive classification (incl. ferrite negatives); a
+  fallback regression asserting a `C`-named crystal binds `Ignore` while
+  `C7=22pF` stays `Passive`; the crystal-load-cap SI checks are unaffected.
+
+### 5. Output-low pins read as "never driven" (`pinMode(OUTPUT)` not modelled)
+
+- **Was** (`crates/hauksbee-mcu/src/avr.rs`): the AVR backend hooked only the
+  PORT register, so `pinMode(pin, OUTPUT)` — a DDR-register write that leaves
+  PORT at 0 — produced no edge. An output-low-held pin (a gate driven LOW and
+  left there) thus looked Hi-Z, so a firmware *correctly* holding a control net
+  safe-low could be flagged as floating (e.g. the RocketryIgniter `IgnitTwo`
+  gate, the safe one).
+- **Fix** (`a8d7b35`): also subscribe to `IOPORT_IRQ_DIRECTION_ALL`; when a pin
+  becomes an output it fires a pin-change at its PORT level, so output-low pins
+  are modelled as driven LOW. Verified against boot_gate pass/fail, blinky, the
+  AVR I2C/SPI co-sims, and the igniter (the false `IgnitTwo` flag is gone; a
+  genuinely-never-configured gate still flags).
+
 ## Deferred (genuinely hard or wrong to "fix"), with reason
 
 ### Legacy KiCad-5 `.sch` (non-s-expression) reader
@@ -97,11 +137,24 @@ those boards' layouts; only their legacy schematics are out of scope.
 - **QEMU ESP32 SAR ADC** is not modelled by the Espressif QEMU fork, so
   `set_analog_in` is a no-op there too (a silicon-model gap, not a wiring gap).
 - **QEMU ESP32 GPIO** is observed through a firmware RAM mailbox because the fork's
-  `esp32.gpio` model has no `GPIO_OUT_REG` read-back. A cleaner host-side fix
-  means patching the QEMU fork's gpio model and rebuilding it; investigating that
-  needs the fork + the firmware demo running, which is out of reach here. The
-  mailbox path is documented and demo firmware maintains it; ergonomics are left
-  as-is rather than changed without the ability to re-validate the GPIO co-sim.
+  `esp32.gpio` model has no `GPIO_OUT_REG` read-back. **Empirically confirmed on
+  the latest build** (QEMU 9.2.2 `esp_develop`, 2026-06-30): a host read of
+  `GPIO_OUT_REG` (0x3FF44004) returns 0 via QMP `xp`, gdbstub `m`, *and*
+  `qom-get` (the `esp32.gpio` object exposes no value property), and a host
+  *write* to those registers is discarded — the model is write-effect-only with
+  no host-visible state, while a RAM address round-trips perfectly. TCG memory
+  plugins are disabled in the prebuilt (`-plugin help` → not enabled), and there
+  is no QEMU source tree on disk, so the only real fix is a ~15-line device-model
+  patch to the fork's `hw/gpio/esp32_gpio.c` (store + return `GPIO_OUT`/`ENABLE`,
+  handling the W1TS/W1TC aliases) plus a rebuild — fully specified, with the
+  exact registers and the matching backend change, in
+  [`hunts/esp32-qemu-i2c-status.md`](hunts/esp32-qemu-i2c-status.md). Shipping the
+  register-read backend path *without* a patched QEMU to validate it against
+  would violate the no-unvalidatable-fixes rule, so it stays deferred — now with
+  an exact, actionable spec rather than an open question. (The orthogonal
+  discovery-path bug the spike surfaced — the loader still probing the
+  pre-rename `~/.hauksbee-qemu-esp` — *was* fixed in `a8d7b35`: it now probes
+  `~/.galvani-qemu-esp` first, legacy path as fallback.)
 
 ### Eagle copper-pour fidelity in DRC
 
