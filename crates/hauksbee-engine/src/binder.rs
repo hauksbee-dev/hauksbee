@@ -598,6 +598,27 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
+    // Crystals / ceramic resonators must be caught BEFORE the passive
+    // first-char heuristic below: their reference often starts with 'C'
+    // ("Crystal1") and their value is a *frequency* ("16MHz"), so the 'C' =>
+    // capacitor branch would parse "16M" as 16 megafarads. That absurd cap
+    // silently wrecks the whole circuit solve (every node collapses), which in
+    // co-sim makes every firmware-driven net read as "never driven / Hi-Z" —
+    // a false result on essentially any crystal-clocked MCU board. Bind the
+    // crystal high-impedance (ignored): the co-sim clock is supplied by the MCU
+    // model, and a quartz crystal's motional R-L-C is negligible at the
+    // solver's operating point, so removing it changes nothing real (the two
+    // load caps, which are genuine passives, stay).
+    if is_crystal_like(&prefix, &comp.value) {
+        return Some(make_entry(
+            "crystal_fallback",
+            ComponentKind::Ignore,
+            "crystal / resonator (engine fallback; high-impedance, clock from MCU model)",
+            Default::default(),
+            BTreeMap::new(),
+        ));
+    }
+
     // Passives by reference class, when a magnitude can be recovered from the
     // value field. Handles plain engineering values ("4k7", "100n") and the
     // structured naming some teams use ("R_47k_0402", "C_22u_25V_0805",
@@ -644,6 +665,24 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         }
     }
     None
+}
+
+/// True for a 2-pin crystal / ceramic resonator: a reference whose alphabetic
+/// prefix is a crystal designator ("Y1", "Crystal2", "XTAL1"), or *any* part
+/// whose value is a frequency ("16MHz", "32.768kHz"). The frequency test is the
+/// load-bearing one: it catches a crystal whose reference starts with 'C'
+/// before the passive heuristic mis-reads it as a capacitor.
+fn is_crystal_like(prefix: &str, value: &str) -> bool {
+    matches!(prefix, "Y" | "CRYSTAL" | "XTAL" | "RESONATOR") || value_is_frequency(value)
+}
+
+/// A value string that denotes a frequency: a leading digit and a trailing
+/// "Hz" unit ("16MHz", "8 Mhz", "32.768kHz"). Deliberately strict (must start
+/// with a digit) so part values that merely contain "hz" do not trip it.
+fn value_is_frequency(value: &str) -> bool {
+    let v = value.trim();
+    v.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && v.to_ascii_lowercase().ends_with("hz")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2027,5 +2066,61 @@ fn power_rail_voltage(name: &str) -> Option<f64> {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod crystal_fallback_tests {
+    use super::*;
+    use hauksbee_models::ComponentKind;
+
+    fn comp(reference: &str, value: &str) -> Component {
+        Component {
+            reference: reference.to_string(),
+            value: value.to_string(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn frequency_values_are_recognised() {
+        for v in ["16MHz", "8Mhz", "16.000MHz", "32.768kHz", "100 Hz", "12000000Hz"] {
+            assert!(value_is_frequency(v), "{v} should read as a frequency");
+        }
+        // A leading digit is required, and a real capacitance/resistance must not trip it.
+        for v in ["22pF", "10k", "4k7", "100nF", "BCM857BS", "Hz", "Choke", ""] {
+            assert!(!value_is_frequency(v), "{v} must NOT read as a frequency");
+        }
+    }
+
+    #[test]
+    fn crystal_detected_by_reference_or_frequency_value() {
+        assert!(is_crystal_like("Y", "16MHz"));
+        assert!(is_crystal_like("CRYSTAL", "")); // KiCad 5 default ref, value missing
+        assert!(is_crystal_like("XTAL", "8MHz"));
+        assert!(is_crystal_like("C", "16Mhz")); // 'C'-prefixed crystal caught by the value
+        assert!(!is_crystal_like("C", "22pF")); // a genuine capacitor
+        assert!(!is_crystal_like("R", "10k"));
+    }
+
+    /// The load-bearing regression: a crystal whose reference starts with 'C'
+    /// and whose value is a frequency must NOT bind as a (gigafarad) capacitor.
+    /// Before the fix it bound Passive with value 16e6 F, which collapsed the
+    /// whole co-sim solve.
+    #[test]
+    fn crystal_named_with_c_prefix_is_high_impedance_not_a_capacitor() {
+        let entry = fallback_entry(&comp("Crystal1", "16Mhz")).expect("crystal binds");
+        assert_eq!(entry.id, "crystal_fallback");
+        assert_eq!(entry.kind, ComponentKind::Ignore);
+
+        // A real 'C' capacitor still binds as a passive (no regression).
+        let cap = fallback_entry(&comp("C7", "22pF")).expect("cap binds");
+        assert_eq!(cap.kind, ComponentKind::Passive);
     }
 }
