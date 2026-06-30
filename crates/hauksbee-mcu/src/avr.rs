@@ -47,12 +47,6 @@ const SPI_IRQ_OUTPUT: i32 = 1; // MOSI (from MCU to peripheral)
 /// making GPIO output read as "never driven" (GREEN on one host, RED on another).
 const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
 
-/// Index for the whole DDR (data-direction) register. Sourced from bindgen for
-/// the same version-skew reason as `IOPORT_IRQ_REG_PORT`. Subscribed so a
-/// `pinMode(OUTPUT)` (a DDR write that leaves PORT alone) is observed and the
-/// pin is modelled as driving its PORT level.
-const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
-
 // TWI message condition flags (from avr_twi.h)
 const TWI_COND_START: u32 = 1 << 0;
 const TWI_COND_STOP: u32 = 1 << 1;
@@ -79,13 +73,8 @@ struct Callbacks {
 
 /// Per-port state tracked for edge detection.
 struct PortState {
-    /// Current PORT register byte (output levels / input pull-ups).
+    /// Current port byte value.
     current: u8,
-    /// Current DDR (data-direction) byte: 1 = output, 0 = input. Tracked so a
-    /// pin that becomes an output via `pinMode(OUTPUT)` (a DDR write with PORT
-    /// unchanged) is modelled as driving its PORT level — an output-low pin is
-    /// driven LOW, not left floating.
-    ddr: u8,
 }
 
 /// State shared between the Rust owner and C IRQ callbacks.
@@ -168,50 +157,8 @@ macro_rules! make_port_hook {
                     }
                     s.port_state
                         .entry($port_char)
-                        .or_insert(PortState { current: 0, ddr: 0 })
+                        .or_insert(PortState { current: 0 })
                         .current = new_val;
-                }
-            }
-        }
-    };
-}
-
-/// Per-port DDR (direction) hook: when a pin becomes an output, it begins
-/// driving its current PORT level. `pinMode(pin, OUTPUT)` is a DDR write that
-/// leaves PORT untouched, so the plain PORT hook above never sees it; without
-/// this hook an output-low pin (set OUTPUT, PORT bit 0, never written high)
-/// would read as "never driven / floating". We fire `on_pin_change` for each
-/// bit that just transitioned 0->1 in DDR, at its PORT level.
-macro_rules! make_ddr_hook {
-    ($fn_name:ident, $port_char:literal) => {
-        unsafe extern "C" fn $fn_name(
-            _irq: *mut ffi::avr_irq_t,
-            value: u32,
-            param: *mut std::os::raw::c_void,
-        ) {
-            let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
-            if let Ok(mut s) = state.lock() {
-                let new_ddr = value as u8;
-                let (prev_ddr, port_level) = {
-                    let entry = s
-                        .port_state
-                        .entry($port_char)
-                        .or_insert(PortState { current: 0, ddr: 0 });
-                    let prev = entry.ddr;
-                    let lvl = entry.current;
-                    entry.ddr = new_ddr;
-                    (prev, lvl)
-                };
-                let newly_output = new_ddr & !prev_ddr;
-                if newly_output != 0 {
-                    if let Some(cb) = &mut s.callbacks.on_pin_change {
-                        for bit in 0u8..8 {
-                            if (newly_output >> bit) & 1 != 0 {
-                                let high = (port_level >> bit) & 1 != 0;
-                                cb(PinId { port: $port_char, bit }, high);
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -227,15 +174,6 @@ make_port_hook!(port_hook_f, 'F');
 make_port_hook!(port_hook_g, 'G');
 make_port_hook!(port_hook_h, 'H');
 
-make_ddr_hook!(ddr_hook_a, 'A');
-make_ddr_hook!(ddr_hook_b, 'B');
-make_ddr_hook!(ddr_hook_c, 'C');
-make_ddr_hook!(ddr_hook_d, 'D');
-make_ddr_hook!(ddr_hook_e, 'E');
-make_ddr_hook!(ddr_hook_f, 'F');
-make_ddr_hook!(ddr_hook_g, 'G');
-make_ddr_hook!(ddr_hook_h, 'H');
-
 /// Map a port letter to its pre-generated hook function pointer.
 fn port_hook_fn(
     port: char,
@@ -249,23 +187,6 @@ fn port_hook_fn(
         'F' => Some(port_hook_f),
         'G' => Some(port_hook_g),
         'H' => Some(port_hook_h),
-        _ => None,
-    }
-}
-
-/// Map a port letter to its pre-generated DDR (direction) hook function pointer.
-fn ddr_hook_fn(
-    port: char,
-) -> Option<unsafe extern "C" fn(*mut ffi::avr_irq_t, u32, *mut std::os::raw::c_void)> {
-    match port {
-        'A' => Some(ddr_hook_a),
-        'B' => Some(ddr_hook_b),
-        'C' => Some(ddr_hook_c),
-        'D' => Some(ddr_hook_d),
-        'E' => Some(ddr_hook_e),
-        'F' => Some(ddr_hook_f),
-        'G' => Some(ddr_hook_g),
-        'H' => Some(ddr_hook_h),
         _ => None,
     }
 }
@@ -531,20 +452,6 @@ impl AvrMcu {
                     if !irq.is_null() {
                         ffi::avr_irq_register_notify(irq, Some(hook_fn), self.callback_ptr);
                         self.hooked_ports.push(port);
-                    }
-                }
-            }
-            // Also subscribe to the DDR register so `pinMode(OUTPUT)` (a DDR
-            // write that leaves PORT unchanged) surfaces as an output edge.
-            if let Some(ddr_fn) = ddr_hook_fn(port) {
-                unsafe {
-                    let irq = ffi::avr_io_getirq(
-                        self.avr,
-                        ioport_getirq(port as u8),
-                        IOPORT_IRQ_DIRECTION_ALL,
-                    );
-                    if !irq.is_null() {
-                        ffi::avr_irq_register_notify(irq, Some(ddr_fn), self.callback_ptr);
                     }
                 }
             }

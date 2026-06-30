@@ -129,32 +129,34 @@ The entry point is `hauksbee run <board> --firmware <img> --headless [--seconds 
 
 ### Boot-safety advisory (`--headless --plain` / `--json`)
 
-When firmware co-sim runs, hauksbee also reports a class of power-up hazard the
-netlist alone cannot adjudicate: a **control net whose power-up state is decided
-entirely by firmware, with no resistor providing a safe default.** Two cases:
+When firmware co-sim runs, hauksbee reports a power-up hazard the netlist alone
+cannot adjudicate: a **control net that switches a transistor/relay, is driven
+(or pulled) HIGH and held from reset, and has no bias resistor** setting a safe
+default — a MOSFET gate / relay / motor enable / igniter energised at power-up.
+*"control net 'X' switches a transistor/relay and is driven HIGH and held from
+the moment the board powers up … confirm the polarity and that this is
+intended."*
 
-- **Driven HIGH and held from reset, no bias resistor** — e.g. a MOSFET gate /
-  relay / motor-driver enable / igniter that the firmware switches on (or whose
-  internal pull-up it enables) at boot. *"control net 'X' is driven HIGH and held
-  from the moment the board powers up … confirm the polarity and that this is
-  intended."*
-- **Left floating the whole run** — a net wired to an MCU GPIO output that drives
-  a transistor/relay but that the firmware never asserts, so its level is
-  undefined at power-up. *"control net 'X' drives a transistor/relay but the
-  firmware never drove it … add a gate/coil pull-down or drive it early."*
+Three conditions must all hold, and the **switch requirement is the zero-FP
+guard**: it is what separates a genuine load-control net (e.g. the igniter gate
+fed by a mis-mapped `SoftwareSerial` pull-up) from an ordinary `INPUT_PULLUP`
+button input, which also reads HIGH at boot but switches nothing. It is honest,
+advisory data, **never a fault on its own** (a held-high enable that *should* be
+high is correct), so the plain report stops saying "Looks healthy" and instead
+says "no failures, but N worth a look" and names the net; a board whose firmware
+only toggles a signal stays "healthy". The advisory also appears in `--json` as a
+note with `kind: "boot_control_net"`. Pass `--strict-boot` to fail CI (exit 2) on
+it; by default it does not affect the exit code.
 
-It is honest, advisory data, **never a fault on its own** (a held-high enable
-that *should* be high is correct), so the plain report stops saying "Looks
-healthy" and instead says "no failures, but N worth a look" and names them; a
-board whose firmware only toggles signals (a blink LED) stays "healthy". The
-never-driven case is narrowed to nets touching a transistor/relay so it stays off
-unused header / test-point pins. Both cases also appear in `--json` as notes with
-`kind: "boot_control_net"`. Pass `--strict-boot` to fail CI (exit 2) on any such
-note; by default they do not affect the exit code. For a deadline-gated, named
-pass/fail version, use the `boot-coverage` assertion in `hauksbee-ci`
-(`boot_gate_pass.toml` / `boot_gate_fail.toml`). This is exactly how the
-`explosion33/RocketryIgniter` power-up ignition fault surfaces from one command
-(see [`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)).
+The complementary **floating-gate** case — a control net the firmware *never*
+drives, left undefined at power-up — is intentionally *not* auto-flagged here:
+without a device model to tell a forgotten gate-drive from a deliberate GPIO
+input on the same net, an automatic version is false-positive-prone, so it is
+served soundly by the deadline-gated, *named* `boot-coverage` assertion in
+`hauksbee-ci` (`boot_gate_pass.toml` / `boot_gate_fail.toml`). The held-high
+advisory is exactly how the `explosion33/RocketryIgniter` power-up ignition fault
+surfaces from one command (see
+[`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)).
 
 ### The `Mcu` trait and three backends
 

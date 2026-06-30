@@ -21,6 +21,9 @@
 //!                          verdict (what / why / fix). Alias `--explain`.
 //! - `run --strict`       : exit 2 when a report finds a real defect (else 0).
 //!                          Alias `--fail-on-findings`.
+//! - `run --strict-boot`  : exit 2 when the co-sim raises a boot-safety advisory
+//!                          (a switch-driving control net held HIGH at power-up
+//!                          with no bias). Advisory-only without this flag.
 //! - `run` (default)      : serve the live websocket (frontend/dist if present).
 //! - `serve`              : local web front door: open a page, drop a board,
 //!                          get the plain-language report in the browser.
@@ -925,27 +928,21 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let zero_activity =
             total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
 
-        // Boot-safety advisories — computed once so the --json and --plain paths
-        // agree. Held-high: a control net the firmware drives HIGH and holds from
-        // reset with no bias resistor. Never-driven: a control net wired to an MCU
-        // GPIO that the firmware never asserts AND that drives a switch (a
-        // transistor / relay) — left floating, its level undefined at power-up.
-        // Both are narrowed to nets with no hardware fail-safe; the switch guard
-        // keeps the never-driven case off unused header / test-point pins.
+        // Boot-safety advisory — computed once so the --json and --plain paths
+        // agree. A control net the firmware drives (or pulls) HIGH and holds from
+        // reset, that **switches a transistor/relay** and has **no bias resistor**
+        // setting a safe default: a MOSFET gate / relay / motor enable / igniter
+        // energised at power-up. The switch requirement is the zero-FP guard — it
+        // is what separates a genuine load-control net (e.g. the igniter gate fed
+        // by a mis-mapped SoftwareSerial pull-up) from an ordinary `INPUT_PULLUP`
+        // button input, which is also held high but switches nothing.
         let held_high_boot_nets: Vec<String> = engine
             .scheduler()
             .firmware_held_high_nets()
             .into_iter()
-            .filter(|net| net_has_no_bias_resistor(&board, net))
+            .filter(|net| net_drives_a_switch(&board, net) && net_has_no_bias_resistor(&board, net))
             .collect();
-        let never_driven_boot_nets: Vec<String> = engine
-            .scheduler()
-            .firmware_never_driven_nets()
-            .into_iter()
-            .filter(|net| net_has_no_bias_resistor(&board, net) && net_drives_a_switch(&board, net))
-            .collect();
-        let has_boot_advisory =
-            !held_high_boot_nets.is_empty() || !never_driven_boot_nets.is_empty();
+        let has_boot_advisory = !held_high_boot_nets.is_empty();
 
         if args.json {
             let mut jr = JsonReport::new(&board_name, summary);
@@ -970,20 +967,11 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::BootControlNet,
                     message: format!(
-                        "control net '{net}' is driven HIGH and held from power-up, with no \
-                         resistor setting a safe default. If a HIGH on it turns something ON \
-                         that must stay OFF until firmware enables it, it is energised at \
-                         power-up — confirm the polarity and that this is intended."
-                    ),
-                });
-            }
-            for net in &never_driven_boot_nets {
-                jr.notes.push(JsonNote {
-                    kind: JsonNoteKind::BootControlNet,
-                    message: format!(
-                        "control net '{net}' drives a transistor/relay but the firmware never \
-                         drove it during the run, and it has no bias resistor — its switch sits \
-                         at an undefined level at power-up until firmware asserts it."
+                        "control net '{net}' drives a transistor/relay, is driven HIGH and held \
+                         from power-up, and has no resistor setting a safe default. If a HIGH on \
+                         it turns the switched load ON when it must stay OFF until firmware \
+                         enables it, it is energised at power-up — confirm the polarity and that \
+                         this is intended."
                     ),
                 });
             }
@@ -1015,19 +1003,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             // gate high (or enabled a pull-up on it) before anything else ran.
             for net in &held_high_boot_nets {
                 report.heads_up.push(format!(
-                    "control net '{net}' is driven HIGH and held from the moment the board \
-                     powers up, with no resistor setting a safe default level. If a HIGH on \
-                     this net turns something ON that must stay OFF until the firmware \
-                     deliberately enables it (a MOSFET, relay, motor driver, or igniter), it \
-                     is energised at power-up — confirm the polarity and that this is intended."
-                ));
-            }
-            for net in &never_driven_boot_nets {
-                report.heads_up.push(format!(
-                    "control net '{net}' drives a transistor/relay but the firmware never drove \
-                     it during the run, and it has no resistor holding a safe default — so its \
-                     switch sits at an undefined level at power-up until the firmware asserts \
-                     it. If it must be OFF at reset, add a gate/coil pull-down or drive it early."
+                    "control net '{net}' switches a transistor/relay and is driven HIGH and held \
+                     from the moment the board powers up, with no resistor setting a safe default \
+                     level. If a HIGH on this net turns the load ON when it must stay OFF until \
+                     the firmware deliberately enables it (a MOSFET, relay, motor driver, or \
+                     igniter), it is energised at power-up — confirm the polarity and that this \
+                     is intended."
                 ));
             }
             println!();
@@ -1052,10 +1033,20 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         if args.strict && !faults.is_empty() {
             std::process::exit(2);
         }
-        // --strict-boot: opt-in escalation of the boot-safety advisories to a
+        // --strict-boot: opt-in escalation of the boot-safety advisory to a
         // failing gate (exit 2). The run was valid and these are real findings
-        // about specific nets; default behaviour leaves them advisory-only.
+        // about specific nets; default behaviour leaves them advisory-only. Print
+        // the reason to stderr so the failure is never silent — including in the
+        // default headless mode (neither --json nor --plain), where the advisory
+        // text is not otherwise emitted.
         if args.strict_boot && has_boot_advisory {
+            for net in &held_high_boot_nets {
+                eprintln!(
+                    "BOOT HAZARD (--strict-boot): control net '{net}' switches a transistor/relay \
+                     and is driven HIGH and held from power-up with no bias resistor — the load is \
+                     energised at reset."
+                );
+            }
             std::process::exit(2);
         }
         return Ok(());
@@ -1688,7 +1679,9 @@ fn net_has_no_bias_resistor(board: &hauksbee_extract::ExtractedBoard, net_name: 
     let is_resistor =
         |c: &hauksbee_extract::Component| c.reference.starts_with('R') || c.reference.starts_with('r');
     for (comp, _) in board.net_members(net.id) {
-        if !is_resistor(comp) {
+        // A DNP (not-assembled) resistor is electrically absent: it must NOT be
+        // credited as a bias (that would suppress a real hazard).
+        if comp.dnp || !is_resistor(comp) {
             continue;
         }
         for p in &comp.pins {
@@ -1703,42 +1696,55 @@ fn net_has_no_bias_resistor(board: &hauksbee_extract::ExtractedBoard, net_name: 
 }
 
 /// True when a net connects to a transistor or relay — a switch whose control
-/// input (a MOSFET/BJT gate-base, a relay coil) left at an undefined level at
-/// power-up is a genuine hazard. Used to narrow the "never driven" boot
-/// advisory off unused header / test-point pins (which touch no switch) so it
-/// stays zero-false-positive. Reference prefix 'Q' = transistor, 'K' = relay
-/// (standard KiCad designators).
+/// input (a MOSFET/BJT gate-base, a relay coil) at the wrong level at power-up
+/// switches a load. This is the load-bearing zero-FP guard for the boot
+/// advisory: it separates a genuine load-control net (e.g. an igniter gate fed
+/// by a mis-mapped pull-up) from an ordinary `INPUT_PULLUP` button input — both
+/// read HIGH at boot, but only the former switches anything. Reference prefix
+/// 'Q' = transistor, 'K' = relay (standard KiCad designators). DNP (not
+/// assembled) switches don't count. (Pin-function data that would let us require
+/// the *control* terminal specifically is absent in PCB-only extraction, so any
+/// terminal of a populated Q/K qualifies — a deliberate, conservative breadth.)
 fn net_drives_a_switch(board: &hauksbee_extract::ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
     };
     board.net_members(net.id).iter().any(|(c, _)| {
-        matches!(
-            c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()),
-            Some('Q') | Some('K')
-        )
+        !c.dnp
+            && matches!(
+                c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()),
+                Some('Q') | Some('K')
+            )
     })
 }
 
-/// Whether a net id names a power rail or ground, by the usual KiCad conventions
-/// (GND/AGND/VSS family; a leading '+', VCC/VDD/VBAT, or a voltage like 3V3/5V).
+/// Whether a net id names a power rail or ground. Grounds: the GND/AGND/VSS
+/// family. Rails: a leading '+', a `V…`/`…V` name (VCC/VDD/VBAT/VMOT/VSYS/VIN
+/// and bare voltages like 12V/3V3/5V/1V8). The broad `V`-name rule is
+/// deliberately inclusive — a missed rail would mis-read a real pull as "no
+/// bias" and over-flag, so on the zero-FP surface we err toward recognising
+/// rails (a false rail only *suppresses* an advisory, the safe direction here is
+/// the opposite, hence breadth).
 fn is_power_or_ground_net(board: &hauksbee_extract::ExtractedBoard, net_id: i64) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.id == net_id) else {
         return false;
     };
     let n = net.name.to_ascii_uppercase();
-    n.starts_with("GND")
-        || n == "AGND"
-        || n == "DGND"
-        || n.starts_with("VSS")
-        || n.starts_with('+')
-        || n.starts_with("VCC")
-        || n.starts_with("VDD")
-        || n.starts_with("VBAT")
-        || n.contains("3V3")
-        || n.contains("3.3V")
-        || n.contains("5V")
-        || n.contains("1V8")
+    // Ground family.
+    if n.starts_with("GND") || n.ends_with("GND") || n.starts_with("VSS") {
+        return true;
+    }
+    // Explicit '+' rail (e.g. "+3V3", "+5V", "+12V").
+    if n.starts_with('+') {
+        return true;
+    }
+    // V-prefixed rails (VCC/VDD/VBAT/VMOT/VSYS/VIN/VIO/VREF…) and bare voltage
+    // names with a digit and a 'V' (e.g. "12V", "3V3", "5V0", "1V8", "9V").
+    let v_named = n.starts_with('V') && n.len() >= 2;
+    let voltage_named = n.contains('V')
+        && n.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && n.chars().any(|c| c.is_ascii_digit());
+    v_named || voltage_named
 }
 
 /// Build the machine-readable co-sim summary (Track B) from a finished run.
@@ -2287,13 +2293,18 @@ mod boot_headsup_tests {
     #[test]
     fn rails_and_grounds_recognised_signals_not() {
         let b = board(
-            &[(1, "GND"), (2, "+3V3"), (3, "VCC"), (4, "GNDA"), (5, "5V"), (6, "SIG")],
+            &[
+                (1, "GND"), (2, "+3V3"), (3, "VCC"), (4, "GNDA"), (5, "5V"),
+                (6, "VMOT"), (7, "VSYS"), (8, "VIN"), (9, "12V"), (10, "1V8"),
+                (11, "SIG"), (12, "DATA0"),
+            ],
             vec![],
         );
-        for id in [1, 2, 3, 4, 5] {
+        for id in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
             assert!(is_power_or_ground_net(&b, id), "net {id} should be rail/ground");
         }
-        assert!(!is_power_or_ground_net(&b, 6), "SIG must not read as rail/ground");
+        assert!(!is_power_or_ground_net(&b, 11), "SIG must not read as rail/ground");
+        assert!(!is_power_or_ground_net(&b, 12), "DATA0 must not read as rail/ground");
     }
 
     #[test]
@@ -2325,6 +2336,9 @@ mod boot_headsup_tests {
     }
 
     fn part(reference: &str, net: i64) -> Component {
+        part_dnp(reference, net, false)
+    }
+    fn part_dnp(reference: &str, net: i64, dnp: bool) -> Component {
         Component {
             reference: reference.into(),
             value: String::new(),
@@ -2333,7 +2347,7 @@ mod boot_headsup_tests {
             position: None,
             layer: String::new(),
             properties: vec![],
-            dnp: false,
+            dnp,
             pins: vec![pin(Some(net))],
         }
     }
@@ -2341,15 +2355,22 @@ mod boot_headsup_tests {
     #[test]
     fn net_to_transistor_or_relay_drives_a_switch() {
         // GATE -> Q1 (transistor) and COIL -> K1 (relay) both count; a net to
-        // only a header / IC does not, so the never-driven advisory stays off
-        // unused breakout pins.
+        // only a header / IC does not, so the boot advisory stays off pins that
+        // switch nothing. A DNP (not-assembled) transistor does NOT count.
         let b = board(
-            &[(1, "GATE"), (2, "COIL"), (3, "HDR")],
-            vec![part("Q1", 1), part("K1", 2), part("J3", 3), part("U7", 3)],
+            &[(1, "GATE"), (2, "COIL"), (3, "HDR"), (4, "DNPGATE")],
+            vec![
+                part("Q1", 1),
+                part("K1", 2),
+                part("J3", 3),
+                part("U7", 3),
+                part_dnp("Q9", 4, true),
+            ],
         );
         assert!(net_drives_a_switch(&b, "GATE"));
         assert!(net_drives_a_switch(&b, "COIL"));
         assert!(!net_drives_a_switch(&b, "HDR"));
+        assert!(!net_drives_a_switch(&b, "DNPGATE"), "a DNP transistor must not count");
         assert!(!net_drives_a_switch(&b, "missing"));
     }
 }

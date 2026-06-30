@@ -351,3 +351,66 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
         "--check --strict must not fail on unvalidated-version shorts"
     );
 }
+
+/// The boot-safety advisory, end to end through the compiled binary: a board
+/// whose firmware drives a transistor-gate net HIGH and holds it from reset
+/// (boot_gate + variant A) is named in `--headless --json` as a
+/// `boot_control_net` note, advisory-only by default (exit 0), and escalated to
+/// exit 2 under `--strict-boot`. Uses committed fixtures.
+#[test]
+fn boot_advisory_emits_note_and_strict_boot_gates() {
+    let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
+    if !fw.exists() {
+        eprintln!("skipping: boot_gate_a firmware not built");
+        return;
+    }
+    let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
+
+    // Advisory present in JSON, and NOT a gate by default.
+    let out = run(&["run", b, "--firmware", fw, "--headless", "--seconds", "0.05", "--json"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"boot_control_net\""),
+        "expected a boot_control_net note for the held-high GATE_CTRL; got:\n{stdout}"
+    );
+    assert!(
+        out.status.success(),
+        "a boot advisory must NOT fail the run without --strict-boot"
+    );
+
+    // --strict-boot escalates it to exit 2.
+    let strict = run(&[
+        "run", b, "--firmware", fw, "--headless", "--seconds", "0.05", "--strict-boot",
+    ]);
+    assert_eq!(
+        strict.status.code(),
+        Some(2),
+        "--strict-boot must exit 2 when a held-high switch net has no bias"
+    );
+}
+
+/// A clean board whose firmware only toggles a signal (no switch-driving net
+/// held high) raises NO boot advisory and is not gated by --strict-boot.
+#[test]
+fn clean_firmware_raises_no_boot_advisory() {
+    let b = board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
+    let fw = board("../../testdata/firmware/demo/demo.hex");
+    if !fw.exists() {
+        eprintln!("skipping: demo firmware not present");
+        return;
+    }
+    let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
+    let out = run(&[
+        "run", b, "--firmware", fw, "--headless", "--seconds", "0.1", "--json", "--strict-boot",
+    ]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("\"boot_control_net\""),
+        "a toggling signal must not raise a boot advisory; got:\n{stdout}"
+    );
+    assert!(
+        out.status.success(),
+        "--strict-boot must exit 0 when there is no boot advisory"
+    );
+}
