@@ -36,7 +36,7 @@ use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use hauksbee_models::value::parse_value;
-use hauksbee_models::{ModelLibrary, StrapLevel};
+use hauksbee_models::{ModelLibrary, StrapInternalPull, StrapLevel};
 
 use crate::binder::resolve;
 
@@ -72,7 +72,27 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
             let Some(net) = board.net(net_id) else {
                 continue;
             };
-            if is_unconnected_net(&net.name) {
+            // A floating strap net. For a pin with a documented internal pull
+            // (every ESP32 strap) an undriven net settles to a defined level, so
+            // skip — the prior, conservative behaviour. But a pin with NO internal
+            // pull (STM32 BOOT0) left floating is genuinely undefined at reset:
+            // that is the fault, not a non-event. This is the boot-mode latch the
+            // firmware cannot override.
+            if is_unconnected_net(&net.name) || net_is_isolated_to(board, net_id, comp) {
+                if strap.internal_pull == StrapInternalPull::None {
+                    report.findings.push(LintFinding {
+                        check: LintCheck::StrapPin,
+                        severity: Severity::High,
+                        message: format!(
+                            "{} strap pin {} ({}) is left floating (net '{}' has no pull resistor and \
+                             the pin has no internal pull): the boot level is undefined at reset, so the \
+                             part may enter the bootloader instead of the application ({})",
+                            comp.reference, pad_num, strap.role, net.name, strap.note
+                        ),
+                        refs: vec![comp.reference.clone()],
+                        nets: vec![net.name.clone()],
+                    });
+                }
                 continue;
             }
             examine_strap(
@@ -378,6 +398,19 @@ fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
+/// True when the only thing on `net_id` is `mcu` itself — no resistor, no other
+/// component, nothing that could define a level. Such a strap net is floating
+/// just as surely as a KiCad `unconnected-*` net, even if it carries a real name.
+/// A net with ANY other member (a pull resistor, a header, a jumper, another
+/// driver) is NOT isolated, so a jumper-selectable BOOT0 (a resistor to a 3-pin
+/// header, as on dev boards) never trips this — only a genuinely dangling pin.
+fn net_is_isolated_to(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> bool {
+    board
+        .net_members(net_id)
+        .iter()
+        .all(|(c, _)| c.reference == mcu.reference)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +583,61 @@ mod tests {
             r.of_check(LintCheck::StrapPin).count(),
             0,
             "BOOT0 pulled low is correct, no finding"
+        );
+    }
+
+    #[test]
+    fn floating_boot0_no_internal_pull_fires_high() {
+        // The flight-controller bug shape (explosion33/RCS_Hardware): an STM32
+        // BOOT0 pad left UNCONNECTED, with no pull resistor anywhere. STM32 BOOT0
+        // has no internal pull, so the boot source is undefined at reset — the
+        // part can come up in the bootloader instead of the application. Must fire
+        // a SERIOUS strap finding.
+        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 38 "unconnected-(U1-Pad44)")
+  (module Package_QFP:LQFP-48 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F401CCU6 (at 0 2) (layer F.Fab))
+    (pad 9  smd rect (at 0 0) (net 2 "+3V3"))
+    (pad 8  smd rect (at 0 1) (net 1 "GND"))
+    (pad 44 smd rect (at 0 2) (net 38 "unconnected-(U1-Pad44)"))
+  )
+)"#;
+        let r = strap_findings(text);
+        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(strap.len(), 1, "a floating BOOT0 with no internal pull must fire");
+        assert!(matches!(strap[0].severity, Severity::High));
+        assert!(strap[0].message.contains("floating"));
+        assert!(strap[0].nets.iter().any(|n| n.contains("Pad44")));
+    }
+
+    #[test]
+    fn floating_esp32_strap_does_not_fire() {
+        // The symmetric negative: an ESP32 GPIO0 left undriven must NOT fire — the
+        // ESP32 strap has a documented internal pull, so a floating net settles to
+        // a defined level. This is the calibration the floating arm must respect.
+        let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 5 "+3V3")
+  (net 9 "unconnected-(U3-Pad25)")
+  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U3 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP32-WROOM-32 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 5 "+3V3"))
+    (pad 25 smd rect (at 0 5) (net 9 "unconnected-(U3-Pad25)"))
+  )
+)"#;
+        let r = strap_findings(text);
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "a floating ESP32 strap (internal pull) must not fire"
         );
     }
 
