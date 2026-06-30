@@ -842,10 +842,13 @@ impl Scheduler {
                 }
                 let Some(name) = name_of(node) else { continue };
                 let Some(st) = self.stats.get(name) else { continue };
-                // Held HIGH: reached a clear logic-high and is not a busy signal
-                // line (<=1 rising edge = driven once and held; many edges =
-                // SPI / UART / PWM / a blinking LED, which are not control holds).
-                if st.max_v >= 2.0 && st.toggles <= 1 {
+                // Held HIGH: reached a clear logic-high (>= 3.0 V, the same floor
+                // update_stats uses) and is not a busy signal line (<=1 rising
+                // edge = driven once and held; many edges = SPI / UART / PWM / a
+                // blinking LED, which are not control holds). The analog check is
+                // belt-and-suspenders: last_levels already confirms the firmware
+                // drove the pin high; this confirms the net physically went high.
+                if st.max_v >= 3.0 && st.toggles <= 1 {
                     out.push(name.to_string());
                 }
             }
