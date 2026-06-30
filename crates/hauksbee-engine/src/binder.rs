@@ -1935,7 +1935,7 @@ fn device_label(d: &Device) -> String {
 }
 
 /// Map an ATmega328P / Arduino-Nano role string to a `(port, bit)` GPIO id.
-fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
+pub(crate) fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
         // Arduino Nano header: d0..d13 map to Arduino digital pins.

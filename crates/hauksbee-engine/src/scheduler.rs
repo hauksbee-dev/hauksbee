@@ -30,7 +30,7 @@ use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_solve::{Layout, SolverOptions, Transient};
 
 use crate::behavioral::BehavioralDevice;
-use crate::binder::{BoundBoard, McuBinding};
+use crate::binder::{gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::DigitalComponent;
 use crate::peripherals::{I2cBus, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
 use crate::power_supply::{PowerSupply, SupplyLeg};
@@ -811,6 +811,48 @@ impl Scheduler {
                 )
             })
             .collect()
+    }
+
+    /// MCU GPIO control nets the firmware drives HIGH and holds from boot: a
+    /// settled, non-toggling logic-high. The power-up level of such a net is
+    /// decided entirely by firmware, so if one controls a load that must be OFF
+    /// at power-up (a MOSFET gate, relay / motor-driver enable, igniter), an
+    /// unintended HIGH is a real hazard the netlist alone cannot adjudicate.
+    ///
+    /// This is honest heads-up *data*, never a fault on its own (a held-high
+    /// enable that *should* be high is fine). The caller frames it for the user
+    /// and may further narrow to nets with no static bias resistor — the case
+    /// where there is no hardware fail-safe at all.
+    pub fn firmware_held_high_nets(&self) -> Vec<String> {
+        let name_of = |target: NodeId| -> Option<&str> {
+            self.net_nodes
+                .iter()
+                .find(|(_, n)| n.0 == target.0)
+                .map(|(name, _)| name.as_str())
+        };
+        let mut out = Vec::new();
+        for m in &self.mcus {
+            for (role, &node) in &m.binding.role_nets {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                    continue;
+                };
+                // The firmware's most recent (and, for a held line, final) drive.
+                if m.last_levels.get(&(port, bit)) != Some(&true) {
+                    continue;
+                }
+                let Some(name) = name_of(node) else { continue };
+                let Some(st) = self.stats.get(name) else { continue };
+                // Held HIGH: reached a clear logic-high and is not a busy signal
+                // line (<=1 rising edge = driven once and held; many edges =
+                // SPI / UART / PWM / a blinking LED, which are not control holds).
+                if st.max_v >= 2.0 && st.toggles <= 1 {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// Last GPIO levels per MCU, for component-state frames.
