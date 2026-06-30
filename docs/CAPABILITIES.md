@@ -127,6 +127,35 @@ transitions fire in the correct order; boot timing is observed in simulated time
 
 The entry point is `hauksbee run <board> --firmware <img> --headless [--seconds N]`.
 
+### Boot-safety advisory (`--headless --plain` / `--json`)
+
+When firmware co-sim runs, hauksbee also reports a class of power-up hazard the
+netlist alone cannot adjudicate: a **control net whose power-up state is decided
+entirely by firmware, with no resistor providing a safe default.** Two cases:
+
+- **Driven HIGH and held from reset, no bias resistor** — e.g. a MOSFET gate /
+  relay / motor-driver enable / igniter that the firmware switches on (or whose
+  internal pull-up it enables) at boot. *"control net 'X' is driven HIGH and held
+  from the moment the board powers up … confirm the polarity and that this is
+  intended."*
+- **Left floating the whole run** — a net wired to an MCU GPIO output that drives
+  a transistor/relay but that the firmware never asserts, so its level is
+  undefined at power-up. *"control net 'X' drives a transistor/relay but the
+  firmware never drove it … add a gate/coil pull-down or drive it early."*
+
+It is honest, advisory data, **never a fault on its own** (a held-high enable
+that *should* be high is correct), so the plain report stops saying "Looks
+healthy" and instead says "no failures, but N worth a look" and names them; a
+board whose firmware only toggles signals (a blink LED) stays "healthy". The
+never-driven case is narrowed to nets touching a transistor/relay so it stays off
+unused header / test-point pins. Both cases also appear in `--json` as notes with
+`kind: "boot_control_net"`. Pass `--strict-boot` to fail CI (exit 2) on any such
+note; by default they do not affect the exit code. For a deadline-gated, named
+pass/fail version, use the `boot-coverage` assertion in `hauksbee-ci`
+(`boot_gate_pass.toml` / `boot_gate_fail.toml`). This is exactly how the
+`explosion33/RocketryIgniter` power-up ignition fault surfaces from one command
+(see [`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)).
+
 ### The `Mcu` trait and three backends
 
 All three backends expose the identical lockstep surface: `run_micros`,
