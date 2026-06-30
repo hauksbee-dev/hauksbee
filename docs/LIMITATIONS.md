@@ -97,20 +97,6 @@ to be hauksbee defects.
   fallback regression asserting a `C`-named crystal binds `Ignore` while
   `C7=22pF` stays `Passive`; the crystal-load-cap SI checks are unaffected.
 
-### 5. Output-low pins read as "never driven" (`pinMode(OUTPUT)` not modelled)
-
-- **Was** (`crates/hauksbee-mcu/src/avr.rs`): the AVR backend hooked only the
-  PORT register, so `pinMode(pin, OUTPUT)` — a DDR-register write that leaves
-  PORT at 0 — produced no edge. An output-low-held pin (a gate driven LOW and
-  left there) thus looked Hi-Z, so a firmware *correctly* holding a control net
-  safe-low could be flagged as floating (e.g. the RocketryIgniter `IgnitTwo`
-  gate, the safe one).
-- **Fix** (`a8d7b35`): also subscribe to `IOPORT_IRQ_DIRECTION_ALL`; when a pin
-  becomes an output it fires a pin-change at its PORT level, so output-low pins
-  are modelled as driven LOW. Verified against boot_gate pass/fail, blinky, the
-  AVR I2C/SPI co-sims, and the igniter (the false `IgnitTwo` flag is gone; a
-  genuinely-never-configured gate still flags).
-
 ## Deferred (genuinely hard or wrong to "fix"), with reason
 
 ### Legacy KiCad-5 `.sch` (non-s-expression) reader

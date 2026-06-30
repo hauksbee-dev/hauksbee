@@ -81,7 +81,7 @@ per chunk over RSP is far too slow).
   (`-drive file=...,if=mtd,format=raw`), and opens a QMP control socket, a serial
   socket, and (best-effort) a gdbstub. It is killed on drop. The binary is found
   via `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32`, then `$HAUKSBEE_QEMU_DIR`,
-  then `~/.hauksbee-qemu-esp/qemu/bin/`, then the esp-idf idf_tools install, then
+  then `~/.galvani-qemu-esp/qemu/bin/`, then the esp-idf idf_tools install, then
   `PATH` (rejecting Homebrew's mainline qemu, which has no esp32 machine). If none
   is found, instantiation fails with a clear install message (tests skip).
 
@@ -201,11 +201,6 @@ are proven through QEMU above.
   0 V / "never driven". If you see board-wide all-zero co-sim voltages, confirm
   you are on a build with `39128bb`+ and check `--report` for any passive with an
   absurd capacitance. See [`LIMITATIONS.md`](LIMITATIONS.md) Fixed #4.
-- **AVR `pinMode(OUTPUT)`.** The AVR backend hooks both the PORT and DDR
-  registers, so a pin set OUTPUT with PORT=0 is modelled as driven **LOW** (not
-  floating). A pin that never has DDR set and is never written stays Hi-Z — which
-  is what the boot-safety "never driven" advisory keys off. See
-  [`LIMITATIONS.md`](LIMITATIONS.md) Fixed #5.
 - **ESP32 GPIO needs the firmware mailbox** (stock third-party firmware is
   GPIO-invisible). The exact, empirically-validated reason and the QEMU-fork
   patch that would remove the requirement are in
@@ -260,7 +255,7 @@ Install (two pieces, both native macOS-arm64 / Linux):
 
 ```
 # 1. Espressif QEMU fork binary (small, ~4 MB; no esp-idf needed for it):
-#    grab the prebuilt release and unpack to ~/.hauksbee-qemu-esp/qemu
+#    grab the prebuilt release and unpack to ~/.galvani-qemu-esp/qemu
 #    https://github.com/espressif/qemu/releases   (qemu-xtensa-softmmu-... and
 #    qemu-riscv32-softmmu-... for the C3), or:
 #    python $IDF_PATH/tools/idf_tools.py install qemu-xtensa qemu-riscv32

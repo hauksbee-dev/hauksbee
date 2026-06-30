@@ -89,7 +89,7 @@ hauksbee calls `find_qemu(arch)` in
    binary; used directly if set.
 2. `$HAUKSBEE_QEMU_DIR/bin/<name>` — points at the `bin/` directory of the
    unpacked fork.
-3. `~/.hauksbee-qemu-esp/qemu/bin/<name>` — the conventional manual-unpack
+3. `~/.galvani-qemu-esp/qemu/bin/<name>` — the conventional manual-unpack
    location.
 4. `~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>` — the location used by
    ESP-IDF's `idf_tools.py install qemu-xtensa qemu-riscv32`.
@@ -265,10 +265,10 @@ automatically (slot 4).
      -C "$DEST" --strip-components=1
    ```
 
-4. Alternatively, unpack both into `~/.hauksbee-qemu-esp/qemu/` (slot 3):
+4. Alternatively, unpack both into `~/.galvani-qemu-esp/qemu/` (slot 3):
 
    ```
-   mkdir -p ~/.hauksbee-qemu-esp/qemu/bin
+   mkdir -p ~/.galvani-qemu-esp/qemu/bin
    # copy qemu-system-xtensa and qemu-system-riscv32 into that bin/ dir
    ```
 
