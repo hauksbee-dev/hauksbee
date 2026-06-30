@@ -957,6 +957,23 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
                         .to_string(),
                 );
             }
+            // Boot-safety heads-up: control nets the firmware switches ON and
+            // holds from power-up, with no resistor setting a safe default. The
+            // netlist alone cannot tell whether a power-up HIGH is intended;
+            // running the firmware can. This is what surfaces, e.g., a MOSFET /
+            // relay / igniter that energises at reset because firmware drove its
+            // gate high (or enabled a pull-up on it) before anything else ran.
+            for net in engine.scheduler().firmware_held_high_nets() {
+                if net_has_no_bias_resistor(&board, &net) {
+                    report.heads_up.push(format!(
+                        "control net '{net}' is switched ON (driven HIGH and held) from the \
+                         moment the board powers up, and it has no resistor holding a safe \
+                         default level. If this net switches a load that must stay OFF until \
+                         the firmware deliberately turns it on (a MOSFET, relay, motor driver, \
+                         or igniter), that load is energised at power-up — confirm this is intended."
+                    ));
+                }
+            }
             println!();
             print!("{}", report.render());
         }
@@ -1603,6 +1620,21 @@ fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &
 /// to summarise). Reads the scheduler's per-net stats for the total toggle count
 /// and the top-N most-active nets, and the MCU binding identities for the
 /// requested part / backend / substitution flag.
+/// True when a net carries no bias resistor: nothing on the board fixes its
+/// power-up level, so it is set entirely by firmware. Used to sharpen the
+/// boot-control-net heads-up to nets with no hardware fail-safe. A net that
+/// *has* any resistor is treated as possibly-biased and left unflagged
+/// (conservative — better to stay quiet than nag a properly-pulled net).
+fn net_has_no_bias_resistor(board: &hauksbee_extract::ExtractedBoard, net_name: &str) -> bool {
+    let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
+        return false;
+    };
+    !board
+        .net_members(net.id)
+        .iter()
+        .any(|(c, _)| c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) == Some('R'))
+}
+
 fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJson> {
     let sched = engine.scheduler();
     let identities = sched.mcu_identities();
