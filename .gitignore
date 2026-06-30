@@ -19,3 +19,4 @@ __pycache__/
 # Claude Code session data / agent worktrees
 .claude/
 .playwright-cli/
+scratchpad/
