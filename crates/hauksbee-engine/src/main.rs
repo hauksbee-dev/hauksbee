@@ -222,6 +222,13 @@ struct RunArgs {
     #[arg(long, help_heading = "Advanced / analyses")]
     strict_thermal: bool,
 
+    /// Opt-in: escalate the co-sim boot-safety advisories to exit 2. By default,
+    /// heads-up notes about MCU control nets driven HIGH at boot — or left
+    /// floating the whole run — with no bias resistor are advisory only and do
+    /// not affect the exit code. Pass --strict-boot to fail CI on any such note.
+    #[arg(long, help_heading = "Advanced / analyses")]
+    strict_boot: bool,
+
     /// List the board's net names (sorted) and exit. Use it to find the exact net
     /// to pass to `--ac-node` / `--ac-loop` without grepping the layout file.
     #[arg(long)]
@@ -918,6 +925,28 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let zero_activity =
             total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
 
+        // Boot-safety advisories — computed once so the --json and --plain paths
+        // agree. Held-high: a control net the firmware drives HIGH and holds from
+        // reset with no bias resistor. Never-driven: a control net wired to an MCU
+        // GPIO that the firmware never asserts AND that drives a switch (a
+        // transistor / relay) — left floating, its level undefined at power-up.
+        // Both are narrowed to nets with no hardware fail-safe; the switch guard
+        // keeps the never-driven case off unused header / test-point pins.
+        let held_high_boot_nets: Vec<String> = engine
+            .scheduler()
+            .firmware_held_high_nets()
+            .into_iter()
+            .filter(|net| net_has_no_bias_resistor(&board, net))
+            .collect();
+        let never_driven_boot_nets: Vec<String> = engine
+            .scheduler()
+            .firmware_never_driven_nets()
+            .into_iter()
+            .filter(|net| net_has_no_bias_resistor(&board, net) && net_drives_a_switch(&board, net))
+            .collect();
+        let has_boot_advisory =
+            !held_high_boot_nets.is_empty() || !never_driven_boot_nets.is_empty();
+
         if args.json {
             let mut jr = JsonReport::new(&board_name, summary);
             // A substitution is an info-level note that must never be silently
@@ -935,6 +964,27 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
                               firmware was not exercised — this result cannot vouch \
                               for firmware behaviour"
                         .to_string(),
+                });
+            }
+            for net in &held_high_boot_nets {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::BootControlNet,
+                    message: format!(
+                        "control net '{net}' is driven HIGH and held from power-up, with no \
+                         resistor setting a safe default. If a HIGH on it turns something ON \
+                         that must stay OFF until firmware enables it, it is energised at \
+                         power-up — confirm the polarity and that this is intended."
+                    ),
+                });
+            }
+            for net in &never_driven_boot_nets {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::BootControlNet,
+                    message: format!(
+                        "control net '{net}' drives a transistor/relay but the firmware never \
+                         drove it during the run, and it has no bias resistor — its switch sits \
+                         at an undefined level at power-up until firmware asserts it."
+                    ),
                 });
             }
             jr.cosim = cosim;
@@ -963,16 +1013,22 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             // running the firmware can. This is what surfaces, e.g., a MOSFET /
             // relay / igniter that energises at reset because firmware drove its
             // gate high (or enabled a pull-up on it) before anything else ran.
-            for net in engine.scheduler().firmware_held_high_nets() {
-                if net_has_no_bias_resistor(&board, &net) {
-                    report.heads_up.push(format!(
-                        "control net '{net}' is driven HIGH and held from the moment the board \
-                         powers up, with no resistor setting a safe default level. If a HIGH on \
-                         this net turns something ON that must stay OFF until the firmware \
-                         deliberately enables it (a MOSFET, relay, motor driver, or igniter), it \
-                         is energised at power-up — confirm the polarity and that this is intended."
-                    ));
-                }
+            for net in &held_high_boot_nets {
+                report.heads_up.push(format!(
+                    "control net '{net}' is driven HIGH and held from the moment the board \
+                     powers up, with no resistor setting a safe default level. If a HIGH on \
+                     this net turns something ON that must stay OFF until the firmware \
+                     deliberately enables it (a MOSFET, relay, motor driver, or igniter), it \
+                     is energised at power-up — confirm the polarity and that this is intended."
+                ));
+            }
+            for net in &never_driven_boot_nets {
+                report.heads_up.push(format!(
+                    "control net '{net}' drives a transistor/relay but the firmware never drove \
+                     it during the run, and it has no resistor holding a safe default — so its \
+                     switch sits at an undefined level at power-up until the firmware asserts \
+                     it. If it must be OFF at reset, add a gate/coil pull-down or drive it early."
+                ));
             }
             println!();
             print!("{}", report.render());
@@ -994,6 +1050,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
 
         // Strict: any fault raised during the run fails the gate.
         if args.strict && !faults.is_empty() {
+            std::process::exit(2);
+        }
+        // --strict-boot: opt-in escalation of the boot-safety advisories to a
+        // failing gate (exit 2). The run was valid and these are real findings
+        // about specific nets; default behaviour leaves them advisory-only.
+        if args.strict_boot && has_boot_advisory {
             std::process::exit(2);
         }
         return Ok(());
@@ -1640,6 +1702,24 @@ fn net_has_no_bias_resistor(board: &hauksbee_extract::ExtractedBoard, net_name: 
     true
 }
 
+/// True when a net connects to a transistor or relay — a switch whose control
+/// input (a MOSFET/BJT gate-base, a relay coil) left at an undefined level at
+/// power-up is a genuine hazard. Used to narrow the "never driven" boot
+/// advisory off unused header / test-point pins (which touch no switch) so it
+/// stays zero-false-positive. Reference prefix 'Q' = transistor, 'K' = relay
+/// (standard KiCad designators).
+fn net_drives_a_switch(board: &hauksbee_extract::ExtractedBoard, net_name: &str) -> bool {
+    let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
+        return false;
+    };
+    board.net_members(net.id).iter().any(|(c, _)| {
+        matches!(
+            c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()),
+            Some('Q') | Some('K')
+        )
+    })
+}
+
 /// Whether a net id names a power rail or ground, by the usual KiCad conventions
 /// (GND/AGND/VSS family; a leading '+', VCC/VDD/VBAT, or a voltage like 3V3/5V).
 fn is_power_or_ground_net(board: &hauksbee_extract::ExtractedBoard, net_id: i64) -> bool {
@@ -2165,7 +2245,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod boot_headsup_tests {
-    use super::{is_power_or_ground_net, net_has_no_bias_resistor};
+    use super::{is_power_or_ground_net, net_drives_a_switch, net_has_no_bias_resistor};
     use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 
     fn pin(net: Option<i64>) -> Pin {
@@ -2242,5 +2322,34 @@ mod boot_headsup_tests {
     fn unknown_net_name_is_treated_as_biased() {
         let b = board(&[(1, "GATE")], vec![]);
         assert!(!net_has_no_bias_resistor(&b, "does-not-exist"));
+    }
+
+    fn part(reference: &str, net: i64) -> Component {
+        Component {
+            reference: reference.into(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![pin(Some(net))],
+        }
+    }
+
+    #[test]
+    fn net_to_transistor_or_relay_drives_a_switch() {
+        // GATE -> Q1 (transistor) and COIL -> K1 (relay) both count; a net to
+        // only a header / IC does not, so the never-driven advisory stays off
+        // unused breakout pins.
+        let b = board(
+            &[(1, "GATE"), (2, "COIL"), (3, "HDR")],
+            vec![part("Q1", 1), part("K1", 2), part("J3", 3), part("U7", 3)],
+        );
+        assert!(net_drives_a_switch(&b, "GATE"));
+        assert!(net_drives_a_switch(&b, "COIL"));
+        assert!(!net_drives_a_switch(&b, "HDR"));
+        assert!(!net_drives_a_switch(&b, "missing"));
     }
 }
