@@ -53,8 +53,6 @@
 // interpreter lands in hauksbee-engine.
 // ─────────────────────────────────────────────────────────────────────────────
 
-use std::collections::HashMap;
-
 use hauksbee_engine::{I2cBus, Lm75, RegisterMapSensor};
 use hauksbee_mcu::I2cEvent;
 

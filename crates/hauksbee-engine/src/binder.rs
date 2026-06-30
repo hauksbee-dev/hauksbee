@@ -676,13 +676,21 @@ fn is_crystal_like(prefix: &str, value: &str) -> bool {
     matches!(prefix, "Y" | "CRYSTAL" | "XTAL" | "RESONATOR") || value_is_frequency(value)
 }
 
-/// A value string that denotes a frequency: a leading digit and a trailing
-/// "Hz" unit ("16MHz", "8 Mhz", "32.768kHz"). Deliberately strict (must start
-/// with a digit) so part values that merely contain "hz" do not trip it.
+/// A value string that is *wholly* a frequency: a number, an optional k/M/G SI
+/// prefix, and a trailing "Hz" ("16MHz", "8 Mhz", "32.768kHz"). The whole-value
+/// test matters: a ferrite bead is conventionally valued as impedance@frequency
+/// ("600@100MHz"), which also ends in "hz" — but a bead sits in *series* in a
+/// power/signal path, so binding it Ignore would open that path and re-create
+/// the exact solve-collapse this crystal handling exists to prevent. Requiring
+/// the remainder (after stripping "hz" and the SI prefix) to be purely numeric
+/// rejects "600@100MHz" (the '@' survives) while accepting real crystal values.
 fn value_is_frequency(value: &str) -> bool {
-    let v = value.trim();
-    v.chars().next().is_some_and(|c| c.is_ascii_digit())
-        && v.to_ascii_lowercase().ends_with("hz")
+    let v = value.trim().to_ascii_lowercase();
+    let Some(num) = v.strip_suffix("hz") else {
+        return false;
+    };
+    let num = num.trim().trim_end_matches(['k', 'm', 'g']);
+    !num.is_empty() && num.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2093,8 +2101,12 @@ mod crystal_fallback_tests {
         for v in ["16MHz", "8Mhz", "16.000MHz", "32.768kHz", "100 Hz", "12000000Hz"] {
             assert!(value_is_frequency(v), "{v} should read as a frequency");
         }
-        // A leading digit is required, and a real capacitance/resistance must not trip it.
-        for v in ["22pF", "10k", "4k7", "100nF", "BCM857BS", "Hz", "Choke", ""] {
+        // Real passive values, and ferrite-bead impedance@frequency values
+        // (which end in "hz" but are NOT crystals) must not trip it.
+        for v in [
+            "22pF", "10k", "4k7", "100nF", "BCM857BS", "Hz", "Choke", "",
+            "600@100MHz", "1k@100MHz", "120@100MHz",
+        ] {
             assert!(!value_is_frequency(v), "{v} must NOT read as a frequency");
         }
     }

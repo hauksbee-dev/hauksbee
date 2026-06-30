@@ -966,11 +966,11 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             for net in engine.scheduler().firmware_held_high_nets() {
                 if net_has_no_bias_resistor(&board, &net) {
                     report.heads_up.push(format!(
-                        "control net '{net}' is switched ON (driven HIGH and held) from the \
-                         moment the board powers up, and it has no resistor holding a safe \
-                         default level. If this net switches a load that must stay OFF until \
-                         the firmware deliberately turns it on (a MOSFET, relay, motor driver, \
-                         or igniter), that load is energised at power-up — confirm this is intended."
+                        "control net '{net}' is driven HIGH and held from the moment the board \
+                         powers up, with no resistor setting a safe default level. If a HIGH on \
+                         this net turns something ON that must stay OFF until the firmware \
+                         deliberately enables it (a MOSFET, relay, motor driver, or igniter), it \
+                         is energised at power-up — confirm the polarity and that this is intended."
                     ));
                 }
             }
@@ -1612,29 +1612,60 @@ fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &
     }
 }
 
-/// Run the co-sim headless for `seconds`, print the activity summary, and return
-/// the faults raised (de-duplicated by component+kind, worst value kept) so the
-/// caller can render them in plain language and/or gate on them under --strict.
+/// True when a net has no *bias* resistor — no resistor tying it toward a power
+/// rail or ground, so nothing on the board fixes its power-up level (it is set
+/// entirely by firmware). Used to sharpen the boot-control-net heads-up to nets
+/// with no hardware fail-safe. A resistor whose other terminal is NOT a rail or
+/// ground is a series element (e.g. GPIO -> R -> MOSFET gate), which sets no
+/// default level, so it does NOT count as a bias and the net is still flagged.
+/// An unknown/unresolvable net name returns false (assume biased; stay silent).
+fn net_has_no_bias_resistor(board: &hauksbee_extract::ExtractedBoard, net_name: &str) -> bool {
+    let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
+        return false;
+    };
+    let is_resistor =
+        |c: &hauksbee_extract::Component| c.reference.starts_with('R') || c.reference.starts_with('r');
+    for (comp, _) in board.net_members(net.id) {
+        if !is_resistor(comp) {
+            continue;
+        }
+        for p in &comp.pins {
+            if let Some(other) = p.net {
+                if other != net.id && is_power_or_ground_net(board, other) {
+                    return false; // a pull-up/down to a rail/ground: a hardware default exists
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Whether a net id names a power rail or ground, by the usual KiCad conventions
+/// (GND/AGND/VSS family; a leading '+', VCC/VDD/VBAT, or a voltage like 3V3/5V).
+fn is_power_or_ground_net(board: &hauksbee_extract::ExtractedBoard, net_id: i64) -> bool {
+    let Some(net) = board.nets.iter().find(|n| n.id == net_id) else {
+        return false;
+    };
+    let n = net.name.to_ascii_uppercase();
+    n.starts_with("GND")
+        || n == "AGND"
+        || n == "DGND"
+        || n.starts_with("VSS")
+        || n.starts_with('+')
+        || n.starts_with("VCC")
+        || n.starts_with("VDD")
+        || n.starts_with("VBAT")
+        || n.contains("3V3")
+        || n.contains("3.3V")
+        || n.contains("5V")
+        || n.contains("1V8")
+}
+
 /// Build the machine-readable co-sim summary (Track B) from a finished run.
 /// Returns `None` when no MCU core ran (no co-sim happened, so there is nothing
 /// to summarise). Reads the scheduler's per-net stats for the total toggle count
 /// and the top-N most-active nets, and the MCU binding identities for the
 /// requested part / backend / substitution flag.
-/// True when a net carries no bias resistor: nothing on the board fixes its
-/// power-up level, so it is set entirely by firmware. Used to sharpen the
-/// boot-control-net heads-up to nets with no hardware fail-safe. A net that
-/// *has* any resistor is treated as possibly-biased and left unflagged
-/// (conservative — better to stay quiet than nag a properly-pulled net).
-fn net_has_no_bias_resistor(board: &hauksbee_extract::ExtractedBoard, net_name: &str) -> bool {
-    let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
-        return false;
-    };
-    !board
-        .net_members(net.id)
-        .iter()
-        .any(|(c, _)| c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) == Some('R'))
-}
-
 fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJson> {
     let sched = engine.scheduler();
     let identities = sched.mcu_identities();
@@ -2129,5 +2160,87 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max).collect()
+    }
+}
+
+#[cfg(test)]
+mod boot_headsup_tests {
+    use super::{is_power_or_ground_net, net_has_no_bias_resistor};
+    use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+
+    fn pin(net: Option<i64>) -> Pin {
+        Pin {
+            number: "1".into(),
+            net,
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+    fn resistor(reference: &str, a: i64, b: i64) -> Component {
+        Component {
+            reference: reference.into(),
+            value: "10k".into(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![pin(Some(a)), pin(Some(b))],
+        }
+    }
+    fn board(nets: &[(i64, &str)], comps: Vec<Component>) -> ExtractedBoard {
+        ExtractedBoard {
+            name: "t".into(),
+            nets: nets
+                .iter()
+                .map(|(id, n)| Net {
+                    id: *id,
+                    name: (*n).into(),
+                })
+                .collect(),
+            components: comps,
+        }
+    }
+
+    #[test]
+    fn rails_and_grounds_recognised_signals_not() {
+        let b = board(
+            &[(1, "GND"), (2, "+3V3"), (3, "VCC"), (4, "GNDA"), (5, "5V"), (6, "SIG")],
+            vec![],
+        );
+        for id in [1, 2, 3, 4, 5] {
+            assert!(is_power_or_ground_net(&b, id), "net {id} should be rail/ground");
+        }
+        assert!(!is_power_or_ground_net(&b, 6), "SIG must not read as rail/ground");
+    }
+
+    #[test]
+    fn gate_net_with_no_resistor_has_no_bias() {
+        // GATE has only the MCU pin + a MOSFET gate, no resistor at all.
+        let b = board(&[(1, "GATE")], vec![]);
+        assert!(net_has_no_bias_resistor(&b, "GATE"));
+    }
+
+    #[test]
+    fn pulldown_to_ground_counts_as_bias() {
+        // GATE -> R1 -> GND: a pull-down is a hardware fail-safe, so NOT flagged.
+        let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("R1", 1, 2)]);
+        assert!(!net_has_no_bias_resistor(&b, "GATE"));
+    }
+
+    #[test]
+    fn series_resistor_to_a_signal_is_not_a_bias() {
+        // GPIO -> R1 -> GATE: on GPIO, R1's far end is a signal, not a rail/
+        // ground, so it sets no power-up default — the net is still flagged.
+        let b = board(&[(1, "GPIO"), (2, "GATE")], vec![resistor("R1", 1, 2)]);
+        assert!(net_has_no_bias_resistor(&b, "GPIO"));
+    }
+
+    #[test]
+    fn unknown_net_name_is_treated_as_biased() {
+        let b = board(&[(1, "GATE")], vec![]);
+        assert!(!net_has_no_bias_resistor(&b, "does-not-exist"));
     }
 }
