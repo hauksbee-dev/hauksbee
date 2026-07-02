@@ -128,7 +128,7 @@ pub struct Partition {
 impl Partition {
     /// Analyze a circuit into islands, with no rail tearing (legacy behaviour).
     pub fn analyze(circuit: &Circuit) -> Partition {
-        Self::analyze_inner(circuit, &[])
+        Self::analyze_inner(circuit, &[], &[])
     }
 
     /// Analyze a circuit into islands, additionally detecting and cutting
@@ -139,7 +139,8 @@ impl Partition {
     pub fn analyze_with_tears(circuit: &Circuit) -> Partition {
         let tears = detect_rail_tears(circuit);
         let tear_nodes: Vec<NodeId> = tears.iter().map(|t| t.rail).collect();
-        let mut p = Self::analyze_inner(circuit, &tear_nodes);
+        let shunts: Vec<DeviceId> = tears.iter().map(|t| t.shunt).collect();
+        let mut p = Self::analyze_inner(circuit, &tear_nodes, &shunts);
         p.tears = tears;
         p
     }
@@ -152,15 +153,23 @@ impl Partition {
     /// this module's legacy magic-constant detection having a vote.
     pub fn analyze_imposing_tears(circuit: &Circuit, tears: Vec<RailTear>) -> Partition {
         let tear_nodes: Vec<NodeId> = tears.iter().map(|t| t.rail).collect();
-        let mut p = Self::analyze_inner(circuit, &tear_nodes);
+        let shunts: Vec<DeviceId> = tears.iter().map(|t| t.shunt).collect();
+        let mut p = Self::analyze_inner(circuit, &tear_nodes, &shunts);
         p.tears = tears;
         p
     }
 
     /// Core analysis. `extra_pinned` nodes are treated as boundary inputs (not
     /// unioned through), exactly like ideal-source-pinned nodes — used for rail
-    /// tear nodes.
-    fn analyze_inner(circuit: &Circuit, extra_pinned: &[NodeId]) -> Partition {
+    /// tear nodes. `tear_shunts` are the tears' series feed resistors: their
+    /// currents are the analytic `(v_feed - v_rail)/R` terms of the balance
+    /// equations, so they must NOT also become boundary-only islands (that
+    /// would count them twice).
+    fn analyze_inner(
+        circuit: &Circuit,
+        extra_pinned: &[NodeId],
+        tear_shunts: &[DeviceId],
+    ) -> Partition {
         let n_nodes = circuit.max_node() as usize;
         let mut uf = UnionFind::new(n_nodes + 1); // index by NodeId.0; 0 = ground
 
@@ -306,6 +315,50 @@ impl Partition {
             bin.sort_unstable();
             bin.dedup();
             isl.boundary_in = bin;
+        }
+
+        // Boundary-only islands. A device with no free node normally drops
+        // from islands, and between IDEAL pins that is exact: its current is
+        // fully determined by pinned voltages and couples to nothing the
+        // solver owns. A TORN rail changes the story: the "pin" is a balance
+        // unknown, and the device's current belongs in the rail's KCL books
+        // (a decoupling cap on a balance-torn supply is the canonical case;
+        // dropping it is precisely the strand hazard the old detector refused
+        // rails over). Each such device becomes its own island whose every
+        // node is a boundary input, so the orchestrator solves it against
+        // trial voltages and reads its boundary current like any block's.
+        // Tear shunts stay excluded: their currents are the analytic terms
+        // of the balance equations themselves.
+        let mut tear_node = vec![false; n_nodes + 1];
+        for n in extra_pinned {
+            if !n.is_ground() {
+                tear_node[n.0 as usize] = true;
+            }
+        }
+        for (id, dev) in circuit.iter() {
+            if matches!(dev, Device::Vsource { .. }) || tear_shunts.contains(&id) {
+                continue;
+            }
+            if rep(dev).is_some() {
+                continue; // has a free node: already in a normal island
+            }
+            if !dev.nodes().iter().any(|n| tear_node[n.0 as usize]) {
+                continue; // between ideal pins: exactly irrelevant, keep dropping
+            }
+            let mut nodes: Vec<NodeId> = dev
+                .nodes()
+                .iter()
+                .copied()
+                .filter(|n| !n.is_ground())
+                .collect();
+            nodes.sort_unstable();
+            nodes.dedup();
+            islands.push(Island {
+                devices: vec![id],
+                boundary_in: nodes.clone(),
+                nodes,
+                linear: dev.is_linear(),
+            });
         }
 
         Partition {

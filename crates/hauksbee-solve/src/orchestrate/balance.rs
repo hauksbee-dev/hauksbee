@@ -85,7 +85,10 @@ pub struct BalancePolicy {
     /// `r * R_shunt`, so each rail's residual is driven below
     /// `v_target / R_shunt` with `v_target = vntol * v_target_frac`. The
     /// default 0.1 gives a 10x margin under the 1e-6 exactness gate,
-    /// independent of the shunt value.
+    /// independent of the shunt value. (Empirically NOT the accuracy
+    /// limiter: tightening it 10x moved the bypass-cap fixture's worst
+    /// node error by under 1e-8; what bounds node agreement is the block
+    /// Newtons' own vntol, in both the torn and monolithic formulations.)
     pub v_target_frac: f64,
     /// Cap on outer round-robin passes. Rails sharing a feed couple only at
     /// second order, so real boards converge in a handful of passes; 60 is
