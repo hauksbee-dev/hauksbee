@@ -86,6 +86,15 @@ pub enum SiCheck {
     AntennaKeepout,
     UsbDiffPair,
     ControlledImpedance,
+    /// IPC-2221 trace-ampacity: a routed trace too narrow for the current
+    /// attributed to its net. Surfaced into `--si` from the engine layer (the
+    /// attribution needs the bound DB models), see
+    /// `hauksbee_engine::checks::ampacity`.
+    TraceAmpacity,
+    /// Input bulk-capacitor ripple-current overstress on a switching converter.
+    /// Also surfaced from the engine layer, see
+    /// `hauksbee_engine::checks::ripple`.
+    InputCapRipple,
 }
 
 impl SiCheck {
@@ -96,6 +105,8 @@ impl SiCheck {
             SiCheck::AntennaKeepout => "antenna_keepout",
             SiCheck::UsbDiffPair => "usb_diff_pair",
             SiCheck::ControlledImpedance => "controlled_impedance",
+            SiCheck::TraceAmpacity => "trace_ampacity",
+            SiCheck::InputCapRipple => "input_cap_ripple",
         }
     }
 }

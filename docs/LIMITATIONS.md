@@ -192,3 +192,10 @@ triage page is a complete index of what is *not* yet closed:
   db pin maps when only a layout (no schematic netlist) is available; schematic
   netlists are authoritative when present. See `docs/TEST_CAMPAIGN.md` and
   `docs/FAMOUS_SWEEP.md`.
+- **Device-decode is per-part and grows one part at a time**: the configurable-
+  controller decode check (config-pin divider vs the part's datasheet band table)
+  has no generic engine; each supported part is a hand-written decoder. Seeded
+  with the CYPD3177 USB-C PD sink only. It also does not read the silk-screened
+  voltage label next to a rotary detent, so it reports which bands a selector can
+  and cannot reach rather than "detent N labelled X codes Y". See
+  `docs/DEVICE_DECODE.md`.

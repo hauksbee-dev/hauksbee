@@ -657,7 +657,10 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
     if args.lint {
-        let report = hauksbee_engine::checks::engine_lint(&board, &lib);
+        let mut report = hauksbee_engine::checks::engine_lint(&board, &lib);
+        report
+            .findings
+            .extend(hauksbee_engine::checks::device_decode::device_decode_lint(&board, &lib).findings);
         if args.json {
             let bound = bind_board(&board, &lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
@@ -734,7 +737,14 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         } else {
             Some(text.as_str())
         };
-        let report = board.si_checks(geo_text);
+        let mut report = board.si_checks(geo_text);
+        // Engine-layer SI checks whose attribution needs the bound DB models:
+        // trace ampacity (current attribution + IPC-2221) and input-cap ripple
+        // (converter topology + cap ripple rating). These augment the
+        // extract-layer SI report exactly the way --lint augments its report
+        // with the strap lint.
+        hauksbee_engine::checks::ampacity::append_ampacity(&board, &lib, geo_text, &mut report);
+        hauksbee_engine::checks::ripple::append_ripple(&board, &lib, &mut report);
         if args.json {
             let bound = bind_board(&board, &lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));

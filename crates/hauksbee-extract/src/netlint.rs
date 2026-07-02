@@ -72,6 +72,12 @@ pub enum LintCheck {
     /// verdict would misread as "checked and clean". Informational, never a
     /// `--strict` failure: an unmodelled part is a coverage gap, not a defect.
     UncheckedMcu,
+    /// A configurable controller whose strap / divider resistors select a
+    /// documented operating mode decodes (against the part's datasheet bands) to
+    /// the WRONG mode, or to an internally-inconsistent configuration. Per-part,
+    /// grows incrementally; seeded with the CYPD3177 USB-C PD sink. Produced by
+    /// the engine-layer `device_decode` check.
+    DeviceDecode,
 }
 
 impl LintCheck {
@@ -87,6 +93,7 @@ impl LintCheck {
             LintCheck::ValuePackageSanity => "value_package_sanity",
             LintCheck::PlaceholderValue => "placeholder_value",
             LintCheck::UncheckedMcu => "unchecked_mcu",
+            LintCheck::DeviceDecode => "device_decode",
         }
     }
 }

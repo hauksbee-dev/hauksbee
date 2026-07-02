@@ -1003,6 +1003,8 @@ pub fn si_plain_hint(check: SiCheck) -> &'static str {
         SiCheck::CrystalLoadCap => "crystal load capacitors may be the wrong value",
         SiCheck::I2cRiseTime => "I2C bus rise time is slow",
         SiCheck::AntennaKeepout => "copper intrudes into the antenna keep-out",
+        SiCheck::TraceAmpacity => "a routed trace is too narrow for the current it carries",
+        SiCheck::InputCapRipple => "the input bulk capacitor is over its ripple-current rating",
     }
 }
 
@@ -1025,6 +1027,12 @@ pub fn si_fix_hint(check: SiCheck) -> Option<&'static str> {
         }
         SiCheck::AntennaKeepout => {
             "Clear all copper and ground fill out of the antenna keep-out region and re-route any tracks that cross it."
+        }
+        SiCheck::TraceAmpacity => {
+            "Widen the trace to at least the IPC-2221 minimum width for its current, pour the rail as a plane, or use heavier copper."
+        }
+        SiCheck::InputCapRipple => {
+            "Use a capacitor with a higher ripple-current rating, split the bulk across parallel caps, or add low-ESR ceramics to take the high-frequency ripple."
         }
     })
 }
@@ -1062,6 +1070,9 @@ pub fn lint_fix_hint(check: LintCheck) -> Option<&'static str> {
         }
         LintCheck::UncheckedMcu => {
             "Verify the boot/strap pins and pin-mux by hand against the datasheet, or supply a model with --models-dir so the strap and resource-conflict checks can run."
+        }
+        LintCheck::DeviceDecode => {
+            "Re-pick the divider resistors so the config pin lands in the intended datasheet band, per the part's decode table."
         }
     })
 }
