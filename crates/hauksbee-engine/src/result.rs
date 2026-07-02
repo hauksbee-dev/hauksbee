@@ -36,6 +36,15 @@ use crate::report::{BindOutcome, BindReport};
 /// any future caller share one source of truth.
 pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
+/// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
+/// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both
+/// entry points resolve the same code ([`EXIT_INVALID_FOR_ANALYSIS`]) and a test
+/// can assert the contract without spawning a process. `None` means the run is
+/// analysable and the ordinary pass/fail exit codes apply.
+pub fn strict_analog_exit_code(analog_abort_tripped: bool) -> Option<i32> {
+    analog_abort_tripped.then_some(EXIT_INVALID_FOR_ANALYSIS)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Bind summary by ROLE (Fix #5 / Theme F)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -502,6 +511,25 @@ pub struct CosimJson {
     /// Top-N nets by activity: name, toggle count, observed min/max voltage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity_summary: Vec<NetActivity>,
+    /// False once any chunk's analog solve failed to converge: the run held stale
+    /// node voltages over `failed_windows` and cannot vouch for analog-derived
+    /// findings there (05 §3b, refuse rather than fake). A fully valid run reports
+    /// `true` with an empty `failed_windows`, so the common shape is unchanged and
+    /// existing consumers keep parsing.
+    pub analog_valid: bool,
+    /// Sim-time windows `[start_s, end_s)` where the analog solve failed. Empty
+    /// (and omitted from JSON) on a valid run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_windows: Vec<CosimFailedWindow>,
+}
+
+/// One sim-time window `[start_s, end_s)` where the analog solve failed to
+/// converge and the co-sim held stale voltages. Reported so a consumer knows the
+/// exact span that cannot be trusted rather than inferring a quiet run.
+#[derive(Debug, Clone, Serialize)]
+pub struct CosimFailedWindow {
+    pub start_s: f64,
+    pub end_s: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]

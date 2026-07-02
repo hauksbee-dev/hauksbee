@@ -648,7 +648,32 @@ fn run_one(
             }
         }
 
+        // Refuse rather than fake (05 §3b): hauksbee-ci is inherently strict, so a
+        // co-sim whose analog solve has been stuck for a whole streak of chunks
+        // must not be asserted on. Stop the loop the moment the abort trips; the
+        // check after the loop turns it into an exit-3 refusal rather than a
+        // fake-green run against held-stale voltages.
+        if engine.scheduler().analog_abort_tripped() {
+            break;
+        }
+
         t += frame_dt;
+    }
+
+    // A tripped analog abort means the run held stale voltages long enough that no
+    // assertion on it is meaningful. Refuse with the invalid-for-analysis exit code
+    // (the same one `hauksbee run --strict` uses) instead of reporting a result.
+    if let Some(code) =
+        hauksbee_engine::result::strict_analog_exit_code(engine.scheduler().analog_abort_tripped())
+    {
+        eprintln!(
+            "hauksbee-ci: analog co-sim failed to converge for {} chunks in a row \
+             ({} failed chunks total); the run held stale voltages and cannot be \
+             asserted on. Refusing to report a result (05 §3b).",
+            hauksbee_engine::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
+            engine.scheduler().failed_chunk_count(),
+        );
+        std::process::exit(code);
     }
 
     // Toggle counts from the scheduler's running stats.
