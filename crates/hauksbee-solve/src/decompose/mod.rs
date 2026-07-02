@@ -20,13 +20,15 @@
 //! * [`conduction`]: terminal classification and the conduction graph, the
 //!   primitive everything else rests on. A tear is only exact if electrical
 //!   reachability is computed over terminals that actually carry current.
+//! * [`feedforward`]: sense-boundary discovery, the reverse-path proof via
+//!   strongly-connected components, and the stage DAG that orders the solves.
 //! * `rails` (planned): stiff-rail detection and balance-tear candidates.
-//! * `feedforward` (planned): sense-boundary discovery, the reverse-path
-//!   proof, and the stage DAG.
 //! * `drivers` (planned): the driver pass that pulls Thevenin sources behind
 //!   kept sense nodes into an island.
 //! * `verify` (planned): exactness gates and tear certificates.
 
 pub mod conduction;
+pub mod feedforward;
 
 pub use conduction::{ConductionGraph, SenseEdge};
+pub use feedforward::{FreeTearEdge, StageDag};
