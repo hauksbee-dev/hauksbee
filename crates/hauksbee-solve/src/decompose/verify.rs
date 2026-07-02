@@ -140,10 +140,16 @@ pub struct TearCertificate {
     /// Set by the orchestrator once it has tried; None until then.
     pub monolith_checkable: Option<bool>,
     /// Sense boundaries that could NOT be certified (a sensed node owned by
-    /// no group, absorbed by no driver assignment, and torn by no rail).
-    /// Non-empty means the decomposition is incomplete and the caller must
-    /// fall back monolithic rather than trust it.
+    /// no group, absorbed by no driver assignment, torn by no rail, and not
+    /// declared exogenous). Non-empty means the decomposition is incomplete
+    /// and the caller must fall back monolithic rather than trust it.
     pub uncertified_boundaries: Vec<NodeId>,
+    /// Sensed nodes certified BY DECLARATION: the caller stated that the
+    /// run-time environment drives them (co-simmed MCU pins, bench supplies,
+    /// test stimuli). This is trust, not proof, and the certificate says so:
+    /// the executor must actually drive every node listed here, and refuse
+    /// to run if it cannot.
+    pub exogenous_boundaries: Vec<NodeId>,
 }
 
 impl TearCertificate {
@@ -192,6 +198,18 @@ impl TearCertificate {
             let names: Vec<_> = nodes.iter().map(|n| circuit.node_name(*n)).collect();
             let _ = writeln!(out, "refuses {refused:?} on [{}]", names.join(", "));
         }
+        if !self.exogenous_boundaries.is_empty() {
+            let names: Vec<_> = self
+                .exogenous_boundaries
+                .iter()
+                .map(|n| circuit.node_name(*n))
+                .collect();
+            let _ = writeln!(
+                out,
+                "exogenous boundaries (trusted on declaration; executor must drive them): [{}]",
+                names.join(", ")
+            );
+        }
         if !self.uncertified_boundaries.is_empty() {
             let names: Vec<_> = self
                 .uncertified_boundaries
@@ -232,6 +250,25 @@ impl Decomposition {
         motive: TearMotive,
         rails: RailPolicy,
         drv: DriverPolicy,
+    ) -> Decomposition {
+        Self::analyze_with_boundaries(circuit, motive, rails, drv, &[])
+    }
+
+    /// [`Decomposition::analyze_with`] plus a declaration of EXOGENOUS nodes:
+    /// nodes the run-time environment drives (co-simmed MCU pins, bench
+    /// stimuli), which the netlist alone cannot know are driven. A sensed
+    /// node in this list is certified by declaration instead of flagged as a
+    /// floating sense net (the analysis probe's finding 2: ENABLE_MEAS nets
+    /// on the flagship are firmware-driven, conducted by nothing in an
+    /// analysis-only bind). The certificate records the trust explicitly in
+    /// `exogenous_boundaries`, and any executor must actually drive every
+    /// node recorded there or refuse to run.
+    pub fn analyze_with_boundaries(
+        circuit: &Circuit,
+        motive: TearMotive,
+        rails: RailPolicy,
+        drv: DriverPolicy,
+        exogenous: &[NodeId],
     ) -> Decomposition {
         let graph = ConductionGraph::analyze(circuit);
         let dag = StageDag::build(circuit, &graph);
@@ -303,7 +340,9 @@ impl Decomposition {
             .filter(|r| matches!(r.kind, TearKind::Balance | TearKind::Stiff))
             .map(|r| r.node)
             .collect();
+        let declared: std::collections::BTreeSet<NodeId> = exogenous.iter().copied().collect();
         let mut uncertified = Vec::new();
+        let mut exogenous_boundaries = Vec::new();
         for e in &graph.sense_edges {
             let conducted = graph
                 .node_island
@@ -314,10 +353,19 @@ impl Decomposition {
             if conducted || torn_rails.contains(&e.node) {
                 continue;
             }
+            // Certified by declaration (d): the environment drives it. This
+            // is the one trust-based rung of the ladder, and it is recorded
+            // as such rather than blended into the proven ones.
+            if declared.contains(&e.node) {
+                exogenous_boundaries.push(e.node);
+                continue;
+            }
             uncertified.push(e.node);
         }
         uncertified.sort_unstable();
         uncertified.dedup();
+        exogenous_boundaries.sort_unstable();
+        exogenous_boundaries.dedup();
 
         // Refusals are DERIVED from the records by kind, never hand-appended
         // alongside them: any tear that pins or reconciles a rail (Balance
@@ -343,6 +391,7 @@ impl Decomposition {
             refusals,
             monolith_checkable: None,
             uncertified_boundaries: uncertified,
+            exogenous_boundaries,
         };
 
         Decomposition {
@@ -543,5 +592,22 @@ mod tests {
         let summary = d.certificate.summary(&c);
         assert!(summary.contains("UNSOUND"), "{summary}");
         assert!(summary.contains("sel_floating"), "{summary}");
+
+        // The same net DECLARED exogenous (a co-simmed MCU pin) is certified
+        // by declaration: sound, and the trust is recorded, not hidden.
+        let d2 = Decomposition::analyze_with_boundaries(
+            &c,
+            TearMotive::Profit,
+            crate::decompose::rails::RailPolicy::default(),
+            crate::decompose::drivers::DriverPolicy::default(),
+            &[sel],
+        );
+        assert!(d2.certificate.sound(), "{}", d2.certificate.summary(&c));
+        assert_eq!(d2.certificate.exogenous_boundaries, vec![sel]);
+        let s2 = d2.certificate.summary(&c);
+        assert!(
+            s2.contains("exogenous") && s2.contains("sel_floating"),
+            "{s2}"
+        );
     }
 }

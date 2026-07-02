@@ -115,6 +115,25 @@ pub fn run_staged(
             decomp.certificate.summary(circuit)
         ));
     }
+    // Exogenous boundaries are certified BY DECLARATION: the certificate
+    // trusts that the run-time environment drives them. This executor has no
+    // drive plumbing for them yet (it lands with the co-sim e2e), and running
+    // anyway would float exactly the nets the declaration promised were
+    // driven: the dead-membrane bug wearing a certificate. Refuse instead.
+    if !decomp.certificate.exogenous_boundaries.is_empty() {
+        let names: Vec<_> = decomp
+            .certificate
+            .exogenous_boundaries
+            .iter()
+            .map(|n| circuit.node_name(*n))
+            .collect();
+        return Err(format!(
+            "staged execution refused: exogenous boundaries [{}] are certified as \
+             environment-driven, and this executor cannot drive them yet; run co-simulated \
+             or monolithic",
+            names.join(", ")
+        ));
+    }
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
         _ => {
