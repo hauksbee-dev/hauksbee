@@ -11,6 +11,13 @@ pub struct AssertResult {
     pub label: String,
     pub kind: String,
     pub passed: bool,
+    /// A THIRD outcome distinct from pass/fail (05 §3b): the assertion could not
+    /// be honestly evaluated because its analog evaluation window overlaps a
+    /// chunk the solver failed on, so the samples there are held-stale. When
+    /// `invalid` is true, `passed` is always false, but this is NOT an ordinary
+    /// failure: the run exits 3 (invalid-for-analysis) rather than 1, even below
+    /// the consecutive-abort threshold. A normal pass or fail leaves it `false`.
+    pub invalid: bool,
     /// One-line detail (the measured value, the offending seed, etc).
     pub detail: String,
     /// If it failed, the seed index that failed (for fuzzed runs).
@@ -29,6 +36,47 @@ fn evaluate_one(a: &Assertion, outcomes: &[RunOutcome]) -> AssertResult {
     let label = a.label();
     let kind = a.kind.clone();
 
+    // Analog-validity gate (05 §3b, "refuse rather than fake"): if this assertion
+    // reads the analog transient operating point AND its evaluation window
+    // overlaps a chunk the solver failed on, the samples there were held-stale.
+    // We can honestly neither pass nor fail it, so report a distinct INVALID
+    // outcome. This fires per-window (not per consecutive-abort), so an
+    // intermittent divergence below the abort threshold still refuses instead of
+    // reporting a fake result. Checked before pass/fail so a window with no valid
+    // samples cannot masquerade as either.
+    for out in outcomes {
+        if let Some((ws, we)) = analog_eval_window(a, out) {
+            if let Some(&(fs, fe)) = out
+                .failed_windows
+                .iter()
+                .find(|&&(fs, fe)| ws < fe && fs < we)
+            {
+                let per_seed = if outcomes.len() > 1 {
+                    format!("seed {}: ", out.seed)
+                } else {
+                    String::new()
+                };
+                return AssertResult {
+                    label,
+                    kind,
+                    passed: false,
+                    invalid: true,
+                    detail: format!(
+                        "{per_seed}INVALID: the analog solve failed within this \
+                         assertion's window ({:.2}-{:.2} ms overlaps its \
+                         {:.2}-{:.2} ms evaluation span); those voltages are \
+                         held-stale, so the result cannot be trusted (05 §3b).",
+                        fs * 1e3,
+                        fe * 1e3,
+                        ws * 1e3,
+                        we * 1e3,
+                    ),
+                    failing_seed: Some(out.seed),
+                };
+            }
+        }
+    }
+
     // Evaluate per seed; the first failing seed determines the result.
     let mut last_detail = String::new();
     for out in outcomes {
@@ -39,6 +87,7 @@ fn evaluate_one(a: &Assertion, outcomes: &[RunOutcome]) -> AssertResult {
                 label,
                 kind,
                 passed: false,
+                invalid: false,
                 detail: if outcomes.len() > 1 {
                     format!("seed {}: {detail}", out.seed)
                 } else {
@@ -53,12 +102,38 @@ fn evaluate_one(a: &Assertion, outcomes: &[RunOutcome]) -> AssertResult {
         label,
         kind,
         passed: true,
+        invalid: false,
         detail: if outcomes.len() > 1 {
             format!("{} (held across {} seeds)", last_detail, outcomes.len())
         } else {
             last_detail
         },
         failing_seed: None,
+    }
+}
+
+/// The sim-time window (seconds) an assertion evaluates the analog transient
+/// operating point over, or `None` when the assertion is not analog-transient-
+/// derived and a failed chunk therefore does not invalidate it.
+///
+/// `uart` (digital MCU output), `peripheral` (bus-slave state), `protection_trip`
+/// (a latch in the supply model) and the small-signal `ac_gain` / `phase_margin`
+/// (a separate DC-linearised sweep, not the transient march) are NOT invalidated
+/// by a failed transient chunk, so they return `None`. Everything that reads a
+/// per-frame node voltage / current / temperature returns its span; the run's
+/// total sim time is the open end. `rail_window` uses the whole run conservatively
+/// (the scoped scenario start is not reachable here); this only ever bites a run
+/// that actually diverged, which must be INVALID regardless, so the conservatism
+/// is in the honest direction.
+fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
+    let end = out.sim_ms / 1000.0;
+    match a.kind.as_str() {
+        "voltage" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
+        "toggle" => Some((0.0, end)),
+        "max_current" | "max_temp" => Some((0.0, end)),
+        "boot-coverage" => Some((0.0, a.deadline_ms.map(|d| d / 1000.0).unwrap_or(end))),
+        "rail_window" => Some((0.0, end)),
+        _ => None,
     }
 }
 

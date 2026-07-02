@@ -54,6 +54,18 @@ pub struct CosimUpdate {
     /// core (e.g. STM32F411 modelled as F407). Mirrors the CLI/web note so the
     /// TUI does not silently present substitute-chip results as exact.
     pub substitution: Option<String>,
+    /// False once the co-sim's analog solve failed to converge on at least one
+    /// chunk: the run held stale node voltages and cannot vouch for the GPIO/net
+    /// levels shown in this pane (05 §3b). A clean run reports `true`. Read from
+    /// `Scheduler::analog_valid()`, the same signal the CLI `--json` and the web
+    /// report surface, so the TUI stops being the one place a diverged co-sim
+    /// looks quiet. `Default` is `false`, so build every real snapshot through
+    /// `build_update` (which sets it) rather than relying on the derive.
+    pub analog_valid: bool,
+    /// Count of chunks whose analog solve failed this run. `0` on a clean run;
+    /// non-zero drives the loud invalid line in the pane. Kept alongside
+    /// `analog_valid` so the pane can say HOW MANY chunks were held stale.
+    pub failed_chunk_count: u64,
     /// True once the run has finished (reached the target or was stopped).
     pub done: bool,
     /// Set on a hard error (e.g. firmware failed to load).
@@ -217,11 +229,16 @@ fn run_worker(
             .substitutions()
             .first()
             .map(|s| s.message());
+        // Analog-validity signal (05 §3b): once any chunk's analog solve fails,
+        // the GPIO/net levels below are read off held-stale voltages. Surface it
+        // so the pane can refuse rather than present them as trustworthy.
+        let analog_valid = engine.scheduler().analog_valid();
+        let failed_chunk_count = engine.scheduler().failed_chunk_count();
 
         // If the UI has gone away, stop.
         let update = build_update(
             t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven,
-            substitution, false,
+            substitution, analog_valid, failed_chunk_count, false,
         );
         if tx.send(update).is_err() {
             return;
@@ -236,9 +253,11 @@ fn run_worker(
         .substitutions()
         .first()
         .map(|s| s.message());
+    let analog_valid = engine.scheduler().analog_valid();
+    let failed_chunk_count = engine.scheduler().failed_chunk_count();
     let _ = tx.send(build_update(
         t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven, substitution,
-        true,
+        analog_valid, failed_chunk_count, true,
     ));
 }
 
@@ -255,6 +274,8 @@ fn build_update(
     tracker: &NetActivity,
     gpio_driven: bool,
     substitution: Option<String>,
+    analog_valid: bool,
+    failed_chunk_count: u64,
     done: bool,
 ) -> CosimUpdate {
     CosimUpdate {
@@ -267,6 +288,8 @@ fn build_update(
         gpio_active: tracker.any_driven(),
         gpio_driven,
         substitution,
+        analog_valid,
+        failed_chunk_count,
         done,
         error: None,
     }
@@ -493,5 +516,36 @@ mod tests {
         assert_eq!(default_chunk_ms(Some("qemu:esp32c3")), 5.0);
         assert_eq!(default_chunk_ms(Some("renode:stm32f4")), 5.0);
         assert_eq!(default_chunk_ms(None), 5.0);
+    }
+
+    #[test]
+    fn build_update_carries_analog_validity_flag() {
+        // Finding 2 (05 §3b): a CosimUpdate must carry the analog-validity signal
+        // the worker reads from the scheduler, so the pane can refuse rather than
+        // present held-stale net levels as trustworthy. This is the terminal-free
+        // state-level check: build an update through the same path the worker uses
+        // and assert the two fields propagate.
+        let start = Instant::now();
+        let uart: VecDeque<String> = VecDeque::new();
+        let tracker = NetActivity::default();
+
+        // A clean run: valid, zero failed chunks.
+        let clean = build_update(
+            0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ true,
+            /*failed_chunk_count*/ 0, false,
+        );
+        assert!(clean.analog_valid, "clean run stays analog-valid");
+        assert_eq!(clean.failed_chunk_count, 0);
+
+        // A diverged run: invalid, with the failed-chunk count carried through.
+        let bad = build_update(
+            0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ false,
+            /*failed_chunk_count*/ 3, true,
+        );
+        assert!(!bad.analog_valid, "a failed chunk makes the update analog-invalid");
+        assert_eq!(
+            bad.failed_chunk_count, 3,
+            "the failed-chunk count reaches the UI snapshot"
+        );
     }
 }

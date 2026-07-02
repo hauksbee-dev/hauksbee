@@ -47,11 +47,15 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let spec = Spec::load(&cfg.spec)?;
     let outcomes = runner::run_spec(&spec)?;
     let results = assertions::evaluate(&spec, &outcomes);
+    // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
+    // if no assertion's window happened to overlap the failed span (05 §3b).
+    let analog_abort = outcomes.iter().any(|o| o.analog_abort);
     Ok(CiResult {
         spec_name: spec.name.clone(),
         board: spec.board.display().to_string(),
         results,
         seeds: outcomes.len() as u32,
         elapsed: started.elapsed(),
+        analog_abort,
     })
 }
