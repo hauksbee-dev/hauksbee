@@ -49,6 +49,60 @@ pub mod qemu;
 
 pub use traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 
+use std::path::{Path, PathBuf};
+
+/// Resolve `path` to an absolute form for error messages, without requiring the
+/// file to exist (so `canonicalize` is not an option: it fails on a missing
+/// path). A relative path is joined onto the current working directory.
+fn absolutize(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|d| d.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
+}
+
+/// Validate a firmware path BEFORE it is handed to a native emulator backend.
+///
+/// simavr's `read_ihex_file` / `elf_read_firmware` (and the QEMU/Renode loaders)
+/// do not defend against a missing file: given a path that does not exist they
+/// print libc's "No such file or directory" to stderr and then dereference a
+/// null result, crashing the whole process with SIGSEGV (exit 139) instead of
+/// returning an error. This guard turns that into a clean, actionable failure.
+///
+/// On success it returns the resolved absolute path (the caller can canonicalize
+/// it further once existence is guaranteed). On failure the error names the
+/// absolute path that was tried and says whether it was missing, a directory,
+/// or unreadable. Callers with extra provenance (e.g. a CI spec field) should
+/// wrap this error to add where the path came from.
+pub fn validate_firmware_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let abs = absolutize(path);
+    match std::fs::metadata(path) {
+        Ok(md) => {
+            if md.is_dir() {
+                anyhow::bail!(
+                    "firmware path is a directory, not a file: {}",
+                    abs.display()
+                );
+            }
+            // Readability: open it now so a permission problem surfaces here with
+            // a clean message rather than deep inside the native loader.
+            std::fs::File::open(path).map_err(|e| {
+                anyhow::anyhow!("firmware file is not readable: {} ({e})", abs.display())
+            })?;
+            Ok(abs)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("no firmware file at {}", abs.display())
+        }
+        Err(e) => anyhow::bail!("cannot access firmware file {}: {e}", abs.display()),
+    }
+}
+
 #[cfg(feature = "avr")]
 pub use avr::AvrMcu;
 
@@ -57,3 +111,41 @@ pub use renode::{RenodeBackend, RenodeConfig};
 
 #[cfg(feature = "qemu")]
 pub use qemu::{QemuBackend, QemuConfig};
+
+#[cfg(test)]
+mod firmware_guard_tests {
+    use super::validate_firmware_path;
+    use std::path::Path;
+
+    #[test]
+    fn missing_file_errors_with_absolute_path() {
+        let err = validate_firmware_path(Path::new("definitely_missing_firmware.hex"))
+            .expect_err("missing firmware must error");
+        let msg = err.to_string();
+        assert!(msg.contains("no firmware file"), "message: {msg}");
+        // The tried path is reported absolutely, not as the bare relative typo.
+        assert!(msg.contains("definitely_missing_firmware.hex"), "message: {msg}");
+        assert!(
+            Path::new(msg.rsplit(' ').next().unwrap_or("")).is_absolute()
+                || msg.contains('/'),
+            "message names an absolute path: {msg}"
+        );
+    }
+
+    #[test]
+    fn directory_is_rejected() {
+        let dir = std::env::temp_dir();
+        let err = validate_firmware_path(&dir).expect_err("a directory is not firmware");
+        assert!(err.to_string().contains("directory"), "message: {err}");
+    }
+
+    #[test]
+    fn readable_file_is_accepted_and_absolutized() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("hauksbee-fw-guard-{}.hex", std::process::id()));
+        std::fs::write(&path, b":00000001FF\n").expect("write temp firmware");
+        let resolved = validate_firmware_path(&path).expect("existing readable file is valid");
+        assert!(resolved.is_absolute());
+        let _ = std::fs::remove_file(&path);
+    }
+}

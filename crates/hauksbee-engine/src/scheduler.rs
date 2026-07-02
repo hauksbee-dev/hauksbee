@@ -2121,6 +2121,11 @@ fn instantiate_mcu(
         instantiate_avr(backend)?
     };
     if let Some(fw) = firmware {
+        // Backstop: validate the path before it reaches the native loader, which
+        // segfaults on a missing file rather than erroring. Higher entry points
+        // (CLI, CI spec runner) validate earlier with richer provenance; this
+        // guards any library caller that reaches the scheduler directly.
+        hauksbee_mcu::validate_firmware_path(fw)?;
         core.load_firmware(fw)?;
     }
     Ok(core)
