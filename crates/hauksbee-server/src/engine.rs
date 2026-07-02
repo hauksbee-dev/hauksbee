@@ -52,7 +52,7 @@ impl McuDemoEngine {
         mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
         let led_state: std::sync::Arc<std::sync::Mutex<bool>> = Default::default();
         let led = led_state.clone();
-        mcu.on_pin_change(Box::new(move |pin, high| {
+        mcu.on_pin_change(Box::new(move |pin, high, _cycle| {
             if pin.port == 'B' && pin.bit == 5 {
                 *led.lock().unwrap() = high;
             }

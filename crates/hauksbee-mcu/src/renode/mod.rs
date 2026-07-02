@@ -627,7 +627,7 @@ pub struct RenodeBackend {
     /// engine actually wired). `None` means poll every configured port.
     active_ports: Option<Vec<char>>,
     /// Pin-change callback.
-    on_pin_change: Option<Box<dyn FnMut(PinId, bool) + Send>>,
+    on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
     /// UART byte callback.
     on_uart: Option<Box<dyn FnMut(u8) + Send>>,
     /// 7-bit I2C addresses the engine attached to this MCU.
@@ -767,6 +767,11 @@ impl RenodeBackend {
                 .collect(),
             None => self.config.ports.clone(),
         };
+        // Poll boundary virtual time, in cycles-equivalent. Every edge observed
+        // this poll shares it: the ODR diff cannot recover intra-slice ordering,
+        // so the stamp is coarse and `cycle_exact()` is false for this backend
+        // (05 §1.1). Snapshot before the mutable-callback borrow.
+        let cyc = self.cycles;
         for port in &ports {
             let new = self.read_odr(port);
             let prev = *self.last_odr.get(&port.letter).unwrap_or(&0);
@@ -782,6 +787,7 @@ impl RenodeBackend {
                                     bit,
                                 },
                                 high,
+                                cyc,
                             );
                         }
                     }
@@ -1325,8 +1331,18 @@ impl Mcu for RenodeBackend {
         // this is a documented no-op until a per-platform ADC map is added.
     }
 
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool) + Send>) {
+    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
         self.on_pin_change = Some(cb);
+    }
+
+    fn current_cycle(&self) -> u64 {
+        self.cycles
+    }
+
+    fn cycle_exact(&self) -> bool {
+        // Poll-based: GPIO edges are observed by diffing ODRs per time slice, so
+        // toggles within a slice collapse and the ordering is coarse (05 §1.1).
+        false
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {

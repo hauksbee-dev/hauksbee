@@ -138,7 +138,7 @@ fn test_pin_change_callback_fires_on_sclk() {
     let sclk_rises: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let counter = sclk_rises.clone();
 
-    mcu.on_pin_change(Box::new(move |pin, high| {
+    mcu.on_pin_change(Box::new(move |pin, high, _cycle| {
         if pin == sclk_pin && high {
             *counter.lock().unwrap() += 1;
         }

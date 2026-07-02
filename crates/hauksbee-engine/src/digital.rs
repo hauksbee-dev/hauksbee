@@ -79,6 +79,116 @@ pub enum DigitalKind {
     Buffer,
 }
 
+/// A single cycle-stamped GPIO output transition captured from an MCU.
+///
+/// This is the ordered, cycle-stamped edge event of 05 §1.1: it carries the MCU
+/// cycle counter at the instant of the edge alongside the pin and its new level,
+/// so a sub-µs `shiftOut` SCLK burst replays in true order and multiplicity
+/// instead of collapsing to a resting level (numerical lore #8,
+/// `docs/dev-plans/research/tarski-saga.md` §5). Within a chunk the log preserves
+/// order and multiplicity; `cycle` is exact on push backends (simavr) and the
+/// coarse poll-slice time on poll backends (Renode/QEMU), flagged by
+/// `Mcu::cycle_exact`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinEdge {
+    /// MCU cycle counter at the instant of the edge.
+    pub cycle: u64,
+    /// Port letter of the pin that transitioned.
+    pub port: char,
+    /// Bit index within the port.
+    pub bit: u8,
+    /// New logic level after the transition.
+    pub level: bool,
+}
+
+/// Collapse a cycle-stamped edge log into per-pin ordered `(cycle, level)`
+/// waveforms, the shape the analog PWL side consumes (05 §1.1/§1.3).
+///
+/// The input log is append-ordered within a chunk, so each pin's resulting
+/// series is already cycle-monotonic; a `(port,bit)` maps to its ordered edge
+/// times so the solver can normalise a cycle to a fraction of the chunk's cycle
+/// span and drive a `SourceKind::Pwl` waveform on the net that pin feeds.
+pub fn pin_edges_by_pin(edges: &[PinEdge]) -> HashMap<(char, u8), Vec<(u64, bool)>> {
+    let mut per_pin: HashMap<(char, u8), Vec<(u64, bool)>> = HashMap::new();
+    for e in edges {
+        per_pin
+            .entry((e.port, e.bit))
+            .or_default()
+            .push((e.cycle, e.level));
+    }
+    per_pin
+}
+
+/// Generalized digital edge replay (05 §1.2): drain a cycle-stamped edge log and
+/// micro-tick a set of GPIO-driven digital components in cycle order, one
+/// micro-tick per edge-group sharing a cycle.
+///
+/// This is the write-path generalization of `Hc595Chain::replay` beyond the 595:
+/// any [`DigitalComponent`] whose clock/data inputs come from MCU GPIO pins (not
+/// from a 595 chain, not from the 165 synchronous responder) advances at edge
+/// granularity here instead of being sampled once per chunk (which collapses the
+/// pulse train). `pin_nets` maps an MCU GPIO `(port,bit)` to the net node it
+/// drives; `high_v`/`low_v` are that MCU's rail levels so the overlaid net
+/// voltage crosses the component's `vih`/`vil` thresholds. Inputs NOT driven by a
+/// replayed pin read their last solved voltage from `base_volts` (case (b) of the
+/// §1.2 cadence rule: analog-driven inputs only change at solve boundaries).
+///
+/// Returns the number of micro-ticks executed (distinct cycle groups that
+/// touched a watched pin) so a caller can assert N edges produced N ordered
+/// micro-ticks rather than one collapsed level.
+#[allow(clippy::too_many_arguments)]
+pub fn replay_components_on_edges(
+    components: &mut [DigitalComponent],
+    which: &[usize],
+    pin_nets: &HashMap<(char, u8), NodeId>,
+    edges: &[PinEdge],
+    base_volts: &[f64],
+    high_v: f64,
+    low_v: f64,
+    circuit: &mut Circuit,
+) -> usize {
+    if edges.is_empty() || which.is_empty() {
+        return 0;
+    }
+    // Net-voltage overlay accumulated as edges are applied. A driven net holds
+    // its last edge level until the next edge on that pin; everything else falls
+    // back to the previous chunk's solved voltage.
+    let mut overlay: HashMap<NodeId, f64> = HashMap::new();
+    let sample = |overlay: &HashMap<NodeId, f64>, base: &[f64], n: NodeId| -> f64 {
+        overlay
+            .get(&n)
+            .copied()
+            .unwrap_or_else(|| base.get(n.0 as usize).copied().unwrap_or(0.0))
+    };
+    let mut microticks = 0usize;
+    let mut i = 0;
+    // The log is pushed in cycle order, so equal cycles are contiguous: one
+    // group per distinct cycle is one micro-tick.
+    while i < edges.len() {
+        let c = edges[i].cycle;
+        let mut touched = false;
+        let mut j = i;
+        while j < edges.len() && edges[j].cycle == c {
+            let e = &edges[j];
+            if let Some(&net) = pin_nets.get(&(e.port, e.bit)) {
+                overlay.insert(net, if e.level { high_v } else { low_v });
+                touched = true;
+            }
+            j += 1;
+        }
+        if touched {
+            let ov = &overlay;
+            let node_v = |n: NodeId| sample(ov, base_volts, n);
+            for &ci in which {
+                components[ci].tick(circuit, &node_v);
+            }
+            microticks += 1;
+        }
+        i = j;
+    }
+    microticks
+}
+
 /// One bound digital component: its pin→net wiring, drivers, and state.
 pub struct DigitalComponent {
     pub reference: String,
@@ -1012,6 +1122,171 @@ mod tests {
             log.push(('B', 5, true)); // SRCLK rising: clock the bit in
             log.push(('B', 5, false)); // SRCLK falling
         }
+    }
+
+    /// A lone (non-chained) 74HC595 wired directly to MCU GPIO, plus its
+    /// `(port,bit) -> net` map, for the generalized-replay tests. SER on PB3,
+    /// SRCLK on PB5, RCLK on PD6 (no daisy chain, so it is NOT an `Hc595Chain`;
+    /// it is exactly the standalone GPIO-clocked shift register the generalized
+    /// path exists to drive).
+    fn build_standalone_595(circuit: &mut Circuit) -> (Vec<DigitalComponent>, HashMap<(char, u8), NodeId>) {
+        let model = hc595_model();
+        let n_ser = circuit.node("SS_SER");
+        let n_srclk = circuit.node("SS_SRCLK");
+        let n_rclk = circuit.node("SS_RCLK");
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        roles.insert("ser".into(), n_ser);
+        roles.insert("srclk".into(), n_srclk);
+        roles.insert("rclk".into(), n_rclk);
+        let comp = DigitalComponent::new("U0".into(), &model, roles, HashMap::new());
+        let mut pin_nets: HashMap<(char, u8), NodeId> = HashMap::new();
+        pin_nets.insert(('B', 3), n_ser);
+        pin_nets.insert(('B', 5), n_srclk);
+        pin_nets.insert(('D', 6), n_rclk);
+        (vec![comp], pin_nets)
+    }
+
+    /// Append a cycle-stamped `shiftOut(MSBFIRST)` of `byte`, one distinct cycle
+    /// per edge so each edge is its own micro-tick group.
+    fn stamped_shift_out(log: &mut Vec<PinEdge>, cyc: &mut u64, byte: u8) {
+        for bit in (0..8).rev() {
+            let b = ((byte >> bit) & 1) == 1;
+            log.push(PinEdge { cycle: *cyc, port: 'B', bit: 3, level: b });
+            *cyc += 1;
+            log.push(PinEdge { cycle: *cyc, port: 'B', bit: 5, level: true });
+            *cyc += 1;
+            log.push(PinEdge { cycle: *cyc, port: 'B', bit: 5, level: false });
+            *cyc += 1;
+        }
+    }
+
+    /// Reconstruct the latched byte from a 595 component's output register
+    /// (`out_reg[i]` is qa+i = bit i).
+    fn pack_out(c: &DigitalComponent) -> u8 {
+        let mut v = 0u8;
+        for i in 0..8 {
+            if c.out_reg[i] {
+                v |= 1 << i;
+            }
+        }
+        v
+    }
+
+    /// The generalized-path proof (05 §1.2): a cycle-stamped `shiftOut` burst
+    /// through the generic `replay_components_on_edges` produces N ordered
+    /// micro-ticks (one per distinct-cycle edge), NOT one collapsed level, and
+    /// latches the byte bit-exact. This is the headline: N edges -> N micro-ticks.
+    #[test]
+    fn generalized_replay_micro_ticks_in_order() {
+        let mut circuit = Circuit::new();
+        let (mut comps, pin_nets) = build_standalone_595(&mut circuit);
+        let base = vec![0.0; circuit.node_count()];
+        let which = [0usize];
+
+        let mut log: Vec<PinEdge> = Vec::new();
+        let mut cyc = 0u64;
+        let byte = 0xA6u8;
+        stamped_shift_out(&mut log, &mut cyc, byte);
+        // RCLK latch pulse (two more distinct-cycle edges).
+        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: true });
+        cyc += 1;
+        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: false });
+
+        let n_edges = log.len();
+        let ticks = replay_components_on_edges(
+            &mut comps, &which, &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+        );
+        assert_eq!(
+            ticks, n_edges,
+            "each distinct-cycle edge is its own micro-tick (no collapse)"
+        );
+        assert_eq!(
+            pack_out(&comps[0]),
+            byte,
+            "the shiftOut burst latched byte-exact through the generalized path"
+        );
+    }
+
+    /// Edges sharing one cycle are ONE micro-tick (05 §1.2: an edge-group sharing
+    /// a cycle is a single micro-tick), unlike distinct-cycle edges.
+    #[test]
+    fn same_cycle_edges_are_one_micro_tick() {
+        let mut circuit = Circuit::new();
+        let (mut comps, pin_nets) = build_standalone_595(&mut circuit);
+        let base = vec![0.0; circuit.node_count()];
+        // SER high and SRCLK high at the SAME cycle -> one group -> one micro-tick.
+        let log = vec![
+            PinEdge { cycle: 5, port: 'B', bit: 3, level: true },
+            PinEdge { cycle: 5, port: 'B', bit: 5, level: true },
+        ];
+        let ticks = replay_components_on_edges(
+            &mut comps, &[0], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+        );
+        assert_eq!(ticks, 1, "two edges on one cycle collapse to a single micro-tick");
+    }
+
+    /// Cycle monotonicity per pin: `pin_edges_by_pin` yields, for each pin, an
+    /// ordered `(cycle, level)` series whose cycles never decrease (the analog
+    /// PWL side relies on this to normalize edge times, 05 §1.1).
+    #[test]
+    fn pin_edges_are_cycle_monotonic_per_pin() {
+        let log = vec![
+            PinEdge { cycle: 0, port: 'B', bit: 5, level: true },
+            PinEdge { cycle: 1, port: 'B', bit: 3, level: true },
+            PinEdge { cycle: 2, port: 'B', bit: 5, level: false },
+            PinEdge { cycle: 5, port: 'B', bit: 5, level: true },
+            PinEdge { cycle: 7, port: 'B', bit: 3, level: false },
+        ];
+        let by_pin = pin_edges_by_pin(&log);
+        for (pin, series) in &by_pin {
+            for w in series.windows(2) {
+                assert!(
+                    w[0].0 <= w[1].0,
+                    "pin {pin:?} cycle series must be monotonic: {series:?}"
+                );
+            }
+        }
+        assert_eq!(by_pin[&('B', 5)].len(), 3, "PB5 saw 3 edges");
+        assert_eq!(by_pin[&('B', 3)].len(), 2, "PB3 saw 2 edges");
+    }
+
+    /// Bit-identical-when-off (05 §1.6 / master doctrine §5): a SINGLE edge on a
+    /// pin in the chunk yields the same digital state through the generalized
+    /// replay as the old once-per-chunk collapse (which sampled the settled
+    /// level). Nothing needs ordering, so the outcome is identical.
+    #[test]
+    fn single_edge_matches_collapsed_tick() {
+        // Replay path: SER already high from a previous solve (in `base_volts`),
+        // one SRCLK rising edge this chunk.
+        let mut circuit = Circuit::new();
+        let (mut comps, pin_nets) = build_standalone_595(&mut circuit);
+        let ser_net = pin_nets[&('B', 3)];
+        let mut base = vec![0.0; circuit.node_count()];
+        base[ser_net.0 as usize] = 5.0;
+        let log = vec![PinEdge { cycle: 10, port: 'B', bit: 5, level: true }];
+        let ticks = replay_components_on_edges(
+            &mut comps, &[0], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+        );
+        assert_eq!(ticks, 1);
+        let replay_shift = comps[0].shift_reg.clone();
+
+        // Old collapse path: SER high and SRCLK high sampled once per chunk
+        // (prev SRCLK low), the pre-change once-per-chunk `tick`.
+        let mut circuit2 = Circuit::new();
+        let (mut comps2, pin_nets2) = build_standalone_595(&mut circuit2);
+        let ser_net2 = pin_nets2[&('B', 3)];
+        let srclk_net2 = pin_nets2[&('B', 5)];
+        let mut volts = vec![0.0; circuit2.node_count()];
+        volts[ser_net2.0 as usize] = 5.0;
+        volts[srclk_net2.0 as usize] = 5.0;
+        let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+        comps2[0].tick(&mut circuit2, &node_v);
+
+        assert_eq!(
+            comps2[0].shift_reg, replay_shift,
+            "single edge collapses to an identical state"
+        );
+        assert!(replay_shift[0], "the one SRCLK edge shifted SER(high) into stage 0");
     }
 
     /// The core FIX 1 proof: a synthetic ordered edge stream reproducing the

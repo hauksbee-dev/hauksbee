@@ -31,7 +31,7 @@ use hauksbee_solve::{Layout, SolverOptions, Transient};
 
 use crate::behavioral::BehavioralDevice;
 use crate::binder::{gpio_of_role, BoundBoard, McuBinding};
-use crate::digital::DigitalComponent;
+use crate::digital::{DigitalComponent, PinEdge};
 use crate::peripherals::{I2cBus, Mcp4728, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
@@ -56,12 +56,13 @@ struct McuShared {
     /// ordinary GPIO drivers (which only care about the final level a chunk
     /// settles to) and diagnostics / frame state.
     pin_edges: HashMap<(char, u8), bool>,
-    /// Ordered log of EVERY pin transition since the last drain, in the order
-    /// the firmware produced them. Unlike `pin_edges` (latest-level map, which
-    /// collapses a sub-µs `shiftOut` SCLK pulse train to its final level), this
-    /// preserves each edge so the bit-banged 74HC595 chain can be clocked at
-    /// edge granularity (FIX 1).
-    pin_edge_log: Vec<(char, u8, bool)>,
+    /// Ordered, cycle-stamped log of EVERY pin transition since the last drain,
+    /// in the order the firmware produced them. Unlike `pin_edges` (latest-level
+    /// map, which collapses a sub-µs `shiftOut` SCLK pulse train to its final
+    /// level), this preserves each edge AND its MCU cycle so the bit-banged
+    /// digital layer replays at edge granularity in cycle order (FIX 1, 05 §1.1;
+    /// numerical lore #8).
+    pin_edge_log: Vec<PinEdge>,
     /// UART bytes the firmware emitted since last drain.
     uart_out: Vec<u8>,
 }
@@ -186,6 +187,25 @@ pub struct Scheduler {
     /// later chunk converges, so a strict post-run check still sees a streak that
     /// crossed the abort threshold mid-run.
     max_consecutive_failed_chunks: u32,
+    /// Standalone GPIO-edge-driven digital components (indices into `digital`)
+    /// advanced through the generalized micro-tick replay (05 §1.2), NOT through
+    /// a 595 chain or the 165 responder. Empty on the current corpus (every GPIO
+    /// 595 is a chain, every 165 a responder), so the generalized path is a no-op
+    /// there and nothing regresses; a board with a standalone GPIO-clocked shift
+    /// register populates it. Skipped by the once-per-chunk digital tick, exactly
+    /// as `chain_chips` are, so they are not double-driven.
+    replay_chips: Vec<usize>,
+    /// Per-MCU map of GPIO `(port,bit)` -> the net node it drives, used by the
+    /// generalized replay to overlay driven-pin levels while micro-ticking the
+    /// `replay_chips`. Parallel to `mcus`.
+    replay_pin_nets: Vec<HashMap<(char, u8), NodeId>>,
+    /// Cycle-stamped GPIO edges each MCU produced in the LAST chunk (one entry
+    /// per MCU that ran), for the analog PWL side. Rebuilt every chunk.
+    last_chunk_edges: Vec<ChunkPinEdges>,
+    /// Distinct cycle-groups replayed through the generalized digital path in the
+    /// last chunk (a micro-tick each). A diagnostic that a `shiftOut` burst
+    /// produced N ordered micro-ticks, not one collapsed level.
+    last_replay_microticks: usize,
 }
 
 
@@ -226,6 +246,30 @@ struct DacVoutDrive {
     address: u8,
     drivers: [Option<crate::drivers::PinDriver>; 4],
 
+}
+
+/// The cycle-stamped GPIO edges one MCU produced during the most recent chunk,
+/// exposed for the analog PWL side (05 §1.1/§1.3).
+///
+/// A `(port,bit)` maps to its ordered `(cycle, level)` series; `cycle_span` is
+/// the chunk's `[start, end)` cycle counter so a consumer normalises an edge
+/// cycle to a fraction of the chunk (`(cycle - start) / (end - start)`) and then
+/// to seconds via `chunk_s`, driving a `SourceKind::Pwl` waveform on the net the
+/// pin feeds. `cycle_exact` is false on poll backends (Renode/QEMU): the series
+/// still orders correctly but sub-slice edge times are coarse, so the PWL side
+/// must not claim cycle-exact corner times there.
+#[derive(Debug, Clone)]
+pub struct ChunkPinEdges {
+    /// The MCU whose edges these are (its reference designator).
+    pub mcu_reference: String,
+    /// Per-pin ordered `(cycle, level)` transitions within the chunk.
+    pub edges: HashMap<(char, u8), Vec<(u64, bool)>>,
+    /// The chunk's `[start_cycle, end_cycle)` span, for time normalization.
+    pub cycle_span: (u64, u64),
+    /// Wall-clock duration of the chunk in seconds (maps normalized time to real time).
+    pub chunk_s: f64,
+    /// Whether the cycle stamps are cycle-exact (push backend) or coarse (poll).
+    pub cycle_exact: bool,
 }
 
 /// Running statistics for one net across a run.
@@ -302,6 +346,14 @@ impl Scheduler {
         // is left to the old once-per-chunk digital tick (so nothing regresses).
         let (chains, chain_mcu, chain_chips) = build_595_chains(&digital, &live);
 
+        // Standalone GPIO-edge-driven digital components (05 §1.2): shift/latch
+        // parts clocked directly by an MCU pin that are NOT part of a 595 chain
+        // or a 165 responder. On the current corpus this is empty; it is the
+        // generalization hook so a lone GPIO-clocked 595/165 replays at edge
+        // granularity through the same path as the chains.
+        let (replay_chips, replay_pin_nets) =
+            build_generic_replay_chips(&digital, &chain_chips, &live);
+
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
@@ -338,6 +390,10 @@ impl Scheduler {
             failed_windows: Vec::new(),
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
+            replay_chips,
+            replay_pin_nets,
+            last_chunk_edges: Vec::new(),
+            last_replay_microticks: 0,
         };
 
         // Build the edge-driven 74HC165 read chains and install each as its
@@ -707,6 +763,10 @@ impl Scheduler {
             snap.extend_from_slice(&self.node_volts);
         }
 
+        // Per-chunk accessor state, rebuilt as each MCU drains below.
+        self.last_chunk_edges.clear();
+        self.last_replay_microticks = 0;
+
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
         for mi in 0..self.mcus.len() {
             let m = &mut self.mcus[mi];
@@ -729,7 +789,15 @@ impl Scheduler {
                     m.core.set_i2c_device_temperature(addr, milli_c);
                 }
             }
+            // Cycle counter bracketing this run: the chunk's [start, end) span,
+            // so the drained edge stamps normalize to a fraction of the chunk for
+            // the analog PWL side (05 §1.1). Exact on simavr, coarse on poll
+            // backends (flagged by `cycle_exact`).
+            let cyc_start = m.core.current_cycle();
             let _ = m.core.run_micros(micros);
+            let cyc_end = m.core.current_cycle();
+            let cycle_exact = m.core.cycle_exact();
+            let mcu_ref = m.binding.reference.clone();
 
             let (edges, edge_log, bytes) = {
                 let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -740,23 +808,27 @@ impl Scheduler {
                 )
             };
             if !bytes.is_empty() {
-                uart.entry(m.binding.reference.clone())
-                    .or_default()
-                    .extend(bytes);
+                uart.entry(mcu_ref.clone()).or_default().extend(bytes);
             }
-            // 1b. Edge-driven 74HC595 chains: replay THIS MCU's ordered
-            // transition log so each bit-banged SRCLK/RCLK pulse clocks the
-            // chains it owns (FIX 1). Only chains whose owning MCU is `mi` are
-            // replayed, so a different MCU's identically-named pin cannot inject
-            // spurious clocks. The latched outputs are pushed onto the analog
-            // nets after the digital tick (so they are not clobbered by it).
-            if !edge_log.is_empty() {
-                for (ci, chain) in self.chains.iter_mut().enumerate() {
-                    if self.chain_mcu[ci] == mi {
-                        chain.replay(&edge_log);
-                    }
-                }
-            }
+            // Expose this MCU's cycle-stamped edges (per pin) for the analog side.
+            self.last_chunk_edges.push(ChunkPinEdges {
+                mcu_reference: mcu_ref,
+                edges: crate::digital::pin_edges_by_pin(&edge_log),
+                cycle_span: (cyc_start, cyc_end),
+                chunk_s: chunk,
+                cycle_exact,
+            });
+            // 1b. Generalized digital replay (05 §1.2): drain THIS MCU's ordered,
+            // cycle-stamped log and replay it in cycle order through every
+            // edge-driven digital element on one path — the 595 chains it owns AND
+            // any standalone GPIO-clocked shift/latch (`replay_chips`). Each
+            // edge-group sharing a cycle is one micro-tick, so a bit-banged
+            // SRCLK/RCLK pulse train clocks the chain per edge instead of
+            // collapsing to a level (FIX 1). Only chains whose owning MCU is `mi`
+            // are replayed, so a different MCU's identically-named pin cannot
+            // inject spurious clocks. Latched outputs reach the analog nets via the
+            // digital tick / chain apply below.
+            self.last_replay_microticks += self.replay_digital_edges(mi, &edge_log);
             // 2. Apply GPIO edges to drivers. An edge means the firmware has
             // configured the pin as a driven output, so enable the (initially
             // tri-stated) Thevenin leg before setting its level.
@@ -772,16 +844,17 @@ impl Scheduler {
         }
 
         // 5(prev). Digital components drive their outputs from current state,
-        // sampling the previous chunk's solved node voltages. Chips owned by an
-        // edge-driven 595 chain are SKIPPED here: they are clocked by the edge
-        // path above and have their latched outputs applied below, so ticking
-        // them once-per-chunk too would double-drive them with a stale,
-        // pulse-collapsed sample.
+        // sampling the previous chunk's solved node voltages. Chips clocked by an
+        // edge path are SKIPPED here: chips owned by an edge-driven 595 chain
+        // (`chain_chips`) and standalone GPIO-clocked shift/latch parts advanced
+        // by the generalized replay (`replay_chips`) already ran at edge
+        // granularity above, so ticking them once-per-chunk too would double-drive
+        // them with a stale, pulse-collapsed sample.
         {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
             for (i, d) in self.digital.iter_mut().enumerate() {
-                if self.chain_chips.contains(&i) {
+                if self.chain_chips.contains(&i) || self.replay_chips.contains(&i) {
                     continue;
                 }
                 d.tick(&mut self.circuit, &node_v);
@@ -1421,6 +1494,98 @@ impl Scheduler {
         out
     }
 
+    /// Generalized digital edge replay (05 §1.2): drain MCU `mi`'s ordered,
+    /// cycle-stamped log and replay it in cycle order through every edge-driven
+    /// digital element on ONE path — the 595 chains it owns AND any standalone
+    /// GPIO-clocked shift/latch (`replay_chips`). One micro-tick per edge-group
+    /// sharing a cycle. Returns the micro-tick count.
+    ///
+    /// This unifies two previously-separate per-chip mechanisms. The 595 chain
+    /// stays byte-exact: replaying a cycle-group sub-slice evolves the chain's
+    /// state identically to replaying the whole log (replay is a stateful
+    /// sequential fold), so PATH B still latches its bytes exactly. The 74HC165
+    /// read path is deliberately NOT here: it resolves synchronously inside
+    /// `run_micros` through the input responder; this post-run replay reconciles
+    /// only the write side (numerical lore #8).
+    fn replay_digital_edges(&mut self, mi: usize, edge_log: &[PinEdge]) -> usize {
+        if edge_log.is_empty() {
+            return 0;
+        }
+        // Generic standalone components first, in cycle order, sharing the same
+        // overlay semantics as the chains. No-op unless `replay_chips` is
+        // populated (empty on the current corpus). Its own return is the
+        // authoritative micro-tick count for those parts.
+        let generic_ticks = if !self.replay_chips.is_empty() {
+            if let Some(pin_nets) = self.replay_pin_nets.get(mi).cloned() {
+                let high_v = self.mcus[mi].logic_high_v;
+                let base = self.node_volts.clone();
+                crate::digital::replay_components_on_edges(
+                    &mut self.digital,
+                    &self.replay_chips,
+                    &pin_nets,
+                    edge_log,
+                    &base,
+                    high_v,
+                    0.0,
+                    &mut self.circuit,
+                )
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // Chains owned by this MCU, replayed cycle-group by cycle-group so the
+        // ordering matches the generic path. The log is pushed in cycle order, so
+        // equal cycles are contiguous: one group per distinct cycle.
+        let mut group_ticks = 0usize;
+        let mut i = 0;
+        while i < edge_log.len() {
+            let c = edge_log[i].cycle;
+            let mut j = i;
+            while j < edge_log.len() && edge_log[j].cycle == c {
+                j += 1;
+            }
+            if !self.chains.is_empty() {
+                let raw: Vec<(char, u8, bool)> = edge_log[i..j]
+                    .iter()
+                    .map(|e| (e.port, e.bit, e.level))
+                    .collect();
+                for (ci, chain) in self.chains.iter_mut().enumerate() {
+                    if self.chain_mcu[ci] == mi {
+                        chain.replay(&raw);
+                    }
+                }
+            }
+            group_ticks += 1;
+            i = j;
+        }
+        // Prefer the generic count where a standalone part drove the replay
+        // (it counts only cycle-groups that touched a watched pin); otherwise the
+        // cycle-group count over the whole log is the chain replay's micro-ticks.
+        if generic_ticks > 0 {
+            generic_ticks
+        } else {
+            group_ticks
+        }
+    }
+
+    /// The cycle-stamped GPIO edges each MCU produced in the most recent chunk,
+    /// one entry per MCU that ran. The analog PWL side consumes this to translate
+    /// each pin's ordered `(cycle, level)` series into a `SourceKind::Pwl`
+    /// waveform on the driven net (05 §1.1/§1.3).
+    pub fn last_chunk_pin_edges(&self) -> &[ChunkPinEdges] {
+        &self.last_chunk_edges
+    }
+
+    /// Micro-ticks replayed through the generalized digital path in the last
+    /// chunk (one per distinct edge-group cycle). A diagnostic that a bit-banged
+    /// burst produced N ordered micro-ticks rather than one collapsed level.
+    pub fn last_replay_microticks(&self) -> usize {
+        self.last_replay_microticks
+    }
+
     /// Per edge-driven 74HC595 chain, the MCU GPIO `(port, bit)` bound to its
     /// SRCLK, RCLK, optional SRCLR_n, optional OE_n, and head SER, plus the chip
     /// count. Empty when no chain is clocked by the MCU (the old once-per-chunk
@@ -1838,6 +2003,71 @@ fn build_595_chains(
     (chains, chain_mcu, owned)
 }
 
+/// Identify standalone GPIO-edge-driven digital components for the generalized
+/// replay (05 §1.2), and build each MCU's GPIO `(port,bit)` -> driven-net map.
+///
+/// A component qualifies when it is a shift/latch part (74HC595 / 74HC165) that
+/// is NOT already owned by a 595 chain (`chain_chips`) nor by a 165 read chain
+/// (the responder path), AND at least one of its clock/data input roles is wired
+/// to a net an MCU GPIO drives. That last condition is what makes it truly
+/// edge-driven: without a GPIO on its clock it can only change at solve
+/// boundaries and stays on the once-per-chunk analog tick (§1.2 cadence case
+/// (b)). On the current corpus every GPIO-clocked 595 is a chain and every 165 a
+/// responder, so this returns an empty chip list — the generalization is a
+/// no-op that regresses nothing and is exercised by the synthetic burst test.
+fn build_generic_replay_chips(
+    digital: &[DigitalComponent],
+    chain_chips: &std::collections::HashSet<usize>,
+    mcus: &[LiveMcu],
+) -> (Vec<usize>, Vec<HashMap<(char, u8), NodeId>>) {
+    use crate::digital::{order_165_chains, DigitalKind};
+
+    let pin_nets: Vec<HashMap<(char, u8), NodeId>> = mcus
+        .iter()
+        .map(|m| {
+            m.binding
+                .gpio_drivers
+                .iter()
+                .map(|(&(port, bit), drv)| ((port, bit), drv.net))
+                .collect()
+        })
+        .collect();
+    let driven_nets: std::collections::HashSet<i64> = pin_nets
+        .iter()
+        .flat_map(|m| m.values().map(|n| n.0 as i64))
+        .collect();
+
+    // Chips owned by a 165 read chain (resolved via the synchronous responder).
+    let mut responder_chips: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for order in order_165_chains(digital) {
+        for c in order {
+            responder_chips.insert(c);
+        }
+    }
+
+    // Clock/data input roles whose net, if GPIO-driven, makes the part edge-driven.
+    const CLOCK_ROLES: &[&str] = &[
+        "srclk", "rclk", "ser", "srclr_n", "oe_n", "clk", "pl_n", "clk_inh",
+    ];
+
+    let mut chips = Vec::new();
+    for (i, d) in digital.iter().enumerate() {
+        if chain_chips.contains(&i) || responder_chips.contains(&i) {
+            continue;
+        }
+        if !matches!(d.kind, DigitalKind::Hc595 | DigitalKind::Hc165) {
+            continue;
+        }
+        let gpio_clocked = d.roles.iter().any(|(role, n)| {
+            CLOCK_ROLES.contains(&role.as_str()) && driven_nets.contains(&(n.0 as i64))
+        });
+        if gpio_clocked {
+            chips.push(i);
+        }
+    }
+    (chips, pin_nets)
+}
+
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
 fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMcu {
     let shared = Arc::new(Mutex::new(McuShared::default()));
@@ -1846,10 +2076,15 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     // simavr backend is across an `extern "C"` FFI boundary where an unwind is
     // UB. So never panic on a poisoned lock: recover the guard and keep going
     // (the captured data is a simple accumulation buffer).
-    core.on_pin_change(Box::new(move |pin: PinId, high: bool| {
+    core.on_pin_change(Box::new(move |pin: PinId, high: bool, cycle: u64| {
         let mut sh = pin_sink.lock().unwrap_or_else(|e| e.into_inner());
         sh.pin_edges.insert((pin.port, pin.bit), high);
-        sh.pin_edge_log.push((pin.port, pin.bit, high));
+        sh.pin_edge_log.push(PinEdge {
+            cycle,
+            port: pin.port,
+            bit: pin.bit,
+            level: high,
+        });
     }));
     let uart_sink = shared.clone();
     core.on_uart(Box::new(move |b: u8| {

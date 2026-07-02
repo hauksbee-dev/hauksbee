@@ -79,7 +79,7 @@ const TWI_COND_READ: u32 = 1 << 5;
 // Callback state (written inside C callbacks, read from Rust)
 // ---------------------------------------------------------------------------
 
-type PinChangeCb = Box<dyn FnMut(PinId, bool) + Send>;
+type PinChangeCb = Box<dyn FnMut(PinId, bool, u64) + Send>;
 type UartCb = Box<dyn FnMut(u8) + Send>;
 type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
 type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
@@ -187,6 +187,15 @@ macro_rules! make_port_hook {
                     // responder can raise an ioport input IRQ while we still
                     // hold the `s` borrow (avr_ptr is Copy).
                     let avr = s.avr_ptr;
+                    // The IRQ fires synchronously inside `avr_run`, so `avr->cycle`
+                    // here is the EXACT cycle of this edge. Stamping it lets the
+                    // scheduler replay a sub-µs SCLK burst in true order rather
+                    // than collapsing it to a level (numerical lore #8).
+                    let cycle = if avr.is_null() {
+                        0
+                    } else {
+                        unsafe { (*avr).cycle }
+                    };
                     // Fire callback for each bit that changed.
                     for bit in 0u8..8 {
                         if (changed >> bit) & 1 == 0 {
@@ -195,7 +204,7 @@ macro_rules! make_port_hook {
                         let high = (new_val >> bit) & 1 != 0;
                         let pin = PinId { port: $port_char, bit };
                         if let Some(cb) = &mut s.callbacks.on_pin_change {
-                            cb(pin, high);
+                            cb(pin, high, cycle);
                         }
                         // Synchronous input drive: the responder may push a
                         // serial-out bit back onto an MCU input pin (e.g. the
@@ -739,6 +748,12 @@ impl Mcu for AvrMcu {
         self.frequency_hz
     }
 
+    fn current_cycle(&self) -> u64 {
+        // Direct read of `avr->cycle`: cheaper than building a full McuState and
+        // exact when called from inside the pin-change hook (same run slice).
+        self.raw_cycle()
+    }
+
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         self.set_pin_raw(pin.port, pin.bit, high);
     }
@@ -766,7 +781,7 @@ impl Mcu for AvrMcu {
         }
     }
 
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool) + Send>) {
+    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
         {
             let mut s = self.state.lock().unwrap();
             s.callbacks.on_pin_change = Some(cb);

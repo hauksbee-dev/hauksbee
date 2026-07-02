@@ -108,10 +108,42 @@ pub trait Mcu {
 
     /// Register a callback that fires on every GPIO output edge.
     ///
-    /// The callback receives the pin and the new logic level.  It is called
-    /// synchronously from within [`run_cycles`] / [`run_micros`] on the same
-    /// thread.
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool) + Send>);
+    /// The callback receives the pin, the new logic level, and the MCU cycle
+    /// counter at the instant of the edge. It is called synchronously from
+    /// within [`run_cycles`] / [`run_micros`] on the same thread.
+    ///
+    /// The cycle stamp is what lets the co-sim replay a sub-µs `shiftOut` SCLK
+    /// burst in the exact order (and multiplicity) the firmware produced it,
+    /// rather than collapsing the whole chunk to a resting level (numerical lore
+    /// #8, `docs/dev-plans/research/tarski-saga.md` §5). On push backends
+    /// (simavr) the stamp is exact: the C IRQ fires synchronously on every edge,
+    /// so the cycle read inside the hook is the true edge time. On poll backends
+    /// (Renode/QEMU) it is the poll boundary's virtual time and coarse; see
+    /// [`Mcu::cycle_exact`].
+    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>);
+
+    /// The MCU's current cycle counter (cycles since reset).
+    ///
+    /// Read synchronously, so calling it from inside an `on_pin_change` hook (as
+    /// the simavr backend does) yields the exact cycle of the edge being
+    /// reported. The default derives it from [`Mcu::state`]; backends with a
+    /// cheaper direct read (simavr's `avr->cycle`) override it.
+    fn current_cycle(&self) -> u64 {
+        self.state().cycles
+    }
+
+    /// Whether this backend's edge cycle stamps are cycle-exact.
+    ///
+    /// True on push backends (simavr: the C IRQ fires on every edge, so each
+    /// stamp is the real edge cycle). False on poll backends (Renode/QEMU diff
+    /// the output registers per time slice, so every edge inside a slice shares
+    /// the slice's virtual time and intra-slice ordering is lost). Downstream
+    /// cadence and framing logic reads this to know whether the drained ordering
+    /// can be trusted at sub-slice granularity (05 §1.1, amended: the drain
+    /// carries the coarse flag rather than pretending the order is exact).
+    fn cycle_exact(&self) -> bool {
+        true
+    }
 
     /// Register a synchronous input responder.
     ///
