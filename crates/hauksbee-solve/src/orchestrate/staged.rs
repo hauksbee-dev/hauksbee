@@ -924,19 +924,21 @@ mod tests {
         assert!(!staged.torn_groups.is_empty(), "must actually run torn");
         let mono = monolith(&c, dt, tstop);
         // Two-sided compare at 5e-6. The bar is wider than the suite's usual
-        // 1e-6 for a documented reason, found the hard way: at the junction
-        // KNEE step of the pulse fall the two engines' accepted solutions
-        // differ by ~2.5e-6 at b0 for ONE sample, and the difference is
-        // path-dependent Newton acceptance, not bookkeeping. Evidence: flat
-        // regions agree to 1e-15 (no leak); the rail balance closes to 7e-9
-        // (the cap's current IS in the books, which is what this gate
-        // exists to prove); tightening the balance target 10x and vntol
-        // 100x changes nothing bitwise (each engine's accepted point is its
-        // own machine-stable fixed point); the blocks are static, so no
-        // history is involved. Root-causing the knee acceptance band
-        // (junction limiting at termination) is punch-listed with the
-        // Newton robustness work. A persistent offset, the failure this
-        // gate hunts, would still fail at this bar.
+        // 1e-6 for a root-caused reason: Newton acceptance is update-based
+        // only (newton.rs converged(): |dx| <= reltol*|x| + vntol, no
+        // residual test), so at a junction-knee step each engine's path
+        // stops at a different point inside the reltol*|x| band (~4.3 mV at
+        // this base node), and the accepted value is the quadratic Newton
+        // image of the last step: a ~1.2e-6 V acceptance spread, present in
+        // BOTH formulations, insensitive to vntol by construction. Verified
+        // by a 400-warm-start repro (spread quadratic in reltol, unmoved by
+        // vntol; pnjlim inactive at termination step sizes, hypothesis
+        // refuted). The designed fix, a node-row residual gate reusing the
+        // line-search matvec behind a strategy flag, collapses the band to
+        // ~1e-12 and lets this bar return to 1e-6; it lands with the
+        // strategy ladder because it changes accepted values bitwise
+        // everywhere. A persistent offset, the failure this gate hunts,
+        // still fails at this bar (flat regions agree to 1e-15).
         let tol = 5e-6;
         for node in 1..c.node_count() {
             for (k, &t) in staged.waveforms.time.iter().enumerate() {
