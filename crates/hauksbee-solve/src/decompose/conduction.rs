@@ -34,8 +34,11 @@
 //! for stiff nodes whose removal fragments an island further. Ground never
 //! joins islands (it is the global reference, not a coupling path), matching
 //! the rule the basic partitioner already uses.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
-use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
+use hauksbee_ir::{Circuit, DeviceId, NodeId};
 
 /// A device reading a node it does not conduct into: the raw material of a
 /// free tear. If `node` is owned by one island and `device` lives in another,
@@ -393,5 +396,159 @@ mod tests {
         });
         let g2 = ConductionGraph::analyze(&c);
         assert_eq!(g2.islands.len(), 1, "a conducting bridge fuses the blocks");
+    }
+
+    /// The staged and BBM stamp paths must keep sense rows as clean as the
+    /// baseline. The main cross-check runs env-off with branch_reg=0; this one
+    /// exercises exactly the paths the co-sim merge added: an SPDT pair with
+    /// HAUKSBEE_SPDT_BBM=1 and a live sibling map (the winner-take-all margin
+    /// coupling), branch_reg > 0 (the staged smooth switch/comparator stamps),
+    /// and frozen event decisions for both device kinds. The property under
+    /// test is the same STEP-0 zero-current row: none of those variants may
+    /// leak current into a control/input row, or the free-tear exactness
+    /// argument collapses on the staged path.
+    ///
+    /// Env-var hazard: HAUKSBEE_SPDT_BBM is process-global and tests run in
+    /// parallel threads. The var is set only around the stamping below and
+    /// removed immediately after; the only other readers in this crate gate
+    /// behavior that is itself row-clean (verified by this very test), so a
+    /// transient overlap cannot turn a passing suite red.
+    #[test]
+    fn staged_and_bbm_paths_keep_sense_rows_clean() {
+        let mut circuit = hauksbee_ir::Circuit::new();
+        let thru = circuit.node("thru");
+        let out0 = circuit.node("out0");
+        let out1 = circuit.node("out1");
+        let cp = circuit.node("sel_p");
+        let cn = circuit.node("sel_n");
+        let ki = circuit.node("cmp_p");
+        let kn = circuit.node("cmp_n");
+        let ko = circuit.node("cmp_out");
+
+        // An SPDT pair in the binder's convention: two legs off one through
+        // node, same control pair, complementary bands.
+        let s0 = circuit.add(hauksbee_ir::Device::VSwitch {
+            name: "SW_s0".into(),
+            a: thru,
+            b: out0,
+            ctrl_p: cp,
+            ctrl_n: cn,
+            von: 2.0,
+            voff: 1.0,
+            ron: 10.0,
+            roff: 1e9,
+        });
+        let s1 = circuit.add(hauksbee_ir::Device::VSwitch {
+            name: "SW_s1".into(),
+            a: thru,
+            b: out1,
+            ctrl_p: cp,
+            ctrl_n: cn,
+            von: 1.0,
+            voff: 2.0,
+            ron: 10.0,
+            roff: 1e9,
+        });
+        let cmp = circuit.add(hauksbee_ir::Device::Comparator {
+            name: "K1".into(),
+            out: ko,
+            inp: ki,
+            inn: kn,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 1e-3,
+        });
+
+        let mut siblings = std::collections::HashMap::new();
+        siblings.insert(s0, s1);
+        siblings.insert(s1, s0);
+        let mut cmp_frozen = std::collections::HashMap::new();
+        cmp_frozen.insert(cmp, true);
+        let mut sw_frozen = std::collections::HashMap::new();
+        sw_frozen.insert(s0, true);
+        sw_frozen.insert(s1, false);
+
+        let mut ws = Workspace::new(&circuit);
+        let opts = SolverOptions::default();
+        let state = ReactiveState::new(circuit.devices.len());
+        let nodes = [thru, out0, out1, cp, cn, ki, kn, ko];
+        // Control voltages straddling and pinned at the band edges, where the
+        // BBM sigmoid and the smooth-switch tanh have their largest slopes
+        // (a leaky stamp shows up most where the derivatives are largest).
+        let probes: [[f64; 8]; 3] = [
+            [4.5, 0.1, 0.2, 1.5, 0.0, 2.0, 1.0, 5.0],
+            [5.0, 0.0, 0.0, 2.0, 0.0, -1.0, 3.0, 0.0],
+            [0.5, 2.0, -1.0, 1.0, 0.5, 0.0, 0.0, 2.5],
+        ];
+
+        std::env::set_var("HAUKSBEE_SPDT_BBM", "1");
+        // Frozen decisions, sibling coupling, and staged regularization on
+        // together: the harshest combination the staged path can present.
+        for (freeze_on, branch_reg) in [(false, 1e-2), (true, 1e-2), (true, 0.0)] {
+            for probe in probes {
+                for (i, v) in probe.iter().enumerate() {
+                    if let Some(row) = ws.layout.node(nodes[i]) {
+                        ws.x[row] = *v;
+                    }
+                }
+                ws.matrix.clear_values();
+                ws.rhs.iter_mut().for_each(|v| *v = 0.0);
+                let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, true);
+                let ctx = StampCtx {
+                    circuit: &circuit,
+                    layout: &ws.layout,
+                    opts: &opts,
+                    x: &ws.x,
+                    x_prev: &ws.x,
+                    time: 0.0,
+                    coeffs,
+                    state: &state,
+                    dc: false,
+                    use_ic: false,
+                    gmin: 0.0,
+                    src_scale: 1.0,
+                    branch_reg,
+                    cmp_freeze: if freeze_on { Some(&cmp_frozen) } else { None },
+                    switch_freeze: if freeze_on { Some(&sw_frozen) } else { None },
+                    spdt_sibling: &siblings,
+                };
+                stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
+
+                for dev in circuit.devices.iter() {
+                    for sn in dev.sense_nodes() {
+                        let row = ws.layout.node(sn).expect("sense node row");
+                        for &(col, val) in ws.matrix.row(row) {
+                            // branch_reg legitimately writes a -reg term on
+                            // EVERY diagonal (solver regularization, not
+                            // device current), mirroring the gmin exemption
+                            // in the baseline test.
+                            if col == row {
+                                let reg_only = (val + branch_reg).abs() < 1e-30;
+                                assert!(
+                                    reg_only || val == 0.0,
+                                    "{}: sense row {row} diagonal {val} is not \
+                                     pure regularization (branch_reg={branch_reg})",
+                                    dev.name()
+                                );
+                                continue;
+                            }
+                            assert!(
+                                val == 0.0,
+                                "{}: sense node {sn:?} row entry ({row},{col})={val} \
+                                 under BBM+staged (freeze={freeze_on}, reg={branch_reg})",
+                                dev.name()
+                            );
+                        }
+                        assert!(
+                            ws.rhs[row] == 0.0,
+                            "{}: sense row {row} RHS {} under BBM+staged",
+                            dev.name(),
+                            ws.rhs[row]
+                        );
+                    }
+                }
+            }
+        }
+        std::env::remove_var("HAUKSBEE_SPDT_BBM");
     }
 }

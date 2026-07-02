@@ -30,6 +30,9 @@
 //! internal feedback (its waveform is not a function of its inputs alone, so
 //! caching or reordering optimizations that assume input-determinism are off
 //! the table for it).
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use hauksbee_ir::{Circuit, NodeId};
 

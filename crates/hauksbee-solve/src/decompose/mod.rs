@@ -28,6 +28,9 @@
 //!   into their consumers instead of tearing (exact: sense-only boundaries
 //!   carry zero current, so even replication cannot disagree).
 //! * `verify` (planned): exactness gates and tear certificates.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 pub mod conduction;
 pub mod drivers;
