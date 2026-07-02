@@ -797,7 +797,12 @@ impl NonlinearIsland {
             1.0,
         );
         if !r.converged {
-            return Err(format!("nonlinear island Newton failed at h={h}"));
+            let names: Vec<&str> = self.sub.devices.iter().map(|d| d.name()).take(8).collect();
+            return Err(format!(
+                "nonlinear island Newton failed at h={h} (island of {}: {})",
+                self.sub.devices.len(),
+                names.join(", ")
+            ));
         }
         Ok(())
     }
