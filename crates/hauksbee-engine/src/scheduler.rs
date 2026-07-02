@@ -39,6 +39,16 @@ use crate::stress::{FaultEvent, StressMonitor};
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 
+/// A strict headless run (`--strict`) or hauksbee-ci aborts (exit 3,
+/// invalid-for-analysis) once the analog solve fails this many chunks in a row.
+/// Three, not one: a single failed chunk is often a stiff step the warm-started
+/// next chunk recovers from, so aborting on the first would be trigger-happy on a
+/// board that self-heals within a chunk or two. Three back-to-back failures is a
+/// solve that is genuinely stuck rather than a blip, and a run that reaches it is
+/// reporting fiction (held stale voltages), so it must refuse rather than fake
+/// (05 §3b, master doctrine §5).
+pub const STRICT_CONSECUTIVE_FAILED_ABORT: u32 = 3;
+
 /// Captured state shared between an MCU's C callbacks and the scheduler.
 #[derive(Default)]
 struct McuShared {
@@ -158,6 +168,24 @@ pub struct Scheduler {
     /// count, so the firmware's per-sample RESET_SR-gated latch reads accumulate a
     /// count that tracks the decomposed RATE (not just a binary "spiked at all").
     forced_node_volts: HashMap<usize, (f64, f64, f64, f64)>,
+    /// Per-run count of chunks whose analog transient solve failed to converge.
+    /// A failed chunk holds/recovers stale voltages (see `solve_chunk`'s `Err`
+    /// arm), so its operating point is not a real solve: it is excluded from the
+    /// running net stats and the stress monitor and surfaced as
+    /// `analog_valid: false` in coverage and the co-sim JSON, rather than being
+    /// silently held and reported as a quiet run (05 §3b, refuse rather than fake).
+    failed_chunks: u64,
+    /// Sim-time windows `[start_s, end_s)` of the failed chunks, merged where
+    /// consecutive so a diverged stretch reads as its true extent. Surfaced in the
+    /// co-sim JSON so a consumer knows exactly which span cannot be trusted.
+    failed_windows: Vec<(f64, f64)>,
+    /// Current run of back-to-back failed chunks (reset to 0 by any converged
+    /// chunk). Feeds the strict/CI abort threshold.
+    consecutive_failed_chunks: u32,
+    /// Worst back-to-back failed-chunk run seen this run. Retained even after a
+    /// later chunk converges, so a strict post-run check still sees a streak that
+    /// crossed the abort threshold mid-run.
+    max_consecutive_failed_chunks: u32,
 }
 
 
@@ -306,6 +334,10 @@ impl Scheduler {
             hc165_chains: Vec::new(),
             input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
             forced_node_volts: HashMap::new(),
+            failed_chunks: 0,
+            failed_windows: Vec::new(),
+            consecutive_failed_chunks: 0,
+            max_consecutive_failed_chunks: 0,
         };
 
         // Build the edge-driven 74HC165 read chains and install each as its
@@ -800,8 +832,10 @@ impl Scheduler {
         }
 
         // 3. Analog: solve a transient over the chunk; read final voltages and
-        // branch currents.
-        self.solve_chunk(chunk);
+        // branch currents. A false return means the solve did not converge and
+        // this chunk is holding stale voltages (05 §3b): its operating point is
+        // fiction, so the stats/stress fold below is skipped for it.
+        let chunk_converged = self.solve_chunk(chunk);
 
         // 3b. Peripherals: output sinks sample the freshly-solved voltages.
         if !self.peripherals.is_empty() {
@@ -860,14 +894,24 @@ impl Scheduler {
             guard.slave_deselect();
         }
 
-        // 4. Update running stats and advance time.
+        // 4. Advance time (time passes even when the solve failed), then fold the
+        // chunk into the running stats and the stress monitor, but ONLY if the
+        // analog solve converged. A failed chunk holds the previous chunk's stale
+        // voltages (solve_chunk's `Err` arm); folding that stale operating point
+        // into the net stats or evaluating the stress monitor on it would
+        // manufacture toggles and faults from a solve that never happened. That is
+        // exactly the silent-hold defect 05 §3b refuses: the failed window is
+        // recorded instead and surfaced as analog_valid:false, rather than an
+        // analog-derived finding evaluated on stale state.
         self.sim_time += chunk;
-        self.update_stats();
+        if chunk_converged {
+            self.update_stats();
 
-        // 6. Fault / stress monitor: evaluate every device against its ratings
-        // using this chunk's solved operating point (may mutate the circuit in
-        // destructive mode).
-        self.evaluate_faults();
+            // 6. Fault / stress monitor: evaluate every device against its ratings
+            // using this chunk's solved operating point (may mutate the circuit in
+            // destructive mode).
+            self.evaluate_faults();
+        }
     }
 
     /// Recompute each supply's commanded voltage from its last-measured rail
@@ -986,7 +1030,11 @@ impl Scheduler {
         self.faults_pending.extend(new);
     }
 
-    fn solve_chunk(&mut self, chunk: f64) {
+    /// Solve one chunk's transient. Returns `true` when the analog march
+    /// converged, `false` when it failed and this chunk is holding recovered/
+    /// stale voltages (the caller then excludes it from stats and stress, and the
+    /// run reports `analog_valid: false` over the failed window; 05 §3b).
+    fn solve_chunk(&mut self, chunk: f64) -> bool {
         // Keep temperature in sync with the circuit's global temp.
         self.circuit.temp_c = self.opts.temperature_c;
         let t = Transient::new(self.opts);
@@ -1008,7 +1056,7 @@ impl Scheduler {
                 final_x.extend_from_slice(s.x);
             },
         );
-        match res {
+        let converged = match res {
             Ok(()) => {
                 self.node_volts.resize(n_nodes, 0.0);
                 self.node_volts[0] = 0.0;
@@ -1023,6 +1071,7 @@ impl Scheduler {
                 }
                 // Seed the next chunk's DC solve with this chunk's end state.
                 self.last_dc_seed = Some(final_x);
+                true
             }
             Err(_) => {
                 // The transient march failed to advance. If the DC operating
@@ -1051,8 +1100,19 @@ impl Scheduler {
                     self.node_volts.resize(n_nodes, 0.0);
                     self.last_dc_seed = None;
                 }
+                false
             }
+        };
+        // A failed transient (either DC-recovered or held) is not a real solve of
+        // this chunk. Record it so the run refuses to pass it off as quiet: the
+        // failed-chunk count and window feed coverage/JSON (analog_valid:false),
+        // and the consecutive streak drives the strict/CI abort (05 §3b).
+        if converged {
+            self.consecutive_failed_chunks = 0;
+        } else {
+            self.record_failed_chunk(chunk);
         }
+
         // Apply any forced node-voltage overrides (the firmware-driven Tarski
         // inference drives the output SPIKE nets from the exact feedforward
         // decomposition here, since the monolith does not converge). These land
@@ -1067,6 +1127,29 @@ impl Scheduler {
                     *slot = v;
                 }
             }
+        }
+        converged
+    }
+
+    /// Record one non-convergent chunk: bump the failed-chunk count and the
+    /// consecutive streak, and extend/append the failed sim-time window. Called
+    /// from `solve_chunk` before `sim_time` advances, so `[sim_time, sim_time +
+    /// chunk)` is the window this failed chunk covers. Consecutive failed chunks
+    /// are merged into one window so a diverged stretch reads as its true extent.
+    fn record_failed_chunk(&mut self, chunk: f64) {
+        self.failed_chunks += 1;
+        self.consecutive_failed_chunks += 1;
+        self.max_consecutive_failed_chunks = self
+            .max_consecutive_failed_chunks
+            .max(self.consecutive_failed_chunks);
+        let start = self.sim_time;
+        let end = self.sim_time + chunk;
+        // Merge into the previous window when this chunk is contiguous with it (a
+        // back-to-back failure). The tolerance is a small fraction of the chunk so
+        // ordinary float drift in `sim_time` accumulation does not split a run.
+        match self.failed_windows.last_mut() {
+            Some(prev) if (start - prev.1).abs() <= chunk * 1e-6 => prev.1 = end,
+            _ => self.failed_windows.push((start, end)),
         }
     }
 
@@ -1107,6 +1190,33 @@ impl Scheduler {
     /// Current sim time (s).
     pub fn sim_time(&self) -> f64 {
         self.sim_time
+    }
+
+    /// Number of chunks this run whose analog transient solve failed to converge.
+    /// Zero on a clean run. A non-zero count means at least one window held stale
+    /// voltages and cannot vouch for analog-derived findings there (05 §3b).
+    pub fn failed_chunk_count(&self) -> u64 {
+        self.failed_chunks
+    }
+
+    /// The sim-time windows `[start_s, end_s)` where the analog solve failed,
+    /// merged where consecutive. Empty on a clean run.
+    pub fn failed_windows(&self) -> &[(f64, f64)] {
+        &self.failed_windows
+    }
+
+    /// False once any chunk's analog solve failed this run: the co-sim held stale
+    /// voltages over at least one window, so it cannot be reported as a faithful
+    /// analog result. Drives `analog_valid` in coverage and the co-sim JSON.
+    pub fn analog_valid(&self) -> bool {
+        self.failed_chunks == 0
+    }
+
+    /// True once the analog solve failed [`STRICT_CONSECUTIVE_FAILED_ABORT`]
+    /// chunks in a row at any point this run. A strict headless run (`--strict`)
+    /// or hauksbee-ci must abort (exit 3) rather than complete a fake-quiet run.
+    pub fn analog_abort_tripped(&self) -> bool {
+        self.max_consecutive_failed_chunks >= STRICT_CONSECUTIVE_FAILED_ABORT
     }
 
     /// Clear all forced node-voltage overrides.
