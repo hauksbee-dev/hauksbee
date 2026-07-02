@@ -14,15 +14,18 @@
 //! The original `tarski_decomp` sampled boundary waveforms every 2 us because
 //! 2 us worked on one board (the magic constant problem, saga §4). Here the
 //! capture grid is the solver's own accepted-step grid: every accepted step
-//! of the upstream solve becomes a PWL breakpoint, INCLUDING the
-//! event-bisected steps the engine inserts around comparator and switch
-//! crossings, so an upstream edge lands in the replay at the same time
-//! resolution the upstream solve itself achieved. Downstream engines
+//! of the upstream solve becomes a PWL breakpoint. Under fixed step control,
+//! the only mode this executor accepts, that grid is exactly the uniform
+//! `dt` grid (the engine's crossing refinement is an adaptive-mode feature;
+//! fixed-step event handling resolves discontinuities at the step boundary
+//! itself), so every replay breakpoint lands exactly on a downstream solve
+//! point and interpolation error at solve points is zero. Downstream engines
 //! interpolate linearly between breakpoints, which is exactly the
 //! first-order-hold assumption their own integrators already make between
 //! steps. The certificate's [`ToleranceClaim::CaptureGrid`] is filled with
-//! the fixed step `dt`: the guaranteed WORST-CASE breakpoint spacing (event
-//! refinement only adds points, never removes them).
+//! `dt`: the breakpoint spacing actually used. When adaptive support lands
+//! (the tau/10 rule), event-bisected points will ride into the capture
+//! automatically, because capture records accepted steps, whatever they are.
 //!
 //! A coarser grid (the plan's tau/10 rule) is a memory optimization for
 //! adaptive-step runs and long captures; it lands with adaptive support.
@@ -47,14 +50,26 @@
 //! imposed on the proven executor) and marched by the partitioned engine,
 //! whose outer loop is [`super::balance::settle_rails`]. The legacy
 //! magic-constant rail detection never runs on this path: rails.rs decided,
-//! this module executes. When the engine declines to construct (a shape its
-//! islands cannot host), the group falls back to the whole-group monolithic
-//! solve, which is exact and merely forfeits the speedup; [`StagedResult::
-//! torn_groups`] says which path each torn group actually took, so a
-//! performance regression is visible instead of silent.
+//! this module executes. When the torn engine declines to construct OR
+//! fails while marching (a per-block Newton death the build could not
+//! foresee; the per-block path has none of the monolithic engine's
+//! escalation ladder), the group falls back to the whole-group monolithic
+//! solve, which is exact and merely forfeits the speedup;
+//! [`StagedResult::torn_groups`] says which path each torn group actually
+//! took, so a performance regression is visible instead of silent.
+//!
+//! Replay pins compose safely with imposed tears. A pin adds a pinned node
+//! the full-circuit strand guard never saw, which looks like it could
+//! strand a rail device on the extracted sub-circuit; it cannot. The strand
+//! condition tests conduction terminals only, and a conduction terminal on
+//! a replayed node is a contradiction: conducting that node would have
+//! fused this group with its upstream during conduction analysis, so the
+//! tear (and therefore the pin) would not exist. The
+//! `torn_group_with_replay_pin_matches_monolith` fixture exercises the
+//! composition.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
+//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use std::collections::HashMap;
 
@@ -309,7 +324,7 @@ fn solve_group(
                 node_voltages: vec![Vec::new(); n_nodes],
                 branch_currents: Vec::new(),
             };
-            engine.run_streaming(sub, tstop, |s| {
+            let run = engine.run_streaming(sub, tstop, |s| {
                 wf.time.push(s.time);
                 for node in 0..n_nodes {
                     let v = if node == 0 {
@@ -319,12 +334,17 @@ fn solve_group(
                     };
                     wf.node_voltages[node].push(v);
                 }
-            })?;
-            return Ok((wf, true));
+            });
+            if run.is_ok() {
+                return Ok((wf, true));
+            }
+            // A run-time death (per-block Newton failure the build could not
+            // foresee: the per-block path lacks the monolithic engine's
+            // escalation ladder). The whole-group solve below is exact and
+            // has that ladder; take it, discard the partial waveforms, and
+            // let torn_groups show the speedup was forfeited.
         }
-        // Construction declined: fall through to the whole-group solve, which
-        // is exact and merely forfeits the tear's speedup (the caller records
-        // the gap in torn_groups).
+        // Construction declined: same fallback, same reasoning.
     }
     Ok((Transient::new(*opts).run(sub, tstop)?, false))
 }
@@ -778,6 +798,179 @@ mod tests {
         // The pipeline end actually energized (the fixture is not vacuous).
         let vo = staged.waveforms.node(&c, "o").unwrap().last().copied();
         assert!(vo.unwrap() > 3.0, "switch never closed: {vo:?}");
+    }
+
+    /// The composition the review flagged as unexercised: a group with BOTH
+    /// an imposed rail tear AND an inbound replay pin. An upstream pulsed
+    /// comparator gates a switch inside the torn array (block 0's base
+    /// return path), so the balance loop must track a load change that
+    /// arrives THROUGH the replay boundary mid-run. The replay pin becomes
+    /// a cut source inside the partitioned engine (evaluated per step) and
+    /// must not disturb the tear's exactness.
+    #[test]
+    fn torn_group_with_replay_pin_matches_monolith() {
+        use hauksbee_ir::{BjtModel, Polarity};
+        let mut c = Circuit::new();
+        // Upstream island: pulsed source, sensed by the comparator.
+        let vin = c.node("vin");
+        c.add(Device::Vsource {
+            name: "VP".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pulse {
+                v1: 0.0,
+                v2: 5.0,
+                delay: 1e-6,
+                rise: 0.5e-6,
+                fall: 0.5e-6,
+                width: 10e-6,
+                period: 0.0,
+            },
+        });
+        let cmp_out = c.node("cmp_out");
+        c.add(Device::Resistor {
+            name: "Rcmp".into(),
+            a: cmp_out,
+            b: NodeId::GROUND,
+            ohms: 10e3,
+            tc1: None,
+        });
+        c.add(Device::Comparator {
+            name: "CMP".into(),
+            out: cmp_out,
+            inp: vin,
+            inn: NodeId::GROUND,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 1e-3,
+        });
+        // The array: shunt-fed rail, 24 PNP blocks; block 0's base return
+        // runs through a switch gated by the upstream comparator.
+        let p5 = c.node("+5V");
+        c.add(Device::Vsource {
+            name: "V5".into(),
+            p: p5,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        let rail = c.node("ANALOG_VDD");
+        c.add(Device::Resistor {
+            name: "R_shunt".into(),
+            a: p5,
+            b: rail,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        for k in 0..24 {
+            let base = c.node(&format!("b{k}"));
+            let col = c.node(&format!("c{k}"));
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: col,
+                b: base,
+                e: rail,
+                model: model.clone(),
+            });
+            if k == 0 {
+                // Base return via the gated switch: the block's bias, and
+                // with it the rail current, changes when the replayed edge
+                // arrives.
+                let ret = c.node("b0_ret");
+                c.add(Device::Resistor {
+                    name: "Rb0".into(),
+                    a: base,
+                    b: ret,
+                    ohms: 100e3,
+                    tc1: None,
+                });
+                c.add(Device::VSwitch {
+                    name: "SW0".into(),
+                    a: ret,
+                    b: NodeId::GROUND,
+                    ctrl_p: cmp_out,
+                    ctrl_n: NodeId::GROUND,
+                    von: 2.0,
+                    voff: 1.0,
+                    ron: 10.0,
+                    roff: 1e9,
+                });
+            } else {
+                c.add(Device::Resistor {
+                    name: format!("Rb{k}"),
+                    a: base,
+                    b: NodeId::GROUND,
+                    ohms: 100e3,
+                    tc1: None,
+                });
+            }
+            c.add(Device::Resistor {
+                name: format!("Rc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 10e3,
+                tc1: None,
+            });
+        }
+
+        let dt = 100e-9;
+        let tstop = 6e-6;
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert!(
+            d.balance_tears.iter().any(|t| t.torn() && t.rail == rail),
+            "{:?}",
+            d.balance_tears
+        );
+        assert!(
+            !d.dag.free_tears.is_empty(),
+            "the comparator boundary must be a free tear: {:?}",
+            d.dag.free_tears
+        );
+
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert!(
+            !staged.torn_groups.is_empty(),
+            "the array group must run torn despite the replay pin: {:?}",
+            staged.torn_groups
+        );
+        let mono = monolith(&c, dt, tstop);
+        // Two-sided compare per the capture-grid claim (same semantics as
+        // tests/staged_property.rs): a replayed edge may arrive up to one
+        // grid interval late downstream, so a point passes when the values
+        // agree OR the reference attains the same value within +/- dt. This
+        // fixture's worst raw pointwise error (6.6e-6 at c0, t=1.1us, the
+        // switching instant, gain-amplified through Q0) is exactly that
+        // transient; away from the edge the runs agree below 1e-6.
+        let tol = 1e-6;
+        for node in 1..c.node_count() {
+            for (k, &t) in staged.waveforms.time.iter().enumerate() {
+                let sv = staged.waveforms.node_voltages[node][k];
+                let m = &mono.node_voltages[node];
+                if (sv - lerp_at(&mono.time, m, t)).abs() <= tol {
+                    continue;
+                }
+                let edge_hit = (0..=8).any(|j| {
+                    let tt = t - dt + (j as f64) * (dt / 4.0);
+                    (lerp_at(&mono.time, m, tt) - sv).abs() <= tol
+                });
+                assert!(
+                    edge_hit,
+                    "replay-pinned torn group diverged beyond the capture-grid claim: \
+                     node {} t={t:.3e} staged {sv:.9} vs mono {:.9}",
+                    c.node_name(NodeId(node as u32)),
+                    lerp_at(&mono.time, m, t)
+                );
+            }
+        }
+        // The mid-run load change actually happened: block 0's collector
+        // moved when the comparator fired (the fixture is not vacuous).
+        let c0 = staged.waveforms.node(&c, "c0").unwrap();
+        let swing = c0.iter().cloned().fold(f64::MIN, f64::max)
+            - c0.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(swing > 0.05, "block 0 never responded to the edge: {swing}");
     }
 
     /// Absorption exactness: the drivers.rs Thevenin shape, replicated into
