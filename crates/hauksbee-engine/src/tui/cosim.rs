@@ -552,7 +552,7 @@ mod tests {
         // A clean run: valid, zero failed chunks.
         let clean = build_update(
             0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ true,
-            /*failed_chunk_count*/ 0, false,
+            /*failed_chunk_count*/ 0, Vec::new(), false,
         );
         assert!(clean.analog_valid, "clean run stays analog-valid");
         assert_eq!(clean.failed_chunk_count, 0);
@@ -560,7 +560,7 @@ mod tests {
         // A diverged run: invalid, with the failed-chunk count carried through.
         let bad = build_update(
             0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ false,
-            /*failed_chunk_count*/ 3, true,
+            /*failed_chunk_count*/ 3, Vec::new(), true,
         );
         assert!(!bad.analog_valid, "a failed chunk makes the update analog-invalid");
         assert_eq!(
