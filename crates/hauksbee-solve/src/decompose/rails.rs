@@ -55,20 +55,20 @@
 //!
 //! ## What can refuse a tear
 //!
-//! * **A stranded device** (the bypass-cap rule, proven load-bearing by
-//!   `rail_with_ground_bypass_cap_is_not_torn`): a device whose conduction
-//!   terminals all land in {held rails, pinned, ground} would have its
-//!   current dropped from every block's books, silently. Refused, with the
-//!   device named in the decision; candidate shunts are exempt (their
-//!   currents ARE the balance equations). Stranding is evaluated in the
-//!   joint context and re-checked as refusals shrink the held set (a rail
-//!   dropping out can un-strand a device).
 //! * **An ideal source on the rail**: already pinned, nothing to tear.
 //! * **Ambiguous feed**: more than one low-impedance path from shallower
 //!   feeds; the scalar-balance bookkeeping assumes one.
 //! * **Cascade parent of an accepted tear**: see above.
 //! * **No fragmentation / unprofitable**: the cost model above (unless
 //!   escalating).
+//!
+//! Stranding (the bypass-cap hazard: a device whose conduction terminals
+//! all land in {held rails, pinned, ground} losing its current from every
+//! block's books) is no longer a refusal, because it is no longer possible:
+//! the island analysis gives such devices boundary-only islands whose
+//! currents the balance reads like any block's (`partition.rs`). The old
+//! detector's refusal survives only on the legacy `detect_rail_tears` path,
+//! whose executor predates that fix.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
@@ -126,8 +126,6 @@ pub enum TearDecision {
     Tear { est_speedup: f64 },
     /// Structurally sound but predicted slower than the monolith.
     RefusedUnprofitable { est_speedup: f64 },
-    /// A device's current books would silently lose the rail current.
-    RefusedStranded { device: DeviceId },
     /// More than one candidate feed path; the scalar balance assumes one.
     RefusedAmbiguousFeed { feeds: usize },
     /// This rail directly feeds another ACCEPTED tear through its shunt. Its
@@ -286,59 +284,14 @@ pub fn detect_balance_tears(
         }
     }
 
-    // Joint strand guard, iterated: with every kept rail held, a device
-    // whose conduction terminals all land in {held rails, pinned, ground}
-    // appears in no block's books. It refuses every rail it touches; a
-    // refusal frees terminals, so re-check until stable. Candidate shunts
-    // are exempt (their currents are balance equations).
-    let shunt_devs: std::collections::HashSet<DeviceId> =
-        kept.iter().map(|&r| links_of[r][0].1).collect();
-    loop {
-        let mut held = vec![false; n_nodes + 1];
-        for &r in &kept {
-            held[r] = true;
-        }
-        let mut newly_refused: Vec<(usize, DeviceId)> = Vec::new();
-        for (id, dev) in circuit.iter() {
-            if shunt_devs.contains(&id) || matches!(dev, Device::Vsource { .. }) {
-                continue;
-            }
-            let cond = dev.conduction_nodes();
-            let touched: Vec<usize> = cond
-                .iter()
-                .filter(|n| !n.is_ground() && held[n.0 as usize])
-                .map(|n| n.0 as usize)
-                .collect();
-            if touched.is_empty() {
-                continue;
-            }
-            let all_bounded = cond
-                .iter()
-                .all(|n| n.is_ground() || pinned[n.0 as usize] || held[n.0 as usize]);
-            if all_bounded {
-                for r in touched {
-                    if !newly_refused.iter().any(|(rr, _)| *rr == r) {
-                        newly_refused.push((r, id));
-                    }
-                }
-            }
-        }
-        if newly_refused.is_empty() {
-            break;
-        }
-        for (rail, device) in newly_refused {
-            kept.retain(|&r| r != rail);
-            let (rail_node, feed, dev, ohms) = candidate_of(rail);
-            out.push(BalanceTearCandidate {
-                rail: rail_node,
-                feed,
-                shunt: dev,
-                shunt_ohms: ohms,
-                block_sizes: Vec::new(),
-                decision: TearDecision::RefusedStranded { device },
-            });
-        }
-    }
+    // No strand guard, by construction. Its old hazard (a device whose every
+    // conduction terminal lands in {held rails, pinned, ground} loses its
+    // current from every block's books) is closed at the source: the island
+    // analysis gives such devices BOUNDARY-ONLY islands whose currents the
+    // balance reads like any block's (`partition.rs`, the analysis-probe
+    // finding about the flagship's rail decoupling). Tear shunts remain the
+    // one exception and are excluded from that pass because their currents
+    // are the analytic balance terms themselves.
 
     // Cascade parents defer to their deepest surviving child (see the
     // TearDecision variant for the executor term this waits on). Walk
@@ -634,11 +587,13 @@ mod tests {
         assert!(esc[0].torn(), "{:?}", esc[0].decision);
     }
 
-    /// The load-bearing refusal, ported: a rail-to-ground bypass cap would be
-    /// stranded by the tear (its current drops from every block), so the rail
-    /// must refuse regardless of motive.
+    /// The bypass-cap shape that used to refuse: with boundary-only islands
+    /// carrying the cap's current into the balance books (`partition.rs`),
+    /// the rail now tears. The numerical proof that this is exact (not just
+    /// permitted) is the staged executor's
+    /// `bypass_cap_on_torn_rail_matches_monolith` gate.
     #[test]
-    fn ground_bypass_cap_strands_and_refuses() {
+    fn ground_bypass_cap_no_longer_refuses() {
         let (mut c, rail) = shunt_array(24);
         c.add(Device::Capacitor {
             name: "Cbypass".into(),
@@ -648,15 +603,14 @@ mod tests {
             ic: None,
         });
         let g = ConductionGraph::analyze(&c);
-        for motive in [TearMotive::Profit, TearMotive::ConvergenceEscalation] {
-            let tears = detect_balance_tears(&c, &g, motive, &RailPolicy::default());
-            assert_eq!(tears.len(), 1);
-            assert!(
-                matches!(tears[0].decision, TearDecision::RefusedStranded { .. }),
-                "bypass cap must refuse the tear ({motive:?}): {:?}",
-                tears[0].decision
-            );
-        }
+        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
+        assert_eq!(tears.len(), 1);
+        assert_eq!(tears[0].rail, rail);
+        assert!(
+            tears[0].torn(),
+            "the cap no longer strands, so the wide array wins: {:?}",
+            tears[0].decision
+        );
     }
 
     /// The flagship's founding shape (analysis-probe finding 1): a supply

@@ -819,6 +819,152 @@ mod tests {
         assert!(vo.unwrap() > 3.0, "switch never closed: {vo:?}");
     }
 
+    /// The bypass-cap exactness gate: a decoupling cap on a balance-torn
+    /// rail rides in a boundary-only island whose current enters the
+    /// balance books. This is the shape the old detector REFUSED because
+    /// its island analysis dropped the cap; the refusal is lifted, and this
+    /// gate is the proof the lift is exact rather than merely permitted.
+    /// A pulsed base drive keeps dv/dt nonzero so the cap's current is a
+    /// live term, not a settled zero.
+    #[test]
+    fn bypass_cap_on_torn_rail_matches_monolith() {
+        use hauksbee_ir::{BjtModel, Polarity};
+        let mut c = Circuit::new();
+        let p5 = c.node("+5V");
+        c.add(Device::Vsource {
+            name: "V5".into(),
+            p: p5,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        let rail = c.node("ANALOG_VDD");
+        c.add(Device::Resistor {
+            name: "R_shunt".into(),
+            a: p5,
+            b: rail,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "Cbypass".into(),
+            a: rail,
+            b: NodeId::GROUND,
+            farads: 100e-9,
+            ic: None,
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        for k in 0..24 {
+            let base = c.node(&format!("b{k}"));
+            let col = c.node(&format!("c{k}"));
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: col,
+                b: base,
+                e: rail,
+                model: model.clone(),
+            });
+            if k == 0 {
+                // Pulse block 0's bias THROUGH its base resistor so the rail
+                // (and the cap) sees a transient: the C*dv/dt term goes live.
+                // Driving the base with an ideal source directly would
+                // forward-bias the EB junction by volts, which is not a
+                // circuit, it is a dead transistor.
+                let drv = c.node("b0drv");
+                c.add(Device::Vsource {
+                    name: "VB0".into(),
+                    p: drv,
+                    n: NodeId::GROUND,
+                    kind: SourceKind::Pulse {
+                        v1: 0.0,
+                        v2: 3.0,
+                        delay: 1.05e-6,
+                        rise: 0.5e-6,
+                        fall: 0.5e-6,
+                        width: 2e-6,
+                        period: 0.0,
+                    },
+                });
+                c.add(Device::Resistor {
+                    name: "Rb0".into(),
+                    a: base,
+                    b: drv,
+                    ohms: 100e3,
+                    tc1: None,
+                });
+            } else {
+                c.add(Device::Resistor {
+                    name: format!("Rb{k}"),
+                    a: base,
+                    b: NodeId::GROUND,
+                    ohms: 100e3,
+                    tc1: None,
+                });
+            }
+            c.add(Device::Resistor {
+                name: format!("Rc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 10e3,
+                tc1: None,
+            });
+        }
+
+        let dt = 100e-9;
+        let tstop = 6e-6;
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        assert!(
+            d.balance_tears.iter().any(|t| t.torn()),
+            "{:?}",
+            d.balance_tears
+        );
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert!(!staged.torn_groups.is_empty(), "must actually run torn");
+        let mono = monolith(&c, dt, tstop);
+        // Two-sided compare at 5e-6. The bar is wider than the suite's usual
+        // 1e-6 for a documented reason, found the hard way: at the junction
+        // KNEE step of the pulse fall the two engines' accepted solutions
+        // differ by ~2.5e-6 at b0 for ONE sample, and the difference is
+        // path-dependent Newton acceptance, not bookkeeping. Evidence: flat
+        // regions agree to 1e-15 (no leak); the rail balance closes to 7e-9
+        // (the cap's current IS in the books, which is what this gate
+        // exists to prove); tightening the balance target 10x and vntol
+        // 100x changes nothing bitwise (each engine's accepted point is its
+        // own machine-stable fixed point); the blocks are static, so no
+        // history is involved. Root-causing the knee acceptance band
+        // (junction limiting at termination) is punch-listed with the
+        // Newton robustness work. A persistent offset, the failure this
+        // gate hunts, would still fail at this bar.
+        let tol = 5e-6;
+        for node in 1..c.node_count() {
+            for (k, &t) in staged.waveforms.time.iter().enumerate() {
+                let sv = staged.waveforms.node_voltages[node][k];
+                let m = &mono.node_voltages[node];
+                if (sv - lerp_at(&mono.time, m, t)).abs() <= tol {
+                    continue;
+                }
+                let edge_hit = (0..=8).any(|j| {
+                    let tt = t - dt + (j as f64) * (dt / 4.0);
+                    (lerp_at(&mono.time, m, tt) - sv).abs() <= tol
+                });
+                assert!(
+                    edge_hit,
+                    "bypass cap current leaked from the balance books: node {} t={t:.3e} \
+                     staged {sv:.9} vs mono {:.9}",
+                    c.node_name(NodeId(node as u32)),
+                    lerp_at(&mono.time, m, t)
+                );
+            }
+        }
+        // The transient really moved the rail (the cap term was live).
+        let vr = staged.waveforms.node(&c, "ANALOG_VDD").unwrap();
+        let swing = vr.iter().cloned().fold(f64::MIN, f64::max)
+            - vr.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(swing > 1e-3, "rail never moved; the gate is vacuous: {swing}");
+    }
+
     /// The composition the review flagged as unexercised: a group with BOTH
     /// an imposed rail tear AND an inbound replay pin. An upstream pulsed
     /// comparator gates a switch inside the torn array (block 0's base
