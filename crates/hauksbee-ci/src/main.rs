@@ -4,8 +4,10 @@
 //! hauksbee-ci run <spec.toml> [--junit <out.xml>] [--quiet]
 //! ```
 //!
-//! Exit code is 0 if every assertion passed, 1 otherwise (2 on a usage/spec
-//! error). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
+//! Exit code is 0 if every assertion passed, 1 if any ordinarily failed, 2 on a
+//! usage/spec error, and 3 when the run is invalid for analysis (an analog chunk
+//! failed to converge under an assertion's window, or the strict abort tripped;
+//! 05 §3b). When `GITHUB_ACTIONS` is set in the environment, GitHub workflow
 //! annotations are emitted to stdout so failures surface inline.
 //!
 //! The argument surface is defined with `clap` (derive API): `--help`/`-h`,
@@ -22,8 +24,9 @@ use hauksbee_ci::{init, run, RunConfig};
 ///
 /// Point it at a TOML spec and it boots the firmware on the emulated PCB, then
 /// asserts on rails, UART, blink rate and stress faults. Exits 0 if every
-/// assertion passed, 1 if any failed, 2 on a spec/usage error. Writes JUnit XML
-/// with --junit and emits GitHub annotations under GITHUB_ACTIONS.
+/// assertion passed, 1 if any failed, 2 on a spec/usage error, 3 when the analog
+/// co-sim did not converge under an assertion's window (invalid for analysis).
+/// Writes JUnit XML with --junit and emits GitHub annotations under GITHUB_ACTIONS.
 #[derive(Parser)]
 #[command(
     name = "hauksbee-ci",
