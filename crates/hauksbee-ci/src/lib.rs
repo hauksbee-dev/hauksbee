@@ -23,12 +23,14 @@ use std::time::Instant;
 
 pub mod assertions;
 pub mod error;
+pub mod init;
 pub mod report;
 pub mod runner;
 pub mod scenarios;
 pub mod spec;
 
 pub use error::SpecError;
+pub use init::init;
 pub use report::CiResult;
 pub use spec::Spec;
 
