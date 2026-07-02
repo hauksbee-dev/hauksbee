@@ -290,6 +290,80 @@ impl Device {
         }
     }
 
+    /// Rewrite every [`NodeId`] this device carries, in place, through `f`.
+    ///
+    /// This is the *one* node-walk over a `Device`. Node remapping (partitioner
+    /// sub-circuit extraction, tear-engine island building) routes through here
+    /// instead of re-listing the variants at each call site, so there is a
+    /// single place to update when a variant is added.
+    ///
+    /// The match is exhaustive with no `_` arm on purpose: a new variant must
+    /// fail to compile until its nodes are wired in here. The hazard that guards
+    /// against is silent, not loud. A catch-all would let a new device's nodes
+    /// slip through unremapped and drop the device from every partitioned
+    /// sub-circuit with no error (see `docs/dev-plans/04-spice-compat.md` §1,
+    /// the `clone_remapped` row of the touchpoint table). Optional terminals
+    /// (`Mosfet` bulk, `OpAmp` reference) are remapped only when present.
+    pub fn map_nodes(&mut self, f: &mut impl FnMut(NodeId) -> NodeId) {
+        match self {
+            Device::Resistor { a, b, .. }
+            | Device::Capacitor { a, b, .. }
+            | Device::Inductor { a, b, .. }
+            | Device::Diode { a, k: b, .. } => {
+                *a = f(*a);
+                *b = f(*b);
+            }
+            Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => {
+                *p = f(*p);
+                *n = f(*n);
+            }
+            Device::Bjt { c, b, e, .. } => {
+                *c = f(*c);
+                *b = f(*b);
+                *e = f(*e);
+            }
+            Device::Mosfet { d, g, s, b, .. } => {
+                *d = f(*d);
+                *g = f(*g);
+                *s = f(*s);
+                if let Some(b) = b {
+                    *b = f(*b);
+                }
+            }
+            Device::VSwitch {
+                a,
+                b,
+                ctrl_p,
+                ctrl_n,
+                ..
+            } => {
+                *a = f(*a);
+                *b = f(*b);
+                *ctrl_p = f(*ctrl_p);
+                *ctrl_n = f(*ctrl_n);
+            }
+            Device::OpAmp {
+                out,
+                inp,
+                inn,
+                reference,
+                ..
+            } => {
+                *out = f(*out);
+                *inp = f(*inp);
+                *inn = f(*inn);
+                if let Some(reference) = reference {
+                    *reference = f(*reference);
+                }
+            }
+            Device::Comparator { out, inp, inn, .. } => {
+                *out = f(*out);
+                *inp = f(*inp);
+                *inn = f(*inn);
+            }
+        }
+    }
+
     /// Whether the element's stamp is constant w.r.t. node voltages.
     ///
     /// Independent sources are linear in the MNA sense (their value depends on
