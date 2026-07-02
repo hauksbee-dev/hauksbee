@@ -2395,6 +2395,140 @@ mod tests {
         Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
     }
 
+
+    /// The W4 acceptance gate (08 section 2, closes TARSKI_RESULTS 5.1): a
+    /// firmware-shaped bit-bang latches a REAL bound 74HC595 through its
+    /// electrical nets. The MCU pins drive SER/SRCLK/RCLK nets; the chip is
+    /// bound from the models DB (not a hand-built fixture); the edge train is
+    /// the exact shape shiftOut(MSBFIRST, 0xA6) emits; the assertion reads the
+    /// latched byte back from the SOLVED node voltages of the output nets,
+    /// which is what the old latest-level collapse could never produce.
+    const CHAIN_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "SER")
+  (net 4 "SRCLK")
+  (net 5 "RCLK")
+  (net 6 "Q0")
+  (net 7 "Q7")
+
+  (module Module:Arduino_Nano (layer F.Cu)
+    (at 100 100)
+    (fp_text reference A1 (at 0 0) (layer F.SilkS))
+    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
+    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
+    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
+    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 3 "SER"))
+    (pad 16 thru_hole circle (at 0 16) (size 1 1) (net 4 "SRCLK"))
+    (pad 15 thru_hole circle (at 0 15) (size 1 1) (net 5 "RCLK"))
+  )
+  (module Logic:SN74HC595 (layer F.Cu)
+    (at 120 100)
+    (fp_text reference U2 (at 0 0) (layer F.SilkS))
+    (fp_text value 74HC595 (at 0 2) (layer F.Fab))
+    (pad 14 thru_hole circle (at 0 0) (size 1 1) (net 3 "SER"))
+    (pad 11 thru_hole circle (at 0 1) (size 1 1) (net 4 "SRCLK"))
+    (pad 12 thru_hole circle (at 0 2) (size 1 1) (net 5 "RCLK"))
+    (pad 15 thru_hole circle (at 0 3) (size 1 1) (net 6 "Q0"))
+    (pad 7 thru_hole circle (at 0 4) (size 1 1) (net 7 "Q7"))
+    (pad 16 thru_hole circle (at 0 5) (size 1 1) (net 2 "+5V"))
+    (pad 8 thru_hole circle (at 0 6) (size 1 1) (net 1 "GND"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 130 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 6 "Q0"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+  (module Resistor:R2 (layer F.Cu)
+    (at 140 100)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 7 "Q7"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+
+    #[test]
+    fn cosim_bitbang_595_latches_through_bound_nets() {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(CHAIN_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut bound = crate::binder::bind_board(&board, &lib);
+
+        // The Nano drives SER on D11/PB3 (pad 14), SRCLK on D13/PB5 (pad 16),
+        // RCLK on D12/PB4 (pad 15): the stock shiftOut wiring. Promote all
+        // three exactly as their first firmware edges would.
+        for (port, bit) in [('B', 3u8), ('B', 5), ('B', 4)] {
+            let drv = bound.mcus[0]
+                .gpio_drivers
+                .get_mut(&(port, bit))
+                .unwrap_or_else(|| panic!("driver for P{port}{bit}"));
+            drv.set_enabled(&mut bound.circuit, true);
+            drv.set_volts(&mut bound.circuit, 0.0);
+        }
+
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // The exact edge shape of shiftOut(SER, SRCLK, MSBFIRST, 0xA6) then an
+        // RCLK latch pulse, cycle-stamped like the simavr hook would: set SER,
+        // pulse SRCLK high/low per bit, then pulse RCLK.
+        let byte = 0xA6u8;
+        let mut log = Vec::new();
+        let mut cyc = 100u64;
+        let mut ser_level = false;
+        for i in (0..8).rev() {
+            let bit_lv = (byte >> i) & 1 != 0;
+            if bit_lv != ser_level {
+                log.push(crate::digital::PinEdge { cycle: cyc, port: 'B', bit: 3, level: bit_lv });
+                ser_level = bit_lv;
+            }
+            cyc += 4;
+            log.push(crate::digital::PinEdge { cycle: cyc, port: 'B', bit: 5, level: true });
+            cyc += 4;
+            log.push(crate::digital::PinEdge { cycle: cyc, port: 'B', bit: 5, level: false });
+            cyc += 4;
+        }
+        log.push(crate::digital::PinEdge { cycle: cyc + 4, port: 'B', bit: 4, level: true });
+        log.push(crate::digital::PinEdge { cycle: cyc + 8, port: 'B', bit: 4, level: false });
+
+        // Replay through the generalized path (what run_chunk does with the
+        // drained MCU log), then let the digital layer push latched outputs
+        // and solve the chunk, mirroring run_chunk's order.
+        let ticks = sched.replay_digital_edges(0, &log);
+        assert!(ticks > 0, "the bound 595 must be clocked by the replay");
+        // Mirror run_chunk's order: the chain's latched outputs are pushed
+        // onto the analog nets by the chain-apply step before the solve.
+        if !sched.chains.is_empty() {
+            let mut chains = std::mem::take(&mut sched.chains);
+            for chain in &mut chains {
+                chain.apply(&mut sched.digital, &mut sched.circuit);
+            }
+            sched.chains = chains;
+        }
+        // Post-replay: apply final pin levels (all low) and solve so the
+        // latched outputs appear on the electrical nets.
+        assert!(sched.solve_chunk(100e-6), "chunk solve converges");
+
+        // 0xA6 = 1010_0110: QA (bit 7 first shifted lands at QH... follow the
+        // engine's convention: MSB-first shiftOut leaves the FIRST-sent bit in
+        // QH (Q7) and the LAST-sent in QA (Q0). First-sent = MSB = 1 -> Q7
+        // high; last-sent = LSB = 0 -> Q0 low.
+        let q7 = sched.net_voltage("Q7").expect("Q7 solved");
+        let q0 = sched.net_voltage("Q0").expect("Q0 solved");
+        assert!(
+            q7 > 3.0,
+            "Q7 (first-shifted MSB of 0xA6 = 1) must be driven high electrically, got {q7:.2} V"
+        );
+        assert!(
+            q0 < 1.0,
+            "Q0 (last-shifted LSB of 0xA6 = 0) must rest low electrically, got {q0:.2} V"
+        );
+    }
+
     /// The electrical face of lore #8: ten 5 us pulses inside one 100 us
     /// chunk end LOW, so the final-level DC drive leaves the RC integrator
     /// empty; the PWL drive integrates every pulse and pumps it to roughly
