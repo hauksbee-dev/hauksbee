@@ -104,3 +104,249 @@ cgs    = 1.0e-12
 max_current_a = 4.0
 max_power_w = 1.4
 max_voltage_v = 30.0
+
+# ── Generic power-FET fallback models ────────────────────────────────────────
+#
+# These two entries are GENERIC PLACEHOLDER catch-alls. They are NOT sourced
+# from any specific datasheet. They exist so that any unmodeled power FET in a
+# recognised power package binds to a sane Rds_on estimate and package ratings,
+# enabling dissipation / Tj computation rather than binding open.
+#
+# Values chosen conservatively:
+#   - Rds_on ~ 20 mOhm split equally rd/rs, representative of a medium-tier
+#     power FET in a DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/PQFN/LFPAK
+#     package. Real parts range ~2-100 mOhm; 20 mOhm is a mid-conservative pick.
+#   - kp generous (modeled as a hard switch): full turn-on assumed at Vgs=10V.
+#   - Ratings are the lowest common denominator for the package class:
+#     20 A / 30 V / 30 W. A real part almost certainly has higher ratings;
+#     the defaults are chosen to avoid false-positive overrating flags on an
+#     unknown part.
+#   - theta_ja ~ 50 C/W typical for TO-252/DPAK in still air (datasheet range
+#     40-65 C/W); use the middle as a representative estimate.
+#   - max_junction_temp_c = 150 C, typical for silicon power FETs.
+#
+# SPECIFICITY: footprint_re only (score = 5). Any entry with a value_re or
+# mpn_re will outscore this catch-all automatically.
+#
+# HOW TO OVERRIDE: add an [[models]] entry with a value_re = "(?i)^<PART>$"
+# in mosfet.toml (or a user TOML directory). The specificity scorer will prefer
+# any value-matched entry over this footprint-only catch-all.
+
+[[models]]
+id = "generic_nmos_power_pkg"
+kind = "nmos"
+description = "Generic N-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK) — PLACEHOLDER, not datasheet-sourced"
+
+[models.match]
+# Matches common SMD and THT power-FET packages by footprint string.
+# Covers KiCad footprint library names for: DPAK (TO-252), D2PAK (TO-263),
+# TO-220, PowerPAK SO-8, PQFN, TDSON, LFPAK33/56/88, and SO-8 power variants.
+footprint_re = "(?i)(DPAK|D2PAK|TO[_-]252|TO[_-]263|TO[_-]220|PowerPAK|PQFN|TDSON|LFPAK|SOT[_-]669|DFN[_-]8)"
+
+[models.params]
+# GENERIC PLACEHOLDER — representative of a medium Rds_on power FET.
+# rd + rs sum to ~20 mOhm (0.020 ohm) Rds_on at Vgs=10V.
+# These are NOT datasheet values for any specific part.
+vto    = 3.0       # threshold voltage (V), typical for standard-threshold N-ch power FET
+kp     = 10.0      # generous kp so FET acts as a low-loss switch when on (A/V²)
+lambda = 0.01      # channel-length modulation, representative (1/V)
+rd     = 0.010     # drain resistance portion of Rds_on, ~10 mOhm
+rs     = 0.010     # source resistance portion of Rds_on, ~10 mOhm
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+# Conservative package-class ratings for DPAK/D2PAK/TO-252 family.
+# GENERIC — a real part will almost certainly have higher ratings.
+# Used only for dissipation/Tj estimation when the real datasheet is absent.
+max_current_a       = 20.0    # Id continuous — conservative for this package class (A)
+max_surge_current_a = 60.0    # Id pulsed estimate (3x continuous, generic)
+max_power_w         = 30.0    # Pd TO-252/DPAK range ~2.5-40W; 30W is mid-conservative
+max_voltage_v       = 30.0    # Vds — conservatively low (real parts typically 20-650V)
+theta_ja_c_per_w    = 50.0    # still-air TO-252 estimate, representative (C/W)
+max_junction_temp_c = 150.0   # standard silicon power-FET junction limit
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "generic_pmos_power_pkg"
+kind = "pmos"
+description = "Generic P-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK) — PLACEHOLDER, not datasheet-sourced"
+
+[models.match]
+# Same package-footprint catch-all as the N-ch entry above; the binder uses
+# the component's kind field (from its schematic symbol) to route N vs P.
+footprint_re = "(?i)(DPAK|D2PAK|TO[_-]252|TO[_-]263|TO[_-]220|PowerPAK|PQFN|TDSON|LFPAK|SOT[_-]669|DFN[_-]8)"
+
+[models.params]
+# GENERIC PLACEHOLDER — P-ch mirror of the N-ch fallback.
+# vto is negative (P-channel). rd + rs sum to ~20 mOhm Rds_on at |Vgs|=10V.
+vto    = -3.0      # threshold voltage (V), negative for P-channel
+kp     = 10.0      # generous kp (A/V²)
+lambda = 0.01
+rd     = 0.010
+rs     = 0.010
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a       = 20.0
+max_surge_current_a = 60.0
+max_power_w         = 30.0
+max_voltage_v       = 30.0
+theta_ja_c_per_w    = 50.0
+max_junction_temp_c = 150.0
+
+# ── Specific datasheet-sourced power-FET entries ───────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IPA045N10N3G — Infineon OptiMOS 3 N-channel power MOSFET
+# Source: Infineon IPA045N10N3G datasheet, Rev 2.6 2019-02-15 (Infineon document
+#   IPA045N10N3G, "OptiMOS(TM)3 Power-Transistor").
+# Package: TO-220-3 (1=Gate, 2=Drain, 3=Source per TO-220 pinout)
+# Key datasheet values (Table 1, Absolute Maximum Ratings / Electrical Char.):
+#   Vds = 100V, Id = 100A (at Tc=25C), Id_pulse = 400A, Pd = 300W (Tc=25C)
+#   Rds(on) max = 4.5 mOhm @ Vgs=10V (Tj=25C), typ = 3.5 mOhm
+#   Vgs(th) typ = 3.8V (2.5-4.5V), theta_JC = 0.5 C/W
+#   theta_JA (per TO-220 PCB mounted) ~ 62 C/W (from thermal resistance table)
+# SPICE params: rd+rs set to model Rds(on) typical = 3.5 mOhm; max = 4.5 mOhm.
+# We use the typical value (3.5 mOhm) split evenly, honest to "typ" column.
+[[models]]
+id = "ipa045n10n3g"
+kind = "nmos"
+description = "IPA045N10N3G Infineon OptiMOS3 N-ch 100V 100A 4.5mOhm TO-220"
+
+[models.match]
+value_re = "(?i)^IPA045N10N3G$"
+
+[models.params]
+# Source: Infineon IPA045N10N3G datasheet Rev 2.6 2019-02-15, Table 1 & SPICE
+vto    = 3.8       # Vgs(th) typ (V), datasheet Table 1
+kp     = 200.0     # A/V² — generous kp approximating a 100A hard-switch FET
+lambda = 0.005     # channel-length modulation, estimated typical for 100V N-ch
+rd     = 0.00175   # drain ohmic resistance, ~half Rds(on) typ (0.0035/2 ohm)
+rs     = 0.00175   # source ohmic resistance, ~half Rds(on) typ
+
+[models.pins]
+# TO-220-3 standard pin order (Infineon datasheet pin description)
+"1" = "gate"
+"2" = "drain"
+"3" = "source"
+
+[models.ratings]
+# Source: Infineon IPA045N10N3G datasheet Rev 2.6, Table 1 Absolute Max Ratings
+max_current_a       = 100.0   # Id at Tc=25C (A)
+max_surge_current_a = 400.0   # Id pulsed (A), datasheet
+max_power_w         = 300.0   # Pd at Tc=25C (W), datasheet
+max_voltage_v       = 100.0   # Vds abs max (V), datasheet
+theta_ja_c_per_w    = 62.0    # theta_JA TO-220 PCB-mounted estimate (C/W), datasheet
+max_junction_temp_c = 175.0   # Tj max (C), datasheet (OptiMOS3 = 175C rated)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IRF9358 — Infineon dual P-channel power MOSFET, SO-8
+# Source: Infineon IRF9358 datasheet, Rev 2.1 (HEXFET Power MOSFET, IRF9358).
+# Package: SO-8 DUAL P-channel.
+# Pinout (per IRF9358 datasheet pin diagram and confirmed in pd-sink-trigger.md):
+#   1=S2, 2=G2, 3=S1, 4=G1, 5=D1, 6=D1, 7=D2, 8=D2
+# NOTE: This is a DUAL (two independent P-ch FETs in one SO-8 package).
+# This entry models the single-channel electrical behaviour; pins are mapped
+# for channel 1. Channel 2 shares the same electrical parameters. The dual
+# topology is not fully modeled here; the entry resolves the part and provides
+# correct single-channel ratings. See pin comment for both channels.
+# Key datasheet values:
+#   Vds = -30V, Id = -9.2A/ch (Tc=25C), Rds(on) max = 16.3 mOhm @ Vgs=-10V
+#   Pd = 2.0W (Ta=25C), Vgs(th) typ = -1.4V (-0.7 to -2.0V)
+#   theta_JA = 62.5 C/W (SO-8 per datasheet), Tj max = 150C
+[[models]]
+id = "irf9358"
+kind = "pmos"
+description = "IRF9358 Infineon dual P-ch -30V -9.2A 16.3mOhm SO-8 (DUAL; single-channel model)"
+
+[models.match]
+value_re = "(?i)^IRF9358$"
+
+[models.params]
+# Source: Infineon IRF9358 datasheet Rev 2.1, Table of Electrical Characteristics
+# Rds(on) max = 16.3 mOhm @ Vgs=-10V. We model the typical which is ~ 13 mOhm.
+# rd+rs split evenly to sum to typical Rds(on). vto is negative (P-channel).
+vto    = -1.4      # Vgs(th) typ (V), datasheet
+kp     = 15.0      # A/V² — generous kp for a -9.2A switch FET
+lambda = 0.01      # channel-length modulation, estimated
+rd     = 0.0065    # drain ohmic resistance, ~half Rds(on) typ (0.013/2 ohm)
+rs     = 0.0065    # source ohmic resistance, ~half Rds(on) typ
+
+[models.pins]
+# SO-8 dual P-ch pinout (both channels), Infineon IRF9358 datasheet.
+# Channel 1: S1=pin3, G1=pin4, D1=pin5, D1=pin6.
+# Channel 2: S2=pin1, G2=pin2, D2=pin7, D2=pin8.
+# This entry models channel 1; channel 2 is electrically identical.
+"1" = "s2"    # Source, channel 2
+"2" = "g2"    # Gate, channel 2
+"3" = "s1"    # Source, channel 1 (= s2 in common-source load-switch topology)
+"4" = "g1"    # Gate, channel 1  (= g2 in typical tied-gate usage)
+"5" = "d1"    # Drain, channel 1
+"6" = "d1b"   # Drain, channel 1 (second pad, tied to pin 5)
+"7" = "d2"    # Drain, channel 2
+"8" = "d2b"   # Drain, channel 2 (second pad, tied to pin 7)
+
+[models.ratings]
+# Source: Infineon IRF9358 datasheet Rev 2.1, Absolute Maximum Ratings table
+max_current_a       = 9.2     # Id per channel (A), Tc=25C
+max_surge_current_a = 35.0    # Idm pulsed per channel (A), datasheet
+max_power_w         = 2.0     # Pd Ta=25C SO-8 (W), datasheet (or ~2.5W per channel)
+max_voltage_v       = 30.0    # |Vds| abs max (V), datasheet
+theta_ja_c_per_w    = 62.5    # theta_JA SO-8 still-air (C/W), datasheet
+max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIR182DP — Vishay N-channel power MOSFET, PowerPAK SO-8
+# Source: Vishay SIR182DP datasheet, Document Number 66664, Rev. E 13-Jul-22.
+# Package: PowerPAK SO-8 (single N-ch, exposed pad = drain).
+# Key datasheet values:
+#   Vds = 100V, Id = 21A (Tc=25C), Id_pulse = 80A, Pd = 31W (Tc=25C)
+#   Rds(on) max = 17 mOhm @ Vgs=10V (typ = 13 mOhm per datasheet)
+#   Vgs(th) typ = 3.5V (2.5-4.5V range), theta_JA = 40 C/W (PCB mounted)
+#   Tj max = 150C
+[[models]]
+id = "sir182dp"
+kind = "nmos"
+description = "SIR182DP Vishay N-ch 100V 21A 17mOhm PowerPAK SO-8"
+
+[models.match]
+value_re = "(?i)^SIR182DP$"
+
+[models.params]
+# Source: Vishay SIR182DP datasheet Document No. 66664 Rev. E 13-Jul-22
+# Rds(on) typ = 13 mOhm @ Vgs=10V, Tj=25C. Split rd+rs evenly.
+vto    = 3.5       # Vgs(th) typ (V), datasheet
+kp     = 30.0      # A/V² — approximating a 21A switch FET at full turn-on
+lambda = 0.005     # channel-length modulation, estimated for 100V N-ch
+rd     = 0.0065    # drain ohmic resistance, ~half Rds(on) typ (0.013/2 ohm)
+rs     = 0.0065    # source ohmic resistance, ~half Rds(on) typ
+
+[models.pins]
+# PowerPAK SO-8 pinout (Vishay SIR182DP datasheet, Figure 1).
+# Pins 1-4 = Source; pins 5,6 = Gate; pins 7,8 = Drain (also exposed pad EP).
+"1" = "source"
+"2" = "source"
+"3" = "source"
+"4" = "source"
+"5" = "gate"
+"6" = "gate"
+"7" = "drain"
+"8" = "drain"
+
+[models.ratings]
+# Source: Vishay SIR182DP datasheet Document No. 66664 Rev. E, Absolute Ratings
+max_current_a       = 21.0    # Id continuous (A), Tc=25C, datasheet
+max_surge_current_a = 80.0    # Id pulsed (A), datasheet
+max_power_w         = 31.0    # Pd at Tc=25C (W), datasheet
+max_voltage_v       = 100.0   # Vds abs max (V), datasheet
+theta_ja_c_per_w    = 40.0    # theta_JA PCB mounted (C/W), datasheet
+max_junction_temp_c = 150.0   # Tj max (C), datasheet

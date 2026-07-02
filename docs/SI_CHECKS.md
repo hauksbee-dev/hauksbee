@@ -1,12 +1,15 @@
 # Signal-integrity static checks (`--si`)
 
-Five pure-arithmetic, physics-grounded static checks over the data hauksbee
+Seven pure-arithmetic, physics-grounded static checks over the data hauksbee
 already extracts (copper geometry, netlists, part values, board stackup) plus a
 small table of cited datasheet constants. Each targets a bug class that really
-ships. They live in `crates/hauksbee-extract/src/si.rs` (+ the
-`si/impedance.rs` submodule for check 5), run as `hauksbee run <board> --si`, and
-follow the same calibration discipline as the rest of the tool
-(`docs/FAMOUS_SWEEP.md`, `docs/KNOWN_FAULTS_VALIDATION.md`):
+ships. Checks 1 to 5 live in `crates/hauksbee-extract/src/si.rs` (+ the
+`si/impedance.rs` submodule for check 5); checks 6 (trace ampacity) and 7
+(input-cap ripple) live in `hauksbee-engine` `checks::ampacity` / `checks::ripple`
+because their current attribution needs the bound DB models, and are merged into
+the same `--si` report (the way `--lint` merges the strap lint). All run as
+`hauksbee run <board> --si`, and follow the same calibration discipline as the
+rest of the tool (`docs/FAMOUS_SWEEP.md`, `docs/KNOWN_FAULTS_VALIDATION.md`):
 
 > **Zero false positives on the known-good corpus, or the check does not fire.**
 
@@ -406,6 +409,118 @@ class this fires on.
 
 ---
 
+## 6. Trace ampacity (`trace_ampacity`)
+
+### Model
+
+IPC-2221 external-layer ampacity, `I = k * dT^0.44 * A^0.725` (k = 0.048 outer,
+0.024 inner), applied to the **narrowest routed segment** on a net (the series
+bottleneck). The physics, the Poured-net exemption, and the never-invent-a-
+current rule all live in `hauksbee-extract`'s `trace_current` module and are
+unit-tested there; what `--si` adds is the *attribution* layer
+(`hauksbee-engine` `checks::ampacity`) that decides which net carries how much
+current, from the bound DB models, so the check runs automatically instead of
+by hand.
+
+### Attribution (the zero-false-positive boundary)
+
+A current is only attributed to a net from an explicit, citeable source, and the
+finding carries that citation:
+
+1. a DB-modelled converter's output-current limit (`iout_limit_a`) on its
+   output net;
+2. a **regulator** or **connector** continuous-current rating (`max_current_a`)
+   on its non-ground power nets.
+
+FETs are deliberately excluded (a high Id switch rating is not proof that the
+load flows through that part on the board), and a **generic / placeholder
+fallback model never seeds an attribution** (its rating is representative, not a
+datasheet figure). Everything else is left un-attributed and the IPC engine then
+skips it.
+
+### The honest reach
+
+- **Pour exemption.** A net that carries a copper zone is reported `Poured` and
+  never flagged: its real cross-section is the plane, not the discrete pad-entry
+  stubs, and measuring the stub would be a guaranteed false positive (the
+  mppt/pd-sink VBUS/VDC pours, and the LumenPnP motor supply, are exactly this).
+- **Routed traces only.** Only discrete `(segment)`/`(arc)` widths are read;
+  width, not length (length is voltage drop, a separate concern).
+- It fires on a genuinely under-width *routed* trace carrying a cited current,
+  and is silent everywhere it cannot see the real conductor or no current is
+  attributable.
+
+### Calibration evidence
+
+- Integration: `--si` surfaces an ampacity finding on a synthetic board with an
+  AMS1117 (rated 1.0 A) whose `+3V3` output is a single 0.15 mm trace
+  (~0.46 A); silent on the same board when the rail is poured, and when no
+  rated part attributes a current
+  (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
+- Zero-FP corpus sweep across the famous boards (gated by
+  `HAUKSBEE_REQUIRE_CORPUS=1`) raises no ampacity findings. That sweep caught,
+  and forced the fix of, an attribution false positive where the generic power-
+  FET fallback's placeholder 20 A was being treated as a cited rail current.
+- The LumenPnP motor-driver sweep (`trace_current_corpus.rs`) pins the poured-
+  rail / adequately-sized-coil-trace honest negative at the TMC2226 datasheet
+  maximum.
+
+---
+
+## 7. Input-capacitor ripple current (`input_cap_ripple`)
+
+### Model
+
+A buck converter chops its input current between 0 and `I_out` at duty
+`D = Vout/Vin`, so the input bulk cap carries an RMS ripple
+
+```
+I_rms = I_out * sqrt(D - D^2)      (worst case 0.5 * I_out at D = 0.5)
+```
+
+which is compared against the cap's rated RMS ripple current. Over-running the
+rating ages the cap out early through I^2*ESR self-heating. The converter
+topology (switch node / input rail / output rail / bulk caps) is recovered
+structurally from the netlist + part kinds by `checks::converter` (a switch-node
+net tying a power FET to the power inductor, with a bulk cap on the input rail),
+so a discrete power stage built from a gate driver + external FETs is read the
+way an engineer reads it off the schematic.
+
+### Cap ripple rating
+
+Datasheet first (`Ratings.max_ripple_current_a`, a per-part DB override), else a
+conservative per-class default keyed on capacitance (the LOW end of typical
+aluminium-electrolytic ripple ratings, so the default under-states the part and
+the check only fires on a clear overstress). A cap whose value will not parse,
+or a sub-100 uF cap (likely MLCC, where ripple is rarely the limit), gets no
+default and is left alone.
+
+### The zero-false-positive boundary
+
+The check fires **only when the topology, the cap ripple rating, and an
+attributable `I_out` are all known**. When the topology resolves but the rating
+or `I_out` is unknown it emits an info note (the negative is on the record) and
+does not fire. It never invents a current or a rating. `I_out` is attributed
+from the same citeable sources as the ampacity check (a converter limit, or a
+regulator/connector rating on the output rail); a FET rating and the generic
+fallback are excluded.
+
+### Calibration evidence (the hunt's mppt-1210-hus C1)
+
+- Hand-checked unit test: `C1` (1200 uF, rated 3.0 A_rms at 100 kHz / 105 C)
+  across a 10 A buck input at `D ~ 0.5` carries `0.5 * 10 = 5.0 A_rms`,
+  ~1.66x its rating (`ripple::tests::mppt_1210_c1_overstress_is_1_66x`).
+- On the real mppt-1210 board, `--si` recovers the buck stage (input rail
+  SOLAR+, switch node SW_NODE, inductor L1, input bulk cap C1 1200uF) and
+  honestly reports that `I_out` is not attributable from a single part rating
+  (the 10 A charge current is a system spec, not a datasheet pin rating), so it
+  emits an info note rather than a fabricated finding. The over-ripple physics is
+  the unit test's job; the board path proves the topology recovery and the honest
+  abstention.
+- Corpus sweep raises no ripple findings on the known-good famous boards.
+
+---
+
 ## Reproduce
 
 ```bash
@@ -422,8 +537,18 @@ $BIN run "$C/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb" --si
 # real Zdiff, info because the board declares dielectric_constraints no).
 $BIN run "$C/watchy/Watchy.kicad_pcb" --si | grep controlled_impedance
 
+# Trace ampacity + input-cap ripple (checks 6, 7): the mppt-1210 buck stage is
+# recovered and its input bulk cap C1 is reported (I_out not auto-attributable,
+# so an honest info note, not a fabricated finding).
+$BIN run ../hunt-boards/mppt-1210-hus/kicad/mppt-1210-hus.kicad_pcb --si | grep -E 'ripple|ampacity'
+
 # The zero-false-positive gate over the whole corpus (KiCad + Eagle), plus the
 # hand-checked impedance formulas vs the reference calculator (unit tests).
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-extract --test si_corpus
 cargo test -p hauksbee-extract --lib si::
+
+# Trace-ampacity + input-cap ripple integration + corpus sweep (checks 6, 7),
+# including the hand-checked mppt-1210 C1 1.66x ripple unit test.
+HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-engine --test si_ampacity_ripple
+cargo test -p hauksbee-engine --lib checks::ripple checks::ampacity checks::converter
 ```

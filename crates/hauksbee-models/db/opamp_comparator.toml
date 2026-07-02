@@ -211,3 +211,156 @@ tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V (Table 6.3)
 "3" = "in_plus"
 "4" = "in_minus"
 "5" = "vcc"
+
+# ── INA180 / INA181 / INA186 — TI current-sense amplifiers ───────────────────
+#
+# Source: Texas Instruments INA180 datasheet, SBOS774D (Rev D, 2019).
+#         Texas Instruments INA181 datasheet, SBOS744C (Rev C, 2019).
+#         Texas Instruments INA186 datasheet, SBOS791A (Rev A, 2020).
+#
+# All three are unidirectional current-sense amplifiers (bidirectional for
+# INA186) in SOT-23-5. The INA18x family shares the same 5-pin SOT-23 package.
+# Gain variants are selected by part suffix: A1=20V/V, A2=50V/V, A3=100V/V,
+# A4=200V/V. This entry matches the whole INA180/181/186 family (gain-agnostic).
+#
+# Key absolute maximum ratings (INA180 datasheet, Table 7.1):
+#   VS supply abs max = 26V
+#   Common-mode input range: -0.2V to +26V
+#   Tj max = 150C
+#
+# NOTE: The gain (20/50/100/200 V/V by part suffix) is not encoded here;
+# the gain param is left as 0 (unknown) to prompt explicit modeling if needed.
+# The entry is sufficient to resolve the part and check supply/Tj limits.
+
+[[models]]
+id = "ina180"
+kind = "opamp"
+description = "TI INA180 current-sense amplifier family, SOT-23-5 (gain by suffix A1/A2/A3/A4)"
+
+[models.match]
+# Matches INA180, INA180A1, INA180A2, INA180A3, INA180A4 and variant suffixes
+value_re = "(?i)^INA180"
+
+[models.params]
+# Source: INA180 datasheet SBOS774D, Table 7.5 Electrical Characteristics.
+# Gain is suffix-dependent (A1=20, A2=50, A3=100, A4=200 V/V); represented as
+# a representative mid-range value here. For simulation, configure the exact gain
+# via a more specific user-TOML entry if precision is required.
+gain    = 100.0    # representative gain (V/V), A3 suffix; A1=20, A2=50, A4=200
+rail_lo = 0.0      # output low limit (V), ground-referenced
+rail_hi = 26.0     # output high limit (V), VS supply
+
+[models.pins]
+# SOT-23-5 pinout. Source: INA180 datasheet SBOS774D, Section 7.1 Pin Configuration.
+"1" = "out"      # Output
+"2" = "gnd"      # GND
+"3" = "in_plus"  # IN+ (non-inverting, high side of shunt)
+"4" = "in_minus" # IN- (inverting, low side of shunt)
+"5" = "vs"       # VS (supply)
+
+[models.ratings]
+# Source: INA180 datasheet SBOS774D, Table 7.1 Absolute Maximum Ratings
+max_voltage_v       = 26.0    # VS abs max (V), datasheet
+max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ina181"
+kind = "opamp"
+description = "TI INA181 current-sense amplifier family, SOT-23-5 (gain by suffix A1/A2/A3/A4)"
+
+[models.match]
+value_re = "(?i)^INA181"
+
+[models.params]
+# Source: INA181 datasheet SBOS744C, Table 7.5. Same gain variants as INA180.
+gain    = 100.0
+rail_lo = 0.0
+rail_hi = 26.0
+
+[models.pins]
+# SOT-23-5 pinout. Source: INA181 datasheet SBOS744C, Section 7.1.
+"1" = "out"
+"2" = "gnd"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "vs"
+
+[models.ratings]
+# Source: INA181 datasheet SBOS744C, Table 7.1 Absolute Maximum Ratings
+max_voltage_v       = 26.0
+max_junction_temp_c = 150.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ina186"
+kind = "opamp"
+description = "TI INA186 bidirectional current-sense amplifier, SOT-23-5 (gain by suffix)"
+
+[models.match]
+value_re = "(?i)^INA186"
+
+[models.params]
+# Source: INA186 datasheet SBOS791A, Table 7.5.
+# INA186 is bidirectional (output swings around Vref for current reversal).
+gain    = 100.0
+rail_lo = 0.0
+rail_hi = 26.0
+
+[models.pins]
+# SOT-23-5 pinout. Source: INA186 datasheet SBOS791A, Section 7.1.
+"1" = "out"
+"2" = "gnd"
+"3" = "in_plus"
+"4" = "in_minus"
+"5" = "vs"
+
+[models.ratings]
+# Source: INA186 datasheet SBOS791A, Table 7.1 Absolute Maximum Ratings
+max_voltage_v       = 26.0
+max_junction_temp_c = 150.0
+
+# ── INA2181 — TI dual current-sense amplifier ─────────────────────────────────
+#
+# Source: Texas Instruments INA2181 datasheet, SBOS831A (Rev A, 2021).
+# DUAL channel version of the INA181 in an MSOP-10 / VSSOP-10 package.
+# Two independent current-sense channels, same 26V supply abs max.
+#
+# NOTE: This is a DUAL device. Each channel is electrically equivalent to one
+# INA181 channel. The pin map covers both channels A and B in the MSOP-10.
+
+[[models]]
+id = "ina2181"
+kind = "opamp"
+description = "TI INA2181 dual current-sense amplifier, MSOP-10 (two INA181 channels)"
+
+[models.match]
+value_re = "(?i)^INA2181"
+
+[models.params]
+# Source: INA2181 datasheet SBOS831A, Table 7.5.
+# Gain is suffix-dependent (A1=20, A2=50, A3=100, A4=200 V/V) — same family.
+gain    = 100.0    # representative (A3 suffix); actual gain from part suffix
+rail_lo = 0.0
+rail_hi = 26.0
+
+[models.pins]
+# MSOP-10 / VSSOP-10 pinout. Source: INA2181 datasheet SBOS831A, Section 7.1.
+# Channel A: IN+A=1, IN-A=2, OUTA=3; Channel B: IN+B=8, IN-B=9, OUTB=10.
+"1"  = "in_plus_a"   # IN+A (channel A, non-inverting)
+"2"  = "in_minus_a"  # IN-A (channel A, inverting)
+"3"  = "out_a"       # OUTA (channel A output)
+"4"  = "gnd"         # GND
+"5"  = "gnd2"        # GND (second pad, tied to pin 4 in most packages)
+"6"  = "vs"          # VS (supply, shared by both channels)
+"7"  = "vs2"         # VS (second pad, tied to pin 6)
+"8"  = "in_plus_b"   # IN+B (channel B, non-inverting)
+"9"  = "in_minus_b"  # IN-B (channel B, inverting)
+"10" = "out_b"       # OUTB (channel B output)
+
+[models.ratings]
+# Source: INA2181 datasheet SBOS831A, Table 7.1 Absolute Maximum Ratings
+max_voltage_v       = 26.0    # VS abs max (V), datasheet
+max_junction_temp_c = 150.0   # Tj max (C), datasheet

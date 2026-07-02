@@ -126,6 +126,23 @@ impl NetCopper {
     }
 }
 
+/// Parse `.kicad_pcb` text into per-net copper geometry. Returns an empty vector
+/// when the text is not a KiCad layout or does not parse, so callers outside the
+/// extract crate (which has the s-expr parser) can run the ampacity check from
+/// raw text without depending on the parser themselves.
+pub fn net_copper_from_text(text: &str) -> Vec<NetCopper> {
+    if !text.contains("(kicad_pcb") {
+        return Vec::new();
+    }
+    let Ok(doc) = forge_sexpr::parse(text) else {
+        return Vec::new();
+    };
+    match doc.root() {
+        Some(root) => net_copper_from_root(root),
+        None => Vec::new(),
+    }
+}
+
 /// Parse the per-net copper geometry (track widths + zone presence) from a
 /// KiCad `.kicad_pcb` document root. Mirrors `drc::collect_primitives` but keeps
 /// only what an ampacity question needs.

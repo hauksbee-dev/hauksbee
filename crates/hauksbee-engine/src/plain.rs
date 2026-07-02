@@ -407,6 +407,11 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so a strap-bearing MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps were verified — and a mis-strapped boot pin is latched by hardware at reset, before any firmware runs.".to_string(),
                 "Check the boot/strap pins (e.g. BOOT0, or the ESP32 strapping pins) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
             ),
+            LintCheck::DeviceDecode => (
+                format!("A configuration pin on {parts} (net \"{net}\") decodes to the wrong setting. {}", f.message),
+                "Some chips read a resistor-divider voltage on a config pin and decode it against a datasheet table to pick a mode (here, the USB-C voltage a PD sink requests). If the chosen resistors land the pin in the wrong band, the chip silently selects the wrong mode: every resistor is in spec and every wire connects, so a normal value/short check cannot see it.".to_string(),
+                "Re-pick the divider resistors so the pin voltage lands in the intended datasheet band, using the single pull-up / single pull-down the datasheet specifies per setting (not a permanent pull-down with an extra switched leg). Check the part's decode table and any min/max override note.".to_string(),
+            ),
         };
         out.push(level, what, why, fix);
     }
@@ -447,6 +452,16 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
                 format!("A trace that should be a controlled impedance is out of range ({}).", short_msg(&f.message)),
                 "Fast signals like USB or Ethernet need their traces to present a specific impedance (for example 90 ohm differential for USB) so the signal does not reflect off the wire. If the trace width / spacing for your board stackup gives the wrong impedance, you get reflections, and the link can be marginal or fail at speed.".to_string(),
                 "Adjust the trace width and pair spacing for your actual layer stackup so the estimated impedance hits the target (tools and the formulas in docs/SI_CHECKS.md give the geometry); or have the fab build a controlled-impedance stackup to your spec.".to_string(),
+            ),
+            SiCheck::TraceAmpacity => (
+                format!("A routed trace is too narrow for the current it has to carry ({}).", short_msg(&f.message)),
+                "Copper can only carry so much current before it overheats: the IPC-2221 rule sets how wide a trace must be for a given current and temperature rise. A trace narrower than that runs hot, which can lift the copper, char the board, or in the worst case open up like a fuse.".to_string(),
+                "Widen the trace to at least the IPC-2221 minimum width for its current (the message states the required width), pour the rail as a plane / copper fill, use heavier copper (2 oz), or split the current across more layers with stitching vias.".to_string(),
+            ),
+            SiCheck::InputCapRipple => (
+                format!("A switching converter's input bulk capacitor is running over its ripple-current rating ({}).", short_msg(&f.message)),
+                "The input capacitor of a buck converter has to supply the chopped, pulsing input current, so it carries a large RMS ripple current. Every capacitor is rated for a maximum ripple current (its internal resistance turns that current into heat); running past the rating overheats the cap from the inside and ages it out early, so the converter fails months or years sooner than it should.".to_string(),
+                "Use a capacitor with a higher ripple-current rating, or split the bulk across several caps in parallel so each carries a share, or add low-ESR ceramics across it to take the high-frequency ripple. The message gives the actual vs rated ripple current.".to_string(),
             ),
         };
         out.push(level, what, why, fix);
