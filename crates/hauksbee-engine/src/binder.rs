@@ -2605,7 +2605,7 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 // ── Power-net detection ──────────────────────────────────────────────────────
 
 /// True for ground-family net names.
-fn is_ground(name: &str) -> bool {
+pub fn is_ground(name: &str) -> bool {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     matches!(
         n.as_str(),
@@ -2614,7 +2614,7 @@ fn is_ground(name: &str) -> bool {
 }
 
 /// If `name` is a recognised supply rail, return its nominal voltage.
-fn power_rail_voltage(name: &str) -> Option<f64> {
+pub fn power_rail_voltage(name: &str) -> Option<f64> {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     match n.as_str() {
         "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" | "+5V0" => Some(5.0),

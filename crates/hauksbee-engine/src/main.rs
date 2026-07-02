@@ -304,6 +304,18 @@ struct RunArgs {
     /// broken by an injection `Vsource` (see docs/AC_ANALYSIS.md).
     #[arg(long = "ac-loop", value_name = "NET", help_heading = "Advanced / analyses")]
     ac_loop: Option<String>,
+
+    /// Record these nets' node voltages each chunk of a `--headless` run and write
+    /// them to `--probe-csv`, so waveforms are scriptable with no UI. Comma-
+    /// separated and/or repeatable: `--probe +5V,GATE --probe D13`. An unknown net
+    /// is a loud error (with near-matches) before the run starts.
+    #[arg(long, value_name = "NET[,NET...]", value_delimiter = ',', help_heading = "Advanced / analyses")]
+    probe: Vec<String>,
+
+    /// CSV path for `--probe`: header is `time_s` then one column per probed net,
+    /// one row per co-sim chunk.
+    #[arg(long, value_name = "FILE", help_heading = "Advanced / analyses")]
+    probe_csv: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -480,6 +492,13 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // behavioural part dropped in any of these loads with no recompile.
     let extra: Vec<&std::path::Path> = args.models_dir.as_deref().into_iter().collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+
+    // --probe records live waveforms, which only exist during a co-sim; it is
+    // meaningless for the static reports and the interactive server. Fail loudly
+    // rather than silently ignore the flag.
+    if !args.probe.is_empty() && !args.headless {
+        anyhow::bail!("--probe records co-sim waveforms and needs --headless");
+    }
 
     // --list-nets: print the board's net names so the user can pick one for
     // --ac-node / --ac-loop without grepping the layout. One net per line on
@@ -876,6 +895,12 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     // Bind with the layered library (so a --models-dir / user-dir custom part is
     // in scope), then build the engine from the bound board.
     let bound = bind_board(&board, &lib);
+    // Net names captured before `bound` is consumed, for --probe validation.
+    let probe_known_nets: Vec<String> = if args.probe.is_empty() {
+        Vec::new()
+    } else {
+        bound.net_names.clone()
+    };
     let mut engine = HauksbeeEngine::from_bound(
         bound,
         args.firmware.as_deref(),
@@ -962,6 +987,11 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     }
 
     if args.headless {
+        // --probe preconditions, checked before the run so a typo fails fast with
+        // the same near-match style the rest of the net-facing CLI uses.
+        let probes = dedup_probes(&args.probe);
+        validate_probes(&probes, args.probe_csv.as_deref(), &probe_known_nets)?;
+
         let board_name = engine.report().board_name.clone();
         let summary = BindSummary::from_report(engine.report());
         let mut uart_seen = false;
@@ -971,7 +1001,9 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             &mut uart_seen,
             args.json,
             args.strict,
-        );
+            &probes,
+            args.probe_csv.as_deref(),
+        )?;
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
         // any chip substitution detected at build time. Built from the SAME run
@@ -2222,13 +2254,107 @@ fn warn_sibling_boards(board: &std::path::Path) {
     eprintln!("  If they are part of the same product, check each one separately.");
 }
 
+/// Trim, drop empties, and de-duplicate probe net names while preserving the
+/// order the user gave (which becomes the CSV column order).
+fn dedup_probes(raw: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in raw {
+        let n = n.trim();
+        if !n.is_empty() && !out.iter().any(|e| e == n) {
+            out.push(n.to_string());
+        }
+    }
+    out
+}
+
+/// Validate `--probe` preconditions before a headless run: a `--probe-csv` sink
+/// is required, and every probed net must exist on the board. An unknown net
+/// fails loudly with near-matches, the same did-you-mean style the spec loader
+/// uses for a bad net name.
+fn validate_probes(
+    probes: &[String],
+    csv: Option<&Path>,
+    known: &[String],
+) -> anyhow::Result<()> {
+    if probes.is_empty() {
+        return Ok(());
+    }
+    if csv.is_none() {
+        anyhow::bail!("--probe needs --probe-csv <path> to write the waveforms to");
+    }
+    let known_set: std::collections::HashSet<&str> = known.iter().map(String::as_str).collect();
+    for net in probes {
+        if !known_set.contains(net.as_str()) {
+            let near = nearest_nets(net, known, 5);
+            let hint = if near.is_empty() {
+                String::new()
+            } else {
+                format!(" - did you mean: {}?", near.join(", "))
+            };
+            anyhow::bail!("--probe: net '{net}' not found on the board{hint}");
+        }
+    }
+    Ok(())
+}
+
+/// Up to `limit` known net names closest to `target` by edit distance, favouring
+/// substring matches. A compact twin of the spec loader's net suggester, kept
+/// local because the engine binary cannot depend on the CI crate.
+fn nearest_nets(target: &str, known: &[String], limit: usize) -> Vec<String> {
+    let t = target.to_ascii_lowercase();
+    let mut scored: Vec<(usize, &String)> = known
+        .iter()
+        .map(|name| {
+            let n = name.to_ascii_lowercase();
+            let contains = n.contains(&t) || t.contains(&n);
+            let dist = levenshtein(&t, &n);
+            let score = if contains { dist.saturating_sub(3) } else { dist };
+            (score, name)
+        })
+        .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    let cutoff = (target.len() / 2).max(3);
+    scored
+        .into_iter()
+        .filter(|(score, _)| *score <= cutoff)
+        .take(limit)
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+/// Classic Levenshtein edit distance.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (n, m) = (a.len(), b.len());
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut cur = vec![0usize; m + 1];
+    for i in 1..=n {
+        cur[0] = i;
+        for j in 1..=m {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[m]
+}
+
 fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
     uart_seen: &mut bool,
     quiet: bool,
     strict: bool,
-) -> Vec<hauksbee_engine::FaultEvent> {
+    probes: &[String],
+    probe_csv: Option<&Path>,
+) -> anyhow::Result<Vec<hauksbee_engine::FaultEvent>> {
     use hauksbee_engine::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
     // External emulator backends (Renode/QEMU) advance over a socket: a fine 1 ms
@@ -2254,6 +2380,9 @@ fn run_headless(
     let mut next_progress = seconds / 5.0; // ~5 progress lines over the run
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
+    // Probe recording: one (time_s, [volts per probed net]) row per chunk. The
+    // net order follows the order the user gave, which becomes the CSV columns.
+    let mut probe_rows: Vec<(f64, Vec<f64>)> = Vec::new();
     while t < seconds {
         // Refuse rather than fake (05 §3b): under --strict, stop as soon as the
         // analog solve has been stuck for a whole streak of chunks. Continuing
@@ -2268,6 +2397,15 @@ fn run_headless(
             next_progress += (seconds / 5.0).max(frame_dt);
         }
         let frame = engine.step(frame_dt);
+        if !probes.is_empty() {
+            // A probed net absent from the frame reads 0 V (e.g. a net collapsed
+            // onto ground); validation already rejected genuinely unknown names.
+            let volts = probes
+                .iter()
+                .map(|net| frame.net_voltages.get(net).copied().unwrap_or(0.0))
+                .collect();
+            probe_rows.push((frame.t, volts));
+        }
         for bytes in frame.uart.values() {
             last_uart.extend_from_slice(bytes);
         }
@@ -2360,7 +2498,31 @@ fn run_headless(
             )
     });
     faults.dedup_by(|a, b| a.component == b.component && a.kind.as_str() == b.kind.as_str());
-    faults
+
+    // Write the probe CSV: header `time_s` then one column per probed net, one
+    // row per chunk. Done after the run so a slow board still streams its summary.
+    if let Some(path) = probe_csv {
+        let mut csv = String::from("time_s");
+        for net in probes {
+            csv.push(',');
+            csv.push_str(net);
+        }
+        csv.push('\n');
+        for (t, volts) in &probe_rows {
+            csv.push_str(&format!("{t:.6}"));
+            for v in volts {
+                csv.push_str(&format!(",{v:.6}"));
+            }
+            csv.push('\n');
+        }
+        std::fs::write(path, csv)
+            .map_err(|e| anyhow::anyhow!("writing probe CSV to {}: {e}", path.display()))?;
+        if !quiet {
+            eprintln!("wrote {} probe row(s) to {}", probe_rows.len(), path.display());
+        }
+    }
+
+    Ok(faults)
 }
 
 /// Strict-mode predicate for the lint report: a high- or medium-severity finding

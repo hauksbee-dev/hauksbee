@@ -38,6 +38,7 @@ mod linear;
 mod loop_stability;
 mod newton;
 mod options;
+pub mod orchestrate;
 mod partition;
 mod partitioned;
 mod plan;
