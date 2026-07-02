@@ -36,6 +36,7 @@ pub mod result;
 pub mod scheduler;
 pub mod shorts;
 pub mod stress;
+pub mod tarski_decomp;
 pub mod thermal;
 pub mod tui;
 
@@ -57,7 +58,7 @@ pub use frontdoor::{
 };
 pub use peripherals::{
     controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},
-    i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75},
+    i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75, Mcp4728},
     load::DynamicLoad,
     sink::VcdSink,
     spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave},

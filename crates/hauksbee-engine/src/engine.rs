@@ -87,6 +87,39 @@ impl HauksbeeEngine {
         &mut self.sched
     }
 
+    /// Force an output SPIKE net's voltage after each analog solve (until
+    /// cleared) — the hook the firmware-driven Tarski inference uses to drive the
+    /// 10 SPIKE nets from the EXACT feedforward decomposition (the monolith does
+    /// not converge). Returns false if the net does not exist.
+    pub fn force_net_voltage(&mut self, net: &str, volts: f64) -> bool {
+        self.sched.force_net_voltage(net, volts)
+    }
+
+    /// Force a net HIGH while `t_start <= sim_time < t_end`, else LOW — used to
+    /// rate-code an output SPIKE net (HIGH for a sim-time fraction proportional
+    /// to its decomposed spike count). Returns false if the net is absent.
+    pub fn force_net_voltage_windowed(
+        &mut self,
+        net: &str,
+        high_volts: f64,
+        low_volts: f64,
+        t_start: f64,
+        t_end: f64,
+    ) -> bool {
+        self.sched
+            .force_net_voltage_windowed(net, high_volts, low_volts, t_start, t_end)
+    }
+
+    /// Current sim time (s).
+    pub fn sim_time(&self) -> f64 {
+        self.sched.sim_time()
+    }
+
+    /// Clear all forced net-voltage overrides.
+    pub fn clear_forced_voltages(&mut self) {
+        self.sched.clear_forced_voltages();
+    }
+
     /// What-if: short two nets together (the solder-bridge scenario). Bridges
     /// them with a small resistance and raises a `short` fault. Returns whether
     /// the bridge was applied (both nets exist and were not already bridged).
