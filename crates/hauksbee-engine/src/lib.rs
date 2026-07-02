@@ -62,7 +62,7 @@ pub use peripherals::{
     i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75, Mcp4728},
     load::DynamicLoad,
     sink::VcdSink,
-    spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiSlave},
+    spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave},
     Peripheral, PeripheralSet, RegisterMapSensor, TickCtx, TimelineEvent,
 };
 pub use plain::{

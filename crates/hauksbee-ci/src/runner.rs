@@ -999,6 +999,23 @@ fn resolve_net(
     None
 }
 
+/// Resolve a SPI peripheral's `cs_net` to the MCU pin that drives it (05 §2.1),
+/// so the co-sim frames transactions on the real chip-select edges. The net name
+/// is looked up in the bound net map, then traced back to the GPIO driver pin via
+/// the scheduler (the same net-to-driving-pin trace the 74HC595 chain wiring
+/// uses). Returns `None` when `cs_net` is absent or does not resolve to a driven
+/// MCU pin, in which case the bus falls back to the chunk-boundary heuristic and
+/// the coverage reports `heuristic`.
+fn resolve_cs_pin(
+    p: &crate::spec::PeripheralSpec,
+    net_node: &HashMap<String, NodeId>,
+    sched: &hauksbee_engine::scheduler::Scheduler,
+) -> Option<(char, u8)> {
+    let net = p.cs_net.as_ref()?;
+    let node = net_node.get(net).copied()?;
+    sched.pin_driving_node(node)
+}
+
 /// Attach every peripheral in the spec to the scheduler. Returns the list of
 /// (sink id, output path) for VCD sinks so they can be dumped after the run.
 fn attach_peripherals(
@@ -1128,12 +1145,14 @@ fn attach_peripherals(
                 sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
             }
             "spi_eeprom" => {
+                let cs_pin = resolve_cs_pin(p, net_node, sched);
                 let bus = SpiBus::new(&p.id, Box::new(Spi25Eeprom::new(p.size.unwrap_or(256))));
-                sched.attach_spi_bus(Arc::new(Mutex::new(bus)));
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin);
             }
             "spi_mcp3008" => {
+                let cs_pin = resolve_cs_pin(p, net_node, sched);
                 let bus = SpiBus::new(&p.id, Box::new(Mcp3008::new(p.vref.unwrap_or(5.0))));
-                sched.attach_spi_bus(Arc::new(Mutex::new(bus)));
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin);
             }
             "vcd_sink" => {
                 let names = p.nets.clone().unwrap_or_default();
@@ -1216,10 +1235,14 @@ fn attach_sensors(
             }
             Bus::Spi => {
                 let arc = Arc::new(Mutex::new(SpiBus::new(&sa.id, Box::new(sensor))));
+                // Declarative sensors do not (yet) carry a CS-net field, so they
+                // stay on the chunk-boundary heuristic (coverage reports
+                // `heuristic`). A resolved CS pin can be threaded here the same way
+                // `attach_peripherals` does once the sensor spec grows a cs_net.
                 if let Some(controller) = &sa.controller {
-                    sched.attach_spi_bus_on(controller, arc);
+                    sched.attach_spi_bus_on(controller, arc, None);
                 } else {
-                    sched.attach_spi_bus(arc);
+                    sched.attach_spi_bus(arc, None);
                 }
             }
         }
