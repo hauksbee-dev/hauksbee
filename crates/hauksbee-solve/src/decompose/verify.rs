@@ -42,7 +42,12 @@ pub enum TearKind {
     /// One scalar KCL equation reconciles the rail per step: exact.
     Balance,
     /// The node is pinned at a settled voltage with no coupling equation:
-    /// exact only within the measured stiffness tolerance.
+    /// exact only within the measured stiffness tolerance. NO PRODUCER YET:
+    /// route-4 provisional stiffness detection (tear at the feed voltage,
+    /// sum block boundary currents, verify I*R_feed against stiff_tol) needs
+    /// a DC solve and lands with the orchestrator. Until then a
+    /// non-convergent monolith gets balance tears via ConvergenceEscalation,
+    /// which is sound and merely costs the outer loop.
     Stiff,
     /// A sense-only, proven one-directional boundary: zero-current exact,
     /// capture-grid limited when replayed from samples.
@@ -64,7 +69,8 @@ pub enum Evidence {
     ZeroCurrentSenseOneDirectional,
     /// The node's voltage was measured (or provisionally verified) to move
     /// less than `tol_v` across the operating envelope; `sag_v` is the
-    /// measured movement.
+    /// measured movement. No producer until the orchestrator's route-4
+    /// detection lands (see [`TearKind::Stiff`]).
     MeasuredStiffness { sag_v: f64, tol_v: f64 },
 }
 
@@ -121,7 +127,8 @@ impl RefusedAnalysis {
 /// The assembled honesty object for one decomposition.
 #[derive(Debug, Clone)]
 pub struct TearCertificate {
-    /// One record per torn node.
+    /// One record per torn boundary. A node sensed by several downstream
+    /// groups carries one Free record per (node, downstream) pair.
     pub records: Vec<TearRecord>,
     /// Analyses this decomposition must refuse, with the nodes that cause
     /// each refusal.
@@ -232,7 +239,6 @@ impl Decomposition {
         let drivers = driver_assignments(circuit, &graph, &dag, &drv);
 
         let mut records = Vec::new();
-        let mut supply_nodes = Vec::new();
 
         // Balance tears: exact by the scalar KCL reconciliation, but the rail
         // is still effectively pinned between outer iterations, so it shares
@@ -248,7 +254,6 @@ impl Decomposition {
                 upstream: None,
                 downstream: None,
             });
-            supply_nodes.push(cand.rail);
         }
 
         // Free tears: certified by the zero-current sense property (enforced
@@ -282,8 +287,11 @@ impl Decomposition {
         // an unconducted node. What remains uncertifiable is a sensed node no
         // device conducts and no rail tear owns: a genuinely floating sense
         // net, which is the STEP-1 dead-membrane failure shape.
-        let torn_rails: std::collections::BTreeSet<NodeId> =
-            supply_nodes.iter().copied().collect();
+        let torn_rails: std::collections::BTreeSet<NodeId> = records
+            .iter()
+            .filter(|r| matches!(r.kind, TearKind::Balance | TearKind::Stiff))
+            .map(|r| r.node)
+            .collect();
         let mut uncertified = Vec::new();
         for e in &graph.sense_edges {
             let conducted = graph
@@ -300,6 +308,17 @@ impl Decomposition {
         uncertified.sort_unstable();
         uncertified.dedup();
 
+        // Refusals are DERIVED from the records by kind, never hand-appended
+        // alongside them: any tear that pins or reconciles a rail (Balance
+        // today, Stiff when route-4 detection lands) automatically registers
+        // the supply-integrity refusal. Deriving keeps the module doc's
+        // "balance and stiff share the refusal" true by construction; a
+        // future stiff-record producer cannot forget to join it.
+        let mut supply_nodes: Vec<NodeId> = records
+            .iter()
+            .filter(|r| matches!(r.kind, TearKind::Balance | TearKind::Stiff))
+            .map(|r| r.node)
+            .collect();
         let refusals = if supply_nodes.is_empty() {
             Vec::new()
         } else {

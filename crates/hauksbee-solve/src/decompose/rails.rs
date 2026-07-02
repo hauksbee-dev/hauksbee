@@ -102,7 +102,7 @@ impl Default for RailPolicy {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TearDecision {
     /// Tear it: the balance loop is predicted `est_speedup` times cheaper
-    /// than the monolithic solve (>= 1.0; exactly 1.0 under escalation when
+    /// than the monolithic solve (>= 1.0; clamped up to 1.0 under escalation when
     /// the model was bypassed).
     Tear { est_speedup: f64 },
     /// Structurally sound but predicted slower than the monolith.
@@ -550,5 +550,84 @@ mod tests {
         let g = ConductionGraph::analyze(&c);
         let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
         assert!(tears.is_empty(), "{tears:?}");
+    }
+
+    /// Two plausible shunt feeds into one rail: the scalar balance assumes a
+    /// single feed, so the detector must refuse rather than pick one
+    /// (section 3.4 refusal-completeness: every assumption gets a violating
+    /// fixture).
+    #[test]
+    fn two_feeds_refuse_ambiguous() {
+        let (mut c, rail) = {
+            let mut c = Circuit::new();
+            let p5 = c.node("+5V");
+            c.add(Device::Vsource {
+                name: "V5".into(),
+                p: p5,
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(5.0),
+            });
+            let rail = c.node("ANALOG_VDD");
+            c.add(Device::Resistor {
+                name: "R_shunt_a".into(),
+                a: p5,
+                b: rail,
+                ohms: 1e3,
+                tc1: None,
+            });
+            (c, rail)
+        };
+        // Second pinned feed path into the same rail.
+        let p3 = c.node("+3V3");
+        c.add(Device::Vsource {
+            name: "V3".into(),
+            p: p3,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.3),
+        });
+        c.add(Device::Resistor {
+            name: "R_shunt_b".into(),
+            a: p3,
+            b: rail,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        for k in 0..8 {
+            let base = c.node(&format!("b{k}"));
+            let col = c.node(&format!("c{k}"));
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: col,
+                b: base,
+                e: rail,
+                model: model.clone(),
+            });
+            c.add(Device::Resistor {
+                name: format!("Rb{k}"),
+                a: base,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("Rc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 10e3,
+                tc1: None,
+            });
+        }
+        let g = ConductionGraph::analyze(&c);
+        // Even under escalation (structural guards never relax), two feeds
+        // must refuse.
+        let tears =
+            detect_balance_tears(&c, &g, TearMotive::ConvergenceEscalation, &RailPolicy::default());
+        let cand = tears.iter().find(|t| t.rail == rail).expect("candidate");
+        assert_eq!(cand.decision, TearDecision::RefusedAmbiguousFeed { feeds: 2 });
+        assert!(!cand.torn());
     }
 }
