@@ -39,7 +39,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
@@ -568,7 +568,12 @@ const SPI_OP_FINISH: u8 = 2;
 /// an op — a truncated MOSI byte, a MISO write that does not land, or an op code
 /// the protocol does not define — returns `Err` so the server logs it instead of
 /// the firmware silently reading a plausible-but-fake bus byte.
-fn handle_spi_stream(stream: &mut TcpStream, callback: &Arc<Mutex<SpiCb>>, trace: bool) -> Result<()> {
+fn handle_spi_stream(
+    stream: &mut TcpStream,
+    callback: &Arc<Mutex<SpiCb>>,
+    cycle: &Arc<AtomicU64>,
+    trace: bool,
+) -> Result<()> {
     let mut op_buf = [0u8; 1];
     match stream.read_exact(&mut op_buf) {
         Ok(()) => {}
@@ -577,6 +582,8 @@ fn handle_spi_stream(stream: &mut TcpStream, callback: &Arc<Mutex<SpiCb>>, trace
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
         Err(e) => return Err(e).context("reading SPI bridge op byte"),
     }
+    // Coarse chunk virtual-cycle stamp, shared from the backend thread (05 §2.2).
+    let cyc = cycle.load(Ordering::Relaxed);
     match op_buf[0] {
         SPI_OP_TRANSMIT => {
             // Transmit: read one MOSI byte, return one MISO byte.
@@ -587,7 +594,11 @@ fn handle_spi_stream(stream: &mut TcpStream, callback: &Arc<Mutex<SpiCb>>, trace
             let mosi = mosi_buf[0];
             let miso = {
                 let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
-                cb(SpiEvent { mosi, deselect: false })
+                cb(SpiEvent {
+                    mosi,
+                    deselect: false,
+                    cycle: cyc,
+                })
             };
             if trace {
                 eprintln!("renode-spi mosi=0x{mosi:02X} miso=0x{miso:02X}");
@@ -605,7 +616,11 @@ fn handle_spi_stream(stream: &mut TcpStream, callback: &Arc<Mutex<SpiCb>>, trace
                 eprintln!("renode-spi FinishTransmission");
             }
             let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = cb(SpiEvent { mosi: 0, deselect: true });
+            let _ = cb(SpiEvent {
+                mosi: 0,
+                deselect: true,
+                cycle: cyc,
+            });
             Ok(())
         }
         other => bail!("SPI bridge: unknown op code 0x{other:02X}"),
@@ -648,6 +663,13 @@ pub struct RenodeBackend {
     firmware_loaded: bool,
     /// Virtual time advanced so far, in cycles-equivalent (frequency * seconds).
     cycles: u64,
+    /// Coarse virtual-cycle stamp shared with the SPI bridge thread. The bridge
+    /// services byte transfers on its own thread (the TCP server), so it cannot
+    /// read `cycles` directly; this atomic is updated each time `cycles` advances
+    /// and read when constructing a [`SpiEvent`], giving the byte the poll-boundary
+    /// virtual time. Coarse by construction (all bytes in a slice share it), which
+    /// is exactly the tier `cycle_exact()` reports false for (05 §2.2 QEMU-like).
+    spi_cycle: Arc<AtomicU64>,
     /// When `HAUKSBEE_RENODE_TRACE=1`, the path of Renode's log file to which
     /// function-name trace lines are written. `None` when tracing is disabled.
     trace_log_path: Option<PathBuf>,
@@ -730,6 +752,7 @@ impl RenodeBackend {
             spi_extra_repl_loaded: false,
             firmware_loaded: false,
             cycles: 0,
+            spi_cycle: Arc::new(AtomicU64::new(0)),
             trace_log_path: None,
         })
     }
@@ -897,8 +920,9 @@ impl RenodeBackend {
         }
 
         let trace = std::env::var_os("HAUKSBEE_RENODE_SPI_TRACE").is_some();
+        let cycle = Arc::clone(&self.spi_cycle);
         let bridge = BridgeServer::start("SPI", cb, move |stream, callback| {
-            handle_spi_stream(stream, callback, trace)
+            handle_spi_stream(stream, callback, &cycle, trace)
         })?;
 
         // Derive a unique C# class name: "HauksbeeSpiBridge_spi2", etc.
@@ -1424,6 +1448,13 @@ impl RenodeBackend {
         if !self.firmware_loaded {
             bail!("no firmware loaded into the Renode machine");
         }
+
+        // Publish the chunk-start virtual cycle to the SPI bridge thread before
+        // running: byte transfers serviced DURING this RunFor read this stamp, so
+        // every byte in the slice carries the chunk's coarse virtual time (poll
+        // tier, `cycle_exact()` is false). Exact intra-slice ordering is not
+        // recoverable on a poll backend, matching the pin-edge stamping.
+        self.spi_cycle.store(self.cycles, Ordering::Relaxed);
 
         // `emulation RunFor` self-advances the (paused) machine by the interval
         // and pauses again; it must NOT be preceded by `start`, or Renode

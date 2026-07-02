@@ -65,6 +65,17 @@ pub struct SpiEvent {
     /// return value is also ignored. Backends that cannot observe chip-select
     /// leave this false; the `SpiBus.post_solve` deselect path handles those.
     pub deselect: bool,
+    /// MCU cycle counter at the instant of this transfer, from the same
+    /// `current_cycle()` clock that stamps [`Mcu::on_pin_change`] edges. This is
+    /// what lets the scheduler merge the byte stream against the CS-pin edge
+    /// stream into ONE cycle-ordered event queue and frame transactions on real
+    /// CS assert/deassert (05 §2). On push backends (simavr) it is exact: the C
+    /// SPI IRQ fires synchronously inside `avr_run`, so the cycle read in the
+    /// hook is the true transfer cycle. On poll backends (Renode/QEMU) it is the
+    /// poll-boundary virtual time and coarse, the same tier `Mcu::cycle_exact`
+    /// reports for pin edges; framing then falls back to arrival order within the
+    /// chunk.
+    pub cycle: u64,
 }
 
 /// Core trait for an emulated microcontroller.

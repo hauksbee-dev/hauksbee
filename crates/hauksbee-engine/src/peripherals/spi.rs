@@ -32,6 +32,19 @@ pub trait SpiSlave: Send {
     /// Exchange a byte: receive the firmware's MOSI byte, return MISO.
     fn transfer(&mut self, mosi: u8) -> u8;
 
+    /// Chip-select ASSERTED (active-low falling edge): begin a fresh transaction
+    /// by resetting the command state machine to its start-of-transaction state
+    /// (05 §2.1). The default reuses [`deselect`], which for the built-in slaves
+    /// resets the sequence/command counter to idle without disturbing latched
+    /// permission bits (the 25xx `deselect` only clears the write-enable latch
+    /// when it lands mid-WRITE, and a select edge never does, because the previous
+    /// transaction already ended, so a WREN issued in its own transaction still
+    /// persists to the following WRITE transaction). Slaves whose start state
+    /// differs from their end state override this.
+    fn select(&mut self) {
+        self.deselect();
+    }
+
     /// Chip-select deasserted: end the current transaction. simavr does not
     /// surface CS, so the engine calls this between co-sim chunks as a frame
     /// boundary heuristic; well-formed transfers complete within a chunk.
@@ -55,11 +68,52 @@ pub trait SpiSlave: Send {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
+/// How a bus's transactions are being framed, surfaced per-slave in the co-sim
+/// coverage so a consumer knows whether the CS boundaries are real or guessed
+/// (05 §2.1). Precedence when reported: `Backend` (a real backend CS event was
+/// observed) over `Exact` (a CS pin resolved) over `Heuristic`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpiFramingMode {
+    /// Framed from the real CS-pin GPIO edge stream: the CS net resolved to the
+    /// MCU pin that drives it, so `select`/`deselect` fire at the true active-low
+    /// falling/rising edges, interleaved in cycle order with the byte transfers.
+    /// Exact on push backends (simavr).
+    Exact,
+    /// The backend surfaces CS itself (Renode hardware-NSS `FinishTransmission`
+    /// -> a `deselect` `SpiEvent`), which frames the transaction precisely with no
+    /// resolved CS pin. Detected dynamically the first time such an event lands.
+    Backend,
+    /// No resolved CS pin and no backend CS event: the chunk-boundary deselect
+    /// heuristic frames transactions. Wrong in two documented ways (two
+    /// transactions in one chunk merge; a boundary-spanning transaction
+    /// truncates), reported honestly rather than silently guessed.
+    Heuristic,
+}
+
+impl SpiFramingMode {
+    /// Lower-case tag for JSON coverage: `"exact"` | `"backend"` | `"heuristic"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpiFramingMode::Exact => "exact",
+            SpiFramingMode::Backend => "backend",
+            SpiFramingMode::Heuristic => "heuristic",
+        }
+    }
+}
+
 /// The SPI bus peripheral: a single active slave whose byte stream is fed from
 /// the MCU's `on_spi` callback.
 pub struct SpiBus {
     id: String,
     slave: Box<dyn SpiSlave>,
+    /// The MCU pin (port, bit) that drives this slave's chip-select net, when
+    /// the binder resolved it (05 §2.1). `Some` selects real CS-edge framing;
+    /// `None` leaves the bus on the chunk-boundary heuristic.
+    cs_pin: Option<(char, u8)>,
+    /// Set once a `deselect` `SpiEvent` from the backend framed this bus (Renode
+    /// hardware-NSS `FinishTransmission`). Makes `framing_mode` report `Backend`
+    /// so the coverage reflects that the backend, not the heuristic, owns framing.
+    backend_deselect_seen: bool,
 }
 
 impl SpiBus {
@@ -67,12 +121,63 @@ impl SpiBus {
         SpiBus {
             id: id.to_string(),
             slave,
+            cs_pin: None,
+            backend_deselect_seen: false,
         }
+    }
+
+    /// The MCU pin driving this slave's chip-select, if resolved.
+    pub fn cs_pin(&self) -> Option<(char, u8)> {
+        self.cs_pin
+    }
+
+    /// Record the resolved CS pin (called by the scheduler at attach time). A
+    /// resolved pin moves the bus onto exact CS-edge framing.
+    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>) {
+        self.cs_pin = pin;
+    }
+
+    /// Which framing tier this bus is actually running on, for coverage.
+    pub fn framing_mode(&self) -> SpiFramingMode {
+        if self.backend_deselect_seen {
+            SpiFramingMode::Backend
+        } else if self.cs_pin.is_some() {
+            SpiFramingMode::Exact
+        } else {
+            SpiFramingMode::Heuristic
+        }
+    }
+
+    /// True when this bus frames its own transactions from a real CS source (a
+    /// resolved CS pin OR a backend CS event), so the scheduler must NOT apply
+    /// the chunk-boundary deselect heuristic to it, since doing so would truncate a
+    /// transaction that legitimately spans a chunk boundary (05 §2, failure mode
+    /// b: the debug warning below must stop firing on these buses).
+    pub fn frames_itself(&self) -> bool {
+        self.cs_pin.is_some() || self.backend_deselect_seen
     }
 
     /// Exchange one byte (body of the `on_spi` closure).
     pub fn transfer(&mut self, mosi: u8) -> u8 {
         self.slave.transfer(mosi)
+    }
+
+    /// CS ASSERTED (active-low falling edge): begin a transaction. Interleaved in
+    /// cycle order with `transfer` on the exact-framing path (05 §2.1).
+    pub fn cs_assert(&mut self) {
+        self.slave.select();
+    }
+
+    /// CS DEASSERTED (active-low rising edge): end the transaction.
+    pub fn cs_deassert(&mut self) {
+        self.slave.deselect();
+    }
+
+    /// A backend-surfaced CS deassert (`deselect` `SpiEvent`). Records that the
+    /// backend frames CS (so coverage reports `Backend`) and ends the transaction.
+    pub fn note_backend_deselect(&mut self) {
+        self.backend_deselect_seen = true;
+        self.slave.deselect();
     }
 
     /// Deselect the slave (chip-select deassert). Called either from the

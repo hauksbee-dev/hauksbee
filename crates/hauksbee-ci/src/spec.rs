@@ -359,6 +359,12 @@ pub struct PeripheralSpec {
     /// ADC reference voltage (spi_mcp3008).
     #[serde(default)]
     pub vref: Option<f64>,
+    /// Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).
+    /// When set and the net resolves to an MCU GPIO pin, the co-sim frames the
+    /// slave's transactions on the real CS edges (exact framing, 05 §2) instead
+    /// of the chunk-boundary heuristic. Absent = heuristic framing.
+    #[serde(default)]
+    pub cs_net: Option<String>,
     /// Stimulus waveform: "dc"|"sine"|"pwl"|"noise".
     #[serde(default)]
     pub waveform: Option<String>,
