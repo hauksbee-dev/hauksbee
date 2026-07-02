@@ -222,6 +222,18 @@ impl Transient {
         let mut steps_taken: u64 = 0;
         let max_steps: u64 = 50_000_000; // safety valve
 
+        // Source breakpoints (PWL vertices, PULSE corners): mandatory step
+        // landings for the ADAPTIVE controller. The fixed-step path is left
+        // untouched on purpose: a fixed dt is a user contract (and the
+        // bit-for-bit reference discipline pins its behavior); if a fixed
+        // grid strides a source corner, that is the user's stated sampling
+        // choice. See breakpoint_table for why the adaptive path needs this.
+        let breakpoints = match opts.step {
+            StepControl::Adaptive { .. } => breakpoint_table(circuit, tstop),
+            StepControl::Fixed { .. } => Vec::new(),
+        };
+        let mut next_bp = 0usize;
+
         while t < tstop - 1e-18 {
             steps_taken += 1;
             if steps_taken > max_steps {
@@ -230,6 +242,29 @@ impl Transient {
             let mut h = dt.min(tstop - t);
             if h < dt_min {
                 h = dt_min;
+            }
+            // Never stride across a source corner: shorten the trial step to
+            // land EXACTLY on the next breakpoint. dt itself is not reduced,
+            // so after the corner the controller resumes at its own rhythm.
+            // The landing step may dip below dt_min (at most once per corner,
+            // when the controller has already ground down near the corner):
+            // dt_min is a floor against LTE-rejection thrash, not a sampling
+            // contract, and an exact landing is the whole point of the table.
+            if !breakpoints.is_empty() {
+                while next_bp < breakpoints.len() {
+                    let bp = breakpoints[next_bp];
+                    if bp <= t + f64::max(1e-18, bp * 1e-12) {
+                        next_bp += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if next_bp < breakpoints.len() {
+                    let bp = breakpoints[next_bp];
+                    if t + h > bp {
+                        h = bp - t;
+                    }
+                }
             }
 
             // Trial solve at t + h.
@@ -499,6 +534,87 @@ fn lte_estimate(
         worst = worst.max(err);
     }
     worst
+}
+
+
+// --- source breakpoints ------------------------------------------------------
+
+/// Collect the time-domain corner points of every independent source: PWL
+/// vertices and PULSE edge corners. The step controller must never stride
+/// across one of these without landing on it.
+///
+/// Why this exists: the adaptive controller's LTE estimator is a second
+/// difference over ACCEPTED steps, so it only sees dynamics the steps already
+/// sampled. A sub-step stimulus (a 1 us PWL pulse arriving after a long quiet
+/// stretch during which dt grew to hundreds of microseconds) produces
+/// identical endpoints and no curvature signal: the pulse is silently aliased
+/// away (lore #8 is the co-sim face of the same failure). Registering source
+/// corners as mandatory step landings is the classic SPICE cure ("the
+/// breakpoint table"), and is what makes the co-sim's PWL edge drive
+/// (docs/dev-plans/05-cosim-fidelity.md section 1.3) honest on the analog
+/// side.
+///
+/// PULSE corner enumeration is capped: a fast periodic source over a long
+/// window enumerates corners only up to [`MAX_BREAKPOINTS`]; beyond the cap
+/// the controller is left to its own rhythm (once locked onto a periodic
+/// waveform the accepted-step history carries the curvature signal, so the
+/// cap loses the guarantee only for the tail, not the lock-on). PWL lists are
+/// finite by construction and are never truncated.
+const MAX_BREAKPOINTS: usize = 100_000;
+
+fn breakpoint_table(circuit: &Circuit, tstop: f64) -> Vec<f64> {
+    use hauksbee_ir::SourceKind;
+    let mut bps: Vec<f64> = Vec::new();
+    let push = |t: f64, bps: &mut Vec<f64>| {
+        if t > 0.0 && t < tstop {
+            bps.push(t);
+        }
+    };
+    for (_, dev) in circuit.iter() {
+        let kind = match dev {
+            Device::Vsource { kind, .. } | Device::Isource { kind, .. } => kind,
+            _ => continue,
+        };
+        match kind {
+            SourceKind::Pwl(points) => {
+                for pt in points {
+                    push(pt.t, &mut bps);
+                }
+            }
+            SourceKind::Pulse {
+                delay,
+                rise,
+                fall,
+                width,
+                period,
+                ..
+            } => {
+                // Corners per period: leading edge start/end, trailing edge
+                // start/end. Zero-length edges still get their corner (the
+                // discontinuity itself is the thing to land on).
+                let step = if *period > 0.0 { *period } else { tstop };
+                let one_shot = *period <= 0.0;
+                let mut t0 = *delay;
+                while t0 < tstop && bps.len() < MAX_BREAKPOINTS {
+                    push(t0, &mut bps);
+                    push(t0 + rise, &mut bps);
+                    push(t0 + rise + width, &mut bps);
+                    push(t0 + rise + width + fall, &mut bps);
+                    if one_shot {
+                        break;
+                    }
+                    t0 += step;
+                }
+            }
+            SourceKind::Dc(_) | SourceKind::Sin { .. } => {}
+        }
+    }
+    bps.sort_by(|a, b| a.partial_cmp(b).expect("breakpoints are finite"));
+    // Dedup within a relative epsilon: two corners closer than the controller
+    // could ever distinguish are one landing.
+    bps.dedup_by(|a, b| (*a - *b).abs() <= f64::max(1e-18, *b * 1e-12));
+    bps.truncate(MAX_BREAKPOINTS);
+    bps
 }
 
 // --- event detection --------------------------------------------------------
