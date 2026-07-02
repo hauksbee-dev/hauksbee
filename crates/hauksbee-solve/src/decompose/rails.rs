@@ -371,23 +371,51 @@ pub fn detect_balance_tears(
     out
 }
 
-/// Sizes of the conduction blocks one island fragments into when every node
-/// marked in `bound` (the pinned set plus every held rail) is a boundary
-/// (descending). Devices are fused through every non-ground, non-bound
-/// conduction terminal, exactly the components a jointly-torn solve would
-/// see. A device with NO free terminal (a shunt between two held rails, a
-/// source-side chain) is the analytic/known side of the balance equations
-/// and is not a block; the strand guard has already refused any rail where
-/// such a device's current would actually be lost.
-fn fragment_sizes(
+/// One island's conduction fragmentation under a held set: which block each
+/// free node and each block device lands in, plus the per-block device count.
+///
+/// This is the SINGLE fragmentation implementation. [`fragment_sizes`] (the
+/// balance-tear cost model's input) and the stiff-node detector
+/// ([`super::stiff`], which must search *inside* a block, not just size it)
+/// both read it, so the two passes can never drift apart on what "one block"
+/// means. Devices are fused through every non-ground, non-`bound` conduction
+/// terminal, exactly the components a jointly-torn solve would see. A device
+/// with NO free terminal (a shunt between two held rails, a source-side chain)
+/// is the analytic/known side of the balance equations and is not a block; the
+/// strand guard has already refused any rail where such a device's current
+/// would actually be lost.
+pub(crate) struct Fragmentation {
+    /// Block representative (a node index) for each free node that lands in a
+    /// block. Two free nodes share a value iff they are in the same block.
+    pub(crate) node_block: std::collections::HashMap<usize, usize>,
+    /// Block representative for each block device (a member that is not on the
+    /// known side).
+    pub(crate) device_block: std::collections::HashMap<DeviceId, usize>,
+    /// Device count per block representative.
+    pub(crate) block_devices: std::collections::HashMap<usize, usize>,
+}
+
+impl Fragmentation {
+    /// Block device counts, descending: the balance-tear cost model's input.
+    pub(crate) fn sizes(&self) -> Vec<usize> {
+        let mut v: Vec<usize> = self.block_devices.values().copied().collect();
+        v.sort_unstable_by(|a, b| b.cmp(a));
+        v
+    }
+}
+
+/// Fragment one island with every node marked in `bound` (the pinned set plus
+/// every held rail or stiff node) treated as a boundary. See [`Fragmentation`]
+/// for the fusion rule and the known-side note.
+pub(crate) fn fragment_blocks(
     circuit: &Circuit,
     graph: &ConductionGraph,
     island: usize,
     bound: &[bool],
-) -> Vec<usize> {
+) -> Fragmentation {
     let n_nodes = circuit.max_node() as usize;
     let mut parent: Vec<usize> = (0..n_nodes + 1).collect();
-    fn find(parent: &mut Vec<usize>, mut x: usize) -> usize {
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]];
             x = parent[x];
@@ -421,30 +449,57 @@ fn fragment_sizes(
         }
     }
 
-    let mut sizes: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut block_devices: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut device_block: std::collections::HashMap<DeviceId, usize> = std::collections::HashMap::new();
+    let mut node_block: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for (id, dev) in circuit.iter() {
         if !member(id) || known_side(dev) {
             continue;
         }
-        if let Some(rep) = dev
+        let free: Vec<usize> = dev
             .conduction_nodes()
             .into_iter()
-            .find(|n| !n.is_ground() && !bound[n.0 as usize])
-        {
-            *sizes.entry(find(&mut parent, rep.0 as usize)).or_insert(0) += 1;
+            .filter(|n| !n.is_ground() && !bound[n.0 as usize])
+            .map(|n| n.0 as usize)
+            .collect();
+        if let Some(&first) = free.first() {
+            let root = find(&mut parent, first);
+            device_block.insert(id, root);
+            *block_devices.entry(root).or_insert(0) += 1;
+            for n in free {
+                let r = find(&mut parent, n);
+                node_block.insert(n, r);
+            }
         }
     }
-    let mut v: Vec<usize> = sizes.into_values().collect();
-    v.sort_unstable_by(|a, b| b.cmp(a));
-    v
+    Fragmentation {
+        node_block,
+        device_block,
+        block_devices,
+    }
+}
+
+/// Sizes of the conduction blocks one island fragments into (descending). Thin
+/// reader over [`fragment_blocks`]; see it for the fusion rule and the
+/// known-side note.
+fn fragment_sizes(
+    circuit: &Circuit,
+    graph: &ConductionGraph,
+    island: usize,
+    bound: &[bool],
+) -> Vec<usize> {
+    fragment_blocks(circuit, graph, island, bound).sizes()
 }
 
 /// Ideal-source pinned-ness, propagated across stacked sources: the same rule
-/// the proven partitioner uses (`partition.rs`), duplicated at ~20 lines
-/// rather than exported, because the two layers must be free to diverge (the
-/// decompose layer will learn regulator envelopes and measured stiffness that
-/// the basic partitioner never needs).
-fn pinned_nodes(circuit: &Circuit, n_nodes: usize) -> Vec<bool> {
+/// the proven partitioner uses (`partition.rs`), kept as its own ~20 lines
+/// rather than reaching into the partitioner, because the two layers must be
+/// free to diverge (the decompose layer will learn regulator envelopes and
+/// measured stiffness that the basic partitioner never needs). Shared
+/// `pub(crate)` across the decompose passes: the stiff-node detector
+/// ([`super::stiff`]) holds the same pinned set the rail pass does, so it reads
+/// this rather than growing a second copy.
+pub(crate) fn pinned_nodes(circuit: &Circuit, n_nodes: usize) -> Vec<bool> {
     let mut pinned = vec![false; n_nodes + 1];
     pinned[0] = true;
     for _ in 0..circuit.devices.len().min(64) {
