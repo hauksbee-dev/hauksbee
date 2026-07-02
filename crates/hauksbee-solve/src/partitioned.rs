@@ -394,12 +394,28 @@ impl PartitionedTransient {
         // rail estimates (linear islands + every nonlinear block solved once).
         self.sweep(circuit, h, tnext, true)?;
 
+        // Cascade wiring: a tear whose FEED is another tear's rail is a child
+        // of that rail, fed through its own shunt. The parent's KCL must carry
+        // that inter-rail current (the shunt lives between two held rails, so
+        // it is in no block); we hand each channel the list of children it
+        // feeds so the balance loop subtracts the analytic draw (see
+        // [`RailChannel::children`] and `orchestrate::balance`).
         let channels: Vec<RailChannel> = self
             .tears
             .iter()
-            .map(|t| RailChannel {
-                rail: t.rail,
-                shunt_ohms: t.r_shunt,
+            .map(|t| {
+                let children: Vec<(usize, f64)> = self
+                    .tears
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.feed == t.rail)
+                    .map(|(j, c)| (j, c.r_shunt))
+                    .collect();
+                RailChannel {
+                    rail: t.rail,
+                    shunt_ohms: t.r_shunt,
+                    children,
+                }
             })
             .collect();
         let mut loads = PartitionedRailLoads {
