@@ -10,6 +10,11 @@ members = [
     "crates/hauksbee-engine",
     "crates/hauksbee-ci",
 ]
+# The vendored forge-* crates (vendor/kicad-forge) form their own workspace and
+# must NOT be members here: excluding them keeps `cargo metadata`/build/test from
+# pulling them into hauksbee's graph as members while still allowing them as path
+# dependencies below. See vendor/kicad-forge/VENDORED.md.
+exclude = ["vendor/kicad-forge"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,9 +22,19 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-forge-sexpr = { path = "../kicad-forge/crates/forge-sexpr" }
-forge-model = { path = "../kicad-forge/crates/forge-model" }
-forge-codegen = { path = "../kicad-forge/crates/forge-codegen" }
+# The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)
+# so a fresh clone builds with no sibling checkout and no network. They come from
+# https://github.com/ETM-Code/kicad-forge.git; source commit and update procedure
+# are in vendor/kicad-forge/VENDORED.md.
+#
+# To develop against a live kicad-forge checkout instead, comment out the three
+# vendored lines below and uncomment these sibling-path overrides:
+# forge-sexpr = { path = "../kicad-forge/crates/forge-sexpr" }
+# forge-model = { path = "../kicad-forge/crates/forge-model" }
+# forge-codegen = { path = "../kicad-forge/crates/forge-codegen" }
+forge-sexpr = { path = "vendor/kicad-forge/crates/forge-sexpr" }
+forge-model = { path = "vendor/kicad-forge/crates/forge-model" }
+forge-codegen = { path = "vendor/kicad-forge/crates/forge-codegen" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

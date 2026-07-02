@@ -146,31 +146,29 @@ freerouting downloads on top, selecting the right per-arch asset from
 
 ### Build context
 
-The workspace `Cargo.toml` path-depends on the sibling `kicad-forge` repo
-(`forge-sexpr = { path = "../kicad-forge/..." }`). The Docker build context must
-therefore be a parent directory that holds both repos as siblings:
+The `forge-*` crates are vendored into this repo (`vendor/kicad-forge`; see
+`vendor/kicad-forge/VENDORED.md`), so the build is self-contained. The Docker
+build context is a parent directory that holds just this repo:
 
 ```
 ctx/
-  hauksbee/      this repo
-  kicad-forge/   the forge crates
+  hauksbee/      this repo (incl. vendor/kicad-forge)
 ```
 
-The CI workflow checks both out into `ctx/` and writes a `.dockerignore` there
+The CI workflow checks it out into `ctx/` and writes a `.dockerignore` there
 to keep the frontend and other build-irrelevant trees out of the context.
 
 ## Build it yourself and smoke-test
 
 The images are really produced by CI (that is where the multi-arch manifests get
-built and pushed). To build locally, set up the sibling context first, then
+built and pushed). To build locally, stage this repo under a context dir, then
 build each image. These are the exact commands:
 
 ```bash
-# 1. Stage both repos as siblings under a context dir.
+# 1. Stage this repo under a context dir (forge crates are vendored inside it).
 mkdir -p ctx
-git clone https://github.com/ETM-Code/hauksbee.git    ctx/hauksbee
-git clone https://github.com/ETM-Code/kicad-forge.git ctx/kicad-forge
-# (or symlink existing checkouts: ln -s "$PWD/hauksbee" ctx/hauksbee, etc.)
+git clone https://github.com/ETM-Code/hauksbee.git ctx/hauksbee
+# (or symlink an existing checkout: ln -s "$PWD/hauksbee" ctx/hauksbee)
 
 # 2. Build the slim image for your host arch.
 docker build \
