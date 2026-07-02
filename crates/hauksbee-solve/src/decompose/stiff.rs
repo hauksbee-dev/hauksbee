@@ -48,7 +48,7 @@ use std::collections::HashMap;
 use hauksbee_ir::{Circuit, NodeId};
 
 use super::conduction::ConductionGraph;
-use super::rails::{fragment_blocks, pinned_nodes, RailPolicy};
+use super::rails::{fragment_blocks, pinned_nodes, Fragmentation, RailPolicy};
 
 /// Tunable policy for stiff-node detection. Every field exists so a calibration
 /// pass can move it from measurements instead of edits.
@@ -97,8 +97,13 @@ pub struct StiffCandidate {
     /// achieve the product of their gains, and the later one's sizes already
     /// reflect the earlier one being held.
     pub block_sizes: Vec<usize>,
-    /// Joint cost-model speedup of the pinned fragmentation versus solving the
-    /// block whole. Strictly greater than 1.0 for every returned candidate.
+    /// Cost-model speedup of splitting THIS candidate's parent block versus
+    /// solving that block whole (the marginal ratio that ranked it). Strictly
+    /// greater than 1.0 for every returned candidate. Note the scope: this is
+    /// per-block marginal and pays no outer loop, so it is NOT directly
+    /// comparable to a balance tear's est_speedup, which is whole-island and
+    /// divided by outer_iters; a consumer ranking the two together would be
+    /// comparing different formulas.
     pub est_speedup: f64,
 }
 
@@ -190,7 +195,7 @@ pub fn detect_stiff_candidates(
 
             // Best fragmenting probe across every big block, chosen
             // deterministically (higher speedup, then lower node id on a tie).
-            let mut best: Option<(usize, f64, Vec<usize>)> = None;
+            let mut best: Option<(usize, f64, Fragmentation)> = None;
             for &root in &big {
                 let mut nodes: Vec<usize> = frag
                     .node_block
@@ -246,22 +251,22 @@ pub fn detect_stiff_candidates(
                         }
                     };
                     if better {
-                        best = Some((p, speedup, sub_sizes));
+                        // Keep the probe's whole fragmentation: the winner's
+                        // probe_held IS the final held set for this round, so
+                        // its block sizes are the candidate's block_sizes and
+                        // recomputing them below would be pure waste.
+                        best = Some((p, speedup, frag2));
                     }
                 }
             }
 
-            let Some((node, speedup, _)) = best else { break };
+            let Some((node, speedup, frag_win)) = best else { break };
             chosen.push(node);
 
             // The candidate's own sizes are the WHOLE island's fragmentation
             // with every accepted node held (base + all chosen, this one
-            // included), so composed candidates read as a single settling.
-            let mut full_held = base_held.clone();
-            for &c in &chosen {
-                full_held[c] = true;
-            }
-            let block_sizes = fragment_blocks(circuit, graph, island, &full_held).sizes();
+            // included): exactly the winning probe's fragmentation, cached.
+            let block_sizes = frag_win.sizes();
             out.push(StiffCandidate {
                 node: NodeId(node as u32),
                 fanout: fanout[node],
