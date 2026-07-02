@@ -838,6 +838,28 @@ impl Scheduler {
         let chunk_converged = self.solve_chunk(chunk);
 
         // 3b. Peripherals: output sinks sample the freshly-solved voltages.
+        //
+        // Runs UNCONDITIONALLY, even when `chunk_converged` is false (05 §3b). We
+        // deliberately do NOT gate this on the analog solve, for two reasons:
+        //
+        //   * The SPI/I2C slave state machines reached via `post_solve` (e.g. the
+        //     SpiBus deselect) are DIGITAL frame-boundary resets. The byte
+        //     transfers they frame happened during this chunk's `run_micros`
+        //     (step 1) regardless of whether the analog march converged. Skipping
+        //     the per-chunk deselect on a failed chunk would leave a slave stuck
+        //     mid-command and desync the NEXT chunk's transaction (its bytes would
+        //     append to stale command state). That is a real correctness bug, so
+        //     the reset must fire every chunk.
+        //   * The only voltage-sampling sink here is `VcdSink`, which emits a VCD
+        //     change only when a net's level CROSSES a threshold. A failed chunk
+        //     holds (or DC-recovers) the previous voltages, so a held net is at the
+        //     same level and no spurious transition is recorded; a DC-recovered
+        //     net records its bias, not a fabricated toggle. Either way the sample
+        //     lands inside a window already surfaced as `analog_valid:false` with
+        //     the exact `failed_windows` span (JSON/coverage), so a VCD consumer
+        //     can mask it. What we DO gate on convergence is the stats/stress fold
+        //     below (step 4/6): those manufacture analog findings and must not run
+        //     on a solve that never happened.
         if !self.peripherals.is_empty() {
             let volts = self.node_volts.clone();
             let mut ctx = TickCtx {
@@ -874,6 +896,15 @@ impl Scheduler {
         // full transaction's wall-time and firmware that issues at most one
         // transaction per chunk. A correct fix needs a real per-edge CS path
         // from the backend (hardware NSS or a software-NSS GPIO watch).
+        //
+        // Runs UNCONDITIONALLY on a failed chunk (05 §3b), for the same reason as
+        // the 3b post_solve deselects: this is a DIGITAL frame-boundary reset of
+        // the SPI slave command state machine, not an analog sample. The byte
+        // transfers it frames already happened in this chunk's `run_micros`, so
+        // whether the analog march converged is irrelevant. Skipping it on a
+        // failed chunk would leave the slave mid-command and desync the next
+        // transaction, so we keep it and instead surface the failed span via
+        // `failed_windows` / `analog_valid:false` for any downstream consumer.
         for bus in &self.spi_buses {
             let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
             // Debug-only: a slave still mid-transaction at the chunk boundary

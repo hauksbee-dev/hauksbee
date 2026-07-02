@@ -103,6 +103,18 @@ pub struct RunOutcome {
     /// Bode `(freq, mag_db, phase_deg)` table per net, plus loop-stability
     /// margins per net. Empty when the spec has no `[ac]` block.
     pub ac: Option<AcOutcome>,
+    /// False once any chunk's analog solve failed to converge this run: the co-sim
+    /// held stale voltages over `failed_windows` (05 §3b). A clean run reports
+    /// `true` with an empty `failed_windows`.
+    pub analog_valid: bool,
+    /// Sim-time windows `[start_s, end_s)` where the analog solve failed, merged
+    /// where consecutive. Assertion evaluation marks any assertion whose window
+    /// overlaps one of these INVALID rather than pass/fail.
+    pub failed_windows: Vec<(f64, f64)>,
+    /// True once the analog solve failed `STRICT_CONSECUTIVE_FAILED_ABORT` chunks
+    /// in a row at any point (the strict/CI hard-refusal condition). Drives exit 3
+    /// on its own, even if no single assertion's window happened to overlap.
+    pub analog_abort: bool,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -571,6 +583,25 @@ fn run_one(
         let frame = engine.step(frame_dt);
         let t_ms = frame.t * 1000.0;
 
+        // Analog-validity gate for this frame (05 §3b). By the time `step`
+        // returns, the scheduler has recorded any chunk in this frame whose
+        // analog solve failed (its sim-time window is in `failed_windows()`). If
+        // this frame's covered span `[frame.t - frame_dt, frame.t)` overlaps one,
+        // its end-of-frame node voltages are held-stale, not a real solve. We must
+        // NOT fold them into the analog aggregates (voltage/rail windows,
+        // boot-coverage, peak current/temperature) or they would manufacture a
+        // settled value / a boot-reach / a peak from a solve that never happened.
+        //
+        // Per-frame query (over reconciling at the end) is the cheaper honest
+        // design: the aggregates are running reductions, so once a stale sample is
+        // folded in it cannot be subtracted back out; the windows list is small
+        // and merged, so the overlap test is O(1)-ish per frame. UART and faults
+        // are NOT gated: UART is digital MCU output independent of the analog
+        // solve, and faults already only arise on converged chunks (the scheduler
+        // skips the stress monitor on a failed chunk).
+        let frame_start_s = (frame.t - frame_dt).max(0.0);
+        let analog_ok = !windows_overlap(engine.scheduler().failed_windows(), frame_start_s, frame.t);
+
         // UART accumulation.
         for (mcu, bytes) in &frame.uart {
             uart.entry(mcu.clone())
@@ -591,47 +622,50 @@ fn run_one(
         }
         // Boot-coverage: record the first time each watched net reaches its
         // required driven level (the firmware actively driving the control net).
-        for (net, level) in &boot_watch {
-            let key = (net.clone(), level.to_bits());
-            if first_reach_ms.contains_key(&key) {
-                continue;
-            }
-            if let Some(&v) = frame.net_voltages.get(net) {
-                if v >= *level - 1e-6 {
-                    first_reach_ms.insert(key, t_ms);
+        // Skipped on a held-stale frame so a stale voltage cannot fake a reach.
+        if analog_ok {
+            for (net, level) in &boot_watch {
+                let key = (net.clone(), level.to_bits());
+                if first_reach_ms.contains_key(&key) {
+                    continue;
+                }
+                if let Some(&v) = frame.net_voltages.get(net) {
+                    if v >= *level - 1e-6 {
+                        first_reach_ms.insert(key, t_ms);
+                    }
                 }
             }
-        }
-        // Per-net windows for every threshold this frame has passed.
-        for &thr in thresholds {
-            if t_ms + 1e-9 >= thr {
-                for (name, &v) in &frame.net_voltages {
-                    let key = (name.clone(), thr.to_bits());
-                    windows.entry(key).or_insert_with(NetWindow::new).observe(v);
+            // Per-net windows for every threshold this frame has passed.
+            for &thr in thresholds {
+                if t_ms + 1e-9 >= thr {
+                    for (name, &v) in &frame.net_voltages {
+                        let key = (name.clone(), thr.to_bits());
+                        windows.entry(key).or_insert_with(NetWindow::new).observe(v);
+                    }
                 }
             }
-        }
-        // Peak current for monitored components.
-        update_peak_currents(&engine, &net_node, &mut peak_current);
+            // Peak current for monitored components.
+            update_peak_currents(&engine, &net_node, &mut peak_current);
 
-        // Peak steady-state junction temperature for dissipating components.
-        for (reference, tj) in engine.scheduler().temp_states() {
-            let e = peak_temp_c.entry(reference).or_insert(f64::NEG_INFINITY);
-            if tj.is_finite() && tj > *e {
-                *e = tj;
+            // Peak steady-state junction temperature for dissipating components.
+            for (reference, tj) in engine.scheduler().temp_states() {
+                let e = peak_temp_c.entry(reference).or_insert(f64::NEG_INFINITY);
+                if tj.is_finite() && tj > *e {
+                    *e = tj;
+                }
             }
-        }
 
-        // Scenario rail windows: for each scenario window active at this time,
-        // record the referenced rails' voltages into the window timeseries.
-        for sw in &scenario_windows {
-            if frame.t + 1e-12 >= sw.start_s {
-                for net in &sw.nets {
-                    if let Some(&v) = frame.net_voltages.get(net) {
-                        rail_windows
-                            .entry((sw.id.clone(), net.clone()))
-                            .or_default()
-                            .observe(frame.t, v);
+            // Scenario rail windows: for each scenario window active at this time,
+            // record the referenced rails' voltages into the window timeseries.
+            for sw in &scenario_windows {
+                if frame.t + 1e-12 >= sw.start_s {
+                    for net in &sw.nets {
+                        if let Some(&v) = frame.net_voltages.get(net) {
+                            rail_windows
+                                .entry((sw.id.clone(), net.clone()))
+                                .or_default()
+                                .observe(frame.t, v);
+                        }
                     }
                 }
             }
@@ -660,23 +694,30 @@ fn run_one(
         t += frame_dt;
     }
 
-    // A tripped analog abort means the run held stale voltages long enough that no
-    // assertion on it is meaningful. Refuse with the invalid-for-analysis exit code
-    // (the same one `hauksbee run --strict` uses) instead of reporting a result.
-    if let Some(code) =
-        hauksbee_engine::result::strict_analog_exit_code(engine.scheduler().analog_abort_tripped())
-    {
+    // Analog-validity outcome (05 §3b). We do NOT `process::exit` here anymore:
+    // the refusal is carried in the outcome and resolved at the `CiResult` layer,
+    // so both the intermittent case (some failed chunks, no consecutive abort ->
+    // any overlapping assertion is INVALID) and the hard case (the abort tripped)
+    // route to exit 3 through the same testable path, rather than one killing the
+    // process mid-run and the other never being reached.
+    let analog_valid = engine.scheduler().analog_valid();
+    let failed_windows: Vec<(f64, f64)> = engine.scheduler().failed_windows().to_vec();
+    let analog_abort = engine.scheduler().analog_abort_tripped();
+    if analog_abort {
+        // Informational: the strict streak tripped. Exit 3 is enforced by
+        // `CiResult::exit_code`, this line just explains why on stderr.
         eprintln!(
             "hauksbee-ci: analog co-sim failed to converge for {} chunks in a row \
              ({} failed chunks total); the run held stale voltages and cannot be \
-             asserted on. Refusing to report a result (05 §3b).",
+             asserted on. Reporting INVALID (exit 3, 05 §3b).",
             hauksbee_engine::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
             engine.scheduler().failed_chunk_count(),
         );
-        std::process::exit(code);
     }
 
-    // Toggle counts from the scheduler's running stats.
+    // Toggle counts from the scheduler's running stats. The scheduler only folds a
+    // converged chunk into its stats (05 §3b), so these already exclude the failed
+    // windows without any work here.
     let toggles: HashMap<String, u64> = engine
         .scheduler()
         .stats
@@ -702,7 +743,19 @@ fn run_one(
         first_reach_ms,
         first_fault_ms,
         ac: None,
+        analog_valid,
+        failed_windows,
+        analog_abort,
     })
+}
+
+/// Does `[start_s, end_s)` overlap any failed-analog window in `windows`? Used to
+/// gate a frame's aggregates and (via the outcome) to mark overlapping assertions
+/// INVALID. Standard half-open interval overlap: `start < w.end && w.start < end`.
+fn windows_overlap(windows: &[(f64, f64)], start_s: f64, end_s: f64) -> bool {
+    windows
+        .iter()
+        .any(|&(ws, we)| start_s < we && ws < end_s)
 }
 
 /// A scenario's measurement window: an id (empty for run-wide), the time it
@@ -1544,6 +1597,23 @@ mod tests {
             normalize_path(Path::new("a/./b/../c")),
             PathBuf::from("a/c")
         );
+    }
+
+    #[test]
+    fn windows_overlap_is_half_open_interval_test() {
+        let w = [(0.001, 0.003)];
+        // A frame fully inside a failed window overlaps.
+        assert!(windows_overlap(&w, 0.0015, 0.0025));
+        // A frame straddling the start overlaps.
+        assert!(windows_overlap(&w, 0.0005, 0.0015));
+        // Touching at the closed start counts (start < end and w.start < end).
+        assert!(windows_overlap(&w, 0.0005, 0.0011));
+        // Abutting exactly at the open end does NOT overlap ([start,end) is open).
+        assert!(!windows_overlap(&w, 0.003, 0.004));
+        // A frame entirely before the window does not overlap.
+        assert!(!windows_overlap(&w, 0.0, 0.001));
+        // No failed windows: never overlaps.
+        assert!(!windows_overlap(&[], 0.0, 1.0));
     }
 
     // ── qemu_bus_slave_warnings unit tests ───────────────────────────────────

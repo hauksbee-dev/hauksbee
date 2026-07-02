@@ -146,6 +146,29 @@ pub struct WebCosimSection {
     /// Per-net activity table (top movers first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpio_nets: Vec<WebGpioNet>,
+    /// False once any chunk's analog solve failed to converge during the co-sim:
+    /// the run held stale node voltages over `failed_windows` and cannot vouch
+    /// for electrical results there (05 §3b, refuse rather than fake). A clean
+    /// run reports `true` with an empty `failed_windows`, so the common JSON shape
+    /// is unchanged and existing consumers keep parsing. This is the STRUCTURAL
+    /// mirror of the prepended analog-validity finding: a JSON consumer must be
+    /// able to read invalidity as a field, not only scrape it out of prose.
+    /// Always serialized (never skipped) so a consumer can rely on its presence.
+    pub analog_valid: bool,
+    /// Sim-time windows `[start_s, end_s)` where the analog solve failed. Empty
+    /// (and omitted) on a clean run. Mirrors the CLI `--json` `failed_windows`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_windows: Vec<WebFailedWindow>,
+}
+
+/// One sim-time window `[start_s, end_s)` where the analog co-sim solve failed to
+/// converge and the run held stale voltages. Reported so the browser can show the
+/// exact span whose electrical results are untrustworthy. Mirrors the CLI/JSON
+/// `CosimFailedWindow`.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebFailedWindow {
+    pub start_s: f64,
+    pub end_s: f64,
 }
 
 /// A component for the simple 2D footprint map (positions in board mm).
@@ -363,6 +386,45 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
             fix: "Drop a board with a supported in-process MCU and a matching firmware build to run the firmware co-sim.".to_string(),
         }],
         gpio_nets: Vec::new(),
+        // A co-sim that never ran cannot have failed an analog chunk: report the
+        // clean, backward-compatible shape (valid, no windows).
+        analog_valid: true,
+        failed_windows: Vec::new(),
+    }
+}
+
+/// The loud, plain-language analog-validity finding, prepended to a co-sim
+/// section when the run held stale voltages over one or more failed windows
+/// (05 §3b). Factored out (a) so `run_web_cosim` reads cleanly and (b) so its
+/// exact wording is unit-testable without staging a diverging board through the
+/// whole engine. `failed_chunks` is the count and `windows` the merged spans.
+fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> WebFinding {
+    // Human-readable span list in milliseconds: "1.20-3.40 ms". Empty windows
+    // (should not happen when failed_chunks > 0) degrade to "unknown span".
+    let spans = if windows.is_empty() {
+        "an unrecorded span".to_string()
+    } else {
+        windows
+            .iter()
+            .map(|w| format!("{:.2}-{:.2} ms", w.start_s * 1e3, w.end_s * 1e3))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let chunk_word = if failed_chunks == 1 { "chunk" } else { "chunks" };
+    WebFinding {
+        level: "serious".to_string(),
+        what: "Analog co-sim did not converge: electrical results are not trustworthy".to_string(),
+        why: format!(
+            "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}. \
+             Over those windows the co-sim held stale node voltages instead of a real \
+             solve, so any voltage, current or fault reading there is fiction (05 §3b, \
+             refuse rather than fake)."
+        ),
+        fix: "Treat electrical results inside those windows as unknown. A stiff or \
+              structurally singular section (conflicting rails, an unconverging \
+              nonlinear stage) usually causes it; simplify the offending section or \
+              relax the operating point, then re-run."
+            .to_string(),
     }
 }
 
@@ -524,6 +586,26 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
             },
         );
     }
+    // Analog-validity refusal (05 §3b): if any chunk's analog solve failed, the
+    // web report is the surface most likely to give false comfort (an empty
+    // findings list reads as "no faults"). Surface it BOTH as a loud prepended
+    // finding (so it leads the prose) and as the structural `analog_valid` /
+    // `failed_windows` fields below (so a JSON consumer reads it as data). This
+    // parallels the CLI `--json` and the TUI pane; the web path used to consult
+    // neither `analog_valid()` nor `failed_windows()`, so a diverged run showed
+    // as quiet.
+    let analog_valid = sched.analog_valid();
+    let failed_windows: Vec<WebFailedWindow> = sched
+        .failed_windows()
+        .iter()
+        .map(|&(start_s, end_s)| WebFailedWindow { start_s, end_s })
+        .collect();
+    if !analog_valid {
+        findings.insert(
+            0,
+            analog_invalid_finding(sched.failed_chunk_count(), &failed_windows),
+        );
+    }
     let net_volts = sched.net_voltages();
     let mut gpio_nets: Vec<WebGpioNet> = sched
         .stats
@@ -549,6 +631,8 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
         uart_output,
         findings,
         gpio_nets,
+        analog_valid,
+        failed_windows,
     }
 }
 
@@ -772,5 +856,82 @@ mod tests {
                 "a skipped co-sim must explain why"
             );
         }
+    }
+
+    #[test]
+    fn cosim_section_always_carries_analog_valid_field() {
+        // Finding 1 (05 §3b): the web co-sim section must expose analog validity
+        // STRUCTURALLY, not only as prose. On a converging board it is true and
+        // present; failed_windows is omitted when empty (backward-compatible).
+        let json = analyze_with_firmware_json("boot_gate.kicad_pcb", SHORTED, "boot_gate.elf", BOOT_GATE_FW);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let cosim = &v["cosim"];
+        assert!(cosim.is_object(), "cosim object present: {json:.200}");
+        assert!(
+            cosim.get("analog_valid").is_some(),
+            "analog_valid must always be present on the cosim section: {json:.300}"
+        );
+        assert_eq!(
+            cosim["analog_valid"], true,
+            "a converging (or skipped) run reports analog_valid:true"
+        );
+        assert!(
+            cosim.get("failed_windows").is_none(),
+            "failed_windows is omitted when empty: {json:.300}"
+        );
+    }
+
+    #[test]
+    fn analog_invalid_finding_is_loud_and_plain() {
+        // The prepended honesty note names the failed-chunk count, the affected
+        // millisecond span, and refuses to vouch for electrical results there.
+        let windows = vec![WebFailedWindow {
+            start_s: 0.0012,
+            end_s: 0.0034,
+        }];
+        let f = analog_invalid_finding(2, &windows);
+        assert_eq!(f.level, "serious", "analog invalidity is serious, not a note");
+        assert!(
+            f.what.to_lowercase().contains("not trustworthy"),
+            "headline must refuse trust: {}",
+            f.what
+        );
+        assert!(
+            f.why.contains("2 chunks") && f.why.contains("1.20-3.40 ms"),
+            "why must name the count and the span: {}",
+            f.why
+        );
+        assert!(
+            f.why.to_lowercase().contains("held stale"),
+            "why must explain the held-stale mechanism: {}",
+            f.why
+        );
+    }
+
+    #[test]
+    fn invalid_cosim_section_serializes_field_and_windows() {
+        // A section built for a diverged run serializes analog_valid:false plus
+        // the failed windows, so the browser/JSON consumer reads it as data.
+        let section = WebCosimSection {
+            ran: true,
+            seconds_simulated: 0.1,
+            uart_output: String::new(),
+            findings: vec![analog_invalid_finding(
+                1,
+                &[WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
+            )],
+            gpio_nets: Vec::new(),
+            analog_valid: false,
+            failed_windows: vec![WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        assert!(
+            json.contains("\"analog_valid\":false"),
+            "invalid run serializes analog_valid:false: {json}"
+        );
+        assert!(
+            json.contains("\"failed_windows\""),
+            "invalid run lists failed_windows: {json}"
+        );
     }
 }
