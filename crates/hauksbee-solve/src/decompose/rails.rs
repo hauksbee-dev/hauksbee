@@ -38,16 +38,35 @@
 //! answer beats no answer. This is the "decompose" rung of the robustness
 //! ladder (`02-tearing-architecture.md` §2.2, §2.6).
 //!
+//! ## Stacked feeds (the flagship's actual shape)
+//!
+//! Real supplies cascade: on the Tarski board the path is source -> +5V ->
+//! 1k shunt -> ANALOG_VDD, and single-hop detection (feed must be
+//! source-pinned) stops one hop short of the rail that fragments the board
+//! (the analysis probe's founding finding). Discovery is therefore
+//! transitive: a discovered rail is a valid feed for the next hop, walked to
+//! a fixpoint. Decisions are then JOINT: every surviving candidate is held
+//! as a boundary while each island's fragmentation is computed once, because
+//! that is the system the multi-rail balance executor actually solves.
+//! Within a cascade, only the deepest accepted rail tears today; its parent
+//! refuses as [`TearDecision::RefusedCascadeParent`] (see that variant for
+//! the analytic term the executor still lacks), which is exact and merely
+//! forfeits the parent's own speedup.
+//!
 //! ## What can refuse a tear
 //!
 //! * **A stranded device** (the bypass-cap rule, proven load-bearing by
 //!   `rail_with_ground_bypass_cap_is_not_torn`): a device whose conduction
-//!   terminals all land in {rail, pinned, ground} would have its current
-//!   dropped from every block's books, silently. Refused, with the device
-//!   named in the decision.
+//!   terminals all land in {held rails, pinned, ground} would have its
+//!   current dropped from every block's books, silently. Refused, with the
+//!   device named in the decision; candidate shunts are exempt (their
+//!   currents ARE the balance equations). Stranding is evaluated in the
+//!   joint context and re-checked as refusals shrink the held set (a rail
+//!   dropping out can un-strand a device).
 //! * **An ideal source on the rail**: already pinned, nothing to tear.
-//! * **Ambiguous feed**: more than one low-impedance path to pinned supply
-//!   nodes; the scalar-balance bookkeeping assumes one.
+//! * **Ambiguous feed**: more than one low-impedance path from shallower
+//!   feeds; the scalar-balance bookkeeping assumes one.
+//! * **Cascade parent of an accepted tear**: see above.
 //! * **No fragmentation / unprofitable**: the cost model above (unless
 //!   escalating).
 //!
@@ -111,6 +130,14 @@ pub enum TearDecision {
     RefusedStranded { device: DeviceId },
     /// More than one candidate feed path; the scalar balance assumes one.
     RefusedAmbiguousFeed { feeds: usize },
+    /// This rail directly feeds another ACCEPTED tear through its shunt. Its
+    /// own balance equation would need the analytic inter-rail shunt term
+    /// (the child's shunt current appears in the parent's books, but the
+    /// child's block set no longer contains that shunt), which the executor
+    /// does not carry yet. Refusing the parent is exact: it stays fused in
+    /// the feed-side block and merely forfeits its own speedup. Lift this
+    /// refusal when `settle_rails` gains the cascade term.
+    RefusedCascadeParent { child: NodeId },
 }
 
 /// One candidate balance tear, with everything the orchestrator and the
@@ -155,12 +182,12 @@ pub fn detect_balance_tears(
     }
     let pinned = pinned_nodes(circuit, n_nodes);
 
-    // Structural scan: nonlinear fanout per node, ideal-source touches, and
-    // candidate shunt links (resistor from a pinned non-ground supply into an
-    // unpinned node).
+    // Structural scan (once): nonlinear fanout, ideal-source touches, and
+    // every non-ground resistor at or under the shunt ceiling. Which end is
+    // the feed is decided per discovery round, not here.
     let mut nl_fanout = vec![0usize; n_nodes + 1];
     let mut vsource_touch = vec![false; n_nodes + 1];
-    let mut shunt_links: Vec<Vec<(usize, DeviceId, f64)>> = vec![Vec::new(); n_nodes + 1];
+    let mut rlinks: Vec<(usize, usize, DeviceId, f64)> = Vec::new();
 
     for (id, dev) in circuit.iter() {
         if !dev.is_linear() {
@@ -178,85 +205,185 @@ pub fn detect_balance_tears(
                     }
                 }
             }
-            Device::Resistor { a, b, ohms, .. } if *ohms <= policy.max_shunt_ohms => {
-                let (ai, bi) = (a.0 as usize, b.0 as usize);
-                if pinned[ai] && !a.is_ground() && !pinned[bi] && !b.is_ground() {
-                    shunt_links[bi].push((ai, id, *ohms));
-                } else if pinned[bi] && !b.is_ground() && !pinned[ai] && !a.is_ground() {
-                    shunt_links[ai].push((bi, id, *ohms));
-                }
+            Device::Resistor { a, b, ohms, .. }
+                if *ohms <= policy.max_shunt_ohms && !a.is_ground() && !b.is_ground() =>
+            {
+                rlinks.push((a.0 as usize, b.0 as usize, id, *ohms));
             }
             _ => {}
         }
     }
 
-    let mut out = Vec::new();
-    for rail in 1..=n_nodes {
-        if pinned[rail] || vsource_touch[rail] {
-            continue;
+    // ---- Phase 1: transitive discovery. ---------------------------------
+    // A node is a candidate rail when a shunt links it to a FEEDABLE node:
+    // pinned, or a rail discovered earlier. This walks supply cascades to
+    // the rail that actually fragments the board. Promotion is monotone, so
+    // the fixpoint loop terminates.
+    let mut feedable = pinned.clone();
+    let mut is_candidate = vec![false; n_nodes + 1];
+    let mut discovered: Vec<usize> = Vec::new();
+    loop {
+        let mut promoted = false;
+        for &(a, b, _, _) in &rlinks {
+            for (feed, rail) in [(a, b), (b, a)] {
+                if !feedable[feed] || feedable[rail] {
+                    continue;
+                }
+                if vsource_touch[rail] || nl_fanout[rail] < policy.min_nonlinear_fanout {
+                    continue;
+                }
+                feedable[rail] = true;
+                is_candidate[rail] = true;
+                discovered.push(rail);
+                promoted = true;
+            }
         }
-        if shunt_links[rail].is_empty() {
-            continue;
+        if !promoted {
+            break;
         }
-        if nl_fanout[rail] < policy.min_nonlinear_fanout {
-            continue;
-        }
-        let rail_node = NodeId(rail as u32);
+    }
 
-        if shunt_links[rail].len() > 1 {
-            let (feed, dev, ohms) = shunt_links[rail][0];
+    // Feed links per candidate, oriented outward-in: a valid feed is
+    // strictly shallower (pinned counts as depth 0, discovery order after),
+    // so a child's shunt is never mistaken for a second feed of its parent.
+    let mut depth = vec![usize::MAX; n_nodes + 1];
+    for (k, &r) in discovered.iter().enumerate() {
+        depth[r] = k + 1;
+    }
+    let depth_of = |n: usize| if pinned[n] { 0 } else { depth[n] };
+    let mut links_of: Vec<Vec<(usize, DeviceId, f64)>> = vec![Vec::new(); n_nodes + 1];
+    for &(a, b, id, ohms) in &rlinks {
+        for (feed, rail) in [(a, b), (b, a)] {
+            if is_candidate[rail] && feedable[feed] && depth_of(feed) < depth_of(rail) {
+                links_of[rail].push((feed, id, ohms));
+            }
+        }
+    }
+
+    let candidate_of = |rail: usize| -> (NodeId, NodeId, DeviceId, f64) {
+        let (feed, dev, ohms) = links_of[rail][0];
+        (NodeId(rail as u32), NodeId(feed as u32), dev, ohms)
+    };
+
+    // ---- Phase 2: refusals, then a joint decision. -----------------------
+    let mut out = Vec::new();
+    let mut kept: Vec<usize> = Vec::new();
+    for &rail in &discovered {
+        if links_of[rail].len() > 1 {
+            let (rail_node, feed, dev, ohms) = candidate_of(rail);
             out.push(BalanceTearCandidate {
                 rail: rail_node,
-                feed: NodeId(feed as u32),
+                feed,
                 shunt: dev,
                 shunt_ohms: ohms,
                 block_sizes: Vec::new(),
                 decision: TearDecision::RefusedAmbiguousFeed {
-                    feeds: shunt_links[rail].len(),
+                    feeds: links_of[rail].len(),
                 },
             });
-            continue;
+        } else {
+            kept.push(rail);
         }
-        let (feed, shunt_dev, shunt_ohms) = shunt_links[rail][0];
+    }
 
-        // Strand guard (the bypass-cap rule). A device is stranded if every
-        // conduction terminal it has lands in {this rail, pinned, ground}:
-        // torn, its current appears in no block's KCL and is silently lost.
-        // The shunt itself is exempt: its current IS the balance equation.
-        let mut stranded: Option<DeviceId> = None;
+    // Joint strand guard, iterated: with every kept rail held, a device
+    // whose conduction terminals all land in {held rails, pinned, ground}
+    // appears in no block's books. It refuses every rail it touches; a
+    // refusal frees terminals, so re-check until stable. Candidate shunts
+    // are exempt (their currents are balance equations).
+    let shunt_devs: std::collections::HashSet<DeviceId> =
+        kept.iter().map(|&r| links_of[r][0].1).collect();
+    loop {
+        let mut held = vec![false; n_nodes + 1];
+        for &r in &kept {
+            held[r] = true;
+        }
+        let mut newly_refused: Vec<(usize, DeviceId)> = Vec::new();
         for (id, dev) in circuit.iter() {
-            if id == shunt_dev || matches!(dev, Device::Vsource { .. }) {
+            if shunt_devs.contains(&id) || matches!(dev, Device::Vsource { .. }) {
                 continue;
             }
             let cond = dev.conduction_nodes();
-            let touches_rail = cond.iter().any(|n| n.0 as usize == rail);
-            if !touches_rail {
+            let touched: Vec<usize> = cond
+                .iter()
+                .filter(|n| !n.is_ground() && held[n.0 as usize])
+                .map(|n| n.0 as usize)
+                .collect();
+            if touched.is_empty() {
                 continue;
             }
-            let all_bounded = cond.iter().all(|n| {
-                n.is_ground() || n.0 as usize == rail || pinned[n.0 as usize]
-            });
+            let all_bounded = cond
+                .iter()
+                .all(|n| n.is_ground() || pinned[n.0 as usize] || held[n.0 as usize]);
             if all_bounded {
-                stranded = Some(id);
-                break;
+                for r in touched {
+                    if !newly_refused.iter().any(|(rr, _)| *rr == r) {
+                        newly_refused.push((r, id));
+                    }
+                }
             }
         }
-        if let Some(device) = stranded {
+        if newly_refused.is_empty() {
+            break;
+        }
+        for (rail, device) in newly_refused {
+            kept.retain(|&r| r != rail);
+            let (rail_node, feed, dev, ohms) = candidate_of(rail);
             out.push(BalanceTearCandidate {
                 rail: rail_node,
-                feed: NodeId(feed as u32),
-                shunt: shunt_dev,
-                shunt_ohms,
+                feed,
+                shunt: dev,
+                shunt_ohms: ohms,
                 block_sizes: Vec::new(),
                 decision: TearDecision::RefusedStranded { device },
             });
-            continue;
         }
+    }
 
-        // Fragmentation: re-run the conduction components of the rail's own
-        // island with the rail excluded from fusing. Block sizes drive the
-        // cost model.
-        let block_sizes = fragment_sizes(circuit, graph, rail_node, &pinned);
+    // Cascade parents defer to their deepest surviving child (see the
+    // TearDecision variant for the executor term this waits on). Walk
+    // deepest-first so a parent whose child refused is itself kept.
+    kept.sort_unstable_by_key(|&r| std::cmp::Reverse(depth_of(r)));
+    let mut final_kept: Vec<usize> = Vec::new();
+    for &r in &kept {
+        if let Some(&child) = final_kept
+            .iter()
+            .find(|&&c| links_of[c][0].0 == r)
+        {
+            let (rail_node, feed, dev, ohms) = candidate_of(r);
+            out.push(BalanceTearCandidate {
+                rail: rail_node,
+                feed,
+                shunt: dev,
+                shunt_ohms: ohms,
+                block_sizes: Vec::new(),
+                decision: TearDecision::RefusedCascadeParent {
+                    child: NodeId(child as u32),
+                },
+            });
+        } else {
+            final_kept.push(r);
+        }
+    }
+
+    // Joint fragmentation and cost, per conduction island: every kept rail
+    // is held while the island fragments once, because that is the system
+    // the multi-rail balance loop solves. All of an island's kept rails
+    // share the verdict (they win or lose as a set; per-subset search is a
+    // calibration refinement, not a correctness need).
+    let mut bound = pinned.clone();
+    for &r in &final_kept {
+        bound[r] = true;
+    }
+    let mut by_island: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+    for &r in &final_kept {
+        if let Some(isl) = graph.node_island.get(r).copied().flatten() {
+            by_island.entry(isl).or_default().push(r);
+        }
+    }
+    for (isl, rails) in by_island {
+        let block_sizes = fragment_sizes(circuit, graph, isl, &bound);
         let total: usize = block_sizes.iter().sum();
         let mono_cost = (total.max(1) as f64).powf(policy.alpha);
         let torn_cost: f64 = policy.outer_iters
@@ -274,27 +401,36 @@ pub fn detect_balance_tears(
             TearMotive::Profit => TearDecision::RefusedUnprofitable { est_speedup },
         };
 
-        out.push(BalanceTearCandidate {
-            rail: rail_node,
-            feed: NodeId(feed as u32),
-            shunt: shunt_dev,
-            shunt_ohms,
-            block_sizes,
-            decision,
-        });
+        for rail in rails {
+            let (rail_node, feed, dev, ohms) = candidate_of(rail);
+            out.push(BalanceTearCandidate {
+                rail: rail_node,
+                feed,
+                shunt: dev,
+                shunt_ohms: ohms,
+                block_sizes: block_sizes.clone(),
+                decision: decision.clone(),
+            });
+        }
     }
+    // Stable order for callers and reports.
+    out.sort_unstable_by_key(|c| c.rail.0);
     out
 }
 
-/// Sizes of the conduction blocks the rail's island fragments into when the
-/// rail is held as a boundary (descending). Devices are fused through every
-/// non-ground conduction terminal EXCEPT the rail, exactly the components a
-/// balance-torn solve would see.
+/// Sizes of the conduction blocks one island fragments into when every node
+/// marked in `bound` (the pinned set plus every held rail) is a boundary
+/// (descending). Devices are fused through every non-ground, non-bound
+/// conduction terminal, exactly the components a jointly-torn solve would
+/// see. A device with NO free terminal (a shunt between two held rails, a
+/// source-side chain) is the analytic/known side of the balance equations
+/// and is not a block; the strand guard has already refused any rail where
+/// such a device's current would actually be lost.
 fn fragment_sizes(
     circuit: &Circuit,
     graph: &ConductionGraph,
-    rail: NodeId,
-    pinned: &[bool],
+    island: usize,
+    bound: &[bool],
 ) -> Vec<usize> {
     let n_nodes = circuit.max_node() as usize;
     let mut parent: Vec<usize> = (0..n_nodes + 1).collect();
@@ -306,36 +442,22 @@ fn fragment_sizes(
         x
     }
 
-    let rail_island = graph
-        .node_island
-        .get(rail.0 as usize)
-        .copied()
-        .flatten();
-    let member = |id: DeviceId| -> bool {
-        match rail_island {
-            Some(isl) => graph.islands[isl].contains(&id),
-            None => false,
-        }
-    };
+    let member = |id: DeviceId| -> bool { graph.islands[island].contains(&id) };
 
-    // Feed-side devices (every non-rail conduction terminal pinned or ground:
-    // the source and the shunt itself) are the KNOWN side of the balance
-    // equation; the outer loop never re-solves them, so they are not blocks.
-    let feed_side = |dev: &Device| -> bool {
+    let known_side = |dev: &Device| -> bool {
         dev.conduction_nodes()
             .into_iter()
-            .filter(|n| *n != rail)
-            .all(|n| n.is_ground() || pinned[n.0 as usize])
+            .all(|n| n.is_ground() || bound[n.0 as usize])
     };
 
     for (id, dev) in circuit.iter() {
-        if !member(id) || feed_side(dev) {
+        if !member(id) || known_side(dev) {
             continue;
         }
         let cond: Vec<usize> = dev
             .conduction_nodes()
             .into_iter()
-            .filter(|n| !n.is_ground() && *n != rail)
+            .filter(|n| !n.is_ground() && !bound[n.0 as usize])
             .map(|n| n.0 as usize)
             .collect();
         for w in cond.windows(2) {
@@ -348,13 +470,13 @@ fn fragment_sizes(
 
     let mut sizes: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for (id, dev) in circuit.iter() {
-        if !member(id) || feed_side(dev) {
+        if !member(id) || known_side(dev) {
             continue;
         }
         if let Some(rep) = dev
             .conduction_nodes()
             .into_iter()
-            .find(|n| !n.is_ground() && *n != rail)
+            .find(|n| !n.is_ground() && !bound[n.0 as usize])
         {
             *sizes.entry(find(&mut parent, rep.0 as usize)).or_insert(0) += 1;
         }
@@ -535,6 +657,117 @@ mod tests {
                 tears[0].decision
             );
         }
+    }
+
+    /// The flagship's founding shape (analysis-probe finding 1): a supply
+    /// CASCADE, source -> R1 -> MID -> R2 -> INNER, with the big array on
+    /// INNER and a couple of loads on MID. Single-hop detection never
+    /// reached INNER; transitive discovery must, and the cascade rule must
+    /// tear the deepest rail while the parent defers explainably.
+    #[test]
+    fn stacked_cascade_reaches_and_tears_the_inner_rail() {
+        let mut c = Circuit::new();
+        let src = c.node("+5V_SRC");
+        c.add(Device::Vsource {
+            name: "VS".into(),
+            p: src,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        let mid = c.node("MID");
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: src,
+            b: mid,
+            ohms: 500.0,
+            tc1: None,
+        });
+        let inner = c.node("INNER");
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: mid,
+            b: inner,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        // Two small loads keep MID above the structural fanout floor.
+        for k in 0..2 {
+            let b = c.node(&format!("mb{k}"));
+            let col = c.node(&format!("mc{k}"));
+            c.add(Device::Bjt {
+                name: format!("MQ{k}"),
+                c: col,
+                b,
+                e: mid,
+                model: model.clone(),
+            });
+            c.add(Device::Resistor {
+                name: format!("MRb{k}"),
+                a: b,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("MRc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+        }
+        // The array on INNER is what makes the cascade worth walking.
+        for k in 0..24 {
+            let b = c.node(&format!("ib{k}"));
+            let col = c.node(&format!("ic{k}"));
+            c.add(Device::Bjt {
+                name: format!("IQ{k}"),
+                c: col,
+                b,
+                e: inner,
+                model: model.clone(),
+            });
+            c.add(Device::Resistor {
+                name: format!("IRb{k}"),
+                a: b,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("IRc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+        }
+
+        let g = ConductionGraph::analyze(&c);
+        let tears = detect_balance_tears(&c, &g, TearMotive::Profit, &RailPolicy::default());
+        let inner_cand = tears
+            .iter()
+            .find(|t| t.rail == inner)
+            .expect("transitive discovery must reach INNER");
+        assert!(
+            matches!(inner_cand.decision, TearDecision::Tear { .. }),
+            "the deep array rail must tear: {:?}",
+            inner_cand.decision
+        );
+        assert_eq!(inner_cand.feed, mid, "INNER is fed from MID");
+        let mid_cand = tears
+            .iter()
+            .find(|t| t.rail == mid)
+            .expect("MID is a candidate too");
+        assert_eq!(
+            mid_cand.decision,
+            TearDecision::RefusedCascadeParent { child: inner },
+            "the parent defers to its accepted child"
+        );
     }
 
     /// A rail pinned by its own ideal source is not a candidate at all.
