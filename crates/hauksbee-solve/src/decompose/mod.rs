@@ -24,6 +24,10 @@
 //!   strongly-connected components, and the stage DAG that orders the solves.
 //! * [`rails`]: stiff-rail detection with a cost-model decision (and the
 //!   convergence-escalation override) for balance-tear candidates.
+//! * [`stiff`]: stiff-node tear candidates, the conducted-both-sides cut
+//!   nodes (the flagship's hidden `V_out` nets) that neither free-tear
+//!   discovery nor the rail pass can see. Detection only nominates; the
+//!   orchestrator measures stiffness at capture time.
 //! * [`drivers`]: the absorption pass that copies small linear driver groups
 //!   into their consumers instead of tearing (exact: sense-only boundaries
 //!   carry zero current, so even replication cannot disagree).
@@ -38,12 +42,14 @@ pub mod conduction;
 pub mod drivers;
 pub mod feedforward;
 pub mod rails;
+pub mod stiff;
 pub mod verify;
 
 pub use conduction::{ConductionGraph, SenseEdge};
 pub use drivers::{driver_assignments, DriverAssignment, DriverPolicy};
 pub use feedforward::{FreeTearEdge, StageDag};
 pub use rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearDecision, TearMotive};
+pub use stiff::{detect_stiff_candidates, StiffCandidate, StiffPolicy};
 pub use verify::{
     Decomposition, Evidence, RefusedAnalysis, TearCertificate, TearKind, TearRecord,
     ToleranceClaim,
