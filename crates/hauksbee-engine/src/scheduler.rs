@@ -711,6 +711,23 @@ impl Scheduler {
         for mi in 0..self.mcus.len() {
             let m = &mut self.mcus[mi];
             for (&ch, &node) in &m.binding.adc_nets {
+                // Skip a pin the firmware has promoted to a GPIO output. An
+                // analog-capable pin binds BOTH an ADC channel and a tri-stated
+                // GPIO driver (dynamic promotion, 05-cosim-fidelity §4.1); once
+                // that driver is enabled the pin is being DRIVEN, not read, so
+                // injecting an ADC voltage for it is contradictory (a phantom
+                // analog reading on a pin the firmware owns as an output).
+                // Promotion is detected as an enabled driver on this pin's own
+                // net; a pin never driven keeps its driver disabled and is
+                // injected normally.
+                let promoted = m
+                    .binding
+                    .gpio_drivers
+                    .values()
+                    .any(|d| d.net == node && d.enabled);
+                if promoted {
+                    continue;
+                }
                 let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
                 m.core.set_analog_in(ch, v.max(0.0));
             }
@@ -759,7 +776,12 @@ impl Scheduler {
             }
             // 2. Apply GPIO edges to drivers. An edge means the firmware has
             // configured the pin as a driven output, so enable the (initially
-            // tri-stated) Thevenin leg before setting its level.
+            // tri-stated) Thevenin leg before setting its level. This is also
+            // the promotion path for a dual-bound analog-capable pin (dynamic
+            // promotion, 05-cosim-fidelity §4.1): the first firmware drive of
+            // an A-pin enables its driver exactly like any other GPIO, while a
+            // pin never driven keeps its driver disabled and stays a pure ADC
+            // input.
             let m = &mut self.mcus[mi];
             for ((port, bit), level) in edges {
                 m.last_levels.insert((port, bit), level);
@@ -767,6 +789,30 @@ impl Scheduler {
                     drv.set_enabled(&mut self.circuit, true);
                     let v = if level { m.logic_high_v } else { 0.0 };
                     drv.set_volts(&mut self.circuit, v);
+                }
+            }
+            // 2b. Early promotion from the configured pin direction. A pin the
+            // firmware set as an OUTPUT but has so far only held at its reset
+            // level (DDR write, no PORT toggle — e.g. an active-low enable held
+            // low from boot) emits no pin-change edge, so the loop above never
+            // enables its driver and the net would float. Enable such drivers
+            // from `pins_configured_output`, at the pin's last known level
+            // (default low, the AVR reset PORT state). Backends that cannot
+            // report direction return an empty set, making this a no-op there;
+            // the edge-driven enable above remains the primary path.
+            let configured = m.core.pins_configured_output();
+            for pin in configured {
+                if let Some(drv) = m.binding.gpio_drivers.get_mut(&(pin.port, pin.bit)) {
+                    if !drv.enabled {
+                        drv.set_enabled(&mut self.circuit, true);
+                        let level = m
+                            .last_levels
+                            .get(&(pin.port, pin.bit))
+                            .copied()
+                            .unwrap_or(false);
+                        let v = if level { m.logic_high_v } else { 0.0 };
+                        drv.set_volts(&mut self.circuit, v);
+                    }
                 }
             }
         }

@@ -200,14 +200,6 @@ pub fn bind_board_with(
         )
     });
 
-    // The set of nodes used as DIGITAL CONTROL lines elsewhere on the board: a
-    // net carrying a 74HC595/165 control input (srclk/rclk/srclr_n/oe_n/ser) or
-    // an I2C sda/scl role. An MCU A-pin (PC0-PC5, dual-purpose ADC/GPIO) sitting
-    // on such a net is being driven as a digital output, not read as an analog
-    // input, so the MCU binder stamps a GPIO driver on it rather than an ADC
-    // probe (FIX 2). Computed up front so `bind_mcu` can consult it.
-    let digital_control_nodes = digital_control_node_set(board, lib, &node_of);
-
     // ── Pass 2: bind every component ────────────────────────────────────────
     for comp in &board.components {
         let res = resolve(lib, comp);
@@ -233,7 +225,6 @@ pub fn bind_board_with(
                     &mut dacs,
                     has_vreg,
                     &power_nets,
-                    &digital_control_nodes,
                     lib.pin_rules(),
                 );
                 (Some(kind_str), outcome, warning, guesses)
@@ -554,51 +545,6 @@ fn gather_device_meta(
     }
 
     metas
-}
-
-/// Collect the set of circuit nodes (by `NodeId.0`) that other components use as
-/// DIGITAL CONTROL lines: a shift-register clock/latch/clear/serial input, an
-/// output-enable, or an I2C SDA/SCL. An MCU's dual-purpose analog pin sitting on
-/// one of these nets is being driven, not sensed, so the MCU binder stamps a
-/// GPIO driver instead of an ADC probe (FIX 2). Ground nodes are never control
-/// lines. Computed by resolving each component and reading its connected role
-/// nodes the same way the per-kind binders do.
-fn digital_control_node_set(
-    board: &ExtractedBoard,
-    lib: &ModelLibrary,
-    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
-) -> std::collections::HashSet<i64> {
-    // Roles that are unambiguously digital control INPUTS on the parts we model.
-    // (595: srclk/rclk/srclr_n/oe_n/ser; 165: clk/clk_inh/pl_n/ser; I2C: sda/scl.)
-    const CONTROL_ROLES: &[&str] = &[
-        "srclk", "rclk", "srclr_n", "oe_n", "ser", "clk", "clk_inh", "pl_n", "sda", "scl",
-    ];
-    let mut set = std::collections::HashSet::new();
-    for comp in &board.components {
-        let res = resolve(lib, comp);
-        let Some(model) = res.model else { continue };
-        // Only treat genuinely digital parts as control sources, so an analog
-        // part that happens to reuse a role name cannot pull an A-pin off ADC.
-        let is_digital = matches!(
-            model.kind,
-            ComponentKind::Digital
-                | ComponentKind::ShiftRegister
-                | ComponentKind::Dac
-                | ComponentKind::Adc
-        );
-        if !is_digital {
-            continue;
-        }
-        let roles = role_node_map(comp, &model, node_of);
-        for role in CONTROL_ROLES {
-            if let Some(&node) = roles.get(*role) {
-                if !node.is_ground() {
-                    set.insert(node.0 as i64);
-                }
-            }
-        }
-    }
-    set
 }
 
 /// Resolve one component into a model entry.
@@ -1247,7 +1193,6 @@ fn bind_component(
     dacs: &mut Vec<DacBinding>,
     has_vreg: bool,
     power_nets: &HashMap<String, f64>,
-    digital_control_nodes: &std::collections::HashSet<i64>,
     pin_rules: &hauksbee_models::PinRuleTable,
 ) -> (BindOutcome, Option<String>, Vec<String>) {
     use ComponentKind::*;
@@ -1320,7 +1265,6 @@ fn bind_component(
                 &pad_nodes,
                 power_nets,
                 mcus,
-                digital_control_nodes,
             );
             (BindOutcome::Mcu { backend }, warning)
         }
@@ -2218,7 +2162,6 @@ fn bind_mcu(
     pad_nodes: &dyn Fn(&str) -> Option<NodeId>,
     _power_nets: &HashMap<String, f64>,
     mcus: &mut Vec<McuBinding>,
-    digital_control_nodes: &std::collections::HashSet<i64>,
 ) -> Option<String> {
     let backend = model
         .params
@@ -2248,54 +2191,39 @@ fn bind_mcu(
     }
 
     // Map roles to (port,bit) GPIO and ADC channels, then stamp drivers/probes.
-    // A pin wired to an ADC channel is an analog *input*: it must not get an
-    // output driver, or the (default-0 V) Thevenin leg would clamp the net the
-    // firmware is trying to read. GPIO output drivers are stamped tri-stated
-    // (high-impedance) and only enabled when the firmware actually drives the
-    // pin — captured as the first `on_pin_change` edge by the scheduler.
+    // Dynamic promotion (05-cosim-fidelity §4.1, closes TARSKI_RESULTS §5.2): a
+    // dual-purpose ADC/GPIO pin (Nano a0..a5 = PC0..PC5, or bare pc0_adc0..)
+    // binds BOTH ways structurally. It keeps its ADC channel mapping AND gets
+    // the same tri-stated Thevenin GPIO driver an ordinary digital pin gets.
+    // Every driver starts high-impedance (a 1e9 Ω leg from a 0 V source, i.e.
+    // electrically inert), so an undriven pin still reads as a pure ADC input
+    // with zero electrical effect; the scheduler enables the driver on the
+    // pin's first firmware drive (its first `on_pin_change` edge, or a
+    // `pins_configured_output` direction report), promoting the pin to a GPIO
+    // output. No bind-time usage heuristic is needed: the firmware's actual
+    // pinMode decides. This is what un-floats OE'_S / SRCLR'_S (Tarski A2/A3):
+    // firmware driving an A-pin digitally now has a driver to enable, where a
+    // floating-low SRCLR'_S would have held the whole 74HC595 chain cleared.
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
     for (role, &node) in &role_nets {
         if node.is_ground() {
             continue;
         }
-        // A dual-purpose A-pin (Nano a0..a5 = PC0..PC5, or bare pc0_adc0..) is
-        // an ADC channel ONLY if it genuinely reads an analog net. When the same
-        // net is driven as a digital control line elsewhere (a 595 SRCLR_n / OE /
-        // SRCLK / RCLK / SER, or an I2C SDA/SCL), the firmware drives the pin as
-        // a GPIO output, so bind it as GPIO and skip the ADC probe (FIX 2). This
-        // mirrors the existing rule that an ADC pin must not also get an output
-        // driver; here the *usage* (digital control net) flips which one wins.
-        let adc_ch = adc_of_role(role, module);
-        let used_as_control = digital_control_nodes.contains(&(node.0 as i64));
-        if let Some(ch) = adc_ch {
-            // A dual-purpose pin driven as digital control binds as GPIO instead
-            // of ADC, BUT only if it actually has a digital port pin. A6/A7 on
-            // the ATmega328P are ADC-only (no port C pin), so `apin_gpio_of_role`
-            // returns None; in that impossible-on-real-hardware case we fall back
-            // to the ADC probe rather than dropping the pin entirely.
-            if used_as_control {
-                if let Some((port, bit)) = apin_gpio_of_role(role, module) {
-                    let net_name = circuit.node_name(node).to_string();
-                    let mut drv = PinDriver::stamp(
-                        circuit,
-                        node,
-                        &net_name,
-                        &format!("{}_{port}{bit}", comp.reference),
-                        DEFAULT_RO,
-                    );
-                    drv.set_enabled(circuit, false);
-                    gpio_drivers.insert((port, bit), drv);
-                    continue;
-                }
-                // No digital port pin (A6/A7): fall through to ADC.
-            }
-            // Genuine analog input (or control pin with no port pin): ADC probe,
-            // no output driver.
+        // Keep the ADC channel mapping for every analog-capable pin, so the
+        // scheduler can inject the solved net voltage while the pin is (or
+        // stays) an analog input. A6/A7 on the ATmega328P are ADC-only (no
+        // port C pin): `apin_gpio_of_role` returns None for them below, so
+        // they bind as plain ADC probes with no driver.
+        if let Some(ch) = adc_of_role(role, module) {
             adc_nets.insert(ch, node);
-            continue;
         }
-        if let Some((port, bit)) = gpio_of_role(role, module) {
+        // Stamp a GPIO driver for every pin with a digital port pin, INCLUDING
+        // analog-capable ones (that dual bind is the point of the promotion
+        // design). `gpio_of_role` covers ordinary digital roles;
+        // `apin_gpio_of_role` recovers the port pin behind an analog role.
+        let port_bit = gpio_of_role(role, module).or_else(|| apin_gpio_of_role(role, module));
+        if let Some((port, bit)) = port_bit {
             let net_name = circuit.node_name(node).to_string();
             let mut drv = PinDriver::stamp(
                 circuit,
@@ -2305,7 +2233,9 @@ fn bind_mcu(
                 DEFAULT_RO,
             );
             // Start high-impedance: the firmware enables the driver by toggling
-            // the pin (DDR + PORT writes surface as an output edge).
+            // the pin (DDR + PORT writes surface as an output edge). Inertness
+            // while disabled is the load-bearing property that lets an ADC pin
+            // carry a driver without perturbing the voltage the firmware reads.
             drv.set_enabled(circuit, false);
             gpio_drivers.insert((port, bit), drv);
         }
@@ -2560,11 +2490,13 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
     }
 }
 
-/// Map a dual-purpose analog-pin role to its ATmega328P GPIO `(port, bit)` when
-/// it is being driven as a digital control line (FIX 2). On the ATmega328P the
-/// analog pins A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are
-/// ADC-only with no port pin and return `None`. Handles both the Nano module
-/// role ("a2", "a3_...") and the bare role carrying an adc index ("pc2_adc2").
+/// Map a dual-purpose analog-pin role to its GPIO `(port, bit)`, so `bind_mcu`
+/// can stamp the tri-stated driver half of the dual ADC+GPIO bind (dynamic
+/// promotion, 05-cosim-fidelity §4.1). On the ATmega328P the analog pins
+/// A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are ADC-only
+/// with no port pin and return `None`, so they stay pure ADC probes. Handles
+/// both the Nano module role ("a2", "a3_...") and the bare role carrying an
+/// adc index ("pc2_adc2").
 fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
