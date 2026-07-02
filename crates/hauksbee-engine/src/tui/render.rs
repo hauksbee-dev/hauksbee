@@ -404,6 +404,28 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                     )));
                 }
 
+                // ── Analog-validity honesty (05 §3b) ──────────────────────────
+                // If the analog solve failed on any chunk, the GPIO/net levels
+                // above were read off held-stale voltages. Say so LOUDLY in red so
+                // they are never trusted, mirroring the CLI --json analog_valid
+                // and the web report's prepended finding. Gated on the failed-
+                // chunk count (0 on a clean run) so a default/idle snapshot never
+                // trips it.
+                if u.failed_chunk_count > 0 {
+                    let chunk_word = if u.failed_chunk_count == 1 { "chunk" } else { "chunks" };
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "analog solve FAILED on {} {chunk_word}: net levels above are held-stale, not trustworthy",
+                            u.failed_chunk_count
+                        ),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        "electrical results in the failed windows are fiction (analog_valid=false); see --json for the exact spans",
+                        Style::default().fg(Color::Red),
+                    )));
+                }
+
                 // ── Stall honesty ─────────────────────────────────────────────
                 // If the firmware never drove any GPIO and never printed
                 // anything, say so plainly rather than freezing silently. While

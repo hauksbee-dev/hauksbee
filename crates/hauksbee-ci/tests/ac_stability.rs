@@ -146,6 +146,11 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
         first_reach_ms: Default::default(),
         first_fault_ms: None,
         ac: Some(ac),
+        // AC assertions are seed-independent DC-linearised sweeps, never touched
+        // by a failed transient chunk: a clean, valid analog outcome.
+        analog_valid: true,
+        failed_windows: Vec::new(),
+        analog_abort: false,
     }
 }
 
@@ -248,6 +253,9 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         first_reach_ms: Default::default(),
         first_fault_ms: None,
         ac: Some(ac),
+        analog_valid: true,
+        failed_windows: Vec::new(),
+        analog_abort: false,
     };
 
     // At fc=1000 Hz the gain is -3.01 dB, so "max <= -2.9 at 1000 Hz" passes and
