@@ -41,7 +41,7 @@
 //! invisible.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
+//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 use hauksbee_ir::NodeId;
 
