@@ -35,6 +35,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use crate::linear::LinearIsland;
 use crate::newton::{dc_operating_point, newton_solve, Workspace};
 use crate::options::{Integration, SolverOptions, StepControl};
+use crate::orchestrate::balance::{settle_rails, BalancePolicy, RailChannel, RailLoads};
 use crate::partition::{Island, Partition};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
@@ -337,17 +338,21 @@ impl PartitionedTransient {
     /// Advance one step while exactly closing every shunt-fed rail's KCL balance.
     ///
     /// For a single tear node the system is bordered-block-diagonal: every block
-    /// depends on the rest only through `v(rail)`. We solve the scalar balance
-    ///   f(v_rail) = (v_feed - v_rail)/R_shunt - Σ_blocks I_drawn(v_rail) = 0
-    /// by the secant method, re-solving the (small) blocks at each trial rail
-    /// voltage. At convergence the partitioned node voltages equal the monolithic
-    /// solution to Newton tolerance — no behaviour is approximated, the array is
-    /// merely re-grouped around its one genuine coupling scalar.
+    /// depends on the rest only through `v(rail)`, so the step reduces to the
+    /// scalar rail balance owned by [`crate::orchestrate::balance`] (secant
+    /// iteration, voltage-referred tolerance, the gmin double-count correction;
+    /// see that module for the full story). This method contributes only the
+    /// adapter: how THIS engine's blocks re-solve when a rail moves.
     ///
-    /// With multiple independent tears we relax them round-robin; since the tears
-    /// found on this board share the same feed (`+5V`) but separate rails, the
-    /// coupling between them is only second order and the outer loop converges in
-    /// a handful of passes.
+    /// With multiple independent tears the loop relaxes them round-robin; since
+    /// the tears found on this board share the same feed (`+5V`) but separate
+    /// rails, the coupling between them is only second order and the outer loop
+    /// converges in a handful of passes.
+    ///
+    /// The balance report is intentionally not fatal here: this engine's
+    /// behaviour on a non-converging balance (proceed, let the step-level
+    /// machinery judge) is what the `rail_tear` gate certifies. The strategy
+    /// ladder's Decompose rung is where non-convergence escalates instead.
     fn step_with_rail_balance(
         &mut self,
         circuit: &Circuit,
@@ -359,106 +364,30 @@ impl PartitionedTransient {
         // rail estimates (linear islands + every nonlinear block solved once).
         self.sweep(circuit, h, tnext, true)?;
 
-        // Outer rail balance: a scalar Newton per tear, iterated until each rail's
-        // KCL residual is below a VOLTAGE-referred tolerance. A residual current
-        // `r` leaves a rail-voltage error of at most `r * r_shunt`, so we drive
-        // each rail's residual below `v_target / r_shunt` (independent of the
-        // shunt value). `v_target` is one tenth of the node tolerance, giving a
-        // 10x margin under the exactness gate regardless of the shunt resistance.
-        let v_target = (self.opts.vntol * 0.1).max(1e-12);
-        let max_outer = 60usize;
-        for _ in 0..max_outer {
-            let mut converged = true;
-            for ti in 0..self.tears.len() {
-                let i_tol = (v_target / self.tears[ti].r_shunt).max(1e-15);
-                let resid = self.balance_one_rail(circuit, h, tnext, ti)?;
-                if resid.abs() > i_tol {
-                    converged = false;
-                }
-            }
-            if converged {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    /// One scalar-Newton step on rail `ti`'s KCL balance. Returns the residual
-    /// current that remained BEFORE this update (so the outer loop can test
-    /// convergence on the actual balance error, not just the step size).
-    fn balance_one_rail(
-        &mut self,
-        circuit: &Circuit,
-        h: f64,
-        tnext: f64,
-        ti: usize,
-    ) -> Result<f64, String> {
-        let rail = self.tears[ti].rail;
-        let feed = self.tears[ti].feed;
-        let r_shunt = self.tears[ti].r_shunt;
-
-        // f(v_rail) = current supplied through the shunt MINUS current drawn by
-        // all blocks loading the rail. Root => KCL satisfied at the rail node.
-        let gmin = self.opts.gmin;
-        // Each block sub-circuit stamps its OWN gmin-to-ground shunt on its local
-        // copy of the rail node (the reference monolithic engine stamps exactly
-        // ONE such shunt on the single rail node). So summing the blocks' rail
-        // boundary currents double-counts the gmin draw `n_loads` times. We undo
-        // the surplus `(n_loads - 1)·gmin·v_rail` so the torn rail's KCL matches
-        // the monolithic node equation bit-for-bit. This is the only bookkeeping
-        // difference between the two formulations; correcting it makes the tear
-        // exact rather than O(n·gmin) off.
-        let n_loads = self.nonlinear.iter().filter(|nl| nl.touches_rail(rail)).count();
-        let surplus = (n_loads.saturating_sub(1)) as f64 * gmin;
-        let residual = |s: &Self| -> f64 {
-            let v_feed = if feed.is_ground() { 0.0 } else { s.vbuf[feed.0 as usize] };
-            let v_rail = s.vbuf[rail.0 as usize];
-            let i_in = (v_feed - v_rail) / r_shunt;
-            let i_out: f64 = s.nonlinear.iter().map(|nl| nl.rail_current(rail)).sum();
-            // Add back the surplus gmin current the per-block shunts over-drew.
-            i_in - i_out + surplus * v_rail
+        let channels: Vec<RailChannel> = self
+            .tears
+            .iter()
+            .map(|t| RailChannel {
+                rail: t.rail,
+                shunt_ohms: t.r_shunt,
+            })
+            .collect();
+        let mut loads = PartitionedRailLoads {
+            nonlinear: &mut self.nonlinear,
+            vbuf: &mut self.vbuf,
+            tears: &self.tears,
+            opts: &self.opts,
+            h,
+            tnext,
         };
-
-        let v0 = self.vbuf[rail.0 as usize];
-        let f0 = residual(self);
-        if f0.abs() <= self.opts.abstol.max(1e-12) {
-            return Ok(f0);
-        }
-        // Numeric derivative df/dv_rail from a small perturbation. The shunt term
-        // contributes -1/R_shunt; the block term its incremental rail conductance.
-        let dv_probe = (v0.abs() * 1e-6).max(1e-6);
-        self.vbuf[rail.0 as usize] = v0 + dv_probe;
-        self.resolve_rail_blocks(circuit, h, tnext, rail)?;
-        let f1 = residual(self);
-
-        let slope = (f1 - f0) / dv_probe;
-        let v_new = if slope.abs() > 1e-15 {
-            v0 - f0 / slope
-        } else {
-            v0
-        };
-        self.vbuf[rail.0 as usize] = v_new;
-        self.resolve_rail_blocks(circuit, h, tnext, rail)?;
-        Ok(f0)
-    }
-
-    /// Re-solve (in place, no history advance) only the blocks that load `rail`,
-    /// after its boundary voltage changed. Cheap: the off-rail blocks are
-    /// untouched.
-    fn resolve_rail_blocks(
-        &mut self,
-        _circuit: &Circuit,
-        h: f64,
-        tnext: f64,
-        rail: NodeId,
-    ) -> Result<(), String> {
-        for nl in &mut self.nonlinear {
-            if nl.touches_rail(rail) {
-                nl.refresh_boundary(&self.vbuf);
-                nl.step(h, tnext, false, &self.opts)?;
-                nl.write_back(&mut self.vbuf);
-            }
-        }
+        settle_rails(
+            &mut loads,
+            &channels,
+            self.opts.gmin,
+            self.opts.vntol,
+            self.opts.abstol,
+            &BalancePolicy::default(),
+        )?;
         Ok(())
     }
 
@@ -596,6 +525,57 @@ impl PartitionedTransient {
         for ni in 1..=self.n_nodes {
             x[ni - 1] = self.vbuf[ni];
         }
+    }
+}
+
+/// The [`RailLoads`] adapter for this engine: a moved rail re-solves exactly
+/// the nonlinear sub-blocks that pin it as a boundary (in place, no history
+/// advance); off-rail blocks are untouched. Boundary currents come from the
+/// blocks' pinned-source branch unknowns (see [`NonlinearIsland::rail_current`]).
+struct PartitionedRailLoads<'a> {
+    nonlinear: &'a mut Vec<NonlinearIsland>,
+    vbuf: &'a mut Vec<f64>,
+    tears: &'a [RailTearState],
+    opts: &'a SolverOptions,
+    h: f64,
+    tnext: f64,
+}
+
+impl RailLoads for PartitionedRailLoads<'_> {
+    fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String> {
+        let rail = self.tears[i].rail;
+        self.vbuf[rail.0 as usize] = v_rail;
+        for nl in self.nonlinear.iter_mut() {
+            if nl.touches_rail(rail) {
+                nl.refresh_boundary(self.vbuf);
+                nl.step(self.h, self.tnext, false, self.opts)?;
+                nl.write_back(self.vbuf);
+            }
+        }
+        Ok(())
+    }
+
+    fn rail_voltage(&self, i: usize) -> f64 {
+        self.vbuf[self.tears[i].rail.0 as usize]
+    }
+
+    fn feed_voltage(&self, i: usize) -> f64 {
+        let feed = self.tears[i].feed;
+        if feed.is_ground() {
+            0.0
+        } else {
+            self.vbuf[feed.0 as usize]
+        }
+    }
+
+    fn current_drawn(&self, i: usize) -> f64 {
+        let rail = self.tears[i].rail;
+        self.nonlinear.iter().map(|nl| nl.rail_current(rail)).sum()
+    }
+
+    fn n_loads(&self, i: usize) -> usize {
+        let rail = self.tears[i].rail;
+        self.nonlinear.iter().filter(|nl| nl.touches_rail(rail)).count()
     }
 }
 

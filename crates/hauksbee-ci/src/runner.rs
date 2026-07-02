@@ -234,7 +234,7 @@ fn compute_ac(spec: &Spec, base: &ExtractedBoard) -> Result<AcOutcome, SpecError
 /// that passes vacuous checks. Everything else (`.kicad_pcb`, `.net`, Eagle
 /// `.brd`, IPC-D-356) carries full connectivity in one file and is sniffed from
 /// its content as before.
-fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
+pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
     let is_sch = board_path
         .extension()
         .and_then(|e| e.to_str())

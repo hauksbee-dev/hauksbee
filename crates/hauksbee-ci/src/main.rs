@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use hauksbee_ci::{run, RunConfig};
+use hauksbee_ci::{init, run, RunConfig};
 
 /// CI for hardware: run a board+firmware spec headless and assert on the result.
 ///
@@ -45,6 +45,16 @@ enum Command {
     /// Example:
     ///   hauksbee-ci run ci/power-up.toml --junit results.xml
     Run(RunArgs),
+
+    /// Scaffold a starter spec from a board, so your first spec is an edit.
+    ///
+    /// Loads and binds the board, then writes `<board-stem>.toml` beside it with
+    /// the detected MCU, supplies and rails already filled in and every line
+    /// commented. Refuses to overwrite an existing spec.
+    ///
+    /// Example:
+    ///   hauksbee-ci init hardware/board.kicad_pcb
+    Init(InitArgs),
 }
 
 #[derive(Parser)]
@@ -62,9 +72,19 @@ struct RunArgs {
     quiet: bool,
 }
 
+#[derive(Parser)]
+struct InitArgs {
+    /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .d356).
+    #[arg(value_name = "BOARD")]
+    board: PathBuf,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let Command::Run(args) = cli.command;
+    let args = match cli.command {
+        Command::Run(args) => args,
+        Command::Init(args) => return cmd_init(args),
+    };
 
     let cfg = RunConfig {
         spec: args.spec.clone(),
@@ -110,4 +130,21 @@ fn main() -> ExitCode {
     }
 
     ExitCode::from(result.exit_code() as u8)
+}
+
+/// `hauksbee-ci init <board>`: scaffold a starter spec and print where it landed.
+/// Board / bind errors carry the crate's loud, did-you-mean style; exit 2 on any
+/// failure to match the spec-error contract of `run`.
+fn cmd_init(args: InitArgs) -> ExitCode {
+    match init(&args.board) {
+        Ok(path) => {
+            println!("wrote starter spec to {}", path.display());
+            println!("edit it, then run:  hauksbee-ci run {}", path.display());
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            eprintln!("hauksbee-ci: {e}");
+            ExitCode::from(2)
+        }
+    }
 }
