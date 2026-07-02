@@ -144,6 +144,19 @@ impl Partition {
         p
     }
 
+    /// Analyze with tears chosen by an EXTERNAL decision layer (the decompose
+    /// analysis's cost model and structural guards), instead of by this
+    /// module's [`detect_rail_tears`] scan. The island-splitting mechanics are
+    /// identical; only the decider changes. This is the seam that lets the
+    /// certificate-carrying decomposition drive the proven executor without
+    /// this module's legacy magic-constant detection having a vote.
+    pub fn analyze_imposing_tears(circuit: &Circuit, tears: Vec<RailTear>) -> Partition {
+        let tear_nodes: Vec<NodeId> = tears.iter().map(|t| t.rail).collect();
+        let mut p = Self::analyze_inner(circuit, &tear_nodes);
+        p.tears = tears;
+        p
+    }
+
     /// Core analysis. `extra_pinned` nodes are treated as boundary inputs (not
     /// unioned through), exactly like ideal-source-pinned nodes — used for rail
     /// tear nodes.

@@ -39,11 +39,19 @@
 //! reassembled; node voltages are the probe surface, as in the partitioned
 //! engine.
 //!
-//! Groups containing an accepted balance tear are simply solved whole here:
-//! a balance tear is a cost optimization, not a correctness requirement, and
-//! solving the monolithic group satisfies its round-off claim trivially.
-//! Wiring [`super::balance`] into per-group solves is the follow-up that
-//! makes those groups fast; it changes nothing about their answers.
+//! ## Balance tears execute torn
+//!
+//! A group whose islands contain an accepted balance tear is not solved
+//! whole: its sub-circuit is partitioned around the torn rail
+//! ([`Partition::analyze_imposing_tears`], the decompose layer's decision
+//! imposed on the proven executor) and marched by the partitioned engine,
+//! whose outer loop is [`super::balance::settle_rails`]. The legacy
+//! magic-constant rail detection never runs on this path: rails.rs decided,
+//! this module executes. When the engine declines to construct (a shape its
+//! islands cannot host), the group falls back to the whole-group monolithic
+//! solve, which is exact and merely forfeits the speedup; [`StagedResult::
+//! torn_groups`] says which path each torn group actually took, so a
+//! performance regression is visible instead of silent.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
@@ -52,8 +60,11 @@ use std::collections::HashMap;
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
+use crate::decompose::rails::BalanceTearCandidate;
 use crate::decompose::verify::{Decomposition, TearKind, ToleranceClaim};
 use crate::options::{Partitioning, SolverOptions, StepControl};
+use crate::partition::{Partition, RailTear};
+use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
 
 /// What a staged run produced.
@@ -67,6 +78,12 @@ pub struct StagedResult {
     /// Solve groups in the order they were executed (absorbed driver groups
     /// never appear: they were copied, not solved).
     pub executed_groups: Vec<usize>,
+    /// Groups whose accepted balance tears actually ran on the torn
+    /// (bordered-block-diagonal) engine rather than as a whole-group
+    /// monolithic solve. A torn-decision group missing here still solved
+    /// exactly, just without the speedup; the gap is visible so a
+    /// performance regression cannot hide.
+    pub torn_groups: Vec<usize>,
 }
 
 /// Execute a decomposition's stage DAG. Refuses (rather than approximates)
@@ -115,6 +132,24 @@ pub fn run_staged(
             .collect()
     };
 
+    // Owner group per island, for routing balance tears to their group here
+    // and each node to the run that solved it during assembly.
+    let mut island_group = vec![usize::MAX; decomp.graph.islands.len()];
+    for (gi, group) in decomp.dag.groups.iter().enumerate() {
+        for &isl in group {
+            island_group[isl] = gi;
+        }
+    }
+    let group_of_node = |n: NodeId| -> Option<usize> {
+        decomp
+            .graph
+            .node_island
+            .get(n.0 as usize)
+            .copied()
+            .flatten()
+            .map(|isl| island_group[isl])
+    };
+
     // Captured tear waveforms: tear node -> (times, values) from its owning
     // group's run. A node is conducted by exactly one group, so one entry.
     let mut captured: HashMap<u32, (Vec<f64>, Vec<f64>)> = HashMap::new();
@@ -122,6 +157,7 @@ pub fn run_staged(
     // read a global node's series back out.
     let mut runs: HashMap<usize, (Waveforms, HashMap<u32, u32>)> = HashMap::new();
     let mut executed_groups = Vec::new();
+    let mut torn_groups = Vec::new();
 
     for stage in &decomp.dag.stages {
         for &g in stage {
@@ -164,9 +200,21 @@ pub fn run_staged(
             replay.dedup_by_key(|(n, _)| n.0);
 
             let (sub, g2l) = extract_subcircuit(circuit, &devices, &replay);
-            let wf = Transient::new(sub_opts)
-                .run(&sub, tstop)
+
+            // Accepted balance tears whose rail this group conducts, remapped
+            // into the sub-circuit's namespace for the torn engine.
+            let imposed: Vec<RailTear> = decomp
+                .balance_tears
+                .iter()
+                .filter(|c| c.torn() && group_of_node(c.rail) == Some(g))
+                .filter_map(|c| remap_tear(c, &devices, &g2l))
+                .collect();
+
+            let (wf, torn) = solve_group(&sub, imposed, &sub_opts, tstop)
                 .map_err(|e| format!("staged group {g} failed: {e}"))?;
+            if torn {
+                torn_groups.push(g);
+            }
 
             // Capture this group's outbound tear nodes for later stages.
             for t in &decomp.dag.free_tears {
@@ -197,14 +245,6 @@ pub fn run_staged(
         node_voltages: vec![vec![0.0; grid.len()]; n_nodes],
         branch_currents: Vec::new(),
     };
-
-    // Owner group per island, for routing each node to the run that solved it.
-    let mut island_group = vec![usize::MAX; decomp.graph.islands.len()];
-    for (gi, group) in decomp.dag.groups.iter().enumerate() {
-        for &isl in group {
-            island_group[isl] = gi;
-        }
-    }
 
     for node in 1..n_nodes {
         let Some(isl) = decomp
@@ -247,6 +287,67 @@ pub fn run_staged(
         waveforms,
         certificate,
         executed_groups,
+        torn_groups,
+    })
+}
+
+/// Solve one group's sub-circuit: torn around its imposed balance rails when
+/// possible, whole otherwise. Returns the run and whether the torn engine
+/// actually hosted it.
+fn solve_group(
+    sub: &Circuit,
+    imposed: Vec<RailTear>,
+    opts: &SolverOptions,
+    tstop: f64,
+) -> Result<(Waveforms, bool), String> {
+    if !imposed.is_empty() {
+        let part = Partition::analyze_imposing_tears(sub, imposed);
+        if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
+            let n_nodes = sub.node_count();
+            let mut wf = Waveforms {
+                time: Vec::new(),
+                node_voltages: vec![Vec::new(); n_nodes],
+                branch_currents: Vec::new(),
+            };
+            engine.run_streaming(sub, tstop, |s| {
+                wf.time.push(s.time);
+                for node in 0..n_nodes {
+                    let v = if node == 0 {
+                        0.0
+                    } else {
+                        s.x.get(node - 1).copied().unwrap_or(0.0)
+                    };
+                    wf.node_voltages[node].push(v);
+                }
+            })?;
+            return Ok((wf, true));
+        }
+        // Construction declined: fall through to the whole-group solve, which
+        // is exact and merely forfeits the tear's speedup (the caller records
+        // the gap in torn_groups).
+    }
+    Ok((Transient::new(*opts).run(sub, tstop)?, false))
+}
+
+/// Remap a balance-tear decision into a sub-circuit's local namespace. `None`
+/// when the sub-circuit does not contain the tear's pieces (a candidate on a
+/// rail this group only senses), which simply means nothing to impose.
+fn remap_tear(
+    c: &BalanceTearCandidate,
+    devices: &[DeviceId],
+    g2l: &HashMap<u32, u32>,
+) -> Option<RailTear> {
+    let rail = NodeId(*g2l.get(&c.rail.0)?);
+    let feed = NodeId(*g2l.get(&c.feed.0)?);
+    // Local device ids are positional: extract_subcircuit adds `devices` in
+    // order, so the shunt's local id is its index in that list.
+    let shunt_pos = devices.iter().position(|&id| id == c.shunt)?;
+    Some(RailTear {
+        rail,
+        feed,
+        shunt: DeviceId(shunt_pos as u32),
+        r_shunt: c.shunt_ohms,
+        extra_loads: Vec::new(),
     })
 }
 
@@ -550,6 +651,133 @@ mod tests {
         let adaptive = SolverOptions::default(); // adaptive step control
         let err2 = run_staged(&c2, &d2, &adaptive, 1e-6).unwrap_err();
         assert!(err2.contains("fixed step"), "{err2}");
+    }
+
+    /// The Tarski shape end to end, in miniature: a shunt-fed PNP mirror
+    /// array (accepted balance tear) whose block-0 collector a comparator
+    /// senses (free tear), whose output gates a switch island (second free
+    /// tear). The staged run must put the array group on the TORN engine,
+    /// driven by the rails.rs decision rather than the legacy detection, and
+    /// the whole three-stage pipeline must match the monolith.
+    #[test]
+    fn balance_torn_group_matches_monolith() {
+        use hauksbee_ir::{BjtModel, Polarity};
+        let mut c = Circuit::new();
+        let p5 = c.node("+5V");
+        c.add(Device::Vsource {
+            name: "V5".into(),
+            p: p5,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        let rail = c.node("ANALOG_VDD");
+        c.add(Device::Resistor {
+            name: "R_shunt".into(),
+            a: p5,
+            b: rail,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        let mut c0 = NodeId::GROUND;
+        for k in 0..24 {
+            let base = c.node(&format!("b{k}"));
+            let col = c.node(&format!("c{k}"));
+            if k == 0 {
+                c0 = col;
+            }
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: col,
+                b: base,
+                e: rail,
+                model: model.clone(),
+            });
+            c.add(Device::Resistor {
+                name: format!("Rb{k}"),
+                a: base,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("Rc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 10e3,
+                tc1: None,
+            });
+        }
+        // Comparator island: watches block 0's collector.
+        let cmp_out = c.node("cmp_out");
+        c.add(Device::Resistor {
+            name: "Rcmp".into(),
+            a: cmp_out,
+            b: NodeId::GROUND,
+            ohms: 10e3,
+            tc1: None,
+        });
+        c.add(Device::Comparator {
+            name: "CMP".into(),
+            out: cmp_out,
+            inp: c0,
+            inn: NodeId::GROUND,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 1e-3,
+        });
+        // Switch island: gated by the comparator.
+        let s = c.node("s");
+        let o = c.node("o");
+        c.add(Device::Vsource {
+            name: "V2".into(),
+            p: s,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.3),
+        });
+        c.add(Device::VSwitch {
+            name: "SW".into(),
+            a: s,
+            b: o,
+            ctrl_p: cmp_out,
+            ctrl_n: NodeId::GROUND,
+            von: 2.0,
+            voff: 1.0,
+            ron: 10.0,
+            roff: 1e9,
+        });
+        c.add(Device::Resistor {
+            name: "RL".into(),
+            a: o,
+            b: NodeId::GROUND,
+            ohms: 10e3,
+            tc1: None,
+        });
+
+        let dt = 100e-9;
+        let tstop = 5e-6;
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        let accepted: Vec<_> = d.balance_tears.iter().filter(|t| t.torn()).collect();
+        assert_eq!(accepted.len(), 1, "{:?}", d.balance_tears);
+        assert_eq!(accepted[0].rail, rail);
+
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert_eq!(
+            staged.torn_groups.len(),
+            1,
+            "the array group must run torn: {:?}",
+            staged.torn_groups
+        );
+
+        let mono = monolith(&c, dt, tstop);
+        let err = max_error(&c, &staged, &mono);
+        assert!(err <= 1e-6, "torn staged diverged from monolith: {err:.3e}");
+        // The pipeline end actually energized (the fixture is not vacuous).
+        let vo = staged.waveforms.node(&c, "o").unwrap().last().copied();
+        assert!(vo.unwrap() > 3.0, "switch never closed: {vo:?}");
     }
 
     /// Absorption exactness: the drivers.rs Thevenin shape, replicated into

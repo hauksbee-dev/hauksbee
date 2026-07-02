@@ -148,9 +148,6 @@ impl PartitionedTransient {
         }
 
         let has_tears = !part.tears.is_empty();
-        // Rail nodes: islands touching them are kept as nonlinear sub-blocks so
-        // their rail-boundary current is readable for the scalar balance.
-        let rail_nodes: Vec<NodeId> = part.tears.iter().map(|t| t.rail).collect();
 
         // Decide whether partitioning actually helps. The closed-form linear
         // fast path wins on *small* islands (few states, where one exact matrix-
@@ -194,6 +191,39 @@ impl PartitionedTransient {
             // reference sparse engine handle it.
             return None;
         }
+
+        Self::build_from_partition(circuit, opts, part)
+    }
+
+    /// Build from a partition whose tears an EXTERNAL decision layer chose
+    /// (the decompose analysis, via [`Partition::analyze_imposing_tears`]).
+    /// None of this module's legacy profitability heuristics run: the caller's
+    /// cost model and structural guards already ruled, and second-guessing
+    /// them here would put two deciders in charge of one tear. Still requires
+    /// a fixed step (the mechanics need it), still returns `None` when a
+    /// sub-island cannot be constructed, and the caller falls back to the
+    /// exact monolithic path in that case.
+    pub fn try_build_from_partition(
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        part: Partition,
+    ) -> Option<PartitionedTransient> {
+        if !matches!(opts.step, StepControl::Fixed { .. }) {
+            return None;
+        }
+        Self::build_from_partition(circuit, opts, part)
+    }
+
+    /// Shared construction tail: lower a partition into runnable islands and
+    /// tear states. Decision logic lives in the callers.
+    fn build_from_partition(
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        part: Partition,
+    ) -> Option<PartitionedTransient> {
+        // Rail nodes: islands touching them are kept as nonlinear sub-blocks so
+        // their rail-boundary current is readable for the scalar balance.
+        let rail_nodes: Vec<NodeId> = part.tears.iter().map(|t| t.rail).collect();
 
         let n_nodes = part.n_nodes;
         let mut linear = Vec::new();
