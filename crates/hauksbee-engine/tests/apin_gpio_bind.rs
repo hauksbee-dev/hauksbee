@@ -1,13 +1,15 @@
-//! FIX 2 proof: a dual-purpose analog pin (PC0..PC5) used as a DIGITAL CONTROL
-//! line binds as a GPIO output driver, not an ADC probe, while a genuine analog
-//! pin still binds as ADC.
+//! Dual bind of analog-capable pins on a BARE ATmega328P (roles "pc2_adc2"
+//! style, complementing the module-level "a2" coverage in
+//! `binder_gpio_promotion.rs`).
 //!
 //! On the ATmega328P A0..A5 are PC0..PC5, dual-purpose ADC/GPIO. The Tarski
 //! board drives A2 = OE'_S and A3 = SRCLR'_S as digital control for the 74HC595
-//! chain. The old binder claimed any "a0".."a7" role as an ADC channel before
-//! checking GPIO, so those pins got no output driver and floated, holding the
-//! 595 chain cleared. The fix resolves by usage: a net carrying a 595 control
-//! input (here SRCLR_n / OE_n) pulls the A-pin onto GPIO.
+//! chain. The original binder claimed any analog-capable role as an ADC channel
+//! before checking GPIO, so those pins got no output driver and floated,
+//! holding the 595 chain cleared. Under dynamic promotion (05-cosim-fidelity
+//! §4.1) every A-pin binds BOTH ways: the ADC channel mapping stays AND a
+//! tri-stated (disabled, electrically inert) GPIO driver is stamped; the
+//! scheduler enables the driver on the pin's first firmware drive.
 
 #![cfg(feature = "avr")]
 
@@ -75,7 +77,7 @@ const BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
 )"#;
 
 #[test]
-fn apin_digital_control_binds_gpio_analog_stays_adc() {
+fn bare_apin_binds_adc_and_disabled_gpio_driver() {
     let board = ExtractedBoard::from_auto(BOARD).expect("parse board");
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
@@ -83,40 +85,32 @@ fn apin_digital_control_binds_gpio_analog_stays_adc() {
     assert_eq!(bound.mcus.len(), 1, "one ATmega328P");
     let mcu = &bound.mcus[0];
 
-    // A2 = PC2 (OE'_S) and A3 = PC3 (SRCLR'_S) are driven as digital control,
-    // so they must bind as GPIO output drivers, NOT as ADC channels.
-    assert!(
-        mcu.gpio_drivers.contains_key(&('C', 2)),
-        "PC2 (A2, OE_S) must bind as GPIO; drivers: {:?}",
-        mcu.gpio_drivers.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        mcu.gpio_drivers.contains_key(&('C', 3)),
-        "PC3 (A3, SRCLR_S) must bind as GPIO; drivers: {:?}",
-        mcu.gpio_drivers.keys().collect::<Vec<_>>()
-    );
-    // And they must NOT be claimed as ADC channels 2/3.
-    assert!(
-        !mcu.adc_nets.contains_key(&2),
-        "PC2 must NOT be an ADC channel (it is digital control)"
-    );
-    assert!(
-        !mcu.adc_nets.contains_key(&3),
-        "PC3 must NOT be an ADC channel (it is digital control)"
-    );
-
-    // A0 = PC0 reads a genuine 2.5 V divider: it must stay an ADC input with no
-    // output driver (regression guard for boards that legitimately use A-pins
-    // as ADC).
-    assert!(
-        mcu.adc_nets.contains_key(&0),
-        "PC0 (A0, analog divider) must stay an ADC channel; adc: {:?}",
-        mcu.adc_nets.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        !mcu.gpio_drivers.contains_key(&('C', 0)),
-        "PC0 reads analog: it must NOT get a GPIO output driver"
-    );
+    // Every A-pin binds BOTH ways: PC2 (OE'_S), PC3 (SRCLR'_S) and PC0 (the
+    // genuine analog divider) each keep their ADC channel AND carry a GPIO
+    // driver that starts tri-stated. Which way the pin is USED is decided at
+    // run time by the firmware (first drive promotes to GPIO).
+    for (ch, port, bit, label) in [
+        (0u8, 'C', 0u8, "PC0/AIN0"),
+        (2, 'C', 2, "PC2/OE_S"),
+        (3, 'C', 3, "PC3/SRCLR_S"),
+    ] {
+        assert!(
+            mcu.adc_nets.contains_key(&ch),
+            "{label} keeps ADC channel {ch}; adc: {:?}",
+            mcu.adc_nets.keys().collect::<Vec<_>>()
+        );
+        let drv = mcu.gpio_drivers.get(&(port, bit)).unwrap_or_else(|| {
+            panic!(
+                "{label} must carry a GPIO driver on P{port}{bit}; drivers: {:?}",
+                mcu.gpio_drivers.keys().collect::<Vec<_>>()
+            )
+        });
+        assert!(
+            !drv.enabled,
+            "{label} driver must start DISABLED (tri-stated): an undriven pin \
+             stays a pure ADC input with zero electrical effect"
+        );
+    }
 
     // The ordinary GPIO control pins are unaffected.
     assert!(
