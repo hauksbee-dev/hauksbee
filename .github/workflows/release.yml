@@ -13,10 +13,9 @@
 # binaries no one ran. The matrix can be extended with real runners (e.g. a
 # macos-13 x86 runner, an arm64 linux runner) when they are available.
 #
-# Dependency note: the workspace Cargo.toml has path deps into the sibling
-# kicad-forge repo (../kicad-forge/crates/forge-sexpr etc). Both repos must
-# be checked out before cargo build runs. This mirrors docker.yml which also
-# materialises both repos before invoking the Dockerfile build stages.
+# Dependency note: the forge-* crates are vendored into this repo
+# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), so the build is
+# self-contained and no sibling checkout is required.
 
 name: release
 
@@ -33,10 +32,6 @@ on:
 permissions:
   contents: write   # needed to create the release and upload assets
 
-env:
-  FORGE_REPO: ETM-Code/kicad-forge
-  FORGE_REF: main
-
 jobs:
   build:
     name: build ${{ matrix.label }}
@@ -50,25 +45,12 @@ jobs:
             label: darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
-      # Checkout hauksbee into a sibling directory so the ../kicad-forge path dep
-      # resolves correctly at build time. The working directory for subsequent
-      # steps defaults to the repo root (GITHUB_WORKSPACE), so we cd there
-      # explicitly in the build step.
+      # Checkout into a subdirectory; the build steps cd into it explicitly. The
+      # forge-* crates are vendored inside this repo, so no sibling is needed.
       - name: Checkout hauksbee
         uses: actions/checkout@v4
         with:
           path: hauksbee
-
-      # The workspace Cargo.toml references forge-sexpr, forge-model, and
-      # forge-codegen via path = "../kicad-forge/crates/...". docker.yml handles
-      # this by building inside a shared ctx/ tree; here we mirror that pattern
-      # by checking out kicad-forge as a sibling of the hauksbee checkout.
-      - name: Checkout kicad-forge sibling
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.FORGE_REPO }}
-          ref: ${{ env.FORGE_REF }}
-          path: kicad-forge
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

@@ -8,13 +8,12 @@
 # NOT carry Renode, the Espressif QEMU fork, or freerouting; reach for the
 # `full` image when you need STM32 / ESP32 co-sim or production autorouting.
 #
-# BUILD CONTEXT: the workspace Cargo.toml depends on the sibling kicad-forge
-# repo via `path = "../kicad-forge/..."`, so the build context must be the
-# PARENT directory that holds both repos as siblings:
+# BUILD CONTEXT: the forge-* crates are vendored into this repo
+# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), so the build is
+# self-contained and the context is a parent directory holding just this repo:
 #
 #   parent/
-#     hauksbee/        (this repo)
-#     kicad-forge/     (the forge crates)
+#     hauksbee/        (this repo, incl. vendor/kicad-forge)
 #
 # Build from that parent with:
 #   docker build -f hauksbee/docker/Dockerfile.slim -t hauksbee:slim parent/
@@ -88,10 +87,9 @@ ENV LIBRARY_PATH=/usr/local/lib \
     BINDGEN_EXTRA_CLANG_ARGS="-I/usr/local/include -I/usr/local/include/simavr"
 
 WORKDIR /build
-# Copy both sibling repos, preserving the ../kicad-forge relative path the
-# workspace Cargo.toml expects.
+# The forge-* crates are vendored inside this repo (vendor/kicad-forge), so only
+# this repo is copied; no sibling checkout is needed.
 COPY hauksbee/ ./hauksbee/
-COPY kicad-forge/ ./kicad-forge/
 
 WORKDIR /build/hauksbee
 # Build the two release binaries with default features (avr + renode + qemu):
