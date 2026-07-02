@@ -13,11 +13,11 @@
 # tag push, :latest / :full-latest. The full image builds FROM the slim image,
 # so slim is built and pushed first, then full pulls it per-platform.
 #
-# BUILD CONTEXT: the workspace Cargo.toml depends on the sibling kicad-forge repo
-# via `path = "../kicad-forge/..."`. Both repos are checked out into a shared
-# parent dir (`ctx/`) so the Dockerfiles can COPY hauksbee/ and kicad-forge/ with
-# that relative path intact. A .dockerignore is written into ctx/ to keep the
-# 85 MB frontend and other build-irrelevant trees out of the build context.
+# BUILD CONTEXT: the forge-* crates are vendored into this repo
+# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), so the build is
+# self-contained. The repo is checked out into a shared parent dir (`ctx/`) that
+# the Dockerfiles COPY hauksbee/ from. A .dockerignore is written into ctx/ to
+# keep the 85 MB frontend and other build-irrelevant trees out of the context.
 
 name: docker
 
@@ -34,10 +34,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE: ghcr.io/etm-code/hauksbee
-  # The kicad-forge sibling the workspace path-depends on. Override the ref via a
-  # dispatch if forge and hauksbee need to move together.
-  FORGE_REPO: ETM-Code/kicad-forge
-  FORGE_REF: main
 
 permissions:
   contents: read
@@ -52,13 +48,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: ctx/hauksbee
-
-      - name: Checkout kicad-forge sibling
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.FORGE_REPO }}
-          ref: ${{ env.FORGE_REF }}
-          path: ctx/kicad-forge
 
       - name: Resolve version
         id: ver
