@@ -76,6 +76,14 @@ use hauksbee_server::Server;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
+    /// Suppress informational notes (the chatty `note:` lines on stderr, e.g.
+    /// "other board file(s) found nearby"). Errors, warnings, and report output
+    /// are unaffected. These notes are also silenced automatically under `--json`
+    /// and when stdout is piped/redirected, so they never pollute machine or
+    /// report output; `--quiet` also hides them for an interactive terminal.
+    #[arg(long, global = true)]
+    quiet: bool,
 }
 
 #[derive(Subcommand)]
@@ -390,8 +398,9 @@ fn main() -> anyhow::Result<()> {
     // instead of the plaintext `error:` line so the failure is still valid JSON.
     // Only `run --json` produces JSON at all, so this is the only place it applies.
     let json = matches!(&cli.command, Command::Run(args) if args.json);
+    let quiet = cli.quiet;
     let result = match cli.command {
-        Command::Run(args) => cmd_run(args),
+        Command::Run(args) => cmd_run(args, quiet),
         Command::ToCode(args) => cmd_to_code(args),
         Command::FromCode(args) => cmd_from_code(args),
         Command::CheckCode(args) => cmd_check_code(args),
@@ -433,7 +442,14 @@ fn is_board_code_header(text: &str) -> bool {
     head.contains("Board-as-Code") || head.contains("board version ")
 }
 
-fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
+fn cmd_run(args: RunArgs, quiet: bool) -> anyhow::Result<()> {
+    // Validate `--firmware` up front, before any heavy work or the TUI takes over
+    // the terminal. The native emulator loaders segfault (exit 139) on a missing
+    // file instead of erroring; this turns a one-character typo into a clean,
+    // actionable message naming the absolute path that was tried.
+    if let Some(fw) = &args.firmware {
+        hauksbee_mcu::validate_firmware_path(fw)?;
+    }
     // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
     // would fail a UTF-8 read. Text formats (KiCad / Eagle / IPC) are recovered
     // losslessly from these bytes. Keep the actionable not-found error.
@@ -450,10 +466,11 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
     })?;
     // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
     // product), say so — a clean verdict on one file is misleading if the user
-    // meant the whole thing. Human-facing only (stderr); skipped under --json.
-    if !args.json {
-        warn_sibling_boards(&args.board);
-    }
+    // meant the whole thing. Routed through `Notes` so it stays on stderr and is
+    // silenced under --quiet / --json / a piped stdout (it is helpful exactly once
+    // for an interactive user, and pure noise in report and pipeline output).
+    let notes = Notes::new(quiet, args.json);
+    warn_sibling_boards(&args.board, notes);
     // Binary board (Altium): auto-detected from the OLE2 magic + Altium streams,
     // exactly as the Eagle path is auto-detected from XML content. No new CLI
     // surface.
@@ -2197,7 +2214,48 @@ fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJso
 /// a multi-board product (e.g. a main board with a separate ESC/daughter board in
 /// a sibling folder). A clean verdict on ONE file reads as "the product is fine"
 /// when the user may have meant the whole thing. Best-effort; never fails the run.
-fn warn_sibling_boards(board: &std::path::Path) {
+/// Whether informational `note:` lines should be shown for this invocation.
+/// They go to stderr and only for an interactive human: suppressed under
+/// `--quiet`, under `--json` (machine output), and when stdout is piped or
+/// redirected (not a TTY), so report and pipeline output stays clean while the
+/// note stays discoverable for interactive users. Pure so it is unit-testable
+/// without a real terminal.
+fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
+    !quiet && !json && stdout_is_tty
+}
+
+/// The single gate every chatty informational note routes through, so `--quiet`
+/// (and JSON / non-TTY suppression) is honoured uniformly and future notes
+/// inherit the behaviour by going through here instead of a bare `eprintln!`.
+#[derive(Clone, Copy)]
+struct Notes {
+    enabled: bool,
+}
+
+impl Notes {
+    fn new(quiet: bool, json: bool) -> Self {
+        Notes {
+            enabled: notes_visible(
+                quiet,
+                json,
+                std::io::IsTerminal::is_terminal(&std::io::stdout()),
+            ),
+        }
+    }
+
+    /// Emit a single-line informational note (prefixed `note:`) on stderr, unless
+    /// notes are suppressed for this invocation.
+    fn say(&self, msg: impl std::fmt::Display) {
+        if self.enabled {
+            eprintln!("note: {msg}");
+        }
+    }
+}
+
+fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
+    if !notes.enabled {
+        return;
+    }
     let Ok(abs) = std::fs::canonicalize(board) else {
         return;
     };
@@ -2248,11 +2306,11 @@ fn warn_sibling_boards(board: &std::path::Path) {
     if found.is_empty() {
         return;
     }
-    eprintln!(
-        "note: {} other board file(s) found nearby — this run only checks '{}':",
+    notes.say(format!(
+        "{} other board file(s) found nearby; this run only checks '{}':",
         found.len(),
         board.display()
-    );
+    ));
     for p in found.iter().take(5) {
         eprintln!("  - {}", p.display());
     }
@@ -2793,6 +2851,37 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max).collect()
+    }
+}
+
+#[cfg(test)]
+mod notes_gate_tests {
+    use super::notes_visible;
+
+    #[test]
+    fn shown_only_for_interactive_non_json_non_quiet() {
+        // Default interactive terminal: the note is discoverable.
+        assert!(notes_visible(false, false, true));
+    }
+
+    #[test]
+    fn quiet_suppresses_notes() {
+        assert!(!notes_visible(true, false, true));
+        assert!(!notes_visible(true, false, false));
+        assert!(!notes_visible(true, true, true));
+    }
+
+    #[test]
+    fn json_never_emits_notes() {
+        // --json is machine output: no note regardless of TTY or quiet.
+        assert!(!notes_visible(false, true, true));
+        assert!(!notes_visible(false, true, false));
+    }
+
+    #[test]
+    fn piped_stdout_suppresses_notes() {
+        // Non-TTY stdout (piped / redirected / CI): keep report output clean.
+        assert!(!notes_visible(false, false, false));
     }
 }
 
