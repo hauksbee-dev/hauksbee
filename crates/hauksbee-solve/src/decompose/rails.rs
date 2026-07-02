@@ -48,17 +48,19 @@
 //! a fixpoint. Decisions are then JOINT: every surviving candidate is held
 //! as a boundary while each island's fragmentation is computed once, because
 //! that is the system the multi-rail balance executor actually solves.
-//! Within a cascade, only the deepest accepted rail tears today; its parent
-//! refuses as [`TearDecision::RefusedCascadeParent`] (see that variant for
-//! the analytic term the executor still lacks), which is exact and merely
-//! forfeits the parent's own speedup.
+//! Within a cascade every accepted rail now tears, parent and child alike:
+//! the balance executor carries the inter-rail shunt term. A parent's KCL
+//! subtracts the current leaving through the shunt toward each accepted child,
+//! whose shunt belongs to no block because it sits between two held rails (see
+//! `orchestrate::balance::RailChannel::children`). The parent no longer has to
+//! stay fused to keep its books straight, so it joins the joint cost
+//! evaluation like any other candidate.
 //!
 //! ## What can refuse a tear
 //!
 //! * **An ideal source on the rail**: already pinned, nothing to tear.
 //! * **Ambiguous feed**: more than one low-impedance path from shallower
 //!   feeds; the scalar-balance bookkeeping assumes one.
-//! * **Cascade parent of an accepted tear**: see above.
 //! * **No fragmentation / unprofitable**: the cost model above (unless
 //!   escalating).
 //!
@@ -128,14 +130,6 @@ pub enum TearDecision {
     RefusedUnprofitable { est_speedup: f64 },
     /// More than one candidate feed path; the scalar balance assumes one.
     RefusedAmbiguousFeed { feeds: usize },
-    /// This rail directly feeds another ACCEPTED tear through its shunt. Its
-    /// own balance equation would need the analytic inter-rail shunt term
-    /// (the child's shunt current appears in the parent's books, but the
-    /// child's block set no longer contains that shunt), which the executor
-    /// does not carry yet. Refusing the parent is exact: it stays fused in
-    /// the feed-side block and merely forfeits its own speedup. Lift this
-    /// refusal when `settle_rails` gains the cascade term.
-    RefusedCascadeParent { child: NodeId },
 }
 
 /// One candidate balance tear, with everything the orchestrator and the
@@ -293,31 +287,13 @@ pub fn detect_balance_tears(
     // one exception and are excluded from that pass because their currents
     // are the analytic balance terms themselves.
 
-    // Cascade parents defer to their deepest surviving child (see the
-    // TearDecision variant for the executor term this waits on). Walk
-    // deepest-first so a parent whose child refused is itself kept.
-    kept.sort_unstable_by_key(|&r| std::cmp::Reverse(depth_of(r)));
-    let mut final_kept: Vec<usize> = Vec::new();
-    for &r in &kept {
-        if let Some(&child) = final_kept
-            .iter()
-            .find(|&&c| links_of[c][0].0 == r)
-        {
-            let (rail_node, feed, dev, ohms) = candidate_of(r);
-            out.push(BalanceTearCandidate {
-                rail: rail_node,
-                feed,
-                shunt: dev,
-                shunt_ohms: ohms,
-                block_sizes: Vec::new(),
-                decision: TearDecision::RefusedCascadeParent {
-                    child: NodeId(child as u32),
-                },
-            });
-        } else {
-            final_kept.push(r);
-        }
-    }
+    // Cascade parents now join the joint decision like everyone else: the
+    // balance executor carries the inter-rail shunt term (a parent's KCL
+    // subtracts the current leaving toward each accepted child, whose shunt
+    // is in no block; see `orchestrate::balance::RailChannel::children`), so a
+    // parent no longer has to stay fused to keep the books straight. Every
+    // surviving candidate is held jointly and fragments once.
+    let final_kept: Vec<usize> = kept;
 
     // Joint fragmentation and cost, per conduction island: every kept rail
     // is held while the island fragments once, because that is the system
@@ -676,8 +652,11 @@ mod tests {
     /// The flagship's founding shape (analysis-probe finding 1): a supply
     /// CASCADE, source -> R1 -> MID -> R2 -> INNER, with the big array on
     /// INNER and a couple of loads on MID. Single-hop detection never
-    /// reached INNER; transitive discovery must, and the cascade rule must
-    /// tear the deepest rail while the parent defers explainably.
+    /// reached INNER; transitive discovery must. Now that the balance executor
+    /// carries the inter-rail shunt term, BOTH rails tear: they share a
+    /// conduction island, so they are decided jointly, and the joint cost on
+    /// this fixture (26 small blocks vs one fused core) clears the outer-loop
+    /// overhead. The parent no longer defers.
     #[test]
     fn stacked_cascade_reaches_and_tears_the_inner_rail() {
         let mut c = Circuit::new();
@@ -769,19 +748,18 @@ mod tests {
             .expect("transitive discovery must reach INNER");
         assert!(
             matches!(inner_cand.decision, TearDecision::Tear { .. }),
-            "the deep array rail must tear: {:?}",
-            inner_cand.decision
+            "the deep array rail must tear: {tears:?}"
         );
         assert_eq!(inner_cand.feed, mid, "INNER is fed from MID");
         let mid_cand = tears
             .iter()
             .find(|t| t.rail == mid)
             .expect("MID is a candidate too");
-        assert_eq!(
-            mid_cand.decision,
-            TearDecision::RefusedCascadeParent { child: inner },
-            "the parent defers to its accepted child"
+        assert!(
+            matches!(mid_cand.decision, TearDecision::Tear { .. }),
+            "the parent tears too now that the executor carries the inter-rail term: {tears:?}"
         );
+        assert_eq!(mid_cand.feed, src, "MID is fed from the source");
     }
 
     /// A rail pinned by its own ideal source is not a candidate at all.

@@ -29,6 +29,16 @@
 //! surplus term is added back inside [`settle_rails`] so every executor gets
 //! the correction whether or not its author has read this paragraph.
 //!
+//! The correction stays exact when rails CASCADE (a stacked feed:
+//! `source -> R1 -> MID -> R2 -> INNER`, both torn). The shunt `R2` between
+//! the two torn rails sits between two held nodes, so it lands in no island
+//! and stamps no gmin; and INNER's blocks stamp their gmin on INNER's own
+//! rail copy, never on MID. MID's `n_loads` therefore still counts exactly
+//! its own blocks, so `(n_loads - 1) * gmin` is the same surplus it always
+//! was. The inter-rail current itself (which MID's block sum misses because
+//! `R2` is in no block) is carried separately as the analytic child-draw term
+//! in [`balance_one`]; see [`RailChannel::children`].
+//!
 //! ## Scope and honesty
 //!
 //! The loop *accepts* the state it reached when the pass budget runs out and
@@ -68,12 +78,25 @@ pub trait RailLoads {
 }
 
 /// Static description of one torn rail under balance.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct RailChannel {
     /// The torn rail node (for reporting; the loop itself is index-based).
     pub rail: NodeId,
     /// The series feed resistance the balance equation divides by.
     pub shunt_ohms: f64,
+    /// Cascade children: rails fed FROM this rail through a shunt. Each entry
+    /// is `(channel index of the child rail, ohms of the connecting shunt)`.
+    ///
+    /// A stacked feed (`source -> R1 -> MID -> R2 -> INNER`, both torn) puts
+    /// the shunt `R2` between two held rails, so it lands in NO island: it is
+    /// neither a block on MID nor on INNER. INNER already books its side of
+    /// `R2` as its analytic feed term `(v_MID - v_INNER)/R2`. MID would then
+    /// MISS that same current as a draw leaving it toward INNER, and its KCL
+    /// would be short by exactly that term. Listing INNER as a child of MID
+    /// restores it (see [`balance_one`]). Empty for a rail that feeds no other
+    /// torn rail, which is every non-cascade rail; the residual is then
+    /// bit-identical to the pre-cascade single-rail form.
+    pub children: Vec<(usize, f64)>,
 }
 
 /// Tunables with their provenance. Defaults reproduce the proven partitioned
@@ -179,11 +202,28 @@ fn balance_one<L: RailLoads>(
     policy: &BalancePolicy,
 ) -> Result<f64, String> {
     // The surplus gmin current the per-block shunts over-drew (module doc).
+    // Cascade note: the gmin count is unaffected by children. A child's own
+    // blocks stamp their gmin on the CHILD's rail copy (counted by the child's
+    // n_loads), never on this rail; and the connecting shunt is in no island,
+    // so it stamps no gmin at all. This rail's `n_loads` therefore still counts
+    // exactly its own blocks, and the surplus correction stays exact under
+    // cascades (module doc, "The gmin double-count correction").
     let surplus = (loads.n_loads(i).saturating_sub(1)) as f64 * gmin;
     let residual = |l: &L| -> f64 {
         let v_rail = l.rail_voltage(i);
         let i_in = (l.feed_voltage(i) - v_rail) / ch.shunt_ohms;
-        i_in - l.current_drawn(i) + surplus * v_rail
+        // Current leaving this rail toward each cascade child through the
+        // connecting shunt. The child books the same current as its analytic
+        // feed term; subtracting it here closes this rail's KCL (module doc,
+        // [`RailChannel::children`]). The finite-difference probe below sees
+        // the -1/r slope this adds automatically, since the child's rail
+        // voltage is held while this rail moves.
+        let child_draw: f64 = ch
+            .children
+            .iter()
+            .map(|&(j, r)| (v_rail - l.rail_voltage(j)) / r)
+            .sum();
+        i_in - l.current_drawn(i) + surplus * v_rail - child_draw
     };
 
     let v0 = loads.rail_voltage(i);
@@ -277,6 +317,7 @@ mod tests {
             .map(|k| RailChannel {
                 rail: NodeId(k as u32 + 1),
                 shunt_ohms: r,
+                children: Vec::new(),
             })
             .collect()
     }
@@ -361,6 +402,146 @@ mod tests {
                 loads.v[i]
             );
         }
+    }
+
+    /// A two-rail CASCADE, the stacked-feed shape: SRC -> R1 -> MID -> R2 ->
+    /// INNER, both rails torn, linear block loads (plus per-block gmin) on
+    /// each. INNER's feed is MID's LIVE rail voltage and the shunt R2 between
+    /// the two torn rails belongs to no block, so MID's KCL depends on the
+    /// analytic child-draw term. The closed-form monolithic 2x2 solution is
+    /// truth, so this proves the child term (and that the gmin correction is
+    /// still exact once per rail) rather than checking the loop against itself.
+    struct CascadeLoads {
+        vsrc: f64,
+        r1: f64,
+        r2: f64,
+        g_mid: Vec<f64>,
+        g_inner: Vec<f64>,
+        v: Vec<f64>, // [v_mid, v_inner]
+        gmin: f64,
+    }
+
+    impl CascadeLoads {
+        /// The monolithic node solution: one gmin per rail, R2 carrying its
+        /// current between the two shared rail nodes exactly once.
+        fn monolithic(&self) -> (f64, f64) {
+            let g1 = 1.0 / self.r1;
+            let g2 = 1.0 / self.r2;
+            let gm: f64 = self.g_mid.iter().sum::<f64>() + self.gmin;
+            let gi: f64 = self.g_inner.iter().sum::<f64>() + self.gmin;
+            // INNER: v_inner = G2 v_mid / (G2 + Gi); MID row substituted.
+            let v_mid = g1 * self.vsrc / ((g1 + gm + g2) - g2 * g2 / (g2 + gi));
+            let v_inner = g2 * v_mid / (g2 + gi);
+            (v_mid, v_inner)
+        }
+    }
+
+    impl RailLoads for CascadeLoads {
+        fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String> {
+            self.v[i] = v_rail;
+            Ok(())
+        }
+        fn rail_voltage(&self, i: usize) -> f64 {
+            self.v[i]
+        }
+        fn feed_voltage(&self, i: usize) -> f64 {
+            // MID is fed by the pinned source; INNER is fed by MID's live rail.
+            if i == 0 {
+                self.vsrc
+            } else {
+                self.v[0]
+            }
+        }
+        fn current_drawn(&self, i: usize) -> f64 {
+            let blocks = if i == 0 { &self.g_mid } else { &self.g_inner };
+            blocks.iter().map(|g| (g + self.gmin) * self.v[i]).sum()
+        }
+        fn n_loads(&self, i: usize) -> usize {
+            if i == 0 {
+                self.g_mid.len()
+            } else {
+                self.g_inner.len()
+            }
+        }
+    }
+
+    #[test]
+    fn cascade_child_term_settles_to_the_monolithic_answer() {
+        let (r1, r2) = (500.0, 1e3);
+        let mut loads = CascadeLoads {
+            vsrc: 5.0,
+            r1,
+            r2,
+            g_mid: vec![1e-4, 2e-4],
+            g_inner: vec![1e-4; 24],
+            v: vec![0.0, 0.0],
+            gmin: GMIN,
+        };
+        // MID (channel 0) feeds INNER (channel 1) through R2; that is the
+        // child link the parent's KCL would otherwise miss.
+        let channels = vec![
+            RailChannel {
+                rail: NodeId(1),
+                shunt_ohms: r1,
+                children: vec![(1, r2)],
+            },
+            RailChannel {
+                rail: NodeId(2),
+                shunt_ohms: r2,
+                children: Vec::new(),
+            },
+        ];
+        let rep =
+            settle_rails(&mut loads, &channels, GMIN, VNTOL, ABSTOL, &BalancePolicy::default())
+                .unwrap();
+        assert!(rep.converged, "{rep:?}");
+        let (mv, iv) = loads.monolithic();
+        // The two rails couple, so this is block Gauss-Seidel and the outer
+        // loop stops at its voltage-referred target (v_target_frac * vntol =
+        // 1e-7), not at machine zero the way an uncoupled single rail does.
+        // Observed error is ~1e-9, two decades inside that target; a MISSING
+        // child term would bias MID by ~0.7 V (the ~2.3 mA of (v_mid -
+        // v_inner)/R2 divided by MID's ~3.3 mS total conductance), which the
+        // sibling test pins.
+        assert!(
+            (loads.v[0] - mv).abs() < 1e-8,
+            "MID {} vs monolithic {mv} (child draw missing?)",
+            loads.v[0]
+        );
+        assert!(
+            (loads.v[1] - iv).abs() < 1e-8,
+            "INNER {} vs monolithic {iv}",
+            loads.v[1]
+        );
+    }
+
+    /// Without the child-draw term, the parent's KCL is short by the shunt
+    /// current leaving toward the child, biasing MID high. This pins that the
+    /// term is load-bearing: a cascade where dropping it is measurable at the
+    /// gate tolerance, mirroring `gmin_double_count_is_corrected`.
+    #[test]
+    fn cascade_parent_without_child_term_would_be_wrong() {
+        let (r1, r2) = (500.0, 1e3);
+        let loads = CascadeLoads {
+            vsrc: 5.0,
+            r1,
+            r2,
+            g_mid: vec![1e-4, 2e-4],
+            g_inner: vec![1e-4; 24],
+            v: vec![0.0, 0.0],
+            gmin: GMIN,
+        };
+        let (mv, _) = loads.monolithic();
+        // The missed current at the true solution is (v_mid - v_inner)/R2,
+        // which referred back through MID's conductance is far above 1e-9. We
+        // assert the fixture is non-degenerate (the child current is a real
+        // term), so the settled-match test above is not vacuous.
+        let (_, iv) = loads.monolithic();
+        let missed = (mv - iv) / r2;
+        assert!(
+            missed.abs() > 1e-6,
+            "child draw is negligible on this fixture; the match test is vacuous: {missed:e}"
+        );
     }
 
     /// A flat residual (blocks whose draw ignores the rail voltage entirely,
