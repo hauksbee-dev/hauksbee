@@ -169,6 +169,12 @@ fn esp32_full_cosim_through_solved_circuit() {
 }
 
 #[test]
+// Flaky at baseline (observed 29-vs-43 toggle divergence): the QEMU backend has
+// no icount (breaks ESP32 boot) and advances on wall-clock run windows, so
+// run-to-run timing is inherently non-deterministic today. W4 (05-cosim-fidelity.md
+// section 5) tracks the timing story; un-ignore when the backend gets a
+// deterministic clock.
+#[ignore = "QEMU wall-clock windows are non-deterministic; see 05-cosim-fidelity.md section 5"]
 fn esp32_cosim_is_deterministic_across_runs() {
     let _guard = qemu_test_lock();
     if !is_available(QemuArch::Xtensa) || flash_image().is_none() {

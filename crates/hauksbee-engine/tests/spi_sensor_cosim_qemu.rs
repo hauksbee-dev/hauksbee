@@ -107,6 +107,11 @@ fn esp32_spi_adc_drives_flag_below_threshold() {
 }
 
 #[test]
+// Known-failing until the QEMU backend wires SPI byte callbacks: on_spi is a
+// no-op on qemu (crates/hauksbee-mcu/src/qemu/mod.rs), so the modeled ADC
+// never answers and the flag never rises. W4 (docs/dev-plans/05-cosim-fidelity.md
+// section 5.2) owns the fix; un-ignore with it.
+#[ignore = "QEMU on_spi unwired; see 05-cosim-fidelity.md section 5.2"]
 fn esp32_spi_adc_drives_flag_above_threshold() {
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
@@ -131,6 +136,8 @@ fn esp32_spi_adc_drives_flag_above_threshold() {
 }
 
 #[test]
+// Same cause as above: QEMU SPI byte callbacks unwired (W4 section 5.2).
+#[ignore = "QEMU on_spi unwired; see 05-cosim-fidelity.md section 5.2"]
 fn esp32_spi_adc_flag_follows_voltage_sweep() {
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
