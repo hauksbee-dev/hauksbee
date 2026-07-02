@@ -426,6 +426,20 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                     )));
                 }
 
+                // SPI framing honesty: a bus whose transaction boundaries are
+                // guessed at chunk edges (no CS pin resolved, backend does not
+                // frame) can merge or truncate transactions; say so instead of
+                // presenting its traffic as exactly framed.
+                if !u.heuristic_spi_buses.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "SPI framing is heuristic on [{}]: transaction boundaries are guessed at chunk edges (wire cs_net in the spec for exact framing)",
+                            u.heuristic_spi_buses.join(", ")
+                        ),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                }
+
                 // ── Stall honesty ─────────────────────────────────────────────
                 // If the firmware never drove any GPIO and never printed
                 // anything, say so plainly rather than freezing silently. While

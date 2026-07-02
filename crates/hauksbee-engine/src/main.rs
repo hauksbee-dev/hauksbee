@@ -2182,6 +2182,14 @@ fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJso
         activity_summary,
         analog_valid,
         failed_windows,
+        spi_framing: sched
+            .spi_framing_modes()
+            .into_iter()
+            .map(|(bus, mode)| hauksbee_engine::result::CosimSpiFraming {
+                bus,
+                mode: mode.as_str().to_string(),
+            })
+            .collect(),
     })
 }
 

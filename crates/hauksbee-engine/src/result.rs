@@ -521,6 +521,20 @@ pub struct CosimJson {
     /// (and omitted from JSON) on a valid run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_windows: Vec<CosimFailedWindow>,
+    /// Per-SPI-bus transaction-framing tier: "exact" (framed on real CS GPIO
+    /// edges), "backend" (the emulator frames CS itself), or "heuristic" (the
+    /// chunk-boundary fallback, honest about its two documented failure
+    /// modes). Empty (and omitted) when the board has no SPI buses; mirrors
+    /// the web co-sim section so the CLI JSON carries the same coverage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spi_framing: Vec<CosimSpiFraming>,
+}
+
+/// One SPI bus's framing tier (see [`CosimJson::spi_framing`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct CosimSpiFraming {
+    pub bus: String,
+    pub mode: String,
 }
 
 /// One sim-time window `[start_s, end_s)` where the analog solve failed to
