@@ -159,6 +159,23 @@ pub struct WebCosimSection {
     /// (and omitted) on a clean run. Mirrors the CLI `--json` `failed_windows`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_windows: Vec<WebFailedWindow>,
+    /// Per-SPI-slave chip-select framing tier (05 §2): `exact` (framed from the
+    /// resolved CS pin's real GPIO edges), `backend` (the backend surfaced CS
+    /// itself, e.g. Renode hardware-NSS FinishTransmission), or `heuristic` (no
+    /// resolved CS, the chunk-boundary fallback, whose two failure modes are
+    /// surfaced here rather than hidden). Empty (and omitted) when the board has
+    /// no SPI slaves, so the common JSON shape is unchanged for existing consumers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spi_framing: Vec<WebSpiFraming>,
+}
+
+/// One SPI slave's chip-select framing tier, for the co-sim coverage (05 §2).
+#[derive(Debug, Clone, Serialize)]
+pub struct WebSpiFraming {
+    /// The bus / slave id (its reference designator).
+    pub bus: String,
+    /// `"exact"` | `"backend"` | `"heuristic"`.
+    pub mode: String,
 }
 
 /// One sim-time window `[start_s, end_s)` where the analog co-sim solve failed to
@@ -390,6 +407,7 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         // clean, backward-compatible shape (valid, no windows).
         analog_valid: true,
         failed_windows: Vec::new(),
+        spi_framing: Vec::new(),
     }
 }
 
@@ -625,6 +643,18 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
 
     let uart_output = String::from_utf8_lossy(&last_uart).trim_end().to_string();
 
+    // Per-slave CS framing tier: exact | backend | heuristic (05 §2). Surfaced so
+    // a JSON consumer can tell which slaves' transaction boundaries are real and
+    // which are the chunk-boundary guess.
+    let spi_framing: Vec<WebSpiFraming> = sched
+        .spi_framing_modes()
+        .into_iter()
+        .map(|(bus, mode)| WebSpiFraming {
+            bus,
+            mode: mode.as_str().to_string(),
+        })
+        .collect();
+
     WebCosimSection {
         ran: true,
         seconds_simulated,
@@ -633,6 +663,7 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
         gpio_nets,
         analog_valid,
         failed_windows,
+        spi_framing,
     }
 }
 
@@ -923,6 +954,7 @@ mod tests {
             gpio_nets: Vec::new(),
             analog_valid: false,
             failed_windows: vec![WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
+            spi_framing: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         assert!(

@@ -96,8 +96,8 @@ fn per_controller_spi_routing_no_crosstalk() {
     )));
 
     let mut sched = empty_scheduler();
-    sched.attach_spi_bus_on("spi2", bus_aa.clone());
-    sched.attach_spi_bus_on("spi3", bus_bb.clone());
+    sched.attach_spi_bus_on("spi2", bus_aa.clone(), None);
+    sched.attach_spi_bus_on("spi3", bus_bb.clone(), None);
 
     // Verify the controller map lookup: spi2 -> bus_aa, spi3 -> bus_bb.
     // Arc::ptr_eq checks physical identity, not just value equality, so a
@@ -157,8 +157,8 @@ fn attach_spi_bus_on_coexists_with_legacy_attach_spi_bus() {
     )));
 
     let mut sched = empty_scheduler();
-    sched.attach_spi_bus(legacy_bus.clone());
-    sched.attach_spi_bus_on("spi2", named_bus.clone());
+    sched.attach_spi_bus(legacy_bus.clone(), None);
+    sched.attach_spi_bus_on("spi2", named_bus.clone(), None);
 
     // Both show up in the flat spi_buses() slice.
     assert_eq!(sched.spi_buses().len(), 2);
