@@ -14,3 +14,20 @@ num-complex = { workspace = true }
 anyhow = { workspace = true }
 num-complex = { workspace = true }
 serde_json = { workspace = true }
+# S2 benchmark harness (docs/dev-plans/03-solver-performance.md §9). Criterion's
+# default features pull in `plotters` (heavy transitive tree, HTML report render
+# we do not use: bench.sh reads the JSON estimates instead) and `rayon` (its own
+# thread pool, which would fight the solver's parallel island pool once S4 lands
+# and could skew wall-time). We keep only `cargo_bench_support` so the benches
+# run under `cargo bench` and criterion's built-in `--save-baseline` / compare
+# still work; that is all the harness needs.
+criterion = { version = "0.5", default-features = false, features = [
+    "cargo_bench_support",
+] }
+
+# Graded-board benchmarks. `harness = false` hands the binary to criterion's own
+# runner instead of libtest, which is what gives us medians, baselines, and the
+# `-- --test` smoke mode.
+[[bench]]
+name = "graded_boards"
+harness = false
