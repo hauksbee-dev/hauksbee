@@ -1147,6 +1147,7 @@ mod tests {
             confidence: Confidence::Exact,
             outcome,
             warning: warning.map(|s| s.to_string()),
+            guesses: Vec::new(),
         }
     }
 
