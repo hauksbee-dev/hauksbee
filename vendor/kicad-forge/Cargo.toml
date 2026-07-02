@@ -1,0 +1,24 @@
+# Vendored copy of the forge-* crates from the sibling kicad-forge repo.
+# This is its OWN workspace (kept out of the hauksbee workspace via
+# `exclude = ["vendor/kicad-forge"]` in the root Cargo.toml) so the vendored
+# crates resolve their `.workspace = true` fields against these values and do
+# not get pulled into hauksbee's build/test graph as members.
+# See VENDORED.md for the source repo, commit, and update procedure.
+[workspace]
+resolver = "2"
+members = [
+    "crates/forge-sexpr",
+    "crates/forge-model",
+    "crates/forge-codegen",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+lto = "thin"
+
+[profile.dev]
+opt-level = 1

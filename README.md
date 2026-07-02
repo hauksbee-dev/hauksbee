@@ -148,7 +148,7 @@ Partition the circuit at device boundaries and give every island the cheapest so
 | `hauksbee-server` | websocket server streaming live simulation frames |
 | `frontend/` | the board, alive: 2D/3D render, signal flow, probes, scope |
 
-Sibling repo [`kicad-forge`](../kicad-forge): lossless KiCad parse/produce (byte-exact round-trip), the typed board model hauksbee extracts from, and board-to-code decompilation.
+Upstream repo [`kicad-forge`](https://github.com/ETM-Code/kicad-forge): lossless KiCad parse/produce (byte-exact round-trip), the typed board model hauksbee extracts from, and board-to-code decompilation. Its `forge-sexpr`, `forge-model`, and `forge-codegen` crates are vendored into this repo under [`vendor/kicad-forge`](vendor/kicad-forge) so a fresh clone builds with no sibling checkout; see [`vendor/kicad-forge/VENDORED.md`](vendor/kicad-forge/VENDORED.md).
 
 ---
 

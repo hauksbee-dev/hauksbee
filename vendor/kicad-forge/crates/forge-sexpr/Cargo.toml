@@ -1,0 +1,10 @@
+[package]
+name = "forge-sexpr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Lossless s-expression CST for KiCad file formats: parse, edit, emit byte-identical"
+
+[dependencies]
+
+[dev-dependencies]

@@ -15,7 +15,7 @@
 # (see crates/hauksbee-mcu and forge-codegen), so they work out of the box.
 #
 # BUILD CONTEXT and multi-arch: identical to Dockerfile.slim. Build from the
-# parent dir holding hauksbee/ and kicad-forge/ siblings:
+# parent dir holding this repo (forge-* crates are vendored inside it):
 #   docker build -f hauksbee/docker/Dockerfile.full -t hauksbee:full parent/
 # buildx produces linux/amd64 + linux/arm64; the Renode and ESP-QEMU downloads
 # select the right per-arch asset from TARGETARCH.

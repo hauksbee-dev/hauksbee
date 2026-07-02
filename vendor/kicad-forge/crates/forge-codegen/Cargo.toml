@@ -1,0 +1,9 @@
+[package]
+name = "forge-codegen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+forge-sexpr = { path = "../forge-sexpr" }
+forge-model = { path = "../forge-model" }
