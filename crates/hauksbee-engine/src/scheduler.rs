@@ -32,7 +32,9 @@ use hauksbee_solve::{Layout, SolverOptions, Transient};
 use crate::behavioral::BehavioralDevice;
 use crate::binder::{gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::{DigitalComponent, PinEdge};
-use crate::peripherals::{I2cBus, Mcp4728, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
+use crate::peripherals::{
+    I2cBus, Mcp4728, PeripheralSet, SpiBus, SpiFramingMode, TickCtx, TimelineEvent,
+};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
 
@@ -48,6 +50,21 @@ pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 /// reporting fiction (held stale voltages), so it must refuse rather than fake
 /// (05 §3b, master doctrine §5).
 pub const STRICT_CONSECUTIVE_FAILED_ABORT: u32 = 3;
+
+/// Live chip-select framing hook installed by [`Scheduler::attach_spi_bus`] when
+/// the binder resolved a slave's CS net to an MCU pin (05 §2.1). When `pin`
+/// toggles, the `on_pin_change` closure frames `bus` from the REAL chip-select
+/// edge, synchronously and in cycle order with the byte stream: on a push backend
+/// (simavr) the SPI byte IRQ and the CS GPIO IRQ both fire inside `avr_run`, so
+/// asserting/deasserting here interleaves the transaction boundaries exactly where
+/// the firmware put them (mid-chunk included), instead of guessing at the chunk
+/// boundary. SPI CS is active-low by convention: a falling edge (level=false)
+/// asserts (begin transaction), a rising edge (level=true) deasserts (end).
+struct CsFrame {
+    pin: (char, u8),
+    active_low: bool,
+    bus: Arc<Mutex<SpiBus>>,
+}
 
 /// Captured state shared between an MCU's C callbacks and the scheduler.
 #[derive(Default)]
@@ -65,6 +82,11 @@ struct McuShared {
     pin_edge_log: Vec<PinEdge>,
     /// UART bytes the firmware emitted since last drain.
     uart_out: Vec<u8>,
+    /// Live CS-framing hooks for SPI slaves whose CS net resolved to a pin on
+    /// this MCU (05 §2.1). Consulted by the `on_pin_change` closure so a CS edge
+    /// frames its bus in true cycle order with the byte transfers. Empty on the
+    /// heuristic path (no resolved CS pin), so this is zero-overhead there.
+    cs_frames: Vec<CsFrame>,
 }
 
 /// One live MCU core plus its binding and shared capture state.
@@ -564,20 +586,32 @@ impl Scheduler {
     }
 
     /// Attach a SPI bus and register it as every live MCU's `on_spi` handler.
-    pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>) {
+    ///
+    /// `cs_pin` is the MCU pin `(port, bit)` that drives the slave's chip-select
+    /// net, when the binder resolved it (05 §2.1). `Some` puts the bus on exact
+    /// CS-edge framing: the CS GPIO edge stream frames each transaction at its
+    /// true assert/deassert, so two transactions in one chunk are separated and a
+    /// boundary-spanning transaction is not truncated. `None` leaves the bus on
+    /// the chunk-boundary heuristic (the pre-05-§2 behaviour), reported honestly
+    /// as `heuristic` in the co-sim coverage.
+    pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>, cs_pin: Option<(char, u8)>) {
+        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
         for m in &mut self.mcus {
             let b = bus.clone();
             m.core.on_spi(Box::new(move |ev| {
                 let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
                 if ev.deselect {
-                    // Chip-select deasserted: reset the slave state machine.
-                    guard.slave_deselect();
+                    // A backend-surfaced CS deassert (Renode hardware-NSS
+                    // FinishTransmission): the backend frames CS itself, so record
+                    // that (coverage reports `backend`) and end the transaction.
+                    guard.note_backend_deselect();
                     0xFF
                 } else {
                     guard.transfer(ev.mosi)
                 }
             }));
         }
+        self.register_cs_frame(&bus, cs_pin);
         self.spi_buses.push(bus);
     }
 
@@ -590,14 +624,23 @@ impl Scheduler {
     ///
     /// The bus is also added to `spi_buses` so the chunk-boundary deselect
     /// loop (which is controller-agnostic) can reach it.
-    pub fn attach_spi_bus_on(&mut self, controller: &str, bus: Arc<Mutex<SpiBus>>) {
+    ///
+    /// `cs_pin` behaves exactly as in [`attach_spi_bus`]: `Some` frames from the
+    /// real CS edge, `None` falls back to the chunk-boundary heuristic.
+    pub fn attach_spi_bus_on(
+        &mut self,
+        controller: &str,
+        bus: Arc<Mutex<SpiBus>>,
+        cs_pin: Option<(char, u8)>,
+    ) {
+        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
         for m in &mut self.mcus {
             let b = bus.clone();
             let ctrl = controller.to_string();
             m.core.on_spi_controller(&ctrl, Box::new(move |ev| {
                 let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
                 if ev.deselect {
-                    guard.slave_deselect();
+                    guard.note_backend_deselect();
                     0xFF
                 } else {
                     guard.transfer(ev.mosi)
@@ -605,7 +648,58 @@ impl Scheduler {
             }));
         }
         self.spi_controller_map.insert(controller.to_string(), bus.clone());
+        self.register_cs_frame(&bus, cs_pin);
         self.spi_buses.push(bus);
+    }
+
+    /// Install the live CS-framing hook for `bus` on whichever MCU actually
+    /// drives `cs_pin` (05 §2.1). Registers the hook only on the MCU whose binding
+    /// owns a GPIO driver for that pin, so a different MCU's identically-named pin
+    /// cannot spuriously frame the bus. A `None` pin (unresolved CS) installs
+    /// nothing and the bus stays on the chunk-boundary heuristic.
+    fn register_cs_frame(&mut self, bus: &Arc<Mutex<SpiBus>>, cs_pin: Option<(char, u8)>) {
+        let Some(pin) = cs_pin else { return };
+        for m in &mut self.mcus {
+            if m.binding.gpio_drivers.contains_key(&pin) {
+                let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
+                sh.cs_frames.push(CsFrame {
+                    pin,
+                    active_low: true,
+                    bus: bus.clone(),
+                });
+            }
+        }
+    }
+
+    /// Trace a net back to the MCU pin that drives it: the (port, bit) of the
+    /// GPIO driver whose net is `node`, if any MCU drives it. This is the CS-net
+    /// resolution the binder uses to populate `cs_pin` (05 §2.1): the same
+    /// net-to-driving-pin trace the 74HC595 chain wiring performs to find its
+    /// SRCLK/RCLK/SER pins. Returns the first match (a net is driven by at most
+    /// one MCU push-pull output in a well-formed board).
+    pub fn pin_driving_node(&self, node: NodeId) -> Option<(char, u8)> {
+        for m in &self.mcus {
+            for (pin, drv) in &m.binding.gpio_drivers {
+                if drv.net == node {
+                    return Some(*pin);
+                }
+            }
+        }
+        None
+    }
+
+    /// Per-slave SPI framing tier for the co-sim coverage: `(bus id, mode)` for
+    /// every attached SPI bus (05 §2). A consumer reads this to know whether each
+    /// slave's transaction boundaries are real (`exact`/`backend`) or guessed
+    /// (`heuristic`).
+    pub fn spi_framing_modes(&self) -> Vec<(String, SpiFramingMode)> {
+        self.spi_buses
+            .iter()
+            .map(|b| {
+                let g = b.lock().unwrap_or_else(|e| e.into_inner());
+                (g.id().to_string(), g.framing_mode())
+            })
+            .collect()
     }
 
     /// Look up the SPI bus attached to a specific named controller.
@@ -990,53 +1084,62 @@ impl Scheduler {
             self.peripherals.post_solve(&mut ctx);
         }
 
-        // 3c. SPI bus chunk-boundary deselect (chunk-cadence CS heuristic).
+        // 3c. SPI bus chunk-boundary deselect: HEURISTIC-MODE BUSES ONLY.
         //
-        // This resets each SPI slave's command state machine so the next
-        // transaction starts fresh. It is a HEURISTIC standing in for a real
-        // chip-select edge, inherited from the AVR backend: simavr's SPI IRQ
-        // surfaces only byte transfers, never CS, so the chunk boundary is used
-        // as a frame boundary. The Renode backend has the same gap for software-
-        // NSS firmware (SSM=1, SSI=1 in STM32 SPI CR1): `STM32SPI` only fires
-        // `FinishTransmission` on a hardware NSS toggle, so soft-NSS firmware
-        // never produces a real CS edge and the chunk boundary is the only
-        // reliable reset point. Backends that DO surface CS (hardware NSS ->
-        // `FinishTransmission`) reset earlier and more precisely via the
-        // `deselect` SpiEvent in `attach_spi_bus`; this call is then idempotent.
+        // History: this used to deselect EVERY bus unconditionally at the chunk
+        // boundary, standing in for a real chip-select edge because simavr's SPI
+        // IRQ surfaces only byte transfers, never CS. That heuristic was wrong in
+        // two documented ways (the comment deleted here, 05 §2):
+        //   * two CS-framed transactions inside one chunk were NOT separated:
+        //     the second transaction's bytes appended to the first slave's state,
+        //     because no reset happened between them; and
+        //   * a single transaction SPANNING a chunk boundary was reset mid-way:
+        //     the slave deselected with bytes still pending, corrupting the reply
+        //     (the debug guard below fired on exactly this case).
         //
-        // LIMITATIONS (where the heuristic is wrong):
-        //   * Two CS-framed transactions inside one chunk are NOT separated: the
-        //     second transaction's bytes are appended to the first slave state,
-        //     because no reset happens between them.
-        //   * A single transaction that SPANS a chunk boundary is reset mid-way:
-        //     the slave is deselected with bytes still pending, corrupting the
-        //     reply. The debug guard below flags exactly this case.
-        // Both are avoided in practice by keeping the chunk period larger than a
-        // full transaction's wall-time and firmware that issues at most one
-        // transaction per chunk. A correct fix needs a real per-edge CS path
-        // from the backend (hardware NSS or a software-NSS GPIO watch).
+        // Both are now fixed for buses with a real CS source. When the binder
+        // resolved the CS net to an MCU pin (`cs_pin`), the `on_pin_change`
+        // closure frames transactions at the true active-low CS edges (mid-chunk
+        // included) via the `CsFrame` hook (05 §2.1); and a backend that surfaces
+        // CS itself (Renode hardware-NSS `FinishTransmission`) frames via the
+        // `note_backend_deselect` path. For those buses (`frames_itself()`), a
+        // chunk-boundary reset would REINTRODUCE failure mode b (truncating a
+        // legitimately boundary-spanning transaction), so we SKIP it and let the
+        // real CS edges own framing (05 §2, failure mode b).
         //
-        // Runs UNCONDITIONALLY on a failed chunk (05 §3b), for the same reason as
-        // the 3b post_solve deselects: this is a DIGITAL frame-boundary reset of
-        // the SPI slave command state machine, not an analog sample. The byte
-        // transfers it frames already happened in this chunk's `run_micros`, so
-        // whether the analog march converged is irrelevant. Skipping it on a
-        // failed chunk would leave the slave mid-command and desync the next
-        // transaction, so we keep it and instead surface the failed span via
-        // `failed_windows` / `analog_valid:false` for any downstream consumer.
+        // Only buses still on the heuristic (no resolved CS pin, no backend CS
+        // event, e.g. simavr with an unrouted CS, or Renode software-NSS) keep
+        // the chunk-boundary deselect, and their coverage says `heuristic` so the
+        // guess is surfaced rather than hidden.
+        //
+        // Runs UNCONDITIONALLY on a failed chunk (05 §3b), same reason as the 3b
+        // post_solve deselects: this is a DIGITAL frame-boundary reset of the SPI
+        // slave command state machine, not an analog sample. The byte transfers it
+        // frames already happened in this chunk's `run_micros`, so whether the
+        // analog march converged is irrelevant; skipping it would desync the next
+        // transaction, so we keep it and surface the failed span via
+        // `failed_windows` / `analog_valid:false` instead.
         for bus in &self.spi_buses {
             let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
-            // Debug-only: a slave still mid-transaction at the chunk boundary
-            // means a transfer spanned the boundary — the heuristic cannot frame
-            // it. Warn loudly in debug builds rather than silently truncating.
-            // (Not an assert/panic: spanning is a known limitation, not a bug to
-            // abort on, and some firmware cadences may legitimately hit it.)
+            // Real-CS buses frame themselves; the chunk boundary must not touch
+            // them (05 §2, failure mode b). The debug warning below therefore also
+            // stops firing for them: a spanning transaction is now correct, not a
+            // truncation to warn about.
+            if guard.frames_itself() {
+                continue;
+            }
+            // Debug-only: a heuristic-mode slave still mid-transaction at the chunk
+            // boundary means a transfer spanned the boundary, and the heuristic cannot
+            // frame it. Warn loudly in debug builds rather than silently truncating.
+            // (Not an assert/panic: spanning is a known limitation of the heuristic
+            // path, not a bug to abort on.)
             #[cfg(debug_assertions)]
             if guard.slave_mid_transaction() {
                 eprintln!(
                     "WARN: SPI bus '{}' deselected mid-transaction at chunk boundary \
                      (transfer spans the {:.3} ms chunk); reply may be truncated. \
-                     Increase chunk_s or use a backend that surfaces chip-select.",
+                     Resolve the CS net (cs_pin) or use a backend that surfaces \
+                     chip-select for exact framing.",
                     guard.id(),
                     chunk * 1e3,
                 );
@@ -2162,6 +2265,29 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
             bit: pin.bit,
             level: high,
         });
+        // Real SPI chip-select framing (05 §2.1): if this pin drives a slave's
+        // CS net, frame that transaction NOW, interleaved in cycle order with the
+        // byte transfers (which arrive through the separate `on_spi` closure).
+        // Collect the matching buses while holding the McuShared lock, then RELEASE
+        // it before taking a bus lock: the lock order is always McuShared -> SpiBus
+        // (the `on_spi` closure only ever takes the bus lock), so never invert it.
+        let mut frames: Vec<(Arc<Mutex<SpiBus>>, bool)> = Vec::new();
+        for f in &sh.cs_frames {
+            if f.pin == (pin.port, pin.bit) {
+                // Active-low CS: falling edge (level=false) asserts, rising deasserts.
+                let asserted = if f.active_low { !high } else { high };
+                frames.push((f.bus.clone(), asserted));
+            }
+        }
+        drop(sh);
+        for (bus, asserted) in frames {
+            let mut b = bus.lock().unwrap_or_else(|e| e.into_inner());
+            if asserted {
+                b.cs_assert();
+            } else {
+                b.cs_deassert();
+            }
+        }
     }));
     let uart_sink = shared.clone();
     core.on_uart(Box::new(move |b: u8| {

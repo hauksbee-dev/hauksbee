@@ -424,8 +424,22 @@ unsafe extern "C" fn spi_output_hook(
         let mosi = value as u8;
         let avr = s.avr_ptr;
 
+        // The SPI IRQ fires synchronously inside `avr_run`, so `avr->cycle` here
+        // is the EXACT cycle of this byte transfer, the same clock the pin-edge
+        // hook stamps. Carrying it lets the scheduler interleave the byte stream
+        // with the CS-pin edge stream in true order for real CS framing (05 §2).
+        let cycle = if avr.is_null() {
+            0
+        } else {
+            unsafe { (*avr).cycle }
+        };
+
         let miso = if let Some(cb) = &mut s.callbacks.on_spi {
-            cb(SpiEvent { mosi, deselect: false })
+            cb(SpiEvent {
+                mosi,
+                deselect: false,
+                cycle,
+            })
         } else {
             0xFF
         };
