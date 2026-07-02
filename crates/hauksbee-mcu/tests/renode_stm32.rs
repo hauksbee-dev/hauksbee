@@ -67,7 +67,7 @@ fn stm32_pc13_led_toggles() {
     let pc13 = PinId { port: 'C', bit: 13 };
     let toggles: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     let counter = toggles.clone();
-    mcu.on_pin_change(Box::new(move |pin, _high| {
+    mcu.on_pin_change(Box::new(move |pin, _high, _cycle| {
         if pin == pc13 {
             *counter.lock().unwrap() += 1;
         }

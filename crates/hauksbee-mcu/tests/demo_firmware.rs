@@ -75,7 +75,7 @@ fn led_blinks_on_pb5() {
     };
     let edges: Arc<Mutex<u32>> = Arc::default();
     let counter = edges.clone();
-    mcu.on_pin_change(Box::new(move |pin: PinId, _high| {
+    mcu.on_pin_change(Box::new(move |pin: PinId, _high, _cycle| {
         if pin.port == 'B' && pin.bit == 5 {
             *counter.lock().unwrap() += 1;
         }

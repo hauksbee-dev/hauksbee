@@ -391,7 +391,7 @@ pub struct QemuBackend {
     in_shadow: HashMap<char, u32>,
     /// If set, only these bank letters are polled each chunk.
     active_ports: Option<Vec<char>>,
-    on_pin_change: Option<Box<dyn FnMut(PinId, bool) + Send>>,
+    on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
     on_uart: Option<Box<dyn FnMut(u8) + Send>>,
     firmware_loaded: bool,
     /// Virtual time advanced so far, in cycles-equivalent.
@@ -529,6 +529,10 @@ impl QemuBackend {
                 .collect(),
             None => self.config.banks.clone(),
         };
+        // Wall-clock-derived poll boundary time, in cycles-equivalent. QEMU has
+        // no icount here, so this is coarse and every edge this poll shares it;
+        // `cycle_exact()` is false (05 §1.1). Snapshot before the callback borrow.
+        let cyc = self.cycles;
         for bank in &banks {
             let new = self.read_out(bank);
             let prev = *self.last_out.get(&bank.letter).unwrap_or(&0);
@@ -544,6 +548,7 @@ impl QemuBackend {
                                     bit,
                                 },
                                 high,
+                                cyc,
                             );
                         }
                     }
@@ -682,8 +687,18 @@ impl Mcu for QemuBackend {
         // The demo couples through the GPIO/LED path, not the ADC.
     }
 
-    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool) + Send>) {
+    fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
         self.on_pin_change = Some(cb);
+    }
+
+    fn current_cycle(&self) -> u64 {
+        self.cycles
+    }
+
+    fn cycle_exact(&self) -> bool {
+        // Wall-clock-derived virtual time, no icount: GPIO is observed by diffing
+        // a RAM-mailbox output word per chunk, so edge ordering is coarse (05 §1.1).
+        false
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {
