@@ -62,6 +62,10 @@ pub struct CosimUpdate {
     /// looks quiet. `Default` is `false`, so build every real snapshot through
     /// `build_update` (which sets it) rather than relying on the derive.
     pub analog_valid: bool,
+    /// SPI buses still framed by the chunk-boundary heuristic (no CS pin
+    /// resolved and the backend does not frame itself): their transaction
+    /// boundaries are guessed, which the pane says out loud.
+    pub heuristic_spi_buses: Vec<String>,
     /// Count of chunks whose analog solve failed this run. `0` on a clean run;
     /// non-zero drives the loud invalid line in the pane. Kept alongside
     /// `analog_valid` so the pane can say HOW MANY chunks were held stale.
@@ -234,11 +238,18 @@ fn run_worker(
         // so the pane can refuse rather than present them as trustworthy.
         let analog_valid = engine.scheduler().analog_valid();
         let failed_chunk_count = engine.scheduler().failed_chunk_count();
+        let heuristic_spi_buses: Vec<String> = engine
+            .scheduler()
+            .spi_framing_modes()
+            .into_iter()
+            .filter(|(_, m)| matches!(m, crate::peripherals::spi::SpiFramingMode::Heuristic))
+            .map(|(b, _)| b)
+            .collect();
 
         // If the UI has gone away, stop.
         let update = build_update(
             t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven,
-            substitution, analog_valid, failed_chunk_count, false,
+            substitution, analog_valid, failed_chunk_count, heuristic_spi_buses, false,
         );
         if tx.send(update).is_err() {
             return;
@@ -255,9 +266,16 @@ fn run_worker(
         .map(|s| s.message());
     let analog_valid = engine.scheduler().analog_valid();
     let failed_chunk_count = engine.scheduler().failed_chunk_count();
+    let heuristic_spi_buses: Vec<String> = engine
+        .scheduler()
+        .spi_framing_modes()
+        .into_iter()
+        .filter(|(_, m)| matches!(m, crate::peripherals::spi::SpiFramingMode::Heuristic))
+        .map(|(b, _)| b)
+        .collect();
     let _ = tx.send(build_update(
         t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven, substitution,
-        analog_valid, failed_chunk_count, true,
+        analog_valid, failed_chunk_count, heuristic_spi_buses, true,
     ));
 }
 
@@ -276,6 +294,7 @@ fn build_update(
     substitution: Option<String>,
     analog_valid: bool,
     failed_chunk_count: u64,
+    heuristic_spi_buses: Vec<String>,
     done: bool,
 ) -> CosimUpdate {
     CosimUpdate {
@@ -290,6 +309,7 @@ fn build_update(
         substitution,
         analog_valid,
         failed_chunk_count,
+        heuristic_spi_buses,
         done,
         error: None,
     }
