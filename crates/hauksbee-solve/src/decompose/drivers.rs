@@ -36,6 +36,9 @@
 //! are what the staged executor exists to capture, and copying a nonlinear
 //! block into k consumers multiplies exactly the Newton work tearing was
 //! supposed to remove.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use hauksbee_ir::Circuit;
 

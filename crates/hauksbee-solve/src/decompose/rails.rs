@@ -50,6 +50,9 @@
 //!   nodes; the scalar-balance bookkeeping assumes one.
 //! * **No fragmentation / unprofitable**: the cost model above (unless
 //!   escalating).
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 

@@ -128,7 +128,7 @@ impl Circuit {
 ///
 /// Reference designators (`name`) are kept for diagnostics and for matching
 /// `.model` cards during loading; the solver ignores them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, strum::EnumCount)]
 pub enum Device {
     /// Linear resistor. `tc1` is the linear temperature coefficient (1/C);
     /// `R(T) = ohms * (1 + tc1 * (T - 27))`.
@@ -447,31 +447,15 @@ impl Device {
 
     /// One representative instance of every variant, wired to the given nodes
     /// (cycled as needed). This is the inventory the per-variant enforcement
-    /// tests iterate: the match below is exhaustive with no `_` arm, so adding
-    /// a `Device` variant fails to compile until it ships an example, and every
-    /// example is then automatically subjected to the stamp/sense cross-check,
-    /// serde round-trip, and node-walk coverage tests. Parameter values are
-    /// arbitrary but physically sane (the tests probe structure, not accuracy).
+    /// tests iterate. Completeness is enforced by the derived
+    /// `strum::EnumCount` length assert inside: adding a `Device` variant bumps
+    /// the count and this function panics (in every test that calls it) until
+    /// the new example ships, and every example is then automatically subjected
+    /// to the stamp/sense cross-check, serde round-trip, and node-walk coverage
+    /// tests. Parameter values are arbitrary but physically sane (the tests
+    /// probe structure, not accuracy).
     pub fn examples(n: [NodeId; 4]) -> Vec<Device> {
-        // Touch every variant name once so the compiler proves this inventory
-        // is complete: a new variant breaks this match before it can ship
-        // without an example.
-        fn _exhaustive(d: &Device) {
-            match d {
-                Device::Resistor { .. }
-                | Device::Capacitor { .. }
-                | Device::Inductor { .. }
-                | Device::Vsource { .. }
-                | Device::Isource { .. }
-                | Device::Diode { .. }
-                | Device::Bjt { .. }
-                | Device::Mosfet { .. }
-                | Device::VSwitch { .. }
-                | Device::OpAmp { .. }
-                | Device::Comparator { .. } => {}
-            }
-        }
-        vec![
+        let out = vec![
             Device::Resistor {
                 name: "Rex".into(),
                 a: n[0],
@@ -558,6 +542,25 @@ impl Device {
                 hysteresis: 1e-3,
             },
         ]
+        ;
+        // The derived variant count is the enforcement the match-arm trick
+        // could not provide: an OR-arm satisfies a match without shipping an
+        // instance, but it cannot satisfy this length check. A new variant
+        // bumps `Device::COUNT` automatically (strum::EnumCount), so this
+        // inventory fails loudly until the example exists, and every example
+        // then flows into the stamp/sense cross-check, serde round-trip, and
+        // node-walk coverage tests.
+        assert_eq!(
+            out.len(),
+            <Device as strum::EnumCount>::COUNT,
+            "Device::examples() must ship exactly one instance per variant"
+        );
+        debug_assert_eq!(
+            out.iter().map(std::mem::discriminant).collect::<std::collections::HashSet<_>>().len(),
+            out.len(),
+            "Device::examples() has a duplicate variant"
+        );
+        out
     }
 
     /// Whether the element's stamp is constant w.r.t. node voltages.
