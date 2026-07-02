@@ -520,7 +520,7 @@ mod tests {
     /// term is load-bearing: a cascade where dropping it is measurable at the
     /// gate tolerance, mirroring `gmin_double_count_is_corrected`.
     #[test]
-    fn cascade_parent_without_child_term_would_be_wrong() {
+    fn cascade_fixture_missed_current_is_nonvacuous() {
         let (r1, r2) = (500.0, 1e3);
         let loads = CascadeLoads {
             vsrc: 5.0,
