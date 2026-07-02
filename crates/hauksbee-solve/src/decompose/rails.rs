@@ -423,16 +423,20 @@ pub(crate) fn fragment_blocks(
         x
     }
 
-    let member = |id: DeviceId| -> bool { graph.islands[island].contains(&id) };
-
     let known_side = |dev: &Device| -> bool {
         dev.conduction_nodes()
             .into_iter()
             .all(|n| n.is_ground() || bound[n.0 as usize])
     };
 
-    for (id, dev) in circuit.iter() {
-        if !member(id) || known_side(dev) {
+    // Iterate the island's own device list: the ids are right there, and a
+    // whole-circuit scan with a linear membership test made every call
+    // O(circuit x island). The stiff-node probe loop calls this hundreds of
+    // times on the flagship's fused island, where that product was minutes
+    // of analysis time (review finding on the detection commit).
+    for &id in &graph.islands[island] {
+        let dev = &circuit.devices[id.0 as usize];
+        if known_side(dev) {
             continue;
         }
         let cond: Vec<usize> = dev
@@ -452,8 +456,9 @@ pub(crate) fn fragment_blocks(
     let mut block_devices: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     let mut device_block: std::collections::HashMap<DeviceId, usize> = std::collections::HashMap::new();
     let mut node_block: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-    for (id, dev) in circuit.iter() {
-        if !member(id) || known_side(dev) {
+    for &id in &graph.islands[island] {
+        let dev = &circuit.devices[id.0 as usize];
+        if known_side(dev) {
             continue;
         }
         let free: Vec<usize> = dev
