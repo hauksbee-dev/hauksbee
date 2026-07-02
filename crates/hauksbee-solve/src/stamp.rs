@@ -74,6 +74,10 @@ pub struct StampCtx<'a> {
     pub opts: &'a SolverOptions,
     /// Current Newton iterate of all unknowns (node voltages then branches).
     pub x: &'a [f64],
+    /// Previous Newton iterate (the last accepted point), used as the anchor for
+    /// pn-junction voltage limiting. Equal to `x` on the very first iteration of
+    /// an operating point (no prior point yet), which disables limiting then.
+    pub x_prev: &'a [f64],
     pub time: f64,
     pub coeffs: IntegCoeffs,
     pub state: &'a ReactiveState,
@@ -87,6 +91,38 @@ pub struct StampCtx<'a> {
     pub gmin: f64,
     /// Source scaling for source-stepping homotopy (1.0 = full).
     pub src_scale: f64,
+    /// Tiny resistance (ohms) added in series with every ideal voltage source
+    /// (stamped on the branch-row diagonal) during the staged-DC fallback. It
+    /// keeps the frozen sparse ordering from hitting a zero pivot on a Vsource
+    /// branch when a downstream junction conducts (a numerical, not physical,
+    /// singularity). 0.0 disables it, keeping the normal path bit-identical.
+    pub branch_reg: f64,
+    /// Optional FROZEN comparator output decisions (keyed by device id),
+    /// supplied only by the staged-DC event-driven outer loop. When present, a
+    /// comparator's `high`/low state is held at the frozen value for the whole
+    /// inner Newton solve instead of being recomputed from the chattering output
+    /// node each iteration; the outer loop re-evaluates the decisions between
+    /// inner solves and re-solves until they stop flipping. This turns the
+    /// otherwise-discontinuous comparator network into a smooth circuit Newton
+    /// can converge, killing the limit cycle. `None` (every normal solve) keeps
+    /// the self-deciding behaviour bit-identical.
+    pub cmp_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
+    /// Optional FROZEN analog-switch on/off decisions (keyed by device id),
+    /// supplied only by the staged-DC event-driven outer loop. The 4320
+    /// SN74LVC1G3157 switches that fuse the Tarski synapse mesh each carry a
+    /// tanh-blended conductance whose control node sits near the transition for
+    /// a coupled core; left self-deciding, the inner Newton limit-cycles as the
+    /// switch flips on/off every iteration. When present, each switch's
+    /// conductance is PINNED to its frozen rail (full `ron` or `roff`, no
+    /// control dependence) so the inner circuit is smooth and Newton converges;
+    /// the outer Gauss-Seidel loop re-derives every switch's rail from the
+    /// converged control voltages and re-solves until none flip. `None` (every
+    /// normal solve) keeps the smooth tanh + control tangent bit-identical.
+    pub switch_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
+    /// SPDT leg sibling map (device id -> complementary throw's device id) for
+    /// the smooth break-before-make coupling. Consulted only when
+    /// HAUKSBEE_SPDT_BBM=1; empty/ignored otherwise (path bit-identical).
+    pub spdt_sibling: &'a std::collections::HashMap<DeviceId, DeviceId>,
 }
 
 impl StampCtx<'_> {
@@ -94,6 +130,14 @@ impl StampCtx<'_> {
     fn v(&self, node: NodeId) -> f64 {
         match self.layout.node(node) {
             Some(i) => self.x[i],
+            None => 0.0,
+        }
+    }
+    /// Node voltage at the PREVIOUS Newton iterate (the limiting anchor).
+    #[inline]
+    fn v_prev(&self, node: NodeId) -> f64 {
+        match self.layout.node(node) {
+            Some(i) => self.x_prev[i],
             None => 0.0,
         }
     }
@@ -180,6 +224,14 @@ pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
             }
         }
     }
+    // Staged-DC branch regularization: a negligible series resistance on every
+    // Vsource/Inductor branch diagonal, so the frozen ordering always has a
+    // nonzero pivot there even when a conducting diode reshapes the elimination.
+    if ctx.branch_reg > 0.0 {
+        for i in ctx.layout.n_nodes..ctx.layout.size {
+            g.add(i, i, -ctx.branch_reg);
+        }
+    }
     for (id, dev) in ctx.circuit.iter() {
         stamp_device(ctx, id, dev, g, rhs);
     }
@@ -208,26 +260,12 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
         }
         Device::Diode { a, k, model, .. } => stamp_diode(ctx, *a, *k, model, g, rhs),
         Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, *c, *b, *e, model, g, rhs),
-        Device::Mosfet {
-            d,
-            g: gate,
-            s,
-            model,
-            ..
-        } => stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs),
-        Device::VSwitch {
-            a,
-            b,
-            ctrl_p,
-            ctrl_n,
-            von,
-            voff,
-            ron,
-            roff,
-            ..
-        } => stamp_vswitch(
-            ctx, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs,
-        ),
+        Device::Mosfet { d, g: gate, s, model, .. } => {
+            stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs)
+        }
+        Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => {
+            stamp_vswitch(ctx, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs)
+        }
         Device::OpAmp {
             out,
             inp,
@@ -240,15 +278,9 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
         } => stamp_opamp(
             ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, g, rhs,
         ),
-        Device::Comparator {
-            out,
-            inp,
-            inn,
-            out_lo,
-            out_hi,
-            hysteresis,
-            ..
-        } => stamp_comparator(ctx, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs),
+        Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => {
+            stamp_comparator(ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs)
+        }
     }
 }
 
@@ -471,7 +503,26 @@ fn stamp_diode(
 
     let vd_raw = ctx.v(a) - ctx.v(k);
     // Use the last accepted junction voltage as the limiting anchor.
-    let vd = pnjlim(vd_raw, ctx.last_vd(a, k), nvt, vc);
+    let mut vd = pnjlim(vd_raw, ctx.last_vd(a, k), nvt, vc);
+
+    // STAGED-DC diode pre-limit (the relaxed-seed overflow cure). On the staged
+    // path only (branch_reg > 0), HARD-CLAMP the junction voltage so the very
+    // FIRST stamp from the relaxed (diodes-off) seed cannot overflow exp(). The
+    // relaxed seed leaves some stretcher-diode cathodes floating; their first
+    // forward bias can be tens of volts, and on iteration 1 pnjlim sees a zero
+    // delta (anchor == iterate) so it does not limit — diode_eval then evaluates
+    // exp(vd/nvt) ≈ 1e30 A and poisons the Newton step (measured: dc_residual
+    // ~1e30 A at the V_out nets). Clamping vd to a few hundred mV past vcrit
+    // bounds the current to a sane magnitude without changing the root: a real
+    // forward junction sits ~0.6–0.9 V, far below this clamp, so at any genuine
+    // operating point the clamp is inactive and the solve is unchanged. The
+    // normal path (branch_reg == 0) keeps the unclamped behaviour bit-identical.
+    if ctx.branch_reg > 0.0 {
+        let vd_max = vc + 0.4; // a few hundred mV into strong conduction
+        if vd > vd_max {
+            vd = vd_max;
+        }
+    }
 
     let (id, gd) = diode_eval(model, vd, t_c, temp_on);
     let gd = gd.max(ctx.opts.gmin);
@@ -648,8 +699,10 @@ fn stamp_mosfet(
     inject(rhs, sn, ieq_signed);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stamp_vswitch(
     ctx: &StampCtx,
+    id: DeviceId,
     a: NodeId,
     b: NodeId,
     cp: NodeId,
@@ -661,19 +714,157 @@ fn stamp_vswitch(
     g: &mut SparseMatrix,
     rhs: &mut [f64],
 ) {
-    let vctrl = ctx.v(cp) - ctx.v(cn);
-    let vmid = 0.5 * (von + voff);
-    let span = ((von - voff).abs()).max(1e-9);
-    // Smooth tanh transition between log-conductances.
     let gon = 1.0 / ron.max(1e-12);
     let goff = 1.0 / roff.max(1e-12);
-    let s = 0.5 * (1.0 + (3.0 * (vctrl - vmid) / span).tanh());
-    let gln = goff.ln() + s * (gon.ln() - goff.ln());
+
+    // Event-frozen path: the staged-DC outer loop supplies a FROZEN on/off
+    // decision for this switch. Pin the conductance to that rail (full ron or
+    // roff) with NO control-node dependence, so the inner circuit is smooth and
+    // strictly through-conducting. This is the limit-cycle cure for the
+    // analog-switch mesh: with every switch's state fixed, the fused core is a
+    // smooth resistor network Newton converges; the outer loop re-derives each
+    // switch's rail from the converged control voltages and re-solves until no
+    // switch flips, so the fixed point is a true root with every switch state
+    // consistent with its own control. (Mirrors the comparator cmp_freeze.)
+    if let Some(freeze) = ctx.switch_freeze {
+        let vmid = 0.5 * (von + voff);
+        let on = freeze
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| (ctx.v(cp) - ctx.v(cn)) > vmid);
+        let gsw = if on { gon } else { goff };
+        stamp_cond(g, ctx.layout, a, b, gsw);
+        return;
+    }
+
+    let vctrl_raw = ctx.v(cp) - ctx.v(cn);
+    let vmid = 0.5 * (von + voff);
+    let span = ((von - voff).abs()).max(1e-9);
+    // CONTROL LIMITING (staged / dynamic path only, branch_reg > 0). The
+    // log-interpolated conductance gsw = exp(lgoff + s*(lgon-lgoff)) spans many
+    // decades (ron ~ ohms, roff ~ 1e9), so a single Newton iteration that moves
+    // the control voltage across the transition makes gsw jump multiple decades
+    // at once. On a switch carrying real current (e.g. a synapse spike-gate
+    // whose control is a climbing neuron V_out) that snap destabilizes the
+    // coupled solve and the per-step Newton fails right at the flip. Mirroring
+    // pn-junction limiting (pnjlim) for diodes, bound the per-iteration change
+    // in the tanh argument `u` to ~1 (about one transition-width / a few
+    // decades of conductance) anchored on the previous iterate, so Newton tracks
+    // the switch through its transition smoothly. branch_reg==0 (every normal
+    // solve) keeps vctrl unlimited and the path bit-identical.
+    let vctrl = if ctx.branch_reg > 0.0 {
+        let vctrl_old = ctx.v_prev(cp) - ctx.v_prev(cn);
+        let u_new = 3.0 * (vctrl_raw - vmid) / span;
+        let u_old = 3.0 * (vctrl_old - vmid) / span;
+        const MAX_DU: f64 = 1.0;
+        let du = (u_new - u_old).clamp(-MAX_DU, MAX_DU);
+        vmid + (u_old + du) * span / 3.0
+    } else {
+        vctrl_raw
+    };
+    // Smooth tanh transition between log-conductances. With u the tanh argument,
+    //   s   = 0.5 * (1 + tanh(u)),      u = 3*(vctrl - vmid)/span
+    //   gln = ln(goff) + s*(ln(gon) - ln(goff))
+    //   gsw = exp(gln)
+    let lgon = gon.ln();
+    let lgoff = goff.ln();
+    let u = 3.0 * (vctrl - vmid) / span;
+    let th = u.tanh();
+    let mut s = 0.5 * (1.0 + th);
+
+    // BREAK-BEFORE-MAKE for SPDT legs (HAUKSBEE_SPDT_BBM=1, gated; default OFF ->
+    // bit-identical). A real SN74LVC1G3157 SPDT is NEVER low-Z to both throws at
+    // once: as the SELECT crosses its threshold the leaving throw opens before the
+    // entering throw closes. The bare smooth-tanh model breaks this -- at the
+    // SELECT transition MID-band BOTH complementary legs sit at the geometric-mean
+    // conductance sqrt(ron*roff) (~70-200 kohm), so the common node `a` is
+    // simultaneously low-Z to BOTH throws. In the Tarski synapse spike-gate the two
+    // throws are the output membrane (s1) and a fixed rail (s0 = GND on the
+    // excitatory leg, +5P on the inhibitory leg). Both legs half-on therefore wires
+    // the rail straight onto the membrane through `a`, injecting a WEIGHT-INDEPENDENT
+    // common-mode current (the +5P throw of the inhibitory gate pulls `a` to ~3 V
+    // and the half-on s1 dumps ~20 uA into the membrane regardless of the latched
+    // synapse weight) -- the over-firing pedestal. Enforcing break-before-make:
+    // WINNER-TAKE-ALL between the two throws by their SELECT margin: the throw
+    // whose control sits FURTHER past its own threshold is the selected one and
+    // keeps (most of) its conductance; the LOSER is driven toward roff. With
+    //   margin = (vctrl - vmid)/span        (>0: past the make threshold)
+    //   s_eff  = s * sigmoid(K*(margin_self - margin_sib))
+    // a cleanly selected throw (margin_self >> margin_sib) is unchanged, the
+    // opposite throw collapses to roff, and AT the exact crossover both halve --
+    // so the rail throw never bridges to the membrane throw, while the GENUINELY
+    // selected throw (the spike-gate s1 once the climbing hidden V_out passes the
+    // band centre) still conducts the weighted synapse current. This is the
+    // analog realisation of the same on-margin tie-break the frozen event path
+    // (`eval_switch_states`) uses, made smooth/differentiable for the per-step
+    // Newton. K sets the transition sharpness (HAUKSBEE_SPDT_BBM_K, default 6).
+    let bbm = std::env::var("HAUKSBEE_SPDT_BBM").as_deref() == Ok("1");
+    if bbm {
+        if let Some(&sib) = ctx.spdt_sibling.get(&id) {
+            if let Some(Device::VSwitch { ctrl_p: scp, ctrl_n: scn, von: svon, voff: svoff, .. }) =
+                ctx.circuit.devices.get(sib.0 as usize)
+            {
+                let svmid = 0.5 * (svon + svoff);
+                let sspan = (svon - svoff).abs().max(1e-9);
+                let margin_self = (vctrl - vmid) / span;
+                let margin_sib = ((ctx.v(*scp) - ctx.v(*scn)) - svmid) / sspan;
+                let k_bbm = std::env::var("HAUKSBEE_SPDT_BBM_K")
+                    .ok()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(6.0);
+                let arg = (k_bbm * (margin_self - margin_sib)).clamp(-40.0, 40.0);
+                let win = 1.0 / (1.0 + (-arg).exp());
+                s *= win;
+            }
+        }
+    }
+
+    let gln = lgoff + s * (lgon - lgoff);
     let gsw = gln.exp();
+
+    // Conductance stamp between the through nodes (a, b).
     stamp_cond(g, ctx.layout, a, b, gsw);
-    // The control dependence is weak; treat as fixed within a Newton step (the
-    // switch is quasi-static and the outer event handler refines crossings).
-    let _ = rhs;
+
+    // CONTROL-NODE JACOBIAN (the true tangent). The switch current
+    //   i = gsw * (v_a - v_b)
+    // depends on the control voltage vctrl through gsw. The MNA companion of a
+    // voltage-controlled conductance adds a transconductance coupling the (a,b)
+    // current rows to the (cp,cn) control columns, with
+    //   gm_ctrl = d i / d vctrl = (v_a - v_b) * d gsw / d vctrl
+    //   d gsw / d vctrl = gsw * (ln(gon) - ln(goff)) * ds/dvctrl
+    //   ds/dvctrl       = 0.5 * (1 - tanh^2(u)) * (3/span)
+    // and a matching equivalent-current correction so the linearization is
+    // exact at the operating point (same root, faster convergence). Stamping
+    // this makes each switch Newton-linearized instead of a Picard fixed point.
+    // The control-node transconductance is a Newton TANGENT (it makes each switch
+    // Newton-linearized rather than a Picard fixed point); it is not required for
+    // correctness -- the same root is reached without it, just with more
+    // iterations. For a torn feedforward column whose spike-gate control is a
+    // HIGH-Z boundary node (the captured hidden V_out, driven through an external
+    // RC, drawing zero conduction current), summing this term across the ~20
+    // switch legs on that one control node with the large mirror voltage
+    // `vab≈4.5 V` couples back into the iterative solution and throttles the
+    // control's slew so the gate never closes (measured: V_out charges ~15x
+    // slower than its R*C). HAUKSBEE_SW_NO_CTRL_GM=1 drops the back-coupling so
+    // the control node is purely exogenous; the conductance stamp + the switch's
+    // own a/b dynamics still track the flip. OFF by default -> bit-identical.
+    let skip_ctrl_gm = std::env::var("HAUKSBEE_SW_NO_CTRL_GM").as_deref() == Ok("1");
+    let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
+    let vab = ctx.v(a) - ctx.v(b);
+    let gm_ctrl = vab * dgsw_dvctrl;
+    if gm_ctrl != 0.0 && !skip_ctrl_gm {
+        let (ai, bi) = (ctx.layout.node(a), ctx.layout.node(b));
+        let (cpi, cni) = (ctx.layout.node(cp), ctx.layout.node(cn));
+        // i_a += gm_ctrl * (v_cp - v_cn), i_b -= ... .
+        add_transconductance(g, ai, bi, cpi, cni, gm_ctrl);
+        // Equivalent-current correction: the transconductance term contributes
+        // gm_ctrl * vctrl to the linearized current, which is already implicit
+        // in the conductance stamp at the operating point. Subtract it back via
+        // the RHS so the residual equals the true device current there.
+        let ieq = gm_ctrl * vctrl;
+        inject(rhs, ai, ieq);
+        inject(rhs, bi, -ieq);
+    }
 }
 
 fn stamp_opamp(
@@ -719,8 +910,10 @@ fn stamp_opamp(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stamp_comparator(
     ctx: &StampCtx,
+    id: DeviceId,
     out: NodeId,
     inp: NodeId,
     inn: NodeId,
@@ -733,11 +926,76 @@ fn stamp_comparator(
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     let prev_out = ctx.v(out);
+    let gout = 1.0;
+
+    // Event-driven staged path: the outer loop supplies a FROZEN decision for
+    // this comparator. Hold its output state fixed for the whole inner Newton
+    // solve so it cannot chatter; the threshold is set by the frozen state's
+    // hysteresis side. This is the limit-cycle cure: with every comparator's
+    // state fixed, the inner circuit is smooth and Newton converges; the outer
+    // loop re-evaluates and re-solves if any decision flipped.
+    if let Some(freeze) = ctx.cmp_freeze {
+        let _ = (vp, vn, hyst);
+        let high = freeze.get(&id).copied().unwrap_or(prev_out > 0.5 * (out_lo + out_hi));
+        // PIN the output to its frozen rail with a CONSTANT target (no input
+        // dependence). A smooth input-dependent transfer still swings the output
+        // whenever the comparator inputs pass near threshold, which makes the
+        // output node chase the inputs and the inner Newton limit-cycle (the
+        // output flip-flops at the step cap forever). Decoupling the output from
+        // the inputs entirely — output := frozen rail — makes the inner circuit
+        // strictly feed-FORWARD through the comparator, so Newton converges
+        // cleanly. The outer event loop is what enforces input/output
+        // consistency: it re-derives each comparator's rail from the converged
+        // inputs and re-solves until no rail flips, so the fixed point is a true
+        // root with every output consistent with its own inputs.
+        let target = if high { out_hi } else { out_lo };
+        if let Some(oi) = ctx.layout.node(out) {
+            g.add(oi, oi, gout);
+            rhs[oi] += gout * target;
+        }
+        return;
+    }
+
     // Hysteresis: threshold depends on current output state.
     let high = prev_out > 0.5 * (out_lo + out_hi);
     let thresh = if high { -hyst } else { hyst };
+
+    // Staged-DC path (branch_reg > 0) without an event-freeze map: the bare
+    // bang-bang transfer below has no tangent, so on a stiff board where a
+    // comparator input sits near threshold the output chatters between rails
+    // every Newton iteration. Replace it, for the staged solve only, with a
+    // smooth high-gain logistic transfer that has a real derivative. A real
+    // LMV7219 has finite (high) open-loop gain, so this is physically faithful;
+    // the discrete model below is kept bit-identical for every normal solve
+    // (branch_reg == 0 and no freeze map).
+    if ctx.branch_reg > 0.0 {
+        let span = out_hi - out_lo;
+        let k = std::env::var("HAUKSBEE_CMP_K").ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(2000.0); // 1/V; ~2 mV transition width
+        let d = vp - vn - thresh;
+        let kd = (k * d).clamp(-40.0, 40.0);
+        let e = (-kd).exp();
+        let sig = 1.0 / (1.0 + e); // logistic in (0,1)
+        let target = out_lo + span * sig;
+        let dsig = k * sig * (1.0 - sig);
+        let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
+        if let Some(oi) = ctx.layout.node(out) {
+            g.add(oi, oi, gout);
+            rhs[oi] += gout * target;
+            if let Some(pi) = ctx.layout.node(inp) {
+                g.add(oi, pi, -gout * dtarget_dvp);
+                rhs[oi] -= gout * dtarget_dvp * vp;
+            }
+            if let Some(ni) = ctx.layout.node(inn) {
+                g.add(oi, ni, gout * dtarget_dvp);
+                rhs[oi] += gout * dtarget_dvp * vn;
+            }
+        }
+        return;
+    }
+
     let target = if vp - vn > thresh { out_hi } else { out_lo };
-    let gout = 1.0;
     if let Some(oi) = ctx.layout.node(out) {
         g.add(oi, oi, gout);
         rhs[oi] += gout * target;
@@ -801,12 +1059,12 @@ fn inject(rhs: &mut [f64], node: Option<usize>, val: f64) {
 // previous Newton iterate; these helpers read it back.
 impl StampCtx<'_> {
     fn last_vd(&self, a: NodeId, k: NodeId) -> f64 {
-        self.v(a) - self.v(k)
+        self.v_prev(a) - self.v_prev(k)
     }
     fn last_vbe(&self, b: NodeId, e: NodeId) -> f64 {
-        self.v(b) - self.v(e)
+        self.v_prev(b) - self.v_prev(e)
     }
     fn last_vbc(&self, b: NodeId, c: NodeId) -> f64 {
-        self.v(b) - self.v(c)
+        self.v_prev(b) - self.v_prev(c)
     }
 }

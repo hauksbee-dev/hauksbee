@@ -49,7 +49,7 @@ pub use ac::{AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
 pub use cmatrix::ComplexSystem;
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};
-pub use newton::{dc_operating_point, Workspace};
+pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};
 pub use options::{DeviceEffects, Integration, Partitioning, SolverOptions, StepControl};
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;

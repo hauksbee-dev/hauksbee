@@ -53,6 +53,20 @@ const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
 /// observation only, see `make_ddr_hook`.
 const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 
+/// Raise an external digital level on one input pin via its per-bit ioport IRQ.
+/// Used from inside the port-output hook by the synchronous input responder, so
+/// the drive lands before the firmware's next instruction (the 74HC165 readback
+/// path). `avr` must be the live core pointer (taken from `SharedState`).
+unsafe fn raise_ioport_input(avr: *mut ffi::avr_t, pin: PinId, high: bool) {
+    if avr.is_null() {
+        return;
+    }
+    let irq = ffi::avr_io_getirq(avr, ioport_getirq(pin.port as u8), pin.bit as i32);
+    if !irq.is_null() {
+        ffi::avr_raise_irq(irq, high as u32);
+    }
+}
+
 // TWI message condition flags (from avr_twi.h)
 const TWI_COND_START: u32 = 1 << 0;
 const TWI_COND_STOP: u32 = 1 << 1;
@@ -69,12 +83,26 @@ type PinChangeCb = Box<dyn FnMut(PinId, bool) + Send>;
 type UartCb = Box<dyn FnMut(u8) + Send>;
 type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
 type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
+/// A synchronous GPIO-input responder. Given the output pin edge the firmware
+/// just produced, it returns a list of input pins to drive (and their levels)
+/// *immediately*, within the same `run_micros` call, before the firmware's next
+/// instruction. This is what lets a firmware bit-bang a clock and `digitalRead`
+/// the resulting serial-out bit in the SAME tight loop (the 74HC165 readback):
+/// the output-pin hook fires on the SCLK/PL edge, the responder computes the
+/// next QH bit, and the bit is raised onto the MISO ioport input IRQ here — so
+/// the very next `digitalRead(MISO)` sees it. Resolving the readback per output
+/// edge (not once per analog chunk) is the read-direction analogue of the
+/// edge-driven 74HC595 write path.
+type InputResponderCb = Box<dyn FnMut(PinId, bool) -> Vec<(PinId, bool)> + Send>;
 
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
     on_uart: Option<UartCb>,
     on_i2c: Option<I2cCb>,
     on_spi: Option<SpiCb>,
+    /// Synchronous input responder, driven from the same port hook as
+    /// `on_pin_change` (see [`InputResponderCb`]).
+    input_responder: Option<InputResponderCb>,
 }
 
 /// Per-port state tracked for edge detection.
@@ -154,19 +182,28 @@ macro_rules! make_port_hook {
                     .unwrap_or(0);
 
                 if new_val != prev_val {
+                    let changed = new_val ^ prev_val;
+                    // Snapshot the avr pointer so the synchronous input
+                    // responder can raise an ioport input IRQ while we still
+                    // hold the `s` borrow (avr_ptr is Copy).
+                    let avr = s.avr_ptr;
                     // Fire callback for each bit that changed.
-                    if let Some(cb) = &mut s.callbacks.on_pin_change {
-                        let changed = new_val ^ prev_val;
-                        for bit in 0u8..8 {
-                            if (changed >> bit) & 1 != 0 {
-                                let high = (new_val >> bit) & 1 != 0;
-                                cb(
-                                    PinId {
-                                        port: $port_char,
-                                        bit,
-                                    },
-                                    high,
-                                );
+                    for bit in 0u8..8 {
+                        if (changed >> bit) & 1 == 0 {
+                            continue;
+                        }
+                        let high = (new_val >> bit) & 1 != 0;
+                        let pin = PinId { port: $port_char, bit };
+                        if let Some(cb) = &mut s.callbacks.on_pin_change {
+                            cb(pin, high);
+                        }
+                        // Synchronous input drive: the responder may push a
+                        // serial-out bit back onto an MCU input pin (e.g. the
+                        // 74HC165 QH -> MISO) so the firmware reads it on its
+                        // next instruction, within this same run.
+                        if let Some(resp) = &mut s.callbacks.input_responder {
+                            for (in_pin, in_high) in resp(pin, high) {
+                                raise_ioport_input(avr, in_pin, in_high);
                             }
                         }
                     }
@@ -468,6 +505,7 @@ impl AvrMcu {
                 on_uart: None,
                 on_i2c: None,
                 on_spi: None,
+                input_responder: None,
             },
         }));
 
@@ -735,6 +773,20 @@ impl Mcu for AvrMcu {
         }
         // Auto-register hooks for the standard ATmega328P ports.
         // Callers working with other MCUs can call register_port_hooks directly.
+        let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
+        self.register_port_hooks(&ports);
+    }
+
+    fn on_input_responder(
+        &mut self,
+        responder: Box<dyn FnMut(PinId, bool) -> Vec<(PinId, bool)> + Send>,
+    ) {
+        {
+            let mut s = self.state.lock().unwrap();
+            s.callbacks.input_responder = Some(responder);
+        }
+        // The responder fires from the per-port output hook, so the standard
+        // ATmega328P ports must be hooked even if `on_pin_change` was never set.
         let ports: Vec<char> = ['A', 'B', 'C', 'D'].to_vec();
         self.register_port_hooks(&ports);
     }

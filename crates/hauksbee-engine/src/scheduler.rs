@@ -32,7 +32,7 @@ use hauksbee_solve::{Layout, SolverOptions, Transient};
 use crate::behavioral::BehavioralDevice;
 use crate::binder::{gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::DigitalComponent;
-use crate::peripherals::{I2cBus, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
+use crate::peripherals::{I2cBus, Mcp4728, PeripheralSet, SpiBus, TickCtx, TimelineEvent};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
 
@@ -42,8 +42,16 @@ pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 /// Captured state shared between an MCU's C callbacks and the scheduler.
 #[derive(Default)]
 struct McuShared {
-    /// Pin edges since last drain: (port, bit) -> latest level.
+    /// Pin edges since last drain: (port, bit) -> latest level. Still used by
+    /// ordinary GPIO drivers (which only care about the final level a chunk
+    /// settles to) and diagnostics / frame state.
     pin_edges: HashMap<(char, u8), bool>,
+    /// Ordered log of EVERY pin transition since the last drain, in the order
+    /// the firmware produced them. Unlike `pin_edges` (latest-level map, which
+    /// collapses a sub-µs `shiftOut` SCLK pulse train to its final level), this
+    /// preserves each edge so the bit-banged 74HC595 chain can be clocked at
+    /// edge granularity (FIX 1).
+    pin_edge_log: Vec<(char, u8, bool)>,
     /// UART bytes the firmware emitted since last drain.
     uart_out: Vec<u8>,
 }
@@ -65,12 +73,28 @@ pub struct Scheduler {
     pub circuit: Circuit,
     pub net_nodes: HashMap<String, NodeId>,
     pub digital: Vec<DigitalComponent>,
+    /// MCU-bit-banged 74HC595 chains, clocked from the ordered pin-edge log at
+    /// edge granularity (FIX 1). One controller PER physical chain (independent
+    /// chains are not merged). The chips these drive are listed in `chain_chips`
+    /// and are skipped by the once-per-chunk `digital` tick so they are not
+    /// driven twice.
+    chains: Vec<crate::digital::Hc595Chain>,
+    /// Index into `mcus` of the MCU that clocks each chain (parallel to
+    /// `chains`), so a chain only consumes its own MCU's edge log.
+    chain_mcu: Vec<usize>,
+    /// Indices into `digital` of every chip driven by `chains` (the edge path).
+    chain_chips: std::collections::HashSet<usize>,
     mcus: Vec<LiveMcu>,
     /// Latest solved node voltages, indexed by `NodeId.0`.
     pub node_volts: Vec<f64>,
     /// Latest solved branch currents, indexed by branch unknown (after nodes).
     /// `branch_x[branch_index]`; map a device to its branch with [`Layout`].
     branch_x: Vec<f64>,
+    /// Previous chunk's final unknown vector, used to warm-start the next chunk's
+    /// DC operating point (skips cold-start homotopy on a stiff nonlinear board).
+    /// Cleared on a solver failure or a structural relayout (size mismatch is
+    /// also rejected safely by the solver).
+    last_dc_seed: Option<Vec<f64>>,
     /// Frozen MNA unknown layout for the current circuit (branch lookup).
     layout: Layout,
     /// Configurable power supplies, updated between chunks (Feature 1).
@@ -102,7 +126,40 @@ pub struct Scheduler {
     /// asked for a more specific part than the emulator core models. Surfaced as
     /// a co-sim warning + JSON note; never gates an exit code on its own.
     substitutions: Vec<McuSubstitution>,
+    /// MCP4728 DAC VOUT drivers: each entry maps an I2C slave (by address, on
+    /// `dac_bus`) to its four VOUT-channel [`PinDriver`]s. Every chunk the
+    /// scheduler reads the slave's computed VOUT per channel and pushes it onto
+    /// the matching driver before the analog solve (the `Hc595Chain::apply`
+    /// cadence), so firmware DAC writes become real analog output voltages.
+    dac_vouts: Vec<DacVoutDrive>,
+    /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
+    /// granularity inside the owning MCU's run loop via its synchronous input
+    /// responder (the read-direction analogue of `chains`). Wrapped in
+    /// Arc<Mutex<>> because the responder closure owns a clone. Each shares the
+    /// `input_volts` snapshot the scheduler refreshes from the last solve so the
+    /// 165 captures the latest spike-latch states on its PL load.
+    hc165_chains: Vec<Arc<Mutex<crate::digital::Hc165Chain>>>,
+    /// Latest solved node voltages, shared with the 165 read chains so their
+    /// PL-load sampling (which fires inside the MCU run, before this chunk's
+    /// solve) sees the previous chunk's settled latch voltages.
+    input_volts: Arc<Mutex<Vec<f64>>>,
+    /// Forced node-voltage overrides applied to `node_volts` AFTER each chunk's
+    /// analog solve. Used by the firmware-driven Tarski inference to drive the 10
+    /// output SPIKE nets from the EXACT feedforward decomposition (the monolith
+    /// does not converge) — the genuine per-column spikes the decomposition
+    /// produces are presented on the SPIKE nets so the on-board 74HC02 NOR
+    /// latches capture them and the firmware's 165 readback reflects them. Empty
+    /// on every other board (no override). Keyed by `NodeId.0`. The value is
+    /// `(high_volts, low_volts, t_start, t_end)`: the node is held at
+    /// `high_volts` while `t_start <= sim_time < t_end`, else `low_volts`. A
+    /// time-unbounded override uses `t_start=-inf, t_end=+inf` (always high). The
+    /// time window lets the firmware-driven inference present each output column's
+    /// SPIKE net HIGH for a sim-time fraction proportional to its decomposed spike
+    /// count, so the firmware's per-sample RESET_SR-gated latch reads accumulate a
+    /// count that tracks the decomposed RATE (not just a binary "spiked at all").
+    forced_node_volts: HashMap<usize, (f64, f64, f64, f64)>,
 }
+
 
 /// A chip-substitution event: the board asked for `requested_part` but the
 /// available emulator core models a less-specific platform (`modelled_core`).
@@ -130,6 +187,17 @@ impl McuSubstitution {
             self.reference, self.requested_part, self.modelled_core
         )
     }
+}
+
+
+/// One MCP4728's analog VOUT drive: the bus its slave lives on, the slave's
+/// 7-bit address, and the four channel drivers (None where the VOUT net is not
+/// connected on the board).
+struct DacVoutDrive {
+    bus: Arc<Mutex<I2cBus>>,
+    address: u8,
+    drivers: [Option<crate::drivers::PinDriver>; 4],
+
 }
 
 /// Running statistics for one net across a run.
@@ -168,6 +236,7 @@ impl Scheduler {
             supplies,
             behavioral,
             device_meta,
+            dacs,
             ..
         } = bound;
 
@@ -197,16 +266,28 @@ impl Scheduler {
             live.push(core_with_hooks(core, binding));
         }
 
+        // Build the MCU-bit-banged 74HC595 chain controllers (FIX 1). For each
+        // live MCU, map the net node each GPIO driver pushes onto back to its
+        // (port, bit), then identify the 595 daisy-chain(s) and bind their
+        // broadcast control signals (SRCLK / RCLK / SRCLR_n) and head SER to
+        // GPIO pins. A chain whose essential control pins are not bound to GPIO
+        // is left to the old once-per-chunk digital tick (so nothing regresses).
+        let (chains, chain_mcu, chain_chips) = build_595_chains(&digital, &live);
+
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
-        Ok(Scheduler {
+        let mut sched = Scheduler {
             circuit,
             net_nodes,
             digital,
+            chains,
+            chain_mcu,
+            chain_chips,
             mcus: live,
             node_volts: vec![0.0; n_nodes],
             branch_x: vec![0.0; n_branch],
+            last_dc_seed: None,
             layout,
             supplies,
             behavioral,
@@ -221,7 +302,145 @@ impl Scheduler {
             spi_buses: Vec::new(),
             spi_controller_map: HashMap::new(),
             substitutions,
-        })
+            dac_vouts: Vec::new(),
+            hc165_chains: Vec::new(),
+            input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
+            forced_node_volts: HashMap::new(),
+        };
+
+        // Build the edge-driven 74HC165 read chains and install each as its
+        // owning MCU's synchronous input responder, so a firmware readback
+        // (bit-banged SCLK + digitalRead(MISO)) resolves at edge granularity.
+        sched.build_and_install_165_chains();
+
+        // Wire up the board's MCP4728 quad DACs: build one I2C slave per binding
+        // at its assigned address, attach them on a shared bus (so firmware TWI
+        // writes reach them through `on_i2c`), and record each slave's VOUT
+        // drivers so the chunk loop pushes computed VOUT onto the analog nets.
+        if !dacs.is_empty() {
+            sched.attach_mcp4728_dacs(dacs);
+        }
+
+        Ok(sched)
+    }
+
+    /// Build and attach the MCP4728 DAC slaves discovered by the binder. One
+    /// shared [`I2cBus`] holds all of them (addressed 0x60/0x61/0x62); the bus
+    /// is registered as every MCU's `on_i2c` handler. Each DAC's VOUT-channel
+    /// drivers are kept in `dac_vouts` so [`Scheduler::push_dac_vouts`] can
+    /// drive the analog nets each chunk.
+    fn attach_mcp4728_dacs(&mut self, dacs: Vec<crate::binder::DacBinding>) {
+        let mut bus = I2cBus::new("MCP4728_BUS");
+        for d in &dacs {
+            let mut slave = Mcp4728::with_config(d.address, d.vref, d.gain);
+            // Carry the datasheet ROUT through so state() / diagnostics agree
+            // with the stamped driver resistance.
+            slave.rout = 1.0;
+            bus.add_slave(Box::new(slave));
+        }
+        let bus = Arc::new(Mutex::new(bus));
+        self.attach_i2c_bus(bus.clone());
+        for d in dacs {
+            self.dac_vouts.push(DacVoutDrive {
+                bus: bus.clone(),
+                address: d.address,
+                drivers: d.vout_drivers,
+            });
+        }
+        // Seed the analog nets with the DACs' power-on VOUT (code 0 -> ~0 V).
+        self.push_dac_vouts();
+    }
+
+    /// Build the edge-driven 74HC165 read chains (one per physical chain whose
+    /// PL / CLK / QH→MISO pins bind to an MCU's GPIO) and install each as that
+    /// MCU's synchronous input responder. The responder fires on every GPIO
+    /// output edge during the MCU's run: it forwards PL / SCLK edges to the
+    /// chain, which samples the spike-latch inputs on a PL load and presents the
+    /// next QH bit on MISO, returning the (MISO pin, level) to drive immediately.
+    /// This closes the readback inside the firmware's own bit-bang loop.
+    fn build_and_install_165_chains(&mut self) {
+        use crate::digital::{order_165_chains, Hc165Chain, LogicLevels};
+
+        // Per MCU: net-node -> (port,bit). Every wired digital-capable pin gets a
+        // (possibly tri-stated) gpio driver, so this map covers both the control
+        // outputs (PL/SCLK) and the MISO *input* pin (its driver stays disabled
+        // because the firmware never drives it, but the mapping is what we need).
+        let gpio_maps: Vec<HashMap<i64, (char, u8)>> = self
+            .mcus
+            .iter()
+            .map(|m| {
+                m.binding
+                    .gpio_drivers
+                    .iter()
+                    .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+                    .collect()
+            })
+            .collect();
+
+        for order in order_165_chains(&self.digital) {
+            for (mi, gpio_node) in gpio_maps.iter().enumerate() {
+                // PL/CLK come from gpio_node; MISO is also in gpio_node (the
+                // input pin's tri-stated driver carries the net mapping).
+                let Some(chain) =
+                    Hc165Chain::build(&self.digital, order.clone(), gpio_node, gpio_node)
+                else {
+                    continue;
+                };
+                let levels: LogicLevels = chain.levels(&self.digital);
+                let pl_n = chain.pl_n;
+                let clk = chain.clk;
+                let chain = Arc::new(Mutex::new(chain));
+                let chain_cb = chain.clone();
+                let volts = self.input_volts.clone();
+                // The responder: only PL/SCLK edges matter; ignore everything
+                // else cheaply. Read the shared voltage snapshot for the
+                // PL-load sampling of the latch inputs.
+                self.mcus[mi].core.on_input_responder(Box::new(
+                    move |pin: PinId, high: bool| -> Vec<(PinId, bool)> {
+                        let pin = (pin.port, pin.bit);
+                        if pin != pl_n && pin != clk {
+                            return Vec::new();
+                        }
+                        let v = volts.lock().unwrap_or_else(|e| e.into_inner());
+                        let node_v = |n: hauksbee_ir::NodeId| {
+                            v.get(n.0 as usize).copied().unwrap_or(0.0)
+                        };
+                        let mut ch = chain_cb.lock().unwrap_or_else(|e| e.into_inner());
+                        match ch.on_edge(pin, high, &node_v, &levels) {
+                            Some(((port, bit), level)) => {
+                                vec![(PinId { port, bit }, level)]
+                            }
+                            None => Vec::new(),
+                        }
+                    },
+                ));
+                self.hc165_chains.push(chain);
+                break;
+            }
+        }
+    }
+
+    /// Read each MCP4728 slave's current per-channel VOUT and push it onto that
+    /// channel's [`PinDriver`]. Called each chunk after the MCU runs (so a just-
+    /// completed I2C DAC write is reflected) and before the analog solve, the
+    /// same cadence the 74HC595 chains use.
+    fn push_dac_vouts(&mut self) {
+        for dv in &self.dac_vouts {
+            // Snapshot the four VOUT voltages under the bus lock, then release it
+            // before mutating the circuit (drivers borrow `self.circuit`).
+            let vouts: [f64; 4] = {
+                let bus = dv.bus.lock().unwrap_or_else(|e| e.into_inner());
+                match bus.slave::<Mcp4728>(dv.address) {
+                    Some(s) => [s.vout(0), s.vout(1), s.vout(2), s.vout(3)],
+                    None => continue,
+                }
+            };
+            for (ch, drv) in dv.drivers.iter().enumerate() {
+                if let Some(drv) = drv {
+                    drv.set_volts(&mut self.circuit, vouts[ch]);
+                }
+            }
+        }
     }
 
     /// Chip-substitution events detected at build time (Track B). Empty when
@@ -446,8 +665,19 @@ impl Scheduler {
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
         let micros = (chunk * 1e6).round().max(1.0) as u64;
 
+        // Refresh the snapshot the edge-driven 74HC165 read chains sample on a
+        // PL load (it fires inside the MCU run below, so it must reflect the
+        // PREVIOUS chunk's settled spike-latch voltages). Cheap clone; only
+        // taken when a 165 read chain is present.
+        if !self.hc165_chains.is_empty() {
+            let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
+            snap.clear();
+            snap.extend_from_slice(&self.node_volts);
+        }
+
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
-        for m in &mut self.mcus {
+        for mi in 0..self.mcus.len() {
+            let m = &mut self.mcus[mi];
             for (&ch, &node) in &m.binding.adc_nets {
                 let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
                 m.core.set_analog_in(ch, v.max(0.0));
@@ -469,10 +699,11 @@ impl Scheduler {
             }
             let _ = m.core.run_micros(micros);
 
-            let (edges, bytes) = {
+            let (edges, edge_log, bytes) = {
                 let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
                 (
                     std::mem::take(&mut sh.pin_edges),
+                    std::mem::take(&mut sh.pin_edge_log),
                     std::mem::take(&mut sh.uart_out),
                 )
             };
@@ -481,9 +712,23 @@ impl Scheduler {
                     .or_default()
                     .extend(bytes);
             }
+            // 1b. Edge-driven 74HC595 chains: replay THIS MCU's ordered
+            // transition log so each bit-banged SRCLK/RCLK pulse clocks the
+            // chains it owns (FIX 1). Only chains whose owning MCU is `mi` are
+            // replayed, so a different MCU's identically-named pin cannot inject
+            // spurious clocks. The latched outputs are pushed onto the analog
+            // nets after the digital tick (so they are not clobbered by it).
+            if !edge_log.is_empty() {
+                for (ci, chain) in self.chains.iter_mut().enumerate() {
+                    if self.chain_mcu[ci] == mi {
+                        chain.replay(&edge_log);
+                    }
+                }
+            }
             // 2. Apply GPIO edges to drivers. An edge means the firmware has
             // configured the pin as a driven output, so enable the (initially
             // tri-stated) Thevenin leg before setting its level.
+            let m = &mut self.mcus[mi];
             for ((port, bit), level) in edges {
                 m.last_levels.insert((port, bit), level);
                 if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
@@ -495,13 +740,39 @@ impl Scheduler {
         }
 
         // 5(prev). Digital components drive their outputs from current state,
-        // sampling the previous chunk's solved node voltages.
+        // sampling the previous chunk's solved node voltages. Chips owned by an
+        // edge-driven 595 chain are SKIPPED here: they are clocked by the edge
+        // path above and have their latched outputs applied below, so ticking
+        // them once-per-chunk too would double-drive them with a stale,
+        // pulse-collapsed sample.
         {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-            for d in &mut self.digital {
+            for (i, d) in self.digital.iter_mut().enumerate() {
+                if self.chain_chips.contains(&i) {
+                    continue;
+                }
                 d.tick(&mut self.circuit, &node_v);
             }
+        }
+        // 5b(prev). Push the edge-driven chains' latched outputs onto the analog
+        // nets (the latched switch-select levels the membrane solve will see).
+        // Move the chains out to satisfy the borrow checker (apply needs &mut
+        // self.digital and &mut self.circuit), then put them back.
+        if !self.chains.is_empty() {
+            let mut chains = std::mem::take(&mut self.chains);
+            for chain in &mut chains {
+                chain.apply(&mut self.digital, &mut self.circuit);
+            }
+            self.chains = chains;
+        }
+
+        // 5c(prev). Push each MCP4728's computed VOUT onto its channel drivers,
+        // so a DAC write the MCU just issued over TWI (handled in step 1 via
+        // `on_i2c`) appears as a real analog output voltage in this chunk's
+        // solve. Same cadence as the 595 chain apply above.
+        if !self.dac_vouts.is_empty() {
+            self.push_dac_vouts();
         }
 
         // 2b. Update configurable power supplies from the rail current measured
@@ -722,10 +993,21 @@ impl Scheduler {
         let n_nodes = self.circuit.node_count();
         let mut final_x: Vec<f64> = Vec::new();
         // Run a short transient; capture the last accepted step's unknowns.
-        let res = t.run_streaming(&self.circuit, chunk, |s| {
-            final_x.clear();
-            final_x.extend_from_slice(s.x);
-        });
+        // Warm-start this chunk's DC operating point from the previous chunk's
+        // final unknowns: the operating point barely moves between 100 us chunks,
+        // so plain Newton converges in ~1 iteration instead of re-running the
+        // cold-start gmin/source-stepping homotopy on the full nonlinear board
+        // every chunk. Exact (same root, fewer iters); a size-mismatched or
+        // failing seed falls back to the cold solve inside the solver.
+        let res = t.run_streaming_seeded(
+            &self.circuit,
+            chunk,
+            self.last_dc_seed.as_deref(),
+            |s| {
+                final_x.clear();
+                final_x.extend_from_slice(s.x);
+            },
+        );
         match res {
             Ok(()) => {
                 self.node_volts.resize(n_nodes, 0.0);
@@ -739,13 +1021,97 @@ impl Scheduler {
                 for b in 0..n_branch {
                     self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
                 }
+                // Seed the next chunk's DC solve with this chunk's end state.
+                self.last_dc_seed = Some(final_x);
             }
             Err(_) => {
-                // Solver failure: hold previous voltages rather than crash the
-                // whole co-sim (the chunk is short; next chunk may recover).
-                self.node_volts.resize(n_nodes, 0.0);
+                // The transient march failed to advance. If the DC operating
+                // point at t=0 was still captured (the streaming sink fires once
+                // before the march loop), use it: a converged DC bias is a far
+                // better state to report and to seed the next chunk from than a
+                // hard zero, which would brown out the modelled MCU. This is what
+                // lets a board whose stiff nonlinear march cannot progress (e.g.
+                // the diode-laden Tarski synapse core) still hold its DC rails and
+                // DAC/peripheral voltages instead of collapsing the whole co-sim.
+                if !final_x.is_empty() {
+                    self.node_volts.resize(n_nodes, 0.0);
+                    self.node_volts[0] = 0.0;
+                    for node in 1..n_nodes {
+                        self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
+                    }
+                    let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
+                    self.branch_x.resize(n_branch, 0.0);
+                    for b in 0..n_branch {
+                        self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
+                    }
+                    self.last_dc_seed = Some(final_x);
+                } else {
+                    // Nothing usable captured: hold previous voltages, cold-start
+                    // the next chunk.
+                    self.node_volts.resize(n_nodes, 0.0);
+                    self.last_dc_seed = None;
+                }
             }
         }
+        // Apply any forced node-voltage overrides (the firmware-driven Tarski
+        // inference drives the output SPIKE nets from the exact feedforward
+        // decomposition here, since the monolith does not converge). These land
+        // in `node_volts` so the on-board NOR latches sample them next chunk.
+        // Each override is time-gated to `sim_time` so a column is HIGH only for
+        // its decomposed rate fraction of the window.
+        if !self.forced_node_volts.is_empty() {
+            let t = self.sim_time;
+            for (&node, &(hi, lo, t0, t1)) in &self.forced_node_volts {
+                let v = if t >= t0 && t < t1 { hi } else { lo };
+                if let Some(slot) = self.node_volts.get_mut(node) {
+                    *slot = v;
+                }
+            }
+        }
+    }
+
+    /// Force a net's voltage to `volts` AFTER each analog solve (until cleared),
+    /// unconditionally (binary "always high"). Returns false if the net is absent.
+    pub fn force_net_voltage(&mut self, net: &str, volts: f64) -> bool {
+        self.force_net_voltage_windowed(net, volts, 0.0, f64::NEG_INFINITY, f64::INFINITY)
+    }
+
+    /// Force a net to `high_volts` while `t_start <= sim_time < t_end`, else
+    /// `low_volts`. Returns false if the net does not exist. Used to drive an
+    /// output SPIKE net HIGH for a sim-time window proportional to its decomposed
+    /// spike count (rate-coded firmware-driven inference).
+    pub fn force_net_voltage_windowed(
+        &mut self,
+        net: &str,
+        high_volts: f64,
+        low_volts: f64,
+        t_start: f64,
+        t_end: f64,
+    ) -> bool {
+        match self.net_nodes.get(net) {
+            Some(&node) => {
+                self.forced_node_volts
+                    .insert(node.0 as usize, (high_volts, low_volts, t_start, t_end));
+                // Reflect immediately so a same-chunk latch sample sees it too.
+                let t = self.sim_time;
+                let v = if t >= t_start && t < t_end { high_volts } else { low_volts };
+                if let Some(slot) = self.node_volts.get_mut(node.0 as usize) {
+                    *slot = v;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Current sim time (s).
+    pub fn sim_time(&self) -> f64 {
+        self.sim_time
+    }
+
+    /// Clear all forced node-voltage overrides.
+    pub fn clear_forced_voltages(&mut self) {
+        self.forced_node_volts.clear();
     }
 
     fn update_stats(&mut self) {
@@ -945,6 +1311,51 @@ impl Scheduler {
         out
     }
 
+    /// Per edge-driven 74HC595 chain, the MCU GPIO `(port, bit)` bound to its
+    /// SRCLK, RCLK, optional SRCLR_n, optional OE_n, and head SER, plus the chip
+    /// count. Empty when no chain is clocked by the MCU (the old once-per-chunk
+    /// path is used). Exposed for diagnostics and co-sim tests of the chain
+    /// wiring (FIX 1).
+    #[allow(clippy::type_complexity)]
+    pub fn hc595_chain_pins(
+        &self,
+    ) -> Vec<(
+        (char, u8),
+        (char, u8),
+        Option<(char, u8)>,
+        Option<(char, u8)>,
+        (char, u8),
+        usize,
+    )> {
+        self.chains
+            .iter()
+            .map(|c| (c.srclk, c.rclk, c.srclr_n, c.oe_n, c.ser, c.order.len()))
+            .collect()
+    }
+
+    /// Per edge-driven 74HC165 read chain, the MCU GPIO `(port,bit)` bound to
+    /// its PL, CLK, and MISO input, plus chip count. Empty when no MCU-clocked
+    /// 165 chain was identified. For diagnostics and read-chain co-sim tests.
+    #[allow(clippy::type_complexity)]
+    pub fn hc165_chain_pins(&self) -> Vec<((char, u8), (char, u8), (char, u8), usize)> {
+        self.hc165_chains
+            .iter()
+            .map(|c| {
+                let c = c.lock().unwrap_or_else(|e| e.into_inner());
+                (c.pl_n, c.clk, c.miso, c.order.len())
+            })
+            .collect()
+    }
+
+    /// The last word each 74HC165 read chain captured on its most recent PL
+    /// load (MSB-first, as the firmware accumulates it). For diagnostics/tests.
+    pub fn hc165_loaded_words(&self) -> Vec<u16> {
+        self.hc165_chains
+            .iter()
+            .map(|c| c.lock().unwrap_or_else(|e| e.into_inner()).loaded_word())
+            .collect()
+    }
+
     /// Digital component register states, for component-state frames.
     pub fn digital_states(&self) -> HashMap<String, HashMap<String, f64>> {
         self.digital
@@ -1066,6 +1477,13 @@ impl Scheduler {
         self.node_volts.resize(n_nodes, 0.0);
         let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
         self.branch_x.resize(n_branch, 0.0);
+        // Keep the 165 read-chain voltage snapshot sized to the node count.
+        {
+            let mut snap = self.input_volts.lock().unwrap_or_else(|e| e.into_inner());
+            snap.resize(n_nodes, 0.0);
+        }
+        // The unknown vector changed shape; a prior warm seed no longer applies.
+        self.last_dc_seed = None;
     }
 }
 
@@ -1258,6 +1676,58 @@ fn instantiate_renode(_part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
     )
 }
 
+/// Build the edge-driven 74HC595 chain controllers, the owning-MCU index per
+/// chain, and the set of chip indices they own.
+///
+/// Each PHYSICAL chain (recovered separately by `order_595_chains`, so two
+/// chains fed by different SER sources are never merged) is matched against each
+/// MCU's GPIO-net map: an MCU owns the chain when it drives the chain head's
+/// SRCLK / RCLK / SER. The owning MCU's index is recorded so the chain only
+/// consumes that MCU's edge log (a different MCU's identically-named pin, e.g.
+/// PB5, must not inject spurious clocks). A chain no MCU drives is left to the
+/// old once-per-chunk digital tick, so nothing regresses.
+fn build_595_chains(
+    digital: &[DigitalComponent],
+    mcus: &[LiveMcu],
+) -> (
+    Vec<crate::digital::Hc595Chain>,
+    Vec<usize>,
+    std::collections::HashSet<usize>,
+) {
+    use crate::digital::{order_595_chains, Hc595Chain};
+
+    let mut chains = Vec::new();
+    let mut chain_mcu = Vec::new();
+    let mut owned = std::collections::HashSet::new();
+
+    // Precompute each MCU's net-node -> (port, bit) GPIO map once.
+    let gpio_maps: Vec<HashMap<i64, (char, u8)>> = mcus
+        .iter()
+        .map(|m| {
+            m.binding
+                .gpio_drivers
+                .iter()
+                .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+                .collect()
+        })
+        .collect();
+
+    for order in order_595_chains(digital) {
+        // Bind this chain to whichever MCU drives its head's control pins.
+        for (mi, gpio_node) in gpio_maps.iter().enumerate() {
+            if let Some(chain) = Hc595Chain::build(digital, order.clone(), gpio_node) {
+                for &c in &chain.order {
+                    owned.insert(c);
+                }
+                chains.push(chain);
+                chain_mcu.push(mi);
+                break;
+            }
+        }
+    }
+    (chains, chain_mcu, owned)
+}
+
 /// Wire `on_pin_change` / `on_uart` hooks into a shared capture buffer.
 fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMcu {
     let shared = Arc::new(Mutex::new(McuShared::default()));
@@ -1267,11 +1737,9 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
     // UB. So never panic on a poisoned lock: recover the guard and keep going
     // (the captured data is a simple accumulation buffer).
     core.on_pin_change(Box::new(move |pin: PinId, high: bool| {
-        pin_sink
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pin_edges
-            .insert((pin.port, pin.bit), high);
+        let mut sh = pin_sink.lock().unwrap_or_else(|e| e.into_inner());
+        sh.pin_edges.insert((pin.port, pin.bit), high);
+        sh.pin_edge_log.push((pin.port, pin.bit, high));
     }));
     let uart_sink = shared.clone();
     core.on_uart(Box::new(move |b: u8| {

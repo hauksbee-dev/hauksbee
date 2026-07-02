@@ -441,6 +441,335 @@ fn be_to_temp(msb: u8, lsb: u8) -> f64 {
     (raw >> 5) as f64 * 0.125
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP4728 quad 12-bit I2C DAC (real datasheet command set)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// MCP4728 — Microchip quad 12-bit voltage-output I2C DAC with internal
+/// reference and EEPROM (datasheet DS22187E).
+///
+/// ## What is modelled
+///
+/// The four channels each hold a 12-bit DAC input register, a per-channel gain
+/// bit (Gx) and reference-select bit (Vref), and a power-down state. The output
+/// voltage of a channel is
+///
+/// ```text
+///   VOUT = (code / 4096) * VREF * gain
+/// ```
+///
+/// with the board configuration VREF = internal 2.048 V and gain = 2, so the
+/// full-scale range is 0 .. 4.095 V and VOUT = code * 0.001 V (1 mV/LSB).
+///
+/// ## Command decode (Table 5-1)
+///
+/// The write byte after the address selects the command:
+///   - **Fast Write** — the firmware's path. The top two bits of the first byte
+///     are `0 0`; the byte carries `[0 0 PD1 PD0 D11 D10 D9 D8]` and the next
+///     byte `[D7..D0]`. Channels auto-increment from A on each completed pair.
+///   - **Multi-Write** (`010` in C2 C1 C0) and **Single Write** (`011`) and
+///     **Sequential Write** (`010` + write-EEPROM bit): the channel comes from
+///     the command byte's `DAC1 DAC0` field, and the two data bytes carry
+///     `[Vref PD1 PD0 Gx D11..D8][D7..D0]`. These are decoded too so a host that
+///     uses them lands the same code.
+///
+/// LDAC is held LOW by the board at init (`PIN_LATCH_DAC = PD2`), so a completed
+/// channel write updates that channel's output register (VOUT) immediately; we
+/// model the board's held-low LDAC and update VOUT on the spot. (The separate
+/// address-reprogramming command and its LDAC-gated ACK is OUT OF SCOPE; this
+/// model assumes the device is already addressed at its configured address.)
+///
+/// ## Readback
+///
+/// A read returns the datasheet read frame: for each channel, the DAC input
+/// register and EEPROM register (3 bytes each, 6 per channel, 24 total). A
+/// reader recovers the 12-bit code from the input-register bytes
+/// `[RDY ... Vref PD1 PD0 Gx D11..D8][D7..D0]` (the upper nibble of the second
+/// byte holds D11..D8). We expose enough of that frame for a `--verify-dacs`
+/// style readback to recover the programmed codes.
+pub struct Mcp4728 {
+    addr: u8,
+    /// Per-channel 12-bit DAC input register (the value written over I2C).
+    input_reg: [u16; 4],
+    /// Per-channel 12-bit DAC output register (drives VOUT). With LDAC held low
+    /// this tracks `input_reg` on each write.
+    output_reg: [u16; 4],
+    /// Per-channel gain (1 or 2).
+    gain: [u8; 4],
+    /// Per-channel reference voltage in volts (internal 2.048 or external VDD).
+    vref: [f64; 4],
+    /// Per-channel power-down code (0 = normal; 1..3 = powered down via Rpd).
+    pd: [u8; 4],
+    /// Output series resistance (ROUT), ohms. Datasheet DC value ~1 Ω.
+    pub rout: f64,
+    /// Auto-incrementing channel cursor for Fast Write.
+    fast_channel: usize,
+    /// Bytes accumulated in the current write transaction.
+    write_acc: Vec<u8>,
+    /// Decoded command of the current write (set on the first byte).
+    cmd: Mcp4728Cmd,
+    /// Byte cursor for the read frame.
+    read_byte: usize,
+}
+
+/// The command decoded from the first write byte of a transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mcp4728Cmd {
+    /// Not yet decoded (no byte seen since START).
+    None,
+    /// Fast Write: 2 bytes per channel, auto-incrementing from A.
+    Fast,
+    /// Multi / Single Write: 3 bytes per channel (cmd + 2 data), channel taken
+    /// from each group's command byte.
+    Write,
+    /// Sequential Write: ONE command byte (consumed in `on_write`, which seeds
+    /// the channel cursor with its start channel), then back-to-back data pairs
+    /// that auto-increment the channel. The command byte is NOT in `write_acc`.
+    Seq,
+    /// A command we do not model (e.g. write-address-bits); bytes are ignored.
+    Other,
+}
+
+impl Mcp4728 {
+    /// Factory-default 7-bit address (A2=A1=A0=0).
+    pub const DEFAULT_ADDR: u8 = 0x60;
+
+    /// Build an MCP4728 at `address` with the board configuration: internal
+    /// VREF = 2.048 V and gain = 2 on every channel (full-scale 4.096 V). All
+    /// channels start at code 0 (VOUT ≈ 0 V), matching a factory-unprogrammed
+    /// EEPROM.
+    pub fn new(address: u8) -> Self {
+        Self::with_config(address, 2.048, 2)
+    }
+
+    /// Build an MCP4728 with an explicit reference voltage and gain on all four
+    /// channels (e.g. internal 2.048 V, gain 2 for the Tarski board).
+    pub fn with_config(address: u8, vref: f64, gain: u8) -> Self {
+        Mcp4728 {
+            addr: address,
+            input_reg: [0; 4],
+            output_reg: [0; 4],
+            gain: [gain; 4],
+            vref: [vref; 4],
+            pd: [0; 4],
+            rout: 1.0,
+            fast_channel: 0,
+            write_acc: Vec::new(),
+            cmd: Mcp4728Cmd::None,
+            read_byte: 0,
+        }
+    }
+
+    /// The 12-bit input-register code for `channel` (0..3).
+    pub fn code(&self, channel: usize) -> u16 {
+        self.input_reg.get(channel).copied().unwrap_or(0)
+    }
+
+    /// The computed output voltage for `channel` (0..3), in volts:
+    /// `VOUT = (code / 4096) * VREF * gain`, or 0 V when powered down.
+    pub fn vout(&self, channel: usize) -> f64 {
+        if channel >= 4 || self.pd[channel] != 0 {
+            return 0.0;
+        }
+        let code = self.output_reg[channel] as f64;
+        (code / 4096.0) * self.vref[channel] * self.gain[channel] as f64
+    }
+
+    /// Commit a completed channel write: latch the input register, and (because
+    /// the board holds LDAC low) update the output register immediately.
+    fn commit(&mut self, channel: usize, code: u16, pd: u8, gain: Option<u8>, vref: Option<f64>) {
+        if channel >= 4 {
+            return;
+        }
+        self.input_reg[channel] = code & 0x0FFF;
+        self.pd[channel] = pd;
+        if let Some(g) = gain {
+            self.gain[channel] = g;
+        }
+        if let Some(v) = vref {
+            self.vref[channel] = v;
+        }
+        // LDAC low -> VOUT updates on the spot.
+        self.output_reg[channel] = self.input_reg[channel];
+    }
+
+    /// Decode the accumulated Fast-Write byte pairs. Each pair is
+    /// `[0 0 PD1 PD0 D11..D8][D7..D0]`, channel auto-incrementing from the
+    /// current cursor.
+    fn decode_fast(&mut self) {
+        while self.write_acc.len() >= 2 {
+            let b1 = self.write_acc.remove(0);
+            let b2 = self.write_acc.remove(0);
+            let pd = (b1 >> 4) & 0x03;
+            let code = (((b1 & 0x0F) as u16) << 8) | b2 as u16;
+            let ch = self.fast_channel & 0x03;
+            self.commit(ch, code, pd, None, None);
+            self.fast_channel = (self.fast_channel + 1) & 0x03;
+        }
+    }
+
+    /// Decode the accumulated Multi/Single-Write bytes. `write_acc` holds one
+    /// command byte per channel: `[cmd][data_hi][data_lo]...`. Each 3-byte group
+    /// is `[C2 C1 C0 W1 W0 DAC1 DAC0 UDAC][Vref PD1 PD0 Gx D11..D8][D7..D0]`.
+    /// Sequential Write (one command, then auto-incrementing pairs) is handled
+    /// separately by [`Mcp4728::decode_seq`].
+    fn decode_write(&mut self) {
+        // Process complete 3-byte groups (cmd + 2 data).
+        while self.write_acc.len() >= 3 {
+            let cmd = self.write_acc.remove(0);
+            let d_hi = self.write_acc.remove(0);
+            let d_lo = self.write_acc.remove(0);
+            let channel = ((cmd >> 1) & 0x03) as usize;
+            let vref_bit = (d_hi >> 7) & 0x01;
+            let pd = (d_hi >> 5) & 0x03;
+            let gain_bit = (d_hi >> 4) & 0x01;
+            let code = (((d_hi & 0x0F) as u16) << 8) | d_lo as u16;
+            let gain = if gain_bit == 1 { 2 } else { 1 };
+            // Vref bit 1 = internal 2.048 V, 0 = external VDD. We keep the
+            // channel's existing external/internal voltages; only switch the
+            // reference magnitude to the internal 2.048 V when the bit selects
+            // internal, otherwise leave the per-channel vref as configured.
+            let vref = if vref_bit == 1 { Some(2.048) } else { None };
+            self.commit(channel, code, pd, Some(gain), vref);
+        }
+    }
+
+    /// Decode Sequential-Write data pairs. The command byte was consumed in
+    /// `on_write` (it seeded `fast_channel` with the start channel), so
+    /// `write_acc` holds only data pairs `[Vref PD1 PD0 Gx D11..D8][D7..D0]`,
+    /// each writing the cursor channel and advancing it (A->B->C->D, wrapping).
+    fn decode_seq(&mut self) {
+        while self.write_acc.len() >= 2 {
+            let d_hi = self.write_acc.remove(0);
+            let d_lo = self.write_acc.remove(0);
+            let vref_bit = (d_hi >> 7) & 0x01;
+            let pd = (d_hi >> 5) & 0x03;
+            let gain_bit = (d_hi >> 4) & 0x01;
+            let code = (((d_hi & 0x0F) as u16) << 8) | d_lo as u16;
+            let gain = if gain_bit == 1 { 2 } else { 1 };
+            let vref = if vref_bit == 1 { Some(2.048) } else { None };
+            let ch = (self.fast_channel & 0x03) as usize;
+            self.commit(ch, code, pd, Some(gain), vref);
+            self.fast_channel = (self.fast_channel + 1) & 0x03;
+        }
+    }
+
+    /// Build the 24-byte read frame: for each channel A..D, the DAC input
+    /// register (3 bytes) then the EEPROM register (3 bytes). Byte layout per
+    /// register: `[RDY POR Vref PD1 PD0 Gx 0 0]` style status is simplified to
+    /// `[0 0 0 0 0 0 0 0]` for the leading byte we don't model; the code is in
+    /// the next two bytes as `[.... D11..D8][D7..D0]`. A reader recovers the
+    /// 12-bit code from bytes 1 and 2 of each input-register triple.
+    fn read_frame(&self) -> Vec<u8> {
+        let mut f = Vec::with_capacity(24);
+        for ch in 0..4 {
+            let code = self.input_reg[ch];
+            let vref_bit = if (self.vref[ch] - 2.048).abs() < 0.5 { 1 } else { 0 };
+            let gain_bit = if self.gain[ch] >= 2 { 1 } else { 0 };
+            // DAC input register triple.
+            // Byte 0: RDY/BSY (1) + POR (1) + address bits — simplified status.
+            f.push(0xC0 | ((self.addr & 0x07) << 1));
+            // Byte 1: [Vref PD1 PD0 Gx D11 D10 D9 D8].
+            f.push((vref_bit << 7)
+                | (self.pd[ch] << 5)
+                | (gain_bit << 4)
+                | ((code >> 8) & 0x0F) as u8);
+            // Byte 2: [D7..D0].
+            f.push((code & 0xFF) as u8);
+            // EEPROM register triple (mirror the input register here).
+            f.push(0xC0 | ((self.addr & 0x07) << 1));
+            f.push((vref_bit << 7)
+                | (self.pd[ch] << 5)
+                | (gain_bit << 4)
+                | ((code >> 8) & 0x0F) as u8);
+            f.push((code & 0xFF) as u8);
+        }
+        f
+    }
+}
+
+impl I2cSlave for Mcp4728 {
+    fn address(&self) -> u8 {
+        self.addr
+    }
+
+    fn on_start(&mut self, read: bool) {
+        self.read_byte = 0;
+        if !read {
+            self.write_acc.clear();
+            self.cmd = Mcp4728Cmd::None;
+            self.fast_channel = 0;
+        }
+    }
+
+    fn on_write(&mut self, data: u8) {
+        if self.cmd == Mcp4728Cmd::None {
+            // First byte after the address decides the command family.
+            let top2 = (data >> 6) & 0x03;
+            if top2 == 0b00 {
+                self.cmd = Mcp4728Cmd::Fast;
+                self.write_acc.push(data);
+            } else {
+                let c = (data >> 5) & 0x07; // C2 C1 C0 (top three bits)
+                let w = (data >> 3) & 0x03; // W1 W0 (the write sub-type)
+                // 010 = the DAC-write family; W1W0: 00 = Multi, 10 = Sequential,
+                // 11 = Single. 011 = single-channel write variant.
+                if c == 0b010 && w == 0b10 {
+                    // Sequential Write: consume the single command byte now (it
+                    // carries only the start channel), then the trailing data
+                    // pairs auto-increment from there. The command byte does NOT
+                    // go into write_acc.
+                    self.cmd = Mcp4728Cmd::Seq;
+                    self.fast_channel = ((data >> 1) & 0x03) as usize;
+                } else if c == 0b010 || c == 0b011 {
+                    self.cmd = Mcp4728Cmd::Write;
+                    self.write_acc.push(data);
+                } else {
+                    // Write-address-bits / general-purpose: not modelled here.
+                    self.cmd = Mcp4728Cmd::Other;
+                }
+            }
+            return;
+        }
+        if matches!(self.cmd, Mcp4728Cmd::Other) {
+            return;
+        }
+        self.write_acc.push(data);
+        // Decode greedily as soon as a full unit is available, so the channel
+        // registers update during the transaction (LDAC low -> immediate VOUT).
+        match self.cmd {
+            Mcp4728Cmd::Fast => self.decode_fast(),
+            Mcp4728Cmd::Write => self.decode_write(),
+            Mcp4728Cmd::Seq => self.decode_seq(),
+            _ => {}
+        }
+    }
+
+    fn on_read(&mut self) -> u8 {
+        let frame = self.read_frame();
+        let b = frame.get(self.read_byte).copied().unwrap_or(0);
+        self.read_byte = (self.read_byte + 1) % frame.len().max(1);
+        b
+    }
+
+    fn state(&self) -> HashMap<String, f64> {
+        let mut m = HashMap::new();
+        for ch in 0..4 {
+            let name = ['a', 'b', 'c', 'd'][ch];
+            m.insert(format!("code_{name}"), self.input_reg[ch] as f64);
+            m.insert(format!("vout_{name}"), self.vout(ch));
+        }
+        m
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 /// Alias kept for the brief's "BME280 or LM75" choice: LM75 is the modelled
 /// part. `Bme280` re-exports nothing real; we expose the chosen sensor under a
 /// clear name so callers pick `Lm75`.
@@ -515,6 +844,186 @@ mod tests {
         assert!(ee.contains(b"Hi"), "EEPROM should contain 'Hi'");
         assert_eq!(ee.contents()[0x10], b'H');
         assert_eq!(ee.contents()[0x11], b'i');
+    }
+
+    /// Emit the EXACT byte pair the firmware sends for a Fast Write of a 12-bit
+    /// code on one channel: byte_1 = (value >> 8) & 0x0F, byte_2 = value & 0xFF
+    /// (device.cpp:182-183). PD bits are 0 (normal mode), top two bits 0.
+    fn firmware_fast_write_pair(value: u16) -> (u8, u8) {
+        let v = value & 0x0FFF;
+        (((v >> 8) & 0x0F) as u8, (v & 0xFF) as u8)
+    }
+
+    #[test]
+    fn mcp4728_firmware_fast_write_sets_vout() {
+        // The firmware writes channel 0 of the device at 0x60 to code 2048.
+        // With the board config (VREF 2.048, gain 2) that is exactly 2.048 V.
+        let mut bus = I2cBus::new("U1101")
+            .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+        let (b1, b2) = firmware_fast_write_pair(2048);
+        for ev in [
+            I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: b1 },
+            I2cEvent::Write { addr: 0x60, data: b2 },
+            I2cEvent::Stop { addr: 0x60 },
+        ] {
+            bus.dispatch(ev);
+        }
+        let dac = bus.slave::<Mcp4728>(0x60).unwrap();
+        assert_eq!(dac.code(0), 2048, "channel 0 latched code 2048");
+        // VOUT = code * 0.001 V exactly (2048 -> 2.048 V).
+        assert!(
+            (dac.vout(0) - 2.048).abs() < 1e-9,
+            "VOUT should be 2.048 V, got {}",
+            dac.vout(0)
+        );
+        // The whole code range maps VOUT = code * 0.001 V.
+        for &code in &[0u16, 1, 1000, 4095] {
+            let mut b = I2cBus::new("U")
+                .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+            let (h, l) = firmware_fast_write_pair(code);
+            for ev in [
+                I2cEvent::Start { addr: 0x60, read: false },
+                I2cEvent::Write { addr: 0x60, data: h },
+                I2cEvent::Write { addr: 0x60, data: l },
+                I2cEvent::Stop { addr: 0x60 },
+            ] {
+                b.dispatch(ev);
+            }
+            let want = code as f64 * 0.001;
+            let got = b.slave::<Mcp4728>(0x60).unwrap().vout(0);
+            assert!((got - want).abs() < 1e-9, "code {code}: VOUT {got} != {want}");
+        }
+    }
+
+    #[test]
+    fn mcp4728_fast_write_auto_increments_channels() {
+        // One Fast Write transaction with four pairs lands on channels A..D.
+        let mut bus = I2cBus::new("U")
+            .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+        let codes = [100u16, 2048, 3000, 4095];
+        let mut evs = vec![I2cEvent::Start { addr: 0x60, read: false }];
+        for &c in &codes {
+            let (h, l) = firmware_fast_write_pair(c);
+            evs.push(I2cEvent::Write { addr: 0x60, data: h });
+            evs.push(I2cEvent::Write { addr: 0x60, data: l });
+        }
+        evs.push(I2cEvent::Stop { addr: 0x60 });
+        for ev in evs {
+            bus.dispatch(ev);
+        }
+        let dac = bus.slave::<Mcp4728>(0x60).unwrap();
+        for (ch, &c) in codes.iter().enumerate() {
+            assert_eq!(dac.code(ch), c, "channel {ch} code");
+            assert!((dac.vout(ch) - c as f64 * 0.001).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn mcp4728_readback_recovers_code() {
+        let mut bus = I2cBus::new("U")
+            .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+        let (h, l) = firmware_fast_write_pair(2730);
+        for ev in [
+            I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: h },
+            I2cEvent::Write { addr: 0x60, data: l },
+            I2cEvent::Stop { addr: 0x60 },
+        ] {
+            bus.dispatch(ev);
+        }
+        // Read the frame back: channel A input register is the first triple;
+        // byte 1 carries D11..D8 in its low nibble, byte 2 carries D7..D0.
+        bus.dispatch(I2cEvent::Start { addr: 0x60, read: true });
+        let _status = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
+        let hi = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
+        let lo = bus.dispatch(I2cEvent::Read { addr: 0x60 }).unwrap();
+        bus.dispatch(I2cEvent::Stop { addr: 0x60 });
+        let recovered = (((hi & 0x0F) as u16) << 8) | lo as u16;
+        assert_eq!(recovered, 2730, "readback recovers the programmed code");
+    }
+
+    #[test]
+    fn mcp4728_three_instances_are_independent() {
+        // Three DACs at 0x60/0x61/0x62 on one bus. Writing 0x60 must not touch
+        // 0x61 or 0x62.
+        let mut bus = I2cBus::new("U")
+            .with_slave(Box::new(Mcp4728::new(0x60)))
+            .with_slave(Box::new(Mcp4728::new(0x61)))
+            .with_slave(Box::new(Mcp4728::new(0x62)));
+        let (h, l) = firmware_fast_write_pair(4000);
+        for ev in [
+            I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: h },
+            I2cEvent::Write { addr: 0x60, data: l },
+            I2cEvent::Stop { addr: 0x60 },
+        ] {
+            bus.dispatch(ev);
+        }
+        assert_eq!(bus.slave::<Mcp4728>(0x60).unwrap().code(0), 4000);
+        assert_eq!(bus.slave::<Mcp4728>(0x61).unwrap().code(0), 0, "0x61 untouched");
+        assert_eq!(bus.slave::<Mcp4728>(0x62).unwrap().code(0), 0, "0x62 untouched");
+        assert!((bus.slave::<Mcp4728>(0x61).unwrap().vout(0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mcp4728_multi_write_command_decodes_channel() {
+        // Multi-Write (C2C1C0 = 010), channel C (DAC1 DAC0 = 10), code 1500,
+        // Vref=internal(1), PD=0, Gx=gain2(1). Byte layout:
+        //   cmd  = 0b0100_1100  (010 | W1W0=01 | DAC=10 | UDAC=0)
+        //   dhi  = [Vref PD1 PD0 Gx D11..D8] = 1 00 1 (1500>>8=0x5) -> 0b1001_0101
+        //   dlo  = 1500 & 0xFF = 0xDC
+        let mut bus = I2cBus::new("U")
+            .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+        let cmd = 0b0100_1100u8;
+        // dhi = [Vref=1, PD=00, Gx=1, D11..D8]. PD bits are 0 (left implicit).
+        let dhi = (1u8 << 7) | (1 << 4) | (((1500u16 >> 8) & 0x0F) as u8);
+        let dlo = (1500u16 & 0xFF) as u8;
+        for ev in [
+            I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: cmd },
+            I2cEvent::Write { addr: 0x60, data: dhi },
+            I2cEvent::Write { addr: 0x60, data: dlo },
+            I2cEvent::Stop { addr: 0x60 },
+        ] {
+            bus.dispatch(ev);
+        }
+        let dac = bus.slave::<Mcp4728>(0x60).unwrap();
+        assert_eq!(dac.code(2), 1500, "channel C programmed via Multi-Write");
+        assert!((dac.vout(2) - 1.500).abs() < 1e-9, "VOUT C = 1.5 V");
+    }
+
+    #[test]
+    fn mcp4728_sequential_write_auto_increments_channels() {
+        // Sequential Write: ONE command byte (start channel A), then four data
+        // pairs that auto-increment A->B->C->D. cmd = 010 | W1W0=10 | DAC=00 |
+        // UDAC=0 = 0b0101_0000 = 0x50. Each data hi = [Vref=1 PD=00 Gx=1 D11..D8].
+        // Codes 100/200/300/400 -> A..D. This sequence is mis-framed by the old
+        // 3-byte-per-group decoder; it must land each code in its own channel.
+        let mut bus = I2cBus::new("U")
+            .with_slave(Box::new(Mcp4728::new(Mcp4728::DEFAULT_ADDR)));
+        let pair = |code: u16| -> [u8; 2] {
+            let hi = (1u8 << 7) | (1 << 4) | (((code >> 8) & 0x0F) as u8);
+            [hi, (code & 0xFF) as u8]
+        };
+        let mut evs = vec![I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: 0x50 }];
+        for code in [100u16, 200, 300, 400] {
+            for b in pair(code) {
+                evs.push(I2cEvent::Write { addr: 0x60, data: b });
+            }
+        }
+        evs.push(I2cEvent::Stop { addr: 0x60 });
+        for ev in evs {
+            bus.dispatch(ev);
+        }
+        let dac = bus.slave::<Mcp4728>(0x60).unwrap();
+        assert_eq!(
+            [dac.code(0), dac.code(1), dac.code(2), dac.code(3)],
+            [100, 200, 300, 400],
+            "Sequential Write lands each code in its own auto-incremented channel"
+        );
+        assert!((dac.vout(3) - 0.400).abs() < 1e-9, "VOUT D = 0.4 V");
     }
 
     #[test]

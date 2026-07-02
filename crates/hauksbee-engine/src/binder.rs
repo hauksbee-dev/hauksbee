@@ -59,13 +59,38 @@ pub struct McuBinding {
     pub module: bool,
 }
 
+/// One MCP4728 quad DAC discovered on the board. Carries the assigned 7-bit
+/// I2C address, the board reference/value config (VREF, gain), and the four
+/// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
+/// creates one [`Mcp4728`](crate::Mcp4728) slave per binding, attaches them on a
+/// shared bus, and pushes each channel's computed VOUT onto these drivers every
+/// chunk (the `Hc595Chain::apply` cadence) so the analog solve sees the DAC
+/// output voltages.
+pub struct DacBinding {
+    pub reference: String,
+    pub address: u8,
+    pub vref: f64,
+    pub gain: u8,
+    /// VOUT channel A..D -> stamped driver (None if that channel net is
+    /// unconnected / tied to ground on this board).
+    pub vout_drivers: [Option<PinDriver>; 4],
+}
+
 /// The bound board: a ready-to-solve circuit plus the event-driven layer.
 pub struct BoundBoard {
     pub name: String,
     pub circuit: Circuit,
     /// Net name -> circuit node.
     pub net_nodes: HashMap<String, NodeId>,
-    /// All net names in declaration order (for board_info / frames).
+    /// All net names in *net-declaration order* (for board_info / frame counts).
+    ///
+    /// WARNING: this is NOT a `NodeId` reverse map. It is pushed once per real
+    /// net (skipping KiCad's no-net id 0), so it has no entry for the ground
+    /// node that occupies `NodeId(0)` in the circuit. Indexing it by `NodeId.0`
+    /// is therefore OFF BY ONE and relabels every node as its successor — which
+    /// is exactly what produced a spurious "comparator +IN -> SCL" mis-wiring
+    /// claim on the Tarski board. To turn a `NodeId` back into a net name, use
+    /// [`Circuit::node_name`] (the circuit's authoritative reverse map).
     pub net_names: Vec<String>,
     pub digital: Vec<DigitalComponent>,
     pub mcus: Vec<McuBinding>,
@@ -84,6 +109,9 @@ pub struct BoundBoard {
     pub behavioral: Vec<crate::behavioral::BehavioralDevice>,
     /// Per-device metadata for the fault/stress monitor (Feature 2).
     pub device_meta: Vec<DeviceMeta>,
+    /// MCP4728 quad DACs discovered on the board, with their VOUT drivers. The
+    /// scheduler turns these into I2C slaves and drives the analog VOUT nets.
+    pub dacs: Vec<DacBinding>,
     pub report: BindReport,
 }
 
@@ -120,6 +148,10 @@ pub fn bind_board_with(
     // net id -> node id (for pin wiring). Net 0 is KiCad's "no net".
     let mut netid_node: HashMap<i64, NodeId> = HashMap::new();
     let mut power_nets: HashMap<String, f64> = HashMap::new();
+    // Rails identified by a `power_out` source pin's function (net id -> volts),
+    // catching supply nets whose NAME is non-canonical (e.g. `+5P`) but whose
+    // driving pin is tagged `power_out`.
+    let power_out_nets = power_out_net_voltages(board);
     for net in &board.nets {
         if net.id == 0 {
             continue;
@@ -132,8 +164,15 @@ pub fn bind_board_with(
         netid_node.insert(net.id, node);
         net_nodes.insert(net.name.clone(), node);
         net_names.push(net.name.clone());
-        if let Some(v) = power_rail_voltage(&net.name) {
-            power_nets.insert(net.name.clone(), v);
+        // A rail is recognised either by its canonical name or by a `power_out`
+        // pin that drives it at a named voltage (the general case). Ground nets
+        // are never rails.
+        if !node.is_ground() {
+            if let Some(v) =
+                power_rail_voltage(&net.name).or_else(|| power_out_nets.get(&net.id).copied())
+            {
+                power_nets.insert(net.name.clone(), v);
+            }
         }
     }
 
@@ -148,6 +187,7 @@ pub fn bind_board_with(
     let mut component_kinds: HashMap<String, String> = HashMap::new();
     let mut digital: Vec<DigitalComponent> = Vec::new();
     let mut mcus: Vec<McuBinding> = Vec::new();
+    let mut dacs: Vec<DacBinding> = Vec::new();
     let input_sources: HashMap<String, hauksbee_ir::DeviceId> = HashMap::new();
 
     // Detect whether the board has its own regulator chain we can solve. If a
@@ -159,6 +199,14 @@ pub fn bind_board_with(
             Some(ComponentKind::Vreg)
         )
     });
+
+    // The set of nodes used as DIGITAL CONTROL lines elsewhere on the board: a
+    // net carrying a 74HC595/165 control input (srclk/rclk/srclr_n/oe_n/ser) or
+    // an I2C sda/scl role. An MCU A-pin (PC0-PC5, dual-purpose ADC/GPIO) sitting
+    // on such a net is being driven as a digital output, not read as an analog
+    // input, so the MCU binder stamps a GPIO driver on it rather than an ADC
+    // probe (FIX 2). Computed up front so `bind_mcu` can consult it.
+    let digital_control_nodes = digital_control_node_set(board, lib, &node_of);
 
     // ── Pass 2: bind every component ────────────────────────────────────────
     for comp in &board.components {
@@ -179,8 +227,10 @@ pub fn bind_board_with(
                     &node_of,
                     &mut digital,
                     &mut mcus,
+                    &mut dacs,
                     has_vreg,
                     &power_nets,
+                    &digital_control_nodes,
                 );
                 (Some(kind_str), outcome, warning)
             }
@@ -197,6 +247,19 @@ pub fn bind_board_with(
             outcome,
             warning,
         });
+    }
+
+    // ── Assign MCP4728 I2C addresses deterministically by reference order ────
+    // The board reprograms the three DACs to 0x60/0x61/0x62 during bring-up
+    // (that bit-banged address-reprogramming is OUT OF SCOPE here). We model the
+    // post-bring-up state: addresses 0x60+i assigned by ascending reference
+    // designator (U1101->0x60, U1102->0x61, U1103->0x62). ASSUMPTION: the
+    // netlist does not encode the final address per device, so by-ref ordering
+    // is the deterministic stand-in; it matches the board's U1101/02/03 layout
+    // and the firmware's CONF_MCP4728_ADDRS = {0x60,0x61,0x62}.
+    dacs.sort_by(|a, b| a.reference.cmp(&b.reference));
+    for (i, d) in dacs.iter_mut().enumerate() {
+        d.address = 0x60 + i as u8;
     }
 
     // ── Pass 3: attach configurable power supplies ──────────────────────────
@@ -265,6 +328,7 @@ pub fn bind_board_with(
         supplies,
         behavioral,
         device_meta,
+        dacs,
         report,
     }
 }
@@ -486,6 +550,51 @@ fn gather_device_meta(
     metas
 }
 
+/// Collect the set of circuit nodes (by `NodeId.0`) that other components use as
+/// DIGITAL CONTROL lines: a shift-register clock/latch/clear/serial input, an
+/// output-enable, or an I2C SDA/SCL. An MCU's dual-purpose analog pin sitting on
+/// one of these nets is being driven, not sensed, so the MCU binder stamps a
+/// GPIO driver instead of an ADC probe (FIX 2). Ground nodes are never control
+/// lines. Computed by resolving each component and reading its connected role
+/// nodes the same way the per-kind binders do.
+fn digital_control_node_set(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> std::collections::HashSet<i64> {
+    // Roles that are unambiguously digital control INPUTS on the parts we model.
+    // (595: srclk/rclk/srclr_n/oe_n/ser; 165: clk/clk_inh/pl_n/ser; I2C: sda/scl.)
+    const CONTROL_ROLES: &[&str] = &[
+        "srclk", "rclk", "srclr_n", "oe_n", "ser", "clk", "clk_inh", "pl_n", "sda", "scl",
+    ];
+    let mut set = std::collections::HashSet::new();
+    for comp in &board.components {
+        let res = resolve(lib, comp);
+        let Some(model) = res.model else { continue };
+        // Only treat genuinely digital parts as control sources, so an analog
+        // part that happens to reuse a role name cannot pull an A-pin off ADC.
+        let is_digital = matches!(
+            model.kind,
+            ComponentKind::Digital
+                | ComponentKind::ShiftRegister
+                | ComponentKind::Dac
+                | ComponentKind::Adc
+        );
+        if !is_digital {
+            continue;
+        }
+        let roles = role_node_map(comp, &model, node_of);
+        for role in CONTROL_ROLES {
+            if let Some(&node) = roles.get(*role) {
+                if !node.is_ground() {
+                    set.insert(node.0 as i64);
+                }
+            }
+        }
+    }
+    set
+}
+
 /// Resolve one component into a model entry.
 pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
@@ -617,6 +726,53 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             Default::default(),
             BTreeMap::new(),
         ));
+    }
+
+    // Generic signal diode by reference class. KiCad's stock "Device:D" symbol
+    // carries the value "D" with no MPN, so the model db cannot resolve it; a
+    // bare SOD/SMA/SMB/MELF/DO diode footprint with no resolved model is the
+    // same case. These are real silicon junctions on the board (on Tarski the
+    // ~94 D_stretch/D_inject/D_hyst pulse-stretcher diodes), so leaving them
+    // OPEN silently deletes a conducting path. Mirror the r_/c_/l_ fallbacks:
+    // when the part is unmistakably a 2-terminal diode, bind a generic 1N4148
+    // signal diode (datasheet-grounded params below).
+    if prefix.starts_with('D') && prefix != "DAC" {
+        let v = comp.value.trim();
+        let val_is_generic = v.is_empty()
+            || v.eq_ignore_ascii_case("D")
+            || v.eq_ignore_ascii_case("diode")
+            || v.eq_ignore_ascii_case("1N4148")
+            || v.eq_ignore_ascii_case("1N4148W")
+            || v.eq_ignore_ascii_case("1N4148WS");
+        let fp = comp.footprint.to_ascii_uppercase();
+        // Footprint families for small 2-pin signal/switching diodes.
+        let fp_is_diode = fp.contains("SOD")
+            || fp.contains("SMA")
+            || fp.contains("SMB")
+            || fp.contains("SMC")
+            || fp.contains("MELF")
+            || fp.contains("DO-")
+            || fp.contains("D_")
+            || fp.contains("DIODE");
+        // Bind the fallback when the value is a generic diode token, OR the
+        // value is unparseable-as-a-passive but the footprint is a diode body.
+        if val_is_generic || (parse_value(&comp.value).is_none() && fp_is_diode) {
+            return Some(make_entry(
+                "signal_diode_1n4148_fallback",
+                ComponentKind::Diode,
+                "generic signal diode (engine fallback: value=\"D\"/bare diode \
+                 footprint -> 1N4148, Philips/Vishay SPICE model)",
+                diode_1n4148_params(),
+                // KiCad Device:D Sim.Pins is "1=K 2=A" (SOD cathode=pin1); the
+                // netlist also carries pinfunction K/A which the binder reads
+                // first, so this pad map is the PCB-only-extraction fallback.
+                [("1", "cathode"), ("2", "anode")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ));
+        }
+
     }
 
     // Passives by reference class, when a magnitude can be recovered from the
@@ -922,6 +1078,28 @@ fn pin_role_summary(pins: &std::collections::BTreeMap<String, String>) -> String
     }
 }
 
+/// Datasheet-grounded SPICE parameters for a generic 1N4148 small-signal
+/// switching diode, used by the value-"D" diode fallback. Values are the
+/// canonical Philips/Vishay 1N4148 model (the part on Tarski is LCSC C2099 =
+/// JSCJ 1N4148W in SOD-323, a standard 1N4148-family switching diode):
+///   IS=4.352e-9 A, N=1.906, RS=0.6458 Ohm, CJO=7.048e-13 F, VJ=0.869 V,
+///   M=0.0306, TT=3.48e-9 s, BV=110 V.
+/// Source: Philips/Vishay 1N4148 .MODEL card (the de-facto reference set,
+/// e.g. spice-padiwa-amps/1N4148.lib); BOM part LCSC C2099 (1N4148W).
+fn diode_1n4148_params() -> hauksbee_models::Params {
+    let mut p = hauksbee_models::Params::default();
+    p.set_f64("is", 4.352e-9);
+    p.set_f64("n", 1.906);
+    p.set_f64("rs", 0.6458);
+    p.set_f64("cjo", 7.048e-13);
+    p.set_f64("vj", 0.869);
+    p.set_f64("m", 0.0306);
+    p.set_f64("tt", 3.48e-9);
+    p.set_f64("bv", 110.0);
+    p
+
+}
+
 /// Construct a [`ModelEntry`] for an engine-layer fallback. Centralised so a
 /// schema change (new optional fields) is handled in one place.
 fn make_entry(
@@ -1060,8 +1238,10 @@ fn bind_component(
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
     digital: &mut Vec<DigitalComponent>,
     mcus: &mut Vec<McuBinding>,
+    dacs: &mut Vec<DacBinding>,
     has_vreg: bool,
     power_nets: &HashMap<String, f64>,
+    digital_control_nodes: &std::collections::HashSet<i64>,
 ) -> (BindOutcome, Option<String>) {
     use ComponentKind::*;
 
@@ -1098,12 +1278,20 @@ fn bind_component(
                 None,
             )
         }
-        Dac | Adc => {
-            // Treated as behavioral passthrough buffers for now.
+        Dac => {
+            // MCP4728-class quad I2C DAC: stamp Thevenin drivers on the four
+            // VOUT channel nets and record a DacBinding. The scheduler creates
+            // the I2C slave and pushes computed VOUT onto these drivers each
+            // chunk. The I2C transactions reach the slave through the MCU's TWI
+            // `on_i2c` hook, not these nets, so no digital buffer is stamped.
+            bind_mcp4728_dac(comp, model, circuit, &role_nets, dacs)
+        }
+        Adc => {
+            // Treated as a behavioral passthrough buffer for now.
             bind_digital(comp, model, circuit, &role_nets, digital);
             (
                 BindOutcome::Digital {
-                    kind: format!("{:?}", model.kind).to_ascii_lowercase(),
+                    kind: "adc".to_string(),
                 },
                 None,
             )
@@ -1114,7 +1302,16 @@ fn bind_component(
                 .get_str("backend")
                 .unwrap_or("simavr:atmega328p")
                 .to_string();
-            let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
+            let warning = bind_mcu(
+                comp,
+                model,
+                circuit,
+                node_of,
+                &pad_nodes,
+                power_nets,
+                mcus,
+                digital_control_nodes,
+            );
             (BindOutcome::Mcu { backend }, warning)
         }
         Connector => (
@@ -1217,6 +1414,28 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             "s" | "sel" | "in" | "ctrl" => "ctrl",
             "gnd" | "vss" => "vss",
             "vcc" | "vdd" => "vcc",
+            _ => return None,
+        },
+        ComponentKind::Opamp | ComponentKind::Comparator => match f.as_str() {
+            "out" | "output" | "q" => "out",
+            "+in" | "in+" | "inp" | "in_p" | "in_plus" | "non-inverting" => "in_plus",
+            "-in" | "in-" | "inn" | "in_n" | "in_minus" | "inverting" => "in_minus",
+            _ => return None,
+        },
+        // MCP4728-class DACs: the schematic VOUTA..VOUTD / SDA / SCL / ~{LDAC}
+        // pin names are authoritative over the db's pad-number map (which some
+        // symbol libraries number differently). This pins each VOUT channel to
+        // the right analog net regardless of MSOP vs symbol pin numbering.
+        ComponentKind::Dac => match f.as_str() {
+            "vouta" | "vout_a" => "vout_a",
+            "voutb" | "vout_b" => "vout_b",
+            "voutc" | "vout_c" => "vout_c",
+            "voutd" | "vout_d" => "vout_d",
+            "sda" => "sda",
+            "scl" => "scl",
+            "ldac" | "~{ldac}" | "ldac_n" => "ldac_n",
+            "vdd" => "vdd",
+            "vss" | "gnd" => "vss",
             _ => return None,
         },
         _ => return None,
@@ -1715,6 +1934,73 @@ fn bind_analog_switch(
     )
 }
 
+/// Bind an MCP4728-class quad I2C DAC: stamp a low-impedance Thevenin
+/// [`PinDriver`] on each connected VOUT channel net (ROUT ~1 Ω per the
+/// datasheet) and push a [`DacBinding`] the scheduler turns into an I2C slave.
+/// The address is assigned later by reference order; we leave a placeholder.
+fn bind_mcp4728_dac(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+    dacs: &mut Vec<DacBinding>,
+) -> (BindOutcome, Option<String>) {
+    // Output series resistance: datasheet ROUT ~1 Ω (normal mode). A small,
+    // non-zero value keeps the MNA well-conditioned while presenting a stiff
+    // source onto the synapse set-point nets.
+    let rout = model.params.get_f64("rout").unwrap_or(1.0);
+    let vref = model.params.get_f64("vref_int").unwrap_or(2.048);
+    let gain = model.params.get_f64("gain").unwrap_or(2.0).round() as u8;
+
+    let channel_roles = ["vout_a", "vout_b", "vout_c", "vout_d"];
+    let mut vout_drivers: [Option<PinDriver>; 4] = [None, None, None, None];
+    let mut stamped = 0;
+    for (ch, role) in channel_roles.iter().enumerate() {
+        let Some(&net) = roles.get(*role) else {
+            continue;
+        };
+        if net.is_ground() {
+            continue;
+        }
+        let net_name = circuit.node_name(net).to_string();
+        let drv = PinDriver::stamp(
+            circuit,
+            net,
+            &net_name,
+            &format!("{}_{role}", comp.reference),
+            rout,
+        );
+        vout_drivers[ch] = Some(drv);
+        stamped += 1;
+    }
+
+    if stamped == 0 {
+        return (
+            BindOutcome::Unresolved {
+                reason: "MCP4728 has no connected VOUT channel".to_string(),
+            },
+            Some(format!(
+                "{} ({}): no VOUT channel connected, DAC left idle",
+                comp.reference, comp.value
+            )),
+        );
+    }
+
+    dacs.push(DacBinding {
+        reference: comp.reference.clone(),
+        address: 0x60, // placeholder; reassigned by reference order post-bind.
+        vref,
+        gain,
+        vout_drivers,
+    });
+    (
+        BindOutcome::Behavioral {
+            device: format!("mcp4728 quad DAC ({stamped} VOUT)"),
+        },
+        None,
+    )
+}
+
 fn bind_digital(
     comp: &Component,
     model: &ModelEntry,
@@ -1722,6 +2008,16 @@ fn bind_digital(
     roles: &HashMap<String, NodeId>,
     digital: &mut Vec<DigitalComponent>,
 ) {
+    // A quad/dual NOR gate (74HC02) wired as cross-coupled SR spike latches: if
+    // any gate pair forms a NOR latch (one gate's output net == the other gate's
+    // input net and vice-versa), bind one NorLatch behavioral component per latch
+    // and return. Falls through to the generic buffer path if no latch found.
+    if model.id.to_ascii_lowercase().contains("74hc02")
+        && bind_nor_latches(comp, model, circuit, roles, digital)
+    {
+        return;
+    }
+
     // Stamp a Thevenin driver on each connected output role.
     let mut drivers = HashMap::new();
     for role in output_roles(model) {
@@ -1748,6 +2044,114 @@ fn bind_digital(
     ));
 }
 
+/// Detect and bind cross-coupled NOR SR latches on a 74HC02 (the Tarski spike
+/// recorder). Each gate `g<n>` has output role `g<n>y` and input roles `g<n>a`,
+/// `g<n>b`. A latch is a pair of gates (gQ, gQb) where `gQ.y == gQb.<one input>`
+/// and `gQb.y == gQ.<one input>` (the cross-couple). For the latch:
+///   - `reset` = the gate whose NON-cross-couple input net name contains "RESET"
+///     (RESET_SR) — that gate's output is Qb (internal);
+///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
+///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
+/// Stamps a Thevenin driver on the `q` net and pushes one [`DigitalComponent`]
+/// (`DigitalKind::NorLatch`) per latch. Returns true if ≥1 latch was bound.
+fn bind_nor_latches(
+    comp: &Component,
+    model: &ModelEntry,
+    circuit: &mut Circuit,
+    roles: &HashMap<String, NodeId>,
+    digital: &mut Vec<DigitalComponent>,
+) -> bool {
+    use crate::digital::{DigitalComponent, LogicLevels};
+    // Collect the gates present (output + its two inputs).
+    struct Gate {
+        idx: usize,
+        y: NodeId,
+        ins: Vec<NodeId>,
+    }
+    let mut gates: Vec<Gate> = Vec::new();
+    for n in 1..=4usize {
+        let y = roles.get(&format!("g{n}y")).copied();
+        let a = roles.get(&format!("g{n}a")).copied();
+        let b = roles.get(&format!("g{n}b")).copied();
+        if let Some(y) = y {
+            let ins: Vec<NodeId> = [a, b].into_iter().flatten().collect();
+            gates.push(Gate { idx: n, y, ins });
+        }
+    }
+    let levels = LogicLevels::from_params(model);
+    let mut bound = 0usize;
+    let mut used: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for i in 0..gates.len() {
+        if used.contains(&i) {
+            continue;
+        }
+        for j in 0..gates.len() {
+            if i == j || used.contains(&j) {
+                continue;
+            }
+            // Cross-couple: gate i's output feeds gate j's input AND vice-versa.
+            let cross = gates[j].ins.contains(&gates[i].y) && gates[i].ins.contains(&gates[j].y);
+            if !cross {
+                continue;
+            }
+            // The non-cross-couple input of each gate (the SET / RESET line).
+            let other_in = |g: &Gate, partner_y: NodeId| -> Option<NodeId> {
+                g.ins.iter().copied().find(|&n| n != partner_y)
+            };
+            let in_i = other_in(&gates[i], gates[j].y);
+            let in_j = other_in(&gates[j], gates[i].y);
+            let net_name = |n: Option<NodeId>| n.map(|n| circuit.node_name(n).to_string());
+            let i_is_reset = net_name(in_i)
+                .map(|s| s.to_ascii_uppercase().contains("RESET"))
+                .unwrap_or(false);
+            let j_is_reset = net_name(in_j)
+                .map(|s| s.to_ascii_uppercase().contains("RESET"))
+                .unwrap_or(false);
+            // The reset gate's output is Qb; the OTHER gate is Q.
+            let (q_gate, set_in) = if j_is_reset && !i_is_reset {
+                (i, in_i)
+            } else if i_is_reset && !j_is_reset {
+                (j, in_j)
+            } else {
+                // No RESET-named line found — not a recognisable SR latch here.
+                continue;
+            };
+            let reset_in = if q_gate == i { in_j } else { in_i };
+            let (Some(set_n), Some(reset_n)) = (set_in, reset_in) else { continue };
+            let q_net = gates[q_gate].y;
+            if q_net.is_ground() {
+                continue;
+            }
+            // Stamp the Q output driver and build the latch component.
+            let q_name = circuit.node_name(q_net).to_string();
+            let drv = PinDriver::stamp(
+                circuit,
+                q_net,
+                &q_name,
+                &format!("{}_latch{}_q", comp.reference, gates[q_gate].idx),
+                DEFAULT_RO,
+            );
+            let mut lroles: HashMap<String, NodeId> = HashMap::new();
+            lroles.insert("set".to_string(), set_n);
+            lroles.insert("reset".to_string(), reset_n);
+            lroles.insert("q".to_string(), q_net);
+            let mut ldrivers = HashMap::new();
+            ldrivers.insert("q".to_string(), drv);
+            digital.push(DigitalComponent::new_nor_latch(
+                format!("{}_L{}", comp.reference, gates[q_gate].idx),
+                levels,
+                lroles,
+                ldrivers,
+            ));
+            used.insert(i);
+            used.insert(j);
+            bound += 1;
+            break;
+        }
+    }
+    bound > 0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn bind_mcu(
     comp: &Component,
@@ -1757,6 +2161,7 @@ fn bind_mcu(
     pad_nodes: &dyn Fn(&str) -> Option<NodeId>,
     _power_nets: &HashMap<String, f64>,
     mcus: &mut Vec<McuBinding>,
+    digital_control_nodes: &std::collections::HashSet<i64>,
 ) -> Option<String> {
     let backend = model
         .params
@@ -1797,12 +2202,40 @@ fn bind_mcu(
         if node.is_ground() {
             continue;
         }
+        // A dual-purpose A-pin (Nano a0..a5 = PC0..PC5, or bare pc0_adc0..) is
+        // an ADC channel ONLY if it genuinely reads an analog net. When the same
+        // net is driven as a digital control line elsewhere (a 595 SRCLR_n / OE /
+        // SRCLK / RCLK / SER, or an I2C SDA/SCL), the firmware drives the pin as
+        // a GPIO output, so bind it as GPIO and skip the ADC probe (FIX 2). This
+        // mirrors the existing rule that an ADC pin must not also get an output
+        // driver; here the *usage* (digital control net) flips which one wins.
         let adc_ch = adc_of_role(role, module);
+        let used_as_control = digital_control_nodes.contains(&(node.0 as i64));
         if let Some(ch) = adc_ch {
+            // A dual-purpose pin driven as digital control binds as GPIO instead
+            // of ADC, BUT only if it actually has a digital port pin. A6/A7 on
+            // the ATmega328P are ADC-only (no port C pin), so `apin_gpio_of_role`
+            // returns None; in that impossible-on-real-hardware case we fall back
+            // to the ADC probe rather than dropping the pin entirely.
+            if used_as_control {
+                if let Some((port, bit)) = apin_gpio_of_role(role, module) {
+                    let net_name = circuit.node_name(node).to_string();
+                    let mut drv = PinDriver::stamp(
+                        circuit,
+                        node,
+                        &net_name,
+                        &format!("{}_{port}{bit}", comp.reference),
+                        DEFAULT_RO,
+                    );
+                    drv.set_enabled(circuit, false);
+                    gpio_drivers.insert((port, bit), drv);
+                    continue;
+                }
+                // No digital port pin (A6/A7): fall through to ADC.
+            }
+            // Genuine analog input (or control pin with no port pin): ADC probe,
+            // no output driver.
             adc_nets.insert(ch, node);
-        }
-        if adc_ch.is_some() {
-            // Treat ADC pins as inputs; no output driver.
             continue;
         }
         if let Some((port, bit)) = gpio_of_role(role, module) {
@@ -2070,6 +2503,26 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
     }
 }
 
+/// Map a dual-purpose analog-pin role to its ATmega328P GPIO `(port, bit)` when
+/// it is being driven as a digital control line (FIX 2). On the ATmega328P the
+/// analog pins A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are
+/// ADC-only with no port pin and return `None`. Handles both the Nano module
+/// role ("a2", "a3_...") and the bare role carrying an adc index ("pc2_adc2").
+fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
+    let r = role.to_ascii_lowercase();
+    if module {
+        let rest = r.strip_prefix('a')?;
+        let n: u8 = rest.split('_').next().unwrap_or("").parse().ok()?;
+        // A0..A5 = PC0..PC5; A6/A7 have no digital port pin.
+        if n <= 5 {
+            return Some(('C', n));
+        }
+        return None;
+    }
+    // Bare role like "pc2_adc2": let the standard parser recover the port pin.
+    gpio_of_role(role, false)
+}
+
 /// Map a role string to an ADC channel number, if it is an analog input.
 fn adc_of_role(role: &str, module: bool) -> Option<u8> {
     let r = role.to_ascii_lowercase();
@@ -2123,6 +2576,41 @@ fn power_rail_voltage(name: &str) -> Option<f64> {
             }
         }
     }
+}
+
+/// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
+/// pinfunction names a voltage is a supply rail at that voltage, no matter what
+/// the NET is named. KiCad netlists from boards that use a non-canonical rail
+/// label (e.g. `+5P`, `VBUS_SW`, `SYS_3V3`) still tag the *source pin* of a
+/// regulator/MCU/connector as `power_out`, so this catches rails that pure
+/// name-matching ([`power_rail_voltage`]) misses. Returns the rail voltage if
+/// any `power_out` pin on the board drives this net id with a known function.
+///
+/// A genuine regulator output is handled separately (the vreg model sources its
+/// own net); this only stamps an ideal rail when nothing else drives the net,
+/// which is correct for an externally/MCU-supplied rail whose source is not
+/// itself solved (e.g. the Arduino's `+5V` pin feeding the analog array).
+fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
+    let mut out: HashMap<i64, f64> = HashMap::new();
+    for comp in &board.components {
+        for pin in &comp.pins {
+            if !pin.kind.starts_with("power_out") {
+                continue;
+            }
+            let Some(net_id) = pin.net else { continue };
+            if net_id == 0 {
+                continue;
+            }
+            // A no_connect power_out pin drives nothing (e.g. an unused 3V3 leg).
+            if pin.kind.contains("no_connect") {
+                continue;
+            }
+            if let Some(v) = power_rail_voltage(&pin.function) {
+                out.insert(net_id, v);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -2215,4 +2703,5 @@ mod fmt_tests {
         assert_eq!(fmt_eng(0.0, "F"), "0 F");
         assert_eq!(fmt_eng(f64::NAN, "Ω"), "0 Ω");
     }
+
 }
