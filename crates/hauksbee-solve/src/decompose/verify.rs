@@ -261,7 +261,18 @@ impl Decomposition {
         // one-directionality proof that StageDag::build already ran (an edge
         // only reaches free_tears if its endpoints landed in different
         // condensation groups, i.e. no reverse path exists).
+        //
+        // Tears whose upstream the driver pass absorbed get NO record: the
+        // staged executor copies those devices into each consumer, so the
+        // boundary (and the capture-grid tolerance a record would claim)
+        // never exists at run time. Recording them would over-claim in the
+        // cautious direction, which is still a false certificate.
+        let absorbed: std::collections::HashSet<usize> =
+            drivers.iter().map(|a| a.driver_group).collect();
         for ft in &dag.free_tears {
+            if absorbed.contains(&ft.upstream) {
+                continue;
+            }
             records.push(TearRecord {
                 node: ft.node,
                 kind: TearKind::Free,

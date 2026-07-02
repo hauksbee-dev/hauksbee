@@ -21,14 +21,17 @@
 //!   proven mechanics from the partitioned engine (secant iteration,
 //!   voltage-referred tolerance, the gmin double-count correction), extracted
 //!   so every executor closes rail KCL through one audited implementation.
-//! * `staged` (next): the capture/replay executor for the stage DAG: solve
-//!   upstream groups, capture free-tear waveforms on a tau/10 grid, replay
-//!   them downstream as PWL sources, and fill the certificate's capture-grid
+//! * [`staged`]: the capture/replay executor for the stage DAG: solve
+//!   upstream groups in dependency order, capture free-tear waveforms on the
+//!   accepted-step grid, replay them downstream as PWL sources, absorb
+//!   driver groups by copying, and fill the certificate's capture-grid
 //!   tolerance with the grid actually used.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
 
 pub mod balance;
+pub mod staged;
 
 pub use balance::{settle_rails, BalancePolicy, BalanceReport, RailChannel, RailLoads};
+pub use staged::{run_staged, StagedResult};
