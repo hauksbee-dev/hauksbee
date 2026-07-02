@@ -327,4 +327,146 @@ mod tests {
         );
         assert_eq!(dag.free_tears.len(), 1, "the staged tear remains");
     }
+
+    /// A small NONLINEAR upstream must never be absorbed: replication is only
+    /// exact for groups whose state is a linear function of their own sources
+    /// (the doc's "nonlinear upstreams are never absorbed", now enforced).
+    #[test]
+    fn nonlinear_driver_is_not_absorbed() {
+        let mut c = Circuit::new();
+        let vin = c.node("vin");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.0),
+        });
+        let drv = c.node("drv");
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: drv,
+            ohms: 1e3,
+            tc1: None,
+        });
+        // The nonlinearity: a diode clamp inside the would-be driver group.
+        c.add(Device::Diode {
+            name: "D1".into(),
+            a: drv,
+            k: NodeId::GROUND,
+            model: hauksbee_ir::DiodeModel::default(),
+        });
+        // Downstream island senses drv through a switch select.
+        let a = c.node("a");
+        let b = c.node("b");
+        c.add(Device::Vsource {
+            name: "V2".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::VSwitch {
+            name: "S1".into(),
+            a,
+            b,
+            ctrl_p: drv,
+            ctrl_n: NodeId::GROUND,
+            von: 2.0,
+            voff: 1.0,
+            ron: 10.0,
+            roff: 1e9,
+        });
+        c.add(Device::Resistor {
+            name: "RL".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let g = ConductionGraph::analyze(&c);
+        let dag = StageDag::build(&c, &g);
+        let asn = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
+        assert!(
+            asn.is_empty(),
+            "a nonlinear upstream may not be absorbed: {asn:?}"
+        );
+    }
+
+    /// A SELF-SENSING upstream (a relaxation oscillator resetting itself)
+    /// must never be absorbed: its output is not a function of its inputs
+    /// alone, so replicas could diverge (lore #5).
+    #[test]
+    fn self_sensing_driver_is_not_absorbed() {
+        let mut c = Circuit::new();
+        let vin = c.node("vin");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.0),
+        });
+        let osc = c.node("osc");
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: osc,
+            ohms: 1e3,
+            tc1: None,
+        });
+        // The self-sense: a switch in the SAME island whose control reads the
+        // island's own output node.
+        let dump = c.node("dump");
+        c.add(Device::VSwitch {
+            name: "S_reset".into(),
+            a: osc,
+            b: dump,
+            ctrl_p: osc,
+            ctrl_n: NodeId::GROUND,
+            von: 2.0,
+            voff: 1.0,
+            ron: 10.0,
+            roff: 1e9,
+        });
+        c.add(Device::Resistor {
+            name: "Rdump".into(),
+            a: dump,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
+        // Downstream consumer senses osc.
+        let a = c.node("a");
+        let b = c.node("b");
+        c.add(Device::Vsource {
+            name: "V2".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::VSwitch {
+            name: "S1".into(),
+            a,
+            b,
+            ctrl_p: osc,
+            ctrl_n: NodeId::GROUND,
+            von: 2.0,
+            voff: 1.0,
+            ron: 10.0,
+            roff: 1e9,
+        });
+        c.add(Device::Resistor {
+            name: "RL".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let g = ConductionGraph::analyze(&c);
+        let dag = StageDag::build(&c, &g);
+        let asn = driver_assignments(&c, &g, &dag, &DriverPolicy::default());
+        assert!(
+            asn.is_empty(),
+            "a self-sensing upstream may not be absorbed: {asn:?}"
+        );
+    }
 }
