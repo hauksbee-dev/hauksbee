@@ -10,98 +10,19 @@
 //! This builds the same structure at `n` blocks and checks that the partitioned
 //! (rail-tear) path reproduces the monolithic answer to <= 1e-6 and is faster.
 
-use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
 use std::time::Instant;
 
-/// Build an `n`-block current-mirror array sharing a SHUNT-FED analog rail.
-///
-/// +5V --[R_shunt 1k]-- ANALOG_VDD --(per block: mirror emitters + membrane R)
-/// Each block: ref resistor -> diode-connected Q1 mirror reference -> Q2 mirror
-/// output charges a membrane RC pulled up to ANALOG_VDD. Bias is quasi-static
-/// (DC drive) so the array reaches a steady operating point, exactly like an
-/// inference window with latched weights.
-fn build_shunt_array(n: usize) -> (Circuit, Vec<String>) {
-    let mut c = Circuit::new();
-    let p5 = c.node("+5V");
-    c.add(Device::Vsource {
-        name: "V5".into(),
-        p: p5,
-        n: NodeId::GROUND,
-        kind: SourceKind::Dc(5.0),
-    });
-    // The defining element: the sense shunt feeding the analog rail.
-    let avdd = c.node("ANALOG_VDD");
-    c.add(Device::Resistor {
-        name: "R_shunt".into(),
-        a: p5,
-        b: avdd,
-        ohms: 1e3,
-        tc1: None,
-    });
-
-    // PNP high-side mirror: emitters on the rail, like the board's ANALOG_VDD
-    // current mirrors.
-    let model = BjtModel {
-        polarity: Polarity::P,
-        is: 1e-15,
-        bf: 150.0,
-        vaf: 80.0,
-        nf: 1.0,
-        ..BjtModel::default()
-    };
-
-    let mut membranes = Vec::new();
-    for k in 0..n {
-        // A current mirror whose transistor EMITTERS sit on the shared rail, the
-        // way the Tarski PNP mirrors hang 720 emitters off ANALOG_VDD. Each block
-        // therefore draws real supply current through the shunt, so the rail sags
-        // with the total array load — the exact coupling we must reproduce.
-        // Reference leg: rail -> RR -> diode-connected mirror reference.
-        let rref = c.node(&format!("ref{k}"));
-        c.add(Device::Resistor {
-            name: format!("RR{k}"),
-            a: avdd,
-            b: rref,
-            ohms: 10e3,
-            tc1: None,
-        });
-        // Diode-connected reference transistor with emitter on the rail.
-        c.add(Device::Bjt {
-            name: format!("Q1_{k}"),
-            c: rref,
-            b: rref,
-            e: avdd,
-            model,
-        });
-        // Mirror output transistor, emitter on the rail, collector -> membrane.
-        let mem = c.node(&format!("mem{k}"));
-        c.add(Device::Bjt {
-            name: format!("Q2_{k}"),
-            c: mem,
-            b: rref,
-            e: avdd,
-            model,
-        });
-        // Membrane RC to ground.
-        c.add(Device::Resistor {
-            name: format!("RM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            ohms: 47e3,
-            tc1: None,
-        });
-        c.add(Device::Capacitor {
-            name: format!("CM{k}"),
-            a: mem,
-            b: NodeId::GROUND,
-            farads: 1e-9,
-            ic: Some(0.0),
-        });
-        membranes.push(format!("mem{k}"));
-    }
-    (c, membranes)
-}
+// The `build_shunt_array` fixture is shared verbatim with the S2 benchmark
+// harness so the topology the exactness gate below checks and the one the
+// benchmark times cannot drift apart. Single source of truth lives in
+// `benches/fixtures.rs` (see its header for why it is a by-path include rather
+// than a library module). `build_rc_ladder` in that file is unused here.
+#[path = "../benches/fixtures.rs"]
+#[allow(dead_code)]
+mod fixtures;
+use fixtures::build_shunt_array;
 
 fn run(c: &Circuit, part: Partitioning, tstop: f64, dt: f64) -> (Transientish, std::time::Duration) {
     let opts = SolverOptions {
