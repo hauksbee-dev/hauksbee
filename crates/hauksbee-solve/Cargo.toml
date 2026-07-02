@@ -13,3 +13,4 @@ num-complex = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 num-complex = { workspace = true }
+serde_json = { workspace = true }
