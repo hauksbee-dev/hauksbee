@@ -49,8 +49,9 @@ use hauksbee_engine::boardcode::{
 use hauksbee_engine::result::{
     self, ac_is_all_sentinel, coverage_open_active_refs, lint_findings_json, no_signal_path_reason,
     si_findings_json, thermal_coverage, thermal_validity, usbc_finding_json, AcJson, AcNetJson, BindSummary,
-    BootGateJson, CheckCoverage, CosimJson, DrcStructured, JsonNote, JsonNoteKind, JsonReport, NetActivity,
-    ThermalDeviceJson, ThermalJson, Validity, EXIT_INVALID_FOR_ANALYSIS,
+    strict_analog_exit_code, BootGateJson, CheckCoverage, CosimFailedWindow, CosimJson, DrcStructured,
+    JsonNote, JsonNoteKind, JsonReport, NetActivity, ThermalDeviceJson, ThermalJson, Validity,
+    EXIT_INVALID_FOR_ANALYSIS,
 };
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
@@ -964,13 +965,27 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
         let board_name = engine.report().board_name.clone();
         let summary = BindSummary::from_report(engine.report());
         let mut uart_seen = false;
-        let faults = run_headless(&mut engine, args.seconds, &mut uart_seen, args.json);
+        let faults = run_headless(
+            &mut engine,
+            args.seconds,
+            &mut uart_seen,
+            args.json,
+            args.strict,
+        );
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
         // any chip substitution detected at build time. Built from the SAME run
         // stats the text table reads, so every surface agrees.
         let cosim = build_cosim_json(&engine, uart_seen);
         let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
+        // Analog-fidelity honesty (05 §3b): once any chunk's analog solve failed,
+        // the run held stale voltages and cannot vouch for analog-derived findings
+        // over the failed windows. `analog_abort` is the stricter condition: the
+        // solve was stuck for a whole streak of chunks, so a strict run must
+        // refuse (exit 3) rather than complete a fake-quiet run.
+        let analog_valid = engine.scheduler().analog_valid();
+        let failed_chunk_count = engine.scheduler().failed_chunk_count();
+        let analog_abort = engine.scheduler().analog_abort_tripped();
         // A co-sim that drove no GPIO, produced no net toggles, AND emitted no
         // UART did not exercise the firmware. `any_gpio_driven()` is essential:
         // a firmware that drives a control line high and HOLDS it (boot-gate style)
@@ -1045,6 +1060,20 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
                         .to_string(),
                 });
             }
+            // A non-convergent chunk held stale voltages: a loud coverage note so
+            // a CI consumer that filters notes (not just the CosimJson body) sees
+            // the analog side is not trustworthy over the failed windows (05 §3b).
+            if !analog_valid {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: format!(
+                        "co-sim analog solve failed to converge on {failed_chunk_count} \
+                         chunk(s); those windows held stale node voltages and are \
+                         reported as analog_valid:false; analog-derived findings over \
+                         them are not trustworthy"
+                    ),
+                });
+            }
             for net in &held_high_boot_nets {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::BootControlNet,
@@ -1089,6 +1118,13 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
                         .to_string(),
                 );
             }
+            if !analog_valid {
+                report.heads_up.push(format!(
+                    "co-sim analog solve failed to converge on {failed_chunk_count} chunk(s); \
+                     those windows held stale voltages and cannot be trusted (analog_valid is \
+                     false); rerun with --json to see the exact failed windows"
+                ));
+            }
             // Boot-safety heads-up: control nets the firmware switches ON and
             // holds from power-up, with no resistor setting a safe default. The
             // netlist alone cannot tell whether a power-up HIGH is intended;
@@ -1123,6 +1159,23 @@ fn cmd_run(args: RunArgs) -> anyhow::Result<()> {
             );
             if args.strict {
                 std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            }
+        }
+
+        // Refuse-rather-than-fake (05 §3b): once the analog solve was stuck for a
+        // whole streak of chunks, a strict run must abort with the invalid code
+        // rather than complete a fake-quiet run. Warn always so the reason is never
+        // silent; only --strict turns it into a failing exit.
+        if analog_abort {
+            eprintln!(
+                "WARNING: co-sim analog solve failed to converge for {} chunks in a row \
+                 ({} failed chunks total); the run held stale voltages and cannot vouch \
+                 for the analog side.",
+                hauksbee_engine::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
+                failed_chunk_count,
+            );
+            if let Some(code) = strict_analog_exit_code(args.strict && analog_abort) {
+                std::process::exit(code);
             }
         }
 
@@ -2076,6 +2129,17 @@ fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJso
         })
         .collect();
 
+    // Analog-fidelity honesty (05 §3b): a run that held stale voltages over one
+    // or more non-convergent chunks is not a faithful analog result. Surface the
+    // exact windows so a consumer sees which span cannot be trusted rather than
+    // reading the quiet-held voltages as real.
+    let analog_valid = sched.analog_valid();
+    let failed_windows: Vec<CosimFailedWindow> = sched
+        .failed_windows()
+        .iter()
+        .map(|&(start_s, end_s)| CosimFailedWindow { start_s, end_s })
+        .collect();
+
     Some(CosimJson {
         mcu_ref,
         backend,
@@ -2084,6 +2148,8 @@ fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJso
         total_toggles,
         uart_seen,
         activity_summary,
+        analog_valid,
+        failed_windows,
     })
 }
 
@@ -2161,6 +2227,7 @@ fn run_headless(
     seconds: f64,
     uart_seen: &mut bool,
     quiet: bool,
+    strict: bool,
 ) -> Vec<hauksbee_engine::FaultEvent> {
     use hauksbee_engine::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
@@ -2188,6 +2255,14 @@ fn run_headless(
     let mut last_uart: Vec<u8> = Vec::new();
     let mut faults: Vec<FaultEvent> = Vec::new();
     while t < seconds {
+        // Refuse rather than fake (05 §3b): under --strict, stop as soon as the
+        // analog solve has been stuck for a whole streak of chunks. Continuing
+        // would burn wall time producing more held-voltage frames the strict gate
+        // is about to reject anyway, so break and let the caller exit 3. Non-strict
+        // runs complete so the failed windows and analog_valid:false are reported.
+        if strict && engine.scheduler().analog_abort_tripped() {
+            break;
+        }
         if external && t >= next_progress {
             eprintln!("  ... {t:.2} / {seconds:.2}s simulated");
             next_progress += (seconds / 5.0).max(frame_dt);
@@ -2247,6 +2322,20 @@ fn run_headless(
             );
         }
         println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
+
+        // Analog-fidelity line (05 §3b): if any chunk failed to converge, say so
+        // and where, so the default text mode never presents held-stale voltages
+        // as a quiet, healthy run.
+        let failed = sched.failed_chunk_count();
+        if failed > 0 {
+            println!(
+                "\nanalog_valid: false ({failed} chunk(s) failed to converge); \
+                 those windows held stale voltages:"
+            );
+            for &(start_s, end_s) in sched.failed_windows() {
+                println!("  [{:.6}s .. {:.6}s)", start_s, end_s);
+            }
+        }
 
         if !last_uart.is_empty() {
             let s = String::from_utf8_lossy(&last_uart);
