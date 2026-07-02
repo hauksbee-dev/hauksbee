@@ -27,7 +27,9 @@
 //! * [`drivers`]: the absorption pass that copies small linear driver groups
 //!   into their consumers instead of tearing (exact: sense-only boundaries
 //!   carry zero current, so even replication cannot disagree).
-//! * `verify` (planned): exactness gates and tear certificates.
+//! * [`verify`]: tear certificates (the honesty object) and the boundary
+//!   completeness gate that decides whether a decomposition may be trusted
+//!   at all.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
@@ -36,8 +38,13 @@ pub mod conduction;
 pub mod drivers;
 pub mod feedforward;
 pub mod rails;
+pub mod verify;
 
 pub use conduction::{ConductionGraph, SenseEdge};
 pub use drivers::{driver_assignments, DriverAssignment, DriverPolicy};
 pub use feedforward::{FreeTearEdge, StageDag};
 pub use rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearDecision, TearMotive};
+pub use verify::{
+    Decomposition, Evidence, RefusedAnalysis, TearCertificate, TearKind, TearRecord,
+    ToleranceClaim,
+};
