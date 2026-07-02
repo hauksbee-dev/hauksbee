@@ -33,6 +33,7 @@
 
 mod ac;
 mod cmatrix;
+pub mod decompose;
 mod linear;
 mod loop_stability;
 mod newton;

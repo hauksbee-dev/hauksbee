@@ -364,6 +364,202 @@ impl Device {
         }
     }
 
+    /// Terminals through which this device injects current: the nodes whose
+    /// KCL rows receive contributions (matrix entries or RHS) from its stamp.
+    ///
+    /// Together with [`Device::sense_nodes`] this is the classification the
+    /// decomposition engine's tearing proofs rest on: electrical reachability
+    /// must traverse conduction terminals only, or two independently solvable
+    /// blocks fuse through a wire that carries no current (see
+    /// `docs/dev-plans/02-tearing-architecture.md` §1, §2.1). The claim made
+    /// here is about the *stamp as implemented today*, not the physical part:
+    /// a MOSFET gate conducts no current in the Level-1 stamp, so it is sense,
+    /// and the day gate charge lands the classification here must change with
+    /// it. That drift is caught mechanically: the cross-check test in
+    /// `hauksbee-solve` stamps every example device and fails if a declared
+    /// sense node's row receives anything, so this declaration cannot silently
+    /// disagree with the stamp.
+    pub fn conduction_nodes(&self) -> Vec<NodeId> {
+        match self {
+            Device::Resistor { a, b, .. }
+            | Device::Capacitor { a, b, .. }
+            | Device::Inductor { a, b, .. }
+            | Device::Diode { a, k: b, .. } => vec![*a, *b],
+            Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => vec![*p, *n],
+            Device::Bjt { c, b, e, .. } => vec![*c, *b, *e],
+            // Level-1 stamp: channel current flows d<->s; the gate row gets no
+            // entries (gm lands in the d/s rows referencing the gate COLUMN)
+            // and the optional bulk is not stamped at all. Both become
+            // conduction terminals when W3 adds gate charge / the body diode.
+            Device::Mosfet { d, s, .. } => vec![*d, *s],
+            // The switch channel conducts; the control pair only steers it.
+            Device::VSwitch { a, b, .. } => vec![*a, *b],
+            // Behavioral output stages drive their out node through a 1 Ohm
+            // Thevenin; the inputs are ideal (infinite input impedance) and the
+            // opamp reference only offsets the target voltage (its own row gets
+            // nothing; it appears as a column of the out row).
+            Device::OpAmp { out, .. } => vec![*out],
+            Device::Comparator { out, .. } => vec![*out],
+        }
+    }
+
+    /// Terminals this device only reads: they steer the stamp (Jacobian
+    /// columns, target voltages) but their own KCL rows receive no current.
+    ///
+    /// A sense terminal is what makes a *free tear* exact: cutting the wire and
+    /// replaying its voltage as a source changes nothing electrically, because
+    /// no current ever crossed it (`docs/dev-plans/02-tearing-architecture.md`
+    /// §1). Every node the device touches is in exactly one of
+    /// [`Device::conduction_nodes`] or this set; the solve-side cross-check
+    /// test enforces both the partition and the zero-row property.
+    pub fn sense_nodes(&self) -> Vec<NodeId> {
+        match self {
+            Device::Resistor { .. }
+            | Device::Capacitor { .. }
+            | Device::Inductor { .. }
+            | Device::Diode { .. }
+            | Device::Vsource { .. }
+            | Device::Isource { .. }
+            | Device::Bjt { .. } => Vec::new(),
+            Device::Mosfet { g, b, .. } => {
+                let mut v = vec![*g];
+                if let Some(b) = b {
+                    v.push(*b);
+                }
+                v
+            }
+            Device::VSwitch { ctrl_p, ctrl_n, .. } => vec![*ctrl_p, *ctrl_n],
+            Device::OpAmp {
+                inp,
+                inn,
+                reference,
+                ..
+            } => {
+                let mut v = vec![*inp, *inn];
+                if let Some(reference) = reference {
+                    v.push(*reference);
+                }
+                v
+            }
+            Device::Comparator { inp, inn, .. } => vec![*inp, *inn],
+        }
+    }
+
+    /// One representative instance of every variant, wired to the given nodes
+    /// (cycled as needed). This is the inventory the per-variant enforcement
+    /// tests iterate: the match below is exhaustive with no `_` arm, so adding
+    /// a `Device` variant fails to compile until it ships an example, and every
+    /// example is then automatically subjected to the stamp/sense cross-check,
+    /// serde round-trip, and node-walk coverage tests. Parameter values are
+    /// arbitrary but physically sane (the tests probe structure, not accuracy).
+    pub fn examples(n: [NodeId; 4]) -> Vec<Device> {
+        // Touch every variant name once so the compiler proves this inventory
+        // is complete: a new variant breaks this match before it can ship
+        // without an example.
+        fn _exhaustive(d: &Device) {
+            match d {
+                Device::Resistor { .. }
+                | Device::Capacitor { .. }
+                | Device::Inductor { .. }
+                | Device::Vsource { .. }
+                | Device::Isource { .. }
+                | Device::Diode { .. }
+                | Device::Bjt { .. }
+                | Device::Mosfet { .. }
+                | Device::VSwitch { .. }
+                | Device::OpAmp { .. }
+                | Device::Comparator { .. } => {}
+            }
+        }
+        vec![
+            Device::Resistor {
+                name: "Rex".into(),
+                a: n[0],
+                b: n[1],
+                ohms: 1e3,
+                tc1: None,
+            },
+            Device::Capacitor {
+                name: "Cex".into(),
+                a: n[0],
+                b: n[1],
+                farads: 1e-9,
+                ic: None,
+            },
+            Device::Inductor {
+                name: "Lex".into(),
+                a: n[0],
+                b: n[1],
+                henries: 1e-6,
+                ic: None,
+            },
+            Device::Vsource {
+                name: "Vex".into(),
+                p: n[0],
+                n: n[1],
+                kind: SourceKind::Dc(1.0),
+            },
+            Device::Isource {
+                name: "Iex".into(),
+                p: n[0],
+                n: n[1],
+                kind: SourceKind::Dc(1e-3),
+            },
+            Device::Diode {
+                name: "Dex".into(),
+                a: n[0],
+                k: n[1],
+                model: DiodeModel::default(),
+            },
+            Device::Bjt {
+                name: "Qex".into(),
+                c: n[0],
+                b: n[1],
+                e: n[2],
+                model: BjtModel::default(),
+            },
+            Device::Mosfet {
+                name: "Mex".into(),
+                d: n[0],
+                g: n[1],
+                s: n[2],
+                b: Some(n[3]),
+                model: MosfetModel::default(),
+            },
+            Device::VSwitch {
+                name: "Sex".into(),
+                a: n[0],
+                b: n[1],
+                ctrl_p: n[2],
+                ctrl_n: n[3],
+                von: 2.0,
+                voff: 1.0,
+                ron: 1.0,
+                roff: 1e9,
+            },
+            Device::OpAmp {
+                name: "Aex".into(),
+                out: n[0],
+                inp: n[1],
+                inn: n[2],
+                reference: Some(n[3]),
+                gain: 1e5,
+                pole_hz: Some(1e6),
+                rail_lo: -5.0,
+                rail_hi: 5.0,
+            },
+            Device::Comparator {
+                name: "Kex".into(),
+                out: n[0],
+                inp: n[1],
+                inn: n[2],
+                out_lo: 0.0,
+                out_hi: 5.0,
+                hysteresis: 1e-3,
+            },
+        ]
+    }
+
     /// Whether the element's stamp is constant w.r.t. node voltages.
     ///
     /// Independent sources are linear in the MNA sense (their value depends on
