@@ -22,13 +22,16 @@
 //!   reachability is computed over terminals that actually carry current.
 //! * [`feedforward`]: sense-boundary discovery, the reverse-path proof via
 //!   strongly-connected components, and the stage DAG that orders the solves.
-//! * `rails` (planned): stiff-rail detection and balance-tear candidates.
+//! * [`rails`]: stiff-rail detection with a cost-model decision (and the
+//!   convergence-escalation override) for balance-tear candidates.
 //! * `drivers` (planned): the driver pass that pulls Thevenin sources behind
 //!   kept sense nodes into an island.
 //! * `verify` (planned): exactness gates and tear certificates.
 
 pub mod conduction;
 pub mod feedforward;
+pub mod rails;
 
 pub use conduction::{ConductionGraph, SenseEdge};
 pub use feedforward::{FreeTearEdge, StageDag};
+pub use rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearDecision, TearMotive};
