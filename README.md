@@ -40,17 +40,22 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
-**Download a prebuilt binary (fastest):**
+**Build from source:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
 ```
 
-This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`.
+**Or run it in Docker** (no local toolchain needed; the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
 
-> **Note:** the prebuilt install needs a published, publicly-downloadable GitHub release. While hauksbee is in private beta there is none yet, so build from source (below) for now. `scripts/test-install-mock.sh` exercises the whole download/verify/install flow against a local mock so the installer is proven before any release goes out.
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
+  hauksbee run path/to/board.kicad_pcb --report
+```
 
-**Then use it** — the friendliest path is the web front door (no terminal flags):
+The slim and full images and more `docker run` examples are in [`docs/DOCKER.md`](docs/DOCKER.md).
+
+**Then use it.** The friendliest path is the web front door (no terminal flags):
 
 ```bash
 hauksbee serve                                       # web front door: open the page, drop a board (+ optional firmware), read the report
@@ -65,11 +70,15 @@ hauksbee-ci run ci/power-up.toml                     # run a CI spec the way a p
 
 Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/TEST_CAMPAIGN.md`](docs/TEST_CAMPAIGN.md).
 
-**Building from source:**
+**Prebuilt binary (once a public release exists):**
+
+> The prebuilt install needs a published, publicly-downloadable GitHub release. While hauksbee is in private beta there is none yet, so build from source (above) for now.
 
 ```bash
-scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
+curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
+
+This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`. `scripts/test-install-mock.sh` exercises the whole download/verify/install flow against a local mock so the installer is proven before any release goes out.
 
 ---
 
