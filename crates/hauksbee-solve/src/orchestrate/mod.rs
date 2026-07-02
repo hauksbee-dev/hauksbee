@@ -28,7 +28,7 @@
 //!   tolerance with the grid actually used.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
-//! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
+//! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 pub mod balance;
 pub mod staged;
