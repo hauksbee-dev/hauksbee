@@ -819,6 +819,170 @@ mod tests {
         assert!(vo.unwrap() > 3.0, "switch never closed: {vo:?}");
     }
 
+    /// The stacked-feed cascade end to end (rails.rs's `stacked_cascade`
+    /// shape): SRC -> 500R -> MID (two PNP loads) -> 1k -> INNER (24-block PNP
+    /// array). BOTH rails are accepted balance tears now that the executor
+    /// carries the inter-rail shunt term, so this is the gate that proves the
+    /// carry is EXACT rather than merely permitted. The R2 shunt between the
+    /// two torn rails lives in no block: INNER books it as its feed term and
+    /// MID books it as an analytic child draw. If either side dropped it, MID
+    /// would sit ~0.7 V off and this two-sided compare would fail.
+    #[test]
+    fn cascaded_rails_match_monolith() {
+        use hauksbee_ir::{BjtModel, Polarity};
+        let mut c = Circuit::new();
+        let src = c.node("+5V_SRC");
+        c.add(Device::Vsource {
+            name: "VS".into(),
+            p: src,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        let mid = c.node("MID");
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: src,
+            b: mid,
+            ohms: 500.0,
+            tc1: None,
+        });
+        let inner = c.node("INNER");
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: mid,
+            b: inner,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        // Two small loads on MID (keep it above the fanout floor).
+        for k in 0..2 {
+            let b = c.node(&format!("mb{k}"));
+            let col = c.node(&format!("mc{k}"));
+            c.add(Device::Bjt {
+                name: format!("MQ{k}"),
+                c: col,
+                b,
+                e: mid,
+                model,
+            });
+            c.add(Device::Resistor {
+                name: format!("MRb{k}"),
+                a: b,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("MRc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+        }
+        // The array on INNER.
+        for k in 0..24 {
+            let b = c.node(&format!("ib{k}"));
+            let col = c.node(&format!("ic{k}"));
+            c.add(Device::Bjt {
+                name: format!("IQ{k}"),
+                c: col,
+                b,
+                e: inner,
+                model,
+            });
+            c.add(Device::Resistor {
+                name: format!("IRb{k}"),
+                a: b,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("IRc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+        }
+
+        let dt = 100e-9;
+        let tstop = 5e-6;
+        let d = Decomposition::analyze(&c, TearMotive::Profit);
+        let accepted: Vec<_> = d.balance_tears.iter().filter(|t| t.torn()).collect();
+        assert_eq!(
+            accepted.len(),
+            2,
+            "both cascade rails must tear: {:?}",
+            d.balance_tears
+        );
+        assert!(
+            accepted.iter().any(|t| t.rail == mid) && accepted.iter().any(|t| t.rail == inner),
+            "the accepted set must be exactly {{MID, INNER}}: {:?}",
+            d.balance_tears
+        );
+
+        let staged = run_staged(&c, &d, &fixed_opts(dt), tstop).expect("staged");
+        assert!(
+            !staged.torn_groups.is_empty(),
+            "the cascade group must run torn: {:?}",
+            staged.torn_groups
+        );
+
+        let mono = monolith(&c, dt, tstop);
+        // Two-sided capture-grid compare, copied from
+        // `torn_group_with_replay_pin_matches_monolith`. This board is all
+        // DC, so away from any (nonexistent) edge the runs agree flatly; the
+        // two-sided form is kept for uniformity with the suite.
+        let tol = 1e-6;
+        for node in 1..c.node_count() {
+            for (k, &t) in staged.waveforms.time.iter().enumerate() {
+                let sv = staged.waveforms.node_voltages[node][k];
+                let m = &mono.node_voltages[node];
+                if (sv - lerp_at(&mono.time, m, t)).abs() <= tol {
+                    continue;
+                }
+                let edge_hit = (0..=8).any(|j| {
+                    let tt = t - dt + (j as f64) * (dt / 4.0);
+                    (lerp_at(&mono.time, m, tt) - sv).abs() <= tol
+                });
+                assert!(
+                    edge_hit,
+                    "cascaded torn group diverged from the monolith: node {} t={t:.3e} \
+                     staged {sv:.9} vs mono {:.9}",
+                    c.node_name(NodeId(node as u32)),
+                    lerp_at(&mono.time, m, t)
+                );
+            }
+        }
+
+        // DC-settled variant: with static sources the whole board is a DC
+        // operating point at every step, so the final sample must equal the
+        // monolith to round-off (the stronger claim). Both rails moved off
+        // their unloaded feed values, so the tear is not vacuous.
+        let last = staged.waveforms.time.len() - 1;
+        for node in 1..c.node_count() {
+            let sv = staged.waveforms.node_voltages[node][last];
+            let mv = lerp_at(&mono.time, &mono.node_voltages[node], staged.waveforms.time[last]);
+            assert!(
+                (sv - mv).abs() <= 1e-9,
+                "DC-settled cascade must be round-off exact: node {} staged {sv:.12} vs mono {mv:.12}",
+                c.node_name(NodeId(node as u32))
+            );
+        }
+        let vmid = *staged.waveforms.node(&c, "MID").unwrap().last().unwrap();
+        let vinner = *staged.waveforms.node(&c, "INNER").unwrap().last().unwrap();
+        assert!(
+            vmid < 4.99 && vinner < vmid - 0.1,
+            "the cascade must actually drop across both shunts: MID {vmid} INNER {vinner}"
+        );
+    }
+
     /// The bypass-cap exactness gate: a decoupling cap on a balance-torn
     /// rail rides in a boundary-only island whose current enters the
     /// balance books. This is the shape the old detector REFUSED because
