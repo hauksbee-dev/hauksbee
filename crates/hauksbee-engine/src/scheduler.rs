@@ -954,7 +954,18 @@ impl Scheduler {
         // branch currents. A false return means the solve did not converge and
         // this chunk is holding stale voltages (05 §3b): its operating point is
         // fiction, so the stats/stress fold below is skipped for it.
+        // 2d. PWL edge drive (05 section 1.3). A pin that toggled more than
+        // once this chunk collapsed to its final level in the driver path
+        // above, which is electrically wrong for any net whose analog
+        // response integrates the pulse train (an RC-loaded clock line, a
+        // charge pump, a gate filter). For such pins, swap the driver's
+        // source to the chunk's exact cycle-stamped PWL waveform for this one
+        // solve; the solver's source-breakpoint table then lands the adaptive
+        // integrator on every corner. Restored to the settled DC level right
+        // after, so the digital tick and the next chunk see the final level.
+        let pwl_restores = self.apply_pwl_drives(chunk);
         let chunk_converged = self.solve_chunk(chunk);
+        self.restore_pwl_drives(&pwl_restores);
 
         // 3b. Peripherals: output sinks sample the freshly-solved voltages.
         //
@@ -1652,6 +1663,140 @@ impl Scheduler {
     /// one entry per MCU that ran. The analog PWL side consumes this to translate
     /// each pin's ordered `(cycle, level)` series into a `SourceKind::Pwl`
     /// waveform on the driven net (05 §1.1/§1.3).
+    /// The PWL edge drive of 05 section 1.3, and its policy.
+    ///
+    /// Eligibility, which IS the cadence negotiation: a pin gets a PWL drive
+    /// only when (a) it toggled at least twice this chunk (a single edge is
+    /// exactly represented by the final-level DC the driver path already
+    /// applied), (b) its driver is enabled, and (c) its net feeds at least one
+    /// device beyond the driver's own Thevenin pair (a pin wired to nothing
+    /// analog pays nothing). Pins failing any test keep the cheap DC path.
+    ///
+    /// Coarse-stamped backends (cycle_exact == false) still get the drive:
+    /// their per-poll ordering is preserved even though intra-poll spacing is
+    /// approximate, and an approximately-timed pulse train integrates far
+    /// closer to the truth than a collapsed level. The per-pin point cap
+    /// guards against a pathological chunk (an edge storm beyond what any
+    /// real bit-bang produces) blowing up the solve; beyond it the pin falls
+    /// back to the DC level for this chunk, which is the pre-PWL behavior.
+    fn apply_pwl_drives(&mut self, chunk: f64) -> Vec<(usize, f64)> {
+        use hauksbee_ir::{PwlPoint, SourceKind};
+        // Two PWL corners per transition plus the anchors; 10k transitions
+        // per pin per chunk is far beyond any firmware bit-bang (a 720-clock
+        // shiftOut is 1,440).
+        const MAX_TRANSITIONS_PER_PIN: usize = 10_000;
+
+        // Consumer count per net, beyond a driver's own Thevenin pair. Built
+        // once per chunk, only if some pin actually multi-toggled.
+        let mut consumers: Option<std::collections::HashMap<u32, usize>> = None;
+
+        let mut restores = Vec::new();
+        for (mi, ce) in self.last_chunk_edges.iter().enumerate() {
+            let high_v = self.mcus[mi].logic_high_v;
+            let (c0, c1) = ce.cycle_span;
+            if c1 <= c0 {
+                continue;
+            }
+            let span = (c1 - c0) as f64;
+            for (pin, transitions) in &ce.edges {
+                if transitions.len() < 2 || transitions.len() > MAX_TRANSITIONS_PER_PIN {
+                    continue;
+                }
+                let Some(drv) = self.mcus[mi].binding.gpio_drivers.get(pin) else {
+                    continue;
+                };
+                if !drv.enabled {
+                    continue;
+                }
+                let net = drv.net;
+                let counts = consumers.get_or_insert_with(|| {
+                    let mut m = std::collections::HashMap::new();
+                    for (_, dev) in self.circuit.iter() {
+                        for n in dev.nodes() {
+                            *m.entry(n.0).or_insert(0usize) += 1;
+                        }
+                    }
+                    m
+                });
+                // The driver's own resistor touches the net once; anything
+                // more means real circuitry hangs off this pin.
+                if counts.get(&net.0).copied().unwrap_or(0) <= 1 {
+                    continue;
+                }
+
+                // Build the waveform. Level BEFORE the first transition is
+                // the complement of what that transition set.
+                let level_v = |lv: bool| if lv { high_v } else { 0.0 };
+                let t_of = |cycle: u64| {
+                    ((cycle.saturating_sub(c0)) as f64 / span * chunk).clamp(0.0, chunk)
+                };
+                // Slew per corner: a tenth of the tightest edge spacing,
+                // capped at 10 ns. Real drivers slew in ns; the exact figure
+                // only needs to be shorter than anything the load can resolve
+                // while keeping the PWL times strictly increasing.
+                let mut min_gap = chunk;
+                for w in transitions.windows(2) {
+                    let g = t_of(w[1].0) - t_of(w[0].0);
+                    if g > 0.0 && g < min_gap {
+                        min_gap = g;
+                    }
+                }
+                let t_edge = (min_gap / 10.0).min(10e-9).max(1e-12);
+
+                let mut pts = Vec::with_capacity(transitions.len() * 2 + 2);
+                let v_init = level_v(!transitions[0].1);
+                pts.push(PwlPoint { t: 0.0, v: v_init });
+                let mut prev_v = v_init;
+                let mut last_t = 0.0f64;
+                for &(cycle, lv) in transitions {
+                    let mut tk = t_of(cycle);
+                    // Strictly increasing times even under coarse stamps that
+                    // collide: nudge past the previous corner.
+                    if tk <= last_t {
+                        tk = last_t + t_edge;
+                    }
+                    let v_new = level_v(lv);
+                    pts.push(PwlPoint { t: tk, v: prev_v });
+                    pts.push(PwlPoint {
+                        t: tk + t_edge,
+                        v: v_new,
+                    });
+                    prev_v = v_new;
+                    last_t = tk + t_edge;
+                }
+                if last_t < chunk {
+                    pts.push(PwlPoint {
+                        t: chunk,
+                        v: prev_v,
+                    });
+                }
+
+                let vs = drv.vsource.0 as usize;
+                if let Some(hauksbee_ir::Device::Vsource { kind, .. }) =
+                    self.circuit.devices.get_mut(vs)
+                {
+                    *kind = SourceKind::Pwl(pts);
+                    restores.push((vs, prev_v));
+                }
+            }
+        }
+        restores
+    }
+
+    /// Settle every PWL-driven source back to its final DC level after the
+    /// chunk's solve, so the digital tick, the stats fold, and the next
+    /// chunk's warm start all see the level the pin actually rests at.
+    fn restore_pwl_drives(&mut self, restores: &[(usize, f64)]) {
+        use hauksbee_ir::SourceKind;
+        for &(vs, v) in restores {
+            if let Some(hauksbee_ir::Device::Vsource { kind, .. }) =
+                self.circuit.devices.get_mut(vs)
+            {
+                *kind = SourceKind::Dc(v);
+            }
+        }
+    }
+
     pub fn last_chunk_pin_edges(&self) -> &[ChunkPinEdges] {
         &self.last_chunk_edges
     }
@@ -2194,5 +2339,126 @@ fn logic_high_for_backend(backend: &str) -> f64 {
         3.3
     } else {
         5.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Nano module driving net CLK from A2 (PC2), with CLK feeding an RC
+    /// integrator (10k into 100 nF, tau = 1 ms): the load whose response
+    /// depends on the WHOLE pulse train, not the final level.
+    const RC_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "CLK")
+  (net 4 "MID")
+
+  (module Module:Arduino_Nano (layer F.Cu)
+    (at 100 100)
+    (fp_text reference A1 (at 0 0) (layer F.SilkS))
+    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
+    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
+    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
+    (pad 21 thru_hole circle (at 0 21) (size 1 1) (net 3 "CLK"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "CLK"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 4 "MID"))
+  )
+  (module Capacitor:C (layer F.Cu)
+    (at 120 100)
+    (fp_text reference C1 (at 0 0) (layer F.SilkS))
+    (fp_text value 100nF (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "MID"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+
+    fn rc_scheduler() -> Scheduler {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(RC_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut bound = crate::binder::bind_board(&board, &lib);
+        // Promote A2 exactly as the first firmware edge would.
+        let drv = bound.mcus[0]
+            .gpio_drivers
+            .get_mut(&('C', 2))
+            .expect("A2 driver");
+        drv.set_enabled(&mut bound.circuit, true);
+        drv.set_volts(&mut bound.circuit, 0.0);
+        Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
+    }
+
+    /// The electrical face of lore #8: ten 5 us pulses inside one 100 us
+    /// chunk end LOW, so the final-level DC drive leaves the RC integrator
+    /// empty; the PWL drive integrates every pulse and pumps it to roughly
+    /// the 50%-duty average. This is the analog half of the fidelity ceiling
+    /// fix (the digital half is the cycle-ordered replay).
+    #[test]
+    fn pwl_drive_integrates_a_pulse_train_the_dc_path_collapses() {
+        let chunk = 100e-6;
+
+        // Synthetic cycle-stamped edges: 16 MHz core, edge every 5 us
+        // (80,000 cycles... 5 us at 16 MHz = 80 cycles-per-us * 5 = 400).
+        // Ten high pulses at 50% duty across the chunk, ending low.
+        let mut transitions = Vec::new();
+        let cycles_per_chunk = 1600u64; // 100 us at 16 MHz
+        for k in 0..10u64 {
+            let up = k * 160;
+            let down = up + 80;
+            transitions.push((up, true));
+            transitions.push((down, false));
+        }
+        let mut edges = HashMap::new();
+        edges.insert(('C', 2u8), transitions);
+
+        // Control run first: no chunk edges recorded, so the DC path rules
+        // and the driver rests at its final level (low). The cap stays flat.
+        let mut sched = rc_scheduler();
+        assert!(sched.solve_chunk(chunk), "control solve converges");
+        let mid_dc = sched.net_voltage("MID").expect("MID");
+        assert!(
+            mid_dc.abs() < 0.05,
+            "control: a low-resting DC drive must leave the RC at ~0 V, got {mid_dc:.3}"
+        );
+
+        // PWL run: inject the chunk's stamped edges as the MCU drain would
+        // have, apply the drive, solve, restore.
+        let mut sched = rc_scheduler();
+        sched.last_chunk_edges.push(ChunkPinEdges {
+            mcu_reference: "A1".into(),
+            edges,
+            cycle_span: (0, cycles_per_chunk),
+            chunk_s: chunk,
+            cycle_exact: true,
+        });
+        let restores = sched.apply_pwl_drives(chunk);
+        assert_eq!(restores.len(), 1, "exactly the CLK pin gets a PWL drive");
+        assert!(sched.solve_chunk(chunk), "pwl solve converges");
+        sched.restore_pwl_drives(&restores);
+
+        let mid_pwl = sched.net_voltage("MID").expect("MID");
+        // Ten 5 us high pulses = 50 us at 5 V through tau = 1 ms:
+        // ~5 * (1 - exp(-0.05)) * duty-shape, roughly 0.2 V. The exact figure
+        // is not the point; the discrimination from the collapsed 0 V is.
+        assert!(
+            mid_pwl > 0.15,
+            "the PWL drive must pump the RC integrator, got {mid_pwl:.4} V"
+        );
+
+        // And the restore: the driver's source must be back at DC low.
+        let drv = &sched.mcus[0].binding.gpio_drivers[&('C', 2)];
+        match &sched.circuit.devices[drv.vsource.0 as usize] {
+            Device::Vsource { kind, .. } => {
+                assert!(matches!(kind, hauksbee_ir::SourceKind::Dc(v) if v.abs() < 1e-9));
+            }
+            _ => panic!("driver vsource missing"),
+        }
     }
 }
