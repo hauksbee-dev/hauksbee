@@ -37,6 +37,7 @@ pub mod scheduler;
 pub mod shorts;
 pub mod stress;
 pub mod tarski_decomp;
+pub mod tarski_prep;
 pub mod thermal;
 pub mod tui;
 
