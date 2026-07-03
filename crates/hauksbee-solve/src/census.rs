@@ -30,6 +30,12 @@ pub(crate) enum Phase {
     Factor,
     /// Triangular back-substitution.
     Backsolve,
+    /// One Armijo line-search residual evaluation (`residual_inf_norm_at`),
+    /// which re-stamps the WHOLE system per alpha trial. Timed separately from
+    /// Stamp because it is line-search overhead, not iteration assembly: the
+    /// first census run left ~55% of the march wall unattributed and this call
+    /// was the prime suspect.
+    LineSearch,
 }
 
 thread_local! {
@@ -37,6 +43,8 @@ thread_local! {
     static FACTOR_NS: Cell<u64> = const { Cell::new(0) };
     static FACTOR_CALLS: Cell<u64> = const { Cell::new(0) };
     static BACKSOLVE_NS: Cell<u64> = const { Cell::new(0) };
+    static LS_NS: Cell<u64> = const { Cell::new(0) };
+    static LS_CALLS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Run one linear-algebra phase, accumulating its wall time when the census is
@@ -57,19 +65,26 @@ pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
             FACTOR_CALLS.with(|c| c.set(c.get() + 1));
         }
         Phase::Backsolve => BACKSOLVE_NS.with(|c| c.set(c.get() + ns)),
+        Phase::LineSearch => {
+            LS_NS.with(|c| c.set(c.get() + ns));
+            LS_CALLS.with(|c| c.set(c.get() + 1));
+        }
     }
     r
 }
 
 /// Drain the thread-local phase accumulators: (stamp_ns, factor_ns,
-/// factor_calls, backsolve_ns). Marches run their Newton solves on their own
-/// thread, so draining at march start and end brackets exactly one march.
-fn take_phases() -> (u64, u64, u64, u64) {
+/// factor_calls, backsolve_ns, ls_ns, ls_calls). Marches run their Newton
+/// solves on their own thread, so draining at march start and end brackets
+/// exactly one march.
+fn take_phases() -> (u64, u64, u64, u64, u64, u64) {
     (
         STAMP_NS.with(|c| c.replace(0)),
         FACTOR_NS.with(|c| c.replace(0)),
         FACTOR_CALLS.with(|c| c.replace(0)),
         BACKSOLVE_NS.with(|c| c.replace(0)),
+        LS_NS.with(|c| c.replace(0)),
+        LS_CALLS.with(|c| c.replace(0)),
     )
 }
 
@@ -178,7 +193,7 @@ impl StepCensus {
 impl Drop for StepCensus {
     fn drop(&mut self) {
         let wall = self.started.elapsed().as_secs_f64();
-        let (stamp_ns, factor_ns, factor_calls, backsolve_ns) = take_phases();
+        let (stamp_ns, factor_ns, factor_calls, backsolve_ns, ls_ns, ls_calls) = take_phases();
         let s = |ns: u64| ns as f64 / 1e9;
         let attempts =
             self.accepted + self.lte_rejected + self.newton_fail_cuts + self.event_bisections;
@@ -238,6 +253,14 @@ impl Drop for StepCensus {
             },
             s(backsolve_ns),
         );
+        if ls_calls > 0 {
+            eprintln!(
+                "[step-census]   line-search residual evals: {} ({:.2}s, {:.2}ms/eval; each is a full re-stamp)",
+                ls_calls,
+                s(ls_ns),
+                ls_ns as f64 / 1e6 / ls_calls as f64,
+            );
+        }
         if !self.crossings.is_empty() {
             let mut by_count: Vec<(&String, &u64)> = self.crossings.iter().collect();
             by_count.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
