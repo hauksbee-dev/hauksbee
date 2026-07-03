@@ -704,7 +704,15 @@ fn residual_inf_norm_at(
     src_scale: f64,
     branch_reg: f64,
 ) -> f64 {
-    ws.matrix.clear_values();
+    // Matrix-free accumulation (assembly-economy sub-lever A): F is folded
+    // directly as each device stamps, into ws.rhs as the scratch buffer, so
+    // the eval pays no matrix clear, no slot-search stores, no branch-row
+    // work and no separate row-product pass. ws.matrix is NOT touched any
+    // more (it still holds the lin_point assembly; nothing reads it before
+    // the next iteration re-stamps). The per-row sum order differs from the
+    // assembled row product, so the norm can move by rounding: this switch
+    // was physics-gated (O2 module counts, smoke rates, fixture band), not
+    // bit-gated.
     for v in ws.rhs.iter_mut() {
         *v = 0.0;
     }
@@ -727,16 +735,13 @@ fn residual_inf_norm_at(
             switch_freeze: ws.switch_freeze.as_ref(),
             spdt_sibling: &ws.spdt_sibling,
         };
-        stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
+        // Split borrows: ws.rhs as the F buffer, every other field read-only.
+        let ws_rhs = &mut ws.rhs;
+        crate::stamp::stamp_residual(&ctx, ws_rhs);
     }
     let mut worst = 0.0f64;
     for i in 0..ws.layout.n_nodes {
-        let row = ws.matrix.row(i);
-        let mut acc = 0.0;
-        for &(col, val) in row {
-            acc += val * ws.x[col];
-        }
-        let f = acc - ws.rhs[i];
+        let f = ws.rhs[i];
         if !f.is_finite() {
             return f64::INFINITY;
         }
