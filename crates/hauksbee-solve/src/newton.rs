@@ -1114,18 +1114,16 @@ fn dc_solve(
     // the gmin floor (a genuine root). For a torn feedforward column (one output
     // neuron of the spiking net: BJT mirrors off a stiff rail + SPDT switches +
     // one comparator/RC-stretcher) that limit cycle parks at a sub-nA residual.
-    // When HAUKSBEE_DC_RESID_ACCEPT=1, check the real residual on the current
-    // iterate and accept it as a root if it is below the threshold (default
-    // 1e-9 A; HAUKSBEE_DC_RESID_TOL overrides). This is physically honest: a
-    // sub-nA KCL residual *is* a DC operating point. It is OFF by default so the
-    // production DC path is bit-identical.
-    if std::env::var("HAUKSBEE_DC_RESID_ACCEPT").as_deref() == Ok("1") {
-        let tol = std::env::var("HAUKSBEE_DC_RESID_TOL")
-            .ok()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(1e-9);
+    // Under Strategy::ResidualAccept, check the real residual on the current
+    // iterate and accept it as a root if it is below opts.residual_accept_tol
+    // (default 1e-9 A). This is physically honest: a sub-nA KCL residual *is*
+    // a DC operating point. It is OFF by default so the production DC path is
+    // bit-identical.
+    if opts.ladder.has(Strategy::ResidualAccept) {
+        let tol = opts.residual_accept_tol;
         let res = ws.dc_residual_inf_norm(circuit, opts);
         if res.is_finite() && res < tol {
+            crate::diagnostics::note(Strategy::ResidualAccept);
             if dbg {
                 eprintln!("[staged] residual-accept: KCL residual {res:e} A < {tol:e} A, accepting iterate as DC root");
             }
