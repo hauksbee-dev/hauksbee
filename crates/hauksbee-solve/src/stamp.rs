@@ -121,7 +121,7 @@ pub struct StampCtx<'a> {
     pub switch_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
     /// SPDT leg sibling map (device id -> complementary throw's device id) for
     /// the smooth break-before-make coupling. Consulted only when
-    /// HAUKSBEE_SPDT_BBM=1; empty/ignored otherwise (path bit-identical).
+    /// `effects.spdt_bbm` (the device-model default); empty/ignored otherwise.
     pub spdt_sibling: &'a std::collections::HashMap<DeviceId, DeviceId>,
 }
 
@@ -294,10 +294,6 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
 /// i.e. per Newton iteration) is indistinguishable for every real caller
 /// (tests set these knobs around whole solves, never mid-assembly).
 struct EnvKnobs {
-    /// HAUKSBEE_SPDT_BBM=1: SPDT break-before-make winner-take-all.
-    spdt_bbm: bool,
-    /// HAUKSBEE_SPDT_BBM_K: BBM transition sharpness (default 6).
-    spdt_bbm_k: f64,
     /// HAUKSBEE_SW_NO_CTRL_GM=1: drop the switch control back-coupling.
     sw_no_ctrl_gm: bool,
     /// HAUKSBEE_CMP_K: staged smooth-comparator gain (default 2000 / V).
@@ -307,11 +303,6 @@ struct EnvKnobs {
 impl EnvKnobs {
     fn read() -> EnvKnobs {
         EnvKnobs {
-            spdt_bbm: std::env::var("HAUKSBEE_SPDT_BBM").as_deref() == Ok("1"),
-            spdt_bbm_k: std::env::var("HAUKSBEE_SPDT_BBM_K")
-                .ok()
-                .and_then(|s| s.parse::<f64>().ok())
-                .unwrap_or(6.0),
             sw_no_ctrl_gm: std::env::var("HAUKSBEE_SW_NO_CTRL_GM").as_deref() == Ok("1"),
             cmp_k: std::env::var("HAUKSBEE_CMP_K")
                 .ok()
@@ -899,8 +890,9 @@ fn stamp_vswitch<S: StampSink>(
     let th = u.tanh();
     let mut s = 0.5 * (1.0 + th);
 
-    // BREAK-BEFORE-MAKE for SPDT legs (HAUKSBEE_SPDT_BBM=1, gated; default OFF ->
-    // bit-identical). A real SN74LVC1G3157 SPDT is NEVER low-Z to both throws at
+    // BREAK-BEFORE-MAKE for SPDT legs (effects.spdt_bbm, the device-model
+    // default; the typed compat field restores the old bridging model). A real
+    // SN74LVC1G3157 SPDT is NEVER low-Z to both throws at
     // once: as the SELECT crosses its threshold the leaving throw opens before the
     // entering throw closes. The bare smooth-tanh model breaks this -- at the
     // SELECT transition MID-band BOTH complementary legs sit at the geometric-mean
@@ -924,8 +916,8 @@ fn stamp_vswitch<S: StampSink>(
     // band centre) still conducts the weighted synapse current. This is the
     // analog realisation of the same on-margin tie-break the frozen event path
     // (`eval_switch_states`) uses, made smooth/differentiable for the per-step
-    // Newton. K sets the transition sharpness (HAUKSBEE_SPDT_BBM_K, default 6).
-    let bbm = knobs.spdt_bbm;
+    // Newton. K sets the transition sharpness (effects.spdt_bbm_k, default 6).
+    let bbm = ctx.opts.effects.spdt_bbm;
     if bbm {
         if let Some(&sib) = ctx.spdt_sibling.get(&id) {
             if let Some(Device::VSwitch { ctrl_p: scp, ctrl_n: scn, von: svon, voff: svoff, .. }) =
@@ -935,7 +927,7 @@ fn stamp_vswitch<S: StampSink>(
                 let sspan = (svon - svoff).abs().max(1e-9);
                 let margin_self = (vctrl - vmid) / span;
                 let margin_sib = ((ctx.v(*scp) - ctx.v(*scn)) - svmid) / sspan;
-                let k_bbm = knobs.spdt_bbm_k;
+                let k_bbm = ctx.opts.effects.spdt_bbm_k;
                 let arg = (k_bbm * (margin_self - margin_sib)).clamp(-40.0, 40.0);
                 let win = 1.0 / (1.0 + (-arg).exp());
                 s *= win;
