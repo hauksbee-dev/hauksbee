@@ -2,7 +2,7 @@
 //! optimization work inside `newton_solve`'s Armijo/staged machinery.
 //!
 //! The flagship general path marches its joint capture with
-//! HAUKSBEE_TRANSIENT_DYN set (which arms the staged regularizers, the
+//! Strategy::TransientDyn granted (which arms the staged regularizers, the
 //! event-freeze retry AND the global Armijo line search) plus the SPDT
 //! break-before-make and control-gm device knobs. Any "this optimization is
 //! bit-identical" claim about that machinery needs a fast fixture that
