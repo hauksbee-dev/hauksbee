@@ -1813,13 +1813,27 @@ fn solve_capture(
         let t0 = std::time::Instant::now();
         let r = run_collect(&ramped, &aopts).ok();
         if dbg {
+            // Step census from the accepted grid: where the march spent its
+            // steps (the power-on bring-up inside the ramp window vs the
+            // cruise) and how small it had to go. Pure readout, no behaviour.
+            let census = r.as_ref().map(|wf| {
+                let n = wf.time.len();
+                let bring_up = wf.time.iter().filter(|&&t| t <= ramp_window).count();
+                let mut min_dt = f64::INFINITY;
+                for w in wf.time.windows(2) {
+                    min_dt = min_dt.min(w[1] - w[0]);
+                }
+                (n, bring_up, min_dt)
+            });
             eprintln!(
-                "  adaptive_once at {}: {} devices, {} nodes, {:.2}s, ok={}",
+                "  adaptive_once at {}: {} devices, {} nodes, {:.2}s, ok={}, steps={:?} (total, in ramp window {:.1e}s, min dt)",
                 sub.node_name(c),
                 cap.devices.len(),
                 cap.node_count(),
                 t0.elapsed().as_secs_f64(),
-                r.is_some()
+                r.is_some(),
+                census,
+                ramp_window,
             );
         }
         r
