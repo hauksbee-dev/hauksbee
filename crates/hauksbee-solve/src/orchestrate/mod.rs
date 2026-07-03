@@ -31,7 +31,9 @@
 //! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
 pub mod balance;
+pub mod capture;
 pub mod staged;
 
 pub use balance::{settle_rails, BalancePolicy, BalanceReport, RailChannel, RailLoads};
+pub use capture::{execute_stiff_group, StiffExecution, StiffOutcome};
 pub use staged::{run_staged, StagedResult};
