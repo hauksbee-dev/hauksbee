@@ -345,7 +345,7 @@ impl Scheduler {
             // happens to have an external backend mapping. The in-process AVR
             // core keeps its historical always-instantiated behaviour.
             let external =
-                binding.backend.starts_with("renode:") || binding.backend.starts_with("qemu:");
+                backend_is_external(&binding.backend);
             if external && firmware.is_none() {
                 continue;
             }
@@ -820,9 +820,9 @@ impl Scheduler {
     /// QEMU integration tests do, so the wall cost is the emulator's, not the
     /// chunk count's.
     pub fn has_external_backend(&self) -> bool {
-        self.mcus.iter().any(|m| {
-            m.binding.backend.starts_with("renode:") || m.binding.backend.starts_with("qemu:")
-        })
+        self.mcus
+            .iter()
+            .any(|m| backend_is_external(&m.binding.backend))
     }
 
     /// Advance the co-sim by `dt` seconds in fixed chunks.
@@ -2173,6 +2173,18 @@ fn instantiate_qemu(
 
 /// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
 #[cfg(feature = "avr")]
+/// Whether a backend string names an EXTERNAL co-sim core (Renode, QEMU, or
+/// anything future) as opposed to the one full-stack in-process backend
+/// (simavr), which models peripheral-slave coupling and exposes pin drive
+/// direction. ALLOWLIST on purpose: an unknown future backend must fail SAFE
+/// (classified external: capability-gated scaffolds, hedged diagnoses)
+/// rather than inherit capabilities it does not have. Both hauksbee-ci's
+/// scaffold gate and the runtime diagnosis route through this one predicate
+/// so the two cannot drift (review finding on the ARM-honesty commit).
+pub fn backend_is_external(backend: &str) -> bool {
+    !backend.starts_with("simavr")
+}
+
 fn instantiate_avr(backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
     let mut avr = if backend.contains("atmega328p") {
         AvrMcu::atmega328p_16mhz()?
@@ -2472,7 +2484,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
 /// GPIO logic-high voltage by backend: STM32-class parts and the ESP32 family
 /// are 3.3 V rails, the classic AVR parts are 5 V.
 fn logic_high_for_backend(backend: &str) -> f64 {
-    if backend.starts_with("renode:") || backend.starts_with("qemu:") {
+    if backend_is_external(backend) {
         3.3
     } else {
         5.0

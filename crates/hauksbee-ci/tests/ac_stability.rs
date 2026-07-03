@@ -144,6 +144,8 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
         peak_temp_c: Default::default(),
         sim_ms: 0.0,
         first_reach_ms: Default::default(),
+        driven_nets: Default::default(),
+        drive_direction_observable: false,
         first_fault_ms: None,
         ac: Some(ac),
         // AC assertions are seed-independent DC-linearised sweeps, never touched
@@ -251,6 +253,8 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         peak_temp_c: Default::default(),
         sim_ms: 0.0,
         first_reach_ms: Default::default(),
+        driven_nets: Default::default(),
+        drive_direction_observable: false,
         first_fault_ms: None,
         ac: Some(ac),
         analog_valid: true,
