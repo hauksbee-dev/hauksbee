@@ -340,6 +340,11 @@ pub fn newton_solve(
     let mut best_norm = f64::INFINITY;
     let mut stall = 0usize;
     const STALL_WINDOW: usize = 12;
+    // Undamped step inf-norm of the PREVIOUS line-search iteration, plus the
+    // hysteresis arm state, the lazy-arming predictor's history (see the
+    // line_search block). Armed at entry: the first iteration always searches.
+    let mut prev_ls_step_norm = f64::INFINITY;
+    let mut sim_ls_armed = true;
     loop {
         iters += 1;
         // Snapshot the point we're about to linearize around BEFORE the solve
@@ -458,6 +463,26 @@ pub fn newton_solve(
         // continues -- exactly what stops the traveling overshoot.
         if line_search {
             let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - lin_point[i]).collect();
+            // Lazy-arming predictor SHADOW (census only, no behaviour): a
+            // two-state hysteresis machine. ARMED runs the search every
+            // iteration and only DISARMS when the search itself accepts
+            // alpha=1 (proof the full step currently satisfies Armijo);
+            // DISARMED skips the search and RE-ARMS the moment the proposed
+            // step norm stops shrinking (the traveling-overshoot signature the
+            // search exists for). Floor-grinding iterations never see an
+            // alpha=1 accept, so they structurally keep their full search. The
+            // first cut of this predictor (skip on any monotone shrink,
+            // stateless) was measured near-uninformative on the flagship
+            // march: it skipped 93% of iterations with P(pass|skip)=57%
+            // against a 58% base rate, and it disarmed the floor-grinders.
+            // Cross-tabbed against the ground truth of the alpha=1 trial
+            // below to measure the hit rate BEFORE any skip is wired in.
+            let step_norm = dx.iter().fold(0.0f64, |m, &d| m.max(d.abs()));
+            let would_skip = !sim_ls_armed && step_norm < prev_ls_step_norm;
+            if !sim_ls_armed && step_norm >= prev_ls_step_norm {
+                sim_ls_armed = true;
+            }
+            prev_ls_step_norm = step_norm;
             let mut alpha = 1.0;
             let mut best_alpha = 1.0;
             let mut best_norm = f64::INFINITY;
@@ -465,6 +490,10 @@ pub fn newton_solve(
             // sufficient decrease (vs hitting the floor and falling back to
             // the best trial). Written below, read only when the census is on.
             let mut armijo_ok = false;
+            // Ground truth for the predictor: did the FIRST (alpha=1) trial
+            // pass Armijo?
+            let mut trials = 0u32;
+            let mut first_trial_pass = false;
             loop {
                 // Trial point x = lin_point + alpha*dx, evaluated into ws.x scratch.
                 for i in 0..ws.x.len() {
@@ -476,6 +505,7 @@ pub fn newton_solve(
                         branch_reg,
                     )
                 });
+                trials += 1;
                 if trial_norm < best_norm {
                     best_norm = trial_norm;
                     best_alpha = alpha;
@@ -485,11 +515,21 @@ pub fn newton_solve(
                 // start) accepts the full step.
                 let accept = trial_norm.is_finite()
                     && (f_norm_lin <= 0.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
+                if trials == 1 && accept {
+                    first_trial_pass = true;
+                }
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
                     armijo_ok = accept;
                     break;
                 }
                 alpha *= 0.5;
+            }
+            crate::census::ls_predictor(would_skip, first_trial_pass);
+            // Shadow state update from the ground truth (in the real design
+            // the DISARM transition comes from the search's own outcome, so
+            // it is only ever taken on iterations that actually searched).
+            if sim_ls_armed && first_trial_pass {
+                sim_ls_armed = false;
             }
             // If even the floor step did not satisfy Armijo, take the best alpha
             // tried (the largest residual decrease seen) rather than a step that

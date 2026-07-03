@@ -56,6 +56,32 @@ thread_local! {
     /// Iterations that hit the alpha floor and fell back to the best trial
     /// seen (no alpha satisfied the Armijo test).
     static LS_FALLBACK: Cell<u64> = const { Cell::new(0) };
+    /// Lazy-arming predictor cross-tab (lever 1c): [skip&pass, skip&fail,
+    /// search&pass, search&fail], where "skip" is the step-norm predictor's
+    /// decision (monotone-shrinking step skips the search) and "pass" is the
+    /// ground truth (the alpha=1 trial satisfied Armijo on its first eval).
+    /// skip&fail is the WRONG-SKIP count the safety argument must cover;
+    /// search&pass is the saving the predictor leaves on the table.
+    static LS_PRED: Cell<[u64; 4]> = const { Cell::new([0; 4]) };
+}
+
+/// Record one line-search iteration's predictor decision against the ground
+/// truth of its first alpha=1 trial. Pure readout.
+pub(crate) fn ls_predictor(would_skip: bool, first_trial_pass: bool) {
+    if !enabled() {
+        return;
+    }
+    let idx = match (would_skip, first_trial_pass) {
+        (true, true) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (false, false) => 3,
+    };
+    LS_PRED.with(|c| {
+        let mut a = c.get();
+        a[idx] += 1;
+        c.set(a);
+    });
 }
 
 /// Record the alpha one line-search iteration ended on. Pure readout, called
@@ -114,7 +140,7 @@ pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
 /// ls_fallback). Marches run their Newton solves on their own thread, so
 /// draining at march start and end brackets exactly one march.
 #[allow(clippy::type_complexity)]
-fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64) {
+fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64, [u64; 4]) {
     (
         STAMP_NS.with(|c| c.replace(0)),
         FACTOR_NS.with(|c| c.replace(0)),
@@ -125,6 +151,7 @@ fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64) {
         LS_ALPHA.with(|c| c.replace([0; 8])),
         LS_ARMIJO_OK.with(|c| c.replace(0)),
         LS_FALLBACK.with(|c| c.replace(0)),
+        LS_PRED.with(|c| c.replace([0; 4])),
     )
 }
 
@@ -274,6 +301,7 @@ impl Drop for StepCensus {
             ls_alpha,
             ls_armijo_ok,
             ls_fallback,
+            ls_pred,
         ) = take_phases();
         let s = |ns: u64| ns as f64 / 1e9;
         let attempts =
@@ -357,6 +385,12 @@ impl Drop for StepCensus {
                 ls_armijo_ok,
                 ls_fallback,
             );
+            if ls_pred.iter().any(|&c| c > 0) {
+                eprintln!(
+                    "[step-census]   ls predictor: skip&pass={} skip&fail={} search&pass={} search&fail={}",
+                    ls_pred[0], ls_pred[1], ls_pred[2], ls_pred[3],
+                );
+            }
         }
         if !self.crossings.is_empty() {
             let mut by_count: Vec<(&String, &u64)> = self.crossings.iter().collect();
