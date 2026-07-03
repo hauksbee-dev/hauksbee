@@ -412,6 +412,99 @@ pub fn execute_stiff_group_held_capped(
         }
     }
 
+    // ---- capture-cluster merge ---------------------------------------------
+    // Grown captures OVERLAP on the flagship: every column capture pulls the
+    // same generator core, so relaxing them separately solves N near-identical
+    // sub-circuits per round, each seeing last round's REPLAY of the shared
+    // core instead of the core itself. That is the measured cost blowout
+    // (~137s x 16 candidates x up to 7 rounds) AND the quiet-basin risk: a
+    // capture pinned to a stale train of its own generator can relax onto the
+    // wrong fixed point. Candidates whose capture-block sets intersect are
+    // merged into one CLUSTER and solved JOINTLY: the intra-cluster tears are
+    // never torn (exact where relaxation only approximated), and only
+    // cluster-external candidates remain replayed pin boundaries. Union-find
+    // over pairwise GENERATION overlap, transitive by design (c1~c2, c2~c3
+    // merges all three); `candidates` order seeds representatives, so the
+    // construction stays deterministic.
+    //
+    // The criterion is deliberately NARROWER than any block-set intersection:
+    // two chain neighbours legitimately share a LOAD block (the cut's own
+    // impedance chain) and relax fine on separate small captures: merging them
+    // would only bloat the solves and rewrite behaviour the fixtures certify.
+    // A shared block triggers a merge only when it is a GROWN block (pulled by
+    // the generator walk, not plain adjacency) for at least one side: that is
+    // the "we both captured the same generator" signature, and it leaves every
+    // ungrown group's execution bit-identical to the pre-merge code.
+    let (clusters, cluster_blocks, cand_rep) = {
+        let n = candidates.len();
+        let sets: Vec<HashSet<usize>> = candidates
+            .iter()
+            .map(|c| capture_blocks[&c.0].iter().copied().collect())
+            .collect();
+        let plain: Vec<HashSet<usize>> = candidates
+            .iter()
+            .map(|c| adjacent.get(&c.0).map(|v| v.iter().copied().collect()).unwrap_or_default())
+            .collect();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut [usize], mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let entangled = sets[i]
+                    .intersection(&sets[j])
+                    .any(|b| !plain[i].contains(b) || !plain[j].contains(b));
+                if entangled {
+                    let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                    if ri != rj {
+                        // Lower index wins: the representative is always the
+                        // EARLIEST member in `candidates` order.
+                        parent[ri.max(rj)] = ri.min(rj);
+                    }
+                }
+            }
+        }
+        let mut clusters: Vec<Vec<NodeId>> = Vec::new();
+        let mut root_slot: HashMap<usize, usize> = HashMap::new();
+        for i in 0..n {
+            let r = find(&mut parent, i);
+            let slot = *root_slot.entry(r).or_insert_with(|| {
+                clusters.push(Vec::new());
+                clusters.len() - 1
+            });
+            clusters[slot].push(candidates[i]);
+        }
+        let mut cluster_blocks: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut cand_rep: HashMap<u32, u32> = HashMap::new();
+        for cl in &clusters {
+            let rep = cl[0];
+            let mut union: HashSet<usize> = HashSet::new();
+            for c in cl {
+                union.extend(capture_blocks[&c.0].iter().copied());
+                cand_rep.insert(c.0, rep.0);
+            }
+            let mut blocks: Vec<usize> = union.into_iter().collect();
+            blocks.sort_unstable();
+            cluster_blocks.insert(rep.0, blocks);
+        }
+        (clusters, cluster_blocks, cand_rep)
+    };
+    if std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok() {
+        eprintln!(
+            "CLUSTERS: {} from {} candidates: {:?}",
+            clusters.len(),
+            candidates.len(),
+            clusters
+                .iter()
+                .map(|cl| (sub.node_name(cl[0]), cl.len(), cluster_blocks[&cl[0].0].len()))
+                .collect::<Vec<_>>()
+        );
+    }
+
     // ---- rest estimates ---------------------------------------------------
     let mut rest: HashMap<u32, f64> = HashMap::new();
     let mut bootstrapped = false;
@@ -427,13 +520,16 @@ pub fn execute_stiff_group_held_capped(
             }
         }
         None => {
-            // Bootstrap: per-candidate capture-group DC with the others at 0.
+            // Bootstrap: per-cluster capture-group DC with the external
+            // candidates at 0; every member's rest reads from the joint point.
             bootstrapped = true;
-            for c in candidates {
+            for cluster in &clusters {
+                let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
                 // Pins default to Dc(0.0): exactly the zeros bootstrap, except
                 // held rails, which start at their train's t=0 estimate.
                 let (mut cap, g2l) = capture_circuit(
-                    sub, &frag, &capture_blocks, &conducts_cand, &companions, *c, candidates, held,
+                    sub, &frag, &cluster_blocks[&cluster[0].0], &members, &conducts_cand,
+                    &companions, candidates, held,
                 );
                 for dev in cap.devices.iter_mut() {
                     if let Device::Vsource { name, kind, .. } = dev {
@@ -447,15 +543,18 @@ pub fn execute_stiff_group_held_capped(
                     }
                 }
                 let mut ws = Workspace::new(&cap);
-                let v = match dc_operating_point(&mut ws, &cap, opts) {
-                    Ok(_) => g2l
-                        .get(&c.0)
-                        .and_then(|ln| ws.layout.node(NodeId(*ln)))
-                        .map(|i| ws.x[i])
-                        .unwrap_or(0.0),
-                    Err(_) => 0.0,
-                };
-                rest.insert(c.0, v);
+                let solved = dc_operating_point(&mut ws, &cap, opts).is_ok();
+                for c in cluster {
+                    let v = if solved {
+                        g2l.get(&c.0)
+                            .and_then(|ln| ws.layout.node(NodeId(*ln)))
+                            .map(|i| ws.x[i])
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    rest.insert(c.0, v);
+                }
             }
         }
     }
@@ -472,6 +571,7 @@ pub fn execute_stiff_group_held_capped(
     // never a literal that happens to match the default (review finding).
     let reltol = opts.reltol;
     let max_rounds = 6usize;
+    let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
 
     let mut trains: HashMap<u32, Vec<f64>> = HashMap::new();
     let mut runs: HashMap<u32, CaptureRun> = HashMap::new();
@@ -485,43 +585,62 @@ pub fn execute_stiff_group_held_capped(
         .iter()
         .map(|c| (c.0, vec![rest.get(&c.0).copied().unwrap_or(0.0); grid.len()]))
         .collect();
-    for c in candidates {
+    for cluster in &clusters {
+        let rep = cluster[0];
+        let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
+        let cluster_grown = cluster.iter().any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
         // Merge: already-captured candidates by train, the rest by rest.
         let mut boundary = rest_trains.clone();
         for (k, v) in &trains {
             boundary.insert(*k, v.clone());
         }
+        let t_solve = std::time::Instant::now();
         let wf = match solve_capture(
-            sub, &frag, &capture_blocks, &conducts_cand, &companions, *c, candidates, &rest, held,
-            Some((&boundary, &grid)), None, grew.get(&c.0).copied().unwrap_or(0) > 0,
-            adaptive_mode.entry(c.0).or_insert(false), opts, tstop,
+            sub, &frag, &cluster_blocks[&rep.0], &members, &conducts_cand, &companions, rep,
+            candidates, &rest, held, Some((&boundary, &grid)), None, cluster_grown,
+            adaptive_mode.entry(rep.0).or_insert(false), opts, tstop,
         ) {
             Ok(wf) => wf,
             Err(_) => {
-                refusal_report.extend(dead_capture_outcomes(candidates, *c, &rest, opts.reltol, bootstrapped));
+                refusal_report.extend(dead_capture_outcomes(candidates, rep, &rest, opts.reltol, bootstrapped));
                 return Ok(None);
             }
         };
-        let s = sample_node(&wf.0, &wf.1, *c, &grid);
-        trains.insert(c.0, s);
-        runs.insert(c.0, wf);
+        if dbg {
+            eprintln!(
+                "  ROUND 0 {} ({} joint): {:.2}s",
+                sub.node_name(rep),
+                cluster.len(),
+                t_solve.elapsed().as_secs_f64()
+            );
+        }
+        for c in cluster {
+            let s = sample_node(&wf.0, &wf.1, *c, &grid);
+            trains.insert(c.0, s);
+        }
+        runs.insert(rep.0, wf);
     }
 
     let mut sag: HashMap<u32, f64> = HashMap::new();
     let mut converged = false;
     for _round in 0..max_rounds {
         converged = true;
-        for c in candidates {
+        for cluster in &clusters {
+            let rep = cluster[0];
+            let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
+            let cluster_grown =
+                cluster.iter().any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
+            let t_solve = std::time::Instant::now();
             let wf = match solve_capture(
-                sub, &frag, &capture_blocks, &conducts_cand, &companions, *c, candidates, &rest, held,
-                Some((&trains, &grid)), runs.get(&c.0), grew.get(&c.0).copied().unwrap_or(0) > 0,
-                adaptive_mode.entry(c.0).or_insert(false), opts, tstop,
+                sub, &frag, &cluster_blocks[&rep.0], &members, &conducts_cand, &companions, rep,
+                candidates, &rest, held, Some((&trains, &grid)), runs.get(&rep.0), cluster_grown,
+                adaptive_mode.entry(rep.0).or_insert(false), opts, tstop,
             ) {
                 Ok(wf) => wf,
                 Err(_) => {
                     refusal_report.extend(dead_capture_outcomes(
                         candidates,
-                        *c,
+                        rep,
                         &rest,
                         opts.reltol,
                         bootstrapped,
@@ -529,25 +648,36 @@ pub fn execute_stiff_group_held_capped(
                     return Ok(None);
                 }
             };
-            let new = sample_node(&wf.0, &wf.1, *c, &grid);
-            let old = &trains[&c.0];
-            // The residual metric is time-shift-tolerant by ONE grid step:
-            // each sample compares against the other iterate's neighbouring
-            // cells and keeps the smallest difference. This is the
-            // capture-grid claim's own metric (a replayed boundary is exact
-            // up to the grid), and it is what lets spiking trains converge:
-            // a spike whose timing shifts by one cell between iterates is
-            // the same physics, but a pointwise metric reads it as volts of
-            // divergence, which is exactly how the flagship's mega group
-            // refused at the full window while accepting at smoke scale.
-            let diff = shifted_residual(old, &new);
-            sag.insert(c.0, diff);
-            let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
-            if diff > 10.0 * reltol * vnom {
-                converged = false;
+            for c in cluster {
+                let new = sample_node(&wf.0, &wf.1, *c, &grid);
+                let old = &trains[&c.0];
+                // The residual metric is time-shift-tolerant by ONE grid step:
+                // each sample compares against the other iterate's neighbouring
+                // cells and keeps the smallest difference. This is the
+                // capture-grid claim's own metric (a replayed boundary is exact
+                // up to the grid), and it is what lets spiking trains converge:
+                // a spike whose timing shifts by one cell between iterates is
+                // the same physics, but a pointwise metric reads it as volts of
+                // divergence, which is exactly how the flagship's mega group
+                // refused at the full window while accepting at smoke scale.
+                let diff = shifted_residual(old, &new);
+                if dbg {
+                    eprintln!(
+                        "  ROUND {} {}: {:.2}s, residual {:.3e}",
+                        _round + 1,
+                        sub.node_name(*c),
+                        t_solve.elapsed().as_secs_f64(),
+                        diff
+                    );
+                }
+                sag.insert(c.0, diff);
+                let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+                if diff > 10.0 * reltol * vnom {
+                    converged = false;
+                }
+                trains.insert(c.0, new);
             }
-            trains.insert(c.0, new);
-            runs.insert(c.0, wf);
+            runs.insert(rep.0, wf);
         }
         if converged {
             break;
@@ -561,6 +691,10 @@ pub fn execute_stiff_group_held_capped(
         let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
         let tol = 10.0 * reltol * vnom;
         let g = grew.get(&c.0).copied().unwrap_or(0);
+        let joint = cand_rep
+            .get(&c.0)
+            .and_then(|r| clusters.iter().find(|cl| cl[0].0 == *r))
+            .is_some_and(|cl| cl.len() > 1);
         outcomes.push(StiffOutcome {
             node: *c,
             kind: BoundaryKind::Signal,
@@ -569,7 +703,9 @@ pub fn execute_stiff_group_held_capped(
             accepted: s <= tol,
             bootstrapped,
             capture_growth: g,
-            note: if g > 0 {
+            note: if joint {
+                "merged capture: solved jointly with overlapping candidates (intra-cluster boundary exact, not replayed)"
+            } else if g > 0 {
                 "generator-inclusive capture (grew beyond plain adjacency)"
             } else {
                 ""
@@ -584,11 +720,12 @@ pub fn execute_stiff_group_held_capped(
     // ---- assembly: every block reads from one owning final-round run ------
     // Ownership follows the GROWN capture set, so a pulled-in generator block is
     // read from the candidate that pulled it (its membrane now carries the real
-    // spiking waveform, not a static rest value).
+    // spiking waveform, not a static rest value). Runs are keyed by CLUSTER
+    // representative: a merged block reads from the joint run that solved it.
     let mut block_owner: HashMap<usize, u32> = HashMap::new();
-    for c in candidates {
-        for &b in &capture_blocks[&c.0] {
-            block_owner.entry(b).or_insert(c.0);
+    for cluster in &clusters {
+        for &b in &cluster_blocks[&cluster[0].0] {
+            block_owner.entry(b).or_insert(cluster[0].0);
         }
     }
     // Any block adjacent to NO candidate would be unreadable; fragmentation
@@ -632,11 +769,11 @@ pub fn execute_stiff_group_held_capped(
             }
         } else {
             // Companion-island nodes (absorbed copies, replay-pin islands)
-            // ride in every capture; read them from the first candidate's
+            // ride in every capture; read them from the first cluster's
             // final run. Known-side nodes of the core island with no free
             // block land here too and stay zero only if no capture mapped
             // them.
-            let owner = candidates[0].0;
+            let owner = clusters[0][0].0;
             let (wf, g2l) = &runs[&owner];
             match g2l.get(&(node as u32)) {
                 Some(&ln) => grid
@@ -1416,23 +1553,24 @@ fn grow_capture_blocks(
     out
 }
 
-/// Build candidate `c`'s capture circuit: its capture blocks' devices plus
-/// every device that conducts `c` (they carry the load current), with pin
-/// sources for the OTHER candidates those devices or blocks touch. Returns
-/// the circuit and the global-to-local node map. Pin sources are added as DC
-/// zero and set by the caller (DC rest or PWL trains). `adjacent` here is the
-/// (possibly generator-grown) capture-block set from [`grow_capture_blocks`].
+/// Build a capture CLUSTER's circuit: the cluster's (merged, possibly
+/// generator-grown) capture blocks' devices plus every device that conducts a
+/// member candidate (they carry the load current), with pin sources for the
+/// candidates OUTSIDE the cluster those devices or blocks touch. Returns the
+/// circuit and the global-to-local node map. Pin sources are added as DC zero
+/// and set by the caller (DC rest or PWL trains). Member candidates get NO
+/// pin: they are interior, solved jointly and exactly.
 fn capture_circuit(
     sub: &Circuit,
     frag: &crate::decompose::rails::Fragmentation,
-    adjacent: &HashMap<u32, Vec<usize>>,
+    blocks: &[usize],
+    members: &HashSet<u32>,
     conducts_cand: &HashMap<DeviceId, Vec<u32>>,
     companions: &[DeviceId],
-    c: NodeId,
     candidates: &[NodeId],
     held: &HashMap<u32, Vec<f64>>,
 ) -> (Circuit, HashMap<u32, u32>) {
-    let my_blocks: HashSet<usize> = adjacent[&c.0].iter().copied().collect();
+    let my_blocks: HashSet<usize> = blocks.iter().copied().collect();
     let companion_set: HashSet<DeviceId> = companions.iter().copied().collect();
     let mut devices: Vec<DeviceId> = Vec::new();
     for (id, _) in sub.iter() {
@@ -1440,10 +1578,12 @@ fn capture_circuit(
             .device_block
             .get(&id)
             .is_some_and(|b| my_blocks.contains(b));
-        // Devices conducting c that belong to no block (all terminals held:
-        // between two candidates) still carry load current: include them.
+        // Devices conducting a member that belong to no block (all terminals
+        // held: between two candidates) still carry load current: include them.
         let orphan_on_c = !frag.device_block.contains_key(&id)
-            && conducts_cand.get(&id).is_some_and(|v| v.contains(&c.0));
+            && conducts_cand
+                .get(&id)
+                .is_some_and(|v| v.iter().any(|x| members.contains(x)));
         // Companion devices (absorbed drivers, replay pins: everything
         // outside the candidates' island) hold the sense boundaries.
         if in_block || orphan_on_c || companion_set.contains(&id) {
@@ -1469,9 +1609,9 @@ fn capture_circuit(
         });
         cap.add(d);
     }
-    // Pin every OTHER candidate this capture touches.
+    // Pin every candidate OUTSIDE the cluster this capture touches.
     for o in candidates {
-        if o.0 == c.0 {
+        if members.contains(&o.0) {
             continue;
         }
         if let Some(&ln) = g2l.get(&o.0) {
@@ -1504,13 +1644,16 @@ fn capture_circuit(
     (cap, g2l)
 }
 
-/// Solve one capture: others pinned at rest DC (round 0) or at PWL trains
-/// (round 1). Returns the run plus its node map.
+/// Solve one capture CLUSTER: cluster-external candidates pinned at rest DC
+/// (round 0) or at PWL trains (round 1+); member candidates interior. `c` is
+/// the cluster representative (naming, error messages). Returns the run plus
+/// its node map.
 #[allow(clippy::too_many_arguments)]
 fn solve_capture(
     sub: &Circuit,
     frag: &crate::decompose::rails::Fragmentation,
-    adjacent: &HashMap<u32, Vec<usize>>,
+    blocks: &[usize],
+    members: &HashSet<u32>,
     conducts_cand: &HashMap<DeviceId, Vec<u32>>,
     companions: &[DeviceId],
     c: NodeId,
@@ -1525,7 +1668,7 @@ fn solve_capture(
     tstop: f64,
 ) -> Result<CaptureRun, String> {
     let (mut cap, g2l) =
-        capture_circuit(sub, frag, adjacent, conducts_cand, companions, c, candidates, held);
+        capture_circuit(sub, frag, blocks, members, conducts_cand, companions, candidates, held);
     // Set the pins: PWL trains when supplied, else the DC rest values.
     for dev in cap.devices.iter_mut() {
         if let Device::Vsource { name, kind, .. } = dev {
@@ -1684,6 +1827,8 @@ fn solve_capture(
         ));
     }
 
+    let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
+    let t_fixed = std::time::Instant::now();
     match run_collect(&cap, &sub_opts) {
         Ok(wf) => Ok((wf, g2l)),
         // A DC-class death gets the fixed-step power-on ramp the staged fused
@@ -1693,8 +1838,30 @@ fn solve_capture(
         // signal (a cut through an active loop, say) that must NOT be papered
         // over, and the adaptive rescue must not resurrect it.
         Err(e) if e.contains("DC") || e.contains("dc") || e.contains("homotopy") => {
+            if dbg {
+                eprintln!(
+                    "  fixed at {} DC-died after {:.2}s: {e}",
+                    sub.node_name(c),
+                    t_fixed.elapsed().as_secs_f64()
+                );
+            }
+            let t_ladder = std::time::Instant::now();
             if let Some(wf) = fixed_ramp_ladder() {
+                if dbg {
+                    eprintln!(
+                        "  ladder at {} ok in {:.2}s",
+                        sub.node_name(c),
+                        t_ladder.elapsed().as_secs_f64()
+                    );
+                }
                 return Ok((wf, g2l));
+            }
+            if dbg {
+                eprintln!(
+                    "  ladder at {} died in {:.2}s",
+                    sub.node_name(c),
+                    t_ladder.elapsed().as_secs_f64()
+                );
             }
             if grown {
                 if let Some(wf) = adaptive_once() {
@@ -1707,6 +1874,13 @@ fn solve_capture(
         // A non-DC transient death (Newton at dt_min on a reset event) is retried
         // ONLY for a grown capture, on the adaptive march that resolves the event.
         Err(e) => {
+            if dbg {
+                eprintln!(
+                    "  fixed at {} died after {:.2}s: {e}",
+                    sub.node_name(c),
+                    t_fixed.elapsed().as_secs_f64()
+                );
+            }
             if grown {
                 if let Some(wf) = adaptive_once() {
                     *prefer_adaptive = true;
@@ -2811,6 +2985,128 @@ mod tests {
             up_crossings(exec.waveforms.node(&c, "vsyn").unwrap(), 2.5),
             mono_vsyn,
             "sense-gated load spike count must match the monolith"
+        );
+    }
+
+    /// The MERGED-cluster gate (the flagship's actual shape): TWO sense-driven
+    /// columns behind the SAME generator. Each candidate's capture grows into
+    /// the shared oscillator core, so the grown block sets overlap and the
+    /// executor must solve them JOINTLY as one cluster: two separately relaxed
+    /// captures would each pin a stale replay of their own generator (the
+    /// measured 137s-per-candidate-per-round cost blowout on the flagship, and
+    /// the quiet-basin hazard). Assembled spike counts must match the fused
+    /// monolith on both columns, and the joint solve must be on the record.
+    #[test]
+    fn overlapping_grown_captures_merge_and_match() {
+        let (mut c, vspk, vdd, hold_v) = generator_capture_fixture();
+        // Second column: an independent output stage sensing the same membrane,
+        // with its own stretcher hop and downstream load.
+        let vmem = c.node("vmem");
+        let vref4 = c.node("vref4");
+        c.add(Device::Vsource {
+            name: "Vref4".into(),
+            p: vref4,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(0.6),
+        });
+        let vko2 = c.node("vko2");
+        c.add(Device::Comparator {
+            name: "Kout2".into(),
+            out: vko2,
+            inp: vmem,
+            inn: vref4,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 0.05,
+        });
+        let vspk2 = c.node("vspk2");
+        c.add(Device::Resistor {
+            name: "R_str2".into(),
+            a: vko2,
+            b: vspk2,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let vload2 = c.node("vload2");
+        c.add(Device::Resistor {
+            name: "Rload2".into(),
+            a: vspk2,
+            b: vload2,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "RloadG2".into(),
+            a: vload2,
+            b: vdd,
+            ohms: 10e3,
+            tc1: None,
+        });
+
+        let dt = 50e-9;
+        let tstop = 20e-6;
+        let opts = SolverOptions {
+            reltol: 1e-7,
+            vntol: 1e-7,
+            max_newton: 100,
+            dc_init: crate::options::DcInit::FromZero,
+            ..fixed_opts(dt)
+        };
+
+        let mut mono_opts = opts;
+        mono_opts.partitioning = Partitioning::Off;
+        let mono = Transient::new(mono_opts).run(&c, tstop).expect("monolith oracle");
+        let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
+        let mono_vspk2 = up_crossings(mono.node(&c, "vspk2").unwrap(), 2.5);
+        assert!(
+            mono_vspk >= 3,
+            "the oscillator must genuinely spike in the monolith (saw {mono_vspk})"
+        );
+        assert_eq!(
+            mono_vspk, mono_vspk2,
+            "the two columns mirror the same generator"
+        );
+
+        let held: HashMap<u32, Vec<f64>> = {
+            let grid = uniform_grid(dt, tstop);
+            [(vdd.0, vec![hold_v; grid.len()])].into_iter().collect()
+        };
+
+        let mut refusals = Vec::new();
+        let exec = execute_stiff_group_held_capped(
+            &c,
+            &[vspk, vspk2],
+            &held,
+            &CapturePolicy::default(),
+            &opts,
+            tstop,
+            &mut refusals,
+        )
+        .expect("mechanical success")
+        .unwrap_or_else(|| panic!("merged generator captures must succeed: {refusals:?}"));
+
+        for cand in [vspk, vspk2] {
+            let o = exec.outcomes.iter().find(|o| o.node == cand).expect("outcome");
+            assert!(o.accepted, "{o:?}");
+            assert!(
+                o.capture_growth > 0,
+                "both captures must grow past plain adjacency: {o:?}"
+            );
+            assert!(
+                o.note.contains("merged capture"),
+                "the joint solve must be on the certificate record: {o:?}"
+            );
+        }
+
+        assert_eq!(
+            up_crossings(&exec.waveforms.node_voltages[vspk.0 as usize], 2.5),
+            mono_vspk,
+            "column 1 spike count must match the monolith"
+        );
+        assert_eq!(
+            up_crossings(&exec.waveforms.node_voltages[vspk2.0 as usize], 2.5),
+            mono_vspk2,
+            "column 2 spike count must match the monolith"
         );
     }
 
