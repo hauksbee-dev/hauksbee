@@ -575,9 +575,6 @@ pub fn execute_stiff_group_held_capped(
 
     let mut trains: HashMap<u32, Vec<f64>> = HashMap::new();
     let mut runs: HashMap<u32, CaptureRun> = HashMap::new();
-    // Per-candidate solve-mode memory: once a grown capture needs the adaptive
-    // rescue, later rounds go straight to it (see solve_capture).
-    let mut adaptive_mode: HashMap<u32, bool> = HashMap::new();
     // Round 0: rest-seeded. Solved in order with in-place updates, so later
     // candidates already see earlier candidates' round-0 trains instead of
     // bare rest values.
@@ -597,8 +594,7 @@ pub fn execute_stiff_group_held_capped(
         let t_solve = std::time::Instant::now();
         let wf = match solve_capture(
             sub, &frag, &cluster_blocks[&rep.0], &members, &conducts_cand, &companions, rep,
-            candidates, &rest, held, Some((&boundary, &grid)), None, cluster_grown,
-            adaptive_mode.entry(rep.0).or_insert(false), opts, tstop,
+            candidates, &rest, held, Some((&boundary, &grid)), None, cluster_grown, opts, tstop,
         ) {
             Ok(wf) => wf,
             Err(_) => {
@@ -623,7 +619,25 @@ pub fn execute_stiff_group_held_capped(
 
     let mut sag: HashMap<u32, f64> = HashMap::new();
     let mut converged = false;
+    // A SINGLE cluster covering every candidate has no replayed candidate
+    // boundaries at all: the only inputs to its solve are the held trains,
+    // which are fixed for the whole call. The relaxation map is therefore
+    // CONSTANT (no member's train feeds back into any solve), so round 0
+    // already sits at the fixed point EXACTLY, not approximately: a train
+    // round would re-solve the identical problem (the flagship measured the
+    // round-1 residual at exactly 0.0 for all 16 members, ~750s of pure
+    // repetition). Zero sag is the structural truth here, the same class of
+    // claim as balance's round-off: nothing was replayed, so nothing sags.
+    if clusters.len() == 1 {
+        converged = true;
+        for c in candidates {
+            sag.insert(c.0, 0.0);
+        }
+    }
     for _round in 0..max_rounds {
+        if converged {
+            break;
+        }
         converged = true;
         for cluster in &clusters {
             let rep = cluster[0];
@@ -634,7 +648,7 @@ pub fn execute_stiff_group_held_capped(
             let wf = match solve_capture(
                 sub, &frag, &cluster_blocks[&rep.0], &members, &conducts_cand, &companions, rep,
                 candidates, &rest, held, Some((&trains, &grid)), runs.get(&rep.0), cluster_grown,
-                adaptive_mode.entry(rep.0).or_insert(false), opts, tstop,
+                opts, tstop,
             ) {
                 Ok(wf) => wf,
                 Err(_) => {
@@ -1663,7 +1677,6 @@ fn solve_capture(
     trains: Option<BoundaryTrains<'_>>,
     seed: Option<&CaptureRun>,
     grown: bool,
-    prefer_adaptive: &mut bool,
     opts: &SolverOptions,
     tstop: f64,
 ) -> Result<CaptureRun, String> {
@@ -1812,31 +1825,36 @@ fn solve_capture(
         r
     };
 
-    // A grown capture that has ALREADY needed the adaptive march once keeps
-    // using it: its pins carry spiking trains whose edges the fixed grid will
-    // fail at every round, and each doomed fixed attempt (plus its ramp ladder)
-    // is minutes of pure waste on a flagship-scale capture. The flag lives with
-    // the caller, per candidate, per group execution.
-    if *prefer_adaptive {
+    let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
+
+    // GROWN captures march ADAPTIVELY FIRST, not as a rescue. A grown capture
+    // contains a self-resetting generator loop, and a fixed grid does not just
+    // risk failing on its reset events: it can "succeed" while MANUFACTURING
+    // spikes. Measured on the flagship's torn O2 column under identical
+    // imposed trains: fixed dt=1e-6 counts 15 spikes, fixed dt=5e-7 counts 1,
+    // the adaptive march counts 2. The fixed-grid count is grid chatter, not
+    // physics, so a fixed "success" on a generator loop cannot be trusted
+    // even when Newton accepts every step. Plain (ungrown) captures keep the
+    // fixed-first path bit-unchanged: no generator inside, no chatter, and
+    // their refusal semantics must not be touched (review invariant).
+    if grown {
         if let Some(wf) = adaptive_once() {
             return Ok((wf, g2l));
         }
-        return Err(format!(
-            "stiff capture at {} failed: adaptive re-march died",
-            sub.node_name(c)
-        ));
+        // Adaptive died: fall through to the fixed chain as the rescue,
+        // inverting the original order. (Note: a grown capture that only the
+        // fixed chain can carry keeps its chatter risk; the alternative is a
+        // refusal, and the certificate's sag measurement still gates it.)
     }
 
-    let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
     let t_fixed = std::time::Instant::now();
     match run_collect(&cap, &sub_opts) {
         Ok(wf) => Ok((wf, g2l)),
         // A DC-class death gets the fixed-step power-on ramp the staged fused
-        // path has (ORIGINAL behaviour, every capture). A GROWN capture that
-        // still refuses escalates to the single adaptive march. This scoping is
-        // deliberate: a plain-adjacency capture that dies is a legitimate refusal
-        // signal (a cut through an active loop, say) that must NOT be papered
-        // over, and the adaptive rescue must not resurrect it.
+        // path has (ORIGINAL behaviour, every capture). A plain-adjacency
+        // capture that dies past the ladder is a legitimate refusal signal (a
+        // cut through an active loop, say) that must NOT be papered over: the
+        // adaptive march never runs for it.
         Err(e) if e.contains("DC") || e.contains("dc") || e.contains("homotopy") => {
             if dbg {
                 eprintln!(
@@ -1863,16 +1881,8 @@ fn solve_capture(
                     t_ladder.elapsed().as_secs_f64()
                 );
             }
-            if grown {
-                if let Some(wf) = adaptive_once() {
-                    *prefer_adaptive = true;
-                    return Ok((wf, g2l));
-                }
-            }
             Err(format!("stiff capture at {} failed: {e}", sub.node_name(c)))
         }
-        // A non-DC transient death (Newton at dt_min on a reset event) is retried
-        // ONLY for a grown capture, on the adaptive march that resolves the event.
         Err(e) => {
             if dbg {
                 eprintln!(
@@ -1880,12 +1890,6 @@ fn solve_capture(
                     sub.node_name(c),
                     t_fixed.elapsed().as_secs_f64()
                 );
-            }
-            if grown {
-                if let Some(wf) = adaptive_once() {
-                    *prefer_adaptive = true;
-                    return Ok((wf, g2l));
-                }
             }
             Err(format!("stiff capture at {} failed: {e}", sub.node_name(c)))
         }
