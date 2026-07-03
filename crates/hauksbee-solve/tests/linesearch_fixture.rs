@@ -161,7 +161,13 @@ fn march() -> Waveforms {
         step: StepControl::Adaptive {
             dt_initial: 1e-6,
             dt_min: 1e-12,
-            dt_max: 2e-6,
+            // Overridable for grid-refinement studies (the burst-count
+            // convergence note at the assertion below); the default matches
+            // the capture recipe's dt_max = 2*dt at this sampling scale.
+            dt_max: std::env::var("HAUKSBEE_FIXTURE_DT_MAX")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2e-6),
         },
         dc_init: DcInit::FromZero,
         ..Default::default()
@@ -195,10 +201,18 @@ fn armed_march_is_deterministic_and_spikes() {
     }
     let spk = wf.node(&c, "spk").expect("spk waveform");
     let spikes = spk.windows(2).filter(|w| w[0] <= 2.5 && w[1] > 2.5).count();
+    // Burst-count band, NOT an exact count: this is a self-resetting loop, so
+    // its coarse-grid spike count is integrator-sensitive (the grid study's
+    // lesson). Measured refinement study (HAUKSBEE_FIXTURE_DT_MAX): the count
+    // CONVERGES to 12 at dt_max 1e-7 under both the raw-second-difference LTE
+    // and the divided-difference LTE; at the default coarse dt_max the two
+    // estimators counted 13 and 15. The band accepts that whole small-burst
+    // class and still catches the real failure modes (a dead oscillator, the
+    // BBM servo latch-up, or chatter manufacturing tens of spikes).
     assert!(
-        spikes >= 2,
-        "the oscillator must fire repeatedly for the fixture to exercise the \
-         flip machinery; counted {spikes} rising edges"
+        (8..=18).contains(&spikes),
+        "spike count {spikes} left the fixture's converged small-burst band \
+         (refinement study: converges to 12, coarse grids count 12-15)"
     );
     assert!(
         wf.time.len() > 200,

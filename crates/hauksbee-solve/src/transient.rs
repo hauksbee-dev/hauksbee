@@ -249,6 +249,11 @@ impl Transient {
         let mut x_accepted = ws.x.clone();
         let mut steps_taken: u64 = 0;
         let max_steps: u64 = 50_000_000; // safety valve
+        // Spacing of the reactive history's two back samples (x1..x2), i.e.
+        // the previous ACCEPTED step: the LTE divided difference needs it to
+        // tell real curvature from a step-size change on a slope. 0.0 = no
+        // accepted step yet.
+        let mut h_prev_accepted: f64 = 0.0;
 
         // Source breakpoints (PWL vertices, PULSE corners): mandatory step
         // landings for the ADAPTIVE controller. The fixed-step path is left
@@ -449,7 +454,7 @@ impl Transient {
                 StepControl::Fixed { .. } => accept = true,
                 StepControl::Adaptive { .. } => {
                     let t_lte = census.as_ref().map(|_| std::time::Instant::now());
-                    let err = lte_estimate(circuit, &ws, &state, h, opts);
+                    let err = lte_estimate(circuit, &ws, &state, h, h_prev_accepted, opts);
                     if let (Some(c), Some(t0)) = (census.as_mut(), t_lte) {
                         c.ns_lte_estimate += t0.elapsed().as_nanos() as u64;
                     }
@@ -497,6 +502,7 @@ impl Transient {
             advance_reactive_state(&mut state, circuit, &ws, &x_accepted, h, opts, first_step);
             x_accepted.copy_from_slice(&ws.x);
             first_step = false;
+            h_prev_accepted = h;
             dt = next_dt;
             sink(StepSample { time: t, x: &ws.x });
         }
@@ -586,14 +592,34 @@ fn node_v(ws: &Workspace, node: NodeId) -> f64 {
 
 // --- LTE estimate -----------------------------------------------------------
 
-/// Dimensionless local-truncation-error norm (>1 means reject). Uses the
-/// divided-difference of reactive-element states, the classic SPICE estimator:
-/// `lte ~ C2 * h^2 * d3x/dt3`, normalized by `reltol*|x| + atol`.
+/// Dimensionless local-truncation-error norm (>1 means reject): a TRUE
+/// divided-difference curvature estimate over the three newest samples,
+/// normalized by `reltol*|x| + atol`.
+///
+/// Why divided differences and not the raw second difference: the samples are
+/// an adaptive (NON-uniform) grid, and the raw `x_new - 2*x1 + x2` is nonzero
+/// for a perfectly LINEAR trajectory whenever the step size changes (it equals
+/// `slope * (h - h_prev)`), so every step-size change on a charging slope
+/// manufactured fake curvature. Measured on the flagship joint capture march
+/// (the step census): 44% of ALL trial solves were LTE-rejected, and a gentler
+/// post-reject growth cap did not move that fraction AT ALL (44.1% before and
+/// after), which is the fingerprint of a rejection signal that does not
+/// depend on how the step got proposed. The divided-difference second
+/// derivative `dd2` is exact-zero on linear trajectories, reduces to the SAME
+/// `x_new - 2*x1 + x2` on a uniform grid (h == h_prev), and `h^2 * dd2` is
+/// the classic uniform-grid curvature the 1/12 trapezoidal coefficient was
+/// calibrated against.
+///
+/// `h_prev` is the previous ACCEPTED step (the spacing of x1..x2 in the
+/// reactive history); 0.0 means "no history yet" (first trial), which falls
+/// back to `h` and reproduces the old first-step behaviour exactly (the
+/// seeded history has x2 == x1, so the h_prev term vanishes).
 fn lte_estimate(
     circuit: &Circuit,
     ws: &Workspace,
     state: &ReactiveState,
     h: f64,
+    h_prev: f64,
     opts: &SolverOptions,
 ) -> f64 {
     let mut worst = 0.0f64;
@@ -609,12 +635,17 @@ fn lte_estimate(
             }
             _ => continue,
         };
-        // Second difference as a curvature proxy: |x_new - 2 x1 + x2|.
-        let curv = (x_new - 2.0 * state.x1[i] + state.x2[i]).abs();
+        // Non-uniform second derivative from the three newest samples, scaled
+        // by h^2 into the uniform-grid curvature the 1/12 coefficient expects.
+        // On h == h_prev this equals x_new - 2*x1 + x2 (up to rounding); on a
+        // linear trajectory it is zero regardless of the step-size history.
+        let hp = if h_prev > 0.0 { h_prev } else { h };
+        let dd2 =
+            2.0 * ((x_new - state.x1[i]) / h - (state.x1[i] - state.x2[i]) / hp) / (h + hp);
+        let curv = (h * h * dd2).abs();
         let tol = opts.reltol * x_new.abs().max(state.x1[i].abs()) + atol;
         // Trapezoidal error coefficient ~ 1/12; scale into a [0,1]-ish norm.
         let err = (curv / 12.0) / tol.max(1e-30);
-        let _ = h;
         worst = worst.max(err);
     }
     worst
