@@ -554,9 +554,14 @@ fn solve_group(
             ramp_opts.dc_init = DcInit::FromZero;
             match Transient::new(ramp_opts).run(&ramped_sub, tstop) {
                 Ok(wf) => Ok((wf, false, true)),
-                // The power-ramp did not carry it either: keep the ORIGINAL DC
-                // error (the honest description of why the group failed).
-                Err(_) => Err(e),
+                // Both failures matter: the DC error says why the normal
+                // start was impossible, and the retry's own error says where
+                // the power-on march died (hiding it cost a 25-minute
+                // flagship run whose only message was the already-known DC
+                // failure).
+                Err(e2) => Err(format!(
+                    "{e}; power-ramp retry (window {ramp_window:.3e}s) also failed: {e2}"
+                )),
             }
         }
         Err(e) => Err(e),
