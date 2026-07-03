@@ -461,6 +461,10 @@ pub fn newton_solve(
             let mut alpha = 1.0;
             let mut best_alpha = 1.0;
             let mut best_norm = f64::INFINITY;
+            // Census readout: whether this iteration's search ended by Armijo
+            // sufficient decrease (vs hitting the floor and falling back to
+            // the best trial). Written below, read only when the census is on.
+            let mut armijo_ok = false;
             loop {
                 // Trial point x = lin_point + alpha*dx, evaluated into ws.x scratch.
                 for i in 0..ws.x.len() {
@@ -482,6 +486,7 @@ pub fn newton_solve(
                 let accept = trial_norm.is_finite()
                     && (f_norm_lin <= 0.0 || trial_norm < (1.0 - ARMIJO_C * alpha) * f_norm_lin);
                 if accept || alpha <= ARMIJO_ALPHA_FLOOR + 1e-15 {
+                    armijo_ok = accept;
                     break;
                 }
                 alpha *= 0.5;
@@ -497,6 +502,9 @@ pub fn newton_solve(
             for i in 0..ws.x.len() {
                 ws.x[i] = lin_point[i] + use_alpha * dx[i];
             }
+            // Census: the alpha this iteration actually stepped with, and how
+            // the search ended (the lever-1c lazy-arming decision data).
+            crate::census::ls_alpha(use_alpha, armijo_ok);
             if dbg_newton {
                 eprintln!(
                     "[newton-ls] iter {iters} alpha={use_alpha:.4} ||F||: {f_norm_lin:.3e} -> {best_norm:.3e}"

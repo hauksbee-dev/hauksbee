@@ -45,6 +45,42 @@ thread_local! {
     static BACKSOLVE_NS: Cell<u64> = const { Cell::new(0) };
     static LS_NS: Cell<u64> = const { Cell::new(0) };
     static LS_CALLS: Cell<u64> = const { Cell::new(0) };
+    /// Accepted line-search alpha per iteration, bucketed by halving: index k
+    /// counts alpha = 2^-k (k = 0..=6, the Armijo ladder down to the 1/64
+    /// floor); index 7 is a guard for anything off the ladder. The lever-1c
+    /// decision (lazy arming) needs exactly this: how many iterations accept
+    /// the full step immediately vs genuinely backtrack.
+    static LS_ALPHA: Cell<[u64; 8]> = const { Cell::new([0; 8]) };
+    /// Iterations whose line search ended by Armijo sufficient decrease.
+    static LS_ARMIJO_OK: Cell<u64> = const { Cell::new(0) };
+    /// Iterations that hit the alpha floor and fell back to the best trial
+    /// seen (no alpha satisfied the Armijo test).
+    static LS_FALLBACK: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Record the alpha one line-search iteration ended on. Pure readout, called
+/// from `newton_solve` only when the census is live.
+pub(crate) fn ls_alpha(alpha: f64, armijo_ok: bool) {
+    if !enabled() {
+        return;
+    }
+    // The ladder is exact powers of two, so -log2(alpha) is integral there.
+    let k = -alpha.log2();
+    let idx = if (k - k.round()).abs() < 1e-9 && (0.0..=6.0).contains(&k) {
+        k.round() as usize
+    } else {
+        7
+    };
+    LS_ALPHA.with(|c| {
+        let mut a = c.get();
+        a[idx] += 1;
+        c.set(a);
+    });
+    if armijo_ok {
+        LS_ARMIJO_OK.with(|c| c.set(c.get() + 1));
+    } else {
+        LS_FALLBACK.with(|c| c.set(c.get() + 1));
+    }
 }
 
 /// Run one linear-algebra phase, accumulating its wall time when the census is
@@ -74,10 +110,11 @@ pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
 }
 
 /// Drain the thread-local phase accumulators: (stamp_ns, factor_ns,
-/// factor_calls, backsolve_ns, ls_ns, ls_calls). Marches run their Newton
-/// solves on their own thread, so draining at march start and end brackets
-/// exactly one march.
-fn take_phases() -> (u64, u64, u64, u64, u64, u64) {
+/// factor_calls, backsolve_ns, ls_ns, ls_calls, ls_alpha, ls_armijo_ok,
+/// ls_fallback). Marches run their Newton solves on their own thread, so
+/// draining at march start and end brackets exactly one march.
+#[allow(clippy::type_complexity)]
+fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64) {
     (
         STAMP_NS.with(|c| c.replace(0)),
         FACTOR_NS.with(|c| c.replace(0)),
@@ -85,6 +122,9 @@ fn take_phases() -> (u64, u64, u64, u64, u64, u64) {
         BACKSOLVE_NS.with(|c| c.replace(0)),
         LS_NS.with(|c| c.replace(0)),
         LS_CALLS.with(|c| c.replace(0)),
+        LS_ALPHA.with(|c| c.replace([0; 8])),
+        LS_ARMIJO_OK.with(|c| c.replace(0)),
+        LS_FALLBACK.with(|c| c.replace(0)),
     )
 }
 
@@ -224,7 +264,17 @@ impl StepCensus {
 impl Drop for StepCensus {
     fn drop(&mut self) {
         let wall = self.started.elapsed().as_secs_f64();
-        let (stamp_ns, factor_ns, factor_calls, backsolve_ns, ls_ns, ls_calls) = take_phases();
+        let (
+            stamp_ns,
+            factor_ns,
+            factor_calls,
+            backsolve_ns,
+            ls_ns,
+            ls_calls,
+            ls_alpha,
+            ls_armijo_ok,
+            ls_fallback,
+        ) = take_phases();
         let s = |ns: u64| ns as f64 / 1e9;
         let attempts =
             self.accepted + self.lte_rejected + self.newton_fail_cuts + self.event_bisections;
@@ -294,6 +344,18 @@ impl Drop for StepCensus {
                 ls_calls,
                 s(ls_ns),
                 ls_ns as f64 / 1e6 / ls_calls as f64,
+            );
+            let ladder = ["1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "other"];
+            let alpha_hist: Vec<String> = ladder
+                .iter()
+                .zip(ls_alpha.iter())
+                .map(|(l, c)| format!("{l}:{c}"))
+                .collect();
+            eprintln!(
+                "[step-census]   line-search accepted alpha [{}] armijo_ok={} best_fallback={}",
+                alpha_hist.join(" "),
+                ls_armijo_ok,
+                ls_fallback,
             );
         }
         if !self.crossings.is_empty() {
