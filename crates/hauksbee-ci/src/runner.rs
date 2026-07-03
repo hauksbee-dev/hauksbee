@@ -95,8 +95,21 @@ pub struct RunOutcome {
     pub sim_ms: f64,
     /// Boot-coverage tracking: first time (ms) each watched (net, level-bits)
     /// pair was seen at or above its level, i.e. when the firmware first drove
-    /// the control net to its defined level. Absent = never driven.
+    /// the control net to its defined level. Absent = the net never reached the
+    /// level (see `driven_nets` / `drive_direction_observable` to tell a driven-
+    /// but-below-threshold net from a genuinely undriven one).
     pub first_reach_ms: HashMap<(String, u64), f64>,
+    /// Nets the firmware drove to a *defined* level (HIGH or LOW) during the run,
+    /// from the scheduler's `firmware_driven_nets`. Lets a below-threshold
+    /// boot-coverage result say "driven but never exceeded X V" instead of
+    /// falsely claiming the pin was left Hi-Z / undefined.
+    pub driven_nets: std::collections::HashSet<String>,
+    /// Whether this run's backend can report pin drive *direction*. True for the
+    /// in-process AVR backend (reads DDR, so a held-LOW pin is known driven);
+    /// false for the external Renode/QEMU backends (drive state comes only from
+    /// observed edges, so absence from `driven_nets` is ambiguous, not proof of
+    /// Hi-Z). Keeps the "undriven" diagnosis from over-claiming on those backends.
+    pub drive_direction_observable: bool,
     /// Time (ms) of the first stress fault this run, if any.
     pub first_fault_ms: Option<f64>,
     /// Small-signal AC results (seed-independent; the same for every seed). The
@@ -750,6 +763,14 @@ fn run_one(
     // Snapshot peripheral state for assertions, and dump any VCD sinks.
     let peripherals = snapshot_peripherals(spec, &engine, &vcd_targets);
 
+    // Drive-state metadata for the boot-coverage diagnosis: which nets the firmware
+    // actually drove to a defined level, and whether this backend can even report
+    // drive direction (only the in-process AVR backend can; the external
+    // Renode/QEMU backends see drive state only through observed edges).
+    let driven_nets: std::collections::HashSet<String> =
+        engine.scheduler().firmware_driven_nets().into_iter().collect();
+    let drive_direction_observable = !engine.scheduler().has_external_backend();
+
     Ok(RunOutcome {
         seed,
         windows,
@@ -763,6 +784,8 @@ fn run_one(
         protection_tripped,
         sim_ms: engine.scheduler().sim_time * 1000.0,
         first_reach_ms,
+        driven_nets,
+        drive_direction_observable,
         first_fault_ms,
         ac: None,
         analog_valid,

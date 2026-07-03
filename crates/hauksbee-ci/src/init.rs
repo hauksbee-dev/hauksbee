@@ -96,10 +96,25 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
 
     // Detected MCU (first, if any). The binder's backend string is
     // "<backend>:<kind>"; the spec's `mcu` hint wants just the kind.
-    let mcu_kind = bound
-        .mcus
-        .first()
-        .map(|m| m.backend.rsplit(':').next().unwrap_or(&m.backend).to_string());
+    let mcu_backend = bound.mcus.first().map(|m| m.backend.clone());
+    let mcu_kind = mcu_backend
+        .as_deref()
+        .map(|b| b.rsplit(':').next().unwrap_or(b).to_string());
+
+    // Can the detected MCU's backend actually satisfy a boot-coverage assertion?
+    // The external emulator backends (`renode:` for STM32/nRF/RISC-V, `qemu:` for
+    // the ESP32 family) co-sim GPIO and UART but leave ADC injection and I2C/SPI
+    // peripheral-slave interception as no-ops (docs/MCU.md), and they cannot
+    // report pin drive *direction*, so they cannot tell a held-LOW control net
+    // from an undriven one. On such a backend a scaffolded boot-coverage assertion
+    // can go RED with a misleading diagnosis on a net the firmware actually drives
+    // (LOW, or via an unmodelled peripheral bus). The in-process AVR backend
+    // models the full stack. So scaffold the assertion live only when the backend
+    // can honour it; otherwise emit it commented-out with an honest note naming
+    // the gap, so the user opts in deliberately instead of hitting a false RED.
+    let boot_coverage_supported = mcu_backend
+        .as_deref()
+        .map_or(true, |b| !(b.starts_with("renode:") || b.starts_with("qemu:")));
 
     let stem = board_stem(board);
     let board_file = board
@@ -168,24 +183,36 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s, "# boot-coverage: a control net (a gate / enable / reset / chip-select) the");
     let _ = writeln!(s, "# firmware must actively drive to a defined level within a deadline of reset,");
     let _ = writeln!(s, "# with no stress fault during the boot window before it does.");
-    let _ = writeln!(s, "[[assert]]");
-    let _ = writeln!(s, "kind = \"boot-coverage\"");
+    // Comment prefix: empty when the backend can satisfy it, "# " otherwise.
+    let cc = if boot_coverage_supported { "" } else { "# " };
+    if !boot_coverage_supported {
+        let backend = mcu_backend.as_deref().unwrap_or("");
+        let _ = writeln!(s, "# NOTE: left commented-out for this board. Its MCU runs on the `{backend}`");
+        let _ = writeln!(s, "#   backend, which co-sims GPIO and UART but models ADC and I2C/SPI");
+        let _ = writeln!(s, "#   peripheral-slave coupling as no-ops (docs/MCU.md), and cannot report pin");
+        let _ = writeln!(s, "#   drive direction, so it cannot distinguish a held-LOW pin from an undriven");
+        let _ = writeln!(s, "#   one. Uncomment only if your control net is driven by plain GPIO to a");
+        let _ = writeln!(s, "#   defined HIGH level; a net driven LOW or via a peripheral bus would report");
+        let _ = writeln!(s, "#   a misleading result on this backend. AVR boards model the full stack.");
+    }
+    let _ = writeln!(s, "{cc}[[assert]]");
+    let _ = writeln!(s, "{cc}kind = \"boot-coverage\"");
     match &boot_net {
         Some(net) => {
             let _ = writeln!(
                 s,
-                "net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"
+                "{cc}net = \"{net}\"                  # control net to watch (edit to your gate/enable/reset/CS)"
             );
         }
         None => {
             let _ = writeln!(
                 s,
-                "net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net"
+                "{cc}net = \"CONTROL_NET\"            # no signal net detected; set this to a real control net"
             );
         }
     }
-    let _ = writeln!(s, "min = {}                    # driven level (V) the firmware must reach", fmt1(boot_level));
-    let _ = writeln!(s, "deadline_ms = 100.0             # by this long after reset");
+    let _ = writeln!(s, "{cc}min = {}                    # driven level (V) the firmware must reach", fmt1(boot_level));
+    let _ = writeln!(s, "{cc}deadline_ms = 100.0             # by this long after reset");
     let _ = writeln!(s);
 
     // Commented voltage assertions on the rails.

@@ -81,13 +81,13 @@ report optional kicad-cli \
 report optional simavr \
   "(also built in) external AVR backend cross-check for ATmega/ATtiny firmware co-sim"
 report optional qemu-system-xtensa \
-  "ESP32 (Xtensa) firmware co-sim, e.g. the Watchy boot-coverage examples" \
+  "ESP32 / ESP32-S3 (Xtensa) firmware co-sim, e.g. the Watchy boot-coverage examples" \
   "set HAUKSBEE_QEMU_XTENSA=/path/to/qemu-system-xtensa if not on PATH"
-report optional qemu-system-arm \
-  "ARM Cortex-M (STM32 etc.) firmware co-sim backend" \
-  "set HAUKSBEE_QEMU_ARM if not on PATH"
+report optional qemu-system-riscv32 \
+  "ESP32-C3 (RISC-V) firmware co-sim backend" \
+  "set HAUKSBEE_QEMU_RISCV32 if not on PATH"
 report optional renode \
-  "Renode backend for multi-node / richer peripheral firmware co-sim" \
+  "STM32 / nRF52 / SiFive RISC-V (ARM Cortex-M and RISC-V) firmware co-sim backend" \
   "set HAUKSBEE_RENODE if not on PATH"
 report optional freerouting \
   "production autorouting of recompiled boards over Specctra DSN (board-as-code routing)"

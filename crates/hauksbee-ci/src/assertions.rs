@@ -247,8 +247,12 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     match reached {
         None => (
             false,
-            format!(
-                "control net '{net}' was NEVER driven to >= {level} V (firmware left it Hi-Z / undefined through the whole run)"
+            boot_below_threshold_msg(
+                &net,
+                level,
+                out.driven_nets.contains(&net),
+                out.drive_direction_observable,
+                boot_observed_range(&net, out),
             ),
         ),
         Some(t_ms) if t_ms > deadline + 1e-9 => (
@@ -277,6 +281,50 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             )
         }
     }
+}
+
+/// Diagnosis for a boot-coverage net that never reached its required level.
+///
+/// The engine tracks pin *drive state* separately from *voltage*, so this must
+/// not blame "Hi-Z / undefined" on a pin the firmware actively drove. Three
+/// honest cases, keyed off what the run actually knows:
+///   - the net is in `driven_nets` (the firmware drove it to a defined level):
+///     it was driven, the voltage just never crossed the threshold;
+///   - it is not driven and the backend can report drive direction (the AVR
+///     backend reads DDR, so a held-LOW pin is known driven): a net absent here
+///     is genuinely undriven / Hi-Z;
+///   - it is not driven and the backend cannot report drive direction (the
+///     external Renode/QEMU backends see drive state only through observed
+///     edges): absence is ambiguous, so we say only what is known rather than
+///     asserting Hi-Z on what might be a held-LOW pin.
+fn boot_below_threshold_msg(
+    net: &str,
+    level: f64,
+    driven: bool,
+    drive_direction_observable: bool,
+    observed: Option<(f64, f64)>,
+) -> String {
+    let range = observed
+        .map(|(lo, hi)| format!("; observed range [{lo:.3}, {hi:.3}] V"))
+        .unwrap_or_default();
+    if driven {
+        format!("control net '{net}' was driven but never exceeded {level} V{range}")
+    } else if drive_direction_observable {
+        format!(
+            "control net '{net}' was never driven to >= {level} V (firmware left it Hi-Z / undefined through the whole run){range}"
+        )
+    } else {
+        format!(
+            "control net '{net}' never reached {level} V{range}; the backend cannot report pin drive direction, so the pin may be undriven (Hi-Z / undefined) or driven LOW"
+        )
+    }
+}
+
+/// Full-run observed voltage range for `net`, read from the always-present
+/// threshold-0 window the runner keeps. `None` if the net was never sampled.
+fn boot_observed_range(net: &str, out: &RunOutcome) -> Option<(f64, f64)> {
+    let w = out.windows.get(&(net.to_string(), 0.0_f64.to_bits()))?;
+    (w.samples > 0).then_some((w.min_v, w.max_v))
 }
 
 /// Parse a hex byte string like "48 69" / "4869" / "0x48,0x69" into bytes.
@@ -676,5 +724,41 @@ fn truncate(s: &str, max: usize) -> String {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::boot_below_threshold_msg;
+
+    // A boot-coverage net that the firmware actively drove but that never crossed
+    // the threshold must NOT be reported as Hi-Z / undefined: it was driven.
+    #[test]
+    fn driven_but_below_threshold_says_driven_not_hi_z() {
+        let m = boot_below_threshold_msg("FLAG", 2.3, true, true, Some((0.0, 0.4)));
+        assert!(m.contains("was driven but never exceeded 2.3 V"), "got: {m}");
+        assert!(m.contains("observed range [0.000, 0.400] V"), "got: {m}");
+        assert!(!m.contains("Hi-Z"), "a driven pin is not Hi-Z, got: {m}");
+    }
+
+    // A genuinely undriven net on a backend that can report drive direction (AVR)
+    // keeps the honest Hi-Z / undefined wording.
+    #[test]
+    fn undriven_on_observable_backend_says_hi_z() {
+        let m = boot_below_threshold_msg("FLAG", 2.3, false, true, Some((0.0, 0.0)));
+        assert!(m.contains("Hi-Z / undefined"), "got: {m}");
+        assert!(m.contains("never driven"), "got: {m}");
+    }
+
+    // On a backend that cannot report drive direction (Renode/QEMU), absence of a
+    // drive record is ambiguous, so the message must not assert Hi-Z: it names
+    // both possibilities instead.
+    #[test]
+    fn unknown_drive_direction_does_not_assert_hi_z() {
+        let m = boot_below_threshold_msg("FLAG", 2.3, false, false, Some((0.0, 0.4)));
+        assert!(m.contains("cannot report pin drive direction"), "got: {m}");
+        assert!(m.contains("undriven"), "got: {m}");
+        assert!(m.contains("driven LOW"), "got: {m}");
+        assert!(!m.contains("firmware left it Hi-Z"), "must not assert Hi-Z, got: {m}");
     }
 }
