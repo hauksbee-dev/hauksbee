@@ -32,6 +32,7 @@
 //! ```
 
 mod ac;
+mod census;
 mod cmatrix;
 pub mod decompose;
 mod linear;
