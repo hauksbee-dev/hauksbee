@@ -1429,9 +1429,9 @@ pub fn newton_solve_event(
     // linearly in its tail (the damping that breaks the diode chatter slows the
     // final approach), as in the DC event loop.
     let mut inner_opts = *opts;
-    inner_opts.max_newton = std::env::var("HAUKSBEE_TRAN_INNER_MAXIT")
-        .ok()
-        .and_then(|s| s.parse().ok())
+    inner_opts.max_newton = opts
+        .event_retry
+        .inner_max_newton
         .unwrap_or_else(|| opts.max_newton.max(400));
     let inner = &inner_opts;
 
@@ -1440,12 +1440,9 @@ pub fn newton_solve_event(
     // state from thrashing, but too small a budget splits a single fired
     // neuron's ganged spike-gates (one V_out drives ~10 output gates) across
     // passes, leaving an inconsistent intermediate the inner solve fights. The
-    // budget is read from the env (HAUKSBEE_TRAN_FLIP_BUDGET) for tuning;
-    // default high enough to flip a neuron's whole gate fan-out in one pass.
-    let max_flips_per_pass: usize = std::env::var("HAUKSBEE_TRAN_FLIP_BUDGET")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(64);
+    // budget is typed tuning (event_retry.flip_budget); the default is high
+    // enough to flip a neuron's whole gate fan-out in one pass.
+    let max_flips_per_pass: usize = opts.event_retry.flip_budget;
     // Comparator handling in the inner solve. By default the comparators are
     // FROZEN per inner solve (like the DC event loop), which converges the hidden
     // spike-gate flip. But the OUTPUT neuron has an adaptation feedback (C_adapt
