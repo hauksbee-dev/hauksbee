@@ -145,29 +145,90 @@ impl StampCtx<'_> {
 
 /// Stamp a conductance `g` between two nodes into the matrix.
 #[inline]
-fn stamp_cond(m: &mut SparseMatrix, layout: &Layout, a: NodeId, b: NodeId, g: f64) {
+fn stamp_cond<S: StampSink>(sink: &mut S, layout: &Layout, a: NodeId, b: NodeId, g: f64) {
     let ai = layout.node(a);
     let bi = layout.node(b);
     if let Some(ai) = ai {
-        m.add(ai, ai, g);
+        sink.g(ai, ai, g);
     }
     if let Some(bi) = bi {
-        m.add(bi, bi, g);
+        sink.g(bi, bi, g);
     }
     if let (Some(ai), Some(bi)) = (ai, bi) {
-        m.add(ai, bi, -g);
-        m.add(bi, ai, -g);
+        sink.g(ai, bi, -g);
+        sink.g(bi, ai, -g);
     }
 }
 
 /// Stamp an equivalent current source pushing `i` from `a` to `b`.
 #[inline]
-fn stamp_current(rhs: &mut [f64], layout: &Layout, a: NodeId, b: NodeId, i: f64) {
+fn stamp_current<S: StampSink>(sink: &mut S, layout: &Layout, a: NodeId, b: NodeId, i: f64) {
     if let Some(ai) = layout.node(a) {
-        rhs[ai] -= i;
+        sink.i(ai, -i);
     }
     if let Some(bi) = layout.node(b) {
-        rhs[bi] += i;
+        sink.i(bi, i);
+    }
+}
+
+
+/// Where device stamps write. Two implementations: the real `(matrix, rhs)`
+/// assembly, and the matrix-free residual accumulator (assembly-economy
+/// sub-lever A). Generic and monomorphized, so the default assembly path
+/// compiles to exactly the writes it always did (its bit-exactness contract
+/// is pinned by the fixture waveform hash and the solve suites).
+pub(crate) trait StampSink {
+    /// Accumulate `g[row][col] += v`.
+    fn g(&mut self, row: usize, col: usize, v: f64);
+    /// Accumulate `rhs[row] += v`.
+    fn i(&mut self, row: usize, v: f64);
+}
+
+/// The classic assembly: writes into the sparse matrix and the rhs vector.
+struct MatrixSink<'a> {
+    g: &'a mut SparseMatrix,
+    rhs: &'a mut [f64],
+}
+
+impl StampSink for MatrixSink<'_> {
+    #[inline]
+    fn g(&mut self, row: usize, col: usize, v: f64) {
+        self.g.add(row, col, v);
+    }
+    #[inline]
+    fn i(&mut self, row: usize, v: f64) {
+        self.rhs[row] += v;
+    }
+}
+
+/// Matrix-free residual accumulation: `F = g*x - rhs` over the NODE block,
+/// folded directly as each device stamps (`F[r] += v * x[c]` for a matrix
+/// write, `F[r] -= v` for an rhs write; rows outside the node block are
+/// dropped, they are not part of the residual norm). This skips the
+/// clear/slot-search/store cost of a real assembly AND the separate row-product
+/// pass, which is what makes the line-search residual eval cheap. The per-row
+/// SUM ORDER differs from the assembled row product (device-stamp order,
+/// interleaved with rhs terms, instead of slot order then rhs), so the norm can
+/// differ from the assembled one by rounding: the switch of the residual eval
+/// onto this sink is a PHYSICS-GATED change, not a bit-identical one.
+struct ResidualSink<'a> {
+    f: &'a mut [f64],
+    x: &'a [f64],
+    n_nodes: usize,
+}
+
+impl StampSink for ResidualSink<'_> {
+    #[inline]
+    fn g(&mut self, row: usize, col: usize, v: f64) {
+        if row < self.n_nodes {
+            self.f[row] += v * self.x[col];
+        }
+    }
+    #[inline]
+    fn i(&mut self, row: usize, v: f64) {
+        if row < self.n_nodes {
+            self.f[row] -= v;
+        }
     }
 }
 
@@ -213,7 +274,6 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
     }
 }
 
-/// Stamp every device for the current iterate into `(g, rhs)`.
 /// Device-model env knobs, read ONCE per assembly instead of once per device.
 /// WHY: `stamp_all` runs once per Newton iteration AND once per line-search
 /// residual eval (~120k assemblies on the flagship's joint capture march), and
@@ -252,13 +312,31 @@ impl EnvKnobs {
     }
 }
 
+/// Stamp every device for the current iterate into `(g, rhs)`.
 pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
+    let mut sink = MatrixSink { g, rhs };
+    stamp_into(ctx, &mut sink);
+}
+
+/// Accumulate the nonlinear residual `F = g*x - rhs` over the NODE block at
+/// the iterate `ctx.x`, without assembling the matrix (see [`ResidualSink`]
+/// for what that changes). `f[0..n_nodes]` must be zeroed by the caller.
+pub(crate) fn stamp_residual(ctx: &StampCtx, f: &mut [f64]) {
+    let mut sink = ResidualSink {
+        f,
+        x: ctx.x,
+        n_nodes: ctx.layout.n_nodes,
+    };
+    stamp_into(ctx, &mut sink);
+}
+
+fn stamp_into<S: StampSink>(ctx: &StampCtx, sink: &mut S) {
     // gmin / homotopy conductance to ground.
     if ctx.gmin > 0.0 {
         for i in 0..ctx.layout.size {
             // Branch rows shouldn't get a shunt; only node rows (< n_nodes).
             if i < ctx.layout.n_nodes {
-                g.add(i, i, ctx.gmin);
+                sink.g(i, i, ctx.gmin);
             }
         }
     }
@@ -267,22 +345,21 @@ pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
     // nonzero pivot there even when a conducting diode reshapes the elimination.
     if ctx.branch_reg > 0.0 {
         for i in ctx.layout.n_nodes..ctx.layout.size {
-            g.add(i, i, -ctx.branch_reg);
+            sink.g(i, i, -ctx.branch_reg);
         }
     }
     let knobs = EnvKnobs::read();
     for (id, dev) in ctx.circuit.iter() {
-        stamp_device(ctx, &knobs, id, dev, g, rhs);
+        stamp_device(ctx, &knobs, id, dev, sink);
     }
 }
 
-fn stamp_device(
+fn stamp_device<S: StampSink>(
     ctx: &StampCtx,
     knobs: &EnvKnobs,
     id: DeviceId,
     dev: &Device,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     match dev {
         Device::Resistor {
@@ -290,27 +367,27 @@ fn stamp_device(
         } => {
             let r = resistor_value(*ohms, *tc1, ctx);
             if r > 0.0 {
-                stamp_cond(g, ctx.layout, *a, *b, 1.0 / r);
+                stamp_cond(sink, ctx.layout, *a, *b, 1.0 / r);
             }
         }
         Device::Capacitor {
             a, b, farads, ic, ..
-        } => stamp_capacitor(ctx, id, *a, *b, *farads, *ic, g, rhs),
+        } => stamp_capacitor(ctx, id, *a, *b, *farads, *ic, sink),
         Device::Inductor {
             a, b, henries, ic, ..
-        } => stamp_inductor(ctx, id, *a, *b, *henries, *ic, g, rhs),
-        Device::Vsource { p, n, kind, .. } => stamp_vsource(ctx, id, *p, *n, kind, g, rhs),
+        } => stamp_inductor(ctx, id, *a, *b, *henries, *ic, sink),
+        Device::Vsource { p, n, kind, .. } => stamp_vsource(ctx, id, *p, *n, kind, sink),
         Device::Isource { p, n, kind, .. } => {
             let val = source_value(ctx, kind);
-            stamp_current(rhs, ctx.layout, *p, *n, val * ctx.src_scale);
+            stamp_current(sink, ctx.layout, *p, *n, val * ctx.src_scale);
         }
-        Device::Diode { a, k, model, .. } => stamp_diode(ctx, *a, *k, model, g, rhs),
-        Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, *c, *b, *e, model, g, rhs),
+        Device::Diode { a, k, model, .. } => stamp_diode(ctx, *a, *k, model, sink),
+        Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, *c, *b, *e, model, sink),
         Device::Mosfet { d, g: gate, s, model, .. } => {
-            stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs)
+            stamp_mosfet(ctx, *d, *gate, *s, model, sink)
         }
         Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => stamp_vswitch(
-            ctx, knobs, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs,
+            ctx, knobs, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, sink,
         ),
         Device::OpAmp {
             out,
@@ -322,10 +399,10 @@ fn stamp_device(
             rail_hi,
             ..
         } => stamp_opamp(
-            ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, g, rhs,
+            ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, sink,
         ),
         Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => stamp_comparator(
-            ctx, knobs, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs,
+            ctx, knobs, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, sink,
         ),
     }
 }
@@ -350,15 +427,14 @@ fn source_value(ctx: &StampCtx, kind: &SourceKind) -> f64 {
 // --- reactive companion models ----------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
-fn stamp_capacitor(
+fn stamp_capacitor<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
     a: NodeId,
     b: NodeId,
     c: f64,
     ic: Option<f64>,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     if ctx.dc {
         // For the initial-conditions operating point, pin the capacitor voltage
@@ -366,8 +442,8 @@ fn stamp_capacitor(
         if ctx.use_ic {
             if let Some(vic) = ic {
                 let gpin = 1e9; // very stiff; drives v across the cap -> vic
-                stamp_cond(g, ctx.layout, a, b, gpin);
-                stamp_current(rhs, ctx.layout, a, b, -gpin * vic);
+                stamp_cond(sink, ctx.layout, a, b, gpin);
+                stamp_current(sink, ctx.layout, a, b, -gpin * vic);
                 return;
             }
         }
@@ -389,21 +465,20 @@ fn stamp_capacitor(
         }
         Integration::BackwardEuler => c * ctx.coeffs.a1 * v_prev,
     };
-    stamp_cond(g, ctx.layout, a, b, geq);
+    stamp_cond(sink, ctx.layout, a, b, geq);
     // Equivalent current ieq flows like the capacitor current a->b.
-    stamp_current(rhs, ctx.layout, a, b, -ieq);
+    stamp_current(sink, ctx.layout, a, b, -ieq);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stamp_inductor(
+fn stamp_inductor<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
     a: NodeId,
     b: NodeId,
     l: f64,
     ic: Option<f64>,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     let br = ctx
         .layout
@@ -413,28 +488,28 @@ fn stamp_inductor(
     let bi = ctx.layout.node(b);
     // KCL: the branch current enters the two node equations (matrix columns).
     if let Some(ai) = ai {
-        g.add(ai, br, 1.0);
+        sink.g(ai, br, 1.0);
     }
     if let Some(bi) = bi {
-        g.add(bi, br, -1.0);
+        sink.g(bi, br, -1.0);
     }
 
     if ctx.dc && ctx.use_ic {
         if let Some(iic) = ic {
             // Initial-conditions point: pin the branch current, i = iic. The
             // branch row carries no voltage terms in this mode.
-            g.add(br, br, 1.0);
-            rhs[br] += iic;
+            sink.g(br, br, 1.0);
+            sink.i(br, iic);
             return;
         }
     }
 
     // Branch-row voltage relation: v_a - v_b (- req*i) = veq.
     if let Some(ai) = ai {
-        g.add(br, ai, 1.0);
+        sink.g(br, ai, 1.0);
     }
     if let Some(bi) = bi {
-        g.add(br, bi, -1.0);
+        sink.g(br, bi, -1.0);
     }
     if ctx.dc {
         // Steady-state short circuit: v_a - v_b = 0.
@@ -454,32 +529,31 @@ fn stamp_inductor(
         Integration::BackwardEuler => l * ctx.coeffs.a1 * i_prev,
     };
     // Branch row: v_a - v_b - req*i = -(req*i_prev + v_prev) = -veq.
-    g.add(br, br, -req);
-    rhs[br] -= veq;
+    sink.g(br, br, -req);
+    sink.i(br, -(veq));
 }
 
-fn stamp_vsource(
+fn stamp_vsource<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
     p: NodeId,
     n: NodeId,
     kind: &SourceKind,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     let br = ctx.layout.branch(id).expect("vsource has a branch unknown");
     let pi = ctx.layout.node(p);
     let ni = ctx.layout.node(n);
     if let Some(pi) = pi {
-        g.add(pi, br, 1.0);
-        g.add(br, pi, 1.0);
+        sink.g(pi, br, 1.0);
+        sink.g(br, pi, 1.0);
     }
     if let Some(ni) = ni {
-        g.add(ni, br, -1.0);
-        g.add(br, ni, -1.0);
+        sink.g(ni, br, -1.0);
+        sink.g(br, ni, -1.0);
     }
     let val = source_value(ctx, kind) * ctx.src_scale;
-    rhs[br] += val;
+    sink.i(br, val);
 }
 
 // --- nonlinear devices ------------------------------------------------------
@@ -532,13 +606,12 @@ fn hauksbee_ir_thermal(t_c: f64, temp_on: bool) -> f64 {
     hauksbee_ir::thermal_voltage_c(t)
 }
 
-fn stamp_diode(
+fn stamp_diode<S: StampSink>(
     ctx: &StampCtx,
     a: NodeId,
     k: NodeId,
     model: &DiodeModel,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     let temp_on = ctx.opts.effects.temperature;
     let t_c = ctx.opts.model_temp();
@@ -574,18 +647,17 @@ fn stamp_diode(
     let gd = gd.max(ctx.opts.gmin);
     // Newton equivalent current: ieq = id - gd*vd.
     let ieq = id - gd * vd;
-    stamp_cond(g, ctx.layout, a, k, gd);
-    stamp_current(rhs, ctx.layout, a, k, ieq);
+    stamp_cond(sink, ctx.layout, a, k, gd);
+    stamp_current(sink, ctx.layout, a, k, ieq);
 }
 
-fn stamp_bjt(
+fn stamp_bjt<S: StampSink>(
     ctx: &StampCtx,
     c: NodeId,
     b: NodeId,
     e: NodeId,
     model: &BjtModel,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     let sign = model.polarity.sign();
     let temp_on = ctx.opts.effects.temperature;
@@ -641,12 +713,12 @@ fn stamp_bjt(
     let (ci, bi, ei) = (ctx.layout.node(c), ctx.layout.node(b), ctx.layout.node(e));
 
     // gpi between b-e, gmu between b-c.
-    add_pair(g, bi, ei, gpi);
-    add_pair(g, bi, ci, gmu);
+    add_pair(sink, bi, ei, gpi);
+    add_pair(sink, bi, ci, gmu);
     // output conductance go between c-e.
-    add_pair(g, ci, ei, go);
+    add_pair(sink, ci, ei, go);
     // transconductance: ic depends on vbe = v(b)-v(e).
-    add_transconductance(g, ci, ei, bi, ei, gm);
+    add_transconductance(sink, ci, ei, bi, ei, gm);
 
     // Equivalent currents: residual = I_terminal - linearized part, both in
     // folded (NPN-reference) space, then mapped to real space by `sign`. The
@@ -658,19 +730,18 @@ fn stamp_bjt(
     let ib_eq = sign * (ib - (gpi * vbe + gmu * vbc));
     let ie_eq = sign * (ie + (gm + gpi) * vbe + go * vce_f);
 
-    inject(rhs, ci, -ic_eq);
-    inject(rhs, bi, -ib_eq);
-    inject(rhs, ei, -ie_eq);
+    inject(sink, ci, -ic_eq);
+    inject(sink, bi, -ib_eq);
+    inject(sink, ei, -ie_eq);
 }
 
-fn stamp_mosfet(
+fn stamp_mosfet<S: StampSink>(
     ctx: &StampCtx,
     d: NodeId,
     gnode: NodeId,
     s: NodeId,
     model: &MosfetModel,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     match model.level {
         MosLevel::Level1 => {}
@@ -735,18 +806,18 @@ fn stamp_mosfet(
     let (dn, sn) = if swap { (si, di) } else { (di, si) };
 
     // Conductances: gds between drain-source, gm couples drain current to vgs.
-    add_pair(g, dn, sn, gds);
-    add_transconductance(g, dn, sn, gi, sn, gm);
+    add_pair(sink, dn, sn, gds);
+    add_transconductance(sink, dn, sn, gi, sn, gm);
 
     // Equivalent current: id_eq = ids - gm*vgs - gds*vds, flowing d->s.
     let ieq = ids - gm * vgs - gds * vds;
     let ieq_signed = sign * ieq;
-    inject(rhs, dn, -ieq_signed);
-    inject(rhs, sn, ieq_signed);
+    inject(sink, dn, -ieq_signed);
+    inject(sink, sn, ieq_signed);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stamp_vswitch(
+fn stamp_vswitch<S: StampSink>(
     ctx: &StampCtx,
     knobs: &EnvKnobs,
     id: DeviceId,
@@ -758,8 +829,7 @@ fn stamp_vswitch(
     voff: f64,
     ron: f64,
     roff: f64,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     let gon = 1.0 / ron.max(1e-12);
     let goff = 1.0 / roff.max(1e-12);
@@ -780,7 +850,7 @@ fn stamp_vswitch(
             .copied()
             .unwrap_or_else(|| (ctx.v(cp) - ctx.v(cn)) > vmid);
         let gsw = if on { gon } else { goff };
-        stamp_cond(g, ctx.layout, a, b, gsw);
+        stamp_cond(sink, ctx.layout, a, b, gsw);
         return;
     }
 
@@ -867,7 +937,7 @@ fn stamp_vswitch(
     let gsw = gln.exp();
 
     // Conductance stamp between the through nodes (a, b).
-    stamp_cond(g, ctx.layout, a, b, gsw);
+    stamp_cond(sink, ctx.layout, a, b, gsw);
 
     // CONTROL-NODE JACOBIAN (the true tangent). The switch current
     //   i = gsw * (v_a - v_b)
@@ -900,18 +970,18 @@ fn stamp_vswitch(
         let (ai, bi) = (ctx.layout.node(a), ctx.layout.node(b));
         let (cpi, cni) = (ctx.layout.node(cp), ctx.layout.node(cn));
         // i_a += gm_ctrl * (v_cp - v_cn), i_b -= ... .
-        add_transconductance(g, ai, bi, cpi, cni, gm_ctrl);
+        add_transconductance(sink, ai, bi, cpi, cni, gm_ctrl);
         // Equivalent-current correction: the transconductance term contributes
         // gm_ctrl * vctrl to the linearized current, which is already implicit
         // in the conductance stamp at the operating point. Subtract it back via
         // the RHS so the residual equals the true device current there.
         let ieq = gm_ctrl * vctrl;
-        inject(rhs, ai, ieq);
-        inject(rhs, bi, -ieq);
+        inject(sink, ai, ieq);
+        inject(sink, bi, -ieq);
     }
 }
 
-fn stamp_opamp(
+fn stamp_opamp<S: StampSink>(
     ctx: &StampCtx,
     out: NodeId,
     inp: NodeId,
@@ -920,8 +990,7 @@ fn stamp_opamp(
     gain: f64,
     rail_lo: f64,
     rail_hi: f64,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     // Behavioral: drive `out` toward clamp(gain*(vp-vn)) through a stiff
     // conductance, modeling an ideal output stage with finite open-loop gain.
@@ -934,28 +1003,28 @@ fn stamp_opamp(
     let in_rail = target > rail_lo && target < rail_hi;
     let oi = ctx.layout.node(out);
     if let Some(oi) = oi {
-        g.add(oi, oi, gout);
-        rhs[oi] += gout * target;
+        sink.g(oi, oi, gout);
+        sink.i(oi, gout * target);
         if in_rail {
             if let Some(ri) = reference.and_then(|n| ctx.layout.node(n)) {
-                g.add(oi, ri, -gout);
-                rhs[oi] -= gout * vref;
+                sink.g(oi, ri, -gout);
+                sink.i(oi, -(gout * vref));
             }
             // Couple output to inputs through the gain (tangent).
             if let Some(pi) = ctx.layout.node(inp) {
-                g.add(oi, pi, -gout * gain);
-                rhs[oi] -= gout * gain * vp;
+                sink.g(oi, pi, -gout * gain);
+                sink.i(oi, -(gout * gain * vp));
             }
             if let Some(ni) = ctx.layout.node(inn) {
-                g.add(oi, ni, gout * gain);
-                rhs[oi] += gout * gain * vn;
+                sink.g(oi, ni, gout * gain);
+                sink.i(oi, gout * gain * vn);
             }
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stamp_comparator(
+fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
     knobs: &EnvKnobs,
     id: DeviceId,
@@ -965,8 +1034,7 @@ fn stamp_comparator(
     out_lo: f64,
     out_hi: f64,
     hyst: f64,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
+    sink: &mut S,
 ) {
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
@@ -995,8 +1063,8 @@ fn stamp_comparator(
         // root with every output consistent with its own inputs.
         let target = if high { out_hi } else { out_lo };
         if let Some(oi) = ctx.layout.node(out) {
-            g.add(oi, oi, gout);
-            rhs[oi] += gout * target;
+            sink.g(oi, oi, gout);
+            sink.i(oi, gout * target);
         }
         return;
     }
@@ -1024,15 +1092,15 @@ fn stamp_comparator(
         let dsig = k * sig * (1.0 - sig);
         let dtarget_dvp = span * dsig; // d target / d vp  (= -d/d vn)
         if let Some(oi) = ctx.layout.node(out) {
-            g.add(oi, oi, gout);
-            rhs[oi] += gout * target;
+            sink.g(oi, oi, gout);
+            sink.i(oi, gout * target);
             if let Some(pi) = ctx.layout.node(inp) {
-                g.add(oi, pi, -gout * dtarget_dvp);
-                rhs[oi] -= gout * dtarget_dvp * vp;
+                sink.g(oi, pi, -gout * dtarget_dvp);
+                sink.i(oi, -(gout * dtarget_dvp * vp));
             }
             if let Some(ni) = ctx.layout.node(inn) {
-                g.add(oi, ni, gout * dtarget_dvp);
-                rhs[oi] += gout * dtarget_dvp * vn;
+                sink.g(oi, ni, gout * dtarget_dvp);
+                sink.i(oi, gout * dtarget_dvp * vn);
             }
         }
         return;
@@ -1040,24 +1108,24 @@ fn stamp_comparator(
 
     let target = if vp - vn > thresh { out_hi } else { out_lo };
     if let Some(oi) = ctx.layout.node(out) {
-        g.add(oi, oi, gout);
-        rhs[oi] += gout * target;
+        sink.g(oi, oi, gout);
+        sink.i(oi, gout * target);
     }
 }
 
 // --- low-level stamp helpers ------------------------------------------------
 
 #[inline]
-fn add_pair(m: &mut SparseMatrix, a: Option<usize>, b: Option<usize>, gval: f64) {
+fn add_pair<S: StampSink>(sink: &mut S, a: Option<usize>, b: Option<usize>, gval: f64) {
     if let Some(a) = a {
-        m.add(a, a, gval);
+        sink.g(a, a, gval);
     }
     if let Some(b) = b {
-        m.add(b, b, gval);
+        sink.g(b, b, gval);
     }
     if let (Some(a), Some(b)) = (a, b) {
-        m.add(a, b, -gval);
-        m.add(b, a, -gval);
+        sink.g(a, b, -gval);
+        sink.g(b, a, -gval);
     }
 }
 
@@ -1065,8 +1133,8 @@ fn add_pair(m: &mut SparseMatrix, a: Option<usize>, b: Option<usize>, gval: f64)
 /// voltage across `(cp, cn)`. `i = gm * (v_cp - v_cn)` added at ip, removed
 /// at in.
 #[inline]
-fn add_transconductance(
-    m: &mut SparseMatrix,
+fn add_transconductance<S: StampSink>(
+    sink: &mut S,
     ip: Option<usize>,
     in_: Option<usize>,
     cp: Option<usize>,
@@ -1075,26 +1143,26 @@ fn add_transconductance(
 ) {
     if let Some(ip) = ip {
         if let Some(cp) = cp {
-            m.add(ip, cp, gm);
+            sink.g(ip, cp, gm);
         }
         if let Some(cn) = cn {
-            m.add(ip, cn, -gm);
+            sink.g(ip, cn, -gm);
         }
     }
     if let Some(in_) = in_ {
         if let Some(cp) = cp {
-            m.add(in_, cp, -gm);
+            sink.g(in_, cp, -gm);
         }
         if let Some(cn) = cn {
-            m.add(in_, cn, gm);
+            sink.g(in_, cn, gm);
         }
     }
 }
 
 #[inline]
-fn inject(rhs: &mut [f64], node: Option<usize>, val: f64) {
+fn inject<S: StampSink>(sink: &mut S, node: Option<usize>, val: f64) {
     if let Some(n) = node {
-        rhs[n] += val;
+        sink.i(n, val);
     }
 }
 
@@ -1111,3 +1179,4 @@ impl StampCtx<'_> {
         self.v_prev(b) - self.v_prev(c)
     }
 }
+
