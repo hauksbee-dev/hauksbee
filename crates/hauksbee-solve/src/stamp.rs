@@ -209,8 +209,17 @@ impl StampSink for MatrixSink<'_> {
 /// pass, which is what makes the line-search residual eval cheap. The per-row
 /// SUM ORDER differs from the assembled row product (device-stamp order,
 /// interleaved with rhs terms, instead of slot order then rhs), so the norm can
-/// differ from the assembled one by rounding: the switch of the residual eval
-/// onto this sink is a PHYSICS-GATED change, not a bit-identical one.
+/// differ from the assembled one by rounding: switching the residual eval
+/// onto this sink was tried (assembly-economy sub-lever A), measured 2x on
+/// the eval and -21% on the smoke march wall, and REVERTED: the flagship
+/// joint march died where the assembled eval survived. The sink's F is
+/// proven equal to the assembled row product within accumulation rounding
+/// (`residual_sink_matches_assembled_row_product`), so the death was not a
+/// bug but marginal Armijo decisions flipping under equally-valid rounding
+/// on cancellation-heavy stiff rows: too fragile to ship. Kept (with the
+/// bench and the equivalence gate) as the measurement estate and for any
+/// future order-robust redesign.
+#[cfg_attr(not(test), allow(dead_code))]
 struct ResidualSink<'a> {
     f: &'a mut [f64],
     x: &'a [f64],
@@ -321,6 +330,7 @@ pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
 /// Accumulate the nonlinear residual `F = g*x - rhs` over the NODE block at
 /// the iterate `ctx.x`, without assembling the matrix (see [`ResidualSink`]
 /// for what that changes). `f[0..n_nodes]` must be zeroed by the caller.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn stamp_residual(ctx: &StampCtx, f: &mut [f64]) {
     let mut sink = ResidualSink {
         f,
@@ -1306,5 +1316,68 @@ mod bench {
             (1.0 - resid / full) * 100.0,
         );
         assert!(full > 0.0 && resid > 0.0);
+    }
+
+    /// ResidualSink correctness: on the same context, the matrix-free F must
+    /// equal the assembled row product F within accumulation rounding (bounded
+    /// RELATIVE TO EACH ROW'S TERM MAGNITUDES, because MNA rows cancel large
+    /// terms and the two schemes sum in different orders). A systematic
+    /// mismatch (sign error, dropped/duplicated contribution, wrong scope)
+    /// shows up as an error far above the rounding floor.
+    #[test]
+    fn residual_sink_matches_assembled_row_product() {
+        let circuit = big_board(64);
+        let layout = Layout::new(&circuit);
+        let mut m = SparseMatrix::new(layout.size);
+        reserve_pattern(&circuit, &layout, &mut m);
+        let n = layout.size;
+        // A deliberately non-trivial iterate: mixed signs and magnitudes.
+        let x: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1)
+            .collect();
+        let state = ReactiveState::new(circuit.devices.len());
+        let opts = SolverOptions::default();
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let spdt = std::collections::HashMap::new();
+        let ctx = StampCtx {
+            circuit: &circuit,
+            layout: &layout,
+            opts: &opts,
+            x: &x,
+            x_prev: &x,
+            time: 1e-6,
+            coeffs,
+            state: &state,
+            dc: false,
+            use_ic: false,
+            gmin: 1e-12,
+            src_scale: 1.0,
+            branch_reg: 1e-2,
+            cmp_freeze: None,
+            switch_freeze: None,
+            spdt_sibling: &spdt,
+        };
+        let mut rhs = vec![0.0f64; n];
+        m.clear_values();
+        stamp_all(&ctx, &mut m, &mut rhs);
+        let mut f = vec![0.0f64; n];
+        stamp_residual(&ctx, &mut f);
+        for i in 0..layout.n_nodes {
+            let mut acc = 0.0;
+            let mut mag = rhs[i].abs();
+            for &(col, val) in m.row(i) {
+                acc += val * x[col];
+                mag += (val * x[col]).abs();
+            }
+            let assembled = acc - rhs[i];
+            let err = (f[i] - assembled).abs();
+            let bound = 1e-12 * mag.max(1.0);
+            assert!(
+                err <= bound,
+                "row {i}: sink F={} assembled F={} err={err:e} > bound={bound:e} (mag {mag:e})",
+                f[i],
+                assembled,
+            );
+        }
     }
 }
