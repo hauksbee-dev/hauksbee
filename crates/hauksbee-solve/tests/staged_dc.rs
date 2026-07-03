@@ -156,24 +156,23 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
 /// (The full event-freeze outer loop's load-bearing proof is the real Tarski
 /// board; this miniature converges on the homotopy ladder, so it guards the
 /// Jacobian + diode interaction without depending on the staged event path. The
-/// env vars enable the dynamic-pivot LU + event loop so the path is exercised if
-/// the ladder ever needs them.)
+/// ladder grants enable the dynamic-pivot LU + event loop so the path is
+/// exercised if the ladder ever needs them.)
 #[test]
 fn multi_switch_core_converges_via_event_freeze() {
-    // The dynamic-pivot LU is a typed grant now; the event-freeze loop is
-    // still env-armed until its own migration lands.
+    // Enable the staged-DC dynamic-pivot LU and the event-freeze outer loop
+    // (the load-bearing path for the switch-fused core): typed grants, no env.
     let opts = SolverOptions {
-        ladder: RobustnessLadder::none().with(Strategy::DynamicPivot),
+        ladder: RobustnessLadder::none()
+            .with(Strategy::DynamicPivot)
+            .with(Strategy::EventFreeze),
         ..Default::default()
     };
     let (c, rail_n, out_n) = build_switched(8);
 
-    std::env::set_var("HAUKSBEE_CMP_EVENT", "1");
-
     let mut ws = Workspace::new(&c);
     let r = dc_operating_point(&mut ws, &c, &opts);
 
-    std::env::remove_var("HAUKSBEE_CMP_EVENT");
 
     r.expect("switched diode core must converge");
 

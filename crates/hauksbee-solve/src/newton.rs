@@ -1009,9 +1009,10 @@ fn dc_solve(
             // whose spike-output nodes are defined dynamically (a stretch cap that
             // is open at DC, so the node has no DC voltage at all), it cannot
             // converge and just burns time, so it is gated behind
-            // HAUKSBEE_CMP_EVENT=1 rather than run on the default path. The
+            // Strategy::EventFreeze rather than run on the default path. The
             // dynamic-pivot LU (the structural fix) stays on regardless.
-            if std::env::var("HAUKSBEE_CMP_EVENT").is_ok() {
+            if opts.ladder.has(Strategy::EventFreeze) {
+                crate::diagnostics::note(Strategy::EventFreeze);
                 if let Some(root) = staged_event_solve(ws, circuit, opts, &seed, staged_gmin, STAGED_BRANCH_REG, dbg) {
                     ws.x.copy_from_slice(&root);
                     ws.staged_branch_reg = 0.0;
