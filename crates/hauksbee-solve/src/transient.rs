@@ -262,6 +262,18 @@ impl Transient {
         };
         let mut next_bp = 0usize;
 
+        // Step census (HAUKSBEE_STEP_CENSUS=1): the accepted grid alone cannot
+        // attribute a march's wall (rejected trials, bisection retries and
+        // Newton cuts leave no trace in the waveform), so the loop counts its
+        // own discards. None when unset; every hook below is `if let Some`,
+        // and the report prints on Drop so an erroring march still accounts.
+        let mut census = crate::census::StepCensus::begin(
+            tstop,
+            circuit.devices.len(),
+            ws.layout.size,
+            matches!(opts.step, StepControl::Adaptive { .. }),
+        );
+
         while t < tstop - 1e-18 {
             steps_taken += 1;
             if steps_taken > max_steps {
@@ -296,6 +308,7 @@ impl Transient {
             }
 
             // Trial solve at t + h.
+            let t_trial = census.as_ref().map(|_| std::time::Instant::now());
             ws.x.copy_from_slice(&x_accepted);
             let coeffs = IntegCoeffs::for_step(opts.integration, h, first_step);
             let r = newton_solve(
@@ -312,9 +325,15 @@ impl Transient {
                 1.0,
             );
 
+            if let Some(c) = census.as_mut() {
+                c.newton_calls += 1;
+                c.newton_iters += r.iters as u64;
+            }
+
             let mut converged = r.converged;
             let mut used_event = false;
             if !converged && ws.tran_event() {
+                let t_event = census.as_ref().map(|_| std::time::Instant::now());
                 // The bare per-step Newton limit-cycled (the spike-gate SPDT flip
                 // under synapse current, or the refractory reset). Retry this step
                 // through the event-freeze loop: freeze comparator+switch states
@@ -348,9 +367,16 @@ impl Transient {
                 }
                 ws.symbolic.set_allow_dynamic(had_dyn);
                 used_event = converged;
+                if let (Some(c), Some(t0)) = (census.as_mut(), t_event) {
+                    c.ns_event_retry += t0.elapsed().as_nanos() as u64;
+                }
             }
 
             if !converged {
+                if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
+                    c.newton_fail_cuts += 1;
+                    c.ns_newton_fail += t0.elapsed().as_nanos() as u64;
+                }
                 // Cut the step hard and retry.
                 if h <= dt_min * 1.0001 {
                     return Err(format!("Newton failed at t={t} even at dt_min={dt_min}"));
@@ -369,10 +395,20 @@ impl Transient {
             // wall. With the event loop owning the discontinuity, accept the step.
             if !used_event {
             if let Some(frac) = crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes()) {
+                // Census: which devices' controls straddled a threshold on this
+                // trial. A second read-only scan, run only when the census is
+                // live, so the default path keeps the single-pass check.
+                if let Some(c) = census.as_mut() {
+                    crossing_census(circuit, &x_accepted, &ws.x, &ws.layout_nodes(), &mut c.crossings);
+                }
                 if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
                     // Bisect toward the crossing for a sharper edge.
                     let refined = (h * frac).clamp(dt_min, h);
                     if (refined - h).abs() > dt_min {
+                        if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
+                            c.event_bisections += 1;
+                            c.ns_bisected += t0.elapsed().as_nanos() as u64;
+                        }
                         dt = refined;
                         continue;
                     }
@@ -412,7 +448,11 @@ impl Transient {
                 }
                 StepControl::Fixed { .. } => accept = true,
                 StepControl::Adaptive { .. } => {
+                    let t_lte = census.as_ref().map(|_| std::time::Instant::now());
                     let err = lte_estimate(circuit, &ws, &state, h, opts);
+                    if let (Some(c), Some(t0)) = (census.as_mut(), t_lte) {
+                        c.ns_lte_estimate += t0.elapsed().as_nanos() as u64;
+                    }
                     if err <= 1.0 || h <= dt_min * 1.0001 {
                         accept = true;
                         // Grow/shrink for next step from the error ratio.
@@ -432,8 +472,20 @@ impl Transient {
             }
 
             if !accept {
+                if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
+                    c.lte_rejected += 1;
+                    c.ns_lte_rejected += t0.elapsed().as_nanos() as u64;
+                }
                 dt = next_dt;
                 continue;
+            }
+
+            if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
+                c.accept(h);
+                if used_event {
+                    c.event_resolved += 1;
+                }
+                c.ns_accepted += t0.elapsed().as_nanos() as u64;
             }
 
             // Accept: advance time, update reactive history, emit.
@@ -691,6 +743,40 @@ fn crossing_fraction(
         }
     }
     earliest
+}
+
+/// Census-only twin of [`crossing_fraction`]: record EVERY device whose
+/// control straddled its threshold on this trial step, by name. Separate from
+/// the detection scan (which reports only the earliest fraction and stays on
+/// the hot path) so the default march keeps its single pass; this one runs
+/// only when HAUKSBEE_STEP_CENSUS is live, to answer "which devices drive the
+/// global bisections".
+fn crossing_census(
+    circuit: &Circuit,
+    x0: &[f64],
+    x1: &[f64],
+    node_idx: &dyn Fn(NodeId) -> Option<usize>,
+    out: &mut std::collections::HashMap<String, u64>,
+) {
+    let vat = |x: &[f64], n: NodeId| node_idx(n).map(|i| x[i]).unwrap_or(0.0);
+    for (_, dev) in circuit.iter() {
+        let (cp, cn, mid) = match dev {
+            Device::Comparator { inp, inn, .. } => (*inp, *inn, 0.0),
+            Device::VSwitch {
+                ctrl_p,
+                ctrl_n,
+                von,
+                voff,
+                ..
+            } => (*ctrl_p, *ctrl_n, 0.5 * (von + voff)),
+            _ => continue,
+        };
+        let d0 = vat(x0, cp) - vat(x0, cn) - mid;
+        let d1 = vat(x1, cp) - vat(x1, cn) - mid;
+        if d0.signum() != d1.signum() && (d1 - d0).abs() > 1e-15 {
+            *out.entry(dev.name().to_string()).or_insert(0) += 1;
+        }
+    }
 }
 
 impl Workspace {

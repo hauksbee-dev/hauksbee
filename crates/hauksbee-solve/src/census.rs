@@ -1,0 +1,256 @@
+//! End-of-march step census for the transient driver (HAUKSBEE_STEP_CENSUS=1).
+//!
+//! Pure readout, zero behaviour: every counter is written from values the
+//! march already computed, and the whole estate is dead when the env var is
+//! unset (one cached-bool branch per hook). The adaptive capture march on the
+//! flagship costs ~1700 s and the accepted grid alone cannot attribute that
+//! wall (rejected trials, event bisections, and Newton retries leave no trace
+//! in the output waveform), so the march itself must count its discards. The
+//! linear-algebra phase split (stamp / LU factor / back-substitution) lives in
+//! thread-local accumulators because the phases execute inside `newton_solve`,
+//! which has no census parameter and must keep its signature (and its
+//! bit-identical default path) untouched.
+
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::time::Instant;
+
+/// Cached once per process: the census exists only when explicitly requested,
+/// so the default path pays a single atomic load per hook and no timer reads.
+pub(crate) fn enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("HAUKSBEE_STEP_CENSUS").is_ok())
+}
+
+/// Linear-algebra phases timed inside the Newton iteration.
+pub(crate) enum Phase {
+    /// Device stamping (Jacobian + rhs assembly).
+    Stamp,
+    /// Numeric LU refactorization (frozen-order Gilbert-Peierls).
+    Factor,
+    /// Triangular back-substitution.
+    Backsolve,
+}
+
+thread_local! {
+    static STAMP_NS: Cell<u64> = const { Cell::new(0) };
+    static FACTOR_NS: Cell<u64> = const { Cell::new(0) };
+    static FACTOR_CALLS: Cell<u64> = const { Cell::new(0) };
+    static BACKSOLVE_NS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Run one linear-algebra phase, accumulating its wall time when the census is
+/// on. When off this is the plain call behind one predictable branch, so the
+/// hot Newton loop keeps its cost (and its arithmetic, hence bit-exactness).
+#[inline]
+pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
+    if !enabled() {
+        return f();
+    }
+    let t0 = Instant::now();
+    let r = f();
+    let ns = t0.elapsed().as_nanos() as u64;
+    match phase {
+        Phase::Stamp => STAMP_NS.with(|c| c.set(c.get() + ns)),
+        Phase::Factor => {
+            FACTOR_NS.with(|c| c.set(c.get() + ns));
+            FACTOR_CALLS.with(|c| c.set(c.get() + 1));
+        }
+        Phase::Backsolve => BACKSOLVE_NS.with(|c| c.set(c.get() + ns)),
+    }
+    r
+}
+
+/// Drain the thread-local phase accumulators: (stamp_ns, factor_ns,
+/// factor_calls, backsolve_ns). Marches run their Newton solves on their own
+/// thread, so draining at march start and end brackets exactly one march.
+fn take_phases() -> (u64, u64, u64, u64) {
+    (
+        STAMP_NS.with(|c| c.replace(0)),
+        FACTOR_NS.with(|c| c.replace(0)),
+        FACTOR_CALLS.with(|c| c.replace(0)),
+        BACKSOLVE_NS.with(|c| c.replace(0)),
+    )
+}
+
+/// Accepted-dt decade histogram bounds: buckets are `<1e-12`, one per decade
+/// `[1e-12,1e-11) .. [1e-6,1e-5)`, then `>=1e-5`. The adaptive capture march
+/// runs dt_min=1e-12, dt_max=2e-6, so every step it can legally take lands in
+/// a labelled bucket; the two guards catch anything out of contract.
+const N_DECADES: usize = 7;
+
+/// One march's census. Created (Some) only when [`enabled`]; the report prints
+/// on Drop so an erroring march (early `return Err`) still accounts for its
+/// discarded work.
+pub(crate) struct StepCensus {
+    started: Instant,
+    tstop: f64,
+    n_devices: usize,
+    n_unknowns: usize,
+    adaptive: bool,
+    pub accepted: u64,
+    pub lte_rejected: u64,
+    pub newton_fail_cuts: u64,
+    pub event_bisections: u64,
+    pub event_resolved: u64,
+    /// Accepted-step sizes by decade: [under, 1e-12.., .., 1e-6.., over].
+    pub dt_hist: [u64; N_DECADES + 2],
+    pub min_accepted_dt: f64,
+    /// Trial-solve wall attributed by the trial's FATE, so the report answers
+    /// "how much Newton work was thrown away and by which mechanism".
+    pub ns_accepted: u64,
+    pub ns_lte_rejected: u64,
+    pub ns_bisected: u64,
+    pub ns_newton_fail: u64,
+    /// Wall inside the event-freeze retry (`newton_solve_event`), separate from
+    /// the bare trial it followed.
+    pub ns_event_retry: u64,
+    pub ns_lte_estimate: u64,
+    /// Bare-Newton iterations summed over every trial (the event retry's inner
+    /// iterations are not reported by its API, hence the separate wall above).
+    pub newton_iters: u64,
+    pub newton_calls: u64,
+    /// Crossing counts by device name, incremented every time a device's
+    /// control straddles its threshold on a non-event trial step (whether or
+    /// not the bisection was taken; the taken count is `event_bisections`).
+    pub crossings: HashMap<String, u64>,
+}
+
+impl StepCensus {
+    /// A live census when HAUKSBEE_STEP_CENSUS is set, else None (and every
+    /// hook in the march loop stays behind `if let Some`).
+    pub(crate) fn begin(
+        tstop: f64,
+        n_devices: usize,
+        n_unknowns: usize,
+        adaptive: bool,
+    ) -> Option<StepCensus> {
+        if !enabled() {
+            return None;
+        }
+        // Drain phase counters left by any previous march on this thread so
+        // the Drop report brackets exactly this march.
+        let _ = take_phases();
+        Some(StepCensus {
+            started: Instant::now(),
+            tstop,
+            n_devices,
+            n_unknowns,
+            adaptive,
+            accepted: 0,
+            lte_rejected: 0,
+            newton_fail_cuts: 0,
+            event_bisections: 0,
+            event_resolved: 0,
+            dt_hist: [0; N_DECADES + 2],
+            min_accepted_dt: f64::INFINITY,
+            ns_accepted: 0,
+            ns_lte_rejected: 0,
+            ns_bisected: 0,
+            ns_newton_fail: 0,
+            ns_event_retry: 0,
+            ns_lte_estimate: 0,
+            newton_iters: 0,
+            newton_calls: 0,
+            crossings: HashMap::new(),
+        })
+    }
+
+    /// Record one accepted step of size `h`.
+    pub(crate) fn accept(&mut self, h: f64) {
+        self.accepted += 1;
+        self.min_accepted_dt = self.min_accepted_dt.min(h);
+        let idx = if h < 1e-12 {
+            0
+        } else if h >= 1e-5 {
+            N_DECADES + 1
+        } else {
+            // 1e-12 -> 1, 1e-11 -> 2, ... 1e-6 -> 7. log10 is monotone and the
+            // bucket edges are exact powers, so boundary values land on the
+            // labelled side within f64 rounding (a one-bucket smear at an exact
+            // edge is irrelevant to a decade histogram).
+            (h.log10().floor() as i32 + 12).clamp(0, N_DECADES as i32 - 1) as usize + 1
+        };
+        self.dt_hist[idx] += 1;
+    }
+}
+
+impl Drop for StepCensus {
+    fn drop(&mut self) {
+        let wall = self.started.elapsed().as_secs_f64();
+        let (stamp_ns, factor_ns, factor_calls, backsolve_ns) = take_phases();
+        let s = |ns: u64| ns as f64 / 1e9;
+        let attempts =
+            self.accepted + self.lte_rejected + self.newton_fail_cuts + self.event_bisections;
+        eprintln!(
+            "[step-census] march tstop={:.3e}s devices={} unknowns={} mode={} wall={:.2}s",
+            self.tstop,
+            self.n_devices,
+            self.n_unknowns,
+            if self.adaptive { "adaptive" } else { "fixed" },
+            wall,
+        );
+        eprintln!(
+            "[step-census]   accepted={} lte_rejected={} newton_fail_cuts={} event_bisections={} event_resolved={} (attempts={})",
+            self.accepted,
+            self.lte_rejected,
+            self.newton_fail_cuts,
+            self.event_bisections,
+            self.event_resolved,
+            attempts,
+        );
+        let labels = ["<1e-12", "1e-12", "1e-11", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", ">=1e-5"];
+        let hist: Vec<String> = labels
+            .iter()
+            .zip(self.dt_hist.iter())
+            .map(|(l, c)| format!("{l}:{c}"))
+            .collect();
+        eprintln!(
+            "[step-census]   accepted dt decades [{}] min_dt={:.2e}",
+            hist.join(" "),
+            self.min_accepted_dt,
+        );
+        eprintln!(
+            "[step-census]   trial wall by fate: accepted={:.2}s lte_rejected={:.2}s bisected={:.2}s newton_fail={:.2}s event_retry={:.2}s lte_estimate={:.2}s",
+            s(self.ns_accepted),
+            s(self.ns_lte_rejected),
+            s(self.ns_bisected),
+            s(self.ns_newton_fail),
+            s(self.ns_event_retry),
+            s(self.ns_lte_estimate),
+        );
+        eprintln!(
+            "[step-census]   newton: calls={} iters={} ({:.2} iters/call); la phases: stamp={:.2}s factor={:.2}s ({} calls, {:.2}ms/call) backsolve={:.2}s",
+            self.newton_calls,
+            self.newton_iters,
+            if self.newton_calls > 0 {
+                self.newton_iters as f64 / self.newton_calls as f64
+            } else {
+                0.0
+            },
+            s(stamp_ns),
+            s(factor_ns),
+            factor_calls,
+            if factor_calls > 0 {
+                factor_ns as f64 / 1e6 / factor_calls as f64
+            } else {
+                0.0
+            },
+            s(backsolve_ns),
+        );
+        if !self.crossings.is_empty() {
+            let mut by_count: Vec<(&String, &u64)> = self.crossings.iter().collect();
+            by_count.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            let top: Vec<String> = by_count
+                .iter()
+                .take(10)
+                .map(|(name, n)| format!("{name} x{n}"))
+                .collect();
+            eprintln!(
+                "[step-census]   top crossings ({} devices crossed): {}",
+                self.crossings.len(),
+                top.join(", "),
+            );
+        }
+    }
+}

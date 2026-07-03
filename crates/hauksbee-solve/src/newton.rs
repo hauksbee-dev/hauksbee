@@ -369,14 +369,22 @@ pub fn newton_solve(
                 switch_freeze: ws.switch_freeze.as_ref(),
                 spdt_sibling: &ws.spdt_sibling,
             };
-            stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
+            // Census hooks (HAUKSBEE_STEP_CENSUS): the march-cost attribution
+            // needs the stamp/factor/backsolve split and these three calls are
+            // the only place the phases exist. A cached-bool branch when off.
+            crate::census::timed(crate::census::Phase::Stamp, || {
+                stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs)
+            });
         }
         // The iterate from the step before this one (the anchor we just used)
         // vs the current linearization point: if they already agree to
         // tolerance, the previous Newton step had converged.
         let prev_iterate = std::mem::replace(&mut ws.x_prev_iter, lin_point.clone());
 
-        if !ws.symbolic.refactor(&ws.matrix) {
+        let factored = crate::census::timed(crate::census::Phase::Factor, || {
+            ws.symbolic.refactor(&ws.matrix)
+        });
+        if !factored {
             // The Jacobian assembled at this iterate is numerically singular.
             // This can happen AT a valid solution of a diode-laden board: once
             // every signal diode is reverse-biased its tangent conductance is
@@ -426,7 +434,9 @@ pub fn newton_solve(
             0.0
         };
 
-        ws.symbolic.solve(&mut ws.rhs);
+        crate::census::timed(crate::census::Phase::Backsolve, || {
+            ws.symbolic.solve(&mut ws.rhs)
+        });
         // rhs now holds the new (UNDAMPED) Newton iterate.
         ws.x.copy_from_slice(&ws.rhs);
 
