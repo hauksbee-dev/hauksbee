@@ -114,7 +114,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     // the gap, so the user opts in deliberately instead of hitting a false RED.
     let boot_coverage_supported = mcu_backend
         .as_deref()
-        .map_or(true, |b| !(b.starts_with("renode:") || b.starts_with("qemu:")));
+        .map_or(true, |b| !hauksbee_engine::scheduler::backend_is_external(b));
 
     let stem = board_stem(board);
     let board_file = board
