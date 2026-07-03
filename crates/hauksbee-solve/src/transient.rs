@@ -213,10 +213,12 @@ impl Transient {
             }
             // The dynamic re-pivot LU is enabled LOCALLY by the event-freeze retry
             // (newton_solve_event) only on the step that flips, so the bulk of
-            // clean steps stay on the fast frozen path. HAUKSBEE_TRANSIENT_DYN=1
-            // additionally forces it on for EVERY step (the old, slower lever),
-            // kept for diagnosis; the default arming relies on the per-step retry.
-            if std::env::var("HAUKSBEE_TRANSIENT_DYN_GLOBAL").is_ok() {
+            // clean steps stay on the fast frozen path.
+            // Strategy::DynamicPivotEveryStep additionally forces it on for
+            // EVERY step (the old, slower lever, kept for stubborn boards);
+            // the default arming relies on the per-step retry.
+            if opts.ladder.has(Strategy::DynamicPivotEveryStep) {
+                crate::diagnostics::note(Strategy::DynamicPivotEveryStep);
                 ws.symbolic.set_allow_dynamic(true);
             }
         }
