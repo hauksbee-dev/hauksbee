@@ -1071,8 +1071,9 @@ fn dc_solve(
             // every node). It is the textbook robust method, but on a board whose
             // per-step nonlinear solve itself does not converge (the Tarski
             // synapse core) it is both slow and unproductive, so it is gated
-            // behind HAUKSBEE_PTC=1 rather than run on the hot path.
-            if std::env::var("HAUKSBEE_PTC").is_ok() {
+            // behind Strategy::Ptc rather than run on the hot path.
+            if opts.ladder.has(Strategy::Ptc) {
+                crate::diagnostics::note(Strategy::Ptc);
                 if let Some(s) = ptc_settle_from_seed(circuit, opts, &seed) {
                     if dbg { eprintln!("[staged] PTC settled to a full operating point"); }
                     ws.x.copy_from_slice(&s);
