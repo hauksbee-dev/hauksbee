@@ -15,16 +15,32 @@ fn blinky() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/boards/blinky.kicad_pcb")
 }
 
+/// An STM32F103 blue pill board: its MCU binds to the external `renode:stm32f103`
+/// backend, which cannot satisfy a boot-coverage assertion the way the in-process
+/// AVR backend can.
+fn stm32_bluepill() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/stm32_bluepill_demo.kicad_pcb")
+}
+
 /// Copy `blinky.kicad_pcb` into a fresh per-test temp dir and return the copy's
 /// path, so init writes its `.toml` there rather than polluting the source tree.
 /// The `tag` keeps parallel tests off each other's directory.
 fn board_in_tempdir(tag: &str) -> PathBuf {
+    copy_board_to_tempdir(&blinky(), tag)
+}
+
+/// Copy `src` (a `.kicad_pcb`) into a fresh per-test temp dir, returning the
+/// copy's path, so init writes its `.toml` there rather than into the source
+/// tree. The `tag` keeps parallel tests off each other's directory.
+fn copy_board_to_tempdir(src: &std::path::Path, tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("hauksbee_ci_init_{}_{tag}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let dst = dir.join("blinky.kicad_pcb");
-    std::fs::copy(blinky(), &dst).unwrap();
+    let file = src.file_name().unwrap();
+    let dst = dir.join(file);
+    std::fs::copy(src, &dst).unwrap();
     // A stale spec from a previous run would trip the overwrite guard.
-    let _ = std::fs::remove_file(dir.join("blinky.toml"));
+    let stem = src.file_stem().unwrap().to_str().unwrap();
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.toml")));
     dst
 }
 
@@ -54,6 +70,44 @@ fn init_generates_a_spec_the_loader_accepts() {
     // Exactly the two enabled assertions parse; the rail voltage asserts stay
     // commented out (they must not count toward the loaded spec).
     assert_eq!(spec.asserts.len(), 2, "only the two enabled assertions are live");
+}
+
+#[test]
+fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
+    // The STM32 blue pill binds to the external `renode:stm32f103` backend, which
+    // co-sims GPIO/UART but models ADC and I2C/SPI peripheral-slave coupling as
+    // no-ops and cannot report pin drive direction (docs/MCU.md). A live
+    // boot-coverage assertion there can go RED with a misleading diagnosis on a
+    // net the firmware actually drives, so init must scaffold it commented-out
+    // with an honest note rather than as a live assertion.
+    let board = copy_board_to_tempdir(&stm32_bluepill(), "backend_gap");
+
+    // The rendered text carries the honest backend-gap note and a commented-out
+    // (`# `) boot-coverage assertion, not a live one.
+    let text = hauksbee_ci::init::render_spec(&board).expect("render scaffolds a spec");
+    assert!(
+        text.contains("renode:stm32f103"),
+        "the note names the backend that cannot satisfy the assertion, got:\n{text}"
+    );
+    assert!(
+        text.contains("# kind = \"boot-coverage\""),
+        "boot-coverage is scaffolded commented-out, got:\n{text}"
+    );
+    assert!(
+        !text.contains("\nkind = \"boot-coverage\""),
+        "boot-coverage must not be a live assertion on this backend, got:\n{text}"
+    );
+
+    // It still writes and round-trips through the loader, with the live-assertion
+    // set reduced to `no_faults` only (boot-coverage did not load).
+    let spec_path = init(&board).expect("init scaffolds a spec");
+    let spec = Spec::load(&spec_path).expect("generated spec parses through Spec::load");
+    let kinds: Vec<&str> = spec.asserts.iter().map(|a| a.kind.as_str()).collect();
+    assert!(kinds.contains(&"no_faults"), "no_faults stays live");
+    assert!(
+        !kinds.contains(&"boot-coverage"),
+        "boot-coverage is commented out, so it must not load"
+    );
 }
 
 #[test]

@@ -17,7 +17,7 @@ hauksbee-ci: boot-coverage: MOSFET gate left floating (FAIL)
   seeds: 1
 
   [FAIL] GATE_CTRL driven to >= 3 V within 20 ms of reset
-        control net 'GATE_CTRL' was NEVER driven to >= 3 V (firmware left it Hi-Z / undefined through the whole run)
+        control net 'GATE_CTRL' was never driven to >= 3 V (firmware left it Hi-Z / undefined through the whole run); observed range [0.000, 0.000] V
 
 0/1 assertions passed in 0.03s - RED
 [exit 1]

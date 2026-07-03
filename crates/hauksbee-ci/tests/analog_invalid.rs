@@ -72,6 +72,8 @@ fn outcome_with(
         protection_tripped: HashMap::new(),
         sim_ms,
         first_reach_ms: HashMap::new(),
+        driven_nets: Default::default(),
+        drive_direction_observable: false,
         first_fault_ms: None,
         ac: None,
         analog_valid,

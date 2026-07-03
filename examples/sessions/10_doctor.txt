@@ -15,11 +15,11 @@ $ scripts/doctor.sh
   ok simavr  /opt/homebrew/bin/simavr
          unlocks: (also built in) external AVR backend cross-check for ATmega/ATtiny firmware co-sim
   ok qemu-system-xtensa  /opt/homebrew/bin/qemu-system-xtensa
-         unlocks: ESP32 (Xtensa) firmware co-sim, e.g. the Watchy boot-coverage examples
-  ok qemu-system-arm  /opt/homebrew/bin/qemu-system-arm
-         unlocks: ARM Cortex-M (STM32 etc.) firmware co-sim backend
+         unlocks: ESP32 / ESP32-S3 (Xtensa) firmware co-sim, e.g. the Watchy boot-coverage examples
+  ok qemu-system-riscv32  /opt/homebrew/bin/qemu-system-riscv32
+         unlocks: ESP32-C3 (RISC-V) firmware co-sim backend
   absent renode
-         would unlock: Renode backend for multi-node / richer peripheral firmware co-sim
+         would unlock: STM32 / nRF52 / SiFive RISC-V (ARM Cortex-M and RISC-V) firmware co-sim backend
          set HAUKSBEE_RENODE if not on PATH
   absent freerouting
          would unlock: production autorouting of recompiled boards over Specctra DSN (board-as-code routing)
