@@ -9,7 +9,7 @@
 //! ## The Tarski meta-lesson, applied
 //!
 //! An early version of this extractor reported dozens of "shorts" on these
-//! boards. Per `docs/BUG_HUNT.md`, each was chased to the XML before being
+//! boards. Per `docs/record/BUG_HUNT.md`, each was chased to the XML before being
 //! believed, and every one was the detector's fault, not the board's:
 //!
 //! - the mirrored-element transform flipped X instead of Y, scrambling the pads
@@ -143,7 +143,7 @@ fn famous_eagle_boards_have_no_true_shorts() {
     assert!(
         offenders.is_empty(),
         "the famous Eagle boards shipped and must be short-clean; if one really \
-         shows a short, chase it to the XML before believing it (docs/BUG_HUNT.md). \
+         shows a short, chase it to the XML before believing it (docs/record/BUG_HUNT.md). \
          Offenders:\n  {}",
         offenders.join("\n  ")
     );
