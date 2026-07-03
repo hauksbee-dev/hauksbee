@@ -1180,3 +1180,131 @@ impl StampCtx<'_> {
     }
 }
 
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use crate::system::ReactiveState;
+    use hauksbee_ir::{Circuit, Device, SourceKind};
+
+    /// A flagship-shaped synthetic board: repeated neuron-ish cells of
+    /// resistors, caps, diode, BJT, comparator and an SPDT switch pair, sized
+    /// to the joint capture march's scale (~5.8k devices, ~4k unknowns).
+    fn big_board(cells: usize) -> Circuit {
+        let mut c = Circuit::new();
+        let vdd = c.node("vdd");
+        c.add(Device::Vsource {
+            name: "VDD".into(),
+            p: vdd,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        for k in 0..cells {
+            let m = c.node(&format!("m{k}"));
+            let s = c.node(&format!("s{k}"));
+            let o = c.node(&format!("o{k}"));
+            let com = c.node(&format!("c{k}"));
+            c.add(Device::Resistor { name: format!("R{k}a"), a: vdd, b: m, ohms: 10e3, tc1: None });
+            c.add(Device::Resistor { name: format!("R{k}b"), a: m, b: NodeId::GROUND, ohms: 47e3, tc1: None });
+            c.add(Device::Capacitor { name: format!("C{k}"), a: m, b: NodeId::GROUND, farads: 1e-9, ic: None });
+            c.add(Device::Diode { name: format!("D{k}"), a: m, k: s, model: Default::default() });
+            c.add(Device::Bjt { name: format!("Q{k}"), c: vdd, b: s, e: NodeId::GROUND, model: Default::default() });
+            c.add(Device::Comparator {
+                name: format!("K{k}"),
+                out: o,
+                inp: m,
+                inn: s,
+                out_lo: 0.0,
+                out_hi: 5.0,
+                hysteresis: 0.1,
+            });
+            c.add(Device::VSwitch {
+                name: format!("G{k}_s1"),
+                a: com, b: m, ctrl_p: o, ctrl_n: NodeId::GROUND,
+                von: 3.0, voff: 2.0, ron: 10.0, roff: 1e9,
+            });
+            c.add(Device::VSwitch {
+                name: format!("G{k}_s0"),
+                a: com, b: vdd, ctrl_p: o, ctrl_n: NodeId::GROUND,
+                von: 2.0, voff: 3.0, ron: 10.0, roff: 1e9,
+            });
+            c.add(Device::Resistor { name: format!("R{k}c"), a: com, b: NodeId::GROUND, ohms: 100.0, tc1: None });
+        }
+        c
+    }
+
+    /// Assembly-economy sub-lever B decision measurement (run with
+    /// --ignored --nocapture): split one assembly's cost into device-model
+    /// COMPUTE (the residual sink: same models, trivial writes) and
+    /// ACCUMULATION (clear + slot-search stores + rhs), by timing `stamp_all`
+    /// against `stamp_residual` on the same context. Whatever a deterministic
+    /// parallel stamping scheme (per-thread buffers reduced in device order)
+    /// can parallelize is bounded by the compute share; the accumulation is
+    /// its serial section. Numbers feed the report; this is measurement
+    /// estate, not a regression gate.
+    #[test]
+    #[ignore = "measurement harness, run explicitly"]
+    fn bench_stamp_split() {
+        let circuit = big_board(640); // ~5.8k devices
+        let layout = Layout::new(&circuit);
+        let mut m = SparseMatrix::new(layout.size);
+        reserve_pattern(&circuit, &layout, &mut m);
+        let n = layout.size;
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.001 * (i % 7) as f64).collect();
+        let state = ReactiveState::new(circuit.devices.len());
+        let opts = SolverOptions::default();
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let spdt = std::collections::HashMap::new();
+        let ctx = StampCtx {
+            circuit: &circuit,
+            layout: &layout,
+            opts: &opts,
+            x: &x,
+            x_prev: &x,
+            time: 1e-6,
+            coeffs,
+            state: &state,
+            dc: false,
+            use_ic: false,
+            gmin: 1e-12,
+            src_scale: 1.0,
+            branch_reg: 1e-2,
+            cmp_freeze: None,
+            switch_freeze: None,
+            spdt_sibling: &spdt,
+        };
+        let mut rhs = vec![0.0f64; n];
+        let mut f = vec![0.0f64; n];
+        const REPS: usize = 300;
+        // Warm both paths.
+        for _ in 0..10 {
+            m.clear_values();
+            for v in rhs.iter_mut() { *v = 0.0; }
+            stamp_all(&ctx, &mut m, &mut rhs);
+            for v in f.iter_mut() { *v = 0.0; }
+            stamp_residual(&ctx, &mut f);
+        }
+        let t0 = std::time::Instant::now();
+        for _ in 0..REPS {
+            m.clear_values();
+            for v in rhs.iter_mut() { *v = 0.0; }
+            stamp_all(&ctx, &mut m, &mut rhs);
+        }
+        let full = t0.elapsed().as_secs_f64() / REPS as f64;
+        let t1 = std::time::Instant::now();
+        for _ in 0..REPS {
+            for v in f.iter_mut() { *v = 0.0; }
+            stamp_residual(&ctx, &mut f);
+        }
+        let resid = t1.elapsed().as_secs_f64() / REPS as f64;
+        println!(
+            "bench_stamp_split: devices={} unknowns={} full_assembly={:.3}ms residual_only={:.3}ms accumulation_share={:.0}%",
+            circuit.devices.len(),
+            n,
+            full * 1e3,
+            resid * 1e3,
+            (1.0 - resid / full) * 100.0,
+        );
+        assert!(full > 0.0 && resid > 0.0);
+    }
+}
