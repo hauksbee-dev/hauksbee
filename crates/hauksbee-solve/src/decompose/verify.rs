@@ -73,6 +73,14 @@ pub enum Evidence {
     /// measured movement. No producer until the orchestrator's route-4
     /// detection lands (see [`TearKind::Stiff`]).
     MeasuredStiffness { sag_v: f64, tol_v: f64 },
+    /// The rail was PINNED at a fixed estimate (its feed voltage, or the
+    /// whole-group DC value when one exists): no balance equation ran and no
+    /// sag was measured. Trusted on the structure of a low-impedance supply
+    /// leg (a milliohm feed cannot sag far), which is an ASSUMPTION, not a
+    /// proof. Emitted by the composed executor's feed-hold degradation when
+    /// the balance engine cannot fragment the group, so the exact
+    /// whole-group balance is unavailable.
+    AssumedFeedHold,
 }
 
 /// The tolerance the tear's exactness claim carries. Gates assert against
@@ -86,6 +94,10 @@ pub enum ToleranceClaim {
     CaptureGrid { dt: Option<f64> },
     /// Bounded by the certified stiffness sag.
     Stiffness { sag_v: f64 },
+    /// No bound exists: nothing was measured at this boundary and no
+    /// equation closed it, so the result may be wrong by the boundary's true
+    /// sag. The honest claim for an [`Evidence::AssumedFeedHold`] pin.
+    Unmeasured,
 }
 
 /// One torn node and the full story of why tearing it is legitimate.
@@ -188,6 +200,7 @@ impl TearCertificate {
                 }
                 ToleranceClaim::CaptureGrid { dt: None } => "capture grid (pending)".to_string(),
                 ToleranceClaim::Stiffness { sag_v } => format!("stiffness sag {sag_v:.3e}V"),
+                ToleranceClaim::Unmeasured => "UNMEASURED (assumed feed hold)".to_string(),
             };
             let _ = writeln!(
                 out,
