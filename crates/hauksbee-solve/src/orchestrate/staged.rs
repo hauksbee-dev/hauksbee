@@ -1823,6 +1823,7 @@ mod tests {
             tol_v: 1e-2,
             accepted: true,
             bootstrapped: true,
+            capture_growth: 0,
             note,
         };
         let n = NodeId(42);
