@@ -25,7 +25,7 @@
 //! own test binary (this file) and must stay the only test in it.
 
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
-use hauksbee_solve::{DcInit, SolverOptions, StepControl, Transient, Waveforms};
+use hauksbee_solve::{DcInit, DeviceEffects, SolverOptions, StepControl, Transient, Waveforms};
 
 /// Integrate-and-fire relaxation oscillator with a binder-style SPDT pair.
 fn spiking_board() -> Circuit {
@@ -170,6 +170,13 @@ fn march() -> Waveforms {
                 .unwrap_or(2e-6),
         },
         dc_init: DcInit::FromZero,
+        effects: DeviceEffects {
+            // The flagship substrate drops the switch control tangent (the
+            // torn-column high-Z boundary problem); typed since the env
+            // migration.
+            switch_ctrl_gm: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     Transient::new(opts)
@@ -183,7 +190,6 @@ fn armed_march_is_deterministic_and_spikes() {
     // sets these as its own configuration); TRANSIENT_DYN is what arms the
     // line search this fixture exists to witness.
     std::env::set_var("HAUKSBEE_TRANSIENT_DYN", "1");
-    std::env::set_var("HAUKSBEE_SW_NO_CTRL_GM", "1");
     std::env::set_var("HAUKSBEE_TRAN_CMP_SMOOTH", "1");
 
     let wf = march();
