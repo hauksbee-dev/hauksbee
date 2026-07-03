@@ -1794,8 +1794,10 @@ fn solve_capture(
     // ONE attempt (not the three-window ladder): an adaptive march is expensive,
     // and this fires once per grown capture per round on the flagship. The result
     // is sampled onto the group grid by lerp, so the non-uniform steps cost
-    // nothing downstream; dt_max = 2*dt (the bespoke stage-A ceiling at the same
-    // sampling scale) lets the clean stretches march at twice the grid.
+    // nothing downstream. dt_max = dt, the CAPTURE GRID ITSELF: the certificate
+    // claims CaptureGrid{dt}, and a march allowed to step coarser than the grid
+    // it certifies undersamples its own claim. The bespoke precedent agrees:
+    // stage A ran dt_max == sample_dt (both 2 us), not a multiple.
     let adaptive_once = || -> Option<Waveforms> {
         let StepControl::Fixed { dt } = sub_opts.step else {
             return None;
@@ -1807,7 +1809,7 @@ fn solve_capture(
         aopts.step = StepControl::Adaptive {
             dt_initial: dt,
             dt_min: 1e-12,
-            dt_max: 2.0 * dt,
+            dt_max: dt,
         };
         let dbg = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
         let t0 = std::time::Instant::now();
