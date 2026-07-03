@@ -1,6 +1,6 @@
 //! Two-sided validation of the behavioural power-IC models against the
 //! documented MNT Reform / ZSWatch DevKit revision faults
-//! (docs/KNOWN_FAULTS_VALIDATION.md). Each test flags the faulty revision for
+//! (docs/record/KNOWN_FAULTS_VALIDATION.md). Each test flags the faulty revision for
 //! exactly the thing the next revision fixed, and goes clean on the fix, the
 //! strongest calibration the tool can have.
 //!

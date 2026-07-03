@@ -6,7 +6,7 @@ Software runs its tests on every commit. Hardware never got that loop: you chang
 
 No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/COMPARISON.md`](docs/COMPARISON.md) for the full matrix.
 
-**New here? Read [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) first** — it is the authoritative scope document: what every layer does, which MCU architectures the firmware co-sim covers (AVR built in; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section that explicitly addresses the two most frequent misunderstandings of the tool.
+**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md): what every layer does, which MCU architectures the firmware co-sim covers (AVR built in; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section. The project's evidence trail (bug-hunt campaigns, known-fault calibration, benchmarks) lives in [`docs/record/`](docs/record/).
 
 [**Watch the showcase**](frontend/capture/out/hauksbee_showcase.mp4) (a dozen boards running headless, ~2.5 min).
 
@@ -32,9 +32,9 @@ Point it at any PCB design and it will:
 
 ## The evidence
 
-**Validated against documented faults.** Eight in-scope faults that were fixed between two public design revisions, across four famous boards (ZSWatch DevKit, Watchy, Olimex ESP32-EVB, MNT Reform), run on both the faulty and the fixed file. The revision history is the ground truth. Six were caught statically, one was executed two-sided via firmware co-sim, and one is an honest miss whose firmware-decidable path is named. No check was forced to inflate the count. Full matrix and the rejected-check evidence: [`docs/KNOWN_FAULTS_VALIDATION.md`](docs/KNOWN_FAULTS_VALIDATION.md).
+**Validated against documented faults.** Eight in-scope faults that were fixed between two public design revisions, across four famous boards (ZSWatch DevKit, Watchy, Olimex ESP32-EVB, MNT Reform), run on both the faulty and the fixed file. The revision history is the ground truth. Six were caught statically, one was executed two-sided via firmware co-sim, and one is an honest miss whose firmware-decidable path is named. No check was forced to inflate the count. Full matrix and the rejected-check evidence: [`docs/record/KNOWN_FAULTS_VALIDATION.md`](docs/record/KNOWN_FAULTS_VALIDATION.md).
 
-**The most famous USB-C fault ever shipped, re-derived cold.** Fed a reconstruction of the Raspberry Pi 4's USB-C power-in (CC1 and CC2 tied to one shared 5.1 kΩ pulldown, the design that shipped on tens of millions of units), hauksbee's generic USB-C classifier derives the failure from spec thresholds alone: both CC pins land at 0.1338 V, below the 0.20 V vRa threshold, so a compliant source declares an Audio Adapter Accessory and withholds VBUS. Every solved voltage was recomputed by hand from the USB Type-C spec and matched to better than 0.01%. Full derivation: [`docs/BUG_HUNT.md`](docs/BUG_HUNT.md).
+**The most famous USB-C fault ever shipped, re-derived cold.** Fed a reconstruction of the Raspberry Pi 4's USB-C power-in (CC1 and CC2 tied to one shared 5.1 kΩ pulldown, the design that shipped on tens of millions of units), hauksbee's generic USB-C classifier derives the failure from spec thresholds alone: both CC pins land at 0.1338 V, below the 0.20 V vRa threshold, so a compliant source declares an Audio Adapter Accessory and withholds VBUS. Every solved voltage was recomputed by hand from the USB Type-C spec and matched to better than 0.01%. Full derivation: [`docs/record/BUG_HUNT.md`](docs/record/BUG_HUNT.md).
 
 ---
 
@@ -68,7 +68,7 @@ hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real d
 hauksbee-ci run ci/power-up.toml                     # run a CI spec the way a pipeline would
 ```
 
-Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/TEST_CAMPAIGN.md`](docs/TEST_CAMPAIGN.md).
+Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
 
 **Prebuilt binary (once a public release exists):**
 
@@ -103,7 +103,7 @@ Gatekeeper note for macOS — are in [`docs/SIMULATORS.md`](docs/SIMULATORS.md).
 
 ## The honest verdict on the hunt
 
-Pointed at two dozen famous open-hardware boards over five rounds, hauksbee found no unreported defect, and zero false positives from the lint. These are shipped, reviewed, working boards, so a clean electrical verdict is the correct one. The real yield was about ten bugs in hauksbee itself, surprises that turned out to be tool defects rather than board defects, each chased to ground and fixed. The clean sweep is evidence of the tool's honesty; the known-fault table is the proof of its teeth. Full write-up: [`docs/FAMOUS_SWEEP.md`](docs/FAMOUS_SWEEP.md).
+Pointed at two dozen famous open-hardware boards over five rounds, hauksbee found no unreported defect, and zero false positives from the lint. These are shipped, reviewed, working boards, so a clean electrical verdict is the correct one. The real yield was about ten bugs in hauksbee itself, surprises that turned out to be tool defects rather than board defects, each chased to ground and fixed. The clean sweep is evidence of the tool's honesty; the known-fault table is the proof of its teeth. Full write-up: [`docs/record/FAMOUS_SWEEP.md`](docs/record/FAMOUS_SWEEP.md).
 
 Then we pointed it where unknown bugs actually survive: **thin-review, single-maintainer, freshly-shipped boards with no issue history** — the opposite of the famous survivors. Across five such boards, hauksbee turned up **three genuine, previously-unreported findings**, each chased to the design file, hand-verified, prior-art-checked, and put past a fresh context-isolated skeptic:
 

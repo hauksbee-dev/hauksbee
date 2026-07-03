@@ -9,7 +9,7 @@ ships. Checks 1 to 5 live in `crates/hauksbee-extract/src/si.rs` (+ the
 because their current attribution needs the bound DB models, and are merged into
 the same `--si` report (the way `--lint` merges the strap lint). All run as
 `hauksbee run <board> --si`, and follow the same calibration discipline as the
-rest of the tool (`docs/FAMOUS_SWEEP.md`, `docs/KNOWN_FAULTS_VALIDATION.md`):
+rest of the tool (`docs/record/FAMOUS_SWEEP.md`, `docs/record/KNOWN_FAULTS_VALIDATION.md`):
 
 > **Zero false positives on the known-good corpus, or the check does not fire.**
 
