@@ -85,6 +85,14 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
             .iter()
             .map(|&(start_s, end_s)| CosimFailedWindow { start_s, end_s })
             .collect(),
+        spi_framing: sched
+            .spi_framing_modes()
+            .into_iter()
+            .map(|(bus, mode)| hauksbee_engine::result::CosimSpiFraming {
+                bus,
+                mode: mode.as_str().to_string(),
+            })
+            .collect(),
     }
 }
 
