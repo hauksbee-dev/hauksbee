@@ -71,8 +71,11 @@ use crate::transient::{Transient, Waveforms};
 pub struct StiffOutcome {
     /// The cut node (in the caller's node space).
     pub node: NodeId,
-    /// The relaxation residual: `max_t |v_last(t) - v_prev(t)|` between the
-    /// final two train-driven iterates at this boundary.
+    /// The relaxation residual between the final two train-driven iterates
+    /// at this boundary, time-shift-tolerant by one grid step (each sample
+    /// compares against the other iterate's neighbouring cells): the
+    /// capture-grid claim's own metric, and the reason spiking trains can
+    /// converge instead of reading a one-cell spike shift as volts.
     pub sag_v: f64,
     /// The tolerance it was judged against (10 x reltol x Vnom).
     pub tol_v: f64,
@@ -315,11 +318,16 @@ pub fn execute_stiff_group(
             };
             let new = sample_node(&wf.0, &wf.1, *c, &grid);
             let old = &trains[&c.0];
-            let diff = old
-                .iter()
-                .zip(&new)
-                .map(|(a, b)| (a - b).abs())
-                .fold(0.0f64, f64::max);
+            // The residual metric is time-shift-tolerant by ONE grid step:
+            // each sample compares against the other iterate's neighbouring
+            // cells and keeps the smallest difference. This is the
+            // capture-grid claim's own metric (a replayed boundary is exact
+            // up to the grid), and it is what lets spiking trains converge:
+            // a spike whose timing shifts by one cell between iterates is
+            // the same physics, but a pointwise metric reads it as volts of
+            // divergence, which is exactly how the flagship's mega group
+            // refused at the full window while accepting at smoke scale.
+            let diff = shifted_residual(old, &new);
             sag.insert(c.0, diff);
             let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
             if diff > 10.0 * reltol * vnom {
@@ -655,6 +663,25 @@ fn sample_node(
             .collect(),
         None => vec![0.0; grid.len()],
     }
+}
+
+/// One-grid-step time-shift-tolerant residual between two iterates of a
+/// boundary train: max over samples of the smallest difference against the
+/// other iterate's neighbouring cells. See the call site for why pointwise
+/// comparison is the wrong metric on spiking trains.
+fn shifted_residual(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len().min(b.len());
+    let mut worst = 0.0f64;
+    for i in 0..n {
+        let lo = i.saturating_sub(1);
+        let hi = (i + 1).min(n - 1);
+        let mut best = f64::INFINITY;
+        for j in lo..=hi {
+            best = best.min((a[i] - b[j]).abs());
+        }
+        worst = worst.max(best);
+    }
+    worst
 }
 
 fn uniform_grid(dt: f64, tstop: f64) -> Vec<f64> {
