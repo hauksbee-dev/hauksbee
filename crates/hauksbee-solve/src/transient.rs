@@ -358,11 +358,12 @@ impl Transient {
                 // resolves the refractory-reset discharge (the smooth comparator's
                 // high gain re-couples the collapsing membrane into the
                 // spike->switch loop and diverges, so the comparator must be
-                // frozen like every other discrete state). The env var, when set,
-                // forces the smooth mode FIRST (the historical default for the
-                // FIRE step); either way the other mode is tried if the first
-                // fails, so a single step is solved by whichever regime fits.
-                let prefer_smooth = std::env::var("HAUKSBEE_TRAN_CMP_SMOOTH").is_ok();
+                // frozen like every other discrete state). The tuning option,
+                // when set, tries the smooth mode FIRST (the historical default
+                // for the FIRE step); either way the other mode is tried if the
+                // first fails, so a single step is solved by whichever regime
+                // fits.
+                let prefer_smooth = opts.event_retry.smooth_comparator_first;
                 let modes = [prefer_smooth, !prefer_smooth];
                 for &cmp_smooth in &modes {
                     ws.x.copy_from_slice(&x_accepted);

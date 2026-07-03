@@ -26,7 +26,8 @@
 
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
-    DcInit, DeviceEffects, RobustnessLadder, SolverOptions, StepControl, Strategy, Transient,
+    DcInit, DeviceEffects, EventRetryTuning, RobustnessLadder, SolverOptions, StepControl,
+    Strategy, Transient,
     Waveforms,
 };
 
@@ -175,6 +176,10 @@ fn march() -> Waveforms {
         dc_init: DcInit::FromZero,
         // The flagship spike-path bundle, typed since the env migration.
         ladder: RobustnessLadder::none().with(Strategy::TransientDyn),
+        event_retry: EventRetryTuning {
+            smooth_comparator_first: true,
+            ..Default::default()
+        },
         effects: DeviceEffects {
             // The flagship substrate drops the switch control tangent (the
             // torn-column high-Z boundary problem); typed since the env
@@ -194,7 +199,6 @@ fn armed_march_is_deterministic_and_spikes() {
     // The flagship general path's numerical substrate (tarski_general_e2e.rs
     // sets these as its own configuration); TRANSIENT_DYN is what arms the
     // line search this fixture exists to witness.
-    std::env::set_var("HAUKSBEE_TRAN_CMP_SMOOTH", "1");
 
     let wf = march();
     let c = spiking_board();
