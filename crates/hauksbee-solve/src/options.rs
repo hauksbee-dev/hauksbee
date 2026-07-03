@@ -95,6 +95,45 @@ pub struct DeviceEffects {
     /// Temperature dependence of saturation currents and thermal voltage.
     /// Off => everything evaluated at TNOM regardless of `temperature_c`.
     pub temperature: bool,
+    /// SPDT break-before-make: the two throws of a recognized SPDT pair
+    /// (binder-emitted `_s0`/`_s1` legs sharing the common node) never conduct
+    /// simultaneously; in the select transition band the losing throw is
+    /// driven toward `roff` by a winner-take-all on select margin. This is a
+    /// CORRECTNESS fix to the switch model (the bare smooth-tanh model bridges
+    /// both throws at mid-band, injecting a weight-independent common-mode
+    /// current; a real SN74LVC1G3157 never does that), promoted from the
+    /// HAUKSBEE_SPDT_BBM env knob to the default per dev-plan 02 section 2.6.
+    /// `false` is the explicit compat switch restoring the bridging model.
+    #[serde(default = "default_true")]
+    pub spdt_bbm: bool,
+    /// Break-before-make winner-take-all sharpness (per unit select margin);
+    /// formerly HAUKSBEE_SPDT_BBM_K.
+    #[serde(default = "default_spdt_bbm_k")]
+    pub spdt_bbm_k: f64,
+    /// Stamp the switch control-node transconductance (the Newton tangent
+    /// coupling the through-current to the control voltage). Not required for
+    /// correctness (the same root is reached without it, with more
+    /// iterations); on a torn column whose gate control is a high-Z boundary
+    /// node the summed back-coupling throttles the control's slew (measured
+    /// ~15x slower than its RC), so such callers set this `false`. Formerly
+    /// HAUKSBEE_SW_NO_CTRL_GM (inverted).
+    #[serde(default = "default_true")]
+    pub switch_ctrl_gm: bool,
+    /// Gain (1/V) of the smooth logistic comparator transfer the STAGED solve
+    /// path uses (every normal solve keeps the discrete bang-bang model);
+    /// formerly HAUKSBEE_CMP_K.
+    #[serde(default = "default_cmp_smooth_gain")]
+    pub cmp_smooth_gain: f64,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_spdt_bbm_k() -> f64 {
+    6.0
+}
+fn default_cmp_smooth_gain() -> f64 {
+    2000.0
 }
 
 impl Default for DeviceEffects {
@@ -104,6 +143,162 @@ impl Default for DeviceEffects {
             junction_caps: true,
             series_resistance: true,
             temperature: true,
+            spdt_bbm: true,
+            spdt_bbm_k: 6.0,
+            switch_ctrl_gm: true,
+            cmp_smooth_gain: 2000.0,
+        }
+    }
+}
+
+/// One rung of the robustness ladder: a named permission for an escalation
+/// mechanism the solver may engage when the plain path is not enough. Each
+/// maps one-to-one onto a formerly-`HAUKSBEE_*` env knob (noted per variant),
+/// and each is BIT-IDENTICAL to baseline when not reached: granting a
+/// strategy that never fires changes nothing. That is the plan's invariant
+/// (dev-plan 02 section 2.6) and what the migration gates pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Strategy {
+    /// Global Armijo line search in the per-step transient Newton (the
+    /// globalization for traveling mesh overshoots). Formerly
+    /// HAUKSBEE_NEWTON_LINESEARCH; the transient driver also arms it
+    /// automatically as part of [`Strategy::TransientDyn`].
+    LineSearch,
+    /// Markowitz dynamic re-pivot fallback when the frozen LU ordering hits a
+    /// singular pivot, in the DC / staged solves. Formerly HAUKSBEE_DC_DYN.
+    DynamicPivot,
+    /// Force the dynamic-pivot fallback on for EVERY transient step (the old,
+    /// slower lever kept for stubborn boards; the event-freeze retry arms it
+    /// locally where needed). Formerly HAUKSBEE_TRANSIENT_DYN_GLOBAL.
+    DynamicPivotEveryStep,
+    /// The event-driven staged DC solve: freeze comparator/switch states per
+    /// inner Newton solve, re-derive Gauss-Seidel until consistent. Formerly
+    /// HAUKSBEE_CMP_EVENT.
+    EventFreeze,
+    /// Pseudo-transient continuation rescue in the staged DC ladder. Formerly
+    /// HAUKSBEE_PTC.
+    Ptc,
+    /// Accept a DC iterate whose KCL residual is below
+    /// [`SolverOptions::residual_accept_tol`] even though the Newton step
+    /// tolerance was never met (the diode-mesh limit-cycle backstop; a sub-nA
+    /// residual IS an operating point). Formerly HAUKSBEE_DC_RESID_ACCEPT.
+    ResidualAccept,
+    /// The stiff-transient bundle the spike-path marches need: staged
+    /// regularizers on every step, the per-step event-freeze retry, and the
+    /// Armijo line search. Formerly HAUKSBEE_TRANSIENT_DYN. (A bundle because
+    /// that is exactly what the env var armed; round 2 may split it.)
+    TransientDyn,
+}
+
+impl Strategy {
+    /// Stable bit for the activation diagnostics.
+    pub(crate) fn bit(self) -> u16 {
+        match self {
+            Strategy::LineSearch => 1 << 0,
+            Strategy::DynamicPivot => 1 << 1,
+            Strategy::DynamicPivotEveryStep => 1 << 2,
+            Strategy::EventFreeze => 1 << 3,
+            Strategy::Ptc => 1 << 4,
+            Strategy::ResidualAccept => 1 << 5,
+            Strategy::TransientDyn => 1 << 6,
+        }
+    }
+
+    /// Every strategy, in the canonical escalation order (cheapest first).
+    pub const ALL: [Strategy; 7] = [
+        Strategy::LineSearch,
+        Strategy::DynamicPivot,
+        Strategy::DynamicPivotEveryStep,
+        Strategy::EventFreeze,
+        Strategy::Ptc,
+        Strategy::ResidualAccept,
+        Strategy::TransientDyn,
+    ];
+}
+
+/// The typed escalation ladder that replaces the `HAUKSBEE_*` control-flow
+/// env vars (dev-plan 02 section 2.6). Round-1 semantics: MEMBERSHIP is the
+/// permission, consulted by the existing solve paths exactly where the env
+/// reads used to sit; the insertion order documents the intended escalation
+/// order (round 2, the partitioner selecting ladder aggressiveness per
+/// island, builds on that). `Copy` because `SolverOptions` is copied through
+/// every orchestration layer, which is also how the ladder reaches nested
+/// sub-solves: the job the process-global env vars used to do covertly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct RobustnessLadder {
+    steps: [Option<Strategy>; 8],
+}
+
+impl RobustnessLadder {
+    /// The empty ladder: the plain solver, bit-identical to the classic
+    /// no-env-vars-set behavior. This is the default.
+    pub const fn none() -> Self {
+        RobustnessLadder { steps: [None; 8] }
+    }
+
+    /// The full ladder in canonical order: every escalation the solver has.
+    /// This is the substrate the flagship spike paths run on (the exact set
+    /// `tarski_decomp::solve_inference` used to arm via env).
+    pub fn full() -> Self {
+        let mut l = RobustnessLadder::none();
+        for s in Strategy::ALL {
+            l = l.with(s);
+        }
+        l
+    }
+
+    /// Grant a strategy (idempotent; appended in call order).
+    pub fn with(mut self, s: Strategy) -> Self {
+        if self.has(s) {
+            return self;
+        }
+        for slot in self.steps.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(s);
+                return self;
+            }
+        }
+        unreachable!("ladder capacity covers every Strategy variant");
+    }
+
+    /// Is this strategy granted?
+    pub fn has(&self, s: Strategy) -> bool {
+        self.steps.iter().any(|&x| x == Some(s))
+    }
+
+    /// Granted strategies in escalation order.
+    pub fn steps(&self) -> impl Iterator<Item = Strategy> + '_ {
+        self.steps.iter().filter_map(|&s| s)
+    }
+}
+
+/// Tuning for the event-freeze retry machinery (the discrete-state
+/// Gauss-Seidel that resolves comparator/switch flips). These were env-tuned
+/// knobs; they are solver configuration, so they live here.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EventRetryTuning {
+    /// Inner Newton budget per frozen solve. `None` uses
+    /// `max(max_newton, 400)` (the frozen inner circuit converges linearly in
+    /// its tail, so it legitimately needs more than the outer budget).
+    /// Formerly HAUKSBEE_TRAN_INNER_MAXIT.
+    pub inner_max_newton: Option<usize>,
+    /// Switch-flip budget per Gauss-Seidel pass: large enough to flip a
+    /// neuron's whole gate fan-out in one pass, small enough to stop discrete
+    /// thrash. Formerly HAUKSBEE_TRAN_FLIP_BUDGET.
+    pub flip_budget: usize,
+    /// Try the SMOOTH-comparator retry mode before the frozen mode (the
+    /// membrane-crosses-up FIRE regime prefers smooth, the refractory reset
+    /// prefers frozen; both are always tried, this is only the order).
+    /// Formerly HAUKSBEE_TRAN_CMP_SMOOTH.
+    pub smooth_comparator_first: bool,
+}
+
+impl Default for EventRetryTuning {
+    fn default() -> Self {
+        EventRetryTuning {
+            inner_max_newton: None,
+            flip_budget: 64,
+            smooth_comparator_first: false,
         }
     }
 }
@@ -147,6 +342,21 @@ pub struct SolverOptions {
     /// sweep (fastest, looser coupling). Ignored when `partitioning == Off`.
     #[serde(default = "default_granularity")]
     pub granularity: f64,
+    /// The robustness escalations this run may use. Empty (the default) is the
+    /// plain classic solver; see [`RobustnessLadder`].
+    #[serde(default)]
+    pub ladder: RobustnessLadder,
+    /// Event-freeze retry tuning; see [`EventRetryTuning`].
+    #[serde(default)]
+    pub event_retry: EventRetryTuning,
+    /// KCL-residual bar (A) for [`Strategy::ResidualAccept`]; ignored unless
+    /// that strategy is granted. Formerly HAUKSBEE_DC_RESID_TOL.
+    #[serde(default = "default_residual_accept_tol")]
+    pub residual_accept_tol: f64,
+}
+
+fn default_residual_accept_tol() -> f64 {
+    1e-9
 }
 
 fn default_granularity() -> f64 {
@@ -174,6 +384,9 @@ impl Default for SolverOptions {
             dc_init: DcInit::Solve,
             partitioning: Partitioning::Auto,
             granularity: 1.0,
+            ladder: RobustnessLadder::none(),
+            event_retry: EventRetryTuning::default(),
+            residual_accept_tol: 1e-9,
         }
     }
 }
