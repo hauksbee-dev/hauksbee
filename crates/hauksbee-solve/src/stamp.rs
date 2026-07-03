@@ -214,6 +214,44 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
 }
 
 /// Stamp every device for the current iterate into `(g, rhs)`.
+/// Device-model env knobs, read ONCE per assembly instead of once per device.
+/// WHY: `stamp_all` runs once per Newton iteration AND once per line-search
+/// residual eval (~120k assemblies on the flagship's joint capture march), and
+/// every VSwitch/Comparator stamp used to consult `std::env::var` inline: on a
+/// board with hundreds of switches that is hundreds of env-lock acquisitions,
+/// environ scans, and String allocations per assembly, a measured double-digit
+/// share of assembly cost. The values feed the SAME expressions, so the
+/// stamped numbers are bit-identical; the snapshot granularity (per assembly,
+/// i.e. per Newton iteration) is indistinguishable for every real caller
+/// (tests set these knobs around whole solves, never mid-assembly).
+struct EnvKnobs {
+    /// HAUKSBEE_SPDT_BBM=1: SPDT break-before-make winner-take-all.
+    spdt_bbm: bool,
+    /// HAUKSBEE_SPDT_BBM_K: BBM transition sharpness (default 6).
+    spdt_bbm_k: f64,
+    /// HAUKSBEE_SW_NO_CTRL_GM=1: drop the switch control back-coupling.
+    sw_no_ctrl_gm: bool,
+    /// HAUKSBEE_CMP_K: staged smooth-comparator gain (default 2000 / V).
+    cmp_k: f64,
+}
+
+impl EnvKnobs {
+    fn read() -> EnvKnobs {
+        EnvKnobs {
+            spdt_bbm: std::env::var("HAUKSBEE_SPDT_BBM").as_deref() == Ok("1"),
+            spdt_bbm_k: std::env::var("HAUKSBEE_SPDT_BBM_K")
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(6.0),
+            sw_no_ctrl_gm: std::env::var("HAUKSBEE_SW_NO_CTRL_GM").as_deref() == Ok("1"),
+            cmp_k: std::env::var("HAUKSBEE_CMP_K")
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(2000.0),
+        }
+    }
+}
+
 pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
     // gmin / homotopy conductance to ground.
     if ctx.gmin > 0.0 {
@@ -232,12 +270,20 @@ pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
             g.add(i, i, -ctx.branch_reg);
         }
     }
+    let knobs = EnvKnobs::read();
     for (id, dev) in ctx.circuit.iter() {
-        stamp_device(ctx, id, dev, g, rhs);
+        stamp_device(ctx, &knobs, id, dev, g, rhs);
     }
 }
 
-fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix, rhs: &mut [f64]) {
+fn stamp_device(
+    ctx: &StampCtx,
+    knobs: &EnvKnobs,
+    id: DeviceId,
+    dev: &Device,
+    g: &mut SparseMatrix,
+    rhs: &mut [f64],
+) {
     match dev {
         Device::Resistor {
             a, b, ohms, tc1, ..
@@ -263,9 +309,9 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
         Device::Mosfet { d, g: gate, s, model, .. } => {
             stamp_mosfet(ctx, *d, *gate, *s, model, g, rhs)
         }
-        Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => {
-            stamp_vswitch(ctx, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs)
-        }
+        Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => stamp_vswitch(
+            ctx, knobs, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, g, rhs,
+        ),
         Device::OpAmp {
             out,
             inp,
@@ -278,9 +324,9 @@ fn stamp_device(ctx: &StampCtx, id: DeviceId, dev: &Device, g: &mut SparseMatrix
         } => stamp_opamp(
             ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, g, rhs,
         ),
-        Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => {
-            stamp_comparator(ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs)
-        }
+        Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => stamp_comparator(
+            ctx, knobs, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, g, rhs,
+        ),
     }
 }
 
@@ -702,6 +748,7 @@ fn stamp_mosfet(
 #[allow(clippy::too_many_arguments)]
 fn stamp_vswitch(
     ctx: &StampCtx,
+    knobs: &EnvKnobs,
     id: DeviceId,
     a: NodeId,
     b: NodeId,
@@ -798,7 +845,7 @@ fn stamp_vswitch(
     // analog realisation of the same on-margin tie-break the frozen event path
     // (`eval_switch_states`) uses, made smooth/differentiable for the per-step
     // Newton. K sets the transition sharpness (HAUKSBEE_SPDT_BBM_K, default 6).
-    let bbm = std::env::var("HAUKSBEE_SPDT_BBM").as_deref() == Ok("1");
+    let bbm = knobs.spdt_bbm;
     if bbm {
         if let Some(&sib) = ctx.spdt_sibling.get(&id) {
             if let Some(Device::VSwitch { ctrl_p: scp, ctrl_n: scn, von: svon, voff: svoff, .. }) =
@@ -808,10 +855,7 @@ fn stamp_vswitch(
                 let sspan = (svon - svoff).abs().max(1e-9);
                 let margin_self = (vctrl - vmid) / span;
                 let margin_sib = ((ctx.v(*scp) - ctx.v(*scn)) - svmid) / sspan;
-                let k_bbm = std::env::var("HAUKSBEE_SPDT_BBM_K")
-                    .ok()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(6.0);
+                let k_bbm = knobs.spdt_bbm_k;
                 let arg = (k_bbm * (margin_self - margin_sib)).clamp(-40.0, 40.0);
                 let win = 1.0 / (1.0 + (-arg).exp());
                 s *= win;
@@ -848,7 +892,7 @@ fn stamp_vswitch(
     // slower than its R*C). HAUKSBEE_SW_NO_CTRL_GM=1 drops the back-coupling so
     // the control node is purely exogenous; the conductance stamp + the switch's
     // own a/b dynamics still track the flip. OFF by default -> bit-identical.
-    let skip_ctrl_gm = std::env::var("HAUKSBEE_SW_NO_CTRL_GM").as_deref() == Ok("1");
+    let skip_ctrl_gm = knobs.sw_no_ctrl_gm;
     let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
     let vab = ctx.v(a) - ctx.v(b);
     let gm_ctrl = vab * dgsw_dvctrl;
@@ -913,6 +957,7 @@ fn stamp_opamp(
 #[allow(clippy::too_many_arguments)]
 fn stamp_comparator(
     ctx: &StampCtx,
+    knobs: &EnvKnobs,
     id: DeviceId,
     out: NodeId,
     inp: NodeId,
@@ -970,9 +1015,7 @@ fn stamp_comparator(
     // (branch_reg == 0 and no freeze map).
     if ctx.branch_reg > 0.0 {
         let span = out_hi - out_lo;
-        let k = std::env::var("HAUKSBEE_CMP_K").ok()
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(2000.0); // 1/V; ~2 mV transition width
+        let k = knobs.cmp_k; // 1/V; ~2 mV transition width
         let d = vp - vn - thresh;
         let kd = (k * d).clamp(-40.0, 40.0);
         let e = (-kd).exp();
