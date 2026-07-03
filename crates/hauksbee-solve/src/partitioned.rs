@@ -497,11 +497,24 @@ impl PartitionedTransient {
     }
 
     /// Seed every island from a DC operating point and fill the exchange buffer.
+    ///
+    /// The primary path is a monolithic whole-circuit DC solve, distributed to
+    /// the islands. When that DC does not exist (the flagship mega group's
+    /// collapse, #59), the whole-circuit solve is exactly the thing this engine
+    /// was torn to avoid, so it falls back to a DECOMPOSED seed
+    /// ([`Self::seed_decomposed`]): boundary estimates into the exchange buffer,
+    /// then a per-island DC (robust to a block whose own DC also fails), letting
+    /// the first marching steps' rail balance reconcile. The success path is
+    /// byte-for-byte the legacy behaviour: the fallback only engages when the
+    /// global DC errors, so the `rail_tear` bit-gate (whose fixtures have a
+    /// converging DC) is untouched.
     fn seed(&mut self, circuit: &Circuit) -> Result<(), String> {
         // Use the monolithic DC solve to get a globally-consistent operating
         // point, then distribute it to island states and the exchange buffer.
         let mut ws = Workspace::new(circuit);
-        dc_operating_point(&mut ws, circuit, &self.opts)?;
+        if dc_operating_point(&mut ws, circuit, &self.opts).is_err() {
+            return self.seed_decomposed(circuit);
+        }
         // Fill exchange buffer with node voltages (ground stays 0).
         for ni in 1..=self.n_nodes {
             let v = ws
@@ -535,6 +548,78 @@ impl PartitionedTransient {
         // Seed nonlinear islands from the same DC point.
         for nl in &mut self.nonlinear {
             nl.seed_from_global(&ws, circuit, &self.opts)?;
+        }
+        Ok(())
+    }
+
+    /// Decomposed seed for when the whole-circuit DC has no solution.
+    ///
+    /// The exchange buffer is filled with boundary ESTIMATES (cut-source pins at
+    /// t=0, each torn rail at its feed-side voltage), then every island is DC'd
+    /// against those estimates on its OWN small matrix. A block whose own DC
+    /// also fails (a comparator astable has no fixed point at all) does not abort
+    /// the seed: [`NonlinearIsland::seed_from_vbuf`] projects the boundary
+    /// estimates onto its nodes and lets the first marching steps integrate out
+    /// of the guess. The rails are NOT explicitly settled at t=0 here (a full
+    /// t=0 settle is awkward before the first `commit`); the accepted v1 is to
+    /// let the first `step_with_rail_balance` reconcile them, so the very first
+    /// window carries the rail's approach to balance rather than a settled
+    /// operating point. That first-window transient is honest data, bounded, and
+    /// vanishes once the balance converges (typically within the first step).
+    fn seed_decomposed(&mut self, circuit: &Circuit) -> Result<(), String> {
+        // 1. Boundary estimates into the exchange buffer.
+        for v in self.vbuf.iter_mut() {
+            *v = 0.0;
+        }
+        // Cut sources (and stacked supplies) resolved at t=0.
+        self.apply_sources(circuit, 0.0);
+        // Each torn rail starts at its feed voltage. Iterated so a cascade
+        // (a rail whose feed is another torn rail) propagates from the source
+        // outward; the loop is bounded by the tear count.
+        for _ in 0..self.tears.len().max(1) {
+            for t in &self.tears {
+                let vfeed = if t.feed.is_ground() {
+                    0.0
+                } else {
+                    self.vbuf[t.feed.0 as usize]
+                };
+                self.vbuf[t.rail.0 as usize] = vfeed;
+            }
+        }
+
+        // 2. Linear island states from the boundary estimates.
+        let vbuf_v = |n: NodeId, vbuf: &[f64]| -> f64 {
+            if n.is_ground() {
+                0.0
+            } else {
+                vbuf[n.0 as usize]
+            }
+        };
+        for (idx, li) in self.linear.iter().enumerate() {
+            let st = &mut self.lin_state[idx];
+            for (k, (id, is_cap)) in li.state_devices().enumerate() {
+                st[k] = if is_cap {
+                    match &circuit.devices[id.0 as usize] {
+                        Device::Capacitor { a, b, ic, .. } => {
+                            ic.unwrap_or_else(|| vbuf_v(*a, &self.vbuf) - vbuf_v(*b, &self.vbuf))
+                        }
+                        _ => 0.0,
+                    }
+                } else {
+                    match &circuit.devices[id.0 as usize] {
+                        Device::Inductor { ic, .. } => ic.unwrap_or(0.0),
+                        _ => 0.0,
+                    }
+                };
+            }
+        }
+
+        // 3. Per-island DC from the boundary estimates (robust to failure),
+        //    writing each island's internal nodes back so the emitted t=0
+        //    sample and the next step's boundary reads are consistent.
+        for nl in &mut self.nonlinear {
+            nl.seed_from_vbuf(&self.vbuf, &self.opts);
+            nl.write_back(&mut self.vbuf);
         }
         Ok(())
     }
@@ -781,6 +866,40 @@ impl NonlinearIsland {
         // Seed reactive history from the sub DC point.
         seed_sub_reactive(&mut self.state, &self.sub, &self.ws);
         Ok(())
+    }
+
+    /// Seed the sub-circuit's accepted state from the exchange buffer's boundary
+    /// ESTIMATES, used by the decomposed seed when no global DC exists. Sets the
+    /// boundary sources from `vbuf`, then tries the island's own DC. If that DC
+    /// also fails (the island is itself an astable with no fixed point), the
+    /// boundary estimates are projected onto the island's nodes as the accepted
+    /// start and the first marching steps integrate out of it. Never errors: a
+    /// per-island DC failure is expected here, not fatal.
+    fn seed_from_vbuf(&mut self, vbuf: &[f64], opts: &SolverOptions) {
+        for (gn, sid) in &self.boundary {
+            let v = vbuf[gn.0 as usize];
+            if let Device::Vsource { kind, .. } = &mut self.sub.devices[sid.0 as usize] {
+                *kind = SourceKind::Dc(v);
+            }
+        }
+        if dc_operating_point(&mut self.ws, &self.sub, opts).is_err() {
+            // Project the boundary estimates onto every mapped node; unmapped
+            // internal nodes stay at zero (power-on rest for this window).
+            for xi in self.ws.x.iter_mut() {
+                *xi = 0.0;
+            }
+            for ln in 1..self.l2g.len() {
+                let gn = self.l2g[ln];
+                if gn.is_ground() {
+                    continue;
+                }
+                if let Some(i) = self.ws.layout.node(NodeId(ln as u32)) {
+                    self.ws.x[i] = vbuf[gn.0 as usize];
+                }
+            }
+        }
+        self.x_accepted.copy_from_slice(&self.ws.x);
+        seed_sub_reactive(&mut self.state, &self.sub, &self.ws);
     }
 
     /// Refresh boundary source values from the global exchange buffer.

@@ -79,7 +79,7 @@ use crate::decompose::rails::BalanceTearCandidate;
 use crate::decompose::verify::{
     Decomposition, Evidence, RefusedAnalysis, TearKind, TearRecord, ToleranceClaim,
 };
-use crate::orchestrate::capture::{execute_stiff_group, StiffOutcome};
+use crate::orchestrate::capture::{execute_composed_group, execute_stiff_group, StiffOutcome};
 use crate::options::{DcInit, Partitioning, SolverOptions, StepControl};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
@@ -279,34 +279,115 @@ pub fn run_staged(
             // relaxation runs first; a refusal (recorded) falls through to
             // the balance-torn or fused path, which is exact regardless.
             //
-            // COMPOSITION DEFERRAL, deliberate and here on purpose: a group
-            // holding accepted balance tears takes the balance-torn path and
-            // skips stiff entirely (the imposed.is_empty() guard below),
-            // even though detection nominated with the rails held. Composing
-            // the two at run time means capture solves that are themselves
-            // rail-torn, which the capture executor does not host yet; the
-            // balance-torn fallback is exact and merely forfeits the stiff
-            // speedup. On the flagship this guard is currently moot (all
-            // rails refuse under Profit), which is exactly why it would rot
-            // silently if undocumented (review finding).
-            let stiff_local: Vec<NodeId> = decomp
-                .stiff
-                .iter()
-                .filter(|s| group_of_node(s.node) == Some(g))
-                .filter_map(|s| g2l.get(&s.node.0).map(|&ln| NodeId(ln)))
-                .collect();
+            // COMPOSITION, deliberate and here on purpose: when a group's stiff
+            // nominations include genuine supply RAILS (a stiff node that is
+            // also a balance-tear candidate, ANY decision), those rails want the
+            // EXACT scalar KCL balance, not Gauss-Seidel relaxation (they are
+            // load-dependent and limit-cycle, the flagship's ANALOG_VDD/+5V).
+            // The composed executor hands the rails to the partitioned balance
+            // engine and relaxes the plain SIGNAL cuts on top of it. Running
+            // plain relaxation on the rails first would burn a full round budget
+            // of mega-group solves on a doomed contraction, so a group with
+            // rails goes STRAIGHT to the composed path (imposed.is_empty() below
+            // keeps the already-balance-torn groups on their own exact path).
+            let mut signal_local: Vec<NodeId> = Vec::new();
+            let mut composed_rails: Vec<RailTear> = Vec::new();
+            for s in &decomp.stiff {
+                if group_of_node(s.node) != Some(g) {
+                    continue;
+                }
+                let Some(&ln) = g2l.get(&s.node.0) else {
+                    continue;
+                };
+                // A stiff node that is ALSO a balance candidate (any decision:
+                // the candidate carries rail/feed/shunt regardless) is a rail.
+                let rail = decomp
+                    .balance_tears
+                    .iter()
+                    .find(|c| c.rail == s.node)
+                    .and_then(|c| remap_tear(c, &devices, &g2l));
+                match rail {
+                    Some(rt) => composed_rails.push(rt),
+                    None => signal_local.push(NodeId(ln)),
+                }
+            }
             let mut stiff_run: Option<Waveforms> = None;
             let mut stiff_refusal_note = String::new();
-            if !stiff_local.is_empty() && imposed.is_empty() {
+
+            // Record a set of measured/refused composed outcomes into the
+            // certificate and telemetry. A rail outcome (note "balanced rail")
+            // becomes a Balance record (round-off exact); a signal becomes a
+            // Stiff record with its measured sag. Every pinned node joins the
+            // supply-integrity refusal, lore #12 generalized off the rails.
+            // (Built lazily: most groups have no stiff nominations at all.)
+            let l2g: HashMap<u32, u32> =
+                if imposed.is_empty() && (!composed_rails.is_empty() || !signal_local.is_empty()) {
+                    g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect()
+                } else {
+                    HashMap::new()
+                };
+            if !composed_rails.is_empty() && imposed.is_empty() {
                 let mut refusals = Vec::new();
-                match execute_stiff_group(&sub, &stiff_local, &sub_opts, tstop, &mut refusals)? {
+                match execute_composed_group(
+                    &sub,
+                    &signal_local,
+                    &composed_rails,
+                    &sub_opts,
+                    tstop,
+                    &mut refusals,
+                )? {
+                    Some(exec) => {
+                        let mut refused_nodes = Vec::new();
+                        for o in &exec.outcomes {
+                            let gnode = NodeId(l2g[&o.node.0]);
+                            // A composed rail carries a non-empty note (how it
+                            // was held); a signal's note is empty. Rails become
+                            // Balance records, signals Stiff records.
+                            if !o.note.is_empty() {
+                                certificate_stiff.push(TearRecord {
+                                    node: gnode,
+                                    kind: TearKind::Balance,
+                                    evidence: Evidence::BalanceEquation,
+                                    tolerance: ToleranceClaim::RoundOff,
+                                    upstream: None,
+                                    downstream: None,
+                                });
+                            } else {
+                                certificate_stiff.push(TearRecord {
+                                    node: gnode,
+                                    kind: TearKind::Stiff,
+                                    evidence: Evidence::MeasuredStiffness {
+                                        sag_v: o.sag_v,
+                                        tol_v: o.tol_v,
+                                    },
+                                    tolerance: ToleranceClaim::Stiffness { sag_v: o.sag_v },
+                                    upstream: None,
+                                    downstream: None,
+                                });
+                            }
+                            refused_nodes.push(gnode);
+                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o.clone() }));
+                        }
+                        certificate_refused_nodes.extend(refused_nodes);
+                        stiff_run = Some(exec.waveforms);
+                        torn_groups.push(g);
+                    }
+                    None => {
+                        stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
+                        for o in refusals {
+                            let gnode = NodeId(l2g[&o.node.0]);
+                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o }));
+                        }
+                    }
+                }
+            } else if !signal_local.is_empty() && imposed.is_empty() {
+                let mut refusals = Vec::new();
+                match execute_stiff_group(&sub, &signal_local, &sub_opts, tstop, &mut refusals)? {
                     Some(exec) => {
                         // Certificate: one measured record per boundary, and
                         // the pinned nodes join the supply-integrity refusal
                         // (questions about their loading beyond sag_v must be
                         // refused, lore #12 generalized off the rails).
-                        let l2g: HashMap<u32, u32> =
-                            g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect();
                         let mut refused_nodes = Vec::new();
                         for o in &exec.outcomes {
                             let gnode = NodeId(l2g[&o.node.0]);
@@ -322,48 +403,21 @@ pub fn run_staged(
                                 downstream: None,
                             });
                             refused_nodes.push(gnode);
-                            stiff_outcomes.push((
-                                g,
-                                StiffOutcome {
-                                    node: gnode,
-                                    ..o.clone()
-                                },
-                            ));
+                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o.clone() }));
                         }
                         certificate_refused_nodes.extend(refused_nodes);
                         stiff_run = Some(exec.waveforms);
                         torn_groups.push(g);
                     }
                     None => {
-                        let l2g: HashMap<u32, u32> =
-                            g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect();
                         // The refusal summary rides into any later fused-path
                         // error: three flagship runs could not see WHY the
                         // mega group fell through, because the fused DC error
                         // masked the stiff refusal that caused it.
-                        stiff_refusal_note = refusals
-                            .iter()
-                            .map(|o| {
-                                format!(
-                                    "{} sag {:.3e} tol {:.3e}{}{}",
-                                    circuit.node_name(NodeId(l2g[&o.node.0])),
-                                    o.sag_v,
-                                    o.tol_v,
-                                    if o.note.is_empty() { "" } else { ": " },
-                                    o.note
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; ");
+                        stiff_refusal_note = summarize_stiff_refusal(circuit, &l2g, &refusals);
                         for o in refusals {
                             let gnode = NodeId(l2g[&o.node.0]);
-                            stiff_outcomes.push((
-                                g,
-                                StiffOutcome {
-                                    node: gnode,
-                                    ..o
-                                },
-                            ));
+                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o }));
                         }
                     }
                 }
@@ -635,6 +689,30 @@ pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
         }
     }
     c
+}
+
+/// Join a set of stiff/composed refusal outcomes into one human line, mapping
+/// each local node back to its board name, so a later fused-path error carries
+/// WHY the relaxation refused instead of masking it behind a DC error.
+fn summarize_stiff_refusal(
+    circuit: &Circuit,
+    l2g: &HashMap<u32, u32>,
+    refusals: &[StiffOutcome],
+) -> String {
+    refusals
+        .iter()
+        .map(|o| {
+            format!(
+                "{} sag {:.3e} tol {:.3e}{}{}",
+                circuit.node_name(NodeId(l2g[&o.node.0])),
+                o.sag_v,
+                o.tol_v,
+                if o.note.is_empty() { "" } else { ": " },
+                o.note
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Remap a balance-tear decision into a sub-circuit's local namespace. `None`
