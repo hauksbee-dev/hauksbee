@@ -256,6 +256,17 @@ pub fn run_staged(
             // Stiff cuts nominated inside this group: the measured waveform
             // relaxation runs first; a refusal (recorded) falls through to
             // the balance-torn or fused path, which is exact regardless.
+            //
+            // COMPOSITION DEFERRAL, deliberate and here on purpose: a group
+            // holding accepted balance tears takes the balance-torn path and
+            // skips stiff entirely (the imposed.is_empty() guard below),
+            // even though detection nominated with the rails held. Composing
+            // the two at run time means capture solves that are themselves
+            // rail-torn, which the capture executor does not host yet; the
+            // balance-torn fallback is exact and merely forfeits the stiff
+            // speedup. On the flagship this guard is currently moot (all
+            // rails refuse under Profit), which is exactly why it would rot
+            // silently if undocumented (review finding).
             let stiff_local: Vec<NodeId> = decomp
                 .stiff
                 .iter()
