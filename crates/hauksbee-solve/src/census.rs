@@ -129,6 +129,16 @@ pub(crate) struct StepCensus {
     /// control straddles its threshold on a non-event trial step (whether or
     /// not the bisection was taken; the taken count is `event_bisections`).
     pub crossings: HashMap<String, u64>,
+    /// FNV-1a over the raw bits of every accepted sample (time, then each
+    /// unknown). Two marches print the same hash iff their accepted grids are
+    /// BIT-IDENTICAL, which is the regression witness optimization work needs:
+    /// "same physics" claims become one line to compare instead of a waveform
+    /// dump. The t=0 emission is excluded (it precedes the loop and is the
+    /// caller's seed, not the march's work).
+    pub wf_hash: u64,
+    /// Sample count folded into `wf_hash` (equal counts make a hash match
+    /// meaningful at a glance).
+    pub wf_samples: u64,
 }
 
 impl StepCensus {
@@ -168,7 +178,28 @@ impl StepCensus {
             newton_iters: 0,
             newton_calls: 0,
             crossings: HashMap::new(),
+            wf_hash: 0xcbf2_9ce4_8422_2325, // FNV-1a offset basis
+            wf_samples: 0,
         })
+    }
+
+    /// Fold one accepted sample (its time and full unknown vector) into the
+    /// waveform hash.
+    pub(crate) fn hash_sample(&mut self, t: f64, x: &[f64]) {
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+        let mut h = self.wf_hash;
+        let mut fold = |v: f64| {
+            for b in v.to_bits().to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(FNV_PRIME);
+            }
+        };
+        fold(t);
+        for &v in x {
+            fold(v);
+        }
+        self.wf_hash = h;
+        self.wf_samples += 1;
     }
 
     /// Record one accepted step of size `h`.
@@ -224,6 +255,10 @@ impl Drop for StepCensus {
             "[step-census]   accepted dt decades [{}] min_dt={:.2e}",
             hist.join(" "),
             self.min_accepted_dt,
+        );
+        eprintln!(
+            "[step-census]   waveform fnv1a=0x{:016x} over {} accepted samples",
+            self.wf_hash, self.wf_samples,
         );
         eprintln!(
             "[step-census]   trial wall by fate: accepted={:.2}s lte_rejected={:.2}s bisected={:.2}s newton_fail={:.2}s event_retry={:.2}s lte_estimate={:.2}s",

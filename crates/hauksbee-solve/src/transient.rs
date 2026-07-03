@@ -486,6 +486,10 @@ impl Transient {
                     c.event_resolved += 1;
                 }
                 c.ns_accepted += t0.elapsed().as_nanos() as u64;
+                // `t + h` here is bitwise the value `t` holds after the
+                // `t += h` below (one addition either way), so the hash covers
+                // exactly the (time, x) pairs the sink receives.
+                c.hash_sample(t + h, &ws.x);
             }
 
             // Accept: advance time, update reactive history, emit.
