@@ -618,9 +618,15 @@ fn solve_capture(
         // iterates, internal estimates, not certified data) ramp with the
         // rest; VREPLAY_ pins stay unramped inside ramp_all_sources.
         Err(e) if e.contains("DC") || e.contains("dc") || e.contains("homotopy") => {
+            // Same ramp-window ladder as the staged retry: quasi-static
+            // first, step-like last (a slow ramp can stall dwelling at bad
+            // biases; a fast one snaps through).
             if let StepControl::Fixed { dt } = sub_opts.step {
-                let ramp_window = (200.0 * dt).min(tstop / 10.0);
-                if ramp_window >= 2.0 * dt {
+                for scale in [200.0, 20.0, 2.0] {
+                    let ramp_window = (scale * dt).min(tstop / 10.0);
+                    if ramp_window < 2.0 * dt {
+                        continue;
+                    }
                     let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
                     let mut ramp_opts = sub_opts;
                     ramp_opts.dc_init = crate::options::DcInit::FromZero;

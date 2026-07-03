@@ -537,32 +537,35 @@ fn solve_group(
                 // window with no grid.
                 _ => return Err(e),
             };
-            // ramp_window = 200 * dt, clamped to a tenth of the window.
-            // Provenance: 200 fixed steps rises slowly relative to the fastest
-            // node the solver resolves, and the clamp guarantees the ramp is a
-            // small transient head rather than the bulk (or the entirety) of a
-            // short record; the smoke run demonstrated the unguarded case,
-            // returning a mid-ramp waveform as a "successful" solve (review
-            // finding). A window too short to fit any meaningful ramp keeps
-            // the original DC error instead of faking a power-on.
-            let ramp_window = (200.0 * dt).min(tstop / 10.0);
-            if ramp_window < 2.0 * dt {
-                return Err(e);
+            // A LADDER of ramp windows, quasi-static first, step-like last.
+            // Provenance: the flagship's group 2 died at t=134us of a 200us
+            // ramp: a slow ramp DWELLS in the worst bias region (junctions at
+            // their knees, comparators at threshold) and a fixed-step Newton
+            // can stall there, while a fast ramp snaps through it and lets
+            // the implicit integrator absorb the step (the 10us smoke ramp
+            // carried every group). Standard homotopy practice: when a slow
+            // continuation stalls, take a bolder step. Windows are clamped
+            // to a tenth of the record (a mid-ramp waveform must never be
+            // the bulk of a "successful" solve) and floored at 2 steps.
+            let mut errors = format!("{e}");
+            for scale in [200.0, 20.0, 2.0] {
+                let ramp_window = (scale * dt).min(tstop / 10.0);
+                if ramp_window < 2.0 * dt {
+                    continue;
+                }
+                let ramped_sub = ramp_all_sources(sub, ramp_window);
+                let mut ramp_opts = *opts;
+                ramp_opts.dc_init = DcInit::FromZero;
+                match Transient::new(ramp_opts).run(&ramped_sub, tstop) {
+                    Ok(wf) => return Ok((wf, false, true)),
+                    Err(e2) => {
+                        errors.push_str(&format!(
+                            "; power-ramp retry (window {ramp_window:.3e}s) also failed: {e2}"
+                        ));
+                    }
+                }
             }
-            let ramped_sub = ramp_all_sources(sub, ramp_window);
-            let mut ramp_opts = *opts;
-            ramp_opts.dc_init = DcInit::FromZero;
-            match Transient::new(ramp_opts).run(&ramped_sub, tstop) {
-                Ok(wf) => Ok((wf, false, true)),
-                // Both failures matter: the DC error says why the normal
-                // start was impossible, and the retry's own error says where
-                // the power-on march died (hiding it cost a 25-minute
-                // flagship run whose only message was the already-known DC
-                // failure).
-                Err(e2) => Err(format!(
-                    "{e}; power-ramp retry (window {ramp_window:.3e}s) also failed: {e2}"
-                )),
-            }
+            Err(errors)
         }
         Err(e) => Err(e),
     }
