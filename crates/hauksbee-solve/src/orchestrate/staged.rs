@@ -566,7 +566,7 @@ fn solve_group(
 /// Clone `sub` with every independent source (Vsource/Isource) wrapped in a
 /// `Ramped` envelope that reaches full amplitude at `ramp_window`. Used by the
 /// power-on retry so a DC-unreachable group starts from zero and ramps up.
-fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
+pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
     let mut c = sub.clone();
     for dev in c.devices.iter_mut() {
         match dev {
