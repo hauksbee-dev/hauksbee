@@ -283,36 +283,6 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
     }
 }
 
-/// Device-model env knobs, read ONCE per assembly instead of once per device.
-/// WHY: `stamp_all` runs once per Newton iteration AND once per line-search
-/// residual eval (~120k assemblies on the flagship's joint capture march), and
-/// every VSwitch/Comparator stamp used to consult `std::env::var` inline: on a
-/// board with hundreds of switches that is hundreds of env-lock acquisitions,
-/// environ scans, and String allocations per assembly, a measured double-digit
-/// share of assembly cost. The values feed the SAME expressions, so the
-/// stamped numbers are bit-identical; the snapshot granularity (per assembly,
-/// i.e. per Newton iteration) is indistinguishable for every real caller
-/// (tests set these knobs around whole solves, never mid-assembly).
-struct EnvKnobs {
-    /// HAUKSBEE_SW_NO_CTRL_GM=1: drop the switch control back-coupling.
-    sw_no_ctrl_gm: bool,
-    /// HAUKSBEE_CMP_K: staged smooth-comparator gain (default 2000 / V).
-    cmp_k: f64,
-}
-
-impl EnvKnobs {
-    fn read() -> EnvKnobs {
-        EnvKnobs {
-            sw_no_ctrl_gm: std::env::var("HAUKSBEE_SW_NO_CTRL_GM").as_deref() == Ok("1"),
-            cmp_k: std::env::var("HAUKSBEE_CMP_K")
-                .ok()
-                .and_then(|s| s.parse::<f64>().ok())
-                .unwrap_or(2000.0),
-        }
-    }
-}
-
-/// Stamp every device for the current iterate into `(g, rhs)`.
 pub fn stamp_all(ctx: &StampCtx, g: &mut SparseMatrix, rhs: &mut [f64]) {
     let mut sink = MatrixSink { g, rhs };
     stamp_into(ctx, &mut sink);
@@ -349,15 +319,13 @@ fn stamp_into<S: StampSink>(ctx: &StampCtx, sink: &mut S) {
             sink.g(i, i, -ctx.branch_reg);
         }
     }
-    let knobs = EnvKnobs::read();
     for (id, dev) in ctx.circuit.iter() {
-        stamp_device(ctx, &knobs, id, dev, sink);
+        stamp_device(ctx, id, dev, sink);
     }
 }
 
 fn stamp_device<S: StampSink>(
     ctx: &StampCtx,
-    knobs: &EnvKnobs,
     id: DeviceId,
     dev: &Device,
     sink: &mut S,
@@ -388,7 +356,7 @@ fn stamp_device<S: StampSink>(
             stamp_mosfet(ctx, *d, *gate, *s, model, sink)
         }
         Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => stamp_vswitch(
-            ctx, knobs, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, sink,
+            ctx, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, sink,
         ),
         Device::OpAmp {
             out,
@@ -403,7 +371,7 @@ fn stamp_device<S: StampSink>(
             ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, sink,
         ),
         Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => stamp_comparator(
-            ctx, knobs, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, sink,
+            ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, sink,
         ),
     }
 }
@@ -820,7 +788,6 @@ fn stamp_mosfet<S: StampSink>(
 #[allow(clippy::too_many_arguments)]
 fn stamp_vswitch<S: StampSink>(
     ctx: &StampCtx,
-    knobs: &EnvKnobs,
     id: DeviceId,
     a: NodeId,
     b: NodeId,
@@ -961,10 +928,11 @@ fn stamp_vswitch<S: StampSink>(
     // switch legs on that one control node with the large mirror voltage
     // `vab≈4.5 V` couples back into the iterative solution and throttles the
     // control's slew so the gate never closes (measured: V_out charges ~15x
-    // slower than its R*C). HAUKSBEE_SW_NO_CTRL_GM=1 drops the back-coupling so
-    // the control node is purely exogenous; the conductance stamp + the switch's
-    // own a/b dynamics still track the flip. OFF by default -> bit-identical.
-    let skip_ctrl_gm = knobs.sw_no_ctrl_gm;
+    // slower than its R*C). effects.switch_ctrl_gm = false drops the
+    // back-coupling so the control node is purely exogenous; the conductance
+    // stamp + the switch's own a/b dynamics still track the flip. The default
+    // (true) keeps the tangent, the classic behavior.
+    let skip_ctrl_gm = !ctx.opts.effects.switch_ctrl_gm;
     let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
     let vab = ctx.v(a) - ctx.v(b);
     let gm_ctrl = vab * dgsw_dvctrl;
@@ -1028,7 +996,6 @@ fn stamp_opamp<S: StampSink>(
 #[allow(clippy::too_many_arguments)]
 fn stamp_comparator<S: StampSink>(
     ctx: &StampCtx,
-    knobs: &EnvKnobs,
     id: DeviceId,
     out: NodeId,
     inp: NodeId,
@@ -1085,7 +1052,7 @@ fn stamp_comparator<S: StampSink>(
     // (branch_reg == 0 and no freeze map).
     if ctx.branch_reg > 0.0 {
         let span = out_hi - out_lo;
-        let k = knobs.cmp_k; // 1/V; ~2 mV transition width
+        let k = ctx.opts.effects.cmp_smooth_gain; // 1/V; ~2 mV transition width at the default
         let d = vp - vn - thresh;
         let kd = (k * d).clamp(-40.0, 40.0);
         let e = (-kd).exp();
