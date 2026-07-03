@@ -497,9 +497,31 @@ fn run_one(
     // `sysbus LoadELF @<path>`, and Renode resolves relative paths against
     // its own working directory (a temp dir), not the repo root. Canonicalize
     // here so ELF loading works regardless of where the CLI is invoked from.
-    let firmware = spec.firmware_path().map(|p| {
-        p.canonicalize().unwrap_or(p)
-    });
+    let firmware = match spec.firmware_path() {
+        Some(p) => {
+            // Validate before the native loader sees it (a missing file segfaults
+            // simavr/QEMU/Renode, exit 139). Name the spec field and what the path
+            // was resolved relative to: the bundled blinky.toml's firmware is
+            // spec-relative three levels up, so it breaks the moment the spec is
+            // copied elsewhere, and the message must make that obvious.
+            hauksbee_engine::validate_firmware_path(&p).map_err(|e| {
+                let field = spec
+                    .firmware
+                    .as_ref()
+                    .map(|f| f.display().to_string())
+                    .unwrap_or_default();
+                SpecError::Io(format!(
+                    "{e}\n  (from the spec's `firmware = \"{field}\"`, resolved relative \
+                     to the spec file at {})",
+                    spec.base_dir.display()
+                ))
+            })?;
+            // Existence is now guaranteed, so canonicalize for Renode (which
+            // resolves relative paths against its own temp working directory).
+            Some(p.canonicalize().unwrap_or(p))
+        }
+        None => None,
+    };
 
     // Capture the QEMU backend strings before `bound` is consumed by
     // `from_bound`. We use these below to warn when bus-slave peripherals or

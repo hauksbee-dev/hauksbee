@@ -45,6 +45,9 @@ impl McuDemoEngine {
         board_url: &str,
     ) -> anyhow::Result<Self> {
         use hauksbee_mcu::Mcu;
+        // Guard the firmware path before simavr sees it: a missing file segfaults
+        // the native loader (exit 139) instead of erroring.
+        hauksbee_mcu::validate_firmware_path(firmware_hex)?;
         let mut mcu = hauksbee_mcu::AvrMcu::atmega328p_16mhz()?;
         mcu.load_firmware(firmware_hex)?;
         let uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
