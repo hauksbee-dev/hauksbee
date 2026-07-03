@@ -466,9 +466,12 @@ pub fn newton_solve(
                 for i in 0..ws.x.len() {
                     ws.x[i] = lin_point[i] + alpha * dx[i];
                 }
-                let trial_norm = residual_inf_norm_at(
-                    ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
-                );
+                let trial_norm = crate::census::timed(crate::census::Phase::LineSearch, || {
+                    residual_inf_norm_at(
+                        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale,
+                        branch_reg,
+                    )
+                });
                 if trial_norm < best_norm {
                     best_norm = trial_norm;
                     best_alpha = alpha;
