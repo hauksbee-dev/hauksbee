@@ -159,8 +159,18 @@ pub fn execute_stiff_group(
             }
         }
     }
-    for (id, cands) in &conducts_cand {
-        if let Some(&b) = frag.device_block.get(id) {
+    // Determinism sweep: iterate the conductor devices in DEVICE-ID order, not
+    // HashMap order. The order blocks are pushed into `adjacent[cand]` seeds the
+    // block-owner assignment below (and, via capture_circuit, the device set of
+    // each capture sub-circuit); circuit construction order is solver-visible
+    // (pivots, convergence paths), so it must be deterministic. HashMap
+    // iteration order is not. (The rest of capture.rs already constructs from
+    // `sub.iter()` device order and the `candidates` slice, both deterministic.)
+    let mut conductors: Vec<DeviceId> = conducts_cand.keys().copied().collect();
+    conductors.sort_unstable();
+    for id in conductors {
+        let cands = &conducts_cand[&id];
+        if let Some(&b) = frag.device_block.get(&id) {
             for &cn in cands {
                 let e = adjacent.entry(cn).or_default();
                 if !e.contains(&b) {

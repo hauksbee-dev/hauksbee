@@ -42,6 +42,31 @@ pub enum Partitioning {
     Auto,
 }
 
+/// How the transient march obtains its state at `t = 0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DcInit {
+    /// Solve a DC operating point at `t = 0` and seed the march from it (the
+    /// reference behaviour). If no operating point converges the run fails:
+    /// there is nothing to march from.
+    #[default]
+    Solve,
+    /// UIC-style power-on start: skip the DC solve entirely. The unknown vector
+    /// is set to `x(0) = 0` (all node voltages and branch currents zero), every
+    /// reactive element's history is zeroed (capacitor voltage `x1 = x2 = 0`,
+    /// inductor current `x1 = x2 = 0`, derivatives `dx1 = 0`), the `t = 0`
+    /// sample is emitted as zeros, and the march proceeds from rest with the
+    /// existing backward-Euler first step.
+    ///
+    /// Pair it with [`crate::SourceKind::Ramped`] sources so the board sees a
+    /// physical power-ramp: sources rise from zero and the state integrates up,
+    /// and there is no DC solve to fail. This is the honest way to carry a
+    /// circuit (or sub-circuit) whose DC operating point is unreachable: a
+    /// free-running oscillator with no stable DC, or a group that stalls in DC
+    /// homotopy. The `t = 0` of such a run is a power-on rest state, not a
+    /// settled operating point.
+    FromZero,
+}
+
 /// How the timestep is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum StepControl {
@@ -109,6 +134,10 @@ pub struct SolverOptions {
     /// Enable gmin-stepping then source-stepping homotopy if the plain DC
     /// operating-point Newton fails to converge.
     pub dc_homotopy: bool,
+    /// How the `t = 0` state is obtained: a DC solve (default) or a power-on
+    /// start from zero. See [`DcInit`].
+    #[serde(default)]
+    pub dc_init: DcInit,
     /// Whether to partition the circuit into islands before solving.
     #[serde(default)]
     pub partitioning: Partitioning,
@@ -142,6 +171,7 @@ impl Default for SolverOptions {
             temperature_c: 27.0,
             effects: DeviceEffects::default(),
             dc_homotopy: true,
+            dc_init: DcInit::Solve,
             partitioning: Partitioning::Auto,
             granularity: 1.0,
         }
