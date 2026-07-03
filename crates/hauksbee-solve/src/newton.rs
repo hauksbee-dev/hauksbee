@@ -950,12 +950,15 @@ fn dc_solve(
     // spike-output nodes are defined only dynamically (a DC-open stretch cap, so
     // the node has no static DC voltage and must be anchored every iteration) it
     // cannot reach a static root and just adds cost, so it is OPT-IN
-    // (HAUKSBEE_DC_DYN=1). The default staged path keeps the original behaviour
+    // (Strategy::DynamicPivot). The default staged path keeps the original behaviour
     // (frozen-singular -> adopt the relaxed power-on point) bit-for-bit and at
     // the original speed, so no existing test changes value or timing. It is
     // restored to off before every return so the workspace-reused transient
     // keeps frozen-only semantics.
-    let dc_dyn = std::env::var("HAUKSBEE_DC_DYN").is_ok();
+    let dc_dyn = opts.ladder.has(Strategy::DynamicPivot);
+    if dc_dyn {
+        crate::diagnostics::note(Strategy::DynamicPivot);
+    }
     ws.symbolic.set_allow_dynamic(dc_dyn);
     if let Some(seed) = solve_relaxed_no_diodes(circuit, opts) {
         if dbg { eprintln!("[staged] relaxed converged, seeding full (len {})", seed.len()); }
@@ -1601,7 +1604,7 @@ fn solve_diode_is_homotopy(
     let mut work = circuit.clone();
     let mut ws = Workspace::new(&work);
     ws.set_staged_branch_reg(branch_reg);
-    ws.symbolic.set_allow_dynamic(std::env::var("HAUKSBEE_DC_DYN").is_ok());
+    ws.symbolic.set_allow_dynamic(opts.ladder.has(Strategy::DynamicPivot));
     let mut x = seed.to_vec();
 
     // Geometric ramp of the Is scale: 1e-4, 1e-3.5, ... up to 1.0.
