@@ -13,7 +13,7 @@
 //! isolation and that it does not regress the ordinary diode solve.
 
 use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
-use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
+use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace, RobustnessLadder, Strategy};
 
 fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let mut c = Circuit::new();
@@ -160,19 +160,20 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
 /// the ladder ever needs them.)
 #[test]
 fn multi_switch_core_converges_via_event_freeze() {
-    let opts = SolverOptions::default();
+    // The dynamic-pivot LU is a typed grant now; the event-freeze loop is
+    // still env-armed until its own migration lands.
+    let opts = SolverOptions {
+        ladder: RobustnessLadder::none().with(Strategy::DynamicPivot),
+        ..Default::default()
+    };
     let (c, rail_n, out_n) = build_switched(8);
 
-    // Enable the staged-DC dynamic-pivot LU and the event-freeze outer loop (the
-    // load-bearing path for the switch-fused core). Scoped to this test.
-    std::env::set_var("HAUKSBEE_DC_DYN", "1");
     std::env::set_var("HAUKSBEE_CMP_EVENT", "1");
 
     let mut ws = Workspace::new(&c);
     let r = dc_operating_point(&mut ws, &c, &opts);
 
     std::env::remove_var("HAUKSBEE_CMP_EVENT");
-    std::env::remove_var("HAUKSBEE_DC_DYN");
 
     r.expect("switched diode core must converge");
 
