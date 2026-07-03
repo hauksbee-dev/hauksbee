@@ -2113,6 +2113,17 @@ fn instantiate_mcu(
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
     let backend = binding.backend.as_str();
 
+    // Backstop: validate the path before it reaches ANY native loader (simavr
+    // segfaults on a missing file; QEMU spawns from the flash image inside
+    // instantiate_qemu, so the check must sit above the backend dispatch, and
+    // it also closes QEMU's directory-path edge that a bare exists() check
+    // lets through). Higher entry points (CLI, CI spec runner) validate
+    // earlier with richer provenance; this guards any library caller that
+    // reaches the scheduler directly.
+    if let Some(fw) = firmware {
+        hauksbee_mcu::validate_firmware_path(fw)?;
+    }
+
     let mut core: Box<dyn Mcu + Send> = if let Some(part) = backend.strip_prefix("renode:") {
         instantiate_renode(part)?
     } else if let Some(part) = backend.strip_prefix("qemu:") {
@@ -2121,11 +2132,6 @@ fn instantiate_mcu(
         instantiate_avr(backend)?
     };
     if let Some(fw) = firmware {
-        // Backstop: validate the path before it reaches the native loader, which
-        // segfaults on a missing file rather than erroring. Higher entry points
-        // (CLI, CI spec runner) validate earlier with richer provenance; this
-        // guards any library caller that reaches the scheduler directly.
-        hauksbee_mcu::validate_firmware_path(fw)?;
         core.load_firmware(fw)?;
     }
     Ok(core)
