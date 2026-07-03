@@ -183,7 +183,6 @@ fn armed_march_is_deterministic_and_spikes() {
     // sets these as its own configuration); TRANSIENT_DYN is what arms the
     // line search this fixture exists to witness.
     std::env::set_var("HAUKSBEE_TRANSIENT_DYN", "1");
-    std::env::set_var("HAUKSBEE_SPDT_BBM", "1");
     std::env::set_var("HAUKSBEE_SW_NO_CTRL_GM", "1");
     std::env::set_var("HAUKSBEE_TRAN_CMP_SMOOTH", "1");
 

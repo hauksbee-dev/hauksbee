@@ -94,8 +94,9 @@ pub struct Workspace {
     /// stamp so the smooth-tanh path can enforce BREAK-BEFORE-MAKE (a real SPDT
     /// is never low-Z to both throws at once): in the select transition band the
     /// loser leg is driven toward `roff`, instead of both legs sitting at the
-    /// geometric-mean conductance and bridging the two throws. Only consulted
-    /// when HAUKSBEE_SPDT_BBM=1 (gated; default OFF -> bit-identical).
+    /// geometric-mean conductance and bridging the two throws. Consulted when
+    /// `effects.spdt_bbm` is on (the device-model default; the typed compat
+    /// field restores the bridging model).
     spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
 }
 

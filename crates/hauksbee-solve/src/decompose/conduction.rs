@@ -401,18 +401,13 @@ mod tests {
     /// The staged and BBM stamp paths must keep sense rows as clean as the
     /// baseline. The main cross-check runs env-off with branch_reg=0; this one
     /// exercises exactly the paths the co-sim merge added: an SPDT pair with
-    /// HAUKSBEE_SPDT_BBM=1 and a live sibling map (the winner-take-all margin
+    /// effects.spdt_bbm (the default) and a live sibling map (the winner-take-all margin
     /// coupling), branch_reg > 0 (the staged smooth switch/comparator stamps),
     /// and frozen event decisions for both device kinds. The property under
     /// test is the same STEP-0 zero-current row: none of those variants may
     /// leak current into a control/input row, or the free-tear exactness
     /// argument collapses on the staged path.
-    ///
-    /// Env-var hazard: HAUKSBEE_SPDT_BBM is process-global and tests run in
-    /// parallel threads. The var is set only around the stamping below and
-    /// removed immediately after; the only other readers in this crate gate
-    /// behavior that is itself row-clean (verified by this very test), so a
-    /// transient overlap cannot turn a passing suite red.
+
     #[test]
     fn staged_and_bbm_paths_keep_sense_rows_clean() {
         let mut circuit = hauksbee_ir::Circuit::new();
@@ -481,7 +476,7 @@ mod tests {
             [0.5, 2.0, -1.0, 1.0, 0.5, 0.0, 0.0, 2.5],
         ];
 
-        std::env::set_var("HAUKSBEE_SPDT_BBM", "1");
+        // BBM is the device-model default now (effects.spdt_bbm).
         // Frozen decisions, sibling coupling, and staged regularization on
         // together: the harshest combination the staged path can present.
         for (freeze_on, branch_reg) in [(false, 1e-2), (true, 1e-2), (true, 0.0)] {
@@ -549,6 +544,5 @@ mod tests {
                 }
             }
         }
-        std::env::remove_var("HAUKSBEE_SPDT_BBM");
     }
 }
