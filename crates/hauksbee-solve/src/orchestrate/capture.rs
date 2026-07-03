@@ -82,6 +82,10 @@ pub struct StiffOutcome {
     /// True when rest estimates came from the per-group DC bootstrap rather
     /// than a converging whole-group DC.
     pub bootstrapped: bool,
+    /// One line of provenance: why this outcome says what it says (an
+    /// out-of-scope disqualification, a dead capture, or empty for a
+    /// normally-measured boundary). Refusals must never be wordless.
+    pub note: &'static str,
 }
 
 /// One capture run and its global-to-local node map.
@@ -125,22 +129,42 @@ pub fn execute_stiff_group(
     }
 
     let graph = ConductionGraph::analyze(sub);
-    // Scope: the cut set must live in ONE conduction island (the fused core).
-    // Sense-coupled sibling islands in the same group are out of scope for
-    // stiff tearing and take the fused path.
+    // Scope: the CANDIDATES must share one conduction island (the fused core
+    // being cut). The sub-circuit legitimately holds OTHER islands too:
+    // absorbed-driver copies and replay-pin islands, whose devices drive the
+    // core's sense nets. Requiring the whole sub to be one island (the first
+    // version of this check) silently disqualified every real group on the
+    // flagship, because absorption creates companion islands by design.
     let mut islands: HashSet<usize> = HashSet::new();
     for c in candidates {
         match graph.node_island.get(c.0 as usize).copied().flatten() {
             Some(i) => {
                 islands.insert(i);
             }
-            None => return Ok(None), // a candidate nobody conducts: not ours
+            None => {
+                refusal_report
+                    .extend(out_of_scope_outcomes(candidates, "a candidate nobody conducts"));
+                return Ok(None);
+            }
         }
     }
-    if islands.len() != 1 || graph.islands.len() != 1 {
+    if islands.len() != 1 {
+        refusal_report.extend(out_of_scope_outcomes(
+            candidates,
+            "candidates span multiple conduction islands",
+        ));
         return Ok(None);
     }
     let island = *islands.iter().next().unwrap();
+    // Companion devices: everything outside the candidates' island rides
+    // into every capture (they hold the sense boundaries; without them the
+    // dead-membrane bug returns wearing a stiff certificate).
+    let companions: Vec<DeviceId> = (0..sub.devices.len() as u32)
+        .map(DeviceId)
+        .filter(|id| {
+            !graph.islands[island].contains(id)
+        })
+        .collect();
 
     let n_nodes = sub.max_node() as usize;
     let mut bound = vec![false; n_nodes + 1];
@@ -181,7 +205,11 @@ pub fn execute_stiff_group(
     }
     for c in candidates {
         if adjacent.get(&c.0).is_none_or(|v| v.is_empty()) {
-            return Ok(None); // nothing to capture against: out of scope
+            refusal_report.extend(out_of_scope_outcomes(
+                candidates,
+                "a candidate with no adjacent block to capture against",
+            ));
+            return Ok(None);
         }
     }
 
@@ -204,8 +232,9 @@ pub fn execute_stiff_group(
             bootstrapped = true;
             for c in candidates {
                 // Pins default to Dc(0.0): exactly the zeros bootstrap.
-                let (cap, g2l) =
-                    capture_circuit(sub, &frag, &adjacent, &conducts_cand, *c, candidates);
+                let (cap, g2l) = capture_circuit(
+                    sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates,
+                );
                 let mut ws = Workspace::new(&cap);
                 let v = match dc_operating_point(&mut ws, &cap, opts) {
                     Ok(_) => g2l
@@ -249,7 +278,7 @@ pub fn execute_stiff_group(
             boundary.insert(*k, v.clone());
         }
         let wf = match solve_capture(
-            sub, &frag, &adjacent, &conducts_cand, *c, candidates, &rest,
+            sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, &rest,
             Some((&boundary, &grid)), None, opts, tstop,
         ) {
             Ok(wf) => wf,
@@ -269,7 +298,7 @@ pub fn execute_stiff_group(
         converged = true;
         for c in candidates {
             let wf = match solve_capture(
-                sub, &frag, &adjacent, &conducts_cand, *c, candidates, &rest,
+                sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, &rest,
                 Some((&trains, &grid)), runs.get(&c.0), opts, tstop,
             ) {
                 Ok(wf) => wf,
@@ -316,6 +345,7 @@ pub fn execute_stiff_group(
             tol_v: tol,
             accepted: s <= tol,
             bootstrapped,
+            note: "",
         });
     }
     if !converged {
@@ -360,7 +390,20 @@ pub fn execute_stiff_group(
                 None => continue,
             }
         } else {
-            continue; // known-side or untouched node
+            // Companion-island nodes (absorbed copies, replay-pin islands)
+            // ride in every capture; read them from the first candidate's
+            // final run. Known-side nodes of the core island with no free
+            // block land here too and stay zero only if no capture mapped
+            // them.
+            let owner = candidates[0].0;
+            let (wf, g2l) = &runs[&owner];
+            match g2l.get(&(node as u32)) {
+                Some(&ln) => grid
+                    .iter()
+                    .map(|&t| lerp_at(&wf.time, &wf.node_voltages[ln as usize], t))
+                    .collect(),
+                None => continue,
+            }
         };
         waveforms.node_voltages[node] = series;
     }
@@ -369,6 +412,24 @@ pub fn execute_stiff_group(
         waveforms,
         outcomes,
     }))
+}
+
+/// Outcomes for an out-of-scope disqualification: no measurement exists,
+/// but the caller still learns exactly why nothing was attempted (the
+/// flagship smoke found the silent form of this: zero outcomes, zero
+/// explanation).
+fn out_of_scope_outcomes(candidates: &[NodeId], note: &'static str) -> Vec<StiffOutcome> {
+    candidates
+        .iter()
+        .map(|c| StiffOutcome {
+            node: *c,
+            sag_v: f64::NAN,
+            tol_v: f64::NAN,
+            accepted: false,
+            bootstrapped: false,
+            note,
+        })
+        .collect()
 }
 
 /// Outcomes for a refusal caused by a capture solve dying at `dead`: the
@@ -390,6 +451,11 @@ fn dead_capture_outcomes(
                 tol_v: 10.0 * reltol * vnom,
                 accepted: false,
                 bootstrapped,
+                note: if c.0 == dead.0 {
+                    "capture solve died (power-ramp retry included)"
+                } else {
+                    "unmeasured: a sibling capture died first"
+                },
             }
         })
         .collect()
@@ -405,10 +471,12 @@ fn capture_circuit(
     frag: &crate::decompose::rails::Fragmentation,
     adjacent: &HashMap<u32, Vec<usize>>,
     conducts_cand: &HashMap<DeviceId, Vec<u32>>,
+    companions: &[DeviceId],
     c: NodeId,
     candidates: &[NodeId],
 ) -> (Circuit, HashMap<u32, u32>) {
     let my_blocks: HashSet<usize> = adjacent[&c.0].iter().copied().collect();
+    let companion_set: HashSet<DeviceId> = companions.iter().copied().collect();
     let mut devices: Vec<DeviceId> = Vec::new();
     for (id, _) in sub.iter() {
         let in_block = frag
@@ -419,7 +487,9 @@ fn capture_circuit(
         // between two candidates) still carry load current: include them.
         let orphan_on_c = !frag.device_block.contains_key(&id)
             && conducts_cand.get(&id).is_some_and(|v| v.contains(&c.0));
-        if in_block || orphan_on_c {
+        // Companion devices (absorbed drivers, replay pins: everything
+        // outside the candidates' island) hold the sense boundaries.
+        if in_block || orphan_on_c || companion_set.contains(&id) {
             devices.push(id);
         }
     }
@@ -467,6 +537,7 @@ fn solve_capture(
     frag: &crate::decompose::rails::Fragmentation,
     adjacent: &HashMap<u32, Vec<usize>>,
     conducts_cand: &HashMap<DeviceId, Vec<u32>>,
+    companions: &[DeviceId],
     c: NodeId,
     candidates: &[NodeId],
     rest: &HashMap<u32, f64>,
@@ -475,7 +546,8 @@ fn solve_capture(
     opts: &SolverOptions,
     tstop: f64,
 ) -> Result<CaptureRun, String> {
-    let (mut cap, g2l) = capture_circuit(sub, frag, adjacent, conducts_cand, c, candidates);
+    let (mut cap, g2l) =
+        capture_circuit(sub, frag, adjacent, conducts_cand, companions, c, candidates);
     // Set the pins: PWL trains when supplied, else the DC rest values.
     for dev in cap.devices.iter_mut() {
         if let Device::Vsource { name, kind, .. } = dev {
@@ -523,21 +595,44 @@ fn solve_capture(
     });
 
     let n_nodes = cap.node_count();
-    let mut wf = Waveforms {
-        time: Vec::new(),
-        node_voltages: vec![Vec::new(); n_nodes],
-        branch_currents: Vec::new(),
-    };
-    Transient::new(sub_opts)
-        .run_streaming_seeded(&cap, tstop, dc_seed.as_deref(), |s| {
+    let run_collect = |circuit: &Circuit, ropts: &SolverOptions| -> Result<Waveforms, String> {
+        let mut wf = Waveforms {
+            time: Vec::new(),
+            node_voltages: vec![Vec::new(); n_nodes],
+            branch_currents: Vec::new(),
+        };
+        Transient::new(*ropts).run_streaming_seeded(circuit, tstop, dc_seed.as_deref(), |s| {
             wf.time.push(s.time);
             for node in 0..n_nodes {
                 let v = if node == 0 { 0.0 } else { s.x[node - 1] };
                 wf.node_voltages[node].push(v);
             }
-        })
-        .map_err(|e| format!("stiff capture at {} failed: {e}", sub.node_name(c)))?;
-    Ok((wf, g2l))
+        })?;
+        Ok(wf)
+    };
+    match run_collect(&cap, &sub_opts) {
+        Ok(wf) => Ok((wf, g2l)),
+        // A DC-class death gets the same power-on retry the staged fused
+        // path has: a capture group can contain the very oscillator shapes
+        // whose DC does not exist. The stiff pins (rest values or previous
+        // iterates, internal estimates, not certified data) ramp with the
+        // rest; VREPLAY_ pins stay unramped inside ramp_all_sources.
+        Err(e) if e.contains("DC") || e.contains("dc") || e.contains("homotopy") => {
+            if let StepControl::Fixed { dt } = sub_opts.step {
+                let ramp_window = (200.0 * dt).min(tstop / 10.0);
+                if ramp_window >= 2.0 * dt {
+                    let ramped = super::staged::ramp_all_sources(&cap, ramp_window);
+                    let mut ramp_opts = sub_opts;
+                    ramp_opts.dc_init = crate::options::DcInit::FromZero;
+                    if let Ok(wf) = run_collect(&ramped, &ramp_opts) {
+                        return Ok((wf, g2l));
+                    }
+                }
+            }
+            Err(format!("stiff capture at {} failed: {e}", sub.node_name(c)))
+        }
+        Err(e) => Err(format!("stiff capture at {} failed: {e}", sub.node_name(c))),
+    }
 }
 
 /// Sample one (global) node from a capture run onto the uniform grid.
