@@ -8,7 +8,7 @@
 //! step is bisected to land near the crossing so edges aren't smeared.
 
 use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
-use crate::options::{DcInit, Integration, SolverOptions, StepControl};
+use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
 use hauksbee_ir::{Circuit, Device, NodeId};
@@ -176,7 +176,7 @@ impl Transient {
         // series R + node damping + node-block convergence) for the whole march
         // in that case only; an ordinary diode circuit (e.g. a rectifier) solved
         // on the normal ladder keeps the bit-identical classic transient path.
-        let transient_dyn = std::env::var("HAUKSBEE_TRANSIENT_DYN").is_ok();
+        let transient_dyn = opts.ladder.has(Strategy::TransientDyn);
         if ws.used_staged_dc() || transient_dyn {
             // Arm the staged regularizers (negligible branch series R + node
             // damping + node-block convergence) AND the VSwitch/diode control
@@ -185,13 +185,13 @@ impl Transient {
             // (a multi-decade conductance snap as a neuron V_out climbs through
             // the switch transition); the control limiting tracks the switch
             // through that transition. Armed when the DC needed staging OR when
-            // the caller opts in (TRANSIENT_DYN) even on a cleanly-DC-solved but
+            // the caller grants Strategy::TransientDyn even on a cleanly-DC-solved but
             // dynamically-stiff march (the RAMP-from-rest spike case).
             ws.set_staged_branch_reg(1e-2);
             // Arm the per-step transient event-freeze retry: when a bare per-step
             // Newton fails (the spike-gate SPDT flip), retry the step with the
             // comparator+switch states frozen Gauss-Seidel + break-before-make
-            // before cutting the timestep. Gated behind TRANSIENT_DYN (the
+            // before cutting the timestep. Gated behind Strategy::TransientDyn (the
             // explicit spike-path opt-in) so an ordinary staged board (e.g. the
             // DAC-rail co-sim, which needs the staged regularizers but whose
             // per-step Newton converges on the bare path) keeps its exact prior
@@ -200,6 +200,7 @@ impl Transient {
             // step actually fails, so even when armed it never changes a step
             // that already converged.
             if transient_dyn {
+                crate::diagnostics::note(Strategy::TransientDyn);
                 ws.set_tran_event(true);
                 // Arm the GLOBAL Armijo line-search in the per-step Newton on the
                 // same stiff-board opt-in. It is the globalization for the
