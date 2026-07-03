@@ -28,7 +28,7 @@ Today exactly **one** part is seeded: the Cypress / Infineon **CYPD3177**
 
 ## Zero-false-positive discipline (binding)
 
-In line with the project rule (`docs/KNOWN_FAULTS_VALIDATION.md`), the check fires
+In line with the project rule (`docs/record/KNOWN_FAULTS_VALIDATION.md`), the check fires
 ONLY when:
 
 1. the part is **positively identified** (its value / MPN string contains the

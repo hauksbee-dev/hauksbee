@@ -16,7 +16,7 @@ to be hauksbee defects.
 
 ### 1. USB-C CC audit under-read on dual-receptacle boards
 
-- **Was** (docs/FAMOUS_SWEEP.md, round 3): "the USB-C CC audit under-reads the
+- **Was** (docs/record/FAMOUS_SWEEP.md, round 3): "the USB-C CC audit under-reads the
   device-side Rd on a board with two USB-C receptacles (Lily58's two halves);
   the board is clean ... the audit just does not credit them."
 - **Chased to ground truth.** Two compounding causes, both hauksbee defects:
@@ -181,17 +181,17 @@ triage page is a complete index of what is *not* yet closed:
 
 - **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs): the QEMU backend
   does not intercept I2C, so an I2C DAC on the bus is not answered. See
-  `docs/TARSKI_RESULTS.md` and `docs/TEST_CAMPAIGN.md`.
+  `docs/record/TARSKI_RESULTS.md` and `docs/record/TEST_CAMPAIGN.md`.
 - **nRF5340 has no co-sim backend**: the Renode 1.16.1 portable build ships no
   nRF5340 platform, so the ZSWatch-class DISPLAY-EN fault stays a static miss.
-  See `docs/MCU.md` and `docs/KNOWN_FAULTS_VALIDATION.md`.
+  See `docs/MCU.md` and `docs/record/KNOWN_FAULTS_VALIDATION.md`.
 - **Bit-banged SPI at sub-chunk timing collapses in full co-sim**: the 595 chain
   is covered by the model-level (PATH B) verification instead. See
-  `docs/TEST_CAMPAIGN.md`.
+  `docs/record/TEST_CAMPAIGN.md`.
 - **PCB-only extraction has no pinfunctions**: multi-unit packages fall back to
   db pin maps when only a layout (no schematic netlist) is available; schematic
-  netlists are authoritative when present. See `docs/TEST_CAMPAIGN.md` and
-  `docs/FAMOUS_SWEEP.md`.
+  netlists are authoritative when present. See `docs/record/TEST_CAMPAIGN.md` and
+  `docs/record/FAMOUS_SWEEP.md`.
 - **Device-decode is per-part and grows one part at a time**: the configurable-
   controller decode check (config-pin divider vs the part's datasheet band table)
   has no generic engine; each supported part is a hand-written decoder. Seeded

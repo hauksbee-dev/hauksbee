@@ -374,7 +374,7 @@ driven only by an MCU GPIO that goes high-impedance at reset. Its power-up
 default is therefore undefined. Whether that is a *bug* depends on the intended
 default state of the controlled load, which the netlist does not encode: a
 display that must be on by default and a haptic motor that must be off by default
-have byte-identical netlist topology. `docs/KNOWN_FAULTS_VALIDATION.md` records
+have byte-identical netlist topology. `docs/record/KNOWN_FAULTS_VALIDATION.md` records
 two real such faults (Watchy e-paper RES#, ZSWatch DISPLAY-EN) as honest misses
 for exactly this reason - a static check firing there would be a confident false
 positive on a shipped board, on the very same topology that is correct elsewhere.
@@ -419,7 +419,7 @@ backends; the mechanism is backend-agnostic, so it is ready for the **STM32
 **not yet co-simmable**: Watchy is ESP32 and ZSWatch is nRF52, and neither has a
 turnkey backend (ESP32 is not modelled in Renode; see `docs/MCU.md`). So the
 boards' own MCUs cannot run this check today - the mechanism is recorded as
-ready-for-backends, and `docs/KNOWN_FAULTS_VALIDATION.md` keeps those rows as
+ready-for-backends, and `docs/record/KNOWN_FAULTS_VALIDATION.md` keeps those rows as
 honest misses with a "decidable with firmware co-sim where the backend exists"
 note, **not** a flipped verdict.
 

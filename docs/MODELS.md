@@ -285,7 +285,7 @@ the actual board:
 
 This is what lets one model produce different behaviour on two board revisions
 with no model edit — the basis of the two-sided fault validations in
-`docs/KNOWN_FAULTS_VALIDATION.md`.
+`docs/record/KNOWN_FAULTS_VALIDATION.md`.
 
 ## Adding a custom part without recompiling
 

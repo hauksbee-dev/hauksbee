@@ -8,7 +8,7 @@
 //! undefined boot bit, compound interactions, a rail down.
 //!
 //! Method, per board: identify the genuinely-undefined boot control nets
-//! (chased to the schematic and recorded in `docs/FAMOUS_SWEEP.md` Round 4),
+//! (chased to the schematic and recorded in `docs/record/FAMOUS_SWEEP.md` Round 4),
 //! fuzz them across seeds via the `[fuzz]` machinery, solve the DC operating
 //! point per seed, and assert the rails hold and no stress fault fires across
 //! *every* seed.
