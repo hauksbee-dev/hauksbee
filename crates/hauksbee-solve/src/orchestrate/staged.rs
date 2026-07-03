@@ -76,7 +76,10 @@ use std::collections::HashMap;
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
 use crate::decompose::rails::BalanceTearCandidate;
-use crate::decompose::verify::{Decomposition, TearKind, ToleranceClaim};
+use crate::decompose::verify::{
+    Decomposition, Evidence, RefusedAnalysis, TearKind, TearRecord, ToleranceClaim,
+};
+use crate::orchestrate::capture::{execute_stiff_group, StiffOutcome};
 use crate::options::{Partitioning, SolverOptions, StepControl};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
@@ -99,6 +102,9 @@ pub struct StagedResult {
     /// exactly, just without the speedup; the gap is visible so a
     /// performance regression cannot hide.
     pub torn_groups: Vec<usize>,
+    /// Per group: the stiff boundaries' measured outcomes (accepted runs and
+    /// refusals alike), so a refused relaxation is data, not a mystery.
+    pub stiff_outcomes: Vec<(usize, StiffOutcome)>,
 }
 
 /// Execute a decomposition's stage DAG. Refuses (rather than approximates)
@@ -192,6 +198,9 @@ pub fn run_staged(
     let mut runs: HashMap<usize, (Waveforms, HashMap<u32, u32>)> = HashMap::new();
     let mut executed_groups = Vec::new();
     let mut torn_groups = Vec::new();
+    let mut stiff_outcomes: Vec<(usize, StiffOutcome)> = Vec::new();
+    let mut certificate_stiff: Vec<TearRecord> = Vec::new();
+    let mut certificate_refused_nodes: Vec<NodeId> = Vec::new();
 
     for stage in &decomp.dag.stages {
         for &g in stage {
@@ -244,8 +253,75 @@ pub fn run_staged(
                 .filter_map(|c| remap_tear(c, &devices, &g2l))
                 .collect();
 
-            let (wf, torn) = solve_group(&sub, imposed, &sub_opts, tstop)
-                .map_err(|e| format!("staged group {g} failed: {e}"))?;
+            // Stiff cuts nominated inside this group: the measured waveform
+            // relaxation runs first; a refusal (recorded) falls through to
+            // the balance-torn or fused path, which is exact regardless.
+            let stiff_local: Vec<NodeId> = decomp
+                .stiff
+                .iter()
+                .filter(|s| group_of_node(s.node) == Some(g))
+                .filter_map(|s| g2l.get(&s.node.0).map(|&ln| NodeId(ln)))
+                .collect();
+            let mut stiff_run: Option<Waveforms> = None;
+            if !stiff_local.is_empty() && imposed.is_empty() {
+                let mut refusals = Vec::new();
+                match execute_stiff_group(&sub, &stiff_local, &sub_opts, tstop, &mut refusals)? {
+                    Some(exec) => {
+                        // Certificate: one measured record per boundary, and
+                        // the pinned nodes join the supply-integrity refusal
+                        // (questions about their loading beyond sag_v must be
+                        // refused, lore #12 generalized off the rails).
+                        let l2g: HashMap<u32, u32> =
+                            g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect();
+                        let mut refused_nodes = Vec::new();
+                        for o in &exec.outcomes {
+                            let gnode = NodeId(l2g[&o.node.0]);
+                            certificate_stiff.push(TearRecord {
+                                node: gnode,
+                                kind: TearKind::Stiff,
+                                evidence: Evidence::MeasuredStiffness {
+                                    sag_v: o.sag_v,
+                                    tol_v: o.tol_v,
+                                },
+                                tolerance: ToleranceClaim::Stiffness { sag_v: o.sag_v },
+                                upstream: None,
+                                downstream: None,
+                            });
+                            refused_nodes.push(gnode);
+                            stiff_outcomes.push((
+                                g,
+                                StiffOutcome {
+                                    node: gnode,
+                                    ..o.clone()
+                                },
+                            ));
+                        }
+                        certificate_refused_nodes.extend(refused_nodes);
+                        stiff_run = Some(exec.waveforms);
+                        torn_groups.push(g);
+                    }
+                    None => {
+                        let l2g: HashMap<u32, u32> =
+                            g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect();
+                        for o in refusals {
+                            let gnode = NodeId(l2g[&o.node.0]);
+                            stiff_outcomes.push((
+                                g,
+                                StiffOutcome {
+                                    node: gnode,
+                                    ..o
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let (wf, torn) = match stiff_run {
+                Some(wf) => (wf, false),
+                None => solve_group(&sub, imposed, &sub_opts, tstop)
+                    .map_err(|e| format!("staged group {g} failed: {e}"))?,
+            };
             if torn {
                 torn_groups.push(g);
             }
@@ -307,7 +383,10 @@ pub fn run_staged(
         }
     }
 
-    // Complete the certificate: every replayed free tear now has its grid.
+    // Complete the certificate: every replayed free tear now has its grid,
+    // and every measured stiff boundary gets its record with the real
+    // residual (analysis recorded only nominations; the certificate states
+    // what was MEASURED).
     let mut certificate = decomp.certificate.clone();
     for r in &mut certificate.records {
         if r.kind == TearKind::Free {
@@ -316,12 +395,33 @@ pub fn run_staged(
             }
         }
     }
+    certificate.records.extend(certificate_stiff);
+    if !certificate_refused_nodes.is_empty() {
+        certificate_refused_nodes.sort_unstable();
+        certificate_refused_nodes.dedup();
+        match certificate
+            .refusals
+            .iter_mut()
+            .find(|(r, _)| *r == RefusedAnalysis::SupplyIntegrityOnTornRail)
+        {
+            Some((_, nodes)) => {
+                nodes.extend(certificate_refused_nodes);
+                nodes.sort_unstable();
+                nodes.dedup();
+            }
+            None => certificate.refusals.push((
+                RefusedAnalysis::SupplyIntegrityOnTornRail,
+                certificate_refused_nodes,
+            )),
+        }
+    }
 
     Ok(StagedResult {
         waveforms,
         certificate,
         executed_groups,
         torn_groups,
+        stiff_outcomes,
     })
 }
 
@@ -1302,6 +1402,135 @@ mod tests {
         let swing = c0.iter().cloned().fold(f64::MIN, f64::max)
             - c0.iter().cloned().fold(f64::MAX, f64::min);
         assert!(swing > 0.05, "block 0 never responded to the edge: {swing}");
+    }
+
+    /// End-to-end stiff wiring: analysis nominates cut nodes on a chain of
+    /// BJT blocks, run_staged executes the measured waveform relaxation,
+    /// the certificate carries Stiff records with real residuals, and the
+    /// result matches the fused monolith within the certificate's own
+    /// numbers.
+    #[test]
+    fn stiff_cuts_flow_through_run_staged() {
+        use crate::decompose::stiff::StiffPolicy;
+        use hauksbee_ir::{BjtModel, Polarity};
+        let mut c = Circuit::new();
+        let vs = c.node("vs");
+        c.add(Device::Vsource {
+            name: "VS".into(),
+            p: vs,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pulse {
+                v1: 3.0,
+                v2: 5.0,
+                delay: 1e-6,
+                rise: 0.5e-6,
+                fall: 0.5e-6,
+                width: 1.5e-6,
+                period: 0.0,
+            },
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        // A chain of three BJT blocks joined through low-impedance nets.
+        let mut prev = vs;
+        for k in 0..3 {
+            let joint = c.node(&format!("j{k}"));
+            c.add(Device::Resistor {
+                name: format!("Rj{k}"),
+                a: prev,
+                b: joint,
+                ohms: 100.0,
+                tc1: None,
+            });
+            let b = c.node(&format!("b{k}"));
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: NodeId::GROUND,
+                b,
+                e: joint,
+                model: model.clone(),
+            });
+            c.add(Device::Resistor {
+                name: format!("Rb{k}"),
+                a: b,
+                b: NodeId::GROUND,
+                ohms: 100e3,
+                tc1: None,
+            });
+            prev = joint;
+        }
+
+        let dt = 100e-9;
+        let tstop = 4e-6;
+        let opts = fixed_opts(dt);
+        let d = Decomposition::analyze_with_boundaries(
+            &c,
+            TearMotive::Profit,
+            Default::default(),
+            Default::default(),
+            StiffPolicy {
+                min_block_devices: 2,
+                max_probes_per_block: 8,
+            },
+            &[],
+        );
+        assert!(
+            !d.stiff.is_empty(),
+            "the chain must yield stiff nominations: {:?}",
+            d.balance_tears
+        );
+
+        let staged = run_staged(&c, &d, &opts, tstop).expect("staged");
+        let accepted: Vec<_> = staged
+            .stiff_outcomes
+            .iter()
+            .filter(|(_, o)| o.accepted)
+            .collect();
+        assert!(
+            !accepted.is_empty(),
+            "the relaxation must certify at least one boundary: {:?}",
+            staged.stiff_outcomes
+        );
+        let stiff_records: Vec<_> = staged
+            .certificate
+            .records
+            .iter()
+            .filter(|r| r.kind == TearKind::Stiff)
+            .collect();
+        assert_eq!(stiff_records.len(), accepted.len());
+        for r in &stiff_records {
+            match r.tolerance {
+                ToleranceClaim::Stiffness { sag_v } => {
+                    assert!(sag_v.is_finite(), "{r:?}");
+                }
+                ref other => panic!("stiff record with wrong claim: {other:?}"),
+            }
+        }
+        // The pinned nodes joined the supply-integrity refusal.
+        assert!(staged
+            .certificate
+            .permits(crate::decompose::verify::RefusedAnalysis::SupplyIntegrityOnTornRail)
+            .is_err());
+
+        let max_sag = accepted
+            .iter()
+            .map(|(_, o)| o.sag_v)
+            .fold(0.0f64, f64::max);
+        let mono = monolith(&c, dt, tstop);
+        let tol = (3.0 * max_sag).max(2e-6);
+        for node in 1..c.node_count() {
+            for (k, &t) in staged.waveforms.time.iter().enumerate() {
+                let sv = staged.waveforms.node_voltages[node][k];
+                let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
+                assert!(
+                    (sv - mv).abs() <= tol,
+                    "staged stiff diverged at {} t={t:.3e}: {sv:.6} vs {mv:.6} (sag {max_sag:.3e})",
+                    c.node_name(NodeId(node as u32))
+                );
+            }
+        }
     }
 
     /// Absorption exactness: the drivers.rs Thevenin shape, replicated into
