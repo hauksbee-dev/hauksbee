@@ -211,6 +211,13 @@ impl PartitionedTransient {
         if !matches!(opts.step, StepControl::Fixed { .. }) {
             return None;
         }
+        // Power-on starts have no DC operating point to seed the islands
+        // from; this engine cold-seeds a global DC unconditionally, so it
+        // must decline rather than silently solve a DC the caller asked to
+        // skip (the monolithic path owns DcInit::FromZero).
+        if !matches!(opts.dc_init, crate::options::DcInit::Solve) {
+            return None;
+        }
         Self::build_from_partition(circuit, opts, part)
     }
 

@@ -151,6 +151,12 @@ impl Transient {
         // chunk when a seed is supplied); under FromZero a power-on start with
         // no DC solve at all: x(0) = 0 and reactive history zeroed further down.
         let from_zero = opts.dc_init == DcInit::FromZero;
+        // Known softness (review note): the staged-DC regularizers arm on
+        // ws.used_staged_dc(), which only a DC solve can set, so a power-on
+        // march runs the bare per-step path. A stiff board that needed the
+        // regularized rescue fails honestly (the caller keeps its original
+        // DC error); arming them under FromZero on nonlinear circuits is a
+        // plausible improvement when the strategy ladder lands.
         if from_zero {
             // Power-on: the unknown vector rests at zero. No DC solve to fail;
             // the ramp (paired Ramped sources) integrates the state up from here.

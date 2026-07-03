@@ -520,7 +520,16 @@ fn solve_group(
         // NOT wired to this retry yet: a separate owner is designing that
         // integration, and composing power-on with the capture relaxation needs
         // its own thought. Left untouched on purpose.
-        Err(e) if opts.dc_init == DcInit::Solve => {
+        // The retry is gated on the error actually being a DC-reachability
+        // failure: retrying an arbitrary mid-march death with a different
+        // trajectory would paper over a real bug and mislabel the group as
+        // DC-unreachable in ramped_groups (review finding). The DC paths
+        // announce themselves in their messages; a typed error is the
+        // eventual fix, the substring is the current idiom.
+        Err(e)
+            if opts.dc_init == DcInit::Solve
+                && (e.contains("DC") || e.contains("dc") || e.contains("homotopy")) =>
+        {
             let dt = match opts.step {
                 StepControl::Fixed { dt } => dt,
                 // A non-fixed run reached here only if run_staged's own guard
@@ -528,14 +537,18 @@ fn solve_group(
                 // window with no grid.
                 _ => return Err(e),
             };
-            // ramp_window = 200 * dt. Provenance: long enough that the ramp is
-            // quasi-static for the board's fast time constants (200 fixed steps
-            // is many decades above a single-step transient, so the sources rise
-            // slowly relative to the fastest node the solver already resolves),
-            // yet short next to any tstop of interest (a staged run marches far
-            // more than 200 steps), so the power-on window is a small transient
-            // head, not the bulk of the record.
-            let ramp_window = 200.0 * dt;
+            // ramp_window = 200 * dt, clamped to a tenth of the window.
+            // Provenance: 200 fixed steps rises slowly relative to the fastest
+            // node the solver resolves, and the clamp guarantees the ramp is a
+            // small transient head rather than the bulk (or the entirety) of a
+            // short record; the smoke run demonstrated the unguarded case,
+            // returning a mid-ramp waveform as a "successful" solve (review
+            // finding). A window too short to fit any meaningful ramp keeps
+            // the original DC error instead of faking a power-on.
+            let ramp_window = (200.0 * dt).min(tstop / 10.0);
+            if ramp_window < 2.0 * dt {
+                return Err(e);
+            }
             let ramped_sub = ramp_all_sources(sub, ramp_window);
             let mut ramp_opts = *opts;
             ramp_opts.dc_init = DcInit::FromZero;
@@ -557,7 +570,21 @@ fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
     let mut c = sub.clone();
     for dev in c.devices.iter_mut() {
         match dev {
-            Device::Vsource { kind, .. } | Device::Isource { kind, .. } => {
+            Device::Vsource { name, kind, .. } => {
+                // Replay pins carry a CERTIFIED upstream waveform: real,
+                // causal boundary data solved from the upstream group's own
+                // (DC-started) run. Ramping them would drive this group's
+                // early window from a boundary that contradicts the upstream
+                // certificate (review finding). Power-on applies to the
+                // group's own supplies and stimuli, not to its neighbours'
+                // already-solved truth.
+                if name.starts_with("VREPLAY_") {
+                    continue;
+                }
+                let inner = std::mem::replace(kind, SourceKind::Dc(0.0));
+                *kind = inner.ramped(ramp_window);
+            }
+            Device::Isource { kind, .. } => {
                 let inner = std::mem::replace(kind, SourceKind::Dc(0.0));
                 *kind = inner.ramped(ramp_window);
             }
