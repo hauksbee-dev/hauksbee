@@ -6,7 +6,7 @@
 //! operating point reuses this with reactive elements opened/shorted, plus
 //! gmin-stepping and source-stepping homotopy when the cold-start Newton stalls.
 
-use crate::options::SolverOptions;
+use crate::options::{SolverOptions, Strategy};
 use crate::plan::StampPlan;
 use crate::sparse::{SparseMatrix, Symbolic};
 use crate::stamp::{reserve_pattern, stamp_all, IntegCoeffs, StampCtx};
@@ -85,7 +85,7 @@ pub struct Workspace {
     /// cycle (the post-reset overshoot whose maxdV rotates across mesh nodes, which
     /// per-node damping cannot catch). Off by default so an ordinary circuit's
     /// per-step path is bit-identical (no residual evaluation). Also force-on via
-    /// HAUKSBEE_NEWTON_LINESEARCH=1 for diagnosis.
+    /// Strategy::LineSearch for direct grants.
     tran_line_search: bool,
     /// SPDT leg sibling map (device id -> the device id of its complementary
     /// throw), recovered once at construction. Two `VSwitch` legs are siblings
@@ -292,7 +292,7 @@ pub fn newton_solve(
     let dbg_newton = std::env::var("HAUKSBEE_NEWTON_DBG").is_ok();
     let dbg_staged = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     // GLOBAL damped-Newton line-search (Armijo backtracking on the full residual
-    // infinity-norm). Gated behind HAUKSBEE_NEWTON_LINESEARCH=1; OFF by default so
+    // infinity-norm). Gated behind Strategy::LineSearch; OFF by default so
     // every existing per-step path is bit-identical. This is the textbook
     // globalization for a traveling overshoot in a stiff mesh (the measured
     // refractory-reset follow-on limit cycle: a huge Newton correction that pins
@@ -313,11 +313,14 @@ pub fn newton_solve(
     // line-search belongs there. With the flag off it is a no-op everywhere.
     //
     // Armed either by the transient driver on the stiff-board path
-    // (ws.tran_line_search, the auto path that keeps the milestone green without an
-    // env var) or forced via HAUKSBEE_NEWTON_LINESEARCH=1 for diagnosis. Never on
-    // the DC path (dc==true).
-    let line_search = !dc
-        && (ws.tran_line_search || std::env::var("HAUKSBEE_NEWTON_LINESEARCH").is_ok());
+    // (ws.tran_line_search, TransientDyn's arming) or granted directly via
+    // Strategy::LineSearch. Never on the DC path (dc==true).
+    let line_search = !dc && (ws.tran_line_search || opts.ladder.has(Strategy::LineSearch));
+    if line_search && !ws.tran_line_search {
+        // Granted directly by the ladder (not via TransientDyn's arming):
+        // record the activation.
+        crate::diagnostics::note(Strategy::LineSearch);
+    }
     const ARMIJO_C: f64 = 1e-4;
     const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     // Anchor for pn-junction voltage limiting: the linearization point of the
