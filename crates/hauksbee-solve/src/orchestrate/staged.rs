@@ -352,8 +352,19 @@ pub fn run_staged(
 
             let (wf, torn, ramped) = match stiff_run {
                 Some(wf) => (wf, false, false),
-                None => solve_group(&sub, imposed, &sub_opts, tstop)
-                    .map_err(|e| format!("staged group {g} failed: {e}"))?,
+                None => solve_group(&sub, imposed, &sub_opts, tstop).map_err(|e| {
+                    // Name the group: a half-hour flagship run whose error
+                    // says only "group 3" costs another half-hour run to
+                    // learn what group 3 is. Devices and a name sample turn
+                    // the next failure into a standalone fixture.
+                    let sample: Vec<&str> =
+                        sub.devices.iter().take(6).map(|d| d.name()).collect();
+                    format!(
+                        "staged group {g} failed ({} devices; sample: {}): {e}",
+                        sub.devices.len(),
+                        sample.join(", ")
+                    )
+                })?,
             };
             if torn {
                 torn_groups.push(g);
