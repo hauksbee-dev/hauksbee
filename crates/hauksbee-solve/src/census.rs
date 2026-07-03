@@ -392,6 +392,13 @@ impl Drop for StepCensus {
                 );
             }
         }
+        // Ladder observability (the dev-plan 02 s2.6 requirement): which
+        // strategies have fired on this thread (pending, not drained: the
+        // census never steals a programmatic caller's diagnostics window).
+        let fired = crate::diagnostics::peek_strategy_activations();
+        if !fired.is_empty() {
+            eprintln!("[step-census]   ladder strategies fired: {fired:?}");
+        }
         if !self.crossings.is_empty() {
             let mut by_count: Vec<(&String, &u64)> = self.crossings.iter().collect();
             by_count.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
