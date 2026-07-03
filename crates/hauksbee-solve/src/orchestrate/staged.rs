@@ -296,6 +296,7 @@ pub fn run_staged(
                 .filter_map(|s| g2l.get(&s.node.0).map(|&ln| NodeId(ln)))
                 .collect();
             let mut stiff_run: Option<Waveforms> = None;
+            let mut stiff_refusal_note = String::new();
             if !stiff_local.is_empty() && imposed.is_empty() {
                 let mut refusals = Vec::new();
                 match execute_stiff_group(&sub, &stiff_local, &sub_opts, tstop, &mut refusals)? {
@@ -336,6 +337,24 @@ pub fn run_staged(
                     None => {
                         let l2g: HashMap<u32, u32> =
                             g2l.iter().map(|(&gn, &ln)| (ln, gn)).collect();
+                        // The refusal summary rides into any later fused-path
+                        // error: three flagship runs could not see WHY the
+                        // mega group fell through, because the fused DC error
+                        // masked the stiff refusal that caused it.
+                        stiff_refusal_note = refusals
+                            .iter()
+                            .map(|o| {
+                                format!(
+                                    "{} sag {:.3e} tol {:.3e}{}{}",
+                                    circuit.node_name(NodeId(l2g[&o.node.0])),
+                                    o.sag_v,
+                                    o.tol_v,
+                                    if o.note.is_empty() { "" } else { ": " },
+                                    o.note
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ");
                         for o in refusals {
                             let gnode = NodeId(l2g[&o.node.0]);
                             stiff_outcomes.push((
@@ -359,8 +378,13 @@ pub fn run_staged(
                     // the next failure into a standalone fixture.
                     let sample: Vec<&str> =
                         sub.devices.iter().take(6).map(|d| d.name()).collect();
+                    let stiff_note = if stiff_refusal_note.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [stiff relaxation refused first: {stiff_refusal_note}]")
+                    };
                     format!(
-                        "staged group {g} failed ({} devices; sample: {}): {e}",
+                        "staged group {g} failed ({} devices; sample: {}){stiff_note}: {e}",
                         sub.devices.len(),
                         sample.join(", ")
                     )
