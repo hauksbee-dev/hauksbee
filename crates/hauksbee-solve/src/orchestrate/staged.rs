@@ -1749,3 +1749,82 @@ mod tests {
         }
     }
 }
+
+/// One group's DC health, from [`probe_groups_dc`].
+#[derive(Debug)]
+pub struct GroupDcProbe {
+    /// Group index (the same numbering staged errors use).
+    pub group: usize,
+    /// Device count of the extracted sub-circuit (absorbed copies included).
+    pub devices: usize,
+    /// A few device names, enough to recognize the group on a schematic.
+    pub sample: Vec<String>,
+    /// Whether the group's own DC operating point converges. `None` when the
+    /// group was skipped (over the size cap, or absorbed).
+    pub dc_ok: Option<bool>,
+}
+
+/// Diagnostic: enumerate the solve groups exactly as [`run_staged`] would and
+/// try ONLY each group's DC operating point. Exists because a failing group
+/// deep inside a half-hour staged run is unidentifiable at acceptable cost
+/// without it (the flagship burned two runs learning that). Groups larger
+/// than `size_cap` are enumerated but not solved (the flagship's mega group
+/// is the known DC-collapse case and takes minutes to fail; probing it tells
+/// nothing new).
+pub fn probe_groups_dc(
+    circuit: &Circuit,
+    decomp: &Decomposition,
+    opts: &SolverOptions,
+    size_cap: usize,
+) -> Vec<GroupDcProbe> {
+    use crate::newton::{dc_operating_point, Workspace};
+
+    let absorbed: HashMap<usize, &[usize]> = decomp
+        .drivers
+        .iter()
+        .map(|a| (a.driver_group, a.consumers.as_slice()))
+        .collect();
+    let group_devices = |g: usize| -> Vec<DeviceId> {
+        decomp.dag.groups[g]
+            .iter()
+            .flat_map(|&isl| decomp.graph.islands[isl].iter().copied())
+            .collect()
+    };
+
+    let mut out = Vec::new();
+    for stage in &decomp.dag.stages {
+        for &g in stage {
+            if absorbed.contains_key(&g) {
+                continue;
+            }
+            let mut devices = group_devices(g);
+            let mut sorted_absorbed: Vec<(&usize, &&[usize])> = absorbed.iter().collect();
+            sorted_absorbed.sort_by_key(|(k, _)| **k);
+            for (dg, consumers) in sorted_absorbed {
+                if consumers.contains(&g) {
+                    devices.extend(group_devices(*dg));
+                }
+            }
+            let (sub, _) = extract_subcircuit(circuit, &devices, &[]);
+            let sample: Vec<String> = sub
+                .devices
+                .iter()
+                .take(6)
+                .map(|d| d.name().to_string())
+                .collect();
+            let dc_ok = if sub.devices.len() > size_cap {
+                None
+            } else {
+                let mut ws = Workspace::new(&sub);
+                Some(dc_operating_point(&mut ws, &sub, opts).is_ok())
+            };
+            out.push(GroupDcProbe {
+                group: g,
+                devices: sub.devices.len(),
+                sample,
+                dc_ok,
+            });
+        }
+    }
+    out
+}
