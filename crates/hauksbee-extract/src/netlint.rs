@@ -935,7 +935,7 @@ fn resistor_to_rail(
 // x2, Olimex EVB, Corne, Lily58, RP2040-minimal, Reform x2, Olimex Pico-PC):
 // the single raw fire on that corpus (Reform `EDP_IRQ`) is an open-drain
 // interrupt line whose pins a symbol author typed `output`, and it is excluded
-// by the open-drain-name and tiebreaker rules below. See `docs/FAMOUS_SWEEP.md`
+// by the open-drain-name and tiebreaker rules below. See `docs/record/FAMOUS_SWEEP.md`
 // Round 4 for the calibration evidence and for why the sibling "undriven input"
 // check was REJECTED (it could not reach zero false positives).
 

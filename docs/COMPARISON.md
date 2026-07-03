@@ -92,7 +92,7 @@ without the hand-modeling:
 | extraction | hand-written simplifier | automatic binder + model db |
 | device physics | closed-form behavioral | SPICE-class, temperature, tolerances |
 | MCU | simavr ATmega328P | same bridge, generalized API |
-| hardware bug discovery | models the intended circuit (cannot see wiring defects) | independently derived the inhibitory miswire: 689mA through a 100mA junction when INH_Q4 enables (docs/BUG_HUNT.md Finding 15) |
+| hardware bug discovery | models the intended circuit (cannot see wiring defects) | independently derived the inhibitory miswire: 689mA through a 100mA junction when INH_Q4 enables (docs/record/BUG_HUNT.md Finding 15) |
 
 ## Unique capabilities
 
@@ -118,7 +118,7 @@ without the hand-modeling:
   Wokwi and Proteus emulate more part numbers, but from their own non-PCB inputs;
   hauksbee's breadth is across CPU architectures co-simulated against a circuit
   extracted from the real layout.
-- Known-fault validation (`docs/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
+- Known-fault validation (`docs/record/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
   faults documented in real boards' revision history, six caught statically, one
   executed via firmware co-sim, each catch two-sided (flags the faulty revision,
   clean on the fix). No other tool here ships a calibration of this kind; it is

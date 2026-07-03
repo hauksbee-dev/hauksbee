@@ -2,7 +2,7 @@
  *
  * This is a DELIBERATELY REDUCED stand-in for the full Watchy Arduino firmware,
  * built to flip the Watchy display-RES# boot-coverage validation row
- * (docs/KNOWN_FAULTS_VALIDATION.md) from MISSED-but-decidable to executed. The
+ * (docs/record/KNOWN_FAULTS_VALIDATION.md) from MISSED-but-decidable to executed. The
  * full Watchy firmware (sqfmi/Watchy, Arduino + GxEPD2) does the same thing this
  * does for the reset line, but pulls in WiFi/BT/RTC/SPI display stacks that the
  * Espressif QEMU fork does not model and that do not mirror GPIO to the RAM

@@ -137,7 +137,7 @@ Cross-checked against the `altium2kicad` project (thesourcerer8) and a Python
 
 ## A real bug chased to the binary (the Tarski discipline)
 
-An early version reported 42 "shorts" on the EBAZ4205. Per `docs/BUG_HUNT.md`
+An early version reported 42 "shorts" on the EBAZ4205. Per `docs/record/BUG_HUNT.md`
 the rule is: chase every short to the data before believing it. All 42 were on
 `In2.Cu` and every one involved a copper-pour polygon. The board has split
 power planes (10 solid pours of different nets — VCC, GND, VCCA, VCC-DDR — on one

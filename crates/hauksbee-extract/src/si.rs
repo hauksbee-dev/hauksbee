@@ -19,7 +19,7 @@
 //! ## Discipline (read before trusting any fire)
 //!
 //! These follow the same calibration rule as the rest of hauksbee
-//! (`docs/FAMOUS_SWEEP.md`, `docs/KNOWN_FAULTS_VALIDATION.md`): **zero false
+//! (`docs/record/FAMOUS_SWEEP.md`, `docs/record/KNOWN_FAULTS_VALIDATION.md`): **zero false
 //! positives on known-good corpus, or the check does not fire.** Every check has
 //! an explicit "unknown -> info, never a fire" path, so a missing datasheet
 //! constant produces silence (or an informational note), never a confident

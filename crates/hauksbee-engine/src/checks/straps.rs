@@ -13,7 +13,7 @@
 //! bound MCU, examines the net each strap pin sits on. It fires only on the
 //! structurally unambiguous case, in line with the famous-sweep calibration
 //! discipline (zero false positives on known-good boards or the check does not
-//! ship, see `docs/KNOWN_FAULTS_VALIDATION.md`):
+//! ship, see `docs/record/KNOWN_FAULTS_VALIDATION.md`):
 //!
 //!   (a) a *free-running clock source* (a powered oscillator) reaches the strap
 //!       net with no strong static pull to override it -> HIGH severity, because
