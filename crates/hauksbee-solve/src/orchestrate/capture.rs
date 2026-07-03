@@ -64,6 +64,8 @@ use crate::decompose::conduction::ConductionGraph;
 use crate::decompose::rails::fragment_blocks;
 use crate::newton::{dc_operating_point, Workspace};
 use crate::options::{Partitioning, SolverOptions, StepControl};
+use crate::partition::{Partition, RailTear};
+use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
 
 /// What happened at one stiff boundary.
@@ -123,6 +125,25 @@ pub fn execute_stiff_group(
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
 ) -> Result<Option<StiffExecution>, String> {
+    execute_stiff_group_held(sub, candidates, &HashMap::new(), opts, tstop, refusal_report)
+}
+
+/// [`execute_stiff_group`] with a set of EXTRA nodes HELD (not relaxed): each
+/// `held` node is treated as a boundary during fragmentation (so the candidate
+/// capture groups stay small even when the held node is a heavily-connected
+/// hub) and pinned at its supplied train in every capture solve. The composed
+/// executor uses this to relax signal cuts while holding the rails at their
+/// balance-solved trains: a signal captured on its small adjacent-block group
+/// with the rails held stays small, where freeing it in the whole rail-torn
+/// group would re-fuse the hub it belongs to.
+pub fn execute_stiff_group_held(
+    sub: &Circuit,
+    candidates: &[NodeId],
+    held: &HashMap<u32, Vec<f64>>,
+    opts: &SolverOptions,
+    tstop: f64,
+    refusal_report: &mut Vec<StiffOutcome>,
+) -> Result<Option<StiffExecution>, String> {
     let dt = match opts.step {
         StepControl::Fixed { dt } => dt,
         _ => return Err("stiff execution requires fixed step control".into()),
@@ -173,6 +194,14 @@ pub fn execute_stiff_group(
     let mut bound = vec![false; n_nodes + 1];
     for c in candidates {
         bound[c.0 as usize] = true;
+    }
+    // Held nodes (the composed executor's rails) are boundaries too: fragmenting
+    // with them held keeps a candidate's capture group small even when the
+    // candidate is a hub that would otherwise re-fuse a large region.
+    for &h in held.keys() {
+        if (h as usize) <= n_nodes {
+            bound[h as usize] = true;
+        }
     }
     let frag = fragment_blocks(sub, &graph, island, &bound);
 
@@ -234,10 +263,22 @@ pub fn execute_stiff_group(
             // Bootstrap: per-candidate capture-group DC with the others at 0.
             bootstrapped = true;
             for c in candidates {
-                // Pins default to Dc(0.0): exactly the zeros bootstrap.
-                let (cap, g2l) = capture_circuit(
-                    sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates,
+                // Pins default to Dc(0.0): exactly the zeros bootstrap, except
+                // held rails, which start at their train's t=0 estimate.
+                let (mut cap, g2l) = capture_circuit(
+                    sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, held,
                 );
+                for dev in cap.devices.iter_mut() {
+                    if let Device::Vsource { name, kind, .. } = dev {
+                        if let Some(net) = name.strip_prefix("VRAIL_") {
+                            if let Some((_, train)) =
+                                held.iter().find(|(k, _)| sub.node_name(NodeId(**k)) == net)
+                            {
+                                *kind = SourceKind::Dc(train.first().copied().unwrap_or(0.0));
+                            }
+                        }
+                    }
+                }
                 let mut ws = Workspace::new(&cap);
                 let v = match dc_operating_point(&mut ws, &cap, opts) {
                     Ok(_) => g2l
@@ -281,7 +322,7 @@ pub fn execute_stiff_group(
             boundary.insert(*k, v.clone());
         }
         let wf = match solve_capture(
-            sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, &rest,
+            sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, &rest, held,
             Some((&boundary, &grid)), None, opts, tstop,
         ) {
             Ok(wf) => wf,
@@ -301,7 +342,7 @@ pub fn execute_stiff_group(
         converged = true;
         for c in candidates {
             let wf = match solve_capture(
-                sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, &rest,
+                sub, &frag, &adjacent, &conducts_cand, &companions, *c, candidates, &rest, held,
                 Some((&trains, &grid)), runs.get(&c.0), opts, tstop,
             ) {
                 Ok(wf) => wf,
@@ -369,12 +410,18 @@ pub fn execute_stiff_group(
         }
     }
     // Any block adjacent to NO candidate would be unreadable; fragmentation
-    // guarantees there are none, but refuse rather than emit zeros if the
-    // guarantee is ever broken.
-    for &b in frag.block_devices.keys() {
-        if !block_owner.contains_key(&b) {
-            refusal_report.extend(outcomes);
-            return Ok(None);
+    // guarantees there are none WITHOUT held rails, but refuse rather than emit
+    // zeros if the guarantee is ever broken. With held rails present, holding
+    // them as boundaries can create blocks adjacent only to a rail (never to a
+    // signal), which is expected: the composed caller assembles the whole group
+    // itself and reads only the signal series from here, so those blocks are
+    // skipped, not fatal.
+    if held.is_empty() {
+        for &b in frag.block_devices.keys() {
+            if !block_owner.contains_key(&b) {
+                refusal_report.extend(outcomes);
+                return Ok(None);
+            }
         }
     }
 
@@ -385,10 +432,14 @@ pub fn execute_stiff_group(
         branch_currents: Vec::new(),
     };
     for node in 1..n_out {
-        let series: Vec<f64> = if bound[node] {
+        let series: Vec<f64> = if held.contains_key(&(node as u32)) {
+            held[&(node as u32)].clone()
+        } else if bound[node] {
             trains[&(node as u32)].clone()
         } else if let Some(&blk) = frag.node_block.get(&node) {
-            let owner = block_owner[&blk];
+            let Some(&owner) = block_owner.get(&blk) else {
+                continue; // rail-only block (held case); composed ignores it
+            };
             let (wf, g2l) = &runs[&owner];
             match g2l.get(&(node as u32)) {
                 Some(&ln) => grid
@@ -420,6 +471,519 @@ pub fn execute_stiff_group(
         waveforms,
         outcomes,
     }))
+}
+
+/// Execute one solve group by COMPOSING balance-torn rails with stiff-cut
+/// waveform relaxation, or refuse.
+///
+/// This is the sibling of [`execute_stiff_group`] for a group whose stiff
+/// nominations include genuine supply RAILS (load-dependent nets on which
+/// Gauss-Seidel limit-cycles instead of contracting, the flagship's ANALOG_VDD
+/// and +5V) alongside ordinary SIGNAL cuts (which relax fine). The rails are
+/// handed to the exact scalar KCL balance (`analyze_imposing_tears` +
+/// `PartitionedTransient`), and the signals are relaxed on top of it.
+///
+/// `sub` is the group's self-contained circuit; `signal_cuts` are signal stiff
+/// nodes in `sub`'s space; `rails` are the balance tears already remapped into
+/// `sub`'s space by the caller (like `remap_tear`).
+///
+/// ## The composition is an alternation of two exact solves
+///
+/// A signal cut relaxes fine on a SMALL capture group; a supply rail does not
+/// relax at all (it limit-cycles), it wants the exact scalar KCL balance. The
+/// naive "pin every signal, solve once, resample" measures a signal's residual
+/// as identically zero (a pinned node reads back its pin), and freeing a signal
+/// in the WHOLE rail-torn group re-fuses the large hub it belongs to (the
+/// flagship's OUTPUT_I nets fuse thousands of devices when freed). So neither a
+/// whole-group free-solve nor a whole-group pinned-solve works.
+///
+/// The composition instead ALTERNATES:
+///
+/// 1. **Rail balance.** Pin every signal at its current train, tear the rails,
+///    and march the fully-fragmented partitioned engine (its seed decomposes
+///    when the whole-group DC collapses). Sample each rail's voltage train from
+///    that solve: the balance closes each rail's KCL exactly per step.
+/// 2. **Signal relaxation.** Hold the rails at those trains and relax the
+///    signals with [`execute_stiff_group_held`]: each signal is captured on its
+///    small adjacent-block group (rails held keep it small even for a hub),
+///    exactly the proven stiff mechanism. Sample the new signal trains.
+///
+/// Iterate until the signal trains stop moving between outer passes; the rails
+/// carry no sag (their exactness is the balance claim), the signals carry the
+/// inner relaxation's measured sag. The final assembly is one rail-balance solve
+/// at the converged signal trains, read for every node.
+///
+/// ## The fragmentation gate, and the stiff-supply feed-hold fallback
+///
+/// Step 1 requires the balance engine to actually FRAGMENT the fully-pinned
+/// group into marchable blocks. It fragments by `nodes()`, coarser than the
+/// conduction-based fragmentation the signal captures use, so a group whose
+/// signals fragment finely can still leave a large nonlinear island for the
+/// balance engine (the flagship's 5808-device mega group does, even with every
+/// signal pinned: a 4000-device block survives and its per-island Newton cannot
+/// march). When [`balance_group_fragments`] reports this, the rails are treated
+/// as the STIFF supplies they are (fed through mΩ legs) and HELD at their feed
+/// voltage instead of balanced on the whole group; only the signals relax, on
+/// their small captures. The rail outcome then says "held rail (stiff-supply
+/// feed)" rather than "balanced rail", and the assembly is the held
+/// relaxation's own (signals from trains, blocks from captures, rails from the
+/// feed hold). This is the honest degradation for a group the balance engine
+/// cannot fragment; the exact whole-group balance stands for groups that do
+/// fragment (the mini fixtures, real synapse arrays).
+///
+/// `Ok(None)` is an honest refusal (a signal that would not contract, or a solve
+/// that died); rails then carry no exactness claim.
+pub fn execute_composed_group(
+    sub: &Circuit,
+    signal_cuts: &[NodeId],
+    rails: &[RailTear],
+    opts: &SolverOptions,
+    tstop: f64,
+    refusal_report: &mut Vec<StiffOutcome>,
+) -> Result<Option<StiffExecution>, String> {
+    let dt = match opts.step {
+        StepControl::Fixed { dt } => dt,
+        _ => return Err("composed execution requires fixed step control".into()),
+    };
+    if rails.is_empty() {
+        return Err("composed execution needs at least one rail tear".into());
+    }
+    let debug = std::env::var("HAUKSBEE_COMPOSED_DEBUG").is_ok();
+
+    let grid = uniform_grid(dt, tstop);
+    let reltol = opts.reltol;
+    let mut sub_opts = *opts;
+    sub_opts.partitioning = Partitioning::Off;
+
+    // ---- estimates: signal rest, rail vnom, rail feed seed ----------------
+    // The whole-group DC usually FAILS (the collapse this exists for). When it
+    // does, signals seed at 0 and rails seed at their feed voltage; the first
+    // rail-balance pass corrects both.
+    let mut rest: HashMap<u32, f64> = HashMap::new();
+    let mut rail_vnom: HashMap<u32, f64> = HashMap::new();
+    let mut rail_seed: HashMap<u32, f64> = HashMap::new();
+    let mut bootstrapped = true;
+    {
+        let mut ws = Workspace::new(sub);
+        if dc_operating_point(&mut ws, sub, opts).is_ok() {
+            bootstrapped = false;
+            for s in signal_cuts {
+                rest.insert(s.0, ws.layout.node(*s).map(|i| ws.x[i]).unwrap_or(0.0));
+            }
+            for rt in rails {
+                let v = ws.layout.node(rt.rail).map(|i| ws.x[i]).unwrap_or(0.0);
+                rail_vnom.insert(rt.rail.0, v.abs().max(1.0));
+                rail_seed.insert(rt.rail.0, v);
+            }
+        } else {
+            for s in signal_cuts {
+                rest.insert(s.0, 0.0);
+            }
+            for rt in rails {
+                // Feed-voltage seed: the feed node's source value if it is
+                // ideally driven, else 0 for now (cascade fix-up below).
+                let vfeed = feed_source_value(sub, rt.feed).unwrap_or(0.0);
+                rail_vnom.insert(rt.rail.0, vfeed.abs().max(1.0));
+                rail_seed.insert(rt.rail.0, vfeed);
+            }
+            // Cascade fix-up: a rail whose feed is ANOTHER rail (ANALOG_VDD fed
+            // from the +5V rail) inherits its parent's seed. Iterate to a
+            // fixpoint (bounded by the rail count).
+            for _ in 0..rails.len().max(1) {
+                for rt in rails {
+                    if rail_seed.get(&rt.rail.0).copied().unwrap_or(0.0) == 0.0 {
+                        if let Some(&pv) = rail_seed.get(&rt.feed.0) {
+                            rail_seed.insert(rt.rail.0, pv);
+                            rail_vnom.insert(rt.rail.0, pv.abs().max(1.0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Signal trains, rail trains (constant seeds to start).
+    let mut signal_trains: HashMap<u32, Vec<f64>> = signal_cuts
+        .iter()
+        .map(|s| (s.0, vec![rest.get(&s.0).copied().unwrap_or(0.0); grid.len()]))
+        .collect();
+    let mut rail_trains: HashMap<u32, Vec<f64>> = rails
+        .iter()
+        .map(|rt| {
+            (
+                rt.rail.0,
+                vec![rail_seed.get(&rt.rail.0).copied().unwrap_or(0.0); grid.len()],
+            )
+        })
+        .collect();
+
+    // ---- does the group fragment for the partitioned BALANCE engine? ------
+    // The balance engine ([`PartitionedTransient`]) fragments by `nodes()`,
+    // which is COARSER than the conduction-based fragmentation the stiff
+    // detector (and the signal captures below) use. A group the detector
+    // fragments into small signal-capture blocks can therefore still leave a
+    // large nonlinear island for the balance engine to march (the flagship's
+    // 5808-device mega group does exactly this, even with every signal pinned).
+    // When it does, we do NOT march the whole group: the rails are STIFF
+    // supplies, so they are held at their feed voltage (a cascade seed, near-
+    // exact for a mΩ supply leg) and only the signals relax on their small
+    // captures. When the group DOES fragment (the mini fixtures, real synapse
+    // arrays), the exact whole-group scalar balance runs and the composition is
+    // exact up to the inner relaxation's sag.
+    let whole_group_balances = balance_group_fragments(sub, rails, signal_cuts);
+    if debug {
+        eprintln!("COMPOSED whole-group balance fragments: {whole_group_balances}");
+    }
+
+    // ---- outer alternation (rail balance <-> signal relaxation) -----------
+    // With the whole-group balance the rail<->signal coupling is block
+    // Gauss-Seidel, contracting LINEARLY at the coupling's spectral radius
+    // (weak on a stiff rail: a couple of passes). The ceiling is generous;
+    // convergence breaks early. When the group does not fragment, the rails are
+    // held fixed at their feed voltage, so a single signal pass suffices.
+    let max_outer = if whole_group_balances { 20 } else { 1 };
+    let mut sag: HashMap<u32, f64> = HashMap::new();
+    let mut outer_converged = signal_cuts.is_empty();
+    let mut held_waveforms: Option<Waveforms> = None;
+    for outer in 0..max_outer {
+        // 1. Rail balance on the whole group (exact) when it fragments.
+        if whole_group_balances {
+            let rail_wf = match solve_composed(
+                sub, rails, signal_cuts, &signal_trains, &grid, &sub_opts, tstop,
+            ) {
+                Ok(Some(wf)) => wf,
+                other => {
+                    if debug {
+                        eprintln!("COMPOSED rail balance died: {:?}", other.as_ref().err());
+                    }
+                    refusal_report.extend(composed_refusal_outcomes(
+                        signal_cuts, rails, None, &rest, &rail_vnom, reltol, bootstrapped,
+                    ));
+                    return Ok(None);
+                }
+            };
+            for rt in rails {
+                let s: Vec<f64> = grid
+                    .iter()
+                    .map(|&t| lerp_at(&rail_wf.time, &rail_wf.node_voltages[rt.rail.0 as usize], t))
+                    .collect();
+                rail_trains.insert(rt.rail.0, s);
+            }
+        }
+        // (else: rails stay held at their feed-voltage seed in rail_trains.)
+
+        // 2. Signal relaxation with rails HELD at their current trains.
+        if signal_cuts.is_empty() {
+            outer_converged = true;
+            break;
+        }
+        let mut inner_refusals = Vec::new();
+        let exec = match execute_stiff_group_held(
+            sub, signal_cuts, &rail_trains, &sub_opts, tstop, &mut inner_refusals,
+        )? {
+            Some(exec) => exec,
+            None => {
+                if debug {
+                    eprintln!("COMPOSED signal relaxation refused: {inner_refusals:?}");
+                }
+                refusal_report.extend(inner_refusals);
+                for rt in rails {
+                    let vnom = rail_vnom.get(&rt.rail.0).copied().unwrap_or(1.0);
+                    refusal_report.push(StiffOutcome {
+                        node: rt.rail,
+                        sag_v: f64::NAN,
+                        tol_v: 10.0 * reltol * vnom,
+                        accepted: false,
+                        bootstrapped,
+                        note: "composed relaxation refused; rail balance not certified",
+                    });
+                }
+                return Ok(None);
+            }
+        };
+
+        let mut outer_move = 0.0f64;
+        for c in signal_cuts {
+            let new: Vec<f64> = grid
+                .iter()
+                .map(|&t| {
+                    lerp_at(&exec.waveforms.time, &exec.waveforms.node_voltages[c.0 as usize], t)
+                })
+                .collect();
+            let old = &signal_trains[&c.0];
+            outer_move = outer_move.max(shifted_residual(old, &new));
+            signal_trains.insert(c.0, new);
+        }
+        for o in &exec.outcomes {
+            sag.insert(o.node.0, o.sag_v);
+        }
+        held_waveforms = Some(exec.waveforms);
+        if debug {
+            eprintln!("COMPOSED outer {outer}: signal move {outer_move:.3e}");
+        }
+        if !whole_group_balances {
+            outer_converged = true; // rails held fixed: one signal pass is the answer
+            break;
+        }
+        let bar = signal_cuts
+            .iter()
+            .map(|c| {
+                let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+                (10.0 * reltol * vnom).max(1e-6 * vnom)
+            })
+            .fold(0.0f64, f64::max);
+        if outer_move <= bar {
+            outer_converged = true;
+            break;
+        }
+    }
+
+    if !outer_converged && !signal_cuts.is_empty() {
+        refusal_report.extend(composed_refusal_outcomes(
+            signal_cuts, rails, None, &rest, &rail_vnom, reltol, bootstrapped,
+        ));
+        return Ok(None);
+    }
+
+    // ---- final assembly ---------------------------------------------------
+    let n_out = sub.node_count();
+    let mut waveforms = Waveforms {
+        time: grid.clone(),
+        node_voltages: vec![vec![0.0; grid.len()]; n_out],
+        branch_currents: Vec::new(),
+    };
+    if whole_group_balances {
+        // One exact whole-group rail-balance solve at the converged trains.
+        let full = match solve_composed(
+            sub, rails, signal_cuts, &signal_trains, &grid, &sub_opts, tstop,
+        ) {
+            Ok(Some(wf)) => wf,
+            other => {
+                if debug {
+                    eprintln!("COMPOSED final assembly died: {:?}", other.as_ref().err());
+                }
+                refusal_report.extend(composed_refusal_outcomes(
+                    signal_cuts, rails, None, &rest, &rail_vnom, reltol, bootstrapped,
+                ));
+                return Ok(None);
+            }
+        };
+        for node in 1..n_out {
+            if node >= full.node_voltages.len() {
+                continue;
+            }
+            for (k, &t) in grid.iter().enumerate() {
+                waveforms.node_voltages[node][k] = lerp_at(&full.time, &full.node_voltages[node], t);
+            }
+        }
+    } else {
+        // Feed-hold: the held signal relaxation's OWN assembly is the group's
+        // waveforms (signals from their trains, blocks from their captures, the
+        // held rails from their feed-voltage trains; rail-only blocks stay 0).
+        if let Some(wf) = held_waveforms {
+            for node in 1..n_out.min(wf.node_voltages.len()) {
+                for (k, &t) in grid.iter().enumerate() {
+                    waveforms.node_voltages[node][k] = lerp_at(&wf.time, &wf.node_voltages[node], t);
+                }
+            }
+        } else {
+            // No signals to relax: just the held rails.
+            for rt in rails {
+                if let Some(tr) = rail_trains.get(&rt.rail.0) {
+                    waveforms.node_voltages[rt.rail.0 as usize] = tr.clone();
+                }
+            }
+        }
+    }
+
+    // ---- outcomes ---------------------------------------------------------
+    let mut outcomes = Vec::new();
+    for c in signal_cuts {
+        let s = sag.get(&c.0).copied().unwrap_or(0.0);
+        let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+        outcomes.push(StiffOutcome {
+            node: *c,
+            sag_v: s,
+            tol_v: 10.0 * reltol * vnom,
+            accepted: true,
+            bootstrapped,
+            note: "",
+        });
+    }
+    for rt in rails {
+        let vnom = rail_vnom.get(&rt.rail.0).copied().unwrap_or(1.0);
+        outcomes.push(StiffOutcome {
+            node: rt.rail,
+            sag_v: 0.0,
+            tol_v: 10.0 * reltol * vnom,
+            accepted: true,
+            bootstrapped,
+            // A rail carries no sag either way (its exactness is a claim, not a
+            // measurement); the note records HOW it was held: the exact scalar
+            // KCL balance, or a stiff-supply feed hold when the group would not
+            // fragment for the balance engine.
+            note: if whole_group_balances {
+                "balanced rail"
+            } else {
+                "held rail (stiff-supply feed)"
+            },
+        });
+    }
+
+    Ok(Some(StiffExecution {
+        waveforms,
+        outcomes,
+    }))
+}
+
+/// Whether the fully-signal-pinned, rail-torn group fragments into blocks the
+/// partitioned balance engine can march (largest nonlinear island under the
+/// fragmentation cap). The balance engine fragments by `nodes()`, coarser than
+/// the conduction-based signal fragmentation, so this can be false even when the
+/// signal captures fragment finely.
+fn balance_group_fragments(sub: &Circuit, rails: &[RailTear], signal_cuts: &[NodeId]) -> bool {
+    const MAX_BALANCE_BLOCK: usize = 600;
+    let mut subp = sub.clone();
+    for s in signal_cuts {
+        subp.add(Device::Vsource {
+            name: format!("VSTIFF_{}", sub.node_name(*s)),
+            p: *s,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(0.0), // topology only; value irrelevant here
+        });
+    }
+    let part = Partition::analyze_imposing_tears(&subp, rails.to_vec());
+    let largest_nl = part
+        .islands
+        .iter()
+        .filter(|i| !i.linear)
+        .map(|i| i.devices.len())
+        .max()
+        .unwrap_or(0);
+    largest_nl <= MAX_BALANCE_BLOCK
+}
+
+/// The DC value an ideal source drives onto `feed`, if one does (used to seed a
+/// torn rail at its feed voltage before the first balance pass). `None` when the
+/// feed is not directly source-pinned.
+fn feed_source_value(sub: &Circuit, feed: NodeId) -> Option<f64> {
+    if feed.is_ground() {
+        return Some(0.0);
+    }
+    for dev in &sub.devices {
+        if let Device::Vsource { p, n, kind, .. } = dev {
+            if *p == feed && n.is_ground() {
+                return Some(kind.eval(0.0));
+            }
+            if *n == feed && p.is_ground() {
+                return Some(-kind.eval(0.0));
+            }
+        }
+    }
+    None
+}
+
+/// One composed solve: `sub` cloned, one VSTIFF PWL pin per node in
+/// `pin_signals` at its current train, torn on `rails`, marched by the
+/// partitioned engine (whose seed decomposes when the whole-group DC collapses).
+/// Returns the whole group's waveforms (node voltages on the engine grid), or
+/// `Ok(None)` if the engine declined to build.
+fn solve_composed(
+    sub: &Circuit,
+    rails: &[RailTear],
+    pin_signals: &[NodeId],
+    trains: &HashMap<u32, Vec<f64>>,
+    grid: &[f64],
+    opts: &SolverOptions,
+    tstop: f64,
+) -> Result<Option<Waveforms>, String> {
+    // Clone so node AND device ids are preserved: the rails' shunt DeviceIds and
+    // feed NodeIds (chosen by the caller in `sub`'s space) stay valid, and the
+    // VSTIFF pins add no new nodes (the signal nodes already exist).
+    let mut subp = sub.clone();
+    for s in pin_signals {
+        let train = &trains[&s.0];
+        let points: Vec<PwlPoint> = grid
+            .iter()
+            .zip(train)
+            .map(|(&t, &v)| PwlPoint { t, v })
+            .collect();
+        subp.add(Device::Vsource {
+            name: format!("VSTIFF_{}", sub.node_name(*s)),
+            p: *s,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pwl(points),
+        });
+    }
+
+    let part = Partition::analyze_imposing_tears(&subp, rails.to_vec());
+    let Some(mut engine) = PartitionedTransient::try_build_from_partition(&subp, opts, part) else {
+        return Ok(None);
+    };
+    let n_nodes = subp.node_count();
+    let mut wf = Waveforms {
+        time: Vec::new(),
+        node_voltages: vec![Vec::new(); n_nodes],
+        branch_currents: Vec::new(),
+    };
+    engine.run_streaming(&subp, tstop, |s| {
+        wf.time.push(s.time);
+        for node in 0..n_nodes {
+            let v = if node == 0 {
+                0.0
+            } else {
+                s.x.get(node - 1).copied().unwrap_or(0.0)
+            };
+            wf.node_voltages[node].push(v);
+        }
+    })?;
+    Ok(Some(wf))
+}
+
+/// Refusal outcomes for the composed executor: signals carry their sag (INF for
+/// the one whose solve died), rails carry no certified balance.
+fn composed_refusal_outcomes(
+    signal_cuts: &[NodeId],
+    rails: &[RailTear],
+    dead: Option<NodeId>,
+    rest: &HashMap<u32, f64>,
+    rail_vnom: &HashMap<u32, f64>,
+    reltol: f64,
+    bootstrapped: bool,
+) -> Vec<StiffOutcome> {
+    let mut out = Vec::new();
+    for c in signal_cuts {
+        let vnom = rest.get(&c.0).map(|v| v.abs()).unwrap_or(0.0).max(1.0);
+        let tol = 10.0 * reltol * vnom;
+        let sag = match dead {
+            Some(d) if d.0 == c.0 => f64::INFINITY,
+            _ => f64::NAN,
+        };
+        out.push(StiffOutcome {
+            node: *c,
+            sag_v: sag,
+            tol_v: tol,
+            accepted: false,
+            bootstrapped,
+            note: match dead {
+                Some(d) if d.0 == c.0 => "composed capture died at this signal",
+                Some(_) => "unmeasured: a sibling signal solve died first",
+                None => "composed relaxation did not contract within the round budget",
+            },
+        });
+    }
+    for rt in rails {
+        let vnom = rail_vnom.get(&rt.rail.0).copied().unwrap_or(1.0);
+        out.push(StiffOutcome {
+            node: rt.rail,
+            sag_v: f64::NAN,
+            tol_v: 10.0 * reltol * vnom,
+            accepted: false,
+            bootstrapped,
+            note: "composed relaxation refused; rail balance not certified",
+        });
+    }
+    out
 }
 
 /// Outcomes for an out-of-scope disqualification: no measurement exists,
@@ -482,6 +1046,7 @@ fn capture_circuit(
     companions: &[DeviceId],
     c: NodeId,
     candidates: &[NodeId],
+    held: &HashMap<u32, Vec<f64>>,
 ) -> (Circuit, HashMap<u32, u32>) {
     let my_blocks: HashSet<usize> = adjacent[&c.0].iter().copied().collect();
     let companion_set: HashSet<DeviceId> = companions.iter().copied().collect();
@@ -534,6 +1099,19 @@ fn capture_circuit(
             });
         }
     }
+    // Pin every HELD node (the composed executor's rails) this capture touches.
+    // Value is set by the caller from the held train (VRAIL_, so ramp_all_sources
+    // treats it like a rampable stimulus, not a certified VREPLAY_ boundary).
+    for &h in held.keys() {
+        if let Some(&ln) = g2l.get(&h) {
+            cap.add(Device::Vsource {
+                name: format!("VRAIL_{}", sub.node_name(NodeId(h))),
+                p: NodeId(ln),
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(0.0),
+            });
+        }
+    }
     (cap, g2l)
 }
 
@@ -549,13 +1127,14 @@ fn solve_capture(
     c: NodeId,
     candidates: &[NodeId],
     rest: &HashMap<u32, f64>,
+    held: &HashMap<u32, Vec<f64>>,
     trains: Option<BoundaryTrains<'_>>,
     seed: Option<&CaptureRun>,
     opts: &SolverOptions,
     tstop: f64,
 ) -> Result<CaptureRun, String> {
     let (mut cap, g2l) =
-        capture_circuit(sub, frag, adjacent, conducts_cand, companions, c, candidates);
+        capture_circuit(sub, frag, adjacent, conducts_cand, companions, c, candidates, held);
     // Set the pins: PWL trains when supplied, else the DC rest values.
     for dev in cap.devices.iter_mut() {
         if let Device::Vsource { name, kind, .. } = dev {
@@ -572,6 +1151,24 @@ fn solve_capture(
                             .collect(),
                     ),
                     None => SourceKind::Dc(rest.get(&other.0).copied().unwrap_or(0.0)),
+                };
+            } else if let Some(net) = name.strip_prefix("VRAIL_") {
+                // A held rail: pin it at its supplied train (constant DC of the
+                // train's t=0 value when no grid is available, e.g. the rest
+                // bootstrap).
+                let train = held
+                    .iter()
+                    .find(|(k, _)| sub.node_name(NodeId(**k)) == net)
+                    .map(|(_, v)| v)
+                    .ok_or_else(|| format!("held rail pin lost its node: {net}"))?;
+                *kind = match trains {
+                    Some((_, grid)) => SourceKind::Pwl(
+                        grid.iter()
+                            .zip(train)
+                            .map(|(&t, &v)| PwlPoint { t, v })
+                            .collect(),
+                    ),
+                    None => SourceKind::Dc(train.first().copied().unwrap_or(0.0)),
                 };
             }
         }
@@ -906,6 +1503,357 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A shunt-fed rail (ANALOG_VDD behind a 1 kΩ sense shunt) feeding a small
+    /// array of PNP blocks whose bases are pulsed (so the rail's total load
+    /// genuinely varies over the window), plus a two-stage chain whose junction
+    /// `MID` is a low-impedance SIGNAL cut between two blocks. Optionally hangs a
+    /// comparator relaxation astable off the rail (via a gated switch load): the
+    /// astable has no consistent DC, so the whole-group DC solve genuinely fails
+    /// and the partitioned engine must take its decomposed seed fallback.
+    fn composed_fixture(with_astable: bool) -> (Circuit, NodeId, DeviceId, NodeId, NodeId) {
+        let mut c = Circuit::new();
+        let p5 = c.node("+5V");
+        c.add(Device::Vsource {
+            name: "V5".into(),
+            p: p5,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        let rail = c.node("ANALOG_VDD");
+        // A stiff sense shunt (like the flagship's ~mΩ supply legs): the rail is
+        // load-dependent but sags only modestly, so the rail<->signal coupling
+        // is weak and the composed alternation converges in a few passes.
+        let shunt = c.add(Device::Resistor {
+            name: "R_shunt".into(),
+            a: p5,
+            b: rail,
+            ohms: 100.0,
+            tc1: None,
+        });
+        // The pulsed stimulus that modulates the rail's load.
+        let vd = c.node("vd");
+        c.add(Device::Vsource {
+            name: "VD".into(),
+            p: vd,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pulse {
+                v1: 0.0,
+                v2: 2.0,
+                delay: 1e-6,
+                rise: 1e-6,
+                fall: 1e-6,
+                width: 2e-6,
+                period: 0.0,
+            },
+        });
+        let model = BjtModel {
+            polarity: Polarity::P,
+            ..BjtModel::default()
+        };
+        // Four PNP blocks on the rail (the proven shunt-array shape), bases
+        // pulled toward the stimulus so each block's rail draw swings with the
+        // pulse: the rail's total load genuinely varies over the window. Block 0
+        // and block 1's collectors are joined through `MID`, a modest-impedance
+        // node between the two chained blocks that serves as the SIGNAL cut
+        // (pinning it fragments blocks 0 and 1, so it is a real stiff coupling).
+        let mut c0 = NodeId::GROUND;
+        let mut c1 = NodeId::GROUND;
+        for k in 0..4 {
+            let base = c.node(&format!("b{k}"));
+            let col = c.node(&format!("c{k}"));
+            if k == 0 {
+                c0 = col;
+            }
+            if k == 1 {
+                c1 = col;
+            }
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: col,
+                b: base,
+                e: rail,
+                model: model.clone(),
+            });
+            c.add(Device::Resistor {
+                name: format!("Rb{k}"),
+                a: base,
+                b: vd,
+                ohms: 100e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("Rc{k}"),
+                a: col,
+                b: NodeId::GROUND,
+                ohms: 10e3,
+                tc1: None,
+            });
+        }
+        let mid = c.node("MID");
+        c.add(Device::Resistor {
+            name: "Rl0".into(),
+            a: c0,
+            b: mid,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "Rl1".into(),
+            a: mid,
+            b: c1,
+            ohms: 1e3,
+            tc1: None,
+        });
+
+        if with_astable {
+            // A comparator relaxation astable (no DC fixed point) whose output
+            // gates a switch loading the rail, so the whole-group DC fails and
+            // the rail load oscillates.
+            let vref = c.node("vref");
+            c.add(Device::Vsource {
+                name: "VREF".into(),
+                p: vref,
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(2.5),
+            });
+            let osc = c.node("osc");
+            let vc = c.node("vc");
+            c.add(Device::Comparator {
+                name: "CMP_AST".into(),
+                out: osc,
+                inp: vref,
+                inn: vc,
+                out_lo: 0.0,
+                out_hi: 5.0,
+                hysteresis: 0.5,
+            });
+            c.add(Device::Resistor {
+                name: "Rosc".into(),
+                a: osc,
+                b: NodeId::GROUND,
+                ohms: 10e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: "Rf".into(),
+                a: osc,
+                b: vc,
+                ohms: 10e3,
+                tc1: None,
+            });
+            // tau = Rf*Cf = 10 us: a handful of oscillation periods fit inside
+            // the test window (a 10 nF cap would take 100 us/period and never
+            // oscillate in a toy-scale run).
+            c.add(Device::Capacitor {
+                name: "Cf".into(),
+                a: vc,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: None,
+            });
+            let astl = c.node("ast_load");
+            c.add(Device::VSwitch {
+                name: "SW_AST".into(),
+                a: rail,
+                b: astl,
+                ctrl_p: osc,
+                ctrl_n: NodeId::GROUND,
+                von: 2.5,
+                voff: 2.0,
+                ron: 50.0,
+                roff: 1e9,
+            });
+            c.add(Device::Resistor {
+                name: "R_ast".into(),
+                a: astl,
+                b: NodeId::GROUND,
+                ohms: 2e3,
+                tc1: None,
+            });
+        }
+        (c, rail, shunt, p5, mid)
+    }
+
+    /// GATE 1: composed execution (rail balanced + signal relaxed) matches the
+    /// fused monolith at toy scale, where the monolith's DC converges so the
+    /// two-sided compare has an oracle. The rail is handed the exact balance,
+    /// the signal cut is relaxed on top of it, and both surface as outcomes.
+    #[test]
+    fn composed_rail_and_signal_matches_monolith() {
+        let (c, rail, shunt, feed, mid) = composed_fixture(false);
+        let dt = 100e-9;
+        let tstop = 4e-6;
+        // Tight Newton/balance tolerances so the torn-vs-monolith acceptance
+        // band (update-based Newton stops inside reltol*|x|, present in BOTH
+        // formulations) is far below the gate's 1e-4 floor; the same setup the
+        // `rail_tear` exactness gate uses.
+        let opts = SolverOptions {
+            reltol: 1e-9,
+            vntol: 1e-9,
+            max_newton: 200,
+            ..fixed_opts(dt)
+        };
+
+        // The oracle: the toy monolith's DC must converge (gate precondition).
+        let mut mono_opts = opts;
+        mono_opts.partitioning = Partitioning::Off;
+        let mono = Transient::new(mono_opts)
+            .run(&c, tstop)
+            .expect("toy monolith DC must converge so it can be the oracle");
+
+        let rails = vec![RailTear {
+            rail,
+            feed,
+            shunt,
+            r_shunt: 100.0,
+            extra_loads: Vec::new(),
+        }];
+        let mut refusals = Vec::new();
+        let exec = execute_composed_group(&c, &[mid], &rails, &opts, tstop, &mut refusals)
+            .expect("mechanical success")
+            .unwrap_or_else(|| panic!("composed execution must succeed: {refusals:?}"));
+
+        // Balance + Stiff outcomes both present.
+        assert!(
+            exec.outcomes
+                .iter()
+                .any(|o| o.note == "balanced rail" && o.node == rail && o.accepted && o.sag_v == 0.0),
+            "the rail must carry a balanced-rail outcome: {:?}",
+            exec.outcomes
+        );
+        let sig = exec
+            .outcomes
+            .iter()
+            .find(|o| o.node == mid)
+            .expect("the signal cut must carry an outcome");
+        assert!(sig.accepted, "the signal must be accepted: {sig:?}");
+
+        let max_sag = exec
+            .outcomes
+            .iter()
+            .filter(|o| o.note.is_empty())
+            .map(|o| o.sag_v)
+            .fold(0.0f64, f64::max);
+        let tol = (3.0 * max_sag).max(1e-4);
+
+        // Two-sided capture-grid compare (one-step window), copied from the
+        // staged-property pattern.
+        for node in 1..c.node_count() {
+            for (k, &t) in exec.waveforms.time.iter().enumerate() {
+                let sv = exec.waveforms.node_voltages[node][k];
+                let mv = lerp_at(&mono.time, &mono.node_voltages[node], t);
+                if (sv - mv).abs() <= tol {
+                    continue;
+                }
+                let edge = (0..=8).any(|j| {
+                    let tt = t - dt + (j as f64) * (dt / 4.0);
+                    (lerp_at(&mono.time, &mono.node_voltages[node], tt) - sv).abs() <= tol
+                });
+                assert!(
+                    edge,
+                    "composed diverged at {} t={t:.3e}: {sv:.6} vs {mv:.6} (max sag {max_sag:.3e}, tol {tol:.3e})",
+                    c.node_name(NodeId(node as u32))
+                );
+            }
+        }
+
+        // Non-vacuous: the rail actually sagged below its unloaded feed.
+        let vr = &exec.waveforms.node_voltages[rail.0 as usize];
+        let vr_min = vr.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(
+            vr.iter().all(|&v| v <= 5.0 + 1e-9) && vr_min < 4.999,
+            "the rail must sag under the array load (min {vr_min})"
+        );
+    }
+
+    /// GATE 2: the SEED FALLBACK. With a comparator astable hung off the rail,
+    /// the whole-group DC has no solution, so the partitioned engine inside the
+    /// composed executor must take its decomposed seed (per-island DC from
+    /// boundary estimates) instead of aborting. The monolith cannot solve this
+    /// either (its DC fails the same way), so there is no oracle: the gate is on
+    /// INTERNAL CONSISTENCY. What is asserted: composed execution still RUNS and
+    /// converges; two runs are bitwise identical (determinism through the
+    /// fallback); the rail moved (the astable load is live); the astable
+    /// oscillated in the assembled result. What is NOT asserted (documented):
+    /// agreement with a monolith, because none exists for a no-DC board.
+    #[test]
+    fn composed_seed_fallback_runs_without_whole_group_dc() {
+        let (c, rail, shunt, feed, mid) = composed_fixture(true);
+        let dt = 100e-9;
+        let tstop = 60e-6; // several astable periods (tau = 10 us)
+        let opts = SolverOptions {
+            reltol: 1e-9,
+            vntol: 1e-9,
+            max_newton: 200,
+            ..fixed_opts(dt)
+        };
+
+        // Precondition: the whole-group DC genuinely fails (the astable has no
+        // fixed point), so the fallback is the ONLY way this runs.
+        let mut mono_opts = opts;
+        mono_opts.partitioning = Partitioning::Off;
+        assert!(
+            Transient::new(mono_opts).run(&c, tstop).is_err(),
+            "the astable fixture must have no reachable whole-group DC (else this \
+             gate is not exercising the seed fallback)"
+        );
+
+        let rails = vec![RailTear {
+            rail,
+            feed,
+            shunt,
+            r_shunt: 100.0,
+            extra_loads: Vec::new(),
+        }];
+        let run = || {
+            let mut refusals = Vec::new();
+            let exec = execute_composed_group(&c, &[mid], &rails, &opts, tstop, &mut refusals)
+                .expect("mechanical success")
+                .unwrap_or_else(|| {
+                    panic!("composed execution must run via the seed fallback: {refusals:?}")
+                });
+            exec
+        };
+        let a = run();
+        let b = run();
+
+        // Determinism through the fallback: bitwise-identical assembled node
+        // voltages across two runs.
+        for node in 0..c.node_count() {
+            assert_eq!(
+                a.waveforms.node_voltages[node], b.waveforms.node_voltages[node],
+                "composed waveform at {} drifted between runs (fallback not deterministic)",
+                c.node_name(NodeId(node as u32))
+            );
+        }
+
+        // Outcomes: rail balanced, signal accepted.
+        assert!(a.outcomes.iter().any(|o| o.note == "balanced rail" && o.node == rail));
+        assert!(a.outcomes.iter().any(|o| o.node == mid && o.accepted));
+
+        // The rail is live (the astable load moved it).
+        let vr = &a.waveforms.node_voltages[rail.0 as usize];
+        let swing = vr.iter().cloned().fold(f64::MIN, f64::max)
+            - vr.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(swing > 1e-3, "the rail never moved; the astable load is dead: {swing}");
+
+        // The astable actually oscillated in the assembled waveforms.
+        let osc = a
+            .waveforms
+            .node(&c, "osc")
+            .expect("osc node must be assembled");
+        let mut crossings = 0;
+        for w in osc.windows(2) {
+            if (w[0] - 2.5).signum() != (w[1] - 2.5).signum() {
+                crossings += 1;
+            }
+        }
+        assert!(
+            crossings >= 3,
+            "the rail astable must oscillate in the composed result (saw {crossings} crossings)"
+        );
     }
 
     /// The refusal gate: a cut through an ACTIVE feedback loop (cross-coupled
