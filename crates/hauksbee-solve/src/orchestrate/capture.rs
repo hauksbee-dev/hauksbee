@@ -217,7 +217,10 @@ pub fn execute_stiff_group(
     // per candidate: max |train_new - train_old| against its tolerance; the
     // LAST round's residual is what the certificate carries.
     let grid = uniform_grid(dt, tstop);
-    let reltol = 1e-3; // the engine's Newton relative-tolerance class
+    // The convergence bar scales with the CALLER'S requested accuracy: the
+    // certified tol_v must be a function of the tolerance the user selected,
+    // never a literal that happens to match the default (review finding).
+    let reltol = opts.reltol;
     let max_rounds = 6usize;
 
     let mut trains: HashMap<u32, Vec<f64>> = HashMap::new();
@@ -241,7 +244,7 @@ pub fn execute_stiff_group(
         ) {
             Ok(wf) => wf,
             Err(_) => {
-                refusal_report.extend(dead_capture_outcomes(candidates, *c, &rest, bootstrapped));
+                refusal_report.extend(dead_capture_outcomes(candidates, *c, &rest, opts.reltol, bootstrapped));
                 return Ok(None);
             }
         };
@@ -261,8 +264,13 @@ pub fn execute_stiff_group(
             ) {
                 Ok(wf) => wf,
                 Err(_) => {
-                    refusal_report
-                        .extend(dead_capture_outcomes(candidates, *c, &rest, bootstrapped));
+                    refusal_report.extend(dead_capture_outcomes(
+                        candidates,
+                        *c,
+                        &rest,
+                        opts.reltol,
+                        bootstrapped,
+                    ));
                     return Ok(None);
                 }
             };
@@ -359,6 +367,7 @@ fn dead_capture_outcomes(
     candidates: &[NodeId],
     dead: NodeId,
     rest: &HashMap<u32, f64>,
+    reltol: f64,
     bootstrapped: bool,
 ) -> Vec<StiffOutcome> {
     candidates
@@ -368,7 +377,7 @@ fn dead_capture_outcomes(
             StiffOutcome {
                 node: *c,
                 sag_v: if c.0 == dead.0 { f64::INFINITY } else { f64::NAN },
-                tol_v: 10.0 * 1e-3 * vnom,
+                tol_v: 10.0 * reltol * vnom,
                 accepted: false,
                 bootstrapped,
             }
