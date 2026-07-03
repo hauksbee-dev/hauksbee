@@ -34,6 +34,7 @@
 mod ac;
 mod census;
 mod cmatrix;
+mod diagnostics;
 pub mod decompose;
 mod linear;
 mod loop_stability;
@@ -53,7 +54,11 @@ pub use cmatrix::ComplexSystem;
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};
 pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};
-pub use options::{DcInit, DeviceEffects, Integration, Partitioning, SolverOptions, StepControl};
+pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
+pub use options::{
+    DcInit, DeviceEffects, EventRetryTuning, Integration, Partitioning, RobustnessLadder,
+    SolverOptions, StepControl, Strategy,
+};
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;
 pub use sparse::{SparseMatrix, Symbolic};
