@@ -71,7 +71,7 @@
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/orchestrate.md
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, PwlPoint, SourceKind};
 
@@ -80,7 +80,7 @@ use crate::decompose::verify::{
     Decomposition, Evidence, RefusedAnalysis, TearKind, TearRecord, ToleranceClaim,
 };
 use crate::orchestrate::capture::{execute_stiff_group, StiffOutcome};
-use crate::options::{Partitioning, SolverOptions, StepControl};
+use crate::options::{DcInit, Partitioning, SolverOptions, StepControl};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
@@ -102,6 +102,18 @@ pub struct StagedResult {
     /// exactly, just without the speedup; the gap is visible so a
     /// performance regression cannot hide.
     pub torn_groups: Vec<usize>,
+    /// Groups whose fused DC solve was unreachable and which were therefore
+    /// carried by a power-ramp retry (every source wrapped in `Ramped`,
+    /// `DcInit::FromZero`, no DC solve) rather than aborting the whole run.
+    ///
+    /// A group listed here means its DC operating point could not be found, so
+    /// the group's early window `[0, ramp_window]` is a POWER-ON TRANSIENT: the
+    /// sources ramp up from zero and the state integrates from rest. That
+    /// window is honest data, not a numerical artifact, but it is NOT a settled
+    /// operating point. The certificate's `t = 0` for such a group is the
+    /// power-on zero, not a DC solution; downstream consumers reading this
+    /// group's early samples should treat them as transient.
+    pub ramped_groups: Vec<usize>,
     /// Per group: the stiff boundaries' measured outcomes (accepted runs and
     /// refusals alike), so a refused relaxation is data, not a mystery.
     pub stiff_outcomes: Vec<(usize, StiffOutcome)>,
@@ -158,7 +170,16 @@ pub fn run_staged(
     sub_opts.partitioning = Partitioning::Off;
 
     // Which groups were absorbed, and who receives each one's devices.
-    let absorbed: HashMap<usize, &[usize]> = decomp
+    //
+    // A BTreeMap, not a HashMap, ON PURPOSE: the loop below extends each
+    // consumer group's device list by iterating this map, so its order is the
+    // order absorbed devices are pushed into the sub-circuit, which sets node
+    // creation order, which the solver SEES (LU pivots, Newton convergence
+    // paths, and thus the last-bit accepted values, and on the flagship even
+    // WHICH group hits a DC non-convergence). Circuit construction order must
+    // be deterministic; HashMap iteration order is not. Keyed by driver group,
+    // sorted, so two runs build byte-identical sub-circuits.
+    let absorbed: BTreeMap<usize, &[usize]> = decomp
         .drivers
         .iter()
         .map(|a| (a.driver_group, a.consumers.as_slice()))
@@ -198,6 +219,7 @@ pub fn run_staged(
     let mut runs: HashMap<usize, (Waveforms, HashMap<u32, u32>)> = HashMap::new();
     let mut executed_groups = Vec::new();
     let mut torn_groups = Vec::new();
+    let mut ramped_groups = Vec::new();
     let mut stiff_outcomes: Vec<(usize, StiffOutcome)> = Vec::new();
     let mut certificate_stiff: Vec<TearRecord> = Vec::new();
     let mut certificate_refused_nodes: Vec<NodeId> = Vec::new();
@@ -328,13 +350,16 @@ pub fn run_staged(
                 }
             }
 
-            let (wf, torn) = match stiff_run {
-                Some(wf) => (wf, false),
+            let (wf, torn, ramped) = match stiff_run {
+                Some(wf) => (wf, false, false),
                 None => solve_group(&sub, imposed, &sub_opts, tstop)
                     .map_err(|e| format!("staged group {g} failed: {e}"))?,
             };
             if torn {
                 torn_groups.push(g);
+            }
+            if ramped {
+                ramped_groups.push(g);
             }
 
             // Capture this group's outbound tear nodes for later stages.
@@ -432,19 +457,21 @@ pub fn run_staged(
         certificate,
         executed_groups,
         torn_groups,
+        ramped_groups,
         stiff_outcomes,
     })
 }
 
 /// Solve one group's sub-circuit: torn around its imposed balance rails when
-/// possible, whole otherwise. Returns the run and whether the torn engine
-/// actually hosted it.
+/// possible, whole otherwise. Returns the run, whether the torn engine actually
+/// hosted it, and whether it was carried by the power-ramp retry (its DC was
+/// unreachable).
 fn solve_group(
     sub: &Circuit,
     imposed: Vec<RailTear>,
     opts: &SolverOptions,
     tstop: f64,
-) -> Result<(Waveforms, bool), String> {
+) -> Result<(Waveforms, bool, bool), String> {
     if !imposed.is_empty() {
         let part = Partition::analyze_imposing_tears(sub, imposed);
         if let Some(mut engine) = PartitionedTransient::try_build_from_partition(sub, opts, part) {
@@ -466,7 +493,7 @@ fn solve_group(
                 }
             });
             if run.is_ok() {
-                return Ok((wf, true));
+                return Ok((wf, true, false));
             }
             // A run-time death (per-block Newton failure the build could not
             // foresee: the per-block path lacks the monolithic engine's
@@ -476,7 +503,68 @@ fn solve_group(
         }
         // Construction declined: same fallback, same reasoning.
     }
-    Ok((Transient::new(*opts).run(sub, tstop)?, false))
+
+    // The fused whole-group solve. Exact and carries the escalation ladder.
+    match Transient::new(*opts).run(sub, tstop) {
+        Ok(wf) => Ok((wf, false, false)),
+        // The group has no reachable DC operating point (a self-resetting
+        // oscillator, or a fused core that stalls in DC homotopy). Rather than
+        // abort the whole staged run the way the bespoke path silently dropped
+        // it, retry ONCE the way a real board resolves it: power-on. Every
+        // source ramps from zero, the state integrates from zero, and there is
+        // no DC solve to fail. Only when the caller asked for a DC-solved start
+        // (the retry is a fallback FROM Solve; an explicit FromZero run that
+        // failed is a real failure, not a DC-reachability problem).
+        //
+        // NOTE: the stiff capture path (orchestrate/capture.rs) is deliberately
+        // NOT wired to this retry yet: a separate owner is designing that
+        // integration, and composing power-on with the capture relaxation needs
+        // its own thought. Left untouched on purpose.
+        Err(e) if opts.dc_init == DcInit::Solve => {
+            let dt = match opts.step {
+                StepControl::Fixed { dt } => dt,
+                // A non-fixed run reached here only if run_staged's own guard
+                // were bypassed; keep the original error rather than invent a
+                // window with no grid.
+                _ => return Err(e),
+            };
+            // ramp_window = 200 * dt. Provenance: long enough that the ramp is
+            // quasi-static for the board's fast time constants (200 fixed steps
+            // is many decades above a single-step transient, so the sources rise
+            // slowly relative to the fastest node the solver already resolves),
+            // yet short next to any tstop of interest (a staged run marches far
+            // more than 200 steps), so the power-on window is a small transient
+            // head, not the bulk of the record.
+            let ramp_window = 200.0 * dt;
+            let ramped_sub = ramp_all_sources(sub, ramp_window);
+            let mut ramp_opts = *opts;
+            ramp_opts.dc_init = DcInit::FromZero;
+            match Transient::new(ramp_opts).run(&ramped_sub, tstop) {
+                Ok(wf) => Ok((wf, false, true)),
+                // The power-ramp did not carry it either: keep the ORIGINAL DC
+                // error (the honest description of why the group failed).
+                Err(_) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Clone `sub` with every independent source (Vsource/Isource) wrapped in a
+/// `Ramped` envelope that reaches full amplitude at `ramp_window`. Used by the
+/// power-on retry so a DC-unreachable group starts from zero and ramps up.
+fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
+    let mut c = sub.clone();
+    for dev in c.devices.iter_mut() {
+        match dev {
+            Device::Vsource { kind, .. } | Device::Isource { kind, .. } => {
+                let inner = std::mem::replace(kind, SourceKind::Dc(0.0));
+                *kind = inner.ramped(ramp_window);
+            }
+            _ => {}
+        }
+    }
+    c
 }
 
 /// Remap a balance-tear decision into a sub-circuit's local namespace. `None`

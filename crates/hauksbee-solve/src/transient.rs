@@ -8,7 +8,7 @@
 //! step is bisected to land near the crossing so edges aren't smeared.
 
 use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
-use crate::options::{Integration, SolverOptions, StepControl};
+use crate::options::{DcInit, Integration, SolverOptions, StepControl};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
 use hauksbee_ir::{Circuit, Device, NodeId};
@@ -132,7 +132,12 @@ impl Transient {
         // iteration, which is far cheaper than that per-chunk cold seeding on a
         // stiff nonlinear board. Both paths solve to the same operating point
         // (Off is bit-identical), so switching is exact.
-        if dc_seed.is_none() {
+        //
+        // ALSO skip it under DcInit::FromZero: the power-on path has no DC
+        // operating point at all (that is the whole point), so the partitioned
+        // engine's per-island cold DC seeding has nothing to do. Bail to the
+        // monolithic path, which honors FromZero below.
+        if dc_seed.is_none() && opts.dc_init == DcInit::Solve {
             if let Some(mut pt) = crate::partitioned::PartitionedTransient::try_build(circuit, opts)
             {
                 return pt.run_streaming(circuit, tstop, sink);
@@ -142,10 +147,21 @@ impl Transient {
         let mut ws = Workspace::new(circuit);
         let n_dev = circuit.devices.len();
 
-        // DC operating point seeds t = 0 (warm-started from the prior chunk when
-        // a seed is supplied). The DC solve manages its own staged regularizers
-        // internally and leaves the workspace flag at 0.
-        dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed)?;
+        // Seed t = 0. Normally a DC operating point (warm-started from the prior
+        // chunk when a seed is supplied); under FromZero a power-on start with
+        // no DC solve at all: x(0) = 0 and reactive history zeroed further down.
+        let from_zero = opts.dc_init == DcInit::FromZero;
+        if from_zero {
+            // Power-on: the unknown vector rests at zero. No DC solve to fail;
+            // the ramp (paired Ramped sources) integrates the state up from here.
+            for v in ws.x.iter_mut() {
+                *v = 0.0;
+            }
+        } else {
+            // The DC solve manages its own staged regularizers internally and
+            // leaves the workspace flag at 0.
+            dc_operating_point_seeded(&mut ws, circuit, opts, dc_seed)?;
+        }
 
         // Only when the DC point itself needed the staged fallback (the standard
         // plain+gmin+source ladder failed) is the board stiff enough that the
@@ -199,7 +215,13 @@ impl Transient {
         }
 
         let mut state = ReactiveState::new(n_dev);
-        seed_reactive_state(&mut state, circuit, &ws);
+        // Under FromZero the reactive history stays at its all-zero construction
+        // value (x1 = x2 = 0, dx1 = 0 for every cap and inductor): the board
+        // powers on from rest, ignoring any device initial conditions. Otherwise
+        // seed it from the DC operating point as usual.
+        if !from_zero {
+            seed_reactive_state(&mut state, circuit, &ws);
+        }
 
         let mut t = 0.0;
         let mut dt = match opts.step {
@@ -563,51 +585,13 @@ fn lte_estimate(
 const MAX_BREAKPOINTS: usize = 100_000;
 
 fn breakpoint_table(circuit: &Circuit, tstop: f64) -> Vec<f64> {
-    use hauksbee_ir::SourceKind;
     let mut bps: Vec<f64> = Vec::new();
-    let push = |t: f64, bps: &mut Vec<f64>| {
-        if t > 0.0 && t < tstop {
-            bps.push(t);
-        }
-    };
     for (_, dev) in circuit.iter() {
         let kind = match dev {
             Device::Vsource { kind, .. } | Device::Isource { kind, .. } => kind,
             _ => continue,
         };
-        match kind {
-            SourceKind::Pwl(points) => {
-                for pt in points {
-                    push(pt.t, &mut bps);
-                }
-            }
-            SourceKind::Pulse {
-                delay,
-                rise,
-                fall,
-                width,
-                period,
-                ..
-            } => {
-                // Corners per period: leading edge start/end, trailing edge
-                // start/end. Zero-length edges still get their corner (the
-                // discontinuity itself is the thing to land on).
-                let step = if *period > 0.0 { *period } else { tstop };
-                let one_shot = *period <= 0.0;
-                let mut t0 = *delay;
-                while t0 < tstop && bps.len() < MAX_BREAKPOINTS {
-                    push(t0, &mut bps);
-                    push(t0 + rise, &mut bps);
-                    push(t0 + rise + width, &mut bps);
-                    push(t0 + rise + width + fall, &mut bps);
-                    if one_shot {
-                        break;
-                    }
-                    t0 += step;
-                }
-            }
-            SourceKind::Dc(_) | SourceKind::Sin { .. } => {}
-        }
+        push_source_corners(kind, tstop, &mut bps);
     }
     bps.sort_by(|a, b| a.partial_cmp(b).expect("breakpoints are finite"));
     // Dedup within a relative epsilon: two corners closer than the controller
@@ -615,6 +599,57 @@ fn breakpoint_table(circuit: &Circuit, tstop: f64) -> Vec<f64> {
     bps.dedup_by(|a, b| (*a - *b).abs() <= f64::max(1e-18, *b * 1e-12));
     bps.truncate(MAX_BREAKPOINTS);
     bps
+}
+
+/// Push one source's time-domain corners into `bps` (times strictly inside
+/// `(0, tstop)`). Recursive so a `Ramped` envelope contributes both its own
+/// full-amplitude corner at `scale_to` AND every corner of the inner source.
+fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, bps: &mut Vec<f64>) {
+    use hauksbee_ir::SourceKind;
+    let push = |t: f64, bps: &mut Vec<f64>| {
+        if t > 0.0 && t < tstop {
+            bps.push(t);
+        }
+    };
+    match kind {
+        SourceKind::Pwl(points) => {
+            for pt in points {
+                push(pt.t, bps);
+            }
+        }
+        SourceKind::Pulse {
+            delay,
+            rise,
+            fall,
+            width,
+            period,
+            ..
+        } => {
+            // Corners per period: leading edge start/end, trailing edge
+            // start/end. Zero-length edges still get their corner (the
+            // discontinuity itself is the thing to land on).
+            let step = if *period > 0.0 { *period } else { tstop };
+            let one_shot = *period <= 0.0;
+            let mut t0 = *delay;
+            while t0 < tstop && bps.len() < MAX_BREAKPOINTS {
+                push(t0, bps);
+                push(t0 + rise, bps);
+                push(t0 + rise + width, bps);
+                push(t0 + rise + width + fall, bps);
+                if one_shot {
+                    break;
+                }
+                t0 += step;
+            }
+        }
+        SourceKind::Ramped { scale_to, inner } => {
+            // The ramp's own kink at full amplitude, then the inner's corners
+            // (the inner is not time-shifted, so its corner times are unchanged).
+            push(*scale_to, bps);
+            push_source_corners(inner, tstop, bps);
+        }
+        SourceKind::Dc(_) | SourceKind::Sin { .. } => {}
+    }
 }
 
 // --- event detection --------------------------------------------------------
