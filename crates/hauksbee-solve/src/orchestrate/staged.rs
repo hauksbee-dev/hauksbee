@@ -79,7 +79,9 @@ use crate::decompose::rails::BalanceTearCandidate;
 use crate::decompose::verify::{
     Decomposition, Evidence, RefusedAnalysis, TearKind, TearRecord, ToleranceClaim,
 };
-use crate::orchestrate::capture::{execute_composed_group, execute_stiff_group, StiffOutcome};
+use crate::orchestrate::capture::{
+    execute_composed_group, execute_stiff_group, BoundaryKind, ComposedPolicy, StiffOutcome,
+};
 use crate::options::{DcInit, Partitioning, SolverOptions, StepControl};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
@@ -332,39 +334,20 @@ pub fn run_staged(
                     &sub,
                     &signal_local,
                     &composed_rails,
+                    &ComposedPolicy::default(),
                     &sub_opts,
                     tstop,
                     &mut refusals,
                 )? {
                     Some(exec) => {
+                        // Every composed boundary joins the supply-integrity
+                        // refusal (balanced, held, and signal alike: all are
+                        // pinned or re-grouped nodes whose loading questions
+                        // beyond the record's claim must be refused).
                         let mut refused_nodes = Vec::new();
                         for o in &exec.outcomes {
                             let gnode = NodeId(l2g[&o.node.0]);
-                            // A composed rail carries a non-empty note (how it
-                            // was held); a signal's note is empty. Rails become
-                            // Balance records, signals Stiff records.
-                            if !o.note.is_empty() {
-                                certificate_stiff.push(TearRecord {
-                                    node: gnode,
-                                    kind: TearKind::Balance,
-                                    evidence: Evidence::BalanceEquation,
-                                    tolerance: ToleranceClaim::RoundOff,
-                                    upstream: None,
-                                    downstream: None,
-                                });
-                            } else {
-                                certificate_stiff.push(TearRecord {
-                                    node: gnode,
-                                    kind: TearKind::Stiff,
-                                    evidence: Evidence::MeasuredStiffness {
-                                        sag_v: o.sag_v,
-                                        tol_v: o.tol_v,
-                                    },
-                                    tolerance: ToleranceClaim::Stiffness { sag_v: o.sag_v },
-                                    upstream: None,
-                                    downstream: None,
-                                });
-                            }
+                            certificate_stiff.push(composed_tear_record(o, gnode));
                             refused_nodes.push(gnode);
                             stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o.clone() }));
                         }
@@ -689,6 +672,48 @@ pub(crate) fn ramp_all_sources(sub: &Circuit, ramp_window: f64) -> Circuit {
         }
     }
     c
+}
+
+/// The durable certificate record for one composed outcome, keyed on the
+/// STRUCTURED [`BoundaryKind`], never on the prose note (the note once
+/// mislabeled a feed-held rail balance-exact; review finding):
+///
+/// * `BalancedRail`: the exact per-step scalar KCL closed it, so
+///   `Balance`/`BalanceEquation`/`RoundOff` is a true claim.
+/// * `HeldRail`: the rail was PINNED at its feed voltage; nothing ran and
+///   nothing was measured, so the record says `Stiff`/`AssumedFeedHold`/
+///   `Unmeasured`, an assumption on the supply leg's stiffness, not a proof.
+/// * `Signal`: the relaxation's measured sag, as the stiff executor records.
+fn composed_tear_record(o: &StiffOutcome, node: NodeId) -> TearRecord {
+    match o.kind {
+        BoundaryKind::BalancedRail => TearRecord {
+            node,
+            kind: TearKind::Balance,
+            evidence: Evidence::BalanceEquation,
+            tolerance: ToleranceClaim::RoundOff,
+            upstream: None,
+            downstream: None,
+        },
+        BoundaryKind::HeldRail => TearRecord {
+            node,
+            kind: TearKind::Stiff,
+            evidence: Evidence::AssumedFeedHold,
+            tolerance: ToleranceClaim::Unmeasured,
+            upstream: None,
+            downstream: None,
+        },
+        BoundaryKind::Signal => TearRecord {
+            node,
+            kind: TearKind::Stiff,
+            evidence: Evidence::MeasuredStiffness {
+                sag_v: o.sag_v,
+                tol_v: o.tol_v,
+            },
+            tolerance: ToleranceClaim::Stiffness { sag_v: o.sag_v },
+            upstream: None,
+            downstream: None,
+        },
+    }
 }
 
 /// Join a set of stiff/composed refusal outcomes into one human line, mapping
@@ -1778,6 +1803,62 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The certificate-honesty gate on the composed record mapping: what each
+    /// [`BoundaryKind`] is allowed to claim, keyed on the STRUCTURED kind and
+    /// never the prose note. The load-bearing case is HeldRail: a feed-held
+    /// rail must NOT produce a balance-exact record (it once did, via a
+    /// note-string match; review finding), and its record must say Stiff +
+    /// AssumedFeedHold + Unmeasured. Every composed outcome, held rails
+    /// included, also joins the supply-integrity refusal in run_staged (the
+    /// insertion is unconditional over exec.outcomes; the stiff-path variant
+    /// of that refusal is gated by `stiff_cuts_flow_through_run_staged`).
+    #[test]
+    fn composed_records_never_overclaim_a_held_rail() {
+        let outcome = |kind, sag_v, note: &'static str| StiffOutcome {
+            node: NodeId(7),
+            kind,
+            sag_v,
+            tol_v: 1e-2,
+            accepted: true,
+            bootstrapped: true,
+            note,
+        };
+        let n = NodeId(42);
+
+        let balanced =
+            composed_tear_record(&outcome(BoundaryKind::BalancedRail, 0.0, "balanced rail"), n);
+        assert_eq!(balanced.kind, TearKind::Balance);
+        assert_eq!(balanced.evidence, Evidence::BalanceEquation);
+        assert_eq!(balanced.tolerance, ToleranceClaim::RoundOff);
+        assert_eq!(balanced.node, n);
+
+        let held = composed_tear_record(
+            &outcome(BoundaryKind::HeldRail, 0.0, "held rail (stiff-supply feed)"),
+            n,
+        );
+        assert_eq!(held.kind, TearKind::Stiff, "a held rail is not a balance tear");
+        assert_eq!(held.evidence, Evidence::AssumedFeedHold);
+        assert_eq!(held.tolerance, ToleranceClaim::Unmeasured);
+
+        // The note must have NO vote: a held rail with a doctored note still
+        // downgrades (kind is the only discriminator).
+        let doctored =
+            composed_tear_record(&outcome(BoundaryKind::HeldRail, 0.0, "balanced rail"), n);
+        assert_eq!(doctored.evidence, Evidence::AssumedFeedHold);
+        assert_eq!(doctored.tolerance, ToleranceClaim::Unmeasured);
+
+        let signal = composed_tear_record(&outcome(BoundaryKind::Signal, 3.5e-7, ""), n);
+        assert_eq!(signal.kind, TearKind::Stiff);
+        assert_eq!(
+            signal.evidence,
+            Evidence::MeasuredStiffness {
+                sag_v: 3.5e-7,
+                tol_v: 1e-2
+            }
+        );
+        assert_eq!(signal.tolerance, ToleranceClaim::Stiffness { sag_v: 3.5e-7 });
     }
 
     /// Absorption exactness: the drivers.rs Thevenin shape, replicated into

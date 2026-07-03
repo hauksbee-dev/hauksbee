@@ -35,5 +35,8 @@ pub mod capture;
 pub mod staged;
 
 pub use balance::{settle_rails, BalancePolicy, BalanceReport, RailChannel, RailLoads};
-pub use capture::{execute_composed_group, execute_stiff_group, StiffExecution, StiffOutcome};
+pub use capture::{
+    execute_composed_group, execute_stiff_group, BoundaryKind, ComposedPolicy, StiffExecution,
+    StiffOutcome,
+};
 pub use staged::{run_staged, StagedResult};
