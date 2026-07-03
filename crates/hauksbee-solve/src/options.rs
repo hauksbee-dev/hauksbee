@@ -266,6 +266,23 @@ impl RobustnessLadder {
         self.steps.iter().any(|&x| x == Some(s))
     }
 
+    /// Revoke a strategy, preserving the order of the rest. The per-island
+    /// selection (round 2: `orchestrate::staged::select_group_ladder`) only
+    /// ever TRIMS with this: the caller's ladder is the ceiling, never
+    /// escalated past.
+    pub fn without(mut self, s: Strategy) -> Self {
+        let mut out = [None; 8];
+        let mut k = 0;
+        for slot in self.steps.iter().flatten() {
+            if *slot != s {
+                out[k] = Some(*slot);
+                k += 1;
+            }
+        }
+        self.steps = out;
+        self
+    }
+
     /// Granted strategies in escalation order.
     pub fn steps(&self) -> impl Iterator<Item = Strategy> + '_ {
         self.steps.iter().filter_map(|&s| s)

@@ -82,7 +82,7 @@ use crate::decompose::verify::{
 use crate::orchestrate::capture::{
     execute_composed_group, execute_stiff_group, BoundaryKind, ComposedPolicy, StiffOutcome,
 };
-use crate::options::{DcInit, Partitioning, SolverOptions, StepControl};
+use crate::options::{DcInit, Partitioning, SolverOptions, StepControl, Strategy};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
@@ -123,6 +123,54 @@ pub struct StagedResult {
 
 /// Execute a decomposition's stage DAG. Refuses (rather than approximates)
 /// when the certificate is unsound or the step control is not fixed.
+/// Per-island ladder selection (dev-plan 02 s2.6, round 2): trim the CALLER'S
+/// ladder down to what this group's sub-circuit could ever use. The caller's
+/// grants are the ceiling (an island is never escalated past what was
+/// authorized), and every trim below is justified by STRUCTURAL impossibility
+/// of the strategy firing, so a trimmed solve is bit-identical to an
+/// untrimmed one; heuristic trims ("probably won't need it") are refused on
+/// principle, because a strategy that CAN fire changes results when removed.
+///
+/// Strategies deliberately NOT trimmed, and why the structural bar fails:
+/// - TransientDyn: arming is unconditional at march start (branch series
+///   regularizers change the stamps of every branch-bearing island), so it
+///   always "fires" when granted.
+/// - DynamicPivot / DynamicPivotEveryStep: a permission consulted only when
+///   the frozen-order LU fails. On a fully-linear island an EXACTLY singular
+///   static matrix fails both orderings identically (rank deficiency is
+///   order-independent), but the threshold row-pivoting can reject a
+///   near-singular pivot under one ordering and accept it under another, so
+///   "frozen fails => dynamic fails" is not provable and the trim is refused.
+///   (This is the plan sketch's own example; it does not survive this
+///   codebase's threshold pivoting.)
+/// - Ptc / ResidualAccept: the staged-DC rescue rungs are meaningful on any
+///   island that reaches the staged fallback, regardless of device mix.
+fn select_group_ladder(sub: &Circuit, caller: &SolverOptions) -> SolverOptions {
+    let mut opts = *caller;
+    let has_discrete = sub
+        .devices
+        .iter()
+        .any(|d| matches!(d, Device::Comparator { .. } | Device::VSwitch { .. }));
+    // EventFreeze's ONLY consult site (the staged-DC event loop,
+    // newton::staged_event_solve) opens by evaluating the comparator and
+    // switch decision sets and returns None when both are empty, i.e. on
+    // exactly this island class the granted path IS the ungranted path, by
+    // the function's own first guard. (The transient event retry is armed by
+    // TransientDyn, not by this grant, and has the same empty-state guard.)
+    if !has_discrete {
+        opts.ladder = opts.ladder.without(Strategy::EventFreeze);
+    }
+    // The per-step Armijo line search lives behind `ws.linear`'s early return
+    // in newton_solve: a fully-linear island is solved exactly by one
+    // backsolve and RETURNS before the line-search block exists, so the grant
+    // is structurally unreachable. (Uses the SAME predicate Workspace::new
+    // uses to set ws.linear, so the two cannot disagree.)
+    if sub.devices.iter().all(|d| d.is_linear()) {
+        opts.ladder = opts.ladder.without(Strategy::LineSearch);
+    }
+    opts
+}
+
 pub fn run_staged(
     circuit: &Circuit,
     decomp: &Decomposition,
@@ -169,6 +217,11 @@ pub fn run_staged(
     // bit-identical to the classic solver, so each group's answer carries no
     // partitioning caveats of its own.
     let mut sub_opts = *opts;
+    // Per-group ladder observability (round 2): each group's fired strategies
+    // are drained into this union and re-noted at the end of the run, so the
+    // per-group windows are invisible to an outer diagnostics observer.
+    let mut fired_union: Vec<Strategy> = Vec::new();
+    let dbg_groups = std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok();
     sub_opts.partitioning = Partitioning::Off;
 
     // Which groups were absorbed, and who receives each one's devices.
@@ -268,6 +321,14 @@ pub fn run_staged(
 
             let (sub, g2l) = extract_subcircuit(circuit, &devices, &replay);
 
+            // Round-2 ladder selection: this group's grants, trimmed from the
+            // caller's ceiling by what the sub-circuit could ever use.
+            let group_opts = select_group_ladder(&sub, &sub_opts);
+            // Per-group activation window (drained after the group's solves;
+            // the union is re-noted at the end of the run so an outer
+            // observer's window sees exactly what it would have seen).
+            fired_union.extend(crate::diagnostics::take_strategy_activations());
+
             // Accepted balance tears whose rail this group conducts, remapped
             // into the sub-circuit's namespace for the torn engine.
             let imposed: Vec<RailTear> = decomp
@@ -335,7 +396,7 @@ pub fn run_staged(
                     &signal_local,
                     &composed_rails,
                     &ComposedPolicy::default(),
-                    &sub_opts,
+                    &group_opts,
                     tstop,
                     &mut refusals,
                 )? {
@@ -365,7 +426,7 @@ pub fn run_staged(
                 }
             } else if !signal_local.is_empty() && imposed.is_empty() {
                 let mut refusals = Vec::new();
-                match execute_stiff_group(&sub, &signal_local, &sub_opts, tstop, &mut refusals)? {
+                match execute_stiff_group(&sub, &signal_local, &group_opts, tstop, &mut refusals)? {
                     Some(exec) => {
                         // Certificate: one measured record per boundary, and
                         // the pinned nodes join the supply-integrity refusal
@@ -408,7 +469,7 @@ pub fn run_staged(
 
             let (wf, torn, ramped) = match stiff_run {
                 Some(wf) => (wf, false, false),
-                None => solve_group(&sub, imposed, &sub_opts, tstop).map_err(|e| {
+                None => solve_group(&sub, imposed, &group_opts, tstop).map_err(|e| {
                     // Name the group: a half-hour flagship run whose error
                     // says only "group 3" costs another half-hour run to
                     // learn what group 3 is. Devices and a name sample turn
@@ -427,6 +488,16 @@ pub fn run_staged(
                     )
                 })?,
             };
+            let fired = crate::diagnostics::take_strategy_activations();
+            if dbg_groups {
+                eprintln!(
+                    "  group {g} ({} devices): ladder granted {:?} fired {:?}",
+                    sub.devices.len(),
+                    group_opts.ladder.steps().collect::<Vec<_>>(),
+                    fired,
+                );
+            }
+            fired_union.extend(fired);
             if torn {
                 torn_groups.push(g);
             }
@@ -522,6 +593,11 @@ pub fn run_staged(
                 certificate_refused_nodes,
             )),
         }
+    }
+
+    // Restore the run-level activation window for outer observers.
+    for st in fired_union {
+        crate::diagnostics::note(st);
     }
 
     Ok(StagedResult {
@@ -843,6 +919,65 @@ fn lerp_at(times: &[f64], vals: &[f64], t: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::select_group_ladder;
+    use crate::options::RobustnessLadder;
+
+    /// Round-2 selection: the two structurally-justified trims fire on the
+    /// right island classes, everything else passes through, and the caller's
+    /// ceiling is respected (an empty ladder stays empty).
+    #[test]
+    fn ladder_selection_trims_only_structurally_dead_grants() {
+        use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+        let full = SolverOptions {
+            ladder: RobustnessLadder::full(),
+            ..Default::default()
+        };
+
+        // Fully linear island (source + divider): LineSearch is unreachable
+        // (ws.linear early return) and EventFreeze inert (no discrete states).
+        let mut lin = Circuit::new();
+        let a = lin.node("a");
+        let b = lin.node("b");
+        lin.add(Device::Vsource { name: "V".into(), p: a, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
+        lin.add(Device::Resistor { name: "R1".into(), a, b, ohms: 1e3, tc1: None });
+        lin.add(Device::Resistor { name: "R2".into(), a: b, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        let sel = select_group_ladder(&lin, &full);
+        assert!(!sel.ladder.has(Strategy::LineSearch));
+        assert!(!sel.ladder.has(Strategy::EventFreeze));
+        // Everything whose firing is state-dependent survives.
+        assert!(sel.ladder.has(Strategy::DynamicPivot));
+        assert!(sel.ladder.has(Strategy::DynamicPivotEveryStep));
+        assert!(sel.ladder.has(Strategy::Ptc));
+        assert!(sel.ladder.has(Strategy::ResidualAccept));
+        assert!(sel.ladder.has(Strategy::TransientDyn));
+
+        // Nonlinear but discrete-free (a diode): EventFreeze still trims,
+        // LineSearch stays (Newton is live).
+        let mut dio = lin.clone();
+        let c = dio.node("c");
+        dio.add(Device::Diode { name: "D".into(), a: b, k: c, model: Default::default() });
+        dio.add(Device::Resistor { name: "R3".into(), a: c, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        let sel = select_group_ladder(&dio, &full);
+        assert!(sel.ladder.has(Strategy::LineSearch));
+        assert!(!sel.ladder.has(Strategy::EventFreeze));
+
+        // A comparator makes the island discrete: nothing trims.
+        let mut cmp = dio.clone();
+        let o = cmp.node("o");
+        cmp.add(Device::Comparator {
+            name: "K".into(), out: o, inp: b, inn: c,
+            out_lo: 0.0, out_hi: 5.0, hysteresis: 0.1,
+        });
+        let sel = select_group_ladder(&cmp, &full);
+        assert!(sel.ladder.has(Strategy::EventFreeze));
+        assert!(sel.ladder.has(Strategy::LineSearch));
+
+        // Ceiling: a caller granting nothing stays granting nothing.
+        let none = SolverOptions::default();
+        let sel = select_group_ladder(&lin, &none);
+        assert_eq!(sel.ladder.steps().count(), 0);
+    }
+
     use super::*;
     use crate::decompose::rails::TearMotive;
     use crate::options::Integration;
