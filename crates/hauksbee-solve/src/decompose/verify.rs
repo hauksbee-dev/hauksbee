@@ -33,6 +33,7 @@ use super::conduction::ConductionGraph;
 use super::drivers::{driver_assignments, DriverAssignment, DriverPolicy};
 use super::feedforward::StageDag;
 use super::rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearMotive};
+use super::stiff::{detect_stiff_candidates, StiffCandidate, StiffPolicy};
 
 /// What kind of tear a node carries. The kinds are ordered by the strength of
 /// their exactness claim; see the vocabulary in
@@ -235,6 +236,12 @@ pub struct Decomposition {
     pub dag: StageDag,
     pub balance_tears: Vec<BalanceTearCandidate>,
     pub drivers: Vec<DriverAssignment>,
+    /// Stiff-cut NOMINATIONS (hypotheses, in choice order). No certificate
+    /// record exists for these at analysis time: the staged executor runs
+    /// the measured waveform relaxation and appends Stiff records with real
+    /// residuals for the boundaries that certify, so the certificate only
+    /// ever states what was measured.
+    pub stiff: Vec<StiffCandidate>,
     pub certificate: TearCertificate,
 }
 
@@ -251,7 +258,7 @@ impl Decomposition {
         rails: RailPolicy,
         drv: DriverPolicy,
     ) -> Decomposition {
-        Self::analyze_with_boundaries(circuit, motive, rails, drv, &[])
+        Self::analyze_with_boundaries(circuit, motive, rails, drv, StiffPolicy::default(), &[])
     }
 
     /// [`Decomposition::analyze_with`] plus a declaration of EXOGENOUS nodes:
@@ -268,12 +275,22 @@ impl Decomposition {
         motive: TearMotive,
         rails: RailPolicy,
         drv: DriverPolicy,
+        stiff_policy: StiffPolicy,
         exogenous: &[NodeId],
     ) -> Decomposition {
         let graph = ConductionGraph::analyze(circuit);
         let dag = StageDag::build(circuit, &graph);
         let balance = detect_balance_tears(circuit, &graph, motive, &rails);
         let drivers = driver_assignments(circuit, &graph, &dag, &drv);
+
+        // Stiff-cut nominations, with the accepted balance rails held so the
+        // two tear families compose instead of competing for the same split.
+        let held: Vec<NodeId> = balance
+            .iter()
+            .filter(|c| c.torn())
+            .map(|c| c.rail)
+            .collect();
+        let stiff = detect_stiff_candidates(circuit, &graph, &held, &rails, &stiff_policy);
 
         let mut records = Vec::new();
 
@@ -399,6 +416,7 @@ impl Decomposition {
             dag,
             balance_tears: balance,
             drivers,
+            stiff,
             certificate,
         }
     }
@@ -600,6 +618,7 @@ mod tests {
             TearMotive::Profit,
             crate::decompose::rails::RailPolicy::default(),
             crate::decompose::drivers::DriverPolicy::default(),
+            crate::decompose::stiff::StiffPolicy::default(),
             &[sel],
         );
         assert!(d2.certificate.sound(), "{}", d2.certificate.summary(&c));
