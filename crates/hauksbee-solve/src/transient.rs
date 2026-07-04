@@ -281,11 +281,37 @@ impl Transient {
             ws.layout.size,
             matches!(opts.step, StepControl::Adaptive { .. }),
         );
-        // Seed-shadow estate (lever-3 mechanism (a), census only): the accepted
-        // point BEFORE the current one, so a converged trial can compare its
-        // actual start iterate against a linear extrapolation through the last
-        // two accepted points. Allocated and maintained only under the census.
-        let mut census_x_accepted_prev: Option<Vec<f64>> = None;
+        // Extrapolated trial seed (lever 3, mechanism (a)). The bare trial
+        // Newton always started from the previous ACCEPTED point; on a
+        // charging/discharging trajectory the root at t+h is a full step away,
+        // and the census seed-shadow measured a linear extrapolation through
+        // the last two accepted points CLOSER to the root on 89% of the joint
+        // march's converged trials (>=10x closer on 57%). A closer start both
+        // cuts iterations and can skip the far-from-root small-alpha
+        // line-search grind entirely. EXACT root, different iterate sequence:
+        // Newton converges to the same operating point within tolerance from
+        // either seed, and every safety mechanism (Armijo line search, staged
+        // damping, stall bail, event retry, step cut) still guards the path.
+        // SCOPE: only the TransientDyn-armed ADAPTIVE march (the flagship
+        // spike-path bundle, which is physics-gated, never bit-pinned); every
+        // fixed-step march and every unarmed path keeps the previous-point
+        // seed bit-identically.
+        //
+        // The extrapolation ratio is clamped to the controller's own 2.0
+        // growth factor: after an event-resolved step the resume dt can jump
+        // decades above the tiny flip step, and extrapolating a ns-scale
+        // difference across a us-scale step would manufacture a wild seed.
+        // The step AFTER an event-resolved accept is not extrapolated at all
+        // (pred_skip_once): the accepted pair straddles the discontinuity the
+        // event loop just resolved, so the linear history is a lie there.
+        let predictor_armed =
+            transient_dyn && matches!(opts.step, StepControl::Adaptive { .. });
+        const PRED_MAX_SCALE: f64 = 2.0;
+        let mut pred_skip_once = false;
+        // The accepted point BEFORE the current one: the predictor's second
+        // history sample, also read by the census seed-shadow. Maintained only
+        // when the predictor or the census wants it.
+        let mut x_accepted_prev: Option<Vec<f64>> = None;
 
         while t < tstop - 1e-18 {
             steps_taken += 1;
@@ -320,9 +346,18 @@ impl Transient {
                 }
             }
 
-            // Trial solve at t + h.
+            // Trial solve at t + h, seeded from the previous accepted point,
+            // or from the clamped linear extrapolation when armed (above).
             let t_trial = census.as_ref().map(|_| std::time::Instant::now());
             ws.x.copy_from_slice(&x_accepted);
+            if predictor_armed && !first_step && !pred_skip_once && h_prev_accepted > 0.0 {
+                if let Some(prev) = x_accepted_prev.as_ref() {
+                    let scale = (h / h_prev_accepted).min(PRED_MAX_SCALE);
+                    for i in 0..ws.x.len() {
+                        ws.x[i] = x_accepted[i] + scale * (x_accepted[i] - prev[i]);
+                    }
+                }
+            }
             let coeffs = IntegCoeffs::for_step(opts.integration, h, first_step);
             let r = newton_solve(
                 &mut ws,
@@ -348,7 +383,7 @@ impl Transient {
                 // root. Measures how many contraction decades a predictor seed
                 // would buy WITHOUT changing any behaviour.
                 if r.converged && h_prev_accepted > 0.0 {
-                    if let Some(prev) = census_x_accepted_prev.as_ref() {
+                    if let Some(prev) = x_accepted_prev.as_ref() {
                         let n_nodes = ws.layout.n_nodes;
                         let scale = h / h_prev_accepted;
                         let mut d_start = 0.0f64;
@@ -531,12 +566,13 @@ impl Transient {
             // Accept: advance time, update reactive history, emit.
             t += h;
             advance_reactive_state(&mut state, circuit, &ws, &x_accepted, h, opts, first_step);
-            if census.is_some() {
-                match census_x_accepted_prev.as_mut() {
+            if census.is_some() || predictor_armed {
+                match x_accepted_prev.as_mut() {
                     Some(p) => p.copy_from_slice(&x_accepted),
-                    None => census_x_accepted_prev = Some(x_accepted.clone()),
+                    None => x_accepted_prev = Some(x_accepted.clone()),
                 }
             }
+            pred_skip_once = used_event;
             x_accepted.copy_from_slice(&ws.x);
             first_step = false;
             h_prev_accepted = h;
