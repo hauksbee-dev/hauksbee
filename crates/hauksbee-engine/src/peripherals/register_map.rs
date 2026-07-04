@@ -121,6 +121,19 @@ fn encode(enc: Encoding, value: f64) -> Vec<u8> {
             let raw = ((counts << 5) & 0xFFFF) as u16;
             vec![(raw >> 8) as u8, (raw & 0xFF) as u8]
         }
+        Encoding::U20BeXlsb => {
+            // Bosch BME280/BMP280 20-bit press/temp packing (datasheet §5.4.6):
+            //   count = round(value), saturated to the 20-bit unsigned range
+            //   bytes = [ MSB = count[19:12], LSB = count[11:4], XLSB = count[3:0]<<4 ]
+            // The XLSB low nibble is unused on the wire (reads back as 0). The
+            // register's `expr` supplies the RAW ADC count; the raw→physical
+            // Bosch compensation is applied by the firmware / test consumer.
+            let count = value.round().clamp(0.0, 0xF_FFFF as f64) as u32;
+            let msb = ((count >> 12) & 0xFF) as u8;
+            let lsb = ((count >> 4) & 0xFF) as u8;
+            let xlsb = ((count << 4) & 0xF0) as u8;
+            vec![msb, lsb, xlsb]
+        }
         Encoding::Raw => Vec::new(),
     }
 }
@@ -744,5 +757,256 @@ addr_mask = 0x7f
         let lo = bus.transfer(0x00);
         let hi = bus.transfer(0x00);
         assert_eq!(i16::from_le_bytes([lo, hi]), -2);
+    }
+
+    // ── §6 sensor-coverage fixtures: BME280 + MPU6050 ────────────────────────
+    //
+    // Per 05-cosim-fidelity §6.2/§7.2: each new sensor lands with a fixture that
+    // "reads a known register value through the bound bus and asserts the decoded
+    // physical quantity". These load the SHIPPED specs (docs/hunts/specs/*.toml)
+    // so the fixture proves the exact spec that ships, drive them through the real
+    // `I2cBus` dispatch path (no injection, no hand-coded model), and assert the
+    // decoded physical output against datasheet worked-example numbers.
+
+    /// The canonical shipped BME280 spec (single source of truth for the model).
+    const BME280_SPEC: &str = include_str!("../../../../docs/hunts/specs/bme280.toml");
+    /// The canonical shipped MPU6050 spec.
+    const MPU6050_SPEC: &str = include_str!("../../../../docs/hunts/specs/mpu6050.toml");
+
+    /// Pointered burst read of `n` bytes starting at register `reg` from the I2C
+    /// slave at 7-bit `addr`, through the real bus dispatch path.
+    fn i2c_read_burst(bus: &mut I2cBus, addr: u8, reg: u8, n: usize) -> Vec<u8> {
+        bus.dispatch(I2cEvent::Start { addr, read: false });
+        bus.dispatch(I2cEvent::Write { addr, data: reg });
+        bus.dispatch(I2cEvent::Start { addr, read: true });
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(bus.dispatch(I2cEvent::Read { addr }).unwrap());
+        }
+        bus.dispatch(I2cEvent::Stop { addr });
+        out
+    }
+
+    // ── Bosch BME280/BMP280 integer compensation (datasheet §4.2.3, §8.2) ─────
+    // Direct ports of the datasheet reference C. `wrapping_*` reproduces C's
+    // modular int32 semantics exactly (the routines are designed not to wrap for
+    // valid inputs, so this is faithful, not lossy). These run in the FIXTURE —
+    // they are the raw→physical consumer the model deliberately does not embed.
+
+    /// Returns `(t_fine, T)` where `T` is temperature in 0.01 °C.
+    fn bme280_compensate_t(adc_t: i32, t1: i32, t2: i32, t3: i32) -> (i32, i32) {
+        let var1 = (((adc_t >> 3) - (t1 << 1)).wrapping_mul(t2)) >> 11;
+        let d = (adc_t >> 4) - t1;
+        let var2 = ((d.wrapping_mul(d) >> 12).wrapping_mul(t3)) >> 14;
+        let t_fine = var1 + var2;
+        let t = (t_fine * 5 + 128) >> 8;
+        (t_fine, t)
+    }
+
+    /// Returns pressure in Pa (int32 routine).
+    #[allow(clippy::too_many_arguments)]
+    fn bme280_compensate_p(
+        adc_p: i32, t_fine: i32,
+        p1: i32, p2: i32, p3: i32, p4: i32, p5: i32, p6: i32, p7: i32, p8: i32, p9: i32,
+    ) -> u32 {
+        let mut var1 = (t_fine >> 1) - 64000;
+        let mut var2 = ((var1 >> 2).wrapping_mul(var1 >> 2) >> 11).wrapping_mul(p6);
+        var2 = var2 + (var1.wrapping_mul(p5) << 1);
+        var2 = (var2 >> 2) + (p4 << 16);
+        let a = p3.wrapping_mul((var1 >> 2).wrapping_mul(var1 >> 2) >> 13) >> 3;
+        let b = p2.wrapping_mul(var1) >> 1;
+        var1 = (a + b) >> 18;
+        var1 = (32768 + var1).wrapping_mul(p1) >> 15;
+        if var1 == 0 {
+            return 0;
+        }
+        let mut p: u32 =
+            ((1_048_576 - adc_p) as u32).wrapping_sub((var2 >> 12) as u32).wrapping_mul(3125);
+        if p < 0x8000_0000 {
+            p = (p << 1) / (var1 as u32);
+        } else {
+            p = (p / (var1 as u32)) * 2;
+        }
+        let w1 = p9.wrapping_mul((((p >> 3) * (p >> 3)) >> 13) as i32) >> 12;
+        let w2 = ((p >> 2) as i32).wrapping_mul(p8) >> 13;
+        ((p as i32) + ((w1 + w2 + p7) >> 4)) as u32
+    }
+
+    /// Returns humidity in Q22.10 %RH (divide by 1024 for %RH).
+    #[allow(clippy::too_many_arguments)]
+    fn bme280_compensate_h(
+        adc_h: i32, t_fine: i32,
+        h1: i32, h2: i32, h3: i32, h4: i32, h5: i32, h6: i32,
+    ) -> u32 {
+        let v0 = t_fine - 76800;
+        let term_a = (((adc_h << 14) - (h4 << 20) - h5.wrapping_mul(v0)) + 16384) >> 15;
+        let y1 = v0.wrapping_mul(h6) >> 10;
+        let y2 = (v0.wrapping_mul(h3) >> 11) + 32768;
+        let y3 = y1.wrapping_mul(y2) >> 10;
+        let y4 = (y3 + 2_097_152).wrapping_mul(h2) + 8192;
+        let big = y4 >> 14;
+        let mut v = term_a.wrapping_mul(big);
+        v = v - ((((v >> 15).wrapping_mul(v >> 15) >> 7).wrapping_mul(h1)) >> 4);
+        let v = v.clamp(0, 419_430_400);
+        (v >> 12) as u32
+    }
+
+    /// FIXTURE: BME280 chip-ID gate reads 0x60 through the bound I2C bus, and a
+    /// burst read of the raw data registers decodes — via the datasheet Bosch
+    /// compensation — to the datasheet Appendix worked-example physical values.
+    ///
+    /// Authority: the trimming + raw ADC inputs are the Bosch datasheet Appendix
+    /// (§8.2) worked example; the compensated temperature 25.08 °C is the exact
+    /// datasheet-published result. The pressure 100656 Pa is the int32 routine's
+    /// result on the same inputs (the int64 Q24.8 routine gives 100653.25 Pa; the
+    /// ~3 Pa gap is documented int32 precision loss). Humidity uses realistic
+    /// BME280 trimming (dig_H4=317, others per the spec) → 54.45 %RH.
+    #[test]
+    fn declarative_bme280_decodes_datasheet_worked_example() {
+        let sensor = RegisterMapSensor::from_toml(BME280_SPEC).unwrap();
+        let addr = 0x76;
+        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
+
+        // Identity gate (datasheet §5.4.1): CHIP_ID 0xD0 == 0x60 (BME280).
+        let id = i2c_read_burst(&mut bus, addr, 0xD0, 1);
+        assert_eq!(id, vec![0x60], "BME280 chip-ID must be 0x60");
+
+        // Calibration blocks: 26 bytes from 0x88, 7 bytes from 0xE1.
+        let cal1 = i2c_read_burst(&mut bus, addr, 0x88, 26);
+        let cal2 = i2c_read_burst(&mut bus, addr, 0xE1, 7);
+        let le16 = |b: &[u8], i: usize| i16::from_le_bytes([b[i], b[i + 1]]) as i32;
+        let leu16 = |b: &[u8], i: usize| u16::from_le_bytes([b[i], b[i + 1]]) as i32;
+        let (t1, t2, t3) = (leu16(&cal1, 0), le16(&cal1, 2), le16(&cal1, 4));
+        let p1 = leu16(&cal1, 6);
+        let (p2, p3, p4) = (le16(&cal1, 8), le16(&cal1, 10), le16(&cal1, 12));
+        let (p5, p6, p7) = (le16(&cal1, 14), le16(&cal1, 16), le16(&cal1, 18));
+        let (p8, p9) = (le16(&cal1, 20), le16(&cal1, 22));
+        let h1 = cal1[25] as i32; // 0xA1
+        let h2 = le16(&cal2, 0); // 0xE1/0xE2
+        let h3 = cal2[2] as i32; // 0xE3
+        // dig_H4/H5 nibble packing (datasheet §4.2.2):
+        let h4 = ((cal2[3] as i8 as i32) << 4) | (cal2[4] & 0x0F) as i32;
+        let h5 = ((cal2[5] as i8 as i32) << 4) | ((cal2[4] >> 4) as i32);
+        let h6 = cal2[6] as i8 as i32;
+        // Full coefficient round-trip through the bus. Covering EVERY pressure
+        // coefficient here (not just p1) is deliberate: a wrong two's-complement
+        // byte in the spec (e.g. dig_P2/dig_P8) would otherwise only surface as a
+        // small pressure error downstream — this pins each to its datasheet value.
+        assert_eq!(
+            (t1, t2, t3),
+            (27504, 26435, -1000),
+            "temperature trimming must round-trip to the datasheet values"
+        );
+        assert_eq!(
+            (p1, p2, p3, p4, p5, p6, p7, p8, p9),
+            (36477, -10685, 3024, 2855, 140, -7, 15500, -14600, 6000),
+            "pressure trimming must round-trip to the datasheet values"
+        );
+        assert_eq!(
+            (h1, h2, h3, h4, h5, h6),
+            (75, 362, 0, 317, 0, 30),
+            "humidity trimming (incl. H4/H5 nibble packing) must round-trip"
+        );
+
+        // Raw data burst: 8 bytes from 0xF7 = press[3] temp[3] hum[2].
+        let d = i2c_read_burst(&mut bus, addr, 0xF7, 8);
+        assert_eq!(
+            &d[0..3],
+            &[0x65, 0x5A, 0xC0],
+            "press bytes must be the u20_be_xlsb packing of 415148"
+        );
+        assert_eq!(
+            &d[3..6],
+            &[0x7E, 0xED, 0x00],
+            "temp bytes must be the u20_be_xlsb packing of 519888"
+        );
+        let adc_p = ((d[0] as i32) << 12) | ((d[1] as i32) << 4) | ((d[2] as i32) >> 4);
+        let adc_t = ((d[3] as i32) << 12) | ((d[4] as i32) << 4) | ((d[5] as i32) >> 4);
+        let adc_h = ((d[6] as i32) << 8) | (d[7] as i32);
+        assert_eq!((adc_p, adc_t, adc_h), (415148, 519888, 30000));
+
+        // Compensate (the firmware/test consumer path).
+        let (t_fine, t) = bme280_compensate_t(adc_t, t1, t2, t3);
+        assert_eq!(t_fine, 128422, "t_fine (datasheet Appendix) must be 128422");
+        assert_eq!(t, 2508, "temperature must be 25.08 °C (datasheet published)");
+
+        let pa = bme280_compensate_p(adc_p, t_fine, p1, p2, p3, p4, p5, p6, p7, p8, p9);
+        assert_eq!(pa, 100656, "pressure must be 100656 Pa (int32 routine)");
+
+        let h_q = bme280_compensate_h(adc_h, t_fine, h1, h2, h3, h4, h5, h6);
+        assert_eq!(h_q, 55759, "humidity must be 55759 (Q22.10)");
+        let rh = h_q as f64 / 1024.0;
+        assert!((54.0..55.0).contains(&rh), "humidity ≈ 54.45 %RH, got {rh}");
+    }
+
+    /// FIXTURE: MPU6050 WHO_AM_I reads 0x68 through the bound I2C bus, and a
+    /// burst read of the data registers decodes — via the linear scale factors —
+    /// to the driven physical quantities (accel Z = +1 g, gyro X = 250 °/s,
+    /// temp = 25 °C). Here the whole forward map is expressible as evalexpr
+    /// value expressions (`expr * scale + offset`), so no encoding addition is
+    /// needed; the fixture proves the round trip physical → raw → physical.
+    #[test]
+    fn declarative_mpu6050_decodes_driven_quantities() {
+        let mut sensor = RegisterMapSensor::from_toml(MPU6050_SPEC).unwrap();
+        sensor.set_input("accel_z_g", 1.0);
+        sensor.set_input("gyro_x_dps", 250.0);
+        sensor.set_input("temp_c", 25.0);
+        let addr = 0x68;
+        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
+
+        // Identity gate (register map §4.32): WHO_AM_I 0x75 == 0x68.
+        let who = i2c_read_burst(&mut bus, addr, 0x75, 1);
+        assert_eq!(who, vec![0x68], "MPU6050 WHO_AM_I must be 0x68");
+
+        // Data burst: 14 bytes from 0x3B = accel XYZ (6) temp (2) gyro XYZ (6).
+        let d = i2c_read_burst(&mut bus, addr, 0x3B, 14);
+        let be = |b: &[u8], i: usize| i16::from_be_bytes([b[i], b[i + 1]]);
+        let ax = be(&d, 0);
+        let ay = be(&d, 2);
+        let az = be(&d, 4);
+        let temp_raw = be(&d, 6);
+        let gx = be(&d, 8);
+
+        // ±2 g full scale → 16384 LSB/g. Z = +1 g → 0x4000.
+        assert_eq!(az, 16384, "accel Z = +1 g must be 16384 LSB");
+        assert_eq!([d[4], d[5]], [0x40, 0x00], "accel Z bytes big-endian");
+        assert_eq!((ax, ay), (0, 0), "accel X/Y at rest = 0");
+        // ±250 °/s → 131 LSB/(°/s). X = 250 °/s → 32750.
+        assert_eq!(gx, 32750, "gyro X = 250 °/s must be 32750 LSB");
+        // Temp: T = raw/340 + 36.53.
+        let temp_c = temp_raw as f64 / 340.0 + 36.53;
+        assert!(
+            (temp_c - 25.0).abs() < 0.05,
+            "decoded temperature must be ≈ 25 °C, got {temp_c}"
+        );
+    }
+
+    /// FIXTURE (SPI address-byte convention): the SAME BME280 register map over
+    /// SPI resolves the chip-ID at its RAW datasheet address 0xD0. The command
+    /// byte folds the R/W flag into bit 7 (0xD0 = read | addr 0x50); the
+    /// interpreter masks it off both the command and the stored key, so the raw
+    /// datasheet address is what the spec declares. Documents item-2's SPI note.
+    #[test]
+    fn declarative_bme280_spi_chip_id() {
+        // Minimal SPI variant of the BME280 register map (same addresses).
+        let spi = r#"
+[sensor]
+name = "BME280"
+bus  = "spi"
+
+[[sensor.register]]
+addr  = 0xD0
+const = [0x60]
+
+[sensor.protocol]
+style           = "spi_reg"
+rw_read_is_high = true
+addr_mask       = 0x7f
+"#;
+        let sensor = RegisterMapSensor::from_toml(spi).unwrap();
+        let mut bus = SpiBus::new("SPI", Box::new(sensor));
+        let _status = bus.transfer(0xD0); // read bit 7 set | masked addr 0x50
+        let id = bus.transfer(0x00);
+        assert_eq!(id, 0x60, "BME280 SPI chip-ID at raw 0xD0 must read 0x60");
     }
 }
