@@ -20,9 +20,19 @@ qemu = []
 [dependencies]
 anyhow = { workspace = true }
 libc = "0.2"
+# Backend config structs (RenodeConfig/QemuConfig and their register-offset /
+# port-map sub-structs) derive Serialize/Deserialize so they are a plain-data
+# file-load target for W5's data-driven MCU descriptor (05-cosim-fidelity §5.5),
+# the same "make it a struct now, load it from a file later" move sensor_spec.rs
+# already uses. No file loading lives here yet; that is the W5 deliverable.
+serde = { workspace = true }
 
 [build-dependencies]
 bindgen = "0.71"
 pkg-config = "0.3"
 
 [dev-dependencies]
+# Round-trip (serialize -> deserialize -> equal) proof that the config structs
+# are a lossless data carrier, i.e. W5's future file load reconstructs the exact
+# config a constructor produces.
+serde_json = { workspace = true }

@@ -92,6 +92,7 @@ pub use process::{find_qemu, is_available, QemuArch};
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
+use serde::{Deserialize, Serialize};
 use process::QemuProcess;
 use qmp::Qmp;
 use std::collections::HashMap;
@@ -229,7 +230,10 @@ pub mod mailbox {
 /// The addresses are the RAM mailbox words (see [`mailbox`]), not the GPIO
 /// peripheral registers, because the QEMU fork's gpio model does not expose
 /// register read-back. The bit layout still matches GPIO_OUT_REG.
-#[derive(Debug, Clone)]
+///
+/// Plain-data register-offset carrier (05-cosim-fidelity §5.5), serde-derivable
+/// so it is a W5 file-load target with no loader landing now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GpioBank {
     /// Logical port letter the engine uses in [`PinId`]. The ESP32 GPIO matrix
     /// is a single flat 0..39 space; the demo uses the low bank (port `'0'`,
@@ -244,7 +248,12 @@ pub struct GpioBank {
 }
 
 /// Per-part QEMU configuration: enough to boot a machine and bridge it.
-#[derive(Debug, Clone)]
+///
+/// Plain-data per-part surface (05-cosim-fidelity §5.5): the machine name, GPIO
+/// banks with their mailbox offsets, icount/frequency, expected ISA, and I2C bus
+/// paths are struct fields a constructor fills. `Serialize`/`Deserialize` make it
+/// the file-load target for W5's data-driven MCU descriptor; no loader now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QemuConfig {
     /// Which QEMU system binary to use.
     pub arch: QemuArch,
@@ -1203,6 +1212,23 @@ mod tests {
         assert_eq!(c.arch, QemuArch::Riscv32);
         assert_eq!(c.machine, "esp32c3");
         assert_eq!(c.banks[0].out_reg, mailbox::GPIO_OUT);
+    }
+
+    /// Bit-identity proof for the data-driven config bridge (05 §5.5): every
+    /// stock QEMU config round-trips through serde equal to the constructor's
+    /// output, so it is a lossless plain-data carrier for W5's future file load,
+    /// and the refactor (inert `#[derive]`s only) left the values unchanged.
+    #[test]
+    fn config_bridge_roundtrips_bit_identically() {
+        for c in [
+            QemuConfig::esp32(),
+            QemuConfig::esp32s3(),
+            QemuConfig::esp32c3(),
+        ] {
+            let json = serde_json::to_string(&c).expect("serialize QemuConfig");
+            let back: QemuConfig = serde_json::from_str(&json).expect("deserialize QemuConfig");
+            assert_eq!(c, back, "QemuConfig must round-trip bit-identically");
+        }
     }
 
     #[test]

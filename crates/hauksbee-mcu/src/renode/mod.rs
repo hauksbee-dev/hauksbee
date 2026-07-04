@@ -33,6 +33,7 @@ pub use process::{find_renode, is_available};
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
+use serde::{Deserialize, Serialize};
 use process::RenodeProcess;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -50,7 +51,13 @@ type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
 type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// How a single GPIO port is addressed inside Renode.
-#[derive(Debug, Clone)]
+///
+/// This is the per-port register-offset data (05-cosim-fidelity §5.5): the
+/// STM32F1-vs-F4 ODR-offset footgun lives here as an explicit `odr_offset`
+/// field, not as logic scattered through the backend, so a new part declares
+/// "where do I read output state" as data. `Serialize`/`Deserialize` make it a
+/// file-load target for W5 without any loader landing now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortMap {
     /// Logical port letter the engine uses in [`PinId`] (e.g. `'C'`).
     pub letter: char,
@@ -70,7 +77,7 @@ pub struct PortMap {
 /// for its ODR diffing — injection is one Monitor command per chunk, issued
 /// while the machine is paused between `RunFor` steps, so the firmware sees
 /// the new count before its next instruction runs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdcInject {
     /// Run a Renode Monitor command each chunk, with `{count}` replaced by the
     /// modeled ADC count and `{millivolts}` by the integer millivolt value.
@@ -89,7 +96,11 @@ pub enum AdcInject {
 }
 
 /// Maps one engine ADC channel to its Renode injection recipe (05 §5.1).
-#[derive(Debug, Clone)]
+///
+/// Not `Eq`: `full_scale_volts` is an `f64`. This is `PartialEq` for the config
+/// round-trip proof (05 §5.5) and folds into `RenodeConfig::adc_channels` as
+/// plain data, so a W5 descriptor can carry ADC recipes with no backend change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdcChannelMap {
     /// Engine-facing ADC channel index ([`Mcu::set_analog_in`]'s `channel`).
     pub channel: u8,
@@ -103,7 +114,19 @@ pub struct AdcChannelMap {
 }
 
 /// Per-MCU Renode configuration: enough to bring up a machine and wire it.
-#[derive(Debug, Clone)]
+///
+/// This is the whole per-part surface as plain data (05-cosim-fidelity §5.5):
+/// the platform-description reference, GPIO port maps with their register
+/// offsets, the UART/I2C/SPI controller names, and the ADC injection recipes are
+/// all struct fields a constructor fills, not logic in the backend. Adding a
+/// part is filling this struct (see [`RenodeConfig::rp2040`], the first config
+/// written directly against the struct shape). `Serialize`/`Deserialize` make it
+/// the file-load target for W5's data-driven MCU descriptor; no loader lands now
+/// (the constructors below stay the source of truth for the built-in parts).
+///
+/// Not `Eq` because [`AdcChannelMap`] carries an `f64`; `PartialEq` backs the
+/// round-trip bit-identity proof in the tests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RenodeConfig {
     /// Human-readable machine name used in the Monitor prompt (e.g. `"f103"`).
     pub machine: String,
@@ -1719,5 +1742,49 @@ mod tests {
         // RAM/result-word path.
         let cmd = render_adc_inject(&AdcInject::MemoryWord(0x2000_4000), 0x9B2, 2000);
         assert_eq!(cmd, "sysbus WriteDoubleWord 0x20004000 0x9B2");
+    }
+
+    /// Bit-identity proof for the data-driven config bridge (05 §5.5): every
+    /// stock config serializes and deserializes back to a value that is EQUAL to
+    /// what the constructor produced. This proves two things at once:
+    ///   1. the struct is a *lossless* plain-data carrier — no field is dropped
+    ///      or altered on the round trip, so W5's future file load reconstructs
+    ///      the exact config the constructor makes today (the whole point of the
+    ///      bridge);
+    ///   2. the config VALUE is unchanged by the refactor — the constructors
+    ///      were not touched (only inert `#[derive]`s were added), and the
+    ///      `*_config_shape` tests below still pin the individual field values
+    ///      they always pinned, so before == after.
+    ///
+    /// A config with an `AdcChannelMap` is included so the just-merged ADC work
+    /// (the `f64` full-scale field) is proven to fold through the round trip too.
+    fn assert_roundtrip(config: &RenodeConfig) {
+        let json = serde_json::to_string(config).expect("serialize RenodeConfig");
+        let back: RenodeConfig = serde_json::from_str(&json).expect("deserialize RenodeConfig");
+        assert_eq!(
+            *config, back,
+            "config must survive a serialize -> deserialize round trip bit-identically"
+        );
+    }
+
+    #[test]
+    fn config_bridge_roundtrips_bit_identically() {
+        assert_roundtrip(&RenodeConfig::stm32f103());
+        assert_roundtrip(&RenodeConfig::stm32f4_discovery());
+        assert_roundtrip(&RenodeConfig::nrf52840());
+        assert_roundtrip(&RenodeConfig::sifive_fe310());
+        // With the merged ADC work folded in as struct data.
+        assert_roundtrip(&RenodeConfig::stm32f103().with_adc_channel(AdcChannelMap {
+            channel: 0,
+            inject: AdcInject::MemoryWord(0x2000_4000),
+            full_scale_volts: 3.3,
+            max_count: 4095,
+        }));
+        assert_roundtrip(&RenodeConfig::stm32f103().with_adc_channel(AdcChannelMap {
+            channel: 1,
+            inject: AdcInject::MonitorCommand("sysbus.adc FeedMillivolts {millivolts}".to_string()),
+            full_scale_volts: 1.8,
+            max_count: 1023,
+        }));
     }
 }
