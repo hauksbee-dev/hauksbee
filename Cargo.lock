@@ -851,6 +851,8 @@ dependencies = [
  "bindgen",
  "libc",
  "pkg-config",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
