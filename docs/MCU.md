@@ -200,7 +200,10 @@ control and the peripheral models, so the firmware runs unmodified.
   diffs it against the previous snapshot, and synthesises per-bit edge callbacks.
   This mirrors exactly how the simavr backend's port hook detects bit edges, so
   the scheduler sees identical behaviour. ODR offsets per family: STM32F1 `0x0C`,
-  STM32F4 `0x14`, nRF52 `0x504`, FE310 `0x0C`.
+  STM32F4 `0x14`, nRF52 `0x504`, FE310 `0x0C`. **RP2040 is the exception**: it is
+  not a memory-mapped GPIO port bank, so the poll targets the SIO block's
+  `GPIO_OUT` (offset `0x10` from `SIO_BASE = 0xD000_0000`), which is where the
+  driven output levels actually live (datasheet §2.3.1.7).
 
 - **GPIO in (push)**: `sysbus.<port> OnGPIO <bit> <bool>` drives an input pin.
 
@@ -229,6 +232,7 @@ recorded). Anything not run for real is labelled honestly.
 | SiFive FE310 (RISC-V RV32, HiFive1) | `renode:sifive_fe310` | Renode `sifive-fe310.repl` | **Proven (UART boot)**: "BOOTING ZEPHYR OS ... shell>" through the bridge (needs `post_load_setup`: PRCI tags + `cpu PC vinit`). |
 | STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not run on this branch |
 | ESP32-S3 (Xtensa LX7) | `qemu:esp32s3` | Espressif QEMU `esp32s3` | Config shipped; machine present in the fork; not run on this branch (no S3 firmware built) |
+| RP2040 (dual Cortex-M0+, Raspberry Pi Pico) | `renode:rp2040` | Renode `rp2040.repl` | Config shipped + unit-tested; **platform ABSENT in installed Renode 1.16.1**; smoke skip-gated (see note below) |
 | ESP32-C6, ESP32-H2 | — | — | Not in the Espressif QEMU fork's machine list; out of scope |
 | nRF5340 (ZSWatch-class) | — | — | See note below |
 
@@ -241,6 +245,48 @@ is NOT proven and no config is claimed for it. The nRF52840 proof is the closest
 Nordic part proven; a ZSWatch-class nRF5340 board would need an nRF5340 Renode
 platform (upstream Renode carries some nRF5340 work, but it is not in this
 portable build and was not run).
+
+### RP2040 / Raspberry Pi Pico, honestly
+
+`RenodeConfig::rp2040()` ships as the first config written directly against the
+data-driven struct shape (05-cosim-fidelity §5.4/§5.5), and it is unit-tested
+(`rp2040_config_shape`, plus the serde round-trip). What is **proven** is the
+config shape and the datasheet-grounded register offsets; what is **not** proven
+is a real boot, for one honest reason: the Renode build installed here (portable
+**v1.16.1.16858**) ships **no rp2040 platform** — `platforms/cpus/` carries only
+`picosoc` and `litex_picorv32` (unrelated RISC-V soft cores), no `rp2040.repl`
+and no Raspberry Pi Pico board. The integration smoke `tests/renode_rp2040.rs`
+therefore checks for the platform `.repl` first and **skips loudly** with that
+reason rather than pretending.
+
+Two things could not be verified offline and are best-effort in the config,
+called out in `RenodeConfig::rp2040()`'s doc comment:
+
+- **SIO, not a port bank.** RP2040 GPIO output does not live in a per-port ODR;
+  it lives in the SIO (single-cycle IO) block. The output-state register is SIO
+  `GPIO_OUT` at `0xD000_0010` (offset `0x10` from `SIO_BASE`), with `GPIO_OE` at
+  `0xD000_0020` and `GPIO_IN` at `0xD000_0004` (datasheet §2.3.1.7). The ODR-poll
+  is pointed at SIO `GPIO_OUT` — the faithful adaptation of the F1-vs-F4
+  ODR-offset discipline to a part that has no port ODR.
+- **Unverified Renode modeling.** The SIO peripheral's *name* in Renode's
+  `rp2040.repl` (assumed `sio`) and whether Renode's SIO model reads `GPIO_OUT`
+  back as the driven value are unconfirmed until the smoke runs on a Renode that
+  carries the platform. It will confirm or correct both.
+
+Deliberately **not** wired, to refuse rather than fake: **ADC** (RP2040 has a SAR
+ADC, but no Renode ADC model is verified, so `adc_channels` is empty → an
+unmapped channel is the merged policy's loud once-per-channel drop, never a fake
+count); **I2C/SPI** (`i2c_controllers`/`spi_controllers` empty — the RP2040
+Renode peripheral set is unverified, so no bridge is installed rather than
+claiming an unproven bus).
+
+The scheduler dispatches `backend = "renode:rp2040"` (alias `renode:pico`) to
+this config. The built-in `db/mcu.toml` rp2040 entry deliberately carries **no**
+`backend` param yet: it exists for the BOOTSEL strap lint, and auto-routing every
+bound RP2040 board into a Renode platform the installed build does not ship
+would turn working binds into boot failures. A board that wants RP2040 co-sim
+opts in with a user model layer setting `backend = "renode:rp2040"`, and gets a
+loud platform-load error until its Renode carries `rp2040.repl`.
 
 ### ESP32 in Renode, honestly
 
