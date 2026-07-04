@@ -113,6 +113,23 @@ resolve_qemu_tag() {
   printf '%s' "$QEMU_FALLBACK_VER"
 }
 
+# Resolve the actual release asset name for a tool+platform by listing the
+# release's assets, instead of constructing the name. Upstream has changed
+# both the version separator (hyphens -> underscores inside the version) and
+# the compression (.tar.bz2 -> .tar.xz) across releases; a constructed name
+# 404s and the "archive" we then extract is a GitHub error page. Matching
+# against the published asset list survives both kinds of rename.
+resolve_qemu_asset() {
+  local tag="$1" tool_name="$2" os_arch_suffix="$3" asset
+  asset="$(github_api "https://api.github.com/repos/espressif/qemu/releases/tags/${tag}" \
+            2>/dev/null \
+          | grep '"name"' \
+          | sed 's/.*"name": *"\([^"]*\)".*/\1/' \
+          | grep "^${tool_name}-softmmu-.*-${os_arch_suffix}\.tar\.\(bz2\|xz\|gz\)$" \
+          | head -1)"
+  [ -n "$asset" ] && printf '%s' "$asset"
+}
+
 # Convert an espressif/qemu release tag (e.g. "esp-develop-9.0.0-20240606") to
 # the directory-name form used by idf_tools ("esp_develop_9.0.0_20240606").
 qemu_tag_to_dir_ver() {
@@ -465,13 +482,20 @@ install_qemu() {
       continue
     fi
 
-    ASSET="${tool_name}-softmmu-${QEMU_TAG}-${OS_ARCH_SUFFIX}.tar.bz2"
+    # Prefer the asset name the release actually publishes (see
+    # resolve_qemu_asset); the constructed form is a fallback for when the
+    # API is unreachable, and carries the historical naming.
+    ASSET="$(resolve_qemu_asset "$QEMU_TAG" "$tool_name" "$OS_ARCH_SUFFIX")"
+    if [ -z "$ASSET" ]; then
+      warn "Could not list release assets; falling back to constructed name."
+      ASSET="${tool_name}-softmmu-${QEMU_TAG}-${OS_ARCH_SUFFIX}.tar.bz2"
+    fi
     DOWNLOAD_URL="https://github.com/espressif/qemu/releases/download/${QEMU_TAG}/${ASSET}"
 
     log "Espressif QEMU: downloading $ASSET..."
     info "  from: $DOWNLOAD_URL"
 
-    if ! curl --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" 2>/dev/null; then
+    if ! curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" 2>/dev/null; then
       warn "Automatic download failed for $ASSET"
       warn "Asset naming conventions change between releases. Download manually:"
       warn "  https://github.com/espressif/qemu/releases/tag/${QEMU_TAG}"
@@ -488,7 +512,9 @@ install_qemu() {
     # The Espressif releases have a top-level 'qemu/' directory in the tarball.
     # We want ~/.espressif/tools/qemu-xtensa/<ver>/qemu/bin/..., so strip that
     # top-level 'qemu' component by extracting one level up and using --strip=1.
-    tar xjf "$TMPDIR/$ASSET" -C "$DEST_DIR" --strip-components=1 \
+    # `tar xf` (no compression flag) sniffs bz2/xz/gz — the compression has
+    # changed across upstream releases, so never hardcode it.
+    tar xf "$TMPDIR/$ASSET" -C "$DEST_DIR" --strip-components=1 \
       || die "tar extraction failed for $ASSET."
 
     # Verify
@@ -496,8 +522,16 @@ install_qemu() {
     [ -x "$installed_bin" ] || die "$installed_bin not found after extraction."
     chmod +x "$installed_bin"
 
+    # A per-arch failure must not abort the sibling arch's install (a die here
+    # historically left riscv32 uninstalled whenever xtensa's check failed).
+    # The common cause on a fresh mac is a missing Homebrew dylib, not a wrong
+    # binary — surface the dyld error so the fix is obvious.
     if ! is_esp_qemu_fork "$installed_bin"; then
-      die "$installed_bin exists but does not advertise esp32 in -machine help. Wrong binary?"
+      warn "$bin_name installed but its esp32 machine check failed."
+      warn "Likely a missing shared library. First error from the binary:"
+      "$installed_bin" -machine help 2>&1 | head -2 | while IFS= read -r l; do warn "  $l"; done
+      warn "If it names a /opt/homebrew library: brew install the package, then re-run --check."
+      continue
     fi
     ok "$bin_name installed: $installed_bin"
   done
