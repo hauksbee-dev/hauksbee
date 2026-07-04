@@ -62,32 +62,39 @@ process, so they link no GPL code.
 
 ### Peripheral-coupling coverage (what each backend actually implements)
 
-The `Mcu` trait above is the full contract, but the three backends do not all
-implement every coupling yet. GPIO (both directions) and UART co-sim work on all
-three; **ADC injection and I2C/SPI peripheral-slave interception are implemented
-only on the in-process AVR backend today.**
+The `Mcu` trait above is the full contract, and all three backends now
+implement every coupling — at different fidelity tiers, stated honestly below.
+GPIO (both directions) and UART co-sim work identically on all three; ADC
+injection and I2C/SPI byte interception are exact on the in-process AVR
+backend and bridged/contracted on the external emulators.
 
 | Coupling | AVR (`simavr`) | Renode (STM32/nRF/RISC-V) | QEMU (ESP32/-S3/-C3) |
 |----------|----------------|---------------------------|----------------------|
 | GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
 | GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
-| ADC inject (`set_analog_in`) | yes | **no-op** | **no-op** |
-| I2C slave models (`on_i2c`) | yes | **no-op** | **no-op** |
-| SPI slave models (`on_spi`) | yes | **no-op** | **no-op** |
+| ADC inject (`set_analog_in`) | yes | yes, per-platform `AdcChannelMap` (Monitor feed command or result-word write); unmapped channels drop LOUDLY | yes, RAM-mailbox count slots (firmware contract) |
+| I2C slave models (`on_i2c`) | yes (TWI decode) | yes (generated C# bridge peripherals) | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
+| SPI slave models (`on_spi`) | yes | yes (C# `ISPIPeripheral` bridges) | yes, RAM-mailbox bus cells (firmware contract) |
 
-On Renode and QEMU the `set_analog_in` / `on_i2c` / `on_spi` methods are explicit,
-commented no-ops (`renode/mod.rs`, `qemu/mod.rs`). The engine still *binds* I2C/SPI
-device models and ADC nets for a board on those backends, but the firmware running
-on the external emulator does not yet see them: an on-bus EEPROM/sensor/DAC gets no
-ACK, and an ADC read returns the core's own default. Why the asymmetry: `simavr`
-runs in-process over FFI and exposes cycle-accurate TWI/SPI/ADC IRQ callbacks, so
-intercepting bus traffic and injecting ADC voltages is natural; Renode and QEMU are
-driven over TCP (Monitor / QMP / gdbstub) and would each need per-platform
-peripheral interception plus an ADC feed path, which is future work. So a non-AVR
-board co-sims its GPIO and UART against the analog solve, but its on-bus peripherals
-and ADC feedback are not modelled yet. AVR-class boards (e.g. the ATmega328P) have
-the full stack.
+The tiers (05-cosim-fidelity §5.1/§5.2): `simavr` runs in-process over FFI with
+cycle-accurate TWI/SPI/ADC IRQ callbacks, so interception is exact. Renode is
+driven over the Monitor TCP channel: I2C/SPI slaves are real Renode peripherals
+(generated C# bridges that call back into the engine), and ADC counts are
+injected per chunk through a per-platform recipe (`RenodeConfig::adc_channels`)
+— either a modeled ADC's feed command or a `WriteDoubleWord` into the result
+word the firmware reads; the stock STM32F103/F4/nRF52/FE310 configs ship no map
+because those Renode platforms model no ADC peripheral, and an unmapped channel
+warns once on stderr instead of silently dropping. Espressif QEMU exposes no
+host hook for its I2C RX FIFO, GPSPI transfers, or SAR ADC, so all three ride
+the RAM mailbox (`qemu/mod.rs::mailbox`, the same contract as the GPIO words):
+ADC counts land in fixed slots, and I2C/SPI transactions go through
+request/response cells with a sequence handshake, serviced once per chunk and
+surfaced through the same `on_i2c`/`on_spi` callbacks as the other backends.
+That is a **firmware contract, not general firmware support** — unmodified
+vendor firmware sees none of it (the cells are gated on a `BUS_MAGIC` word) —
+and each mailbox function is retired the day the fork grows the corresponding
+peripheral hook (05 §5.3).
 
 ### Why QEMU (the Espressif fork) for the ESP32 family
 
@@ -404,15 +411,15 @@ proving the backend is ISA-agnostic.
   (`GPIOPort GetState/SetState/RegisterEvent`, `RunFor`, `GetTime`) which avoids
   ASCII framing entirely.
 
-- **ADC injection is a no-op for the Renode backend.** Renode's ADC peripheral
-  API is per-SoC (`FeedSample` / `SetDefaultValue` vary by family), so
-  `set_analog_in` is documented as a no-op until a per-platform ADC map is added.
-  The STM32 demo couples through the GPIO/LED path, not the ADC, so it is
-  unaffected. The AVR backend's ADC injection is fully wired.
-
-- **I2C/SPI interception is not wired for Renode** (it is for AVR). The hooks
-  exist on the trait and return cleanly; peripheral-bus interception over the
-  Monitor is future work.
+- **ADC injection needs a per-platform map on Renode.** Renode's ADC peripheral
+  API is per-SoC (`FeedSample` / `SetDefaultValue` vary by family) and the stock
+  STM32F103/F4/nRF52/FE310 platform descriptions model no ADC at all, so
+  `set_analog_in` delivers counts only where a `RenodeConfig::adc_channels`
+  recipe says how (a Monitor feed command for a modeled ADC, or a
+  `WriteDoubleWord` into the result word the firmware reads — 05-cosim-fidelity
+  §5.1). An unmapped channel is a loud once-per-channel stderr drop, never a
+  silent one. The STM32 demo couples through the GPIO/LED path, not the ADC, so
+  it carries no map. The AVR backend's ADC injection is fully wired and exact.
 
 - **One firmware per machine.** The engine loads one firmware ELF/HEX for all
   MCUs on a board, matching the existing AVR behaviour.
@@ -439,10 +446,23 @@ proving the backend is ISA-agnostic.
   The RISC-V esp32c3 machine tolerates icount per Espressif's docs, but the
   backend keeps the same icount-free mechanism for uniformity.
 
-- **ESP32 ADC (SAR) is not modelled** by the QEMU fork, so `set_analog_in` is a
-  documented no-op (as for Renode). The demo couples through the GPIO/LED path.
+- **ESP32 ADC (SAR) is not modelled** by the QEMU fork, so `set_analog_in`
+  writes the modeled 12-bit count into a fixed RAM-mailbox slot instead
+  (05-cosim-fidelity §5.1): firmware reads the count from the slot where it
+  would read the SAR result register, with a validity mask distinguishing
+  "never injected" from an honest zero. Like the GPIO words, this is a
+  firmware contract. The demo couples through the GPIO/LED path.
 
-- **No I2C/SPI interception** for the QEMU backend (as for Renode).
+- **I2C/SPI byte interception rides the same mailbox** (05 §5.2): the fork
+  exposes no host hook for the I2C RX FIFO or GPSPI transfers, so a
+  participating firmware submits transaction-level requests through mailbox
+  cells (gated on a `BUS_MAGIC` word; sequence handshake; one transaction per
+  bus per chunk) and the backend surfaces each byte through the standard
+  `on_i2c`/`on_spi` callbacks, writing replies back into guest RAM. Unmodified
+  vendor firmware is untouched — and its real-controller bus traffic remains
+  host-invisible until the fork grows a peripheral hook (05 §5.3). Temperature
+  sensors additionally reach unmodified firmware through the machine's own
+  emulated tmp105 via `set_i2c_device_temperature`.
 
 - **Control round-trip cost.** Each chunk is a QMP cont/stop pair plus a mailbox
   read; the wall window per chunk floors at 8 ms so boot clears in a reasonable

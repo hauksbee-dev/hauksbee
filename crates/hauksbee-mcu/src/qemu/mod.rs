@@ -90,7 +90,7 @@ mod uart;
 pub use process::{find_qemu, is_available, QemuArch};
 
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
 use process::QemuProcess;
 use qmp::Qmp;
@@ -98,6 +98,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use uart::UartSocket;
+
+type I2cCb = Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>;
+type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// GPIO observation/injection mailbox in ESP32 RTC slow memory.
 ///
@@ -133,6 +136,92 @@ pub mod mailbox {
 
     /// ESP32-C3 (RISC-V) RTC slow memory base differs from the Xtensa parts.
     pub const C3_BASE: u32 = 0x5000_0000;
+
+    // ── Mailbox v2: the ADC + bus extension (05-cosim-fidelity §5.1/§5.2) ───
+    //
+    // Espressif QEMU models neither the SAR ADC nor a host hook for I2C/SPI
+    // byte traffic, so these functions ride the same RAM mailbox as GPIO.
+    // Like the GPIO words, this is a FIRMWARE CONTRACT, not general firmware
+    // support (05 §5.3): unmodified vendor firmware does not read these slots.
+    // Each function is stated here precisely so a firmware author (or the
+    // repo's demo firmware) can opt in; §5.3 retires each slot the day the
+    // QEMU fork grows the corresponding peripheral hook.
+    //
+    // ADC (host → firmware, no handshake): `Mcu::set_analog_in(ch, volts)` is
+    // converted to a count against `ADC_FULL_SCALE_VOLTS`/`ADC_MAX_COUNT` and
+    // written into `adc_channel_word(ch)` each chunk, with bit `ch` of
+    // ADC_MASK set. Firmware reads the count from the slot where it would
+    // read the SAR ADC result register; the mask distinguishes "channel never
+    // injected" from an honest zero count.
+    //
+    // I2C/SPI byte transfers (firmware ⇄ host, sequence handshake): the
+    // firmware is the bus MASTER, so transfers originate guest-side. The
+    // firmware describes one transaction-level request in the request cell
+    // (op / addr / len / payload), then bumps REQ_SEQ (monotonic, nonzero)
+    // and spin-waits for RSP_SEQ == REQ_SEQ (its timeout must exceed one
+    // chunk). The backend services the cell once per `run_micros` chunk while
+    // the guest is paused: it surfaces the bytes through the SAME
+    // `on_i2c`/`on_spi` trait callbacks the simavr/Renode backends use (so
+    // the engine's I2C slave models and SPI framing apply uniformly), writes
+    // any reply bytes into RSP_DATA, and echoes the sequence into RSP_SEQ.
+    // One transaction per bus per chunk: a register read (write-reg, read,
+    // stop) costs three chunks. Coarse, and called out honestly as such.
+    //
+    // The whole v2 block is gated on the firmware writing BUS_MAGIC_VALUE
+    // into BUS_MAGIC: without it the backend never touches the cells (and
+    // with no callback registered it never even reads BUS_MAGIC), so the
+    // pre-v2 behaviour is bit-identical.
+
+    /// Firmware -> host: `BUS_MAGIC_VALUE` once the v2 bus cells are valid.
+    pub const BUS_MAGIC: u32 = BASE + 0x0C;
+    /// Magic tag for the v2 extension (MAGIC_VALUE + 1, "jnlj").
+    pub const BUS_MAGIC_VALUE: u32 = 0x6A6C_6E6A;
+
+    /// Host -> firmware: bitmask of ADC channels that carry an injected count.
+    pub const ADC_MASK: u32 = BASE + 0x10;
+    /// Host -> firmware: first ADC count word; channel N is at `+ 4*N`.
+    pub const ADC_CH0: u32 = BASE + 0x14;
+    /// Number of injectable ADC channel slots.
+    pub const ADC_CHANNELS: u8 = 8;
+    /// Count written at full scale (the ESP32 SAR ADC is a 12-bit converter).
+    pub const ADC_MAX_COUNT: u32 = 4095;
+    /// Voltage mapping to `ADC_MAX_COUNT` (11 dB attenuation full scale,
+    /// approximated at the 3V3 rail the demo boards reference).
+    pub const ADC_FULL_SCALE_VOLTS: f64 = 3.3;
+
+    /// The mailbox word carrying channel `ch`'s injected count.
+    pub const fn adc_channel_word(ch: u8) -> u32 {
+        ADC_CH0 + 4 * ch as u32
+    }
+
+    /// Maximum payload/reply bytes per bus request cell.
+    pub const BUS_DATA_MAX: u32 = 64;
+
+    /// I2C request cell (firmware -> host) and response cell (host -> firmware).
+    pub const I2C_REQ_SEQ: u32 = BASE + 0x40;
+    pub const I2C_REQ_OP: u32 = BASE + 0x44;
+    pub const I2C_REQ_ADDR: u32 = BASE + 0x48;
+    pub const I2C_REQ_LEN: u32 = BASE + 0x4C;
+    pub const I2C_REQ_DATA: u32 = BASE + 0x50;
+    pub const I2C_RSP_SEQ: u32 = BASE + 0x90;
+    pub const I2C_RSP_DATA: u32 = BASE + 0x94;
+
+    /// I2C ops (mirroring the Renode bridge protocol op codes).
+    pub const I2C_OP_WRITE: u32 = 1;
+    pub const I2C_OP_READ: u32 = 2;
+    pub const I2C_OP_STOP: u32 = 3;
+
+    /// SPI request cell (firmware -> host) and response cell (host -> firmware).
+    pub const SPI_REQ_SEQ: u32 = BASE + 0xE0;
+    pub const SPI_REQ_OP: u32 = BASE + 0xE4;
+    pub const SPI_REQ_LEN: u32 = BASE + 0xE8;
+    pub const SPI_REQ_DATA: u32 = BASE + 0xEC;
+    pub const SPI_RSP_SEQ: u32 = BASE + 0x12C;
+    pub const SPI_RSP_DATA: u32 = BASE + 0x130;
+
+    /// SPI ops: a byte transfer burst, or a chip-select deassert.
+    pub const SPI_OP_TRANSFER: u32 = 1;
+    pub const SPI_OP_DESELECT: u32 = 2;
 }
 
 /// One GPIO bank's observation addresses, generic over ESP32 family member.
@@ -400,6 +489,25 @@ pub struct QemuBackend {
     /// address (`None` once searched and not found, so we do not re-walk QMP
     /// every frame). Populated lazily by [`Mcu::set_i2c_device_temperature`].
     i2c_temp_paths: HashMap<u8, Option<String>>,
+
+    // ── Mailbox v2 (05 §5.1/§5.2) state ─────────────────────────────────────
+    /// I2C byte-event handler, serviced from the mailbox I2C request cell.
+    on_i2c: Option<I2cCb>,
+    /// SPI byte-event handler, serviced from the mailbox SPI request cell.
+    on_spi: Option<SpiCb>,
+    /// True once BUS_MAGIC_VALUE has been observed; the bus cells are never
+    /// read before the firmware declares them valid.
+    bus_magic_seen: bool,
+    /// Last serviced I2C / SPI request sequence numbers.
+    i2c_serviced_seq: u32,
+    spi_serviced_seq: u32,
+    /// Open I2C transaction state for Start/Stop synthesis: `(addr, read)`.
+    /// Mirrors the Renode bridge's `I2cBridgeState::ensure_mode` semantics.
+    i2c_ring_active: Option<(u8, bool)>,
+    /// Shadow of the ADC_MASK word (channels injected so far).
+    adc_mask_shadow: u32,
+    /// One-time warning flag for ADC injection without a gdbstub.
+    adc_no_gdb_warned: bool,
 }
 
 impl QemuBackend {
@@ -495,6 +603,14 @@ impl QemuBackend {
             firmware_loaded: true, // booted from the image
             cycles: 0,
             i2c_temp_paths: HashMap::new(),
+            on_i2c: None,
+            on_spi: None,
+            bus_magic_seen: false,
+            i2c_serviced_seq: 0,
+            spi_serviced_seq: 0,
+            i2c_ring_active: None,
+            adc_mask_shadow: 0,
+            adc_no_gdb_warned: false,
         })
     }
 
@@ -594,8 +710,267 @@ impl QemuBackend {
         self.cycles += (seconds * self.config.frequency_hz as f64).round() as u64;
 
         self.poll_gpio_edges();
+        // Service the mailbox bus cells while the guest is paused (05 §5.2),
+        // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
+        self.service_bus_mailbox()?;
         self.pump_uart_out();
         Ok(())
+    }
+
+    /// Read one guest word over the control channels: QMP `xp` first, gdbstub
+    /// fallback, erroring only when both paths fail (the mailbox protocol must
+    /// not mistake a dead control channel for a zero word).
+    fn read_guest_u32(&mut self, addr: u32) -> Result<u32> {
+        match self.qmp.read_u32(addr) {
+            Ok(v) => Ok(v),
+            Err(qmp_err) => match self.gdb.as_mut() {
+                Some(g) => g.read_u32(addr),
+                None => Err(qmp_err).context("QMP word read failed and no gdbstub fallback"),
+            },
+        }
+    }
+
+    /// Read `len` packed bytes from the mailbox at `addr`.
+    fn read_guest_bytes(&mut self, addr: u32, len: usize) -> Result<Vec<u8>> {
+        // Prefer the gdbstub's native byte read; fall back to word-granular QMP.
+        if let Some(g) = self.gdb.as_mut() {
+            if let Ok(b) = g.read_mem(addr, len) {
+                if b.len() >= len {
+                    return Ok(b[..len].to_vec());
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(len);
+        let mut a = addr;
+        while out.len() < len {
+            let w = self.qmp.read_u32(a)?;
+            out.extend_from_slice(&w.to_le_bytes());
+            a += 4;
+        }
+        out.truncate(len);
+        Ok(out)
+    }
+
+    /// Write packed bytes into the mailbox (gdbstub `M` packet). The bus
+    /// mailbox cannot answer without a gdbstub; that is a loud error, not a
+    /// silently dropped reply the firmware would read as bus data.
+    fn write_guest_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        let g = self
+            .gdb
+            .as_mut()
+            .context("the QEMU bus mailbox needs the gdbstub for reply writes")?;
+        g.write_mem(addr, bytes)
+    }
+
+    fn write_guest_u32(&mut self, addr: u32, val: u32) -> Result<()> {
+        self.write_guest_bytes(addr, &val.to_le_bytes())
+    }
+
+    /// Service the mailbox v2 bus cells once per chunk (05 §5.2), while the
+    /// guest is paused. Zero-cost when no callback is registered; one word
+    /// read per chunk until the firmware raises BUS_MAGIC.
+    fn service_bus_mailbox(&mut self) -> Result<()> {
+        if self.on_i2c.is_none() && self.on_spi.is_none() {
+            return Ok(());
+        }
+        if !self.bus_magic_seen {
+            // A pre-v2 firmware never raises the magic — un-primed RAM reads
+            // as an honest 0 through a WORKING channel. A read that FAILS is a
+            // control-channel fault and must surface, not masquerade as "magic
+            // not raised" (a v2 firmware would spin on RSP_SEQ forever).
+            let magic = self
+                .read_guest_u32(mailbox::BUS_MAGIC)
+                .context("reading the QEMU bus-mailbox magic word")?;
+            if magic != mailbox::BUS_MAGIC_VALUE {
+                return Ok(());
+            }
+            self.bus_magic_seen = true;
+        }
+        if self.on_i2c.is_some() {
+            self.service_i2c_cell()
+                .context("servicing the QEMU I2C mailbox cell")?;
+        }
+        if self.on_spi.is_some() {
+            self.service_spi_cell()
+                .context("servicing the QEMU SPI mailbox cell")?;
+        }
+        Ok(())
+    }
+
+    /// Service one pending I2C transaction request, surfacing it as the same
+    /// Start/Write/Read/Stop [`I2cEvent`]s the simavr TWI decode and the
+    /// Renode bridge produce (the state machine mirrors the Renode bridge's
+    /// `I2cBridgeState::ensure_mode`).
+    fn service_i2c_cell(&mut self) -> Result<()> {
+        let seq = self.read_guest_u32(mailbox::I2C_REQ_SEQ)?;
+        if seq == 0 || seq == self.i2c_serviced_seq {
+            return Ok(());
+        }
+        let op = self.read_guest_u32(mailbox::I2C_REQ_OP)?;
+        let addr = self.read_guest_u32(mailbox::I2C_REQ_ADDR)? as u8;
+        let len = self.read_guest_u32(mailbox::I2C_REQ_LEN)?;
+        ensure!(
+            len <= mailbox::BUS_DATA_MAX,
+            "QEMU I2C mailbox request too large: {len} bytes (max {})",
+            mailbox::BUS_DATA_MAX
+        );
+        let len = len as usize;
+        let payload = if op == mailbox::I2C_OP_WRITE && len != 0 {
+            self.read_guest_bytes(mailbox::I2C_REQ_DATA, len)?
+        } else {
+            Vec::new()
+        };
+
+        // Dispatch with the callback taken out of `self` so the borrow does
+        // not pin the control channels.
+        let mut cb = self.on_i2c.take().expect("checked by caller");
+        let mut active = self.i2c_ring_active.take();
+        // Mirrors the Renode bridge's `I2cBridgeState::ensure_mode` exactly:
+        // switching TO write stops any open transaction; switching to read on
+        // the SAME address is a repeated START (no Stop — a register-read
+        // slave must not see its transaction boundary mid-read); a read on a
+        // DIFFERENT address stops the old transaction first.
+        let ensure_mode = |active: &mut Option<(u8, bool)>, cb: &mut I2cCb, a: u8, read: bool| {
+            if *active != Some((a, read)) {
+                if !read {
+                    if let Some((prev, _)) = active.take() {
+                        let _ = cb(I2cEvent::Stop { addr: prev });
+                    }
+                } else if let Some((prev, _)) = *active {
+                    if prev != a {
+                        let _ = cb(I2cEvent::Stop { addr: prev });
+                        *active = None;
+                    }
+                }
+                let _ = cb(I2cEvent::Start { addr: a, read });
+                *active = Some((a, read));
+            }
+        };
+        let mut reply: Vec<u8> = Vec::new();
+        let dispatch = (|| -> Result<()> {
+            match op {
+                mailbox::I2C_OP_WRITE => {
+                    ensure_mode(&mut active, &mut cb, addr, false);
+                    for data in payload {
+                        let _ = cb(I2cEvent::Write { addr, data });
+                    }
+                }
+                mailbox::I2C_OP_READ => {
+                    ensure_mode(&mut active, &mut cb, addr, true);
+                    for _ in 0..len {
+                        // `None` is the model layer's "no slave / NACK"; 0xFF
+                        // is the level an open-drain bus floats to (the same
+                        // convention as the Renode bridge).
+                        reply.push(cb(I2cEvent::Read { addr }).unwrap_or(0xFF));
+                    }
+                }
+                mailbox::I2C_OP_STOP => {
+                    if let Some((prev, _)) = active.take() {
+                        let _ = cb(I2cEvent::Stop { addr: prev });
+                    }
+                }
+                other => bail!("QEMU I2C mailbox: unknown op {other}"),
+            }
+            Ok(())
+        })();
+        self.on_i2c = Some(cb);
+        self.i2c_ring_active = active;
+        // The request is SERVICED once dispatched, acknowledged or not: mark
+        // it before the response writes so a caller that retries after a
+        // failed write cannot replay the byte events into a stateful slave
+        // model. A failed write still errors out loudly below (the firmware's
+        // spin-wait then times out rather than reading a half-written reply).
+        self.i2c_serviced_seq = seq;
+        dispatch?;
+
+        if !reply.is_empty() {
+            self.write_guest_bytes(mailbox::I2C_RSP_DATA, &reply)?;
+        }
+        self.write_guest_u32(mailbox::I2C_RSP_SEQ, seq)?;
+        Ok(())
+    }
+
+    /// Service one pending SPI request: a byte-transfer burst (one
+    /// [`SpiEvent`] per byte, MISO bytes returned in the response cell) or a
+    /// chip-select deassert.
+    fn service_spi_cell(&mut self) -> Result<()> {
+        let seq = self.read_guest_u32(mailbox::SPI_REQ_SEQ)?;
+        if seq == 0 || seq == self.spi_serviced_seq {
+            return Ok(());
+        }
+        let op = self.read_guest_u32(mailbox::SPI_REQ_OP)?;
+        let len = self.read_guest_u32(mailbox::SPI_REQ_LEN)?;
+        ensure!(
+            len <= mailbox::BUS_DATA_MAX,
+            "QEMU SPI mailbox request too large: {len} bytes (max {})",
+            mailbox::BUS_DATA_MAX
+        );
+        let len = len as usize;
+        let mosi = if op == mailbox::SPI_OP_TRANSFER && len != 0 {
+            self.read_guest_bytes(mailbox::SPI_REQ_DATA, len)?
+        } else {
+            Vec::new()
+        };
+
+        // Coarse poll-boundary stamp, the same tier the pin edges carry
+        // (`cycle_exact()` is false on this backend).
+        let cyc = self.cycles;
+        let mut cb = self.on_spi.take().expect("checked by caller");
+        let mut miso: Vec<u8> = Vec::new();
+        let dispatch = (|| -> Result<()> {
+            match op {
+                mailbox::SPI_OP_TRANSFER => {
+                    for b in mosi {
+                        miso.push(cb(SpiEvent {
+                            mosi: b,
+                            deselect: false,
+                            cycle: cyc,
+                        }));
+                    }
+                }
+                mailbox::SPI_OP_DESELECT => {
+                    let _ = cb(SpiEvent {
+                        mosi: 0,
+                        deselect: true,
+                        cycle: cyc,
+                    });
+                }
+                other => bail!("QEMU SPI mailbox: unknown op {other}"),
+            }
+            Ok(())
+        })();
+        self.on_spi = Some(cb);
+        // Serviced once dispatched (see the I2C twin): never replay byte
+        // events into a stateful slave model on a retry after a failed write.
+        self.spi_serviced_seq = seq;
+        dispatch?;
+
+        if !miso.is_empty() {
+            self.write_guest_bytes(mailbox::SPI_RSP_DATA, &miso)?;
+        }
+        self.write_guest_u32(mailbox::SPI_RSP_SEQ, seq)?;
+        Ok(())
+    }
+
+    /// Read a guest physical word over the control channels (QMP `xp`, gdbstub
+    /// fallback).
+    ///
+    /// Diagnostic / test-support accessor: the mailbox integration tests use
+    /// it to play the firmware's half of the RAM-mailbox contract (no
+    /// mailbox-v2-aware firmware image ships in the repo yet, and this machine
+    /// carries no Xtensa cross-toolchain to build one).
+    pub fn debug_read_u32(&mut self, addr: u32) -> Result<u32> {
+        self.read_guest_u32(addr)
+    }
+
+    /// Write a guest physical word (gdbstub `M` packet). See [`Self::debug_read_u32`].
+    pub fn debug_write_u32(&mut self, addr: u32, val: u32) -> Result<()> {
+        self.write_guest_u32(addr, val)
+    }
+
+    /// Write guest physical bytes (gdbstub `M` packet). See [`Self::debug_read_u32`].
+    pub fn debug_write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        self.write_guest_bytes(addr, bytes)
     }
 
     /// Walk the configured I2C buses for an emulated device whose `address`
@@ -681,10 +1056,43 @@ impl Mcu for QemuBackend {
         }
     }
 
-    fn set_analog_in(&mut self, _channel: u8, _volts: f64) {
-        // ESP32 ADC (SAR ADC) is not modelled by the QEMU fork's peripheral set,
-        // so ADC injection is a documented no-op (matching the Renode backend).
-        // The demo couples through the GPIO/LED path, not the ADC.
+    fn set_analog_in(&mut self, channel: u8, volts: f64) {
+        // The ESP32 SAR ADC is not modelled by the QEMU fork's peripheral set,
+        // so injection rides the RAM mailbox (05 §5.1): the modeled voltage is
+        // converted to a 12-bit count and written into the channel's mailbox
+        // slot each chunk, with the channel's ADC_MASK bit set. Firmware reads
+        // the count from the slot rather than a real peripheral — a FIRMWARE
+        // CONTRACT, stated as such in [`mailbox`], retired per function the
+        // day the fork models the peripheral (05 §5.3).
+        if channel >= mailbox::ADC_CHANNELS {
+            eprintln!(
+                "qemu: DROPPING ADC injection for channel {channel}: the mailbox \
+                 carries {} slots",
+                mailbox::ADC_CHANNELS
+            );
+            return;
+        }
+        let frac = (volts / mailbox::ADC_FULL_SCALE_VOLTS).clamp(0.0, 1.0);
+        let count = (frac * f64::from(mailbox::ADC_MAX_COUNT)).round() as u32;
+        let Some(g) = self.gdb.as_mut() else {
+            if !self.adc_no_gdb_warned {
+                self.adc_no_gdb_warned = true;
+                eprintln!(
+                    "qemu: DROPPING ADC injection: no gdbstub attached, so guest \
+                     memory cannot be written (matching set_digital_in)"
+                );
+            }
+            return;
+        };
+        let mask = self.adc_mask_shadow | (1 << channel);
+        let write = g
+            .write_u32(mailbox::adc_channel_word(channel), count)
+            .and_then(|()| g.write_u32(mailbox::ADC_MASK, mask));
+        match write {
+            Ok(()) => self.adc_mask_shadow = mask,
+            // LOUD drop: a failed injection must not read as a valid count.
+            Err(e) => eprintln!("qemu: ADC injection write failed: {e:#}"),
+        }
     }
 
     fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
@@ -709,13 +1117,24 @@ impl Mcu for QemuBackend {
         self.on_uart = Some(cb);
     }
 
-    fn on_i2c(&mut self, _cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
+    fn on_i2c(&mut self, cb: Box<dyn FnMut(I2cEvent) -> Option<u8> + Send>) {
         // The Espressif QEMU controller exposes no host-byte hook for its RX
-        // FIFO, so the byte-callback model used by simavr/Renode does not apply.
-        // Instead the engine pushes sensor readings into QEMU's OWN emulated I2C
-        // device (the machine ships a tmp105 at 0x48 on i2c0) via
-        // `set_i2c_device_temperature`, and the firmware reads it through its real
-        // I2C controller. So this callback is intentionally unused for QEMU.
+        // FIFO, so byte events cannot be intercepted from the emulated I2C
+        // controller the way simavr/Renode do. Two paths coexist instead:
+        //
+        //   1. This callback services the RAM-mailbox I2C cell (05 §5.2): a
+        //      firmware participating in the mailbox v2 contract gets its
+        //      transactions surfaced as the same Start/Write/Read/Stop events,
+        //      so the engine's I2C slave models answer uniformly across
+        //      backends. Coarse (one transaction per chunk) and gated on
+        //      BUS_MAGIC; a non-participating firmware costs nothing.
+        //   2. Temperature sensors are ALSO pushed into QEMU's own emulated
+        //      I2C device (the machine ships a tmp105 at 0x48 on i2c0) via
+        //      `set_i2c_device_temperature`, which unmodified vendor firmware
+        //      reads through its real I2C controller. Where such a device
+        //      exists it is preferred (05 §5.3: retire the mailbox function
+        //      when a real peripheral emulation exists).
+        self.on_i2c = Some(cb);
     }
 
     fn set_i2c_device_temperature(&mut self, addr: u8, milli_c: i32) {
@@ -731,8 +1150,15 @@ impl Mcu for QemuBackend {
         }
     }
 
-    fn on_spi(&mut self, _cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
-        // SPI interception is not wired for the QEMU backend.
+    fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
+        // Espressif QEMU exposes no host hook for GPSPI transfers, so SPI byte
+        // events ride the RAM-mailbox SPI cell (05 §5.2): a firmware
+        // participating in the mailbox v2 contract submits transaction-level
+        // bursts and each byte is surfaced through this callback (MISO bytes
+        // return via the response cell). Gated on BUS_MAGIC; unmodified vendor
+        // firmware driving the real (unmodeled) SPI controller is untouched —
+        // and, honestly, unserved until the fork grows a peripheral hook.
+        self.on_spi = Some(cb);
     }
 
     fn state(&self) -> McuState {
@@ -785,6 +1211,27 @@ mod tests {
         assert_eq!(mailbox::GPIO_IN, 0x5000_0004);
         assert_eq!(mailbox::MAGIC, 0x5000_0008);
         assert_eq!(mailbox::MAGIC_VALUE, 0x6A6C_6E69);
+    }
+
+    #[test]
+    fn mailbox_v2_layout_does_not_overlap() {
+        use mailbox::*;
+        // v2 marker sits directly after the v1 words.
+        assert_eq!(BUS_MAGIC, 0x5000_000C);
+        assert_ne!(BUS_MAGIC_VALUE, MAGIC_VALUE);
+        // ADC block: mask + 8 channel words, ending before the I2C cell.
+        assert_eq!(ADC_MASK, 0x5000_0010);
+        assert_eq!(adc_channel_word(0), 0x5000_0014);
+        assert_eq!(adc_channel_word(7), 0x5000_0030);
+        assert!(adc_channel_word(ADC_CHANNELS - 1) + 4 <= I2C_REQ_SEQ);
+        // I2C cell: request data ends exactly at the response seq; response
+        // data ends before the SPI cell.
+        assert_eq!(I2C_REQ_DATA + BUS_DATA_MAX, I2C_RSP_SEQ);
+        assert!(I2C_RSP_DATA + BUS_DATA_MAX <= SPI_REQ_SEQ);
+        // SPI cell: request data ends exactly at the response seq; the whole
+        // mailbox stays comfortably inside the 8 KiB RTC slow memory.
+        assert_eq!(SPI_REQ_DATA + BUS_DATA_MAX, SPI_RSP_SEQ);
+        assert!(SPI_RSP_DATA + BUS_DATA_MAX <= BASE + 0x2000);
     }
 
     #[test]

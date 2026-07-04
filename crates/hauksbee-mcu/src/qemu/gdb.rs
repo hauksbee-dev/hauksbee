@@ -96,9 +96,16 @@ impl GdbStub {
 
     /// Write one little-endian 32-bit word at physical `addr`.
     pub fn write_u32(&mut self, addr: u32, val: u32) -> Result<()> {
-        let bytes = val.to_le_bytes();
+        self.write_mem(addr, &val.to_le_bytes())
+    }
+
+    /// Write `bytes` to guest memory at physical `addr` (RSP `M` packet).
+    pub fn write_mem(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-        let resp = self.packet(&format!("M{addr:x},4:{hex}"))?;
+        let resp = self.packet(&format!("M{addr:x},{:x}:{hex}", bytes.len()))?;
         if resp != "OK" {
             bail!("gdbstub memory write to 0x{addr:08x} failed: {resp}");
         }
