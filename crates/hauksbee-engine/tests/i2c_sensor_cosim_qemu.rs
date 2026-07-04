@@ -1,11 +1,17 @@
 //! I2C peripheral interception proof: ESP32 / Espressif-QEMU backend.
 //!
 //! This is the QEMU analogue of `i2c_sensor_cosim.rs`, which already passes on
-//! AVR/simavr. THE FEATURE UNDER TEST IS NOT YET BUILT: today the QEMU backend's
-//! `on_i2c` hook is a documented no-op, so these tests are expected to FAIL at
-//! the I2C dispatch level (firmware I2C reads see 0xFF, temperature decodes as
-//! ~-0.125 C, FLAG stays LOW regardless of the injected temperature). They will
-//! go GREEN the moment the QEMU I2C bridge is wired up.
+//! AVR/simavr. What carries these tests is the EMULATED-DEVICE path: the ESP32
+//! machine ships a tmp105 at 0x48 on i2c0, the scheduler pushes the modeled
+//! LM75's temperature into it via `set_i2c_device_temperature` each chunk, and
+//! the firmware reads it through its real I2C controller. That is the §5.3
+//! preferred shape (a real peripheral emulation over a mailbox contract).
+//!
+//! The backend's `on_i2c` byte-callback hook is wired separately through the
+//! RAM-mailbox bus contract (05-cosim-fidelity §5.2, regression-tested in
+//! `hauksbee-mcu/tests/qemu_bus_mailbox.rs`); it does not participate here
+//! because this firmware drives its real I2C controller, whose byte traffic
+//! Espressif QEMU does not surface to the host.
 //!
 //! ## What is being tested
 //!
@@ -124,11 +130,10 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
 /// The core proof: the ESP32 firmware reads the LM75 via I2C and drives GPIO5
 /// / "FLAG" HIGH when >= 30 C, LOW otherwise.
 ///
-/// TODAY this test FAILS because the QEMU `on_i2c` hook is a no-op: the
-/// firmware gets 0xFF bytes back, decodes them as ~-0.125 C, and never sets the
-/// flag. The test is deliberately written to fail with a clear assertion message
-/// when the bridge is absent, and to go GREEN the instant the bridge delivers
-/// real bytes.
+/// The modeled temperature reaches the firmware through the machine's own
+/// emulated tmp105 (`set_i2c_device_temperature` each chunk); if that push
+/// path breaks, the firmware reads 0xFF bytes, decodes them as ~-0.125 C, and
+/// never sets the flag — so this fails with a clear assertion message.
 #[test]
 fn esp32_i2c_firmware_drives_gpio_from_temperature() {
     if !is_available(QemuArch::Xtensa) {
