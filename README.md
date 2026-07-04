@@ -6,7 +6,7 @@ Software runs its tests on every commit. Hardware never got that loop: you chang
 
 No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/COMPARISON.md`](docs/COMPARISON.md) for the full matrix.
 
-**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md): what every layer does, which MCU architectures the firmware co-sim covers (AVR built in; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section. The project's evidence trail (bug-hunt campaigns, known-fault calibration, benchmarks) lives in [`docs/record/`](docs/record/).
+**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md): what every layer does, which MCU architectures the firmware co-sim covers (AVR via libsimavr; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section. The project's evidence trail (bug-hunt campaigns, known-fault calibration, benchmarks) lives in [`docs/record/`](docs/record/).
 
 [**Watch the showcase**](frontend/capture/out/hauksbee_showcase.mp4) (a dozen boards running headless, ~2.5 min).
 
@@ -84,9 +84,23 @@ This fetches the latest release for your OS/arch, verifies the sha256 checksum, 
 
 ## Simulators / firmware co-sim
 
-AVR (ATmega328P) co-simulation is built in — nothing to install. For STM32,
-nRF52, SiFive RISC-V, ESP32, and ESP32-C3 you need the external simulator
-backends:
+AVR (ATmega328P) co-simulation links libsimavr directly into the engine, so
+there is no separate simulator process to launch. simavr is GPL-3.0 and this
+MIT repo does not vendor it, so a source build links it from the system — one
+command installs it:
+
+```bash
+scripts/install-sims.sh --avr    # build + install libsimavr (AVR co-sim)
+```
+
+Prefer to skip AVR? Build the GPL-free subset instead:
+
+```bash
+cargo build -p hauksbee-engine --no-default-features --features renode,qemu
+```
+
+For STM32, nRF52, SiFive RISC-V, ESP32, and ESP32-C3 you need the external
+simulator backends:
 
 ```bash
 scripts/install-sims.sh          # install Renode + Espressif QEMU

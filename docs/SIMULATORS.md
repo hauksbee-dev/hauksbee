@@ -7,12 +7,15 @@ circuit in lockstep. Three backends cover the full supported architecture range:
 
 | Backend | Chips | Emulator | Install needed? |
 |---------|-------|----------|-----------------|
-| `simavr` | ATmega328P (AVR / Arduino) | libsimavr, linked in-process | **No** — built in |
+| `simavr` | ATmega328P (AVR / Arduino) | libsimavr, linked in-process | **Yes** (source build) — `scripts/install-sims.sh --avr` |
 | `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 | External headless Renode process | **Yes** |
 | `qemu` | ESP32 / ESP32-S3 (Xtensa) / ESP32-C3 (RISC-V) | External Espressif QEMU process | **Yes** |
 
-AVR needs nothing. This document covers installing Renode and the Espressif QEMU
-fork for the other two. See [`docs/MCU.md`](MCU.md) for the full co-simulation
+AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in this
+MIT repo): install it with `scripts/install-sims.sh --avr`, or build without AVR
+via `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.
+This document covers installing Renode and the Espressif QEMU fork for the other
+two. See [`docs/MCU.md`](MCU.md) for the full co-simulation
 architecture, per-board recipes, and proven integration test results.
 
 ---
