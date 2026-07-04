@@ -77,6 +77,7 @@ pub use plain::{
 };
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
+pub use responders::{BitBangSpiPins, BitBangSpiResponder, InputResponder, ResponderRegistry};
 pub use result::{
     ac_is_all_sentinel, no_signal_path_reason, thermal_validity, BindSummary, DrcStructured,
     Validity, EXIT_INVALID_FOR_ANALYSIS,
