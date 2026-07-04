@@ -114,14 +114,25 @@ those boards' layouts; only their legacy schematics are out of scope.
 
 ### Renode ADC injection / I2C-SPI slave interception; QEMU ESP32 ADC and GPIO mailbox
 
-- **Renode ADC (`set_analog_in`) and `on_i2c`/`on_spi`** are documented no-ops:
-  Renode's ADC peripheral and bus-interception APIs are per-SoC, needing a
-  per-platform peripheral map. **Renode is not installed in this environment**,
-  so any change here could not be validated against ground truth, only written
-  blind. The meta-lesson forbids shipping an emulator integration that cannot be
-  run and checked. Deferred until it can be exercised against a live Renode.
-- **QEMU ESP32 SAR ADC** is not modelled by the Espressif QEMU fork, so
-  `set_analog_in` is a no-op there too (a silicon-model gap, not a wiring gap).
+- **Renode ADC (`set_analog_in`)** now injects for real (05-cosim-fidelity
+  §5.1, validated against a live Renode 1.16.1): counts are delivered per chunk
+  over the Monitor channel through a per-platform `AdcChannelMap` recipe (a
+  modeled ADC's feed command, or a `WriteDoubleWord` into the result word the
+  firmware reads). What remains deferred is a *default* map for the stock
+  STM32/nRF52/FE310 configs: those Renode platform descriptions model no ADC
+  peripheral, and Renode's `Analog.STM32_ADC` speaks the F0/L0 register layout,
+  so pretending it is an F1 ADC would be fake fidelity. Unmapped channels drop
+  loudly (once-per-channel stderr warning). Renode `on_i2c`/`on_spi` slave
+  interception has been wired via generated C# bridge peripherals for a while
+  (see `docs/MCU.md`).
+- **QEMU ESP32 SAR ADC** is not modelled by the Espressif QEMU fork (a
+  silicon-model gap), so `set_analog_in` writes the count into a RAM-mailbox
+  slot instead (05 §5.1) — a firmware contract like the GPIO mailbox below:
+  only mailbox-aware firmware reads it. The same applies to the I2C/SPI byte
+  callbacks (05 §5.2): request/response mailbox cells gated on `BUS_MAGIC`,
+  serviced once per chunk, surfacing through the standard `on_i2c`/`on_spi`
+  trait callbacks. Unmodified vendor firmware's real-controller bus traffic
+  stays host-invisible until the fork grows a peripheral hook (05 §5.3).
 - **QEMU ESP32 GPIO** is observed through a firmware RAM mailbox because the fork's
   `esp32.gpio` model has no `GPIO_OUT_REG` read-back. **Empirically confirmed on
   the latest build** (QEMU 9.2.2 `esp_develop`, 2026-06-30): a host read of
