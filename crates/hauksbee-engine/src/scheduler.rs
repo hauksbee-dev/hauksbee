@@ -750,6 +750,49 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Attach a soft-I2C slave bus (05 §1.5): the firmware bit-bangs SCL/SDA
+    /// as plain GPIOs and the [`crate::responders::SoftI2cResponder`] protocol
+    /// engine recovers the transaction from the pin edges, routing it to the
+    /// existing [`I2cBus`] slave models and answering SDA synchronously inside
+    /// the firmware's own clock loop. See the responder's docs for the honest
+    /// waveform subset (single master, no clock stretching, push-pull master).
+    ///
+    /// The responder registers with the registry of the MCU whose binding owns
+    /// the SCL GPIO driver; SDA must belong to the same MCU. The bus joins
+    /// `i2c_buses` so the chunk loop's `flush_stops` delivers the ctx-bearing
+    /// `on_stop` exactly like the hardware-TWI path — but deliberately WITHOUT
+    /// `attach_i2c_bus`'s `on_i2c` registration: this bus lives on GPIO pins,
+    /// not the TWI peripheral, and answering hardware-TWI traffic at these
+    /// addresses would invent a device on the wrong pins.
+    pub fn attach_soft_i2c(
+        &mut self,
+        bus: Arc<Mutex<I2cBus>>,
+        scl: (char, u8),
+        sda: (char, u8),
+    ) -> anyhow::Result<()> {
+        let mi = self
+            .mcus
+            .iter()
+            .position(|m| m.binding.gpio_drivers.contains_key(&scl))
+            .ok_or_else(|| {
+                anyhow::anyhow!("soft I2C: no live MCU drives SCL pin {scl:?}")
+            })?;
+        if !self.mcus[mi].binding.gpio_drivers.contains_key(&sda) {
+            anyhow::bail!(
+                "soft I2C: SDA pin {sda:?} is not a wired GPIO of the MCU that drives \
+                 SCL ({})",
+                self.mcus[mi].binding.reference,
+            );
+        }
+        let responder = crate::responders::SoftI2cResponder::new(bus.clone(), scl, sda);
+        self.responder_registry(mi)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(Box::new(responder));
+        self.i2c_buses.push(bus);
+        Ok(())
+    }
+
     /// Resolve a named net to the MCU GPIO pin wired to it. This is the
     /// net-to-pin trace the 165/595 chain discovery performs, exposed by net
     /// NAME so a caller wiring a bit-banged topology can go from the board's
