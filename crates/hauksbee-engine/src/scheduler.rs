@@ -1020,6 +1020,28 @@ impl Scheduler {
             self.push_dac_vouts();
         }
 
+        // 5d(prev). Deliver the deferred I2C transaction-end hooks (05 §3.1):
+        // every slave that saw a STOP during this chunk's MCU run gets
+        // `on_stop(ctx)` so it can drive its output nets before this chunk's
+        // solve — the write-side analogue of the 595 chain apply above. The
+        // byte dispatch itself runs inside the MCU's `on_i2c` callback, where
+        // no TickCtx can be built; the STOP is recorded there and delivered
+        // here, the first point the circuit is borrowable and the earliest the
+        // analog solve could see the result anyway.
+        if !self.i2c_buses.is_empty() {
+            let buses = self.i2c_buses.clone();
+            let volts = self.node_volts.clone();
+            let mut ctx = TickCtx {
+                circuit: &mut self.circuit,
+                node_volts: &volts,
+                t: self.sim_time,
+                dt: chunk,
+            };
+            for b in buses {
+                b.lock().unwrap_or_else(|e| e.into_inner()).flush_stops(&mut ctx);
+            }
+        }
+
         // 2b. Update configurable power supplies from the rail current measured
         // in the *previous* chunk, setting this chunk's commanded voltage (the
         // PinDriver pattern: behavioral source updated between solver chunks).
