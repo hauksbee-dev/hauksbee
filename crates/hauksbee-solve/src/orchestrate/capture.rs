@@ -346,8 +346,10 @@ pub fn execute_stiff_group_held_capped(
     // output stage sensing a membrane in a non-adjacent block) then relaxes flat
     // on that load-only group, because the generation is pinned/absent. This
     // pre-pass grows each candidate's block set past the load to pull that
-    // generation in, generalizing the bespoke two-seed island walk
-    // (`tarski_decomp::capture_hidden_train`) to an arbitrary decomposition.
+    // generation in, generalizing the bespoke two-seed island walk (the
+    // reference tear's hidden-capture BFS, deleted 2026-07-04 with the rest
+    // of the bespoke path; docs/dev-plans/research/tarski-decomp-deletion-package.md)
+    // to an arbitrary decomposition.
     // Two coupling kinds pull a block B (not yet in the set):
     //   (b) SENSE: a device already IN the capture senses a node of B, OR a
     //       device of B senses the candidate or a node already in the set. This
@@ -1437,9 +1439,11 @@ fn dead_capture_outcomes(
 /// the captured node, not only its load. Returns cand -> block reps (the
 /// plain-adjacency blocks plus any pulled generator blocks), sorted.
 ///
-/// This generalizes the bespoke two-seed island walk
-/// (`tarski_decomp::capture_hidden_train`, which seeds a BFS from BOTH the drive
-/// net and the output net) to an arbitrary conduction decomposition. The walk is
+/// This generalizes the bespoke two-seed island walk (the reference tear's
+/// hidden-capture BFS, which seeded from BOTH the drive net and the output
+/// net; deleted 2026-07-04 with the rest of the bespoke path, see
+/// `docs/dev-plans/research/tarski-decomp-deletion-package.md`) to an
+/// arbitrary conduction decomposition. The walk is
 /// a targeted SENSE-follow, seeded from the devices that DRIVE `c` (its
 /// conductors: the output stage, plus any orphan output comparator whose only
 /// conducted terminal is `c`). It pulls in every block those drivers SENSE, then
