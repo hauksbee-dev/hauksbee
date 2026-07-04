@@ -349,6 +349,11 @@ pub fn newton_solve(
     // line_search block). Armed at entry: the first iteration always searches.
     let mut prev_ls_step_norm = f64::INFINITY;
     let mut sim_ls_armed = true;
+    // Census (lever-3 attribution): the previous iteration's post-line-search
+    // node-step norm, for the contraction-ratio histogram. NaN = none yet.
+    // Pure readout, only computed when the census is live.
+    let census_on = crate::census::enabled();
+    let mut census_prev_norm = f64::NAN;
     loop {
         iters += 1;
         // Snapshot the point we're about to linearize around BEFORE the solve
@@ -417,6 +422,14 @@ pub fn newton_solve(
             if dbg_staged {
                 eprintln!("[newton] refactor singular at iter {iters} (already_converged={already})");
             }
+            if census_on {
+                let reason = if already {
+                    crate::census::NewtonExit::SingularAccept
+                } else {
+                    crate::census::NewtonExit::SingularFail
+                };
+                crate::census::newton_exit(reason, iters);
+            }
             return NewtonResult { converged: already, iters };
         }
         // Residual of the NONLINEAR system at the current linearization point,
@@ -452,6 +465,9 @@ pub fn newton_solve(
         // A fully linear system is solved exactly in one shot; no need to
         // assemble and factor a second time just to watch the residual be zero.
         if ws.linear {
+            if census_on {
+                crate::census::newton_exit(crate::census::NewtonExit::Linear, iters);
+            }
             return NewtonResult {
                 converged: true,
                 iters,
@@ -570,6 +586,26 @@ pub fn newton_solve(
         let undamped_node_converged =
             node_block_converged(&ws.x, &lin_point, &ws.layout, opts);
 
+        // Census (lever-3 attribution): the node-block step norm this
+        // iteration will be judged on, captured BEFORE the damping rewrites
+        // ws.x. Pure readout behind the cached bool.
+        let census_step_norm = if census_on {
+            let mut n = 0.0f64;
+            for i in 0..ws.layout.n_nodes {
+                let d = (ws.x[i] - lin_point[i]).abs();
+                if d > n {
+                    n = d;
+                }
+            }
+            n
+        } else {
+            0.0
+        };
+        // How many nodes the staged damping classifies as oscillating this
+        // iteration (integer side-channel out of the damping loop below; no
+        // float behaviour touched).
+        let mut census_osc_nodes = 0u64;
+
         // Adaptive damped Newton (staged-DC only). A node sitting behind a
         // reverse-biased diode plus a DC-open cap is nearly floating and
         // high-gain, so the undamped Newton map can limit-cycle (a node and its
@@ -605,6 +641,7 @@ pub fn newton_solve(
                 // oscillates, so this is inert at the root and bit-identical on the
                 // normal path (branch_reg==0 skips this block entirely).
                 let alpha = if oscillating {
+                    census_osc_nodes += 1;
                     ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
                     // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
                     let shrink = ws.osc_count[i].saturating_sub(1).min(8);
@@ -624,7 +661,20 @@ pub fn newton_solve(
             }
         }
 
+        if census_on {
+            crate::census::newton_iter_norm(
+                census_step_norm,
+                census_prev_norm,
+                branch_reg > 0.0 && iters < 3 && undamped_node_converged && !undamped_converged,
+                census_osc_nodes,
+            );
+            census_prev_norm = census_step_norm;
+        }
+
         if undamped_converged {
+            if census_on {
+                crate::census::newton_exit(crate::census::NewtonExit::Full, iters);
+            }
             return NewtonResult { converged: true, iters };
         }
         // Staged-DC node-block convergence. The branch regularizer injects
@@ -636,6 +686,9 @@ pub fn newton_solve(
         // branch currents are derived and the leftover noise is below any real
         // signal current. Only for branch_reg>0 (staged path).
         if branch_reg > 0.0 && iters >= 3 && undamped_node_converged {
+            if census_on {
+                crate::census::newton_exit(crate::census::NewtonExit::NodeBlock, iters);
+            }
             return NewtonResult { converged: true, iters };
         }
         if dbg_newton {
@@ -674,11 +727,17 @@ pub fn newton_solve(
                 stall += 1;
                 if stall >= STALL_WINDOW {
                     // No progress for a full window: this solve is limit-cycling.
+                    if census_on {
+                        crate::census::newton_exit(crate::census::NewtonExit::Stall, iters);
+                    }
                     return NewtonResult { converged: false, iters };
                 }
             }
         }
         if iters >= opts.max_newton {
+            if census_on {
+                crate::census::newton_exit(crate::census::NewtonExit::MaxIters, iters);
+            }
             return NewtonResult {
                 converged: false,
                 iters,

@@ -63,6 +63,156 @@ thread_local! {
     /// skip&fail is the WRONG-SKIP count the safety argument must cover;
     /// search&pass is the saving the predictor leaves on the table.
     static LS_PRED: Cell<[u64; 4]> = const { Cell::new([0; 4]) };
+
+    // --- lever-3 iteration attribution (why does Newton take N iterations) ---
+
+    /// How each `newton_solve` call ENDED, indexed by [`NewtonExit`]:
+    /// [full, node_block, linear, singular_accept, singular_fail, stall,
+    /// max_iters]. "full" is the all-unknowns step test; "node_block" is the
+    /// staged `iters >= 3 && node_block_converged` accept (branch currents
+    /// still rippling at the regularizer scale).
+    static NEWTON_EXIT: Cell<[u64; 7]> = const { Cell::new([0; 7]) };
+    /// Iterations-per-call histogram, buckets:
+    /// [1, 2, 3, 4, 5, 6, 7, 8, 9-12, 13-16, 17-24, 25-40, 41-64, 65+].
+    static NEWTON_ITERS_HIST: Cell<[u64; 14]> = const { Cell::new([0; 14]) };
+    /// Contraction ratio of SUCCESSIVE post-line-search undamped node-step
+    /// norms (norm_k / norm_{k-1}), buckets:
+    /// [<0.02, 0.02-0.05, 0.05-0.15, 0.15-0.35, 0.35-0.7, 0.7-1.05, >1.05].
+    /// The staged converging damping (alpha 0.9) leaves 10% of every step, so
+    /// a pure-damping tail shows up as mass in the 0.05-0.15 bucket; a
+    /// limit-cycle shows up in 0.7-1.05/>1.05; a genuine quadratic Newton
+    /// tail lands <0.02.
+    static NEWTON_STEP_RATIO: Cell<[u64; 7]> = const { Cell::new([0; 7]) };
+    /// Iterations where the NODE block had already converged (the physics)
+    /// but the `iters >= 3` gate blocked the staged accept: pure gate cost.
+    static NEWTON_NODE_CONV_GATED: Cell<u64> = const { Cell::new(0) };
+    /// Iterations with at least one oscillating (sign-reversal damped) node,
+    /// and the total oscillating-node count across them.
+    static NEWTON_OSC_ITERS: Cell<u64> = const { Cell::new(0) };
+    static NEWTON_OSC_NODES: Cell<u64> = const { Cell::new(0) };
+    /// Initial-iterate shadow (mechanism (a), better trial seeds): for each
+    /// converged bare trial, the node-block distance from the ACTUAL start
+    /// point (previous accepted x) to the root vs the distance from a linear
+    /// extrapolation through the last two accepted points. Histogram of
+    /// d_extrap/d_start: [<0.03, 0.03-0.1, 0.1-0.3, 0.3-0.9, 0.9-1.1,
+    /// 1.1-3, >3]; below 1 the extrapolated seed starts CLOSER to the root.
+    static PRED_SHADOW: Cell<[u64; 7]> = const { Cell::new([0; 7]) };
+}
+
+/// How one `newton_solve` call ended (census attribution, lever 3).
+#[derive(Clone, Copy)]
+pub(crate) enum NewtonExit {
+    /// Full convergence test (all unknowns incl. branch currents).
+    Full = 0,
+    /// Staged node-block accept (`iters >= 3`, node voltages settled).
+    NodeBlock = 1,
+    /// Linear circuit: one exact solve.
+    Linear = 2,
+    /// Singular next Jacobian at an already-converged point (accepted).
+    SingularAccept = 3,
+    /// Singular Jacobian mid-iteration (failed).
+    SingularFail = 4,
+    /// Staged stall-bail (step norm stopped improving for a window).
+    Stall = 5,
+    /// Hit `max_newton` (failed).
+    MaxIters = 6,
+}
+
+/// Record how a `newton_solve` call ended and how many iterations it took.
+pub(crate) fn newton_exit(reason: NewtonExit, iters: usize) {
+    if !enabled() {
+        return;
+    }
+    NEWTON_EXIT.with(|c| {
+        let mut a = c.get();
+        a[reason as usize] += 1;
+        c.set(a);
+    });
+    let idx = match iters {
+        0..=8 => iters.saturating_sub(1),
+        9..=12 => 8,
+        13..=16 => 9,
+        17..=24 => 10,
+        25..=40 => 11,
+        41..=64 => 12,
+        _ => 13,
+    };
+    NEWTON_ITERS_HIST.with(|c| {
+        let mut a = c.get();
+        a[idx] += 1;
+        c.set(a);
+    });
+}
+
+/// Record one Newton iteration's post-line-search undamped node-step norm
+/// against the previous iteration's (`prev_norm` NaN on the first iteration),
+/// whether the node block was already converged but gate-blocked, and how many
+/// nodes the staged damping classified as oscillating.
+pub(crate) fn newton_iter_norm(norm: f64, prev_norm: f64, node_conv_gated: bool, osc_nodes: u64) {
+    if !enabled() {
+        return;
+    }
+    if prev_norm.is_finite() && prev_norm > 0.0 && norm.is_finite() {
+        let r = norm / prev_norm;
+        let idx = if r < 0.02 {
+            0
+        } else if r < 0.05 {
+            1
+        } else if r < 0.15 {
+            2
+        } else if r < 0.35 {
+            3
+        } else if r < 0.7 {
+            4
+        } else if r < 1.05 {
+            5
+        } else {
+            6
+        };
+        NEWTON_STEP_RATIO.with(|c| {
+            let mut a = c.get();
+            a[idx] += 1;
+            c.set(a);
+        });
+    }
+    if node_conv_gated {
+        NEWTON_NODE_CONV_GATED.with(|c| c.set(c.get() + 1));
+    }
+    if osc_nodes > 0 {
+        NEWTON_OSC_ITERS.with(|c| c.set(c.get() + 1));
+        NEWTON_OSC_NODES.with(|c| c.set(c.get() + osc_nodes));
+    }
+}
+
+/// Record one converged trial's initial-iterate shadow comparison (see
+/// `PRED_SHADOW`): `d_start` = node-block inf-distance from the trial's actual
+/// starting iterate to the converged root, `d_extrap` = same distance from the
+/// linear extrapolation through the last two accepted points.
+pub(crate) fn predictor_shadow(d_start: f64, d_extrap: f64) {
+    if !enabled() || !d_start.is_finite() || !d_extrap.is_finite() || d_start <= 0.0 {
+        return;
+    }
+    let r = d_extrap / d_start;
+    let idx = if r < 0.03 {
+        0
+    } else if r < 0.1 {
+        1
+    } else if r < 0.3 {
+        2
+    } else if r < 0.9 {
+        3
+    } else if r < 1.1 {
+        4
+    } else if r < 3.0 {
+        5
+    } else {
+        6
+    };
+    PRED_SHADOW.with(|c| {
+        let mut a = c.get();
+        a[idx] += 1;
+        c.set(a);
+    });
 }
 
 /// Record one line-search iteration's predictor decision against the ground
@@ -155,6 +305,22 @@ fn take_phases() -> (u64, u64, u64, u64, u64, u64, [u64; 8], u64, u64, [u64; 4])
     )
 }
 
+/// Drain the lever-3 iteration-attribution accumulators: (exit reasons,
+/// iters-per-call histogram, step contraction ratios, node-conv-gated iters,
+/// osc iters, osc nodes, predictor shadow histogram).
+#[allow(clippy::type_complexity)]
+fn take_newton_attrib() -> ([u64; 7], [u64; 14], [u64; 7], u64, u64, u64, [u64; 7]) {
+    (
+        NEWTON_EXIT.with(|c| c.replace([0; 7])),
+        NEWTON_ITERS_HIST.with(|c| c.replace([0; 14])),
+        NEWTON_STEP_RATIO.with(|c| c.replace([0; 7])),
+        NEWTON_NODE_CONV_GATED.with(|c| c.replace(0)),
+        NEWTON_OSC_ITERS.with(|c| c.replace(0)),
+        NEWTON_OSC_NODES.with(|c| c.replace(0)),
+        PRED_SHADOW.with(|c| c.replace([0; 7])),
+    )
+}
+
 /// Accepted-dt decade histogram bounds: buckets are `<1e-12`, one per decade
 /// `[1e-12,1e-11) .. [1e-6,1e-5)`, then `>=1e-5`. The adaptive capture march
 /// runs dt_min=1e-12, dt_max=2e-6, so every step it can legally take lands in
@@ -223,6 +389,7 @@ impl StepCensus {
         // Drain phase counters left by any previous march on this thread so
         // the Drop report brackets exactly this march.
         let _ = take_phases();
+        let _ = take_newton_attrib();
         Some(StepCensus {
             started: Instant::now(),
             tstop,
@@ -391,6 +558,54 @@ impl Drop for StepCensus {
                     ls_pred[0], ls_pred[1], ls_pred[2], ls_pred[3],
                 );
             }
+        }
+        // Lever-3 iteration attribution: why the Newton calls took the
+        // iterations they did. Only printed when any call was recorded.
+        let (exits, iters_hist, ratios, gated, osc_iters, osc_nodes, pred) = take_newton_attrib();
+        if exits.iter().any(|&c| c > 0) {
+            eprintln!(
+                "[step-census]   newton exits: full={} node_block={} linear={} singular_accept={} singular_fail={} stall={} max_iters={}",
+                exits[0], exits[1], exits[2], exits[3], exits[4], exits[5], exits[6],
+            );
+            let iter_labels = [
+                "1", "2", "3", "4", "5", "6", "7", "8", "9-12", "13-16", "17-24", "25-40",
+                "41-64", "65+",
+            ];
+            let ih: Vec<String> = iter_labels
+                .iter()
+                .zip(iters_hist.iter())
+                .map(|(l, c)| format!("{l}:{c}"))
+                .collect();
+            eprintln!("[step-census]   iters/call hist [{}]", ih.join(" "));
+            let ratio_labels = ["<0.02", "0.05", "0.15", "0.35", "0.7", "1.05", ">1.05"];
+            let rh: Vec<String> = ratio_labels
+                .iter()
+                .zip(ratios.iter())
+                .map(|(l, c)| format!("{l}:{c}"))
+                .collect();
+            eprintln!(
+                "[step-census]   step contraction (norm_k/norm_k-1, upper edges) [{}] node-conv-gated iters={} osc iters={} (osc nodes {})",
+                rh.join(" "),
+                gated,
+                osc_iters,
+                osc_nodes,
+            );
+        }
+        if pred.iter().any(|&c| c > 0) {
+            let pred_labels = ["<0.03", "0.1", "0.3", "0.9", "1.1", "3", ">3"];
+            let ph: Vec<String> = pred_labels
+                .iter()
+                .zip(pred.iter())
+                .map(|(l, c)| format!("{l}:{c}"))
+                .collect();
+            let n: u64 = pred.iter().sum();
+            let better: u64 = pred[..4].iter().sum();
+            eprintln!(
+                "[step-census]   seed shadow d_extrap/d_start (upper edges) [{}] extrap closer on {}/{} trials",
+                ph.join(" "),
+                better,
+                n,
+            );
         }
         // Ladder observability (the dev-plan 02 s2.6 requirement): which
         // strategies have fired on this thread (pending, not drained: the

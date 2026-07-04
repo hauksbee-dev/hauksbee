@@ -281,6 +281,11 @@ impl Transient {
             ws.layout.size,
             matches!(opts.step, StepControl::Adaptive { .. }),
         );
+        // Seed-shadow estate (lever-3 mechanism (a), census only): the accepted
+        // point BEFORE the current one, so a converged trial can compare its
+        // actual start iterate against a linear extrapolation through the last
+        // two accepted points. Allocated and maintained only under the census.
+        let mut census_x_accepted_prev: Option<Vec<f64>> = None;
 
         while t < tstop - 1e-18 {
             steps_taken += 1;
@@ -336,6 +341,28 @@ impl Transient {
             if let Some(c) = census.as_mut() {
                 c.newton_calls += 1;
                 c.newton_iters += r.iters as u64;
+                // Seed shadow: with the root in hand (a converged bare trial),
+                // compare the start iterate the trial actually used
+                // (x_accepted) against a linear extrapolation through the last
+                // two accepted points, both as node-block inf-distances to the
+                // root. Measures how many contraction decades a predictor seed
+                // would buy WITHOUT changing any behaviour.
+                if r.converged && h_prev_accepted > 0.0 {
+                    if let Some(prev) = census_x_accepted_prev.as_ref() {
+                        let n_nodes = ws.layout.n_nodes;
+                        let scale = h / h_prev_accepted;
+                        let mut d_start = 0.0f64;
+                        let mut d_extrap = 0.0f64;
+                        for i in 0..n_nodes {
+                            let root = ws.x[i];
+                            let cur = x_accepted[i];
+                            let pred = cur + scale * (cur - prev[i]);
+                            d_start = d_start.max((root - cur).abs());
+                            d_extrap = d_extrap.max((root - pred).abs());
+                        }
+                        crate::census::predictor_shadow(d_start, d_extrap);
+                    }
+                }
             }
 
             let mut converged = r.converged;
@@ -504,6 +531,12 @@ impl Transient {
             // Accept: advance time, update reactive history, emit.
             t += h;
             advance_reactive_state(&mut state, circuit, &ws, &x_accepted, h, opts, first_step);
+            if census.is_some() {
+                match census_x_accepted_prev.as_mut() {
+                    Some(p) => p.copy_from_slice(&x_accepted),
+                    None => census_x_accepted_prev = Some(x_accepted.clone()),
+                }
+            }
             x_accepted.copy_from_slice(&ws.x);
             first_step = false;
             h_prev_accepted = h;
