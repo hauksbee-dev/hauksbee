@@ -398,7 +398,7 @@ impl I2cSlave for RegisterMapSensor {
         b
     }
 
-    fn on_stop(&mut self) {
+    fn on_stop(&mut self, _ctx: &mut super::TickCtx) {
         self.got_pointer = false;
     }
 

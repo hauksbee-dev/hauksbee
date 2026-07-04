@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 use hauksbee_mcu::I2cEvent;
 
-use super::Peripheral;
+use super::{Peripheral, TickCtx};
 
 /// A device that answers on the I2C bus at a fixed 7-bit address.
 pub trait I2cSlave: Send {
@@ -47,8 +47,23 @@ pub trait I2cSlave: Send {
     /// The firmware is reading a byte; return the byte to clock back.
     fn on_read(&mut self) -> u8;
 
-    /// STOP condition ended the transaction.
-    fn on_stop(&mut self) {}
+    /// A STOP condition ended a transaction addressed to this device (05 §3.1).
+    ///
+    /// The [`TickCtx`] is the same context the peripheral `pre_solve` /
+    /// `post_solve` hooks receive, so a slave can convert its accumulated
+    /// register writes into net voltages (e.g. a DAC driving its VOUT nets
+    /// through their [`crate::drivers::PinDriver`]s).
+    ///
+    /// **Delivery is deferred to the chunk boundary.** The byte-level events
+    /// arrive through the MCU's `on_i2c` callback during `run_micros`, where no
+    /// `&mut Circuit` exists to build a `TickCtx` from. [`I2cBus::dispatch`]
+    /// therefore only *records* the STOP; the scheduler delivers the hook once
+    /// per chunk via [`I2cBus::flush_stops`], after the MCU ran and before the
+    /// analog solve — which is the earliest moment the solver could see a
+    /// driven net anyway (the chunk-rate limit documented in the module
+    /// header). Transaction *state* resets must therefore not live here; every
+    /// slave already re-arms on the next `on_start`.
+    fn on_stop(&mut self, _ctx: &mut TickCtx) {}
 
     /// Numeric state for frame reporting.
     fn state(&self) -> HashMap<String, f64> {
@@ -74,6 +89,11 @@ pub struct I2cBus {
     /// Address of the slave currently addressed (set on START), if any matched.
     active: Option<u8>,
     slaves: Vec<Box<dyn I2cSlave>>,
+    /// Addresses that saw a STOP since the last [`I2cBus::flush_stops`]. The
+    /// ctx-bearing `on_stop` cannot run inside the MCU callback (no `TickCtx`
+    /// exists there), so `dispatch` records the STOP here and the scheduler
+    /// delivers it at the chunk boundary.
+    stop_pending: Vec<u8>,
 }
 
 impl I2cBus {
@@ -82,6 +102,7 @@ impl I2cBus {
             id: id.to_string(),
             active: None,
             slaves: Vec::new(),
+            stop_pending: Vec::new(),
         }
     }
 
@@ -138,11 +159,39 @@ impl I2cBus {
             }
             I2cEvent::Stop { addr } => {
                 let a = self.active.take().unwrap_or(addr);
-                if let Some(s) = self.slave_mut(a) {
-                    s.on_stop();
+                // Record the STOP; the ctx-bearing on_stop is delivered by
+                // `flush_stops` at the chunk boundary (see the trait docs).
+                if self.slave_mut(a).is_some() && !self.stop_pending.contains(&a) {
+                    self.stop_pending.push(a);
                 }
                 None
             }
+        }
+    }
+
+    /// Deliver the deferred transaction-end hooks: call `on_stop(ctx)` on every
+    /// slave that saw a STOP since the last flush. The scheduler calls this once
+    /// per chunk, after the MCU ran and before the analog solve — the first
+    /// point a `&mut Circuit` is borrowable, and the earliest the solve could
+    /// see a driven net. Multiple transactions to one slave inside a chunk
+    /// collapse to one delivery from the final state, exactly the resolution
+    /// the chunk-rate analog side has.
+    pub fn flush_stops(&mut self, ctx: &mut TickCtx) {
+        let pending = std::mem::take(&mut self.stop_pending);
+        for addr in pending {
+            if let Some(s) = self.slave_mut(addr) {
+                s.on_stop(ctx);
+            }
+        }
+    }
+
+    /// Call `on_stop(ctx)` on EVERY slave, pending or not. Used at attach time
+    /// to seed the analog nets with each slave's power-on outputs (e.g. a DAC's
+    /// code-0 VOUT ≈ 0 V) before any firmware transaction has happened.
+    pub fn drive_all(&mut self, ctx: &mut TickCtx) {
+        self.stop_pending.clear();
+        for s in &mut self.slaves {
+            s.on_stop(ctx);
         }
     }
 
