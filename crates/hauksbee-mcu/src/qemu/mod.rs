@@ -87,7 +87,7 @@ mod process;
 mod qmp;
 mod uart;
 
-pub use process::{is_available, QemuArch};
+pub use process::{find_qemu, is_available, QemuArch};
 
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, Context, Result};
