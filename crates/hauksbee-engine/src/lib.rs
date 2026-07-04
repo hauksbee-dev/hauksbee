@@ -32,6 +32,7 @@ pub mod peripherals;
 pub mod plain;
 pub mod power_supply;
 pub mod report;
+pub mod responders;
 pub mod result;
 pub mod scheduler;
 pub mod shorts;
