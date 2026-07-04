@@ -119,6 +119,28 @@ pub enum Encoding {
     /// apply `scale = 2.0` and use `i16_be` with a right-shift-aware decoder.
     #[serde(rename = "q7.1_be")]
     Q71Be,
+    /// Bosch BME280/BMP280 20-bit pressure/temperature packing, big-endian,
+    /// spread across three bytes as `MSB, LSB, XLSB` where the 20-bit unsigned
+    /// ADC count occupies `MSB[7:0] LSB[7:0] XLSB[7:4]` (XLSB's low nibble is
+    /// unused / zero). This is the exact layout of the BME280 `press`/`temp`
+    /// data registers (datasheet §5.4.6/§5.4.7): a read of `press_msb`
+    /// auto-increments through `press_lsb`, `press_xlsb`.
+    ///
+    /// **Why this is a distinct encoding.** The existing integer encodings top
+    /// out at 16 bits (`u16_*`/`i16_*`), so a 20-bit ADC count cannot be packed
+    /// by them, and the value expressions (`evalexpr`) operate on scalars — they
+    /// cannot themselves emit a 3-byte MSB/LSB/XLSB frame with a shifted low
+    /// nibble. This encoding is the "minor encoding addition" the co-sim-fidelity
+    /// plan (05 §6.1) anticipated for BME280. It packs a **raw ADC count** (the
+    /// register's `expr` supplies the count, e.g. an `adc_press` input); the
+    /// raw↔physical Bosch compensation is applied by the firmware / test
+    /// consumer, not here (see the BME280 spec header for why the compensation
+    /// is not expressible as a forward `evalexpr` value expression).
+    ///
+    /// Packing: `count = round(value).clamp(0, 0xFFFFF)` (20-bit unsigned);
+    /// `bytes = [ (count>>12)&0xFF, (count>>4)&0xFF, (count<<4)&0xF0 ]`.
+    #[serde(rename = "u20_be_xlsb")]
+    U20BeXlsb,
     /// Constant-byte register: no numeric value, `const` carries the bytes.
     Raw,
 }
@@ -129,6 +151,7 @@ impl Encoding {
         match self {
             Encoding::U8 => 1,
             Encoding::U16Be | Encoding::U16Le | Encoding::I16Be | Encoding::I16Le | Encoding::Q71Be => 2,
+            Encoding::U20BeXlsb => 3,
             Encoding::Raw => 0,
         }
     }
