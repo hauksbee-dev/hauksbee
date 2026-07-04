@@ -1751,6 +1751,149 @@ style = "i2c_pointer"
         assert!((src_volts(&circuit) - 2.048).abs() < 1e-9, "driven after flush");
     }
 
+    // ── §6.1 write-side sensors: ADS1115 + INA219 ─────────────────────────────
+    //
+    // Per 05 §6.1 items 3-4: both need the write side. The fixtures load the
+    // SHIPPED specs, drive them through the real I2cBus dispatch path, and
+    // anchor every expected register value to a datasheet-published number
+    // (cited inline).
+
+    /// The canonical shipped ADS1115 spec.
+    const ADS1115_SPEC: &str = include_str!("../../../../docs/hunts/specs/ads1115.toml");
+    /// The canonical shipped INA219 spec.
+    const INA219_SPEC: &str = include_str!("../../../../docs/hunts/specs/ina219.toml");
+
+    /// Pointer-framed 16-bit register write: [ptr, hi, lo] in one transaction.
+    fn i2c_write_u16(bus: &mut I2cBus, addr: u8, reg: u8, value: u16) {
+        for ev in [
+            I2cEvent::Start { addr, read: false },
+            I2cEvent::Write { addr, data: reg },
+            I2cEvent::Write { addr, data: (value >> 8) as u8 },
+            I2cEvent::Write { addr, data: (value & 0xFF) as u8 },
+            I2cEvent::Stop { addr },
+        ] {
+            bus.dispatch(ev);
+        }
+    }
+
+    /// Pointer-framed 16-bit register read (big-endian, like both TI parts).
+    fn i2c_read_u16(bus: &mut I2cBus, addr: u8, reg: u8) -> u16 {
+        let d = i2c_read_burst(bus, addr, reg, 2);
+        u16::from_be_bytes([d[0], d[1]])
+    }
+
+    /// FIXTURE: ADS1115 config write selects mux/PGA and the conversion read
+    /// reflects the driven input — the write→read coupling that is the point
+    /// of §6.1 item 3.
+    ///
+    /// Authority (TI SBAS444): POR config 0x8583 (§8.6.4) is MUX=000
+    /// (AIN0-AIN1) at PGA=010 (±2.048 V FSR, 62.5 uV/LSB, Table 1). Writing
+    /// 0xC383 selects MUX=100 (AIN0 vs GND, Table 8) at PGA=001 (±4.096 V,
+    /// 125 uV/LSB, Table 1): 1.024 V / 125 uV = code 8192 (0x2000). Full-scale
+    /// clipping saturates at 0x7FFF (§8.3.3).
+    #[test]
+    fn declarative_ads1115_config_write_selects_mux_and_pga() {
+        let mut sensor = RegisterMapSensor::from_toml(ADS1115_SPEC).unwrap();
+        sensor.set_input("a0", 0.5);
+        sensor.set_input("a1", 0.3);
+        let addr = 0x48;
+        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
+
+        // POR (no write yet): differential AIN0-AIN1 at ±2.048 V.
+        // (0.5 - 0.3) * 32768 / 2.048 = 3200.
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x00) as i16,
+            3200,
+            "POR config (0x8583) must read AIN0-AIN1 at ±2.048 V FSR"
+        );
+        // POR config readback is byte-exact (§8.6.4).
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x01), 0x8583);
+
+        // Firmware-style single-shot config: OS=1 MUX=100(AIN0/GND)
+        // PGA=001(±4.096) MODE=1 DR=100 COMP_QUE=11 -> 0xC383.
+        i2c_write_u16(&mut bus, addr, 0x01, 0xC383);
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x01),
+            0xC383,
+            "config readback is the written value (OS=1: conversion 'done')"
+        );
+        {
+            let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
+            assert_eq!(s.store("mux"), Some(4.0), "mux field extracted");
+            assert_eq!(s.store("pga"), Some(1.0), "pga field extracted");
+        }
+
+        // AIN0 = 1.024 V at ±4.096 V FSR -> 8192 (Table 1: 125 uV/LSB).
+        bus.slave_mut_t::<RegisterMapSensor>(addr).unwrap().set_input("a0", 1.024);
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x00),
+            0x2000,
+            "1.024 V at 125 uV/LSB must read 0x2000 (datasheet Table 1 LSB)"
+        );
+
+        // Negative differential and full-scale clipping.
+        i2c_write_u16(&mut bus, addr, 0x01, 0x8583); // back to POR mux/pga
+        {
+            let s = bus.slave_mut_t::<RegisterMapSensor>(addr).unwrap();
+            s.set_input("a0", 0.0);
+            s.set_input("a1", 0.5);
+        }
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x00) as i16,
+            -8000,
+            "AIN0-AIN1 = -0.5 V at 62.5 uV/LSB must read -8000"
+        );
+        bus.slave_mut_t::<RegisterMapSensor>(addr).unwrap().set_input("a0", 5.0);
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x00),
+            0x7FFF,
+            "over-range input clips at +full-scale (§8.3.3)"
+        );
+    }
+
+    /// FIXTURE: INA219 calibration write feeds the current/power math — the
+    /// §6.1 item-4 coupling — anchored to the datasheet §8.5.1 worked example
+    /// (TI SBOS448): R_SHUNT = 0.1 Ω, Current_LSB = 100 uA -> Cal = 0x1000;
+    /// at I = 2 A, VBUS = 12 V: shunt 20000, bus 0x5DC2, current 20000
+    /// (= 2.0 A), power 12000 (= 24 W at 2 mW/bit).
+    #[test]
+    fn declarative_ina219_calibration_write_feeds_current_and_power() {
+        let mut sensor = RegisterMapSensor::from_toml(INA219_SPEC).unwrap();
+        sensor.set_input("shunt_v", 0.2); // 2 A through 0.1 Ω
+        sensor.set_input("bus_v", 12.0);
+        let addr = 0x40;
+        let mut bus = I2cBus::new("I2C").with_slave(Box::new(sensor));
+
+        // POR config readback (§8.6.3.1).
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x00), 0x399F);
+        // Shunt and bus registers read regardless of calibration:
+        // 0.2 V / 10 uV = 20000; (12 V / 4 mV) << 3 | CNVR = 0x5DC2.
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x01) as i16, 20000);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x02), 0x5DC2);
+        // §8.5.1: current and power REMAIN ZERO until calibration is written.
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x04), 0, "current 0 before cal");
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x03), 0, "power 0 before cal");
+
+        // Program the worked-example calibration 0x1000 (= 4096).
+        i2c_write_u16(&mut bus, addr, 0x05, 0x1000);
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x04),
+            20000,
+            "current_reg = 20000 * 4096 / 4096 (Eq. 4) = 2.0 A at 100 uA/bit"
+        );
+        assert_eq!(
+            i2c_read_u16(&mut bus, addr, 0x03),
+            12000,
+            "power_reg = 20000 * 3000 / 5000 (Eq. 5) = 24 W at 2 mW/bit"
+        );
+
+        // FS0 (cal bit 0) is read-only zero (§8.6.3.7): writing 0x1001 lands
+        // as 0x1000 and the math is unchanged.
+        i2c_write_u16(&mut bus, addr, 0x05, 0x1001);
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x05), 0x1000, "FS0 forced low");
+        assert_eq!(i2c_read_u16(&mut bus, addr, 0x04), 20000);
+    }
+
     // ── THE PROOF (05 §3.2): the MCP4728 as a data instance of the schema ────
     //
     // These are the hand-coded `Mcp4728` model's unit tests, ported verbatim —
