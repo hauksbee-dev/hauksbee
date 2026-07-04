@@ -2286,6 +2286,7 @@ fn instantiate_renode(part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
         "stm32f4_discovery" | "stm32f4" => RenodeConfig::stm32f4_discovery(),
         "nrf52840" | "nrf52" => RenodeConfig::nrf52840(),
         "sifive_fe310" | "fe310" => RenodeConfig::sifive_fe310(),
+        "rp2040" | "pico" => RenodeConfig::rp2040(),
         other => anyhow::bail!("unknown renode backend part '{other}'"),
     };
     Ok(Box::new(RenodeBackend::new(config)?))
