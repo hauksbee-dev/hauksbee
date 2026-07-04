@@ -481,6 +481,9 @@ pub struct SoftI2cResponder {
     /// Addresses already warned about (unmodeled slave), to keep the honest
     /// NACK loud but not spammy.
     warned_addrs: Vec<u8>,
+    /// Per-edge waveform trace to stderr (`HAUKSBEE_SOFT_I2C_TRACE=1`),
+    /// cached at construction: this runs on every SCL/SDA edge.
+    trace: bool,
 }
 
 impl SoftI2cResponder {
@@ -496,6 +499,7 @@ impl SoftI2cResponder {
             active: false,
             drive: None,
             warned_addrs: Vec::new(),
+            trace: std::env::var_os("HAUKSBEE_SOFT_I2C_TRACE").is_some(),
         }
     }
 
@@ -623,6 +627,13 @@ impl InputResponder for SoftI2cResponder {
 
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
         let mut out = Vec::new();
+
+        if self.trace {
+            eprintln!(
+                "soft-i2c edge {:?}={} phase={:?} sda={} scl={}",
+                pin, high, self.phase, self.sda, self.scl
+            );
+        }
 
         if pin == self.sda_pin {
             let prev = self.sda;
