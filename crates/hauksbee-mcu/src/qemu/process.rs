@@ -21,12 +21,13 @@
 //! `esp32` machine before it is accepted.
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// Which Espressif QEMU system binary an architecture needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QemuArch {
     /// Xtensa LX6/LX7: ESP32 and ESP32-S3 (`qemu-system-xtensa`).
     Xtensa,
