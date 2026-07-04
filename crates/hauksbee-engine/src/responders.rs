@@ -34,7 +34,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::digital::{Hc165Chain, LogicLevels};
+use crate::peripherals::i2c::I2cBus;
 use crate::peripherals::spi::SpiBus;
+use hauksbee_mcu::I2cEvent;
 
 /// One bit-banged input protocol instance: consumes MCU GPIO *output* edges
 /// on its watched pins and answers by driving MCU *input* pins.
@@ -393,6 +395,373 @@ impl InputResponder for BitBangSpiResponder {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Soft I2C (firmware bit-bangs SCL/SDA as GPIOs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Where the soft-I2C engine is within a transaction. Bit counters live in
+/// the variants; SDA/SCL line levels live on the responder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum I2cPhase {
+    /// No transaction open (before START / after STOP).
+    Idle,
+    /// Clocking a master-driven byte: the address byte (`is_addr`) or write
+    /// data. `acc` accumulates MSB-first; `nbits` counts SCL rising edges.
+    MasterBits { is_addr: bool, nbits: u8, acc: u8 },
+    /// The ACK clock after a master byte: the SLAVE owns SDA. `driven` is set
+    /// once the ACK level went onto the wire (at the falling edge entering the
+    /// ack clock); the next falling edge leaves the state. `read_next` routes
+    /// an acked address-with-R into the read phase.
+    SlaveAck {
+        ack: bool,
+        read_next: bool,
+        driven: bool,
+    },
+    /// Clocking a slave-driven read byte: WE drive SDA, shifting `byte` out
+    /// MSB-first; `nbits` counts the master's sampling (rising) edges.
+    ReadBits { nbits: u8, byte: u8 },
+    /// The ACK clock after a read byte: the MASTER owns SDA. `sampled` is
+    /// `Some(ack)` once the master's level was read on the rising edge.
+    MasterAck { sampled: Option<bool> },
+    /// A NACK ended the dialogue (unknown address, or master NACK after the
+    /// final read byte): ignore clocks until STOP or repeated START.
+    AwaitStop,
+}
+
+/// Firmware bit-bangs SCL/SDA as plain GPIOs; this responder is a small I2C
+/// protocol engine over the pin edges — START/STOP detection, address
+/// decoding, ACK generation, byte clocking — routing the transaction to the
+/// EXISTING [`I2cBus`] slave models and answering SDA synchronously, so the
+/// firmware's `digitalRead(SDA)` inside its own clock loop sees the slave's
+/// bit (05 §1.5).
+///
+/// ## The honest subset (stated; everything else refused or absent, loudly)
+///
+/// * **Single master.** There is no arbitration and no detection of a second
+///   master (none can exist in-sim: the one firmware owns the pins).
+/// * **No clock stretching.** The modeled slaves answer instantaneously and
+///   never hold SCL; a real peripheral that stretches would run FASTER here,
+///   never slower, and firmware relying on stretching semantics is outside
+///   the subset.
+/// * **7-bit addressing, standard framing.** START/repeated-START/STOP are
+///   recognized from any state (SDA transition while SCL high), exactly the
+///   asynchronous resync a real slave performs — so a mid-byte START is
+///   treated as a START, not an error, matching silicon.
+/// * **Push-pull master waveform.** The responder observes the master through
+///   PORT-register edges. Classic open-drain emulation that toggles ONLY the
+///   direction register (DDR out+low vs. input-release, PORT held at 0)
+///   produces no PORT edges at all and is therefore INVISIBLE — a documented
+///   no-answer, not a wrong answer: the firmware sees a dead bus (perpetual
+///   NACK), and this doc plus the fixture show the supported pattern (drive
+///   SDA push-pull; switch it to input for the ACK bit and read bytes).
+/// * **An address no attached slave models is NACKed** (SDA left high), with
+///   a once-per-address warning — never a fake ACK.
+///
+/// SDA is bidirectional: the responder tracks the MASTER's driven level from
+/// the PORT edges, separately from the level IT drives into the MCU's input
+/// register. Slave-driven bits (ACKs, read bytes) go onto the wire at the SCL
+/// falling edge (data changes while the clock is low, per the spec) and are
+/// re-asserted at the following rising edge, so a firmware that flips SDA to
+/// input only just before reading still sees the bit.
+pub struct SoftI2cResponder {
+    bus: Arc<Mutex<I2cBus>>,
+    scl_pin: (char, u8),
+    sda_pin: (char, u8),
+    /// Last seen master-driven line levels (from PORT edges).
+    scl: bool,
+    sda: bool,
+    phase: I2cPhase,
+    /// 7-bit address + R/W of the open transaction.
+    addr: u8,
+    /// True when the open transaction's address matched an attached slave.
+    active: bool,
+    /// The SDA level this responder is currently driving into the MCU input,
+    /// while a slave-owned phase holds the line.
+    drive: Option<bool>,
+    /// Addresses already warned about (unmodeled slave), to keep the honest
+    /// NACK loud but not spammy.
+    warned_addrs: Vec<u8>,
+}
+
+impl SoftI2cResponder {
+    pub fn new(bus: Arc<Mutex<I2cBus>>, scl_pin: (char, u8), sda_pin: (char, u8)) -> Self {
+        SoftI2cResponder {
+            bus,
+            scl_pin,
+            sda_pin,
+            scl: false,
+            sda: false,
+            phase: I2cPhase::Idle,
+            addr: 0,
+            active: false,
+            drive: None,
+            warned_addrs: Vec::new(),
+        }
+    }
+
+    fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
+        self.bus.lock().unwrap_or_else(|e| e.into_inner()).dispatch(ev)
+    }
+
+    /// Put a slave-driven level on the wire (records it for re-assertion).
+    fn drive_sda(&mut self, level: bool, out: &mut Vec<((char, u8), bool)>) {
+        self.drive = Some(level);
+        out.push((self.sda_pin, level));
+    }
+
+    /// Release the line to the master: drive the idle-high pull-up level once
+    /// and stop re-asserting.
+    fn release_sda(&mut self, out: &mut Vec<((char, u8), bool)>) {
+        self.drive = None;
+        out.push((self.sda_pin, true));
+    }
+
+    /// Fetch the next read byte from the addressed slave and put its MSB on
+    /// the wire (entry into `ReadBits`, always at a falling edge).
+    fn begin_read_byte(&mut self, out: &mut Vec<((char, u8), bool)>) {
+        let byte = match self.dispatch(I2cEvent::Read { addr: self.addr }) {
+            Some(b) => b,
+            None => {
+                // Structurally impossible while `active` (the address matched
+                // at Start); if a slave vanished mid-transaction, say so and
+                // present the open-bus level rather than inventing data.
+                eprintln!(
+                    "ERROR: soft I2C: slave 0x{:02x} answered Start but not Read; \
+                     presenting 0xFF (open bus)",
+                    self.addr
+                );
+                0xFF
+            }
+        };
+        self.phase = I2cPhase::ReadBits { nbits: 0, byte };
+        self.drive_sda(byte & 0x80 != 0, out);
+    }
+
+    /// A START (or repeated START) was seen: begin address capture. Never
+    /// dispatches a Stop — a repeated START legitimately ends the previous
+    /// transfer without one (the register-read idiom: write pointer, Sr,
+    /// read), and the slave models' `on_start` handles the rollover.
+    fn on_start(&mut self, out: &mut Vec<((char, u8), bool)>) {
+        self.phase = I2cPhase::MasterBits {
+            is_addr: true,
+            nbits: 0,
+            acc: 0,
+        };
+        if self.drive.is_some() {
+            self.release_sda(out);
+        }
+    }
+
+    /// A STOP was seen: close the transaction. The Stop event is recorded by
+    /// the bus and its ctx-bearing `on_stop` is delivered by the scheduler's
+    /// chunk-boundary `flush_stops`, same as the hardware-TWI path.
+    fn on_stop(&mut self, out: &mut Vec<((char, u8), bool)>) {
+        if self.active {
+            self.dispatch(I2cEvent::Stop { addr: self.addr });
+        }
+        self.active = false;
+        self.phase = I2cPhase::Idle;
+        if self.drive.is_some() {
+            self.release_sda(out);
+        }
+    }
+
+    /// A master byte completed (8th rising edge): decode it, decide the ACK.
+    fn on_master_byte(&mut self, is_addr: bool, acc: u8) {
+        if is_addr {
+            let addr = acc >> 1;
+            let read = acc & 1 != 0;
+            self.addr = addr;
+            let known = self
+                .bus
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .addresses()
+                .contains(&addr);
+            // Dispatch the Start regardless (the bus tracks its own active
+            // address; an unmatched Start clears it) — but only a MODELED
+            // address gets the ACK. An unknown address is NACKed honestly,
+            // and loudly once, never fake-ACKed.
+            self.dispatch(I2cEvent::Start { addr, read });
+            if !known && !self.warned_addrs.contains(&addr) {
+                self.warned_addrs.push(addr);
+                eprintln!(
+                    "WARN: soft I2C: firmware addressed 0x{addr:02x} but no attached \
+                     slave models it — NACKing (honest no-answer)"
+                );
+            }
+            self.active = known;
+            self.phase = I2cPhase::SlaveAck {
+                ack: known,
+                read_next: known && read,
+                driven: false,
+            };
+        } else {
+            // Write data byte. The models accept-and-count every write (the
+            // hardware-TWI path has the same always-ACK shape), so an active
+            // transaction ACKs; an inactive one (data pushed after an address
+            // NACK) stays NACKed.
+            if self.active {
+                self.dispatch(I2cEvent::Write {
+                    addr: self.addr,
+                    data: acc,
+                });
+            }
+            self.phase = I2cPhase::SlaveAck {
+                ack: self.active,
+                read_next: false,
+                driven: false,
+            };
+        }
+    }
+}
+
+impl InputResponder for SoftI2cResponder {
+    fn watched_pins(&self) -> Vec<(char, u8)> {
+        vec![self.scl_pin, self.sda_pin]
+    }
+
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+        let mut out = Vec::new();
+
+        if pin == self.sda_pin {
+            let prev = self.sda;
+            self.sda = high;
+            // SDA transitions while SCL is high are the framing symbols; while
+            // SCL is low they are ordinary data-bit setup (level recorded
+            // above, sampled at the next rising edge).
+            if self.scl && prev != high {
+                if high {
+                    self.on_stop(&mut out);
+                } else {
+                    self.on_start(&mut out);
+                }
+            }
+            return out;
+        }
+
+        if pin != self.scl_pin {
+            return out;
+        }
+        let rising = high && !self.scl;
+        let falling = !high && self.scl;
+        self.scl = high;
+
+        if rising {
+            match self.phase {
+                I2cPhase::MasterBits { is_addr, nbits, acc } => {
+                    let acc = (acc << 1) | u8::from(self.sda);
+                    if nbits + 1 == 8 {
+                        self.on_master_byte(is_addr, acc);
+                    } else {
+                        self.phase = I2cPhase::MasterBits {
+                            is_addr,
+                            nbits: nbits + 1,
+                            acc,
+                        };
+                    }
+                }
+                I2cPhase::MasterAck { .. } => {
+                    // Master's ACK (low) / NACK (high) is on the wire now.
+                    self.phase = I2cPhase::MasterAck {
+                        sampled: Some(!self.sda),
+                    };
+                }
+                // Slave-owned clock-high windows: the master is sampling what
+                // we drove at the last falling edge. Re-assert it so a
+                // firmware that switched SDA to input only after that edge
+                // still reads the bit (the input-register raise is refreshed
+                // on the read side of the clock).
+                I2cPhase::SlaveAck { driven: true, .. } | I2cPhase::ReadBits { .. } => {
+                    if let Some(level) = self.drive {
+                        out.push((self.sda_pin, level));
+                    }
+                    if let I2cPhase::ReadBits { nbits, byte } = self.phase {
+                        // Count the master's sample; after the 8th the next
+                        // clock is the master's ACK.
+                        if nbits + 1 == 8 {
+                            self.phase = I2cPhase::MasterAck { sampled: None };
+                        } else {
+                            self.phase = I2cPhase::ReadBits {
+                                nbits: nbits + 1,
+                                byte,
+                            };
+                        }
+                    }
+                }
+                I2cPhase::Idle | I2cPhase::AwaitStop | I2cPhase::SlaveAck { .. } => {}
+            }
+            return out;
+        }
+        if !falling {
+            return out;
+        }
+
+        // Falling edge: the slave's turn to change the wire (data valid while
+        // the clock is high, changes while low).
+        match self.phase {
+            I2cPhase::SlaveAck {
+                ack,
+                read_next,
+                driven: false,
+            } => {
+                // Entering the ACK clock: put ACK (low) / NACK (high) on the
+                // wire before the master raises SCL to sample it.
+                self.drive_sda(!ack, &mut out);
+                self.phase = I2cPhase::SlaveAck {
+                    ack,
+                    read_next,
+                    driven: true,
+                };
+            }
+            I2cPhase::SlaveAck {
+                ack,
+                read_next,
+                driven: true,
+            } => {
+                // Leaving the ACK clock.
+                if read_next {
+                    self.begin_read_byte(&mut out);
+                } else if ack {
+                    // Acked address-for-write or write byte: the master's
+                    // next byte follows.
+                    self.release_sda(&mut out);
+                    self.phase = I2cPhase::MasterBits {
+                        is_addr: false,
+                        nbits: 0,
+                        acc: 0,
+                    };
+                } else {
+                    // NACK delivered: nothing more until STOP / Sr.
+                    self.release_sda(&mut out);
+                    self.phase = I2cPhase::AwaitStop;
+                }
+            }
+            I2cPhase::ReadBits { nbits, byte } if nbits > 0 => {
+                // Shift the next bit out (bit 7 went out at entry).
+                self.drive_sda(byte & (0x80 >> nbits) != 0, &mut out);
+            }
+            I2cPhase::MasterAck { sampled } => match sampled {
+                None => {
+                    // The falling edge after our last data bit: hand the wire
+                    // to the master for its ACK/NACK.
+                    self.release_sda(&mut out);
+                }
+                Some(true) => {
+                    // Master ACK: it wants the next byte.
+                    self.begin_read_byte(&mut out);
+                }
+                Some(false) => {
+                    // Master NACK: last byte of the read; STOP or Sr follows.
+                    self.phase = I2cPhase::AwaitStop;
+                }
+            },
+            _ => {}
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +952,186 @@ addr_mask = 0x7f
             m.resp.faulted(),
             "nonzero reply with no preview must fault the responder"
         );
+    }
+
+    // ── Soft I2C ─────────────────────────────────────────────────────────────
+
+    const SCL: (char, u8) = ('D', 2);
+    const SDA: (char, u8) = ('D', 3);
+
+    const I2C_SPEC: &str = r#"
+[sensor]
+name = "MINI6050"
+bus = "i2c"
+i2c_address = 0x68
+
+[[sensor.input]]
+name = "val"
+default = 0.0
+
+[[sensor.register]]
+addr = 0x75
+const = [0x68]
+
+[[sensor.register]]
+addr = 0x41
+bytes = 2
+encoding = "i16_be"
+expr = "val"
+
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+
+    /// A bit-level soft-I2C master driving the responder the way the fixture
+    /// firmware drives the real pins: push-pull SDA for master bits, sampling
+    /// the responder's SDA drive (last drive wins) for ACKs and read bytes.
+    struct I2cMaster {
+        resp: SoftI2cResponder,
+        /// The SDA input-pin level as the MCU would read it.
+        sda_in: bool,
+    }
+
+    impl I2cMaster {
+        fn edge(&mut self, pin: (char, u8), high: bool) {
+            for (p, level) in self.resp.on_edge(pin, high) {
+                assert_eq!(p, SDA, "responder must only drive SDA");
+                self.sda_in = level;
+            }
+        }
+        fn init(&mut self) {
+            // Firmware init: both lines driven high (bus idle).
+            self.edge(SDA, true);
+            self.edge(SCL, true);
+        }
+        fn start(&mut self) {
+            // SDA falls while SCL high, then SCL falls.
+            self.edge(SDA, true);
+            self.edge(SCL, true);
+            self.edge(SDA, false);
+            self.edge(SCL, false);
+        }
+        fn stop(&mut self) {
+            self.edge(SDA, false);
+            self.edge(SCL, true);
+            self.edge(SDA, true);
+        }
+        /// Write one byte; returns the slave's ACK (true = acked).
+        fn write_byte(&mut self, byte: u8) -> bool {
+            for i in (0..8).rev() {
+                self.edge(SDA, (byte >> i) & 1 != 0);
+                self.edge(SCL, true);
+                self.edge(SCL, false);
+            }
+            // ACK clock: the slave drove SDA at the falling edge above; the
+            // master samples while SCL is high.
+            self.edge(SCL, true);
+            let ack = !self.sda_in;
+            self.edge(SCL, false);
+            ack
+        }
+        /// Read one byte, answering with `ack` (true = ACK = more bytes).
+        fn read_byte(&mut self, ack: bool) -> u8 {
+            let mut byte = 0u8;
+            for _ in 0..8 {
+                self.edge(SCL, true);
+                byte = (byte << 1) | u8::from(self.sda_in);
+                self.edge(SCL, false);
+            }
+            // Master ACK/NACK (push-pull), sampled by the slave on the rising
+            // edge.
+            self.edge(SDA, !ack);
+            self.edge(SCL, true);
+            self.edge(SCL, false);
+            byte
+        }
+    }
+
+    fn i2c_master(val: f64) -> (I2cMaster, Arc<Mutex<I2cBus>>) {
+        let mut sensor = RegisterMapSensor::from_toml(I2C_SPEC).unwrap();
+        sensor.set_input("val", val);
+        let bus = Arc::new(Mutex::new(
+            I2cBus::new("U3").with_slave(Box::new(sensor)),
+        ));
+        let resp = SoftI2cResponder::new(bus.clone(), SCL, SDA);
+        (
+            I2cMaster {
+                resp,
+                sda_in: true,
+            },
+            bus,
+        )
+    }
+
+    /// PROOF: the classic pointered register read — START, addr+W (acked),
+    /// pointer byte, repeated START, addr+R (acked), data bytes with a master
+    /// ACK between and a NACK to end, STOP — recovered entirely from pin
+    /// edges and answered by the byte-level RegisterMapSensor.
+    #[test]
+    fn soft_i2c_reads_registers_via_repeated_start() {
+        let (mut m, _bus) = i2c_master(1234.0);
+        m.init();
+
+        // WHO_AM_I (0x75), single-byte read.
+        m.start();
+        assert!(m.write_byte(0x68 << 1), "address+W must ACK");
+        assert!(m.write_byte(0x75), "pointer byte must ACK");
+        m.start(); // repeated START
+        assert!(m.write_byte((0x68 << 1) | 1), "address+R must ACK");
+        let who = m.read_byte(false);
+        m.stop();
+        assert_eq!(who, 0x68, "WHO_AM_I over soft I2C");
+
+        // Two-byte i16_be register (0x41) = 1234.
+        m.start();
+        assert!(m.write_byte(0x68 << 1));
+        assert!(m.write_byte(0x41));
+        m.start();
+        assert!(m.write_byte((0x68 << 1) | 1));
+        let hi = m.read_byte(true);
+        let lo = m.read_byte(false);
+        m.stop();
+        assert_eq!(i16::from_be_bytes([hi, lo]), 1234);
+    }
+
+    /// An address no attached slave models is NACKed — the honest no-answer,
+    /// never a fake ACK — and a following good transaction still works.
+    #[test]
+    fn soft_i2c_nacks_unknown_address() {
+        let (mut m, _bus) = i2c_master(0.0);
+        m.init();
+
+        m.start();
+        assert!(!m.write_byte(0x21 << 1), "unmodeled address must NACK");
+        m.stop();
+
+        m.start();
+        assert!(m.write_byte(0x68 << 1), "modeled address still ACKs");
+        m.stop();
+    }
+
+    /// A START mid-byte resyncs the engine (the asynchronous START detection
+    /// real slaves perform) instead of erroring or staying desynced.
+    #[test]
+    fn soft_i2c_resyncs_on_mid_byte_start() {
+        let (mut m, _bus) = i2c_master(0.0);
+        m.init();
+
+        // Begin an address byte, abandon it three bits in with a new START.
+        m.start();
+        for bit in [true, false, true] {
+            m.edge(SDA, bit);
+            m.edge(SCL, true);
+            m.edge(SCL, false);
+        }
+        m.edge(SDA, true); // setup for the framing violation
+        m.edge(SCL, true);
+        m.edge(SDA, false); // SDA falls while SCL high: START
+        m.edge(SCL, false);
+
+        // The fresh address byte must be captured cleanly.
+        assert!(m.write_byte(0x68 << 1), "post-resync address must ACK");
+        m.stop();
     }
 
     #[test]
