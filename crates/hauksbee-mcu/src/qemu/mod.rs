@@ -774,9 +774,13 @@ impl QemuBackend {
             return Ok(());
         }
         if !self.bus_magic_seen {
-            // A pre-v2 firmware never raises the magic; treat an unreadable
-            // word as "not raised" (boot-time RAM may not be primed yet).
-            let magic = self.read_guest_u32(mailbox::BUS_MAGIC).unwrap_or(0);
+            // A pre-v2 firmware never raises the magic — un-primed RAM reads
+            // as an honest 0 through a WORKING channel. A read that FAILS is a
+            // control-channel fault and must surface, not masquerade as "magic
+            // not raised" (a v2 firmware would spin on RSP_SEQ forever).
+            let magic = self
+                .read_guest_u32(mailbox::BUS_MAGIC)
+                .context("reading the QEMU bus-mailbox magic word")?;
             if magic != mailbox::BUS_MAGIC_VALUE {
                 return Ok(());
             }
@@ -821,10 +825,22 @@ impl QemuBackend {
         // not pin the control channels.
         let mut cb = self.on_i2c.take().expect("checked by caller");
         let mut active = self.i2c_ring_active.take();
+        // Mirrors the Renode bridge's `I2cBridgeState::ensure_mode` exactly:
+        // switching TO write stops any open transaction; switching to read on
+        // the SAME address is a repeated START (no Stop — a register-read
+        // slave must not see its transaction boundary mid-read); a read on a
+        // DIFFERENT address stops the old transaction first.
         let ensure_mode = |active: &mut Option<(u8, bool)>, cb: &mut I2cCb, a: u8, read: bool| {
             if *active != Some((a, read)) {
-                if let Some((prev, _)) = active.take() {
-                    let _ = cb(I2cEvent::Stop { addr: prev });
+                if !read {
+                    if let Some((prev, _)) = active.take() {
+                        let _ = cb(I2cEvent::Stop { addr: prev });
+                    }
+                } else if let Some((prev, _)) = *active {
+                    if prev != a {
+                        let _ = cb(I2cEvent::Stop { addr: prev });
+                        *active = None;
+                    }
                 }
                 let _ = cb(I2cEvent::Start { addr: a, read });
                 *active = Some((a, read));
@@ -859,13 +875,18 @@ impl QemuBackend {
         })();
         self.on_i2c = Some(cb);
         self.i2c_ring_active = active;
+        // The request is SERVICED once dispatched, acknowledged or not: mark
+        // it before the response writes so a caller that retries after a
+        // failed write cannot replay the byte events into a stateful slave
+        // model. A failed write still errors out loudly below (the firmware's
+        // spin-wait then times out rather than reading a half-written reply).
+        self.i2c_serviced_seq = seq;
         dispatch?;
 
         if !reply.is_empty() {
             self.write_guest_bytes(mailbox::I2C_RSP_DATA, &reply)?;
         }
         self.write_guest_u32(mailbox::I2C_RSP_SEQ, seq)?;
-        self.i2c_serviced_seq = seq;
         Ok(())
     }
 
@@ -919,13 +940,15 @@ impl QemuBackend {
             Ok(())
         })();
         self.on_spi = Some(cb);
+        // Serviced once dispatched (see the I2C twin): never replay byte
+        // events into a stateful slave model on a retry after a failed write.
+        self.spi_serviced_seq = seq;
         dispatch?;
 
         if !miso.is_empty() {
             self.write_guest_bytes(mailbox::SPI_RSP_DATA, &miso)?;
         }
         self.write_guest_u32(mailbox::SPI_RSP_SEQ, seq)?;
-        self.spi_serviced_seq = seq;
         Ok(())
     }
 

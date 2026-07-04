@@ -176,8 +176,9 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     );
 
     // A READ transaction: two bytes, replies must land in the response cell.
-    // The repeated-start (write→read on the same address) synthesizes
-    // Stop+Start, mirroring the Renode bridge's ensure_mode.
+    // A write→read turnaround on the SAME address is a repeated START — no
+    // Stop in between (a register-read slave must not see its transaction
+    // boundary mid-read), mirroring the Renode bridge's ensure_mode.
     mcu.debug_write_u32(mailbox::I2C_REQ_OP, mailbox::I2C_OP_READ)
         .expect("op");
     mcu.debug_write_u32(mailbox::I2C_REQ_LEN, 2).expect("len");
@@ -188,13 +189,9 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
         let log = events.lock().unwrap();
         assert_eq!(
             &log[4..],
-            [
-                "stop 0x50",
-                "start 0x50 read=true",
-                "read 0x50",
-                "read 0x50"
-            ],
-            "mode change must synthesize Stop+Start, then one Read per byte"
+            ["start 0x50 read=true", "read 0x50", "read 0x50"],
+            "same-address write→read must be a repeated START (no Stop), \
+             then one Read per byte"
         );
     }
     let rsp = mcu.debug_read_u32(mailbox::I2C_RSP_DATA).expect("rsp data");
