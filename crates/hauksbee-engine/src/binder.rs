@@ -62,10 +62,12 @@ pub struct McuBinding {
 /// One MCP4728 quad DAC discovered on the board. Carries the assigned 7-bit
 /// I2C address, the board reference/value config (VREF, gain), and the four
 /// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
-/// creates one [`Mcp4728`](crate::Mcp4728) slave per binding, attaches them on a
-/// shared bus, and pushes each channel's computed VOUT onto these drivers every
-/// chunk (the `Hc595Chain::apply` cadence) so the analog solve sees the DAC
-/// output voltages.
+/// realizes each binding as a spec-driven
+/// [`RegisterMapSensor`](crate::RegisterMapSensor) instance of
+/// `docs/hunts/specs/mcp4728.toml` on a shared bus, binding these drivers to
+/// the spec's per-channel outputs; the slave then drives the VOUT nets itself
+/// at each transaction end (the ctx-bearing `on_stop`, 05 §3.1), so the analog
+/// solve sees the DAC output voltages.
 pub struct DacBinding {
     pub reference: String,
     pub address: u8,

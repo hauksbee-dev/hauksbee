@@ -106,6 +106,58 @@ the TWI input IRQ with `READ | ACK` carrying the data. `I2cEvent` gained a
 `Read { addr }` variant for this path. The integration proof reads an LM75 and
 decodes real temperature bytes end to end.
 
+### Declarative register-map devices (and the write side)
+
+Hand-coding each bus device in Rust does not scale, so a device can instead be
+a **TOML spec** (`docs/hunts/specs/*.toml`, schema in
+`hauksbee-models/src/sensor_spec.rs`) that the generic `RegisterMapSensor`
+interpreter realizes as a live `I2cSlave`/`SpiSlave`. The read side maps
+physical inputs through `evalexpr` value expressions into datasheet register
+packings (BME280, MPU6050, LM75 are byte-identical to hand-coded models).
+
+Since 05 §3.2 the spec also describes the **write side** — what firmware
+writes do:
+
+- **Pointer-framed write registers** decode into stored variables that read
+  expressions reference, so a config write changes what a later read returns.
+  ADS1115 (config selects mux/PGA for the conversion register) and INA219
+  (calibration feeds the current/power math) are the shipped proofs, each
+  fixture-anchored to datasheet worked-example numbers.
+- **Command-framed writes** (the MCP4728 shape: mask-matched command byte,
+  fixed-size data groups, per-channel state) update state whose **output
+  voltage laws drive analog nets**. The MCP4728 is pure data now
+  (`docs/hunts/specs/mcp4728.toml`); the scheduler binds the binder-stamped
+  VOUT `PinDriver`s to the spec's outputs, and the slave drives them itself in
+  the ctx-bearing `on_stop` (05 §3.1) — delivered once per chunk, after the
+  MCU ran and before the analog solve, because the byte events arrive inside
+  the MCU callback where no circuit context exists (and the solve could not
+  see a mid-chunk voltage anyway).
+- **Bit extraction is framing-layer data**, never expression math: `evalexpr`
+  has no bit operations, so fields are declared `[high, low]` bit ranges the
+  interpreter extracts in Rust. Everything downstream (state updates, voltage
+  laws, read-back frames) is expressions over the extracted names.
+
+What the write side does **not** do, stated rather than faked:
+
+- **SPI writes are accept-and-ignore** (validation rejects SPI write blocks;
+  the ignored bytes are counted). No shipped device needs them yet.
+- **No timing.** Conversion/update latency is not modeled: an ADS1115
+  single-shot completes instantly, a DAC write lands at the next chunk solve.
+- **Undeclared writes are ACKed and counted** (`ignored_write_bytes` in the
+  slave's `state()`), like a real part ACKing a command family the model
+  omits — an eaten config write is observable, never silent.
+- **SSD1306 is deferred (design sketch).** A display is a write-only
+  command/data STREAM, not a register map: the control byte (0x00 command /
+  0x40 data) selects an interpreter, commands set an addressing-mode cursor,
+  and data bytes fill a 128×64 framebuffer — a **sink with megabytes of
+  addressable state**, not per-channel scalars with a voltage law. Forcing it
+  into `state`/`output` would mean thousands of fake "channels" and no net to
+  drive. The honest shape is a third device class: `write_command`-style
+  framing feeding a `framebuffer` sink block (page/column cursor semantics in
+  Rust, dimensions and command opcodes as data) with assertions over pixel
+  regions instead of net voltages. That lands with the W5 extensibility SDK
+  rather than being bent into the net-driving schema here.
+
 ### Bus-speed honesty (chunk-rate limits)
 
 Interception is at the **byte / transaction level** through simavr's hardware
@@ -235,6 +287,9 @@ max = 25
   machine). Well-formed transfers complete within a chunk, so this is correct in
   practice; pathological multi-chunk transfers with no idle gap could mis-frame.
 - **One SPI slave per bus** (no CS to select among several).
+- **The declarative write side is I2C-only and untimed** (see the section
+  above): SPI write phases and conversion/update latency are stated
+  non-features, and unmodeled write bytes are counted, not decoded.
 - **Contact bounce is a deterministic chatter model**, not a measured
   statistical bounce profile: a fixed ~5-cycle open/close burst across the
   configured window. It is enough to exercise debounce logic, not to reproduce a
