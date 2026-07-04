@@ -64,7 +64,7 @@ pub use frontdoor::{
 };
 pub use peripherals::{
     controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},
-    i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75, Mcp4728},
+    i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75},
     load::DynamicLoad,
     sink::VcdSink,
     spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave},
