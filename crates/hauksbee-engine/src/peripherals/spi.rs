@@ -60,6 +60,28 @@ pub trait SpiSlave: Send {
         false
     }
 
+    /// The byte this slave would shift out on the NEXT [`SpiSlave::transfer`],
+    /// when that byte is already determined by prior traffic — `None` when the
+    /// model cannot say. Must be non-advancing: calling it any number of times
+    /// must not change the observable byte stream.
+    ///
+    /// Physical grounding: a real slave preloads its output shift register
+    /// before the master clocks, so MISO byte N can never depend on MOSI
+    /// byte N. The byte-level `transfer(mosi) -> miso` API conflates the two
+    /// directions; this hook un-conflates them for bit-level consumers (the
+    /// bit-banged SPI responder, 05 §1.5), which must present MISO bits before
+    /// the master's byte has finished arriving. The responder cross-checks the
+    /// preview against the eventual `transfer` return and refuses loudly on a
+    /// mismatch, so a model whose reply genuinely depends on the incoming byte
+    /// fails loud, never silently wrong.
+    ///
+    /// The default `None` leaves byte-level buses unaffected (they never call
+    /// this); implement it on any slave that should be readable over
+    /// bit-banged SPI.
+    fn miso_preview(&mut self) -> Option<u8> {
+        None
+    }
+
     fn state(&self) -> HashMap<String, f64> {
         HashMap::new()
     }
@@ -160,6 +182,13 @@ impl SpiBus {
     /// Exchange one byte (body of the `on_spi` closure).
     pub fn transfer(&mut self, mosi: u8) -> u8 {
         self.slave.transfer(mosi)
+    }
+
+    /// The slave's next MISO byte, when determined (see
+    /// [`SpiSlave::miso_preview`]). Called by the bit-banged SPI responder at
+    /// each byte boundary; the byte-level `on_spi` path never calls this.
+    pub fn miso_preview(&mut self) -> Option<u8> {
+        self.slave.miso_preview()
     }
 
     /// CS ASSERTED (active-low falling edge): begin a transaction. Interleaved in

@@ -686,6 +686,82 @@ impl Scheduler {
         }
     }
 
+    /// Attach a bit-banged SPI slave (05 §1.5): the firmware toggles
+    /// SCLK/MOSI/CS as plain GPIOs and reads MISO as a GPIO, and the
+    /// [`crate::responders::BitBangSpiResponder`] bridges the bit stream to
+    /// the byte-level slave in `bus`, answering MISO synchronously inside the
+    /// firmware's own clock loop.
+    ///
+    /// The responder registers with the input-responder registry of the MCU
+    /// whose binding owns the SCLK GPIO driver (the same ownership rule as
+    /// `register_cs_frame`); all four pins must belong to that MCU. Pin tuples
+    /// come from the board — resolve nets with [`Scheduler::mcu_pin_for_net`],
+    /// the same net-to-pin trace the 165/595 chain discovery performs.
+    ///
+    /// The bus records `cs_n` as its CS pin so coverage reports `exact`
+    /// framing and the chunk-boundary deselect heuristic stays off it
+    /// (`frames_itself`). Deliberately NOT `register_cs_frame`: the responder
+    /// owns select/deselect from the same CS edges, and registering both would
+    /// double-deliver every CS event to the slave.
+    ///
+    /// Only meaningful on push backends (simavr): on poll backends the
+    /// responder never fires (`on_input_responder` is a documented no-op) and
+    /// a bit-banged read stays coarse, per the 05 §1.5 backend tier.
+    pub fn attach_bitbang_spi(
+        &mut self,
+        bus: Arc<Mutex<SpiBus>>,
+        pins: crate::responders::BitBangSpiPins,
+    ) -> anyhow::Result<()> {
+        let mi = self
+            .mcus
+            .iter()
+            .position(|m| m.binding.gpio_drivers.contains_key(&pins.sclk))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "bit-banged SPI '{}': no live MCU drives SCLK pin {:?}",
+                    bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                    pins.sclk
+                )
+            })?;
+        for (name, pin) in [
+            ("MOSI", pins.mosi),
+            ("MISO", pins.miso),
+            ("CS", pins.cs_n),
+        ] {
+            if !self.mcus[mi].binding.gpio_drivers.contains_key(&pin) {
+                anyhow::bail!(
+                    "bit-banged SPI '{}': {name} pin {:?} is not a wired GPIO of the MCU \
+                     that drives SCLK ({})",
+                    bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                    pin,
+                    self.mcus[mi].binding.reference,
+                );
+            }
+        }
+        bus.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_cs_pin(Some(pins.cs_n));
+        let responder = crate::responders::BitBangSpiResponder::new(bus.clone(), pins);
+        self.responder_registry(mi)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(Box::new(responder));
+        self.spi_buses.push(bus);
+        Ok(())
+    }
+
+    /// Resolve a named net to the MCU GPIO pin wired to it. This is the
+    /// net-to-pin trace the 165/595 chain discovery performs, exposed by net
+    /// NAME so a caller wiring a bit-banged topology can go from the board's
+    /// nets straight to responder pins. Input pins resolve too: every wired
+    /// digital-capable pin gets a (possibly tri-stated) GPIO driver, so a
+    /// MISO/SDA-style read pin carries the mapping even though the firmware
+    /// never drives it.
+    pub fn mcu_pin_for_net(&self, net: &str) -> Option<(char, u8)> {
+        let node = *self.net_nodes.get(net)?;
+        self.pin_driving_node(node)
+    }
+
     /// Trace a net back to the MCU pin that drives it: the (port, bit) of the
     /// GPIO driver whose net is `node`, if any MCU drives it. This is the CS-net
     /// resolution the binder uses to populate `cs_pin` (05 §2.1): the same
