@@ -2171,8 +2171,6 @@ fn instantiate_qemu(
     )
 }
 
-/// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
-#[cfg(feature = "avr")]
 /// Whether a backend string names an EXTERNAL co-sim core (Renode, QEMU, or
 /// anything future) as opposed to the one full-stack in-process backend
 /// (simavr), which models peripheral-slave coupling and exposes pin drive
@@ -2185,6 +2183,8 @@ pub fn backend_is_external(backend: &str) -> bool {
     !backend.starts_with("simavr")
 }
 
+/// Build a simavr-backed AVR core for a `simavr:<part>` backend string.
+#[cfg(feature = "avr")]
 fn instantiate_avr(backend: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
     let mut avr = if backend.contains("atmega328p") {
         AvrMcu::atmega328p_16mhz()?
