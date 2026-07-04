@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
 # install-sims.sh - install or verify the external MCU simulator backends.
 #
-# hauksbee's AVR co-sim is built in (libsimavr, no install needed). The Renode
+# hauksbee's AVR co-sim links libsimavr from the system. simavr is GPL-3.0 and
+# this repo is MIT, so simavr is NOT vendored — it is linked from the system by
+# deliberate choice; `--avr` below builds and installs it for you. The Renode
 # and Espressif QEMU backends require externally installed binaries. This script
-# installs them into the exact locations hauksbee auto-discovers, resolving
-# versions from the GitHub API and verifying the binaries after install.
+# installs any of them into the exact locations hauksbee auto-discovers,
+# resolving versions from the GitHub API and verifying after install.
 #
 # Usage:
-#   scripts/install-sims.sh [--renode-only | --qemu-only] [--check] [--help]
+#   scripts/install-sims.sh [--renode-only | --qemu-only | --avr]
+#                           [--prefix DIR] [--check] [--help]
 #
 # Flags:
-#   (none)           Install both Renode and Espressif QEMU.
+#   (none)           Install both Renode and Espressif QEMU (AVR is opt-in via
+#                    --avr because simavr is GPL-3.0; see below).
 #   --renode-only    Install Renode only.
 #   --qemu-only      Install Espressif QEMU only.
+#   --avr            Install libsimavr (AVR co-sim) only. Installs libelf, then
+#                    clones + builds + installs simavr from source into the
+#                    prefix hauksbee-mcu's build.rs links against.
+#   --prefix DIR     Install simavr under DIR instead of the platform default
+#                    (/opt/homebrew on arm64 macOS, /usr/local elsewhere). Only
+#                    affects --avr; pair with SIMAVR_INCLUDE_DIR/SIMAVR_LIB_DIR
+#                    when building.
 #   --check          Do NOT install anything. Report for each backend whether
 #                    hauksbee will discover it and at which path. Exit 0 if
-#                    both requested backends are discoverable, else 1.
+#                    all requested backends are discoverable, else 1.
 #   --help           Show this help.
 #
 # Install targets:
@@ -24,6 +35,7 @@
 #   Esp QEMU  -> ~/.espressif/tools/qemu-xtensa/<ver>/qemu/bin/
 #              -> ~/.espressif/tools/qemu-riscv32/<ver>/qemu/bin/
 #             (or via idf_tools.py if an ESP-IDF checkout is found)
+#   simavr    -> <prefix>/lib/libsimavr.a  +  <prefix>/include/simavr/
 #
 # Environment overrides (these are hauksbee's env overrides, not just this
 # script's): HAUKSBEE_RENODE, HAUKSBEE_QEMU_XTENSA, HAUKSBEE_QEMU_RISCV32.
@@ -40,12 +52,17 @@ usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'
 # ── defaults ────────────────────────────────────────────────────────────────
 DO_RENODE=1
 DO_QEMU=1
+DO_AVR=0          # opt-in: simavr is GPL-3.0, so it is not installed by default
 CHECK_ONLY=0
+PREFIX_OVERRIDE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --renode-only)  DO_QEMU=0; shift ;;
-    --qemu-only)    DO_RENODE=0; shift ;;
+    --renode-only)  DO_QEMU=0; DO_AVR=0; shift ;;
+    --qemu-only)    DO_RENODE=0; DO_AVR=0; shift ;;
+    --avr|--avr-only) DO_RENODE=0; DO_QEMU=0; DO_AVR=1; shift ;;
+    --prefix)       PREFIX_OVERRIDE="${2:?--prefix needs a directory}"; shift 2 ;;
+    --prefix=*)     PREFIX_OVERRIDE="${1#*=}"; shift ;;
     --check)        CHECK_ONLY=1; shift ;;
     -h|--help)      usage; exit 0 ;;
     *) die "unknown argument '$1' (try --help)" ;;
@@ -78,6 +95,10 @@ esac
 # ── fallback pinned versions (used if GitHub API is unreachable) ─────────────
 RENODE_FALLBACK_VER="1.16.1"
 QEMU_FALLBACK_VER="esp_develop_9.0.0_20240606"
+
+# Pinned simavr release tag (buserror/simavr). Bumping this is a deliberate,
+# reviewed change — see the licensing note in the header.
+SIMAVR_TAG="v1.8"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -134,6 +155,40 @@ resolve_qemu_asset() {
 # the directory-name form used by idf_tools ("esp_develop_9.0.0_20240606").
 qemu_tag_to_dir_ver() {
   printf '%s' "$1" | tr '-' '_' | sed 's/^esp_/esp_/'
+}
+
+# ── AVR / simavr prefix + discovery ──────────────────────────────────────────
+#
+# hauksbee-mcu/build.rs links a SYSTEM libsimavr. Its default prefix is
+# /opt/homebrew on arm64 macOS and /usr/local everywhere else; --prefix overrides
+# it (pair with SIMAVR_INCLUDE_DIR / SIMAVR_LIB_DIR at build time). Keep this in
+# lockstep with build.rs's default_prefix.
+avr_prefix() {
+  if [ -n "$PREFIX_OVERRIDE" ]; then printf '%s' "$PREFIX_OVERRIDE"; return 0; fi
+  if [ "$PLATFORM" = darwin ] && [ "$ARCH_NORM" = arm64 ]; then
+    printf '%s' "/opt/homebrew"
+  else
+    printf '%s' "/usr/local"
+  fi
+}
+
+# Where Homebrew keeps libelf/zlib, so simavr's Makefile can find them while
+# building — independent of where we install simavr itself (which --prefix may
+# redirect to a scratch dir).
+brew_prefix() {
+  if [ "$ARCH_NORM" = arm64 ]; then printf '%s' "/opt/homebrew"; else printf '%s' "/usr/local"; fi
+}
+
+# Returns 0 and prints the prefix if a usable simavr is installed: BOTH the
+# header build.rs includes and the static archive it links must exist. Mirrors
+# the preflight in crates/hauksbee-mcu/build.rs.
+find_avr_prefix() {
+  local prefix; prefix="$(avr_prefix)"
+  if [ -f "$prefix/include/simavr/sim_avr.h" ] && [ -f "$prefix/lib/libsimavr.a" ]; then
+    printf '%s' "$prefix"
+    return 0
+  fi
+  return 1
 }
 
 # ── Renode discovery (mirrors find_renode() in renode/process.rs) ────────────
@@ -331,6 +386,22 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
       fi
       printf '\n'
     done
+  fi
+
+  if [ "$DO_AVR" -eq 1 ]; then
+    log "AVR / simavr (ATmega / ATtiny co-sim, linked in-process)"
+    avr_found="$(find_avr_prefix 2>/dev/null || true)"
+    if [ -n "$avr_found" ]; then
+      ok "FOUND  $avr_found"
+      info "       header: $avr_found/include/simavr/sim_avr.h"
+      info "       lib:    $avr_found/lib/libsimavr.a"
+    else
+      err "NOT FOUND under $(avr_prefix)"
+      info "  Expected: $(avr_prefix)/include/simavr/sim_avr.h and $(avr_prefix)/lib/libsimavr.a"
+      info "  Run: scripts/install-sims.sh --avr"
+      all_ok=1
+    fi
+    printf '\n'
   fi
 
   if [ "$all_ok" -eq 0 ]; then
@@ -543,6 +614,84 @@ install_qemu() {
   [ -n "$riscv_bin" ]   || die "qemu-system-riscv32 not discoverable after install."
 }
 
+# ── install AVR / simavr ──────────────────────────────────────────────────────
+#
+# simavr is GPL-3.0 and deliberately not vendored (this repo is MIT); we build
+# and install it from a pinned upstream tag into the prefix build.rs links
+# against. This is the same recipe used to produce the working install on the
+# reference machine.
+install_avr() {
+  local prefix; prefix="$(avr_prefix)"
+
+  log "AVR / simavr: checking for existing install under $prefix ..."
+  if find_avr_prefix >/dev/null 2>&1; then
+    ok "Already installed at $prefix — skipping."
+    info "  header: $prefix/include/simavr/sim_avr.h"
+    info "  lib:    $prefix/lib/libsimavr.a"
+    return 0
+  fi
+
+  # 1. libelf (simavr's ELF loader dependency). zlib ships with the OS.
+  log "AVR / simavr: ensuring libelf is present..."
+  case "$PLATFORM" in
+    darwin)
+      if have brew; then
+        brew list libelf >/dev/null 2>&1 || brew install libelf \
+          || die "brew install libelf failed. Install it, then re-run --avr."
+        ok "libelf present (Homebrew)."
+      else
+        warn "Homebrew not found. Install libelf yourself, then re-run --avr."
+      fi
+      ;;
+    linux)
+      info "  simavr needs libelf, zlib and a C toolchain. If the build below"
+      info "  fails on a missing header, install them:"
+      info "    Debian/Ubuntu: sudo apt-get install libelf-dev zlib1g-dev build-essential"
+      info "    Fedora:        sudo dnf install elfutils-libelf-devel zlib-devel make gcc"
+      have cc || have gcc || warn "no C compiler on PATH; the simavr build will fail without one."
+      ;;
+  esac
+
+  # 2. clone + build + install simavr at the pinned tag.
+  have git  || die "git not found; needed to clone simavr."
+  have make || die "make not found; needed to build simavr."
+  TMPDIR="$(make_tmpdir)"
+  log "AVR / simavr: cloning buserror/simavr @ $SIMAVR_TAG ..."
+  info "  into: $TMPDIR/simavr"
+  git clone --depth 1 --branch "$SIMAVR_TAG" https://github.com/buserror/simavr "$TMPDIR/simavr" \
+    || die "git clone of simavr failed (tag $SIMAVR_TAG). Clone it manually and 'make install-simavr'."
+
+  # simavr's install prefix is controlled by DESTDIR (its Makefile sets
+  # PREFIX = ${DESTDIR}); headers land in <DESTDIR>/include/simavr, the archive
+  # in <DESTDIR>/lib. On macOS point HOMEBREW_PREFIX at the real Homebrew tree so
+  # its Makefile finds libelf, regardless of where we install simavr.
+  local make_args=(RELEASE=1 DESTDIR="$prefix")
+  if [ "$PLATFORM" = darwin ]; then
+    make_args+=(HOMEBREW_PREFIX="$(brew_prefix)")
+  fi
+
+  log "AVR / simavr: building + installing into $prefix ..."
+  info "  make -C $TMPDIR/simavr install-simavr ${make_args[*]}"
+  if [ ! -w "$prefix" ] && [ ! -w "$(dirname "$prefix")" ]; then
+    warn "  $prefix is not writable by this user; the install may need sudo."
+  fi
+  make -C "$TMPDIR/simavr" install-simavr "${make_args[@]}" \
+    || die "simavr build/install failed. Check the output above (missing libelf/zlib or a C compiler are the usual causes)."
+
+  # 3. verify against the exact paths build.rs will look for.
+  [ -f "$prefix/include/simavr/sim_avr.h" ] \
+    || die "simavr headers not found at $prefix/include/simavr/sim_avr.h after install."
+  [ -f "$prefix/lib/libsimavr.a" ] \
+    || die "libsimavr.a not found at $prefix/lib/libsimavr.a after install."
+  ok "simavr installed under $prefix"
+  info "  header: $prefix/include/simavr/sim_avr.h"
+  info "  lib:    $prefix/lib/libsimavr.a"
+  if [ -n "$PREFIX_OVERRIDE" ]; then
+    info "  Non-default prefix: build with"
+    info "    SIMAVR_INCLUDE_DIR=$prefix/include SIMAVR_LIB_DIR=$prefix/lib cargo build -p hauksbee-mcu"
+  fi
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 printf '\n'
 log "hauksbee simulator installer  (OS: $OS  arch: $ARCH_NORM)"
@@ -555,6 +704,11 @@ fi
 
 if [ "$DO_QEMU" -eq 1 ]; then
   install_qemu
+  printf '\n'
+fi
+
+if [ "$DO_AVR" -eq 1 ]; then
+  install_avr
   printf '\n'
 fi
 
@@ -586,6 +740,16 @@ if [ "$DO_QEMU" -eq 1 ]; then
     ok "QEMU (riscv32)  $riscv_bin"
   else
     err "QEMU (riscv32)  NOT FOUND"
+    summary_ok=0
+  fi
+fi
+
+if [ "$DO_AVR" -eq 1 ]; then
+  avr_found="$(find_avr_prefix 2>/dev/null || true)"
+  if [ -n "$avr_found" ]; then
+    ok "simavr   $avr_found/lib/libsimavr.a"
+  else
+    err "simavr   NOT FOUND (install step may have failed; see output above)"
     summary_ok=0
   fi
 fi
