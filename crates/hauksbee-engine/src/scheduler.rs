@@ -33,7 +33,7 @@ use crate::behavioral::BehavioralDevice;
 use crate::binder::{gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::{DigitalComponent, PinEdge};
 use crate::peripherals::{
-    I2cBus, Mcp4728, PeripheralSet, SpiBus, SpiFramingMode, TickCtx, TimelineEvent,
+    I2cBus, PeripheralSet, RegisterMapSensor, SpiBus, SpiFramingMode, TickCtx, TimelineEvent,
 };
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
@@ -159,12 +159,6 @@ pub struct Scheduler {
     /// asked for a more specific part than the emulator core models. Surfaced as
     /// a co-sim warning + JSON note; never gates an exit code on its own.
     substitutions: Vec<McuSubstitution>,
-    /// MCP4728 DAC VOUT drivers: each entry maps an I2C slave (by address, on
-    /// `dac_bus`) to its four VOUT-channel [`PinDriver`]s. Every chunk the
-    /// scheduler reads the slave's computed VOUT per channel and pushes it onto
-    /// the matching driver before the analog solve (the `Hc595Chain::apply`
-    /// cadence), so firmware DAC writes become real analog output voltages.
-    dac_vouts: Vec<DacVoutDrive>,
     /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
     /// granularity inside the owning MCU's run loop via its synchronous input
     /// responder (the read-direction analogue of `chains`). Wrapped in
@@ -259,16 +253,6 @@ impl McuSubstitution {
     }
 }
 
-
-/// One MCP4728's analog VOUT drive: the bus its slave lives on, the slave's
-/// 7-bit address, and the four channel drivers (None where the VOUT net is not
-/// connected on the board).
-struct DacVoutDrive {
-    bus: Arc<Mutex<I2cBus>>,
-    address: u8,
-    drivers: [Option<crate::drivers::PinDriver>; 4],
-
-}
 
 /// The cycle-stamped GPIO edges one MCU produced during the most recent chunk,
 /// exposed for the analog PWL side (05 §1.1/§1.3).
@@ -404,7 +388,6 @@ impl Scheduler {
             spi_buses: Vec::new(),
             spi_controller_map: HashMap::new(),
             substitutions,
-            dac_vouts: Vec::new(),
             hc165_chains: Vec::new(),
             input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
             forced_node_volts: HashMap::new(),
@@ -423,10 +406,12 @@ impl Scheduler {
         // (bit-banged SCLK + digitalRead(MISO)) resolves at edge granularity.
         sched.build_and_install_165_chains();
 
-        // Wire up the board's MCP4728 quad DACs: build one I2C slave per binding
-        // at its assigned address, attach them on a shared bus (so firmware TWI
-        // writes reach them through `on_i2c`), and record each slave's VOUT
-        // drivers so the chunk loop pushes computed VOUT onto the analog nets.
+        // Wire up the board's MCP4728 quad DACs: build one spec-driven I2C
+        // slave per binding at its assigned address, attach them on a shared
+        // bus (so firmware TWI writes reach them through `on_i2c`), with each
+        // connected VOUT net's PinDriver bound to the matching spec output so
+        // the slave drives the analog nets itself at every transaction end
+        // (the ctx-bearing on_stop, 05 §3.1).
         if !dacs.is_empty() {
             sched.attach_mcp4728_dacs(dacs);
         }
@@ -436,29 +421,49 @@ impl Scheduler {
 
     /// Build and attach the MCP4728 DAC slaves discovered by the binder. One
     /// shared [`I2cBus`] holds all of them (addressed 0x60/0x61/0x62); the bus
-    /// is registered as every MCU's `on_i2c` handler. Each DAC's VOUT-channel
-    /// drivers are kept in `dac_vouts` so [`Scheduler::push_dac_vouts`] can
-    /// drive the analog nets each chunk.
+    /// is registered as every MCU's `on_i2c` handler.
+    ///
+    /// Each slave is a [`RegisterMapSensor`] instance of the shipped MCP4728
+    /// spec (05 §3.2: the DAC is data, not Rust) with the binder-resolved
+    /// per-instance address / VREF / gain applied over the spec defaults and
+    /// each connected VOUT channel's [`crate::drivers::PinDriver`] bound to
+    /// the matching spec output. Net driving happens in the slave's own
+    /// `on_stop(ctx)`, delivered by the chunk loop's `flush_stops` — no
+    /// scheduler-side polling.
     fn attach_mcp4728_dacs(&mut self, dacs: Vec<crate::binder::DacBinding>) {
+        /// The shipped declarative MCP4728 spec. Embedded (rather than loaded
+        /// from disk at runtime) so an engine binary is self-contained; the
+        /// unit fixtures include the same file, keeping one source of truth.
+        const MCP4728_SPEC: &str = include_str!("../../../docs/hunts/specs/mcp4728.toml");
+
         let mut bus = I2cBus::new("MCP4728_BUS");
-        for d in &dacs {
-            let mut slave = Mcp4728::with_config(d.address, d.vref, d.gain);
-            // Carry the datasheet ROUT through so state() / diagnostics agree
-            // with the stamped driver resistance.
-            slave.rout = 1.0;
+        for d in dacs {
+            let mut slave = RegisterMapSensor::from_toml(MCP4728_SPEC)
+                .expect("shipped mcp4728.toml spec must validate");
+            slave.set_i2c_address(d.address);
+            for ch in 0..4 {
+                slave.set_channel_state("vref", ch, d.vref);
+                slave.set_channel_state("gain", ch, d.gain as f64);
+            }
+            for (ch, drv) in d.vout_drivers.into_iter().enumerate() {
+                if let Some(drv) = drv {
+                    slave.attach_output_driver_for_channel(ch, drv);
+                }
+            }
             bus.add_slave(Box::new(slave));
         }
         let bus = Arc::new(Mutex::new(bus));
         self.attach_i2c_bus(bus.clone());
-        for d in dacs {
-            self.dac_vouts.push(DacVoutDrive {
-                bus: bus.clone(),
-                address: d.address,
-                drivers: d.vout_drivers,
-            });
-        }
-        // Seed the analog nets with the DACs' power-on VOUT (code 0 -> ~0 V).
-        self.push_dac_vouts();
+        // Seed the analog nets with the DACs' power-on VOUT (code 0 -> ~0 V),
+        // the way the first flush_stops otherwise would after a transaction.
+        let volts = self.node_volts.clone();
+        let mut ctx = TickCtx {
+            circuit: &mut self.circuit,
+            node_volts: &volts,
+            t: self.sim_time,
+            dt: self.chunk_s,
+        };
+        bus.lock().unwrap_or_else(|e| e.into_inner()).drive_all(&mut ctx);
     }
 
     /// Build the edge-driven 74HC165 read chains (one per physical chain whose
@@ -526,29 +531,6 @@ impl Scheduler {
                 ));
                 self.hc165_chains.push(chain);
                 break;
-            }
-        }
-    }
-
-    /// Read each MCP4728 slave's current per-channel VOUT and push it onto that
-    /// channel's [`PinDriver`]. Called each chunk after the MCU runs (so a just-
-    /// completed I2C DAC write is reflected) and before the analog solve, the
-    /// same cadence the 74HC595 chains use.
-    fn push_dac_vouts(&mut self) {
-        for dv in &self.dac_vouts {
-            // Snapshot the four VOUT voltages under the bus lock, then release it
-            // before mutating the circuit (drivers borrow `self.circuit`).
-            let vouts: [f64; 4] = {
-                let bus = dv.bus.lock().unwrap_or_else(|e| e.into_inner());
-                match bus.slave::<Mcp4728>(dv.address) {
-                    Some(s) => [s.vout(0), s.vout(1), s.vout(2), s.vout(3)],
-                    None => continue,
-                }
-            };
-            for (ch, drv) in dv.drivers.iter().enumerate() {
-                if let Some(drv) = drv {
-                    drv.set_volts(&mut self.circuit, vouts[ch]);
-                }
             }
         }
     }
@@ -1012,12 +994,27 @@ impl Scheduler {
             self.chains = chains;
         }
 
-        // 5c(prev). Push each MCP4728's computed VOUT onto its channel drivers,
-        // so a DAC write the MCU just issued over TWI (handled in step 1 via
-        // `on_i2c`) appears as a real analog output voltage in this chunk's
-        // solve. Same cadence as the 595 chain apply above.
-        if !self.dac_vouts.is_empty() {
-            self.push_dac_vouts();
+        // 5c(prev). Deliver the deferred I2C transaction-end hooks (05 §3.1):
+        // every slave that saw a STOP during this chunk's MCU run gets
+        // `on_stop(ctx)` so it can drive its output nets before this chunk's
+        // solve — the write-side analogue of the 595 chain apply above (and
+        // how a firmware MCP4728 write becomes a real VOUT net voltage). The
+        // byte dispatch itself runs inside the MCU's `on_i2c` callback, where
+        // no TickCtx can be built; the STOP is recorded there and delivered
+        // here, the first point the circuit is borrowable and the earliest the
+        // analog solve could see the result anyway.
+        if !self.i2c_buses.is_empty() {
+            let buses = self.i2c_buses.clone();
+            let volts = self.node_volts.clone();
+            let mut ctx = TickCtx {
+                circuit: &mut self.circuit,
+                node_volts: &volts,
+                t: self.sim_time,
+                dt: chunk,
+            };
+            for b in buses {
+                b.lock().unwrap_or_else(|e| e.into_inner()).flush_stops(&mut ctx);
+            }
         }
 
         // 2b. Update configurable power supplies from the rail current measured
