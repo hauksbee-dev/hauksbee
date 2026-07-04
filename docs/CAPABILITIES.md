@@ -194,10 +194,19 @@ scheduler couples to any of them without change. The trait lives in
 `crates/hauksbee-mcu/src/traits.rs`; the backends in
 `crates/hauksbee-mcu/src/`.
 
-#### AVR — `AvrMcu` (built in, no install required)
+#### AVR — `AvrMcu` (libsimavr, linked in-process)
 
-Backed by libsimavr, linked in-process. Works out of the box with no external
-dependencies.
+Backed by libsimavr, linked directly into the engine — the AVR co-sim runs
+in-process, with no separate simulator to launch. simavr is GPL-3.0 and this
+MIT repo deliberately does **not** vendor it, so a source build links it from
+the system. Get there one of three ways:
+
+- install it with one command — `scripts/install-sims.sh --avr` (builds and
+  installs libsimavr + libelf into the prefix the build links against);
+- point the build at an existing copy via `SIMAVR_INCLUDE_DIR` /
+  `SIMAVR_LIB_DIR`; or
+- build the GPL-free subset without AVR —
+  `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.
 
 Supported parts (anything simavr knows by name, two shipped convenience
 constructors):
@@ -418,8 +427,9 @@ Three commands form the edit–simulate loop:
 
 **Wrong.**
 
-The AVR backend (ATmega328P, ATmega2560, and anything else simavr knows) is
-built in and requires no install. But hauksbee's co-sim layer has three
+The AVR backend (ATmega328P, ATmega2560, and anything else simavr knows) links
+libsimavr in-process — installed with `scripts/install-sims.sh --avr`, or
+skipped entirely (see the AVR section above). But hauksbee's co-sim layer has three
 backends behind one uniform `Mcu` trait, and the other two cover a wide range
 of modern architectures:
 
@@ -434,9 +444,9 @@ STM32, nRF52840, ESP32, and ESP32-C3 are all proven end-to-end on this branch
 `esp32_qemu_cosim.rs`, `renode_riscv_arm_cosim.rs`). The external simulators
 install via `scripts/install-sims.sh` and are found automatically at runtime.
 
-The correct description: **hauksbee's firmware co-sim covers AVR (built in),
-STM32/nRF52/RISC-V (via Renode), and the full ESP32 family (via Espressif
-QEMU).**
+The correct description: **hauksbee's firmware co-sim covers AVR (via
+libsimavr), STM32/nRF52/RISC-V (via Renode), and the full ESP32 family (via
+Espressif QEMU).**
 
 ### "hauksbee is just a DRC wrapper"
 
