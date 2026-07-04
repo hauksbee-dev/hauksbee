@@ -63,6 +63,45 @@ pub struct PortMap {
     pub width: u8,
 }
 
+/// How a modeled ADC voltage is delivered into the Renode machine for one
+/// engine ADC channel (05-cosim-fidelity §5.1).
+///
+/// Both variants ride the same Monitor TCP channel the backend already uses
+/// for its ODR diffing — injection is one Monitor command per chunk, issued
+/// while the machine is paused between `RunFor` steps, so the firmware sees
+/// the new count before its next instruction runs.
+#[derive(Debug, Clone)]
+pub enum AdcInject {
+    /// Run a Renode Monitor command each chunk, with `{count}` replaced by the
+    /// modeled ADC count and `{millivolts}` by the integer millivolt value.
+    ///
+    /// This is the peripheral-model path: a platform whose `.repl` carries a
+    /// modeled ADC accepts its own feed API (e.g. Renode's `Analog.STM32_ADC`
+    /// on the F0/L0 family takes `sysbus.adc SetDefaultValue {count}`), and
+    /// the firmware then reads the count through its real ADC registers.
+    MonitorCommand(String),
+    /// Write the modeled count into a fixed word each chunk via
+    /// `sysbus WriteDoubleWord <addr> <count>`: the ADC result RAM word (an
+    /// address the firmware reads) or a memory-backed data register. This is
+    /// the Monitor/RAM path of 05 §5.1 — the write-direction twin of the ODR
+    /// poll.
+    MemoryWord(u32),
+}
+
+/// Maps one engine ADC channel to its Renode injection recipe (05 §5.1).
+#[derive(Debug, Clone)]
+pub struct AdcChannelMap {
+    /// Engine-facing ADC channel index ([`Mcu::set_analog_in`]'s `channel`).
+    pub channel: u8,
+    /// How the count reaches the guest.
+    pub inject: AdcInject,
+    /// Voltage corresponding to `max_count` (e.g. 3.3 for a 3V3-referenced
+    /// converter). Injected volts are clamped to `[0, full_scale_volts]`.
+    pub full_scale_volts: f64,
+    /// Count at full scale (4095 for a 12-bit converter).
+    pub max_count: u32,
+}
+
 /// Per-MCU Renode configuration: enough to bring up a machine and wire it.
 #[derive(Debug, Clone)]
 pub struct RenodeConfig {
@@ -107,6 +146,18 @@ pub struct RenodeConfig {
     pub expected_e_machine: u16,
     /// Human-readable MCU/board name for arch-mismatch error messages.
     pub mcu_label: String,
+    /// Per-channel ADC injection recipes (05 §5.1). Empty means ADC injection
+    /// is a LOUD drop (a once-per-channel stderr warning), never a silent one.
+    ///
+    /// The stock constructors leave this empty on purpose: the Renode 1.16
+    /// platform descriptions for the F103 / F4-Discovery / nRF52840 / FE310
+    /// model no ADC peripheral at all, and Renode's `Analog.STM32_ADC` speaks
+    /// the F0/L0 register layout — registering it at an F1 address would let
+    /// firmware "read" a peripheral whose registers are laid out wrong, which
+    /// is fake fidelity ("refuse rather than fake", 00-MASTER-PLAN §5). A
+    /// board/test that knows where its counts must land (a modeled ADC's feed
+    /// command, or the RAM result word its firmware reads) supplies the map.
+    pub adc_channels: Vec<AdcChannelMap>,
 }
 
 impl RenodeConfig {
@@ -144,6 +195,7 @@ impl RenodeConfig {
             ),
             expected_e_machine: crate::elf::EM_ARM,
             mcu_label: "STM32F103 (ARM Cortex-M3)".to_string(),
+            adc_channels: Vec::new(),
         }
     }
 
@@ -181,6 +233,7 @@ impl RenodeConfig {
             spi_extra_repl: None,
             expected_e_machine: crate::elf::EM_ARM,
             mcu_label: "STM32F407 (ARM Cortex-M4)".to_string(),
+            adc_channels: Vec::new(),
         }
     }
 
@@ -215,6 +268,7 @@ impl RenodeConfig {
             spi_extra_repl: None,
             expected_e_machine: crate::elf::EM_ARM,
             mcu_label: "nRF52840 (ARM Cortex-M4)".to_string(),
+            adc_channels: Vec::new(),
         }
     }
 
@@ -248,6 +302,39 @@ impl RenodeConfig {
             spi_extra_repl: None,
             expected_e_machine: crate::elf::EM_RISCV,
             mcu_label: "SiFive FE310 (RISC-V)".to_string(),
+            adc_channels: Vec::new(),
+        }
+    }
+
+    /// Add one ADC channel injection recipe (05 §5.1). Chainable.
+    pub fn with_adc_channel(mut self, map: AdcChannelMap) -> Self {
+        self.adc_channels.push(map);
+        self
+    }
+}
+
+/// Convert a modeled voltage to an ADC count against a converter's full scale.
+/// Clamps to `[0, max_count]`; a non-positive full scale yields 0 (a broken map
+/// must read as "stuck at zero", not NaN-poisoned).
+fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
+    if !(full_scale_volts > 0.0) {
+        return 0;
+    }
+    let frac = (volts / full_scale_volts).clamp(0.0, 1.0);
+    (frac * f64::from(max_count)).round() as u32
+}
+
+/// Render the Monitor command that delivers `count` for one channel's recipe.
+/// `millivolts` is the already-clamped voltage (the caller applies the
+/// channel's `[0, full_scale_volts]` clamp so BOTH placeholders stay inside
+/// the converter's contract, not just `{count}`).
+fn render_adc_inject(inject: &AdcInject, count: u32, millivolts: u64) -> String {
+    match inject {
+        AdcInject::MonitorCommand(template) => template
+            .replace("{count}", &count.to_string())
+            .replace("{millivolts}", &millivolts.to_string()),
+        AdcInject::MemoryWord(addr) => {
+            format!("sysbus WriteDoubleWord 0x{addr:X} 0x{count:X}")
         }
     }
 }
@@ -673,6 +760,9 @@ pub struct RenodeBackend {
     /// When `HAUKSBEE_RENODE_TRACE=1`, the path of Renode's log file to which
     /// function-name trace lines are written. `None` when tracing is disabled.
     trace_log_path: Option<PathBuf>,
+    /// Channels already warned about as un-mapped for ADC injection, so the
+    /// loud drop prints once per channel instead of once per chunk.
+    adc_unmapped_warned: std::collections::HashSet<u8>,
 }
 
 impl RenodeBackend {
@@ -754,6 +844,7 @@ impl RenodeBackend {
             cycles: 0,
             spi_cycle: Arc::new(AtomicU64::new(0)),
             trace_log_path: None,
+            adc_unmapped_warned: std::collections::HashSet::new(),
         })
     }
 
@@ -1348,11 +1439,45 @@ impl Mcu for RenodeBackend {
         }
     }
 
-    fn set_analog_in(&mut self, _channel: u8, _volts: f64) {
-        // ADC injection is platform-specific in Renode (the ADC peripheral
-        // model and its `FeedSample`/`SetDefaultValue` API vary by SoC). The
-        // STM32F103 demo couples through the LED net rather than the ADC, so
-        // this is a documented no-op until a per-platform ADC map is added.
+    fn set_analog_in(&mut self, channel: u8, volts: f64) {
+        // ADC injection through the Monitor/RAM path (05 §5.1): translate the
+        // modeled voltage into a count and deliver it per this channel's
+        // config recipe (a modeled-ADC feed command, or a WriteDoubleWord into
+        // the result word the firmware reads). The Monitor is idle between
+        // `RunFor` chunks, so the write lands before the next chunk executes —
+        // the same cadence at which the scheduler pushes ADC voltages.
+        let Some(map) = self
+            .config
+            .adc_channels
+            .iter()
+            .find(|m| m.channel == channel)
+            .cloned()
+        else {
+            // LOUD drop, once per channel: an unmapped platform must not
+            // silently swallow the scheduler's ADC pushes (the pre-05 §5.1
+            // behaviour this replaces).
+            if self.adc_unmapped_warned.insert(channel) {
+                eprintln!(
+                    "renode: DROPPING ADC injection for channel {channel} on '{}': \
+                     no AdcChannelMap configured (the stock Renode platform models \
+                     no ADC; supply RenodeConfig::adc_channels to enable injection)",
+                    self.config.machine
+                );
+            }
+            return;
+        };
+        let count = adc_count(volts, map.full_scale_volts, map.max_count);
+        let clamped_mv =
+            (volts.clamp(0.0, map.full_scale_volts.max(0.0)) * 1000.0).round() as u64;
+        let cmd = render_adc_inject(&map.inject, count, clamped_mv);
+        // FAIL LOUD, matching the on_i2c/on_spi bridge discipline: a failed
+        // injection means the firmware quietly reads a stale/zero count as if
+        // it were real — exactly the fake-data mode this backend refuses.
+        match self.monitor.command(&cmd) {
+            Ok(resp) if !monitor_failed(&resp) => {}
+            Ok(resp) => panic!("Renode ADC injection failed ({cmd}): {resp}"),
+            Err(e) => panic!("Renode ADC injection failed ({cmd}): {e:#}"),
+        }
     }
 
     fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
@@ -1558,5 +1683,41 @@ mod tests {
             .iter()
             .any(|p| p.letter == 'C' && p.odr_offset == 0x0C));
         assert_eq!(c.uart.as_deref(), Some("sysbus.usart1"));
+        // Stock platforms model no ADC → no injection map, loud-drop path.
+        assert!(c.adc_channels.is_empty());
+    }
+
+    #[test]
+    fn adc_count_conversion() {
+        // 12-bit converter, 3.3 V full scale.
+        assert_eq!(adc_count(0.0, 3.3, 4095), 0);
+        assert_eq!(adc_count(3.3, 3.3, 4095), 4095);
+        // Clamped above full scale and below zero.
+        assert_eq!(adc_count(5.0, 3.3, 4095), 4095);
+        assert_eq!(adc_count(-1.0, 3.3, 4095), 0);
+        // 2.0 V of 3.3 V: (2.0/3.3)*4095 = 2481.8 → 2482.
+        assert_eq!(adc_count(2.0, 3.3, 4095), 2482);
+        // Broken map (zero full scale) reads stuck-at-zero, not NaN.
+        assert_eq!(adc_count(1.0, 0.0, 4095), 0);
+    }
+
+    #[test]
+    fn adc_inject_rendering() {
+        // Peripheral-model path: template substitution.
+        let cmd = render_adc_inject(
+            &AdcInject::MonitorCommand("sysbus.adc SetDefaultValue {count}".to_string()),
+            2482,
+            2000,
+        );
+        assert_eq!(cmd, "sysbus.adc SetDefaultValue 2482");
+        let cmd = render_adc_inject(
+            &AdcInject::MonitorCommand("sysbus.adc FeedMillivolts {millivolts}".to_string()),
+            2482,
+            2000,
+        );
+        assert_eq!(cmd, "sysbus.adc FeedMillivolts 2000");
+        // RAM/result-word path.
+        let cmd = render_adc_inject(&AdcInject::MemoryWord(0x2000_4000), 0x9B2, 2000);
+        assert_eq!(cmd, "sysbus WriteDoubleWord 0x20004000 0x9B2");
     }
 }
