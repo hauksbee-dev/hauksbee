@@ -325,14 +325,14 @@ fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
 }
 
 /// Render the Monitor command that delivers `count` for one channel's recipe.
-fn render_adc_inject(inject: &AdcInject, count: u32, volts: f64) -> String {
+/// `millivolts` is the already-clamped voltage (the caller applies the
+/// channel's `[0, full_scale_volts]` clamp so BOTH placeholders stay inside
+/// the converter's contract, not just `{count}`).
+fn render_adc_inject(inject: &AdcInject, count: u32, millivolts: u64) -> String {
     match inject {
-        AdcInject::MonitorCommand(template) => {
-            let mv = (volts.max(0.0) * 1000.0).round() as u64;
-            template
-                .replace("{count}", &count.to_string())
-                .replace("{millivolts}", &mv.to_string())
-        }
+        AdcInject::MonitorCommand(template) => template
+            .replace("{count}", &count.to_string())
+            .replace("{millivolts}", &millivolts.to_string()),
         AdcInject::MemoryWord(addr) => {
             format!("sysbus WriteDoubleWord 0x{addr:X} 0x{count:X}")
         }
@@ -1467,7 +1467,9 @@ impl Mcu for RenodeBackend {
             return;
         };
         let count = adc_count(volts, map.full_scale_volts, map.max_count);
-        let cmd = render_adc_inject(&map.inject, count, volts);
+        let clamped_mv =
+            (volts.clamp(0.0, map.full_scale_volts.max(0.0)) * 1000.0).round() as u64;
+        let cmd = render_adc_inject(&map.inject, count, clamped_mv);
         // FAIL LOUD, matching the on_i2c/on_spi bridge discipline: a failed
         // injection means the firmware quietly reads a stale/zero count as if
         // it were real — exactly the fake-data mode this backend refuses.
@@ -1705,17 +1707,17 @@ mod tests {
         let cmd = render_adc_inject(
             &AdcInject::MonitorCommand("sysbus.adc SetDefaultValue {count}".to_string()),
             2482,
-            2.0,
+            2000,
         );
         assert_eq!(cmd, "sysbus.adc SetDefaultValue 2482");
         let cmd = render_adc_inject(
             &AdcInject::MonitorCommand("sysbus.adc FeedMillivolts {millivolts}".to_string()),
             2482,
-            2.0,
+            2000,
         );
         assert_eq!(cmd, "sysbus.adc FeedMillivolts 2000");
         // RAM/result-word path.
-        let cmd = render_adc_inject(&AdcInject::MemoryWord(0x2000_4000), 0x9B2, 2.0);
+        let cmd = render_adc_inject(&AdcInject::MemoryWord(0x2000_4000), 0x9B2, 2000);
         assert_eq!(cmd, "sysbus WriteDoubleWord 0x20004000 0x9B2");
     }
 }
