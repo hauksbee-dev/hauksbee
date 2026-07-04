@@ -329,6 +329,94 @@ impl RenodeConfig {
         }
     }
 
+    /// RP2040 (Raspberry Pi Pico): dual Cortex-M0+, 125 MHz, one 30-pin GPIO
+    /// bank observed through the SIO. This is the first config written directly
+    /// against the plain-data struct shape (05-cosim-fidelity §5.4/§5.5).
+    ///
+    /// # The SIO footgun (an honest adaptation of the F4-vs-F103 ODR discipline)
+    ///
+    /// On the STM32 parts the output-state register is a per-port ODR inside a
+    /// GPIO port peripheral (F1 at offset `0x0C`, F4 at `0x14` — the documented
+    /// footgun: use the wrong offset and you read the wrong register). **RP2040
+    /// is not a memory-mapped GPIO port bank at all.** Its GPIO output value
+    /// lives in the SIO (single-cycle IO) block at `SIO_BASE = 0xD000_0000`
+    /// (RP2040 datasheet §2.3.1.7):
+    ///
+    /// | Register     | Absolute      | Offset from SIO_BASE |
+    /// |--------------|---------------|----------------------|
+    /// | `GPIO_IN`    | `0xD000_0004` | `0x04`               |
+    /// | `GPIO_OUT`   | `0xD000_0010` | `0x10`               |
+    /// | `GPIO_OUT_SET`| `0xD000_0014`| `0x14`               |
+    /// | `GPIO_OE`    | `0xD000_0020` | `0x20`               |
+    ///
+    /// So "where do I read output state" is **SIO `GPIO_OUT`** (offset `0x10`
+    /// within the SIO peripheral), not a port ODR. The ODR-diff mechanism
+    /// (`read_odr` → `sysbus.<peripheral> ReadDoubleWord <offset>`) is pointed
+    /// at the SIO peripheral with `odr_offset = 0x10`, which is the faithful
+    /// adaptation: read the register that actually holds the driven levels
+    /// rather than invent a port-bank ODR that does not exist.
+    ///
+    /// # Verification status — READ THIS BEFORE TRUSTING THIS CONFIG
+    ///
+    /// The register offsets above are datasheet-verified. What is **NOT** verified
+    /// is Renode's side, because the Renode build installed on this machine
+    /// (portable **v1.16.1**) ships **no `rp2040` platform** — `platforms/cpus/`
+    /// has only `picosoc`/`litex_picorv32` (unrelated RISC-V soft cores), no
+    /// `rp2040.repl` and no Raspberry Pi Pico board. So two things could not be
+    /// confirmed against a running platform and are best-effort:
+    ///   1. the SIO peripheral's **name** in Renode's `rp2040.repl` (assumed
+    ///      `sio`; correct it here if a Renode build that ships rp2040 names it
+    ///      otherwise), and
+    ///   2. whether Renode's SIO model **reads `GPIO_OUT` back** as the driven
+    ///      value (the STM32 ODR-poll relies on read-back; if Renode tracks the
+    ///      pin level in the IO-bank peripheral instead, the poll target moves).
+    /// The integration smoke `tests/renode_rp2040.rs` is skip-gated precisely on
+    /// this absence and will exercise (and thereby confirm/correct) both points
+    /// the day it runs on a Renode that carries the platform.
+    ///
+    /// # What is deliberately NOT wired (refuse rather than fake)
+    ///
+    /// - **ADC**: RP2040 has a SAR ADC, but no Renode ADC model is verified here,
+    ///   so `adc_channels` is empty — an unmapped channel is the merged policy's
+    ///   LOUD once-per-channel drop, never a fake count.
+    /// - **I2C/SPI**: `i2c_controllers`/`spi_controllers` are empty because the
+    ///   RP2040 Renode peripheral set is unverified; the backend then installs no
+    ///   bridge rather than claiming an unproven bus.
+    /// - **GPIO input**: `set_digital_in` drives `OnGPIO` on the configured
+    ///   peripheral; on RP2040 an input is a pad/IO-bank concern, not SIO, so
+    ///   input injection is unverified. The output smoke does not use it.
+    pub fn rp2040() -> Self {
+        // SIO GPIO_OUT is the output-state register (see the doc comment): a
+        // single 30-pin bank, port letter '0', read at SIO offset 0x10.
+        let ports = vec![PortMap {
+            letter: '0',
+            peripheral: "sio".to_string(),
+            odr_offset: 0x10, // SIO GPIO_OUT, relative to SIO_BASE 0xD0000000
+            width: 30,        // GPIO0..GPIO29
+        }];
+        RenodeConfig {
+            machine: "rp2040".to_string(),
+            platform: "@platforms/cpus/rp2040.repl".to_string(),
+            // Dual-core; the SIO GPIO registers are shared single-cycle IO, so
+            // observation is core-agnostic. State queries use core 0.
+            cpu: "sysbus.cpu0".to_string(),
+            uart: Some("sysbus.uart0".to_string()),
+            ports,
+            frequency_hz: 125_000_000,
+            extra_setup: Vec::new(),
+            post_load_setup: Vec::new(),
+            // Unverified against a running Renode rp2040 platform: leave the bus
+            // controllers empty rather than claim an unproven capability.
+            i2c_controllers: Vec::new(),
+            spi_controllers: Vec::new(),
+            spi_extra_repl: None,
+            expected_e_machine: crate::elf::EM_ARM,
+            mcu_label: "RP2040 (dual Cortex-M0+)".to_string(),
+            // No verified Renode ADC model → no map → loud drop (merged policy).
+            adc_channels: Vec::new(),
+        }
+    }
+
     /// Add one ADC channel injection recipe (05 §5.1). Chainable.
     pub fn with_adc_channel(mut self, map: AdcChannelMap) -> Self {
         self.adc_channels.push(map);
@@ -1768,11 +1856,32 @@ mod tests {
     }
 
     #[test]
+    fn rp2040_config_shape() {
+        let c = RenodeConfig::rp2040();
+        assert_eq!(c.machine, "rp2040");
+        assert_eq!(c.platform, "@platforms/cpus/rp2040.repl");
+        assert_eq!(c.expected_e_machine, crate::elf::EM_ARM);
+        assert_eq!(c.frequency_hz, 125_000_000);
+        // One 30-pin bank read at SIO GPIO_OUT (offset 0x10 from SIO_BASE), NOT
+        // a port ODR — the honest SIO adaptation of the ODR-offset discipline.
+        assert_eq!(c.ports.len(), 1);
+        assert_eq!(c.ports[0].letter, '0');
+        assert_eq!(c.ports[0].peripheral, "sio");
+        assert_eq!(c.ports[0].odr_offset, 0x10);
+        assert_eq!(c.ports[0].width, 30);
+        // Nothing unverified is claimed: no ADC map, no bus controllers.
+        assert!(c.adc_channels.is_empty());
+        assert!(c.i2c_controllers.is_empty());
+        assert!(c.spi_controllers.is_empty());
+    }
+
+    #[test]
     fn config_bridge_roundtrips_bit_identically() {
         assert_roundtrip(&RenodeConfig::stm32f103());
         assert_roundtrip(&RenodeConfig::stm32f4_discovery());
         assert_roundtrip(&RenodeConfig::nrf52840());
         assert_roundtrip(&RenodeConfig::sifive_fe310());
+        assert_roundtrip(&RenodeConfig::rp2040());
         // With the merged ADC work folded in as struct data.
         assert_roundtrip(&RenodeConfig::stm32f103().with_adc_channel(AdcChannelMap {
             channel: 0,
