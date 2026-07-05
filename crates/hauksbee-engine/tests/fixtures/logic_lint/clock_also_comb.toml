@@ -1,0 +1,30 @@
+# Deliberately-broken [models.logic] spec: exercised by cli_models_lint.rs to
+# prove `hauksbee models lint` refuses this category with its NAMED error.
+[[models]]
+id = "broken_clock_also_comb"
+kind = "digital"
+description = "clock pin referenced combinationally"
+
+[models.match]
+value_re = "(?i)^NEVER_MATCHES_BROKEN_CLOCK_ALSO_COMB"
+
+[models.params]
+voh = 4.4
+vol = 0.1
+vih = 3.15
+vil = 1.35
+
+[models.logic]
+inputs  = ["clk", "d"]
+outputs = ["q", "y"]
+
+[[models.logic.register]]
+name = "ff"
+bits = 1
+clock = { pin = "clk", edge = "rising" }
+op = "load"
+data_in = "d"
+
+[models.logic.comb]
+"q" = "ff[0]"
+"y" = "clk & d"

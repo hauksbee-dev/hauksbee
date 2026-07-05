@@ -43,6 +43,46 @@ gnd_pin    = "8"
 max_pin_current_a = 0.025  # ±25mA per output (TI abs max 35)
 max_voltage_v = 7.0
 
+[models.logic]
+# Behaviour source: TI SN74HC595 datasheet (SCLS041I), function table (§8.3):
+# SRCLR L clears the shift register asynchronously and DOMINATES SRCLK (the
+# "SRCLR L, SRCLK X" row); SRCLK rising shifts SER toward QH (QA is the first
+# stage, so bit 0 = QA); RCLK rising copies shift -> storage (with tied
+# clocks the storage register is one clock behind — simultaneous-commit
+# semantics); OE L enables QA..QH (QH' , the serial cascade tap, is not
+# OE-gated).
+inputs  = ["ser", "srclk", "rclk", "srclr_n", "oe_n"]
+outputs = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial"]
+
+[[models.logic.register]]
+name = "shift"
+bits = 8
+clock = { pin = "srclk", edge = "rising" }
+reset = { pin = "srclr_n", active = "low", value = 0 }
+op = "shift_left"
+data_in = "ser"
+
+[[models.logic.register]]
+name = "store"
+bits = 8
+clock = { pin = "rclk", edge = "rising" }
+op = "load"
+data_in = "shift"
+
+[models.logic.comb]
+"qa" = "store[0]"
+"qb" = "store[1]"
+"qc" = "store[2]"
+"qd" = "store[3]"
+"qe" = "store[4]"
+"qf" = "store[5]"
+"qg" = "store[6]"
+"qh" = "store[7]"
+"qh_serial" = "shift[7]"
+
+[models.logic.tristate]
+"qa..qh" = { enable = "oe_n", active = "low" }
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -86,6 +126,32 @@ gnd_pin    = "8"
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
 
+[models.logic]
+# Behaviour source: TI SN74HC165 datasheet (SCLS052I), function table: PL_n
+# (SH/LD) LOW loads A..H asynchronously (dominant over the clock); with PL_n
+# HIGH and CLK_INH LOW, a CLK rising edge shifts the data one stage TOWARD QH
+# (QH shows H after a load, then G, F, ... — shift_left with QH = bit 7) while
+# SER enters at the first stage. QH_n is the complement output.
+# NOTE: the pre-migration hardcoded tick shifted the OPPOSITE direction (a
+# modeling artifact nothing exercised — the real readback path is the
+# edge-driven Hc165Chain, which always had the datasheet direction). This spec
+# is the silicon behaviour; tests/logic_migration.rs documents the difference.
+inputs  = ["pl_n", "clk", "clk_inh", "ser", "a", "b", "c", "d", "e", "f", "g", "h"]
+outputs = ["qh", "qh_n"]
+
+[[models.logic.register]]
+name = "reg"
+bits = 8
+clock = { pin = "clk", edge = "rising" }
+clock_enable = { pin = "clk_inh", active = "low" }
+op = "shift_left"
+data_in = "ser"
+load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g", "h"] }
+
+[models.logic.comb]
+"qh" = "reg[7]"
+"qh_n" = "!reg[7]"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -126,6 +192,25 @@ gnd_pin    = "7"
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
 
+[models.logic]
+# Behaviour source: TI SN74HC125 datasheet (SCLS049), function table: each
+# buffer passes A to Y while its own OE_n is LOW; OE_n HIGH puts that Y in
+# high impedance (per-gate tristate, independent enables).
+inputs  = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "a1"
+"y2" = "a2"
+"y3" = "a3"
+"y4" = "a4"
+
+[models.logic.tristate]
+"y1" = { enable = "oe_n_1", active = "low" }
+"y2" = { enable = "oe_n_2", active = "low" }
+"y3" = { enable = "oe_n_3", active = "low" }
+"y4" = { enable = "oe_n_4", active = "low" }
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -164,6 +249,19 @@ gnd_pin    = "7"
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC27 datasheet (SCLS089), function table: each
+# Y = NOR(A, B, C) — any input HIGH pulls the output LOW. (Before the
+# declarative migration this part fell back to the generic a*->y* buffer,
+# which mirrored only the A input — a real misbehaviour this block fixes.)
+inputs  = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"]
+outputs = ["y1", "y2", "y3"]
+
+[models.logic.comb]
+"y1" = "!(a1 | b1 | c1)"
+"y2" = "!(a2 | b2 | c2)"
+"y3" = "!(a3 | b3 | c3)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -211,3 +309,363 @@ gnd_pin    = "7"
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC02 datasheet (SCLS050), function table: each
+# Y = NOR(A, B). Standalone (non-cross-coupled) gates evaluate here; gates
+# wired as cross-coupled SR latch PAIRS are intercepted by the binder's latch
+# detection (bind_nor_latches) and fused into one NOR-latch spec instance per
+# pair, because a cross-couple THROUGH BOARD NETS cannot settle at analog
+# chunk granularity — the fused latch resolves it in one evaluator fixpoint.
+inputs  = ["g1a", "g1b", "g2a", "g2b", "g3a", "g3b", "g4a", "g4b"]
+outputs = ["g1y", "g2y", "g3y", "g4y"]
+
+[models.logic.comb]
+"g1y" = "!(g1a | g1b)"
+"g2y" = "!(g2a | g2b)"
+"g3y" = "!(g3a | g3b)"
+"g4y" = "!(g4a | g4b)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc00"
+kind = "digital"
+description = "74HC00 quad 2-input NAND gate"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC00"
+
+[models.params]
+# Electrical envelope: Texas Instruments SN74HC00 datasheet (SCLS181),
+# electrical characteristics at Vcc = 4.5 V (74HC-family standard levels).
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 9.0e-9
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "b1"
+"3"  = "y1"
+"4"  = "a2"
+"5"  = "b2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "b3"
+"11" = "a4"
+"12" = "b4"
+"13" = "y4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC00 datasheet (SCLS181), function table:
+# Y = LOW iff A AND B are both HIGH (Y = !(A & B)).
+inputs  = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "!(a1 & b1)"
+"y2" = "!(a2 & b2)"
+"y3" = "!(a3 & b3)"
+"y4" = "!(a4 & b4)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc04"
+kind = "digital"
+description = "74HC04 hex inverter"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC04"
+
+[models.params]
+# Electrical envelope: Texas Instruments SN74HC04 datasheet, electrical
+# characteristics at Vcc = 4.5 V.
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 9.0e-9
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "y1"
+"3"  = "a2"
+"4"  = "y2"
+"5"  = "a3"
+"6"  = "y3"
+"7"  = "gnd"
+"8"  = "y4"
+"9"  = "a4"
+"10" = "y5"
+"11" = "a5"
+"12" = "y6"
+"13" = "a6"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC04 datasheet, function table: Y = !A.
+inputs  = ["a1", "a2", "a3", "a4", "a5", "a6"]
+outputs = ["y1", "y2", "y3", "y4", "y5", "y6"]
+
+[models.logic.comb]
+"y1" = "!a1"
+"y2" = "!a2"
+"y3" = "!a3"
+"y4" = "!a4"
+"y5" = "!a5"
+"y6" = "!a6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc08"
+kind = "digital"
+description = "74HC08 quad 2-input AND gate"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC08"
+
+[models.params]
+# Electrical envelope: Texas Instruments SN74HC08 datasheet, electrical
+# characteristics at Vcc = 4.5 V.
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 9.0e-9
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "b1"
+"3"  = "y1"
+"4"  = "a2"
+"5"  = "b2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "b3"
+"11" = "a4"
+"12" = "b4"
+"13" = "y4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC08 datasheet, function table: Y = A & B.
+inputs  = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "a1 & b1"
+"y2" = "a2 & b2"
+"y3" = "a3 & b3"
+"y4" = "a4 & b4"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc32"
+kind = "digital"
+description = "74HC32 quad 2-input OR gate"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC32"
+
+[models.params]
+# Electrical envelope: Texas Instruments SN74HC32 datasheet, electrical
+# characteristics at Vcc = 4.5 V.
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 9.0e-9
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "b1"
+"3"  = "y1"
+"4"  = "a2"
+"5"  = "b2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "b3"
+"11" = "a4"
+"12" = "b4"
+"13" = "y4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC32 datasheet, function table: Y = A | B.
+inputs  = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "a1 | b1"
+"y2" = "a2 | b2"
+"y3" = "a3 | b3"
+"y4" = "a4 | b4"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc86"
+kind = "digital"
+description = "74HC86 quad 2-input XOR gate"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC86"
+
+[models.params]
+# Electrical envelope: Texas Instruments SN74HC86 datasheet, electrical
+# characteristics at Vcc = 4.5 V.
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 1.1e-8
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "a1"
+"2"  = "b1"
+"3"  = "y1"
+"4"  = "a2"
+"5"  = "b2"
+"6"  = "y2"
+"7"  = "gnd"
+"8"  = "y3"
+"9"  = "a3"
+"10" = "b3"
+"11" = "a4"
+"12" = "b4"
+"13" = "y4"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC86 datasheet, function table: Y = A XOR B
+# (Y HIGH iff exactly one input HIGH).
+inputs  = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "a1 ^ b1"
+"y2" = "a2 ^ b2"
+"y3" = "a3 ^ b3"
+"y4" = "a4 ^ b4"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "74hc74"
+kind = "digital"
+description = "74HC74 dual D-type flip-flop with preset and clear"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC74"
+
+[models.params]
+# Electrical envelope: Texas Instruments SN74HC74 datasheet, electrical
+# characteristics at Vcc = 4.5 V.
+voh       = 4.4
+vol       = 0.1
+vih       = 3.15
+vil       = 1.35
+tpd_s     = 1.6e-8
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+"1"  = "clr_n1"
+"2"  = "d1"
+"3"  = "clk1"
+"4"  = "pre_n1"
+"5"  = "q1"
+"6"  = "q_n1"
+"7"  = "gnd"
+"8"  = "q_n2"
+"9"  = "q2"
+"10" = "pre_n2"
+"11" = "clk2"
+"12" = "d2"
+"13" = "clr_n2"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025
+max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC74 datasheet, function table: PRE_n LOW sets
+# Q HIGH asynchronously; CLR_n LOW clears Q LOW asynchronously; with both
+# HIGH, a CLK rising edge captures D; CLK LOW/HIGH levels hold. The
+# both-asserted row (PRE_n and CLR_n LOW: Q = Q_n = HIGH, unstable) is not
+# representable in a 1-bit register and is deliberately not faked: the FIRST
+# declared reset (CLR_n) wins while both are held (a documented refusal, and
+# the datasheet itself marks the state unstable/invalid on release).
+inputs  = ["d1", "clk1", "pre_n1", "clr_n1", "d2", "clk2", "pre_n2", "clr_n2"]
+outputs = ["q1", "q_n1", "q2", "q_n2"]
+
+[[models.logic.register]]
+name = "ff1"
+bits = 1
+clock = { pin = "clk1", edge = "rising" }
+reset = [
+  { pin = "clr_n1", active = "low", value = 0 },
+  { pin = "pre_n1", active = "low", value = 1 },
+]
+op = "load"
+data_in = "d1"
+
+[[models.logic.register]]
+name = "ff2"
+bits = 1
+clock = { pin = "clk2", edge = "rising" }
+reset = [
+  { pin = "clr_n2", active = "low", value = 0 },
+  { pin = "pre_n2", active = "low", value = 1 },
+]
+op = "load"
+data_in = "d2"
+
+[models.logic.comb]
+"q1" = "ff1[0]"
+"q_n1" = "!ff1[0]"
+"q2" = "ff2[0]"
+"q_n2" = "!ff2[0]"

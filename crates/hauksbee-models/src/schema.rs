@@ -64,6 +64,13 @@ pub struct ModelEntry {
         skip_serializing_if = "crate::behavioral::Behavioral::is_empty"
     )]
     pub behavioral: crate::behavioral::Behavioral,
+
+    /// Optional declarative digital-logic model (combinational expressions,
+    /// clocked registers, tri-state groups) interpreted by the engine's
+    /// generic logic evaluator — a digital part's behaviour is data, not a
+    /// Rust match arm. See [`crate::logic_spec`].
+    #[serde(default, skip_serializing_if = "crate::logic_spec::Logic::is_empty")]
+    pub logic: crate::logic_spec::Logic,
 }
 
 /// One boot strapping pin, straight from the part's reference manual.
