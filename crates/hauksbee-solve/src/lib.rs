@@ -32,6 +32,15 @@
 //! ```
 
 mod ac;
+// S1 allocation-hygiene enforcement gate (plan §4.4): a counting global
+// allocator + zero-alloc per-step-loop tests, compiled ONLY for the crate's
+// own test binary. Non-test builds never see it.
+#[cfg(test)]
+mod alloc_audit;
+#[cfg(test)]
+#[global_allocator]
+static AUDIT_ALLOC: alloc_audit::CountingAlloc = alloc_audit::CountingAlloc;
+
 mod census;
 mod cmatrix;
 mod diagnostics;

@@ -747,10 +747,22 @@ impl Symbolic {
     }
 
     /// Solve `A x = b` in place, all triangular sweeps in step coordinates.
-    pub fn solve(&self, b: &mut [f64]) {
+    ///
+    /// `scratch` is a caller-owned work buffer of length >= `n` (the matrix
+    /// dimension); it holds the permuted/eliminated right-hand side and is
+    /// fully overwritten before any read, so its incoming contents are
+    /// irrelevant. Hoisting it out of `solve` removes the per-call heap
+    /// allocation that used to sit on the Newton hot path (one `vec![0.0; n]`
+    /// per solve, per iteration, per step). `&self` stays immutable so callers
+    /// can hold the factorization while bringing their own scratch — which is
+    /// also what lets each thread solve a private island matrix without
+    /// contending on a shared buffer (see plan §4.1). The permute / forward /
+    /// back / unpermute arithmetic below is byte-for-byte unchanged; only the
+    /// buffer's origin moved, so every existing solve stays bit-identical.
+    pub fn solve(&self, b: &mut [f64], scratch: &mut [f64]) {
         let n = self.n;
         // Permute rhs by pivot rows: y[k] = b[pivot_row[k]].
-        let mut y = vec![0.0; n];
+        let y = &mut scratch[..n];
         for k in 0..n {
             y[k] = b[self.pivot_row[k]];
         }
@@ -905,7 +917,8 @@ mod tests {
         let mut sym = m.factorize_symbolic();
         assert!(sym.refactor(m), "refactor failed");
         let mut x = b.to_vec();
-        sym.solve(&mut x);
+        let mut scratch = vec![0.0; x.len()];
+        sym.solve(&mut x, &mut scratch);
         x
     }
 
@@ -915,7 +928,8 @@ mod tests {
         let mut sym = m.factorize_symbolic();
         assert!(sym.refactor_dynamic(m), "dynamic refactor failed");
         let mut x = b.to_vec();
-        sym.solve(&mut x);
+        let mut scratch = vec![0.0; x.len()];
+        sym.solve(&mut x, &mut scratch);
         x
     }
 
@@ -1083,12 +1097,14 @@ mod tests {
         assert!(!a.allow_dynamic, "dynamic must default OFF");
         assert!(a.refactor(&m));
         let mut xa = b.to_vec();
-        a.solve(&mut xa);
+        let mut scratch_a = vec![0.0; xa.len()];
+        a.solve(&mut xa, &mut scratch_a);
 
         let mut f = m.factorize_symbolic();
         assert!(f.refactor_frozen(&m));
         let mut xf = b.to_vec();
-        f.solve(&mut xf);
+        let mut scratch_f = vec![0.0; xf.len()];
+        f.solve(&mut xf, &mut scratch_f);
 
         // Byte-for-byte identical: refactor (default) == refactor_frozen.
         assert_eq!(xa.to_bits_vec(), xf.to_bits_vec(), "default refactor diverged from frozen");
@@ -1236,7 +1252,8 @@ mod tests {
         m.add(1, 1, 2.0);
         assert!(sym.refactor(&m));
         let mut x = vec![8.0, 6.0];
-        sym.solve(&mut x);
+        let mut scratch = vec![0.0; x.len()];
+        sym.solve(&mut x, &mut scratch);
         assert!((x[0] - 2.0).abs() < 1e-12);
         assert!((x[1] - 3.0).abs() < 1e-12);
     }
