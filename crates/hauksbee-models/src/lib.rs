@@ -27,6 +27,7 @@
 //! ```
 
 pub mod behavioral;
+pub mod logic_spec;
 pub mod matcher;
 pub mod pin_rules;
 pub mod profile;
@@ -48,6 +49,7 @@ pub use profile::{LoadProfile, Segment};
 pub use schema::{
     ComponentKind, ModelEntry, Params, StrapInternalPull, StrapLevel, StrapPin,
 };
+pub use logic_spec::{Logic, LogicExpr, LogicSpecError, ValidatedLogic};
 pub use sensor_spec::{Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError};
 pub use spice_input::SpiceCard;
 
@@ -419,6 +421,7 @@ impl ModelLibrary {
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
+            logic: Default::default(),
         };
 
         Resolution {

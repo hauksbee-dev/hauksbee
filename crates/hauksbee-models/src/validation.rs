@@ -136,6 +136,7 @@ mod tests {
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
+            logic: Default::default(),
         }
     }
 
@@ -168,6 +169,7 @@ mod tests {
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
+            logic: Default::default(),
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("'n'")));
@@ -191,6 +193,7 @@ mod tests {
             ratings: Default::default(),
             straps: Vec::new(),
             behavioral: Default::default(),
+            logic: Default::default(),
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("bf")));
