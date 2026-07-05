@@ -129,13 +129,14 @@ const PAR_MIN_NONLINEAR_ISLANDS: usize = 32;
 /// Cap on the per-engine pool size under [`ParallelPolicy::Auto`]. Island
 /// solves are fine-grained (a warm quiescent block re-solve is well under a
 /// microsecond), so extra workers add coordination and cache traffic faster
-/// than they add arithmetic: on the 240-block mirror array the march gains
-/// ~2.3x at 2 workers, holds near that at 3-4, and LOSES outright at 8 (the
-/// dev machine's other four cores are efficiency cores, and spin-waiting
-/// workers also tax the serial sections between passes). Auto therefore uses
-/// half the logical CPUs — on big.LITTLE parts that approximates the
-/// performance-core count — capped here. `Threads(n)` overrides both for
-/// callers who know their machine.
+/// than they add arithmetic. Measured on the 240-block mirror array (M1,
+/// 4P+4E): 2 workers win 1.36-1.37x end-to-end run after run (~2.3x on the
+/// balance march alone in the cleanest probe window), 4 workers only break
+/// even, 8 lose outright (efficiency cores, plus spin-waiting workers taxing
+/// the serial sections between passes). Auto therefore sizes a QUARTER of
+/// the logical CPUs — the measured optimum here, conservative everywhere —
+/// floored at 2 and capped here. `Threads(n)` overrides both for callers who
+/// know their machine and their board's per-island weight.
 const PAR_MAX_THREADS: usize = 4;
 
 /// Minimum islands per parallel task. A warm-started per-block Newton solve
@@ -159,20 +160,17 @@ fn build_pool(policy: ParallelPolicy, n_nonlinear: usize) -> Option<rayon::Threa
             if n_nonlinear < PAR_MIN_NONLINEAR_ISLANDS {
                 return None;
             }
-            // Half the logical CPUs (see PAR_MAX_THREADS: approximates the
-            // performance-core count on big.LITTLE parts, and leaves room for
-            // the caller's own threads), capped.
-            (std::thread::available_parallelism()
+            let avail = std::thread::available_parallelism()
                 .map(|n| n.get())
-                .unwrap_or(1)
-                / 2)
-            .max(1)
-            .min(PAR_MAX_THREADS)
+                .unwrap_or(1);
+            if avail < 2 {
+                return None; // a pool on one CPU is pure overhead
+            }
+            // A quarter of the logical CPUs, floored at 2 and capped (see
+            // PAR_MAX_THREADS for the measurements behind this shape).
+            (avail / 4).max(2).min(PAR_MAX_THREADS)
         }
     };
-    if threads <= 1 && matches!(policy, ParallelPolicy::Auto) {
-        return None;
-    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
