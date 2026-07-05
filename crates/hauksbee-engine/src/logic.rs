@@ -717,6 +717,14 @@ impl LogicComponent {
         self.registers.iter().map(|r| (r.name.as_str(), r.state))
     }
 
+    /// Declared width of a register, if the spec has one by this name.
+    pub fn register_bits(&self, name: &str) -> Option<u32> {
+        self.registers
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.bits)
+    }
+
     /// Overwrite a register's value (the chain-controller mirror / test-latch
     /// path). Returns false when the spec has no such register. Callers that
     /// need the outputs to reflect the new state must call

@@ -7,17 +7,34 @@
 //!   3. writes the component's output logic levels back onto the analog nets
 //!      through Thevenin [`PinDriver`]s (`voh`/`vol`, `ro`).
 //!
-//! Two families are modelled in detail because they dominate the corpus:
-//! 74HC595 (serial-in, parallel-out) and 74HC165 (parallel-in, serial-out).
-//! Anything else with a `digital`/`shift_register` kind falls back to a
-//! transparent buffer that mirrors recognised input roles onto output roles.
+//! Behaviour is DECLARATIVE: each part's model entry carries a
+//! `[models.logic]` block (06-extensibility §1.1) that the generic
+//! [`LogicComponent`] evaluator compiles at bind time — the old hardcoded
+//! `DigitalKind::{Hc595, Hc165, Buffer, NorLatch}` enum and its per-kind tick
+//! methods were deleted after a byte-exact regression proved the spec-driven
+//! reimplementations identical at every edge (`tests/logic_migration.rs`).
+//! A digital model WITHOUT a logic block falls back to a synthesized
+//! transparent passthrough over its wired `a*`/`y*` role pairs (the old
+//! `Buffer` semantics, preserved for `adc`-kind passthroughs and unmodelled
+//! parts).
+//!
+//! What stays Rust, deliberately: the MCU-facing chain controllers
+//! ([`Hc595Chain`], [`Hc165Chain`]) and their net-walking recovery
+//! (`order_*_chains`). They are GPIO-integration machinery — mapping edge
+//! logs and MISO responders onto daisy chains — not part behaviour; the
+//! per-chip shift/latch semantics they mirror INTO the components now live
+//! in the components' specs. Their chain-candidacy test is structural (a
+//! part declaring a `ser` input and a `qh_serial`/`qh` output participates),
+//! so the contract is data-visible role names, not a Rust enum.
 
 use std::collections::HashMap;
 
 use hauksbee_ir::{Circuit, NodeId};
+use hauksbee_models::logic_spec::Logic;
 use hauksbee_models::ModelEntry;
 
 use crate::drivers::{PinDriver, DEFAULT_RO};
+use crate::logic::{LogicCompileError, LogicComponent};
 
 /// Logic thresholds and drive levels pulled from a model entry's params.
 #[derive(Debug, Clone, Copy)]
@@ -62,22 +79,29 @@ impl LogicLevels {
     }
 }
 
-/// The behaviour family of a digital component.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DigitalKind {
-    Hc595,
-    Hc165,
-    /// Cross-coupled NOR set/reset latch (a 74HC02 latch pair). Roles `set`
-    /// (active-high SET input), `reset` (active-high RESET input), and output
-    /// `q`. Active-LOW Q semantics of the Tarski spike recorder: at reset Q is
-    /// HIGH (idle), a SET pulse drives Q LOW and the cross-couple HOLDS it LOW
-    /// until the next RESET. Modelled directly from the NOR-latch truth table so
-    /// the firmware-driven 74HC165 readback samples the same level the real
-    /// board's latch Q presents (idle HIGH -> 0xFFC0, captured spike LOW).
-    NorLatch,
-    /// Generic transparent buffer / unmodelled digital block.
-    Buffer,
-}
+/// The `[models.logic]` spec of the cross-coupled NOR SR latch the binder
+/// synthesizes for a 74HC02 latch pair (the Tarski spike recorder). Roles
+/// `set` (active-high SET), `reset` (active-high RESET), output `q` (`qb` is
+/// the internal cross-couple node, unwired on the board). Active-LOW Q
+/// semantics: at reset Q is HIGH (idle), a SET pulse drives Q LOW and the
+/// cross-couple HOLDS it LOW until the next RESET — so the firmware-driven
+/// 74HC165 readback samples the level the real board's latch Q presents
+/// (idle HIGH -> 0xFFC0, captured spike LOW). The cross-coupled `comb` pair
+/// resolves by the evaluator's fixpoint machinery; `init` seeds the cleared
+/// power-on state (a symmetric seed would be the classic SR metastability).
+pub const NOR_LATCH_SPEC_ID: &str = "nor_sr_latch";
+const NOR_LATCH_SPEC: &str = r#"
+inputs  = ["set", "reset"]
+outputs = ["q", "qb"]
+
+[comb]
+"q"  = "!(set | qb)"
+"qb" = "!(reset | q)"
+
+[init]
+"q" = 1
+"qb" = 0
+"#;
 
 /// A single cycle-stamped GPIO output transition captured from an MCU.
 ///
@@ -177,10 +201,30 @@ pub fn replay_components_on_edges(
             j += 1;
         }
         if touched {
-            let ov = &overlay;
-            let node_v = |n: NodeId| sample(ov, base_volts, n);
+            {
+                let ov = &overlay;
+                let node_v = |n: NodeId| sample(ov, base_volts, n);
+                for &ci in which {
+                    components[ci].tick(circuit, &node_v);
+                }
+            }
+            // Propagate the ticked components' driven outputs into the overlay
+            // AFTER the whole group ticked, so chips sharing a clock edge all
+            // sampled the PRE-edge levels (simultaneous-clock silicon
+            // semantics) and a daisy chain's qh_serial -> next ser carry works
+            // at edge granularity through plain comb outputs (§1.1: chaining
+            // needs nothing special).
             for &ci in which {
-                components[ci].tick(circuit, &node_v);
+                let d = &components[ci];
+                let Some(logic) = d.logic.as_ref() else { continue };
+                for (name, level, enabled) in logic.outputs() {
+                    if !enabled {
+                        continue;
+                    }
+                    if let Some(&net) = d.roles.get(name) {
+                        overlay.insert(net, d.levels.drive_volts(level));
+                    }
+                }
             }
             microticks += 1;
         }
@@ -189,305 +233,241 @@ pub fn replay_components_on_edges(
     microticks
 }
 
-/// One bound digital component: its pin→net wiring, drivers, and state.
+/// One bound digital component: its pin→net wiring, drivers, and the
+/// compiled spec evaluator holding all state.
 pub struct DigitalComponent {
     pub reference: String,
-    pub kind: DigitalKind,
     pub levels: LogicLevels,
     /// Role name -> net node it is wired to (only connected roles present).
     pub roles: HashMap<String, NodeId>,
     /// Output drivers keyed by role name.
     pub drivers: HashMap<String, PinDriver>,
-    /// Previous decided input levels keyed by role.
-    pub input_state: HashMap<String, bool>,
-    /// Shift register contents (bit 0 = first stage).
-    pub shift_reg: Vec<bool>,
-    /// Latched / output register contents.
-    pub out_reg: Vec<bool>,
-    pub bits: usize,
-    /// Edge-detector memory for the clock and latch lines.
-    prev_srclk: bool,
-    prev_rclk: bool,
-    prev_clk: bool,
-    prev_pl: bool,
-    /// NOR-latch held state: (Q, Qb). Initialised to the post-reset idle level
-    /// (Q HIGH) so a board that has never been driven reads the cleared word.
-    latch_q: bool,
-    latch_qb: bool,
+    /// The compiled `[models.logic]` evaluator. `None` for an inert part (a
+    /// model with no logic block and no mirrorable `a*`/`y*` role pairs):
+    /// such a part keeps its stamped drivers at their initial low level,
+    /// exactly what the old kind-`Buffer` fallback did when it had nothing
+    /// to mirror.
+    pub logic: Option<LogicComponent>,
+}
+
+/// Synthesize the transparent-passthrough spec for a digital model WITHOUT a
+/// `[models.logic]` block: every wired `a<idx>` input role mirrors onto its
+/// wired `y<idx>` output role (the 74HCxx buffer/gate naming). This is the
+/// old kind-`Buffer` behaviour, generated as data at bind time from the
+/// ACTUAL wiring so partial wiring behaves identically (an unpaired wired
+/// `y*` keeps its stamped driver's initial low level; an unwired pair simply
+/// does not exist). Returns `None` when there is nothing to mirror.
+fn synth_passthrough_spec(roles: &HashMap<String, NodeId>) -> Option<Logic> {
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    let mut comb = std::collections::BTreeMap::new();
+    let mut names: Vec<&String> = roles.keys().collect();
+    names.sort();
+    for role in names {
+        if let Some(idx) = role.strip_prefix('a') {
+            let y = format!("y{idx}");
+            if roles.contains_key(&y) {
+                inputs.push(role.clone());
+                comb.insert(y.clone(), role.clone());
+                outputs.push(y);
+            }
+        }
+    }
+    if outputs.is_empty() {
+        return None;
+    }
+    Some(Logic {
+        inputs,
+        outputs,
+        comb,
+        registers: Vec::new(),
+        tristate: Default::default(),
+        init: Default::default(),
+    })
 }
 
 impl DigitalComponent {
     /// Build a digital component from its model entry and a role→node map. The
     /// caller has already stamped output [`PinDriver`]s and passes them in.
+    ///
+    /// The model's `[models.logic]` block is compiled here (bind time — the
+    /// expressions are never re-parsed on the tick path). A model without a
+    /// logic block gets the synthesized `a*`/`y*` passthrough. A model WITH a
+    /// logic block that fails to compile is a hard error: the caller decides
+    /// whether to skip the part loudly (nets float, lore #9) — it is never
+    /// silently downgraded to a passthrough.
     pub fn new(
         reference: String,
         model: &ModelEntry,
         roles: HashMap<String, NodeId>,
         drivers: HashMap<String, PinDriver>,
-    ) -> Self {
-        let kind = classify(model);
-        let bits = model
-            .params
-            .get_f64("bits")
-            .map(|b| b as usize)
-            .unwrap_or(8);
-        DigitalComponent {
+    ) -> Result<Self, LogicCompileError> {
+        let logic = if model.logic.is_empty() {
+            synth_passthrough_spec(&roles)
+                .map(|spec| LogicComponent::compile(&format!("{}_passthrough", model.id), &spec))
+                .transpose()?
+        } else {
+            Some(LogicComponent::compile(&model.id, &model.logic)?)
+        };
+        Ok(DigitalComponent {
             reference,
-            kind,
             levels: LogicLevels::from_params(model),
             roles,
             drivers,
-            input_state: HashMap::new(),
-            shift_reg: vec![false; bits],
-            out_reg: vec![false; bits],
-            bits,
-            prev_srclk: false,
-            prev_rclk: false,
-            prev_clk: false,
-            prev_pl: false,
-            // Power-on idle = the cleared latch state (Q HIGH, Qb LOW), matching
-            // the real 74HC02 NOR latch after RESET_SR with no spike captured.
-            latch_q: true,
-            latch_qb: false,
-        }
+            logic,
+        })
     }
 
     /// Build a NOR SR latch component (one latch = one cross-coupled gate
     /// pair). `roles` must carry `set`, `reset`, and `q`; the caller has stamped
     /// the `q` output [`PinDriver`]. Uses the supplied logic levels (the 74HC02
-    /// model entry's). State initialises to the cleared idle (Q HIGH).
+    /// model entry's). State initialises to the cleared idle (Q HIGH) via the
+    /// spec's `init`.
     pub fn new_nor_latch(
         reference: String,
         levels: LogicLevels,
         roles: HashMap<String, NodeId>,
         drivers: HashMap<String, PinDriver>,
     ) -> Self {
+        let spec: Logic =
+            toml::from_str(NOR_LATCH_SPEC).expect("builtin NOR latch spec parses");
+        let logic = LogicComponent::compile(NOR_LATCH_SPEC_ID, &spec)
+            .expect("builtin NOR latch spec compiles");
         DigitalComponent {
             reference,
-            kind: DigitalKind::NorLatch,
             levels,
             roles,
             drivers,
-            input_state: HashMap::new(),
-            shift_reg: vec![false; 1],
-            out_reg: vec![false; 1],
-            bits: 1,
-            prev_srclk: false,
-            prev_rclk: false,
-            prev_clk: false,
-            prev_pl: false,
-            latch_q: true,
-            latch_qb: false,
+            logic: Some(logic),
         }
     }
 
-    /// Sample an input role's net voltage and decide its logic level. Roles not
-    /// wired to a node read as low.
-    fn sample(&mut self, role: &str, node_v: &dyn Fn(NodeId) -> f64) -> bool {
-        let prev = self.input_state.get(role).copied().unwrap_or(false);
-        let level = match self.roles.get(role) {
-            Some(&n) => self.levels.decide(node_v(n), prev),
-            None => false,
-        };
-        self.input_state.insert(role.to_string(), level);
-        level
-    }
-
-    /// Process one scheduler tick: read inputs, update register, drive outputs.
+    /// Process one scheduler tick: sample inputs (with hysteresis), advance
+    /// the spec evaluator, drive outputs.
     pub fn tick(&mut self, circuit: &mut Circuit, node_v: &dyn Fn(NodeId) -> f64) {
-        match self.kind {
-            DigitalKind::Hc595 => self.tick_595(node_v),
-            DigitalKind::Hc165 => self.tick_165(node_v),
-            DigitalKind::NorLatch => self.tick_nor_latch(node_v),
-            DigitalKind::Buffer => self.tick_buffer(node_v),
-        }
-        self.drive_outputs(circuit);
-    }
-
-    /// Latch a parallel-output byte directly into the output register and push
-    /// it onto the analog drivers, bypassing the serial shift/clock sequence.
-    /// This is the model-level "the host already streamed and latched the
-    /// chain" shortcut (the same end state as the edge-driven `Hc595Chain`),
-    /// for harnesses that drive a 74HC595's known latched value without
-    /// simulating the SPI bit-bang. `out_reg[i]` (i.e. `qa+i`) gets bit `i` of
-    /// `byte`. No-op for non-595 kinds.
-    pub fn latch_byte(&mut self, circuit: &mut Circuit, byte: u8) {
-        if self.kind != DigitalKind::Hc595 {
+        let Some(logic) = self.logic.as_mut() else {
             return;
+        };
+        let roles = &self.roles;
+        let levels = self.levels;
+        logic.tick(&mut |name, prev| {
+            roles.get(name).map(|&n| levels.decide(node_v(n), prev))
+        });
+        self.drive_outputs(circuit);
+    }
+
+    /// Latch a parallel-output byte directly into the `store` register and
+    /// push it onto the analog drivers, bypassing the serial shift/clock
+    /// sequence. This is the model-level "the host already streamed and
+    /// latched the chain" shortcut (the same end state as the edge-driven
+    /// `Hc595Chain`), for harnesses that drive a 74HC595's known latched
+    /// value without simulating the SPI bit-bang. Bit `i` of `byte` lands in
+    /// `store[i]` (= `qa+i`). No-op for parts without a `store` register.
+    pub fn latch_byte(&mut self, circuit: &mut Circuit, byte: u8) {
+        let Some(logic) = self.logic.as_mut() else {
+            return;
+        };
+        if logic.set_register("store", byte as u64) {
+            logic.refresh_outputs();
+            self.drive_outputs(circuit);
         }
-        for i in 0..self.bits.min(8) {
-            self.out_reg[i] = (byte >> i) & 1 == 1;
+    }
+
+    /// Push the evaluator's current output levels and tri-state enables onto
+    /// the stamped drivers.
+    fn drive_outputs(&mut self, circuit: &mut Circuit) {
+        let Some(logic) = self.logic.as_ref() else {
+            return;
+        };
+        for (name, level, enabled) in logic.outputs() {
+            if let Some(drv) = self.drivers.get_mut(name) {
+                drv.set_enabled(circuit, enabled);
+                if enabled {
+                    drv.set_volts(circuit, self.levels.drive_volts(level));
+                }
+            }
+        }
+    }
+
+    /// Re-evaluate outputs from current register/input state and drive them
+    /// (the chain-controller mirror path after `set_register`).
+    pub fn drive_from_registers(&mut self, circuit: &mut Circuit) {
+        if let Some(logic) = self.logic.as_mut() {
+            logic.refresh_outputs();
         }
         self.drive_outputs(circuit);
     }
 
-    fn tick_595(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
-        let ser = self.sample("ser", node_v);
-        let srclk = self.sample("srclk", node_v);
-        let rclk = self.sample("rclk", node_v);
-        // SRCLR_n active-low clears the shift register.
-        let srclr = if self.roles.contains_key("srclr_n") {
-            self.sample("srclr_n", node_v)
-        } else {
-            true
-        };
-        if !srclr {
-            for b in self.shift_reg.iter_mut() {
-                *b = false;
-            }
-        }
-        // Rising edge of SRCLK shifts ser into stage 0; stages move up.
-        if srclk && !self.prev_srclk {
-            for i in (1..self.bits).rev() {
-                self.shift_reg[i] = self.shift_reg[i - 1];
-            }
-            self.shift_reg[0] = ser;
-        }
-        // Rising edge of RCLK latches shift register into the output register.
-        if rclk && !self.prev_rclk {
-            self.out_reg.copy_from_slice(&self.shift_reg);
-        }
-        self.prev_srclk = srclk;
-        self.prev_rclk = rclk;
+    /// Current value of a spec register (`None`: no such register / inert).
+    pub fn register(&self, name: &str) -> Option<u64> {
+        self.logic.as_ref().and_then(|l| l.register(name))
     }
 
-    fn tick_165(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
-        // PL_n (active low) parallel-loads inputs A..H into the register.
-        let pl = self.sample("pl_n", node_v);
-        let clk = self.sample("clk", node_v);
-        let clk_inh = if self.roles.contains_key("clk_inh") {
-            self.sample("clk_inh", node_v)
-        } else {
-            false
-        };
-        // Parallel-load on PL_n falling edge / while low.
-        if !pl {
-            let parallel = ["a", "b", "c", "d", "e", "f", "g", "h"];
-            for (i, role) in parallel.iter().enumerate().take(self.bits) {
-                self.shift_reg[i] = self.sample(role, node_v);
-            }
-        } else if clk && !self.prev_clk && !clk_inh {
-            // Rising edge shifts toward QH (stage bits-1 is QH output).
-            for i in 0..self.bits - 1 {
-                self.shift_reg[i] = self.shift_reg[i + 1];
-            }
-            // New data shifted in at SER (or 0).
-            self.shift_reg[self.bits - 1] = self.sample("ser", node_v);
-        }
-        self.prev_pl = pl;
-        self.prev_clk = clk;
-        self.out_reg.copy_from_slice(&self.shift_reg);
+    /// Overwrite a spec register (chain mirror). False if absent.
+    pub fn set_register(&mut self, name: &str, value: u64) -> bool {
+        self.logic
+            .as_mut()
+            .map(|l| l.set_register(name, value))
+            .unwrap_or(false)
     }
 
-    /// Cross-coupled NOR SR latch (74HC02 latch pair). Q = NOR(set, Qb),
-    /// Qb = NOR(reset, Q). `set` and `reset` are sampled active-HIGH from the
-    /// analog nets (SPIKE<n> and RESET_SR); the held (Q, Qb) is re-settled each
-    /// tick by iterating the two NOR equations to a fixed point.
-    ///
-    /// Truth table (matching the Tarski spike recorder):
-    ///   reset=1            -> Q forced LOW? NO. With this wiring Q = NOR(set, Qb)
-    ///                         and Qb = NOR(reset, Q): reset HIGH pulls Qb LOW, so
-    ///                         Q = NOR(set, 0) = !set. With set idle (0) Q is HIGH
-    ///                         = the cleared/idle level (active-low: idle reads
-    ///                         HIGH). A captured spike is set=1 -> Q LOW, held.
-    ///   set=1,reset=0      -> Q LOW (a spike is latched).
-    ///   set=0,reset=0      -> HOLD (Q keeps its last value -- the latch memory).
-    fn tick_nor_latch(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
-        let set = self.sample("set", node_v);
-        let reset = self.sample("reset", node_v);
-        let nor = |a: bool, b: bool| !(a || b);
-        // Iterate to the latch's stable fixed point (≤4 passes suffices for a
-        // 2-gate cross-couple; HOLD keeps the prior state).
-        let (mut q, mut qb) = (self.latch_q, self.latch_qb);
-        for _ in 0..4 {
-            let nq = nor(set, qb);
-            let nqb = nor(reset, q);
-            if nq == q && nqb == qb {
-                break;
-            }
-            q = nq;
-            qb = nqb;
-        }
-        self.latch_q = q;
-        self.latch_qb = qb;
+    /// Current logic level of a spec output.
+    pub fn output_level(&self, name: &str) -> Option<bool> {
+        self.logic.as_ref().and_then(|l| l.output_level(name))
     }
 
-    fn tick_buffer(&mut self, node_v: &dyn Fn(NodeId) -> f64) {
-        // Transparent: copy any sampled "a*" input role onto matching "y*"
-        // output role (74HCxx buffer/gate naming), else hold.
-        let roles: Vec<String> = self.roles.keys().cloned().collect();
-        for role in roles {
-            if let Some(idx) = role.strip_prefix('a') {
-                let v = self.sample(&role, node_v);
-                let out = format!("y{idx}");
-                self.input_state.insert(out, v);
-            }
-        }
+    /// Structural chain candidacy: a part declaring a `ser` serial input and
+    /// a `qh_serial` cascade output participates in 74HC595-style write
+    /// chains. The role names are the data-visible contract the chain
+    /// controllers key on (formerly the `DigitalKind::Hc595` enum tag).
+    pub fn chains_as_595(&self) -> bool {
+        self.logic
+            .as_ref()
+            .map(|l| l.has_input("ser") && l.has_output("qh_serial"))
+            .unwrap_or(false)
     }
 
-    /// Push the current output-register / decided output levels onto drivers.
-    fn drive_outputs(&mut self, circuit: &mut Circuit) {
-        match self.kind {
-            DigitalKind::Hc595 => {
-                // qa..qh map to out_reg[0..8]; qa is stage 0.
-                let names = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"];
-                for (i, name) in names.iter().enumerate().take(self.bits) {
-                    if let Some(drv) = self.drivers.get(*name) {
-                        drv.set_volts(circuit, self.levels.drive_volts(self.out_reg[i]));
-                    }
-                }
-                // Serial out = last stage.
-                if let Some(drv) = self.drivers.get("qh_serial") {
-                    drv.set_volts(
-                        circuit,
-                        self.levels.drive_volts(self.shift_reg[self.bits - 1]),
-                    );
-                }
-            }
-            DigitalKind::Hc165 => {
-                // QH = last stage; QH_n is its complement.
-                let qh = self.shift_reg[self.bits - 1];
-                if let Some(drv) = self.drivers.get("qh") {
-                    drv.set_volts(circuit, self.levels.drive_volts(qh));
-                }
-                if let Some(drv) = self.drivers.get("qh_n") {
-                    drv.set_volts(circuit, self.levels.drive_volts(!qh));
-                }
-            }
-            DigitalKind::NorLatch => {
-                if let Some(drv) = self.drivers.get("q") {
-                    drv.set_volts(circuit, self.levels.drive_volts(self.latch_q));
-                }
-            }
-            DigitalKind::Buffer => {
-                let outs: Vec<(String, bool)> = self
-                    .drivers
-                    .keys()
-                    .filter_map(|k| self.input_state.get(k).map(|v| (k.clone(), *v)))
-                    .collect();
-                for (role, v) in outs {
-                    if let Some(drv) = self.drivers.get(&role) {
-                        drv.set_volts(circuit, self.levels.drive_volts(v));
-                    }
-                }
-            }
-        }
+    /// Structural chain candidacy for 74HC165-style read chains: a `ser`
+    /// serial input, a `pl_n` parallel-load input, and a `qh` serial output.
+    pub fn chains_as_165(&self) -> bool {
+        self.logic
+            .as_ref()
+            .map(|l| l.has_input("ser") && l.has_input("pl_n") && l.has_output("qh"))
+            .unwrap_or(false)
     }
 
-    /// Compact register state for frame reporting (e.g. "reg" = packed byte).
+    /// Is this a binder-synthesized NOR SR latch?
+    pub fn is_nor_latch(&self) -> bool {
+        self.logic
+            .as_ref()
+            .map(|l| l.spec_id() == NOR_LATCH_SPEC_ID)
+            .unwrap_or(false)
+    }
+
+    /// True when the part has at least one clocked register (edge-replay
+    /// candidacy — see the scheduler's generalized replay).
+    pub fn is_sequential(&self) -> bool {
+        self.logic.as_ref().map(|l| l.is_sequential()).unwrap_or(false)
+    }
+
+    /// Input pins whose edge timing matters (register clocks / resets /
+    /// loads / enables / serial data), per the spec.
+    pub fn sequential_pins(&self) -> Vec<&str> {
+        self.logic
+            .as_ref()
+            .map(|l| l.sequential_pins())
+            .unwrap_or_default()
+    }
+
+    /// Compact register state for frame reporting: one entry per spec
+    /// register under its declared name.
     pub fn state_summary(&self) -> HashMap<String, f64> {
-        let pack = |bits: &[bool]| -> f64 {
-            let mut v = 0u32;
-            for (i, b) in bits.iter().enumerate().take(32) {
-                if *b {
-                    v |= 1 << i;
-                }
-            }
-            v as f64
-        };
         let mut m = HashMap::new();
-        m.insert("shift_reg".to_string(), pack(&self.shift_reg));
-        m.insert("out_reg".to_string(), pack(&self.out_reg));
+        if let Some(logic) = self.logic.as_ref() {
+            for (name, value) in logic.registers() {
+                m.insert(name.to_string(), value as f64);
+            }
+        }
         m
     }
 }
@@ -506,7 +486,7 @@ pub fn order_595_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
     let chips: Vec<usize> = digital
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.kind == DigitalKind::Hc595)
+        .filter(|(_, d)| d.chains_as_595())
         .map(|(i, _)| i)
         .collect();
 
@@ -647,6 +627,33 @@ impl Hc595Chain {
         let srclr_n = role_gpio(head, "srclr_n");
         let oe_n = role_gpio(head, "oe_n");
 
+        // The chain controller mirrors its per-chip bytes into the chips' spec
+        // registers by NAME ("shift"/"store", 8 bits) — the documented contract
+        // between the Rust chain fast-path and a 595-shaped [models.logic]
+        // spec. A chip that chains (ser + qh_serial roles) but lacks the
+        // registers would silently desynchronize from its own analog outputs,
+        // so refuse loudly and leave the chain to the once-per-chunk tick.
+        for &ci in &order {
+            let chip = &digital[ci];
+            let ok = chip
+                .logic
+                .as_ref()
+                .map(|l| {
+                    l.register_bits("shift") == Some(8) && l.register_bits("store") == Some(8)
+                })
+                .unwrap_or(false);
+            if !ok {
+                eprintln!(
+                    "ERROR: 595-chain chip '{}' ({}): [models.logic] must declare 8-bit \
+                     'shift' and 'store' registers to ride the edge-driven chain; \
+                     falling back to once-per-chunk sampling for this chain",
+                    chip.reference,
+                    chip.logic.as_ref().map(|l| l.spec_id()).unwrap_or("no logic"),
+                );
+                return None;
+            }
+        }
+
         let n = order.len();
         Some(Hc595Chain {
             order,
@@ -730,23 +737,24 @@ impl Hc595Chain {
         // OE_n defaults low (enabled) when no OE pin is wired.
         let outputs_enabled = !self.lvl_oe_n;
         for (c, &chip_idx) in self.order.iter().enumerate() {
-            let latched = self.latched[c];
-            let shift = self.shift[c];
             let d = &mut digital[chip_idx];
-            for i in 0..d.bits.min(8) {
-                let bit = ((latched >> i) & 1) == 1;
-                d.out_reg[i] = bit;
-                let s = ((shift >> i) & 1) == 1;
-                d.shift_reg[i] = s;
-            }
-            // Tri-state / enable the parallel-output drivers per OE_n. qh_serial
-            // is left enabled (it is not output-enable gated on the 74HC595).
+            // Mirror the chain's bytes into the chip's spec registers so frame
+            // reporting and the comb outputs (qa..qh from store, qh_serial from
+            // shift) see the edge-accurate state, then drive.
+            d.set_register("shift", self.shift[c] as u64);
+            d.set_register("store", self.latched[c] as u64);
+            d.drive_from_registers(circuit);
+            // Tri-state / enable the parallel-output drivers per the CHAIN's
+            // OE_n level (tracked from MCU edges; the chip itself is skipped by
+            // the per-chunk tick, so its own sampled tristate state is stale —
+            // the chain is authoritative here). Applied AFTER the drive so the
+            // chain's decision wins; qh_serial stays enabled (not OE-gated on
+            // the 74HC595).
             for name in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"] {
                 if let Some(drv) = d.drivers.get_mut(name) {
                     drv.set_enabled(circuit, outputs_enabled);
                 }
             }
-            d.drive_outputs(circuit);
         }
     }
 }
@@ -764,7 +772,7 @@ pub fn order_165_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
     let chips: Vec<usize> = digital
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.kind == DigitalKind::Hc165)
+        .filter(|(_, d)| d.chains_as_165())
         .map(|(i, _)| i)
         .collect();
 
@@ -1008,38 +1016,21 @@ impl Hc165Chain {
     }
 }
 
-/// Decide a digital component's behaviour family from its model id / params.
-fn classify(model: &ModelEntry) -> DigitalKind {
-    let id = model.id.to_ascii_lowercase();
-    if id.contains("595") {
-        DigitalKind::Hc595
-    } else if id.contains("165") {
-        DigitalKind::Hc165
-    } else {
-        DigitalKind::Buffer
-    }
-}
-
 /// Which pin roles a digital component treats as outputs (gets a driver).
 /// Used by the binder to decide which pins to stamp Thevenin drivers on.
+/// Declarative parts answer from their `[models.logic]` outputs; parts
+/// without a logic block fall back to the `y*` role convention the
+/// synthesized passthrough mirrors onto (the old `Buffer` behaviour).
 pub fn output_roles(model: &ModelEntry) -> Vec<String> {
-    match classify(model) {
-        DigitalKind::Hc595 => ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        DigitalKind::Hc165 => ["qh", "qh_n"].iter().map(|s| s.to_string()).collect(),
-        DigitalKind::NorLatch => vec!["q".to_string()],
-        DigitalKind::Buffer => {
-            // Any pin role starting with 'y' (74HCxx convention) is an output.
-            model
-                .pins
-                .values()
-                .filter(|r| r.starts_with('y'))
-                .cloned()
-                .collect()
-        }
+    if !model.logic.is_empty() {
+        return model.logic.outputs.clone();
     }
+    model
+        .pins
+        .values()
+        .filter(|r| r.starts_with('y'))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -1084,12 +1075,10 @@ mod tests {
             for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"].iter().enumerate() {
                 roles.insert((*q).into(), circuit.node(&format!("Q{k}_{i}")));
             }
-            chips.push(DigitalComponent::new(
-                format!("U{k}"),
-                &model,
-                roles,
-                HashMap::new(),
-            ));
+            chips.push(
+                DigitalComponent::new(format!("U{k}"), &model, roles, HashMap::new())
+                    .expect("builtin 595 logic compiles"),
+            );
             prev_qh = Some(qh);
         }
 
@@ -1138,7 +1127,8 @@ mod tests {
         roles.insert("ser".into(), n_ser);
         roles.insert("srclk".into(), n_srclk);
         roles.insert("rclk".into(), n_rclk);
-        let comp = DigitalComponent::new("U0".into(), &model, roles, HashMap::new());
+        let comp = DigitalComponent::new("U0".into(), &model, roles, HashMap::new())
+            .expect("builtin 595 logic compiles");
         let mut pin_nets: HashMap<(char, u8), NodeId> = HashMap::new();
         pin_nets.insert(('B', 3), n_ser);
         pin_nets.insert(('B', 5), n_srclk);
@@ -1160,16 +1150,10 @@ mod tests {
         }
     }
 
-    /// Reconstruct the latched byte from a 595 component's output register
-    /// (`out_reg[i]` is qa+i = bit i).
+    /// Reconstruct the latched byte from a 595 component's storage register
+    /// (`store` bit i is qa+i).
     fn pack_out(c: &DigitalComponent) -> u8 {
-        let mut v = 0u8;
-        for i in 0..8 {
-            if c.out_reg[i] {
-                v |= 1 << i;
-            }
-        }
-        v
+        c.register("store").expect("595 store register") as u8
     }
 
     /// The generalized-path proof (05 §1.2): a cycle-stamped `shiftOut` burst
@@ -1268,7 +1252,7 @@ mod tests {
             &mut comps, &[0], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
         );
         assert_eq!(ticks, 1);
-        let replay_shift = comps[0].shift_reg.clone();
+        let replay_shift = comps[0].register("shift").expect("shift register");
 
         // Old collapse path: SER high and SRCLK high sampled once per chunk
         // (prev SRCLK low), the pre-change once-per-chunk `tick`.
@@ -1283,10 +1267,14 @@ mod tests {
         comps2[0].tick(&mut circuit2, &node_v);
 
         assert_eq!(
-            comps2[0].shift_reg, replay_shift,
+            comps2[0].register("shift"),
+            Some(replay_shift),
             "single edge collapses to an identical state"
         );
-        assert!(replay_shift[0], "the one SRCLK edge shifted SER(high) into stage 0");
+        assert!(
+            replay_shift & 1 == 1,
+            "the one SRCLK edge shifted SER(high) into stage 0"
+        );
     }
 
     /// The core FIX 1 proof: a synthetic ordered edge stream reproducing the
@@ -1392,12 +1380,10 @@ mod tests {
                 roles.insert("ser".into(), prev_qh.unwrap_or(head_ser));
                 let qh = circuit.node(&format!("QHS_{tag}{k}"));
                 roles.insert("qh_serial".into(), qh);
-                chips.push(DigitalComponent::new(
-                    format!("U_{tag}{k}"),
-                    &model,
-                    roles,
-                    HashMap::new(),
-                ));
+                chips.push(
+                    DigitalComponent::new(format!("U_{tag}{k}"), &model, roles, HashMap::new())
+                        .expect("builtin 595 logic compiles"),
+                );
                 prev_qh = Some(qh);
             }
         };
@@ -1485,7 +1471,10 @@ mod tests {
             let drv = PinDriver::stamp(&mut circuit, net, q, &format!("U_{q}"), DEFAULT_RO);
             drivers.insert(q.into(), drv);
         }
-        let mut chips = vec![DigitalComponent::new("U0".into(), &model, roles, drivers)];
+        let mut chips = vec![
+            DigitalComponent::new("U0".into(), &model, roles, drivers)
+                .expect("builtin 595 logic compiles"),
+        ];
 
         let mut gpio: HashMap<i64, (char, u8)> = HashMap::new();
         gpio.insert(srclk.0 as i64, ('B', 5));
@@ -1551,7 +1540,8 @@ mod tests {
                 let n = circuit.node(&format!("{refn}_{r}"));
                 roles.insert(r.into(), n);
             }
-            let d = DigitalComponent::new(refn.into(), &model, roles.clone(), HashMap::new());
+            let d = DigitalComponent::new(refn.into(), &model, roles.clone(), HashMap::new())
+                .expect("builtin 165 logic compiles");
             // Drive the input nets via voltage sources so node_v reads them.
             for r in ["a", "b", "c", "d", "e", "f", "g", "h"] {
                 let n = roles[r];
@@ -1714,27 +1704,29 @@ mod tests {
             }
         };
 
+        let q = |l: &DigitalComponent| l.output_level("q").expect("latch q output");
+
         // 1. Power-on idle: Q HIGH.
-        assert!(latch.latch_q, "power-on idle latch Q must be HIGH (cleared/idle)");
+        assert!(q(&latch), "power-on idle latch Q must be HIGH (cleared/idle)");
 
         // 2. Assert RESET_SR (set low): Q stays HIGH (the cleared level).
-        latch.tick_nor_latch(&make_v(false, true));
-        assert!(latch.latch_q, "RESET with no spike holds Q HIGH (idle)");
+        latch.tick(&mut circuit, &make_v(false, true));
+        assert!(q(&latch), "RESET with no spike holds Q HIGH (idle)");
 
         // 3. Release reset, no spike: HOLD HIGH.
-        latch.tick_nor_latch(&make_v(false, false));
-        assert!(latch.latch_q, "idle hold keeps Q HIGH");
+        latch.tick(&mut circuit, &make_v(false, false));
+        assert!(q(&latch), "idle hold keeps Q HIGH");
 
         // 4. A spike (SET pulse HIGH): Q goes LOW.
-        latch.tick_nor_latch(&make_v(true, false));
-        assert!(!latch.latch_q, "a SET pulse (spike) drives Q LOW");
+        latch.tick(&mut circuit, &make_v(true, false));
+        assert!(!q(&latch), "a SET pulse (spike) drives Q LOW");
 
         // 5. Spike clears (SET low), no reset: Q HELD LOW (the latch memory).
-        latch.tick_nor_latch(&make_v(false, false));
-        assert!(!latch.latch_q, "Q stays LOW after the spike clears (held by cross-couple)");
+        latch.tick(&mut circuit, &make_v(false, false));
+        assert!(!q(&latch), "Q stays LOW after the spike clears (held by cross-couple)");
 
         // 6. RESET_SR pulse: Q back HIGH (idle).
-        latch.tick_nor_latch(&make_v(false, true));
-        assert!(latch.latch_q, "RESET_SR returns Q to HIGH (idle)");
+        latch.tick(&mut circuit, &make_v(false, true));
+        assert!(q(&latch), "RESET_SR returns Q to HIGH (idle)");
     }
 }
