@@ -9,6 +9,11 @@ hauksbee-ir = { path = "../hauksbee-ir" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 num-complex = { workspace = true }
+# S4 parallel island execution (docs/dev-plans/03-solver-performance.md §3.4):
+# one ThreadPool per PartitionedTransient, gated behind an explicit
+# `ParallelPolicy` in SolverOptions. Criterion below deliberately excludes its
+# own rayon feature so the bench harness never fights this pool for cores.
+rayon = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
