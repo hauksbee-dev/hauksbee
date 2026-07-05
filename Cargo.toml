@@ -41,6 +41,10 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 num-complex = "0.4"
+# Parallel island execution (dev-plan 03 §3): the standard, battle-tested
+# work-stealing pool. Used only by hauksbee-solve's partitioned sweep, behind
+# an explicit `ParallelPolicy` option; the reference paths never touch it.
+rayon = "1"
 # Temp-file handling for the web firmware drop zone: uploaded ELF/HEX bytes are
 # written to a NamedTempFile so the path-based MCU loader can read them.
 tempfile = "3"
