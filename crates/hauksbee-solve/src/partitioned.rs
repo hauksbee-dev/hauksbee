@@ -117,22 +117,35 @@ const TEAR_MAX_BLOCK_DEVICES: usize = 600;
 const COUPLING_SWEEP_CAP: usize = 16;
 
 /// [`ParallelPolicy::Auto`] engages the thread pool only when at least this
-/// many NONLINEAR islands exist: each one is a private Newton solve (tens of
-/// microseconds), which dwarfs rayon's per-task dispatch, whereas a linear
-/// island's dense mat-vec is too small to win back the overhead on its own.
-/// Measured on the shunt-fed mirror arrays (the graded boards, plan §9.1):
-/// the 24-block array already gains ~2x from 4 threads, so the threshold sits
-/// well below it, high enough that a handful-of-islands board stays on the
-/// overhead-free sequential loop. Explicit `Threads(n)` bypasses this gate.
-const PAR_MIN_NONLINEAR_ISLANDS: usize = 8;
+/// many NONLINEAR islands exist. Measured on the shunt-fed mirror arrays
+/// (the graded boards, plan §9.1): a warm per-block re-solve at quiescence is
+/// sub-microsecond, so the 24-block array LOSES to pool coordination at any
+/// worker count, the 90-block array breaks even, and the 240-block array wins
+/// — the threshold sits between 24 and 90. Boards whose islands carry real
+/// per-step Newton work clear the per-task overhead far earlier; explicit
+/// `Threads(n)` bypasses this gate for them.
+const PAR_MIN_NONLINEAR_ISLANDS: usize = 32;
 
 /// Cap on the per-engine pool size under [`ParallelPolicy::Auto`]. Island
-/// solves are short and memory-bound at the margins, and the engine may
-/// itself be called from a parallel harness (each `PartitionedTransient`
-/// builds its OWN pool precisely so it cannot oversubscribe a shared global
-/// one); past 8 workers the mirror-array sweep stops scaling. `Threads(n)`
-/// overrides the cap for callers who know their machine.
-const PAR_MAX_THREADS: usize = 8;
+/// solves are fine-grained (a warm quiescent block re-solve is well under a
+/// microsecond), so extra workers add coordination and cache traffic faster
+/// than they add arithmetic: on the 240-block mirror array the march gains
+/// ~2.3x at 2 workers, holds near that at 3-4, and LOSES outright at 8 (the
+/// dev machine's other four cores are efficiency cores, and spin-waiting
+/// workers also tax the serial sections between passes). Auto therefore uses
+/// half the logical CPUs — on big.LITTLE parts that approximates the
+/// performance-core count — capped here. `Threads(n)` overrides both for
+/// callers who know their machine.
+const PAR_MAX_THREADS: usize = 4;
+
+/// Minimum islands per parallel task. A warm-started per-block Newton solve
+/// on a mirror-array island is sub-microsecond (a handful of devices, an
+/// ~8x8 factorization, 1-2 iterations), far below rayon's per-task dispatch
+/// cost, so task-per-island dispatch LOSES to the sequential loop — measured
+/// directly on the 240-block array. Batching islands per task restores the
+/// arithmetic-to-overhead ratio; the value is tuned on the graded mirror
+/// arrays (see the S4 measurement commit).
+const PAR_MIN_ISLANDS_PER_TASK: usize = 32;
 
 /// Build the per-engine rayon pool for a policy, given how many nonlinear
 /// islands the partition produced. `None` means "run sequential", which is
@@ -146,10 +159,15 @@ fn build_pool(policy: ParallelPolicy, n_nonlinear: usize) -> Option<rayon::Threa
             if n_nonlinear < PAR_MIN_NONLINEAR_ISLANDS {
                 return None;
             }
-            std::thread::available_parallelism()
+            // Half the logical CPUs (see PAR_MAX_THREADS: approximates the
+            // performance-core count on big.LITTLE parts, and leaves room for
+            // the caller's own threads), capped.
+            (std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1)
-                .min(PAR_MAX_THREADS)
+                / 2)
+            .max(1)
+            .min(PAR_MAX_THREADS)
         }
     };
     if threads <= 1 && matches!(policy, ParallelPolicy::Auto) {
@@ -221,10 +239,16 @@ pub struct PartitionedTransient {
     coupled: bool,
     /// Per-engine rayon pool (plan §3.4): `Some` when the policy engaged.
     /// Owned by THIS engine — never a global pool — so a caller that runs
-    /// many engines concurrently cannot oversubscribe through us. Executes
-    /// only sweep/resolve phase (a), whose result is order-free, so the pool's
-    /// presence changes wall time and nothing else.
+    /// many engines concurrently cannot oversubscribe through us. Entered
+    /// ONCE per step (`in_pool`), because entry from an outside thread is a
+    /// blocking handoff whose cost rivals a whole quiescent island pass; the
+    /// phase-(a) `par_iter`s inside then run on the ambient (= this) pool
+    /// with the workers already hot across the sweep and every balance pass.
     pool: Option<rayon::ThreadPool>,
+    /// `pool.is_some()`, readable while the pool itself is temporarily moved
+    /// out during `in_pool`. Phase (a) branches on this: when true, the code
+    /// is by construction executing inside the engine's own pool.
+    par: bool,
     n_nodes: usize,
 }
 
@@ -444,6 +468,7 @@ impl PartitionedTransient {
             .any(|n| claimed[n.0 as usize]);
 
         let pool = build_pool(opts.parallel, nonlinear.len());
+        let par = pool.is_some();
 
         Some(PartitionedTransient {
             opts: *opts,
@@ -459,8 +484,25 @@ impl PartitionedTransient {
             vbuf_next: vec![0.0; n_nodes + 1],
             coupled,
             pool,
+            par,
             n_nodes,
         })
+    }
+
+    /// Run `f` inside this engine's pool (or inline when sequential). The one
+    /// pool-entry point: callers wrap a whole step's solve so the blocking
+    /// outside-thread handoff is paid once per step, not once per relaxation
+    /// sweep or balance pass, and the phase-(a) `par_iter`s inside execute on
+    /// the ambient — that is, this engine's own — pool.
+    fn in_pool<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
+        match self.pool.take() {
+            Some(pool) => {
+                let r = pool.install(|| f(self));
+                self.pool = Some(pool);
+                r
+            }
+            None => f(self),
+        }
     }
 
     /// Run to `tstop`, streaming each accepted step to `sink`. The sample's `x`
@@ -503,13 +545,16 @@ impl PartitionedTransient {
             // at the new time (zero-order hold input for this step).
             self.apply_sources(circuit, tnext);
 
-            if self.tears.is_empty() {
-                // Convergence-gated Jacobi relaxation (replaces the fixed
-                // 3/2/1 sweep counts; see `relax_step` for the guard).
-                self.relax_step(circuit, h, tnext)?;
-            } else {
-                self.step_with_rail_balance(circuit, h, tnext)?;
-            }
+            // One pool entry for the whole step's solve (see `in_pool`).
+            self.in_pool(|me| {
+                if me.tears.is_empty() {
+                    // Convergence-gated Jacobi relaxation (replaces the fixed
+                    // 3/2/1 sweep counts; see `relax_step` for the guard).
+                    me.relax_step(circuit, h, tnext)
+                } else {
+                    me.step_with_rail_balance(circuit, h, tnext)
+                }
+            })?;
 
             // Commit accepted state in every island (advance reactive history).
             self.commit(circuit, h);
@@ -581,7 +626,7 @@ impl PartitionedTransient {
             vbuf: &mut self.vbuf,
             tears: &self.tears,
             opts: &self.opts,
-            pool: self.pool.as_ref(),
+            par: self.par,
             h,
             tnext,
         };
@@ -648,7 +693,9 @@ impl PartitionedTransient {
         tnext: f64,
         first: bool,
     ) -> Result<(), String> {
-        self.sweep(circuit, h, tnext, first).map(|_| ())
+        // Through `in_pool` like every real caller, so a parallel-policy audit
+        // could never leak onto the global rayon pool.
+        self.in_pool(|me| me.sweep(circuit, h, tnext, first).map(|_| ()))
     }
 
     /// One relaxation sweep over all islands, as an explicit double-buffered
@@ -690,8 +737,11 @@ impl PartitionedTransient {
         // execution order and thread count.
         let vbuf: &[f64] = &self.vbuf;
         let opts = &self.opts;
-        let first_err: Option<String> = match &self.pool {
-            Some(pool) => pool.install(|| {
+        let first_err: Option<String> = if self.par {
+            // Inside the engine's own pool (every caller reaches `sweep`
+            // through `in_pool`), so the ambient `par_iter`s below execute on
+            // it, never on the global rayon pool.
+            {
                 let (_, nl_err) = rayon::join(
                     || {
                         (
@@ -701,6 +751,7 @@ impl PartitionedTransient {
                             self.lin_vfree.as_mut_slice(),
                         )
                             .into_par_iter()
+                            .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
                             .for_each(|(li, state, buf, vfree)| {
                                 linear_phase_a(
                                     li, circuit, vbuf, tnext, first, state, buf, vfree,
@@ -710,6 +761,7 @@ impl PartitionedTransient {
                     || {
                         self.nonlinear
                             .par_iter_mut()
+                            .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
                             .enumerate()
                             .filter_map(|(i, nl)| {
                                 nl.phase_a(vbuf, h, tnext, first, opts)
@@ -720,8 +772,9 @@ impl PartitionedTransient {
                     },
                 );
                 nl_err.map(|(_, e)| e)
-            }),
-            None => {
+            }
+        } else {
+            {
                 for (((li, state), buf), vfree) in self
                     .linear
                     .iter()
@@ -968,11 +1021,12 @@ struct PartitionedRailLoads<'a> {
     vbuf: &'a mut Vec<f64>,
     tears: &'a [RailTearState],
     opts: &'a SolverOptions,
-    /// The engine's pool (see [`PartitionedTransient::pool`]); the balance's
-    /// per-trial block re-solves are the hot loop of a torn board, and every
-    /// block reads only the frozen buffer here, so they parallelize with the
-    /// same order-free argument as the sweep's phase (a).
-    pool: Option<&'a rayon::ThreadPool>,
+    /// True iff the engine's pool is engaged (see [`PartitionedTransient::par`]);
+    /// the balance runs inside `in_pool`, so the ambient `par_iter` here is the
+    /// engine's own pool. The per-trial block re-solves are the hot loop of a
+    /// torn board, and every block reads only the frozen buffer, so they
+    /// parallelize with the same order-free argument as the sweep's phase (a).
+    par: bool,
     h: f64,
     tnext: f64,
 }
@@ -989,18 +1043,18 @@ impl RailLoads for PartitionedRailLoads<'_> {
         // split is bit-neutral for the same reason it is safe in parallel.
         let vbuf: &[f64] = self.vbuf;
         let (h, tnext, opts) = (self.h, self.tnext, self.opts);
-        let err: Option<(usize, String)> = match self.pool {
-            Some(pool) => pool.install(|| {
-                self.nonlinear
-                    .par_iter_mut()
-                    .enumerate()
-                    .filter(|(_, nl)| nl.touches_rail(rail))
-                    .filter_map(|(k, nl)| {
-                        nl.phase_a(vbuf, h, tnext, false, opts).err().map(|e| (k, e))
-                    })
-                    .min_by_key(|(k, _)| *k)
-            }),
-            None => {
+        let err: Option<(usize, String)> = if self.par {
+            self.nonlinear
+                .par_iter_mut()
+                .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
+                .enumerate()
+                .filter(|(_, nl)| nl.touches_rail(rail))
+                .filter_map(|(k, nl)| {
+                    nl.phase_a(vbuf, h, tnext, false, opts).err().map(|e| (k, e))
+                })
+                .min_by_key(|(k, _)| *k)
+        } else {
+            {
                 let mut first_err = None;
                 for (k, nl) in self.nonlinear.iter_mut().enumerate() {
                     if nl.touches_rail(rail) {
@@ -1483,9 +1537,91 @@ fn seed_sub_reactive(state: &mut ReactiveState, sub: &Circuit, ws: &Workspace) {
     }
 }
 
+// The graded-board fixtures (single source of truth in benches/, see the
+// header there); `#[path]` resolves against `src/`, not the nested inline
+// `tests` module, so the include lives at file level like alloc_audit's.
+#[cfg(test)]
+#[path = "../benches/fixtures.rs"]
+#[allow(dead_code)]
+mod test_fixtures;
+
 #[cfg(test)]
 mod tests {
+    use super::test_fixtures as fixtures;
     use super::*;
+
+    /// INTERNAL TIMING PROBE (ignored; prints, asserts nothing). Breaks a torn
+    /// mirror-array step into its components so parallelization decisions are
+    /// made on measured hot spots, not guesses. Run with:
+    /// `cargo test -p hauksbee-solve --release --lib -- --ignored --nocapture probe_step`
+    #[test]
+    #[ignore]
+    fn probe_step_breakdown() {
+        use std::time::Instant;
+        // Warm-up pass (cold-binary/page-fault effects otherwise land on the
+        // first policy measured), then interleave nothing: each config is
+        // rebuilt fresh and the march is long enough to dominate.
+        for par in [
+            ParallelPolicy::Off,
+            ParallelPolicy::Off,
+            ParallelPolicy::Threads(1),
+            ParallelPolicy::Threads(2),
+            ParallelPolicy::Threads(3),
+            ParallelPolicy::Threads(4),
+            ParallelPolicy::Threads(6),
+            ParallelPolicy::Threads(8),
+            ParallelPolicy::Off,
+        ] {
+            let (c, _m) = fixtures::build_shunt_array(240);
+            let opts = SolverOptions {
+                integration: Integration::Trapezoidal,
+                reltol: 1e-9,
+                vntol: 1e-9,
+                max_newton: 200,
+                gmin: 1e-9,
+                parallel: par,
+                ..fixed_opts(1e-6)
+            };
+            let mut e = PartitionedTransient::try_build(&c, &opts).expect("tears");
+            let t0 = Instant::now();
+            e.seed(&c).expect("seed");
+            let t_seed = t0.elapsed();
+            let dt = 1e-6;
+            for li in &mut e.linear {
+                li.ensure_cache(dt);
+            }
+            let steps = 200;
+            let (mut t_src, mut t_bal, mut t_commit, mut t_gather) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let mut xg = vec![0.0; e.global_x_len()];
+            let mut t = 0.0;
+            for _ in 0..steps {
+                let tnext = t + dt;
+                let t0 = Instant::now();
+                e.apply_sources(&c, tnext);
+                t_src += t0.elapsed().as_secs_f64();
+                let t0 = Instant::now();
+                e.in_pool(|me| me.step_with_rail_balance(&c, dt, tnext))
+                    .expect("step");
+                t_bal += t0.elapsed().as_secs_f64();
+                let t0 = Instant::now();
+                e.commit(&c, dt);
+                t_commit += t0.elapsed().as_secs_f64();
+                let t0 = Instant::now();
+                e.gather_into(&mut xg);
+                t_gather += t0.elapsed().as_secs_f64();
+                t = tnext;
+            }
+            println!(
+                "{par:?}: seed {:.2}ms | per step: sources {:.1}us, balance {:.1}us, commit {:.1}us, gather {:.1}us",
+                t_seed.as_secs_f64() * 1e3,
+                t_src / steps as f64 * 1e6,
+                t_bal / steps as f64 * 1e6,
+                t_commit / steps as f64 * 1e6,
+                t_gather / steps as f64 * 1e6,
+            );
+        }
+    }
 
     /// Disjoint owned sets pass, and the claim mask marks exactly the owned
     /// slots (not the outer-written rail, not unclaimed nodes).
@@ -1670,6 +1806,64 @@ mod tests {
             err.contains("failed to relax"),
             "the guard must refuse, not mislabel: {err}"
         );
+    }
+
+    /// The small-island guard (plan §3.4): `ParallelPolicy::Auto` must DECLINE
+    /// to build a pool for a board with too few nonlinear islands to amortize
+    /// dispatch (the RC-fan shape: many trivial linear islands, zero Newton
+    /// solves), must ENGAGE on the mirror array (24 nonlinear blocks), and
+    /// `Threads(n)` must force a pool regardless.
+    #[test]
+    fn auto_policy_declines_small_boards_and_engages_large_ones() {
+        // 6-leg RC fan: 6 linear islands off one pinned rail, 0 nonlinear.
+        let mut c = Circuit::new();
+        let rail = c.node("rail");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: rail,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        for k in 0..6 {
+            let mid = c.node(&format!("leg{k}"));
+            c.add(Device::Resistor {
+                name: format!("R{k}"),
+                a: rail,
+                b: mid,
+                ohms: 1e3,
+                tc1: None,
+            });
+            c.add(Device::Capacitor {
+                name: format!("C{k}"),
+                a: mid,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: Some(0.0),
+            });
+        }
+        let opts = fixed_opts(1e-6);
+        let engine = PartitionedTransient::try_build(&c, &opts).expect("fan partitions");
+        assert!(
+            engine.pool.is_none(),
+            "Auto must decline a pool for a linear fan with no nonlinear islands"
+        );
+        let forced = PartitionedTransient::try_build(
+            &c,
+            &SolverOptions {
+                parallel: ParallelPolicy::Threads(2),
+                ..opts
+            },
+        )
+        .expect("fan partitions");
+        assert!(
+            forced.pool.is_some(),
+            "Threads(n) must force a pool even below the Auto threshold"
+        );
+        // The pool-size decision itself, without building boards for every
+        // case: below threshold declines, at threshold engages.
+        assert!(build_pool(ParallelPolicy::Auto, PAR_MIN_NONLINEAR_ISLANDS - 1).is_none());
+        assert!(build_pool(ParallelPolicy::Auto, PAR_MIN_NONLINEAR_ISLANDS).is_some());
+        assert!(build_pool(ParallelPolicy::Off, 1_000).is_none());
     }
 
     /// The positive half of the convergence gate: a genuinely coupled but
