@@ -166,6 +166,14 @@ pub struct Scheduler {
     /// `input_volts` snapshot the scheduler refreshes from the last solve so the
     /// 165 captures the latest spike-latch states on its PL load.
     hc165_chains: Vec<Arc<Mutex<crate::digital::Hc165Chain>>>,
+    /// Per-MCU synchronous input-responder registries (05 §1.5): the
+    /// multiplexer that shares each MCU's single `on_input_responder` slot
+    /// across every registered bit-banged input protocol (165 chains,
+    /// bit-banged SPI MISO, soft-I2C). `None` until the first responder is
+    /// registered for that MCU — the dispatch closure is installed lazily so a
+    /// board with no responders keeps the backend hook empty (zero per-edge
+    /// cost, exactly the pre-registry behaviour).
+    responder_registries: Vec<Option<Arc<Mutex<crate::responders::ResponderRegistry>>>>,
     /// Latest solved node voltages, shared with the 165 read chains so their
     /// PL-load sampling (which fires inside the MCU run, before this chunk's
     /// solve) sees the previous chunk's settled latch voltages.
@@ -389,6 +397,7 @@ impl Scheduler {
             spi_controller_map: HashMap::new(),
             substitutions,
             hc165_chains: Vec::new(),
+            responder_registries: Vec::new(),
             input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
             forced_node_volts: HashMap::new(),
             failed_chunks: 0,
@@ -401,9 +410,14 @@ impl Scheduler {
             last_replay_microticks: 0,
         };
 
-        // Build the edge-driven 74HC165 read chains and install each as its
-        // owning MCU's synchronous input responder, so a firmware readback
-        // (bit-banged SCLK + digitalRead(MISO)) resolves at edge granularity.
+        // One (initially absent) input-responder registry slot per live MCU;
+        // `responder_registry` fills a slot on first registration.
+        sched.responder_registries = (0..sched.mcus.len()).map(|_| None).collect();
+
+        // Build the edge-driven 74HC165 read chains and register each with its
+        // owning MCU's synchronous input-responder registry, so a firmware
+        // readback (bit-banged SCLK + digitalRead(MISO)) resolves at edge
+        // granularity.
         sched.build_and_install_165_chains();
 
         // Wire up the board's MCP4728 quad DACs: build one spec-driven I2C
@@ -466,15 +480,48 @@ impl Scheduler {
         bus.lock().unwrap_or_else(|e| e.into_inner()).drive_all(&mut ctx);
     }
 
+    /// The synchronous input-responder registry for MCU `mi` (05 §1.5),
+    /// creating it and installing its dispatch closure into the MCU's single
+    /// `on_input_responder` slot on first use. Every bit-banged input protocol
+    /// (165 chains, bit-banged SPI MISO, soft-I2C) registers here; the registry
+    /// keys dispatch on the output pins each responder watches, so an edge on
+    /// a non-protocol pin costs one map miss. Lazy install keeps the backend
+    /// hook empty (its `None` fast path) on boards with no responders. On poll
+    /// backends (Renode/QEMU) `on_input_responder` is a documented no-op — the
+    /// registry exists but never fires, the deliberate coarse tier of 05 §1.5.
+    fn responder_registry(
+        &mut self,
+        mi: usize,
+    ) -> Arc<Mutex<crate::responders::ResponderRegistry>> {
+        if let Some(reg) = &self.responder_registries[mi] {
+            return reg.clone();
+        }
+        let reg = Arc::new(Mutex::new(crate::responders::ResponderRegistry::new()));
+        let cb = reg.clone();
+        self.mcus[mi].core.on_input_responder(Box::new(
+            move |pin: PinId, high: bool| -> Vec<(PinId, bool)> {
+                cb.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .dispatch((pin.port, pin.bit), high)
+                    .into_iter()
+                    .map(|((port, bit), level)| (PinId { port, bit }, level))
+                    .collect()
+            },
+        ));
+        self.responder_registries[mi] = Some(reg.clone());
+        reg
+    }
+
     /// Build the edge-driven 74HC165 read chains (one per physical chain whose
-    /// PL / CLK / QH→MISO pins bind to an MCU's GPIO) and install each as that
-    /// MCU's synchronous input responder. The responder fires on every GPIO
-    /// output edge during the MCU's run: it forwards PL / SCLK edges to the
-    /// chain, which samples the spike-latch inputs on a PL load and presents the
-    /// next QH bit on MISO, returning the (MISO pin, level) to drive immediately.
-    /// This closes the readback inside the firmware's own bit-bang loop.
+    /// PL / CLK / QH→MISO pins bind to an MCU's GPIO) and register each with
+    /// that MCU's input-responder registry. The responder fires on every PL /
+    /// SCLK edge during the MCU's run: the chain samples the spike-latch inputs
+    /// on a PL load and presents the next QH bit on MISO, returning the (MISO
+    /// pin, level) to drive immediately. This closes the readback inside the
+    /// firmware's own bit-bang loop.
     fn build_and_install_165_chains(&mut self) {
         use crate::digital::{order_165_chains, Hc165Chain, LogicLevels};
+        use crate::responders::Hc165Responder;
 
         // Per MCU: net-node -> (port,bit). Every wired digital-capable pin gets a
         // (possibly tri-stated) gpio driver, so this map covers both the control
@@ -502,33 +549,19 @@ impl Scheduler {
                     continue;
                 };
                 let levels: LogicLevels = chain.levels(&self.digital);
-                let pl_n = chain.pl_n;
-                let clk = chain.clk;
                 let chain = Arc::new(Mutex::new(chain));
-                let chain_cb = chain.clone();
-                let volts = self.input_volts.clone();
-                // The responder: only PL/SCLK edges matter; ignore everything
-                // else cheaply. Read the shared voltage snapshot for the
-                // PL-load sampling of the latch inputs.
-                self.mcus[mi].core.on_input_responder(Box::new(
-                    move |pin: PinId, high: bool| -> Vec<(PinId, bool)> {
-                        let pin = (pin.port, pin.bit);
-                        if pin != pl_n && pin != clk {
-                            return Vec::new();
-                        }
-                        let v = volts.lock().unwrap_or_else(|e| e.into_inner());
-                        let node_v = |n: hauksbee_ir::NodeId| {
-                            v.get(n.0 as usize).copied().unwrap_or(0.0)
-                        };
-                        let mut ch = chain_cb.lock().unwrap_or_else(|e| e.into_inner());
-                        match ch.on_edge(pin, high, &node_v, &levels) {
-                            Some(((port, bit), level)) => {
-                                vec![(PinId { port, bit }, level)]
-                            }
-                            None => Vec::new(),
-                        }
-                    },
-                ));
+                // Register with the owning MCU's responder registry: dispatch
+                // is keyed on the chain's PL/SCLK pins, so every other edge is
+                // ignored as cheaply as the pre-registry closure did. The
+                // responder reads the shared voltage snapshot for the PL-load
+                // sampling of the latch inputs.
+                let responder =
+                    Hc165Responder::new(chain.clone(), levels, self.input_volts.clone());
+                let registry = self.responder_registry(mi);
+                registry
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .register(Box::new(responder));
                 self.hc165_chains.push(chain);
                 break;
             }
@@ -651,6 +684,125 @@ impl Scheduler {
                 });
             }
         }
+    }
+
+    /// Attach a bit-banged SPI slave (05 §1.5): the firmware toggles
+    /// SCLK/MOSI/CS as plain GPIOs and reads MISO as a GPIO, and the
+    /// [`crate::responders::BitBangSpiResponder`] bridges the bit stream to
+    /// the byte-level slave in `bus`, answering MISO synchronously inside the
+    /// firmware's own clock loop.
+    ///
+    /// The responder registers with the input-responder registry of the MCU
+    /// whose binding owns the SCLK GPIO driver (the same ownership rule as
+    /// `register_cs_frame`); all four pins must belong to that MCU. Pin tuples
+    /// come from the board — resolve nets with [`Scheduler::mcu_pin_for_net`],
+    /// the same net-to-pin trace the 165/595 chain discovery performs.
+    ///
+    /// The bus records `cs_n` as its CS pin so coverage reports `exact`
+    /// framing and the chunk-boundary deselect heuristic stays off it
+    /// (`frames_itself`). Deliberately NOT `register_cs_frame`: the responder
+    /// owns select/deselect from the same CS edges, and registering both would
+    /// double-deliver every CS event to the slave.
+    ///
+    /// Only meaningful on push backends (simavr): on poll backends the
+    /// responder never fires (`on_input_responder` is a documented no-op) and
+    /// a bit-banged read stays coarse, per the 05 §1.5 backend tier.
+    pub fn attach_bitbang_spi(
+        &mut self,
+        bus: Arc<Mutex<SpiBus>>,
+        pins: crate::responders::BitBangSpiPins,
+    ) -> anyhow::Result<()> {
+        let mi = self
+            .mcus
+            .iter()
+            .position(|m| m.binding.gpio_drivers.contains_key(&pins.sclk))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "bit-banged SPI '{}': no live MCU drives SCLK pin {:?}",
+                    bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                    pins.sclk
+                )
+            })?;
+        for (name, pin) in [
+            ("MOSI", pins.mosi),
+            ("MISO", pins.miso),
+            ("CS", pins.cs_n),
+        ] {
+            if !self.mcus[mi].binding.gpio_drivers.contains_key(&pin) {
+                anyhow::bail!(
+                    "bit-banged SPI '{}': {name} pin {:?} is not a wired GPIO of the MCU \
+                     that drives SCLK ({})",
+                    bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
+                    pin,
+                    self.mcus[mi].binding.reference,
+                );
+            }
+        }
+        bus.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_cs_pin(Some(pins.cs_n));
+        let responder = crate::responders::BitBangSpiResponder::new(bus.clone(), pins);
+        self.responder_registry(mi)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(Box::new(responder));
+        self.spi_buses.push(bus);
+        Ok(())
+    }
+
+    /// Attach a soft-I2C slave bus (05 §1.5): the firmware bit-bangs SCL/SDA
+    /// as plain GPIOs and the [`crate::responders::SoftI2cResponder`] protocol
+    /// engine recovers the transaction from the pin edges, routing it to the
+    /// existing [`I2cBus`] slave models and answering SDA synchronously inside
+    /// the firmware's own clock loop. See the responder's docs for the honest
+    /// waveform subset (single master, no clock stretching, push-pull master).
+    ///
+    /// The responder registers with the registry of the MCU whose binding owns
+    /// the SCL GPIO driver; SDA must belong to the same MCU. The bus joins
+    /// `i2c_buses` so the chunk loop's `flush_stops` delivers the ctx-bearing
+    /// `on_stop` exactly like the hardware-TWI path — but deliberately WITHOUT
+    /// `attach_i2c_bus`'s `on_i2c` registration: this bus lives on GPIO pins,
+    /// not the TWI peripheral, and answering hardware-TWI traffic at these
+    /// addresses would invent a device on the wrong pins.
+    pub fn attach_soft_i2c(
+        &mut self,
+        bus: Arc<Mutex<I2cBus>>,
+        scl: (char, u8),
+        sda: (char, u8),
+    ) -> anyhow::Result<()> {
+        let mi = self
+            .mcus
+            .iter()
+            .position(|m| m.binding.gpio_drivers.contains_key(&scl))
+            .ok_or_else(|| {
+                anyhow::anyhow!("soft I2C: no live MCU drives SCL pin {scl:?}")
+            })?;
+        if !self.mcus[mi].binding.gpio_drivers.contains_key(&sda) {
+            anyhow::bail!(
+                "soft I2C: SDA pin {sda:?} is not a wired GPIO of the MCU that drives \
+                 SCL ({})",
+                self.mcus[mi].binding.reference,
+            );
+        }
+        let responder = crate::responders::SoftI2cResponder::new(bus.clone(), scl, sda);
+        self.responder_registry(mi)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(Box::new(responder));
+        self.i2c_buses.push(bus);
+        Ok(())
+    }
+
+    /// Resolve a named net to the MCU GPIO pin wired to it. This is the
+    /// net-to-pin trace the 165/595 chain discovery performs, exposed by net
+    /// NAME so a caller wiring a bit-banged topology can go from the board's
+    /// nets straight to responder pins. Input pins resolve too: every wired
+    /// digital-capable pin gets a (possibly tri-stated) GPIO driver, so a
+    /// MISO/SDA-style read pin carries the mapping even though the firmware
+    /// never drives it.
+    pub fn mcu_pin_for_net(&self, net: &str) -> Option<(char, u8)> {
+        let node = *self.net_nodes.get(net)?;
+        self.pin_driving_node(node)
     }
 
     /// Trace a net back to the MCU pin that drives it: the (port, bit) of the

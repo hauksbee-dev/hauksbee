@@ -1001,6 +1001,33 @@ impl SpiSlave for RegisterMapSensor {
         }
     }
 
+    /// Exact, non-advancing mirror of [`SpiSlave::transfer`]'s return value.
+    /// Every branch of `transfer` computes its MISO byte from state set by
+    /// PRIOR bytes (command exchange and write phase return the fixed 0x00
+    /// status don't-care; read bytes stream `read_buf` / the auto-increment
+    /// successor), never from the incoming MOSI byte — which is why this
+    /// sensor is fully previewable and hence readable over bit-banged SPI.
+    /// A unit test locks the preview to the transfer stream byte-for-byte.
+    fn miso_preview(&mut self) -> Option<u8> {
+        if self.spi_first_byte || !self.spi_is_read {
+            return Some(0x00);
+        }
+        if self.spi_pos >= self.read_buf.len() {
+            // The next transfer would auto-increment to the next register in
+            // order (or re-refill the same address when it is not in the
+            // order, matching `transfer`); preview that register's first byte
+            // without committing the advance.
+            let addr = self
+                .addr_order
+                .iter()
+                .position(|&a| a == self.spi_addr)
+                .map(|idx| self.addr_order[(idx + 1) % self.addr_order.len().max(1)])
+                .unwrap_or(self.spi_addr);
+            return Some(self.register_bytes(addr).first().copied().unwrap_or(0xFF));
+        }
+        Some(self.read_buf[self.spi_pos])
+    }
+
     fn state(&self) -> HashMap<String, f64> {
         let mut m = HashMap::new();
         m.insert("spi_addr".into(), self.spi_addr as f64);
@@ -1136,6 +1163,37 @@ addr_mask = 0x7f
         let value = i16::from_le_bytes([lo, hi]);
         assert_eq!(value, 1234, "data register should decode to 1234");
         assert_eq!([lo, hi], [0xD2, 0x04]);
+    }
+
+    /// PROOF of the `miso_preview` contract the bit-banged SPI responder rests
+    /// on: at EVERY byte position of a transaction — command byte, in-register
+    /// streaming, the auto-increment hop past a register's end, and across a
+    /// CS deassert — the preview equals the byte the very next `transfer`
+    /// returns, and previewing repeatedly does not advance the stream.
+    #[test]
+    fn miso_preview_matches_transfer_stream_byte_for_byte() {
+        let mut sensor = RegisterMapSensor::from_toml(SPI_IMU_SPEC).unwrap();
+        sensor.set_input("gyro_x", 1234.0);
+
+        // WHO_AM_I read burst that runs past the 1-byte register (exercising
+        // the auto-increment preview), then a fresh transaction after CS.
+        for mosi in [0x80 | 0x0f, 0x00, 0x00, 0x00, 0x00] {
+            let preview = sensor.miso_preview();
+            let again = sensor.miso_preview();
+            assert_eq!(preview, again, "preview must be non-advancing");
+            let actual = SpiSlave::transfer(&mut sensor, mosi);
+            assert_eq!(
+                preview,
+                Some(actual),
+                "preview must equal the next transfer's return (mosi 0x{mosi:02x})"
+            );
+        }
+        SpiSlave::deselect(&mut sensor);
+        for mosi in [0x80 | 0x22, 0x00, 0x00] {
+            let preview = sensor.miso_preview();
+            let actual = SpiSlave::transfer(&mut sensor, mosi);
+            assert_eq!(preview, Some(actual));
+        }
     }
 
     // A BMP280-like SPI spec whose chip-ID register is declared at its RAW
