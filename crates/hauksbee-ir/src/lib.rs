@@ -19,7 +19,7 @@ pub use models::{
     thermal_voltage as thermal_voltage_c, BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity,
 };
 pub use source::{PwlPoint, SourceKind};
-pub use spice::{SpiceError, SpiceLoader};
+pub use spice::{Directives, SpiceError, SpiceLoader, TranDirective};
 
 use serde::{Deserialize, Serialize};
 

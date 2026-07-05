@@ -1,0 +1,9 @@
+npn common-emitter bias
+VCC vcc 0 DC 12
+RC vcc coll 4.7k
+RB vcc base 470k
+RE emit 0 1k
+Q1 coll base emit QMOD
+.model QMOD NPN(IS=1e-15 BF=200 VAF=80 NF=1.0)
+.op
+.end

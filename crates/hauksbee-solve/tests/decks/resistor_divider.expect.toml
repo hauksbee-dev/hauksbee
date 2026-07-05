@@ -1,0 +1,17 @@
+# Pure linear divider: exact to floating-point. Node voltages and the source
+# branch current all cross-checked tightly.
+analysis = "op"
+description = "resistive divider DC operating point"
+
+[[probe]]
+expr = "V(out)"
+reltol = 1.0e-4
+
+[[probe]]
+expr = "V(in)"
+reltol = 1.0e-4
+
+[[probe]]
+expr = "I(V1)"
+reltol = 1.0e-4
+abstol = 1.0e-9
