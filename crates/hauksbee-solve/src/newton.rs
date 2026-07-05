@@ -407,8 +407,20 @@ pub fn newton_solve(
             // Census hooks (HAUKSBEE_STEP_CENSUS): the march-cost attribution
             // needs the stamp/factor/backsolve split and these three calls are
             // the only place the phases exist. A cached-bool branch when off.
+            //
+            // AssemblyMode routing (03-solver-performance.md §5): `Planned`
+            // (explicit opt-in) replays the compiled constant backbone and
+            // re-stamps only the nonlinear/time-varying tier through
+            // pre-resolved slots; the default `Interpreted` keeps the classic
+            // walk bit-identical. `stamp_all_planned` itself falls back to the
+            // interpreted walk on contexts the plan does not model (DC solves,
+            // staged regularizers, event-frozen states).
             crate::census::timed(crate::census::Phase::Stamp, || {
-                stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs)
+                if opts.assembly == crate::options::AssemblyMode::Planned {
+                    crate::plan::stamp_all_planned(&ctx, &ws.plan, &mut ws.matrix, &mut ws.rhs)
+                } else {
+                    stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs)
+                }
             });
         }
         // The iterate from the step before this one (the anchor we just used)

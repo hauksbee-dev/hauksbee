@@ -42,6 +42,32 @@ pub enum Partitioning {
     Auto,
 }
 
+/// How each Newton iteration assembles the linearized system `g x = rhs`.
+///
+/// `Interpreted` is the classic reference assembly: one walk of the whole
+/// device list per iteration, every matrix write finding its slot by binary
+/// search. It is the bit-for-bit oracle path and the default.
+///
+/// `Planned` routes assembly through the compiled [`crate::StampPlan`]
+/// (`docs/dev-plans/03-solver-performance.md` §5): the constant backbone
+/// (resistors, source/inductor incidence, per-dt reactive conductances) is
+/// replayed as a flat list of pre-resolved slot writes, and only the
+/// nonlinear / time-varying devices are re-evaluated, writing through
+/// pre-resolved per-device slot tables instead of per-write binary searches.
+/// The accumulation ORDER differs from `Interpreted`, so results match to
+/// solver tolerance (reltol/vntol), not bit-for-bit; contexts the plan does
+/// not cover (DC solves, staged regularizers, event-frozen solves) fall back
+/// to the interpreted assembly automatically. Explicit opt-in only: no
+/// default path flips to `Planned` here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AssemblyMode {
+    /// Classic interpreted device walk (the bit-for-bit reference).
+    #[default]
+    Interpreted,
+    /// Two-tier compiled assembly through the [`crate::StampPlan`].
+    Planned,
+}
+
 /// How the transient march obtains its state at `t = 0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DcInit {
@@ -353,6 +379,9 @@ pub struct SolverOptions {
     /// Whether to partition the circuit into islands before solving.
     #[serde(default)]
     pub partitioning: Partitioning,
+    /// How Newton assembles the linearized system; see [`AssemblyMode`].
+    #[serde(default)]
+    pub assembly: AssemblyMode,
     /// Coupling granularity for the partitioned path, in `[0, 1]`. At `1.0` the
     /// orchestrator runs extra Gauss-Seidel relaxation sweeps per step to tighten
     /// inter-island agreement (more accurate, slower); at `0.0` it does a single
@@ -400,6 +429,7 @@ impl Default for SolverOptions {
             dc_homotopy: true,
             dc_init: DcInit::Solve,
             partitioning: Partitioning::Auto,
+            assembly: AssemblyMode::Interpreted,
             granularity: 1.0,
             ladder: RobustnessLadder::none(),
             event_retry: EventRetryTuning::default(),

@@ -65,8 +65,8 @@ pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, Stabili
 pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};
 pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
 pub use options::{
-    DcInit, DeviceEffects, EventRetryTuning, Integration, Partitioning, RobustnessLadder,
-    SolverOptions, StepControl, Strategy,
+    AssemblyMode, DcInit, DeviceEffects, EventRetryTuning, Integration, Partitioning,
+    RobustnessLadder, SolverOptions, StepControl, Strategy,
 };
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;
