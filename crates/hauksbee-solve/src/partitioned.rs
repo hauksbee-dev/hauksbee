@@ -54,10 +54,11 @@
 //! computes bit-for-bit what the Gauss-Seidel sweep did.
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
+use rayon::prelude::*;
 
 use crate::linear::LinearIsland;
 use crate::newton::{dc_operating_point, newton_solve, Workspace};
-use crate::options::{Integration, SolverOptions, StepControl};
+use crate::options::{Integration, ParallelPolicy, SolverOptions, StepControl};
 use crate::orchestrate::balance::{settle_rails, BalancePolicy, RailChannel, RailLoads};
 use crate::partition::{Island, Partition};
 use crate::stamp::IntegCoeffs;
@@ -114,6 +115,51 @@ const TEAR_MAX_BLOCK_DEVICES: usize = 600;
 /// are outer-written pins/rails), so the cap only bites on imposed partitions
 /// with genuine inter-island feedback.
 const COUPLING_SWEEP_CAP: usize = 16;
+
+/// [`ParallelPolicy::Auto`] engages the thread pool only when at least this
+/// many NONLINEAR islands exist: each one is a private Newton solve (tens of
+/// microseconds), which dwarfs rayon's per-task dispatch, whereas a linear
+/// island's dense mat-vec is too small to win back the overhead on its own.
+/// Measured on the shunt-fed mirror arrays (the graded boards, plan §9.1):
+/// the 24-block array already gains ~2x from 4 threads, so the threshold sits
+/// well below it, high enough that a handful-of-islands board stays on the
+/// overhead-free sequential loop. Explicit `Threads(n)` bypasses this gate.
+const PAR_MIN_NONLINEAR_ISLANDS: usize = 8;
+
+/// Cap on the per-engine pool size under [`ParallelPolicy::Auto`]. Island
+/// solves are short and memory-bound at the margins, and the engine may
+/// itself be called from a parallel harness (each `PartitionedTransient`
+/// builds its OWN pool precisely so it cannot oversubscribe a shared global
+/// one); past 8 workers the mirror-array sweep stops scaling. `Threads(n)`
+/// overrides the cap for callers who know their machine.
+const PAR_MAX_THREADS: usize = 8;
+
+/// Build the per-engine rayon pool for a policy, given how many nonlinear
+/// islands the partition produced. `None` means "run sequential", which is
+/// always numerically identical (the Jacobi sweep is order-free), so a pool
+/// build failure quietly degrades to sequential rather than failing the run.
+fn build_pool(policy: ParallelPolicy, n_nonlinear: usize) -> Option<rayon::ThreadPool> {
+    let threads = match policy {
+        ParallelPolicy::Off => return None,
+        ParallelPolicy::Threads(n) => n.max(1),
+        ParallelPolicy::Auto => {
+            if n_nonlinear < PAR_MIN_NONLINEAR_ISLANDS {
+                return None;
+            }
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .min(PAR_MAX_THREADS)
+        }
+    };
+    if threads <= 1 && matches!(policy, ParallelPolicy::Auto) {
+        return None;
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .ok()
+}
 
 /// Count the reactive states (caps + inductors) in an island.
 fn count_states(circuit: &Circuit, isl: &Island) -> usize {
@@ -173,6 +219,12 @@ pub struct PartitionedTransient {
     /// than measured — a re-solved Newton island jitters by its own step
     /// tolerance, which would flap a measured gate without conveying anything.
     coupled: bool,
+    /// Per-engine rayon pool (plan §3.4): `Some` when the policy engaged.
+    /// Owned by THIS engine — never a global pool — so a caller that runs
+    /// many engines concurrently cannot oversubscribe through us. Executes
+    /// only sweep/resolve phase (a), whose result is order-free, so the pool's
+    /// presence changes wall time and nothing else.
+    pool: Option<rayon::ThreadPool>,
     n_nodes: usize,
 }
 
@@ -391,6 +443,8 @@ impl PartitionedTransient {
             .chain(nonlinear.iter().flat_map(|nl| nl.boundary.iter().map(|(bn, _)| bn)))
             .any(|n| claimed[n.0 as usize]);
 
+        let pool = build_pool(opts.parallel, nonlinear.len());
+
         Some(PartitionedTransient {
             opts: *opts,
             linear,
@@ -404,6 +458,7 @@ impl PartitionedTransient {
             vbuf: vec![0.0; n_nodes + 1],
             vbuf_next: vec![0.0; n_nodes + 1],
             coupled,
+            pool,
             n_nodes,
         })
     }
@@ -526,6 +581,7 @@ impl PartitionedTransient {
             vbuf: &mut self.vbuf,
             tears: &self.tears,
             opts: &self.opts,
+            pool: self.pool.as_ref(),
             h,
             tnext,
         };
@@ -626,28 +682,66 @@ impl PartitionedTransient {
         first: bool,
     ) -> Result<(f64, u32), String> {
         // ---- Phase a: compute owned outputs into per-island scratch. ----
+        // Sequential and pooled arms run the SAME per-island code on the same
+        // frozen inputs; the pool only changes which core runs which island,
+        // which the phase's no-shared-writes structure makes unobservable.
+        // Both arms visit EVERY island and surface the lowest-indexed failure,
+        // so the error message (not just the waveform) is independent of
+        // execution order and thread count.
         let vbuf: &[f64] = &self.vbuf;
         let opts = &self.opts;
-        for (((li, state), buf), vfree) in self
-            .linear
-            .iter()
-            .zip(self.lin_state.iter_mut())
-            .zip(self.lin_input_buf.iter_mut())
-            .zip(self.lin_vfree.iter_mut())
-        {
-            linear_phase_a(li, circuit, vbuf, tnext, first, state, buf, vfree);
-        }
-        // Run EVERY island and surface the lowest-indexed failure, so the
-        // error message (not just the waveform) stays independent of execution
-        // order once this phase runs on the pool.
-        let mut first_err: Option<String> = None;
-        for nl in self.nonlinear.iter_mut() {
-            if let Err(e) = nl.phase_a(vbuf, h, tnext, first, opts) {
-                if first_err.is_none() {
-                    first_err = Some(e);
+        let first_err: Option<String> = match &self.pool {
+            Some(pool) => pool.install(|| {
+                let (_, nl_err) = rayon::join(
+                    || {
+                        (
+                            self.linear.as_slice(),
+                            self.lin_state.as_mut_slice(),
+                            self.lin_input_buf.as_mut_slice(),
+                            self.lin_vfree.as_mut_slice(),
+                        )
+                            .into_par_iter()
+                            .for_each(|(li, state, buf, vfree)| {
+                                linear_phase_a(
+                                    li, circuit, vbuf, tnext, first, state, buf, vfree,
+                                )
+                            })
+                    },
+                    || {
+                        self.nonlinear
+                            .par_iter_mut()
+                            .enumerate()
+                            .filter_map(|(i, nl)| {
+                                nl.phase_a(vbuf, h, tnext, first, opts)
+                                    .err()
+                                    .map(|e| (i, e))
+                            })
+                            .min_by_key(|(i, _)| *i)
+                    },
+                );
+                nl_err.map(|(_, e)| e)
+            }),
+            None => {
+                for (((li, state), buf), vfree) in self
+                    .linear
+                    .iter()
+                    .zip(self.lin_state.iter_mut())
+                    .zip(self.lin_input_buf.iter_mut())
+                    .zip(self.lin_vfree.iter_mut())
+                {
+                    linear_phase_a(li, circuit, vbuf, tnext, first, state, buf, vfree);
                 }
+                let mut first_err: Option<String> = None;
+                for nl in self.nonlinear.iter_mut() {
+                    if let Err(e) = nl.phase_a(vbuf, h, tnext, first, opts) {
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
+                    }
+                }
+                first_err
             }
-        }
+        };
         if let Some(e) = first_err {
             return Err(e);
         }
@@ -874,6 +968,11 @@ struct PartitionedRailLoads<'a> {
     vbuf: &'a mut Vec<f64>,
     tears: &'a [RailTearState],
     opts: &'a SolverOptions,
+    /// The engine's pool (see [`PartitionedTransient::pool`]); the balance's
+    /// per-trial block re-solves are the hot loop of a torn board, and every
+    /// block reads only the frozen buffer here, so they parallelize with the
+    /// same order-free argument as the sweep's phase (a).
+    pool: Option<&'a rayon::ThreadPool>,
     h: f64,
     tnext: f64,
 }
@@ -882,10 +981,44 @@ impl RailLoads for PartitionedRailLoads<'_> {
     fn resolve(&mut self, i: usize, v_rail: f64) -> Result<(), String> {
         let rail = self.tears[i].rail;
         self.vbuf[rail.0 as usize] = v_rail;
-        for nl in self.nonlinear.iter_mut() {
+        // Phase (a): every block touching the rail re-solves against the
+        // frozen buffer (boundary slots are outer-written — never any block's
+        // owned slot, enforced at build — so compute order is unobservable).
+        // Phase (b): scatter owned outputs back, serially. Splitting the
+        // phases is what lets (a) run on the pool; on the sequential arm the
+        // split is bit-neutral for the same reason it is safe in parallel.
+        let vbuf: &[f64] = self.vbuf;
+        let (h, tnext, opts) = (self.h, self.tnext, self.opts);
+        let err: Option<(usize, String)> = match self.pool {
+            Some(pool) => pool.install(|| {
+                self.nonlinear
+                    .par_iter_mut()
+                    .enumerate()
+                    .filter(|(_, nl)| nl.touches_rail(rail))
+                    .filter_map(|(k, nl)| {
+                        nl.phase_a(vbuf, h, tnext, false, opts).err().map(|e| (k, e))
+                    })
+                    .min_by_key(|(k, _)| *k)
+            }),
+            None => {
+                let mut first_err = None;
+                for (k, nl) in self.nonlinear.iter_mut().enumerate() {
+                    if nl.touches_rail(rail) {
+                        if let Err(e) = nl.phase_a(vbuf, h, tnext, false, opts) {
+                            if first_err.is_none() {
+                                first_err = Some((k, e));
+                            }
+                        }
+                    }
+                }
+                first_err
+            }
+        };
+        if let Some((_, e)) = err {
+            return Err(e);
+        }
+        for nl in self.nonlinear.iter() {
             if nl.touches_rail(rail) {
-                nl.refresh_boundary(self.vbuf);
-                nl.step(self.h, self.tnext, false, self.opts)?;
                 nl.write_back(self.vbuf);
             }
         }

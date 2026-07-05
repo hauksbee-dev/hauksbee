@@ -186,11 +186,20 @@ mod tests {
     /// heap allocations once warmed. The linear-island reconstruction reuses the
     /// pre-allocated `lin_vfree` buffer (§4.2) and every nonlinear island's inner
     /// Newton solve reuses its workspace `solve_scratch` (§4.1).
+    ///
+    /// Measured on the SEQUENTIAL execution arm (`ParallelPolicy::Off`): the
+    /// S1 property under audit is the solver hot path's own buffers, which the
+    /// S4 pooled arm runs identically (same per-island code, same scratch).
+    /// The pool's work-stealing deques allocate as jobs are pushed — runtime
+    /// machinery outside the solver's numerics — so auditing the pooled arm
+    /// would count rayon internals, not solver leaks. The pooled arm's own
+    /// gate is the §3.5 bit-identical determinism test.
     #[test]
     fn partitioned_sweep_is_alloc_free() {
         let (circuit, _membranes) = fixtures::build_shunt_array(90);
         let opts = SolverOptions {
             partitioning: Partitioning::Auto,
+            parallel: crate::options::ParallelPolicy::Off,
             ..audit_opts()
         };
 
