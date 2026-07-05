@@ -102,6 +102,11 @@ pub struct PartitionedTransient {
     lin_input_buf: Vec<Vec<f64>>,
     /// Per linear island: free-node voltage scratch and the global node of each.
     lin_free_nodes: Vec<Vec<NodeId>>,
+    /// Per linear island: reconstructed free-node voltage buffer, pre-allocated
+    /// (sized `li.n_free()`) and reused across sweeps instead of a per-sweep
+    /// `vec![0.0; n_free]`. `node_voltages` fully overwrites every entry before
+    /// any read, so reuse is a pure lifetime change (plan §4.2).
+    lin_vfree: Vec<Vec<f64>>,
     nonlinear: Vec<NonlinearIsland>,
     /// Global voltage source ids (cut points) and their global +/- nodes.
     sources: Vec<DeviceId>,
@@ -237,6 +242,7 @@ impl PartitionedTransient {
         let mut lin_state = Vec::new();
         let mut lin_input_buf = Vec::new();
         let mut lin_free_nodes = Vec::new();
+        let mut lin_vfree = Vec::new();
         let mut nonlinear = Vec::new();
 
         let touches_rail = |isl: &crate::partition::Island| -> bool {
@@ -255,6 +261,7 @@ impl PartitionedTransient {
                         let free: Vec<NodeId> = collect_free_nodes(isl, &li);
                         lin_state.push(vec![0.0; n]);
                         lin_input_buf.push(vec![0.0; li.n_inputs_total()]);
+                        lin_vfree.push(vec![0.0; li.n_free()]);
                         lin_free_nodes.push(free);
                         linear.push(li);
                     }
@@ -294,6 +301,7 @@ impl PartitionedTransient {
             lin_state,
             lin_input_buf,
             lin_free_nodes,
+            lin_vfree,
             nonlinear,
             sources,
             tears,
@@ -448,6 +456,20 @@ impl PartitionedTransient {
     /// buffer and writing its owned node voltages back. `first` advances the
     /// trial state from accepted history; later sweeps re-solve in place to
     /// relax coupling without committing.
+    /// Test-only accessor for the S1 allocation-hygiene gate (plan §4.4): run
+    /// one sweep directly so the `alloc_audit` counter can measure the per-step
+    /// inner loop in isolation. Keeps `sweep` itself private; not engine API.
+    #[cfg(test)]
+    pub(crate) fn sweep_for_audit(
+        &mut self,
+        circuit: &Circuit,
+        h: f64,
+        tnext: f64,
+        first: bool,
+    ) -> Result<(), String> {
+        self.sweep(circuit, h, tnext, first)
+    }
+
     fn sweep(&mut self, circuit: &Circuit, h: f64, tnext: f64, first: bool) -> Result<(), String> {
         // Linear islands.
         for (idx, li) in self.linear.iter().enumerate() {
@@ -469,10 +491,12 @@ impl PartitionedTransient {
             if first {
                 li.step(&mut self.lin_state[idx], buf);
             }
-            // Reconstruct free-node voltages and write back.
+            // Reconstruct free-node voltages and write back. `vfree` is the
+            // pre-allocated per-island buffer; `node_voltages` overwrites every
+            // entry, so no per-sweep allocation and no need to clear (plan §4.2).
             let free = &self.lin_free_nodes[idx];
-            let mut vfree = vec![0.0f64; li.n_free()];
-            li.node_voltages(&self.lin_state[idx], buf, &mut vfree);
+            let vfree = &mut self.lin_vfree[idx];
+            li.node_voltages(&self.lin_state[idx], buf, vfree);
             for (f, gn) in free.iter().enumerate() {
                 self.vbuf[gn.0 as usize] = vfree[f];
             }
