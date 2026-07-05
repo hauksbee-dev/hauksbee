@@ -1,0 +1,10 @@
+half-wave rectifier + smoothing
+V1 in 0 SIN(0 5 1k 0 0 0)
+D1 in out DMOD
+R1 out 0 10k
+C1 out 0 10u
+.model DMOD D(IS=1e-14 N=1.0 RS=0.1)
+.tran 5u 5m uic
+.print tran v(out)
+.options reltol=1e-4
+.end

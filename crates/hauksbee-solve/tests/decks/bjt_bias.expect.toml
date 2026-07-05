@@ -1,0 +1,17 @@
+# NPN common-emitter bias point. Gummel-Poon core (is/bf/vaf); no series R or
+# charge storage yet (DC op does not need them). Percent-level covers the small
+# model differences from ngspice.
+analysis = "op"
+description = "NPN common-emitter bias point"
+
+[[probe]]
+expr = "V(coll)"
+reltol = 0.005
+
+[[probe]]
+expr = "V(base)"
+reltol = 0.005
+
+[[probe]]
+expr = "V(emit)"
+reltol = 0.005

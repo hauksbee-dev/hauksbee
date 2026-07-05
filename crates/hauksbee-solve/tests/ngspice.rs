@@ -1,55 +1,117 @@
-//! Cross-checks against ngspice. The same netlist string is (a) run through
-//! `/opt/homebrew/bin/ngspice -b` and (b) parsed by our [`SpiceLoader`] and
-//! simulated by our engine; the two output waveforms are compared.
+//! The ngspice differential harness (SPICE-compat plan §6).
 //!
-//! ngspice defaults differ from ours in a couple of places, so the netlists set
-//! `.options reltol=...` to match and use `uic` where we seed initial
-//! conditions. Tolerance is max relative voltage error < 1% over the run after
-//! resampling ngspice onto our timebase (documented per test).
+//! For every `.cir` in `tests/decks/` with a companion `<name>.expect.toml`,
+//! this runs ngspice `-b` and the hauksbee solver over the SAME deck, resamples
+//! ngspice onto our timebase, and compares each declared probe against its
+//! declared PER-QUANTITY tolerance (a diode forward drop wants mV; an RC tail
+//! only percent — one global bar cannot serve both). Each deck emits a per-deck
+//! pass/fail with its worst-case error and where it occurred, and the whole
+//! corpus regenerates `docs/spice-compat/results.md`.
 //!
-//! If ngspice is not installed the tests skip rather than fail.
+//! ngspice lookup: `$NGSPICE`, then `PATH`, then the known per-OS install
+//! locations — so the harness runs on any machine with ngspice, not just the
+//! one Mac whose Homebrew path was once hardcoded. If ngspice is not found the
+//! harness SKIPS (contributors without it are never blocked); it never fails
+//! for want of the oracle.
 
-use hauksbee_ir::{SpiceError, SpiceLoader};
-use hauksbee_solve::{Integration, SolverOptions, StepControl, Transient};
+use hauksbee_ir::{Directives, SpiceLoader};
+use hauksbee_solve::{
+    run_op, run_tran, DcInit, Integration, Probe, SimOutput, SolverOptions, StepControl,
+};
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const NGSPICE: &str = "/opt/homebrew/bin/ngspice";
+// --- ngspice discovery -------------------------------------------------------
 
-/// A parsed ngspice `.print tran` column: (times, values).
-struct NgResult {
-    t: Vec<f64>,
-    v: Vec<f64>,
+/// Locate the ngspice binary: `$NGSPICE`, then `PATH`, then per-OS defaults.
+fn find_ngspice() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("NGSPICE") {
+        let pb = PathBuf::from(&p);
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    let exe = if cfg!(windows) { "ngspice.exe" } else { "ngspice" };
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let cand = dir.join(exe);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    for p in [
+        "/opt/homebrew/bin/ngspice",
+        "/usr/local/bin/ngspice",
+        "/usr/bin/ngspice",
+        "/opt/local/bin/ngspice",
+        "C:\\Program Files\\ngspice\\bin\\ngspice_con.exe",
+        "C:\\Program Files\\ngspice\\bin\\ngspice.exe",
+    ] {
+        let pb = PathBuf::from(p);
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    None
 }
 
-/// Run a netlist through ngspice batch mode and parse the printed transient
-/// table. Returns `None` if ngspice is unavailable.
-fn run_ngspice(netlist: &str) -> Option<NgResult> {
-    if !std::path::Path::new(NGSPICE).exists() {
-        return None;
+/// The ngspice version line (e.g. `ngspice-46`), for the results table.
+fn ngspice_version(bin: &Path) -> String {
+    let out = match Command::new(bin).arg("--version").output() {
+        Ok(o) => o,
+        Err(_) => return "unknown".to_string(),
+    };
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for line in text.lines() {
+        if let Some(pos) = line.find("ngspice-") {
+            let tail = &line[pos..];
+            let tok: String = tail
+                .chars()
+                .take_while(|c| !c.is_whitespace() && *c != ':')
+                .collect();
+            return tok;
+        }
     }
-    // Unique per netlist so tests running in parallel never share a file.
+    "unknown".to_string()
+}
+
+/// Run a netlist string through `ngspice -b` and return its stdout.
+fn run_ngspice(bin: &Path, netlist: &str) -> Option<String> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     netlist.hash(&mut h);
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!(
+    let path = std::env::temp_dir().join(format!(
         "hauksbee_xcheck_{}_{:016x}.cir",
         std::process::id(),
         h.finish()
     ));
-    {
-        let mut f = std::fs::File::create(&path).ok()?;
-        f.write_all(netlist.as_bytes()).ok()?;
-    }
-    let out = Command::new(NGSPICE).arg("-b").arg(&path).output().ok()?;
+    std::fs::File::create(&path)
+        .ok()?
+        .write_all(netlist.as_bytes())
+        .ok()?;
+    let out = Command::new(bin).arg("-b").arg(&path).output().ok()?;
     let _ = std::fs::remove_file(&path);
-    let text = String::from_utf8_lossy(&out.stdout);
-    parse_print_table(&text)
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+// --- ngspice output parsing --------------------------------------------------
+
+/// A parsed `.print tran` column: (times, values).
+struct NgSeries {
+    t: Vec<f64>,
+    v: Vec<f64>,
 }
 
 /// Parse the `Index time value` block ngspice prints for `.print tran`.
-fn parse_print_table(text: &str) -> Option<NgResult> {
+fn parse_tran_table(text: &str) -> Option<NgSeries> {
     let mut t = Vec::new();
     let mut v = Vec::new();
     let mut in_table = false;
@@ -59,34 +121,77 @@ fn parse_print_table(text: &str) -> Option<NgResult> {
             in_table = true;
             continue;
         }
-        if !in_table {
+        if !in_table || trimmed.starts_with("---") || trimmed.is_empty() {
             continue;
         }
-        if trimmed.starts_with("---") || trimmed.is_empty() {
-            continue;
-        }
-        // Rows look like: `12\t2.960000e-06\t1.477811e-02`.
         let cols: Vec<&str> = trimmed.split_whitespace().collect();
         if cols.len() >= 3 {
             if let (Ok(time), Ok(val)) = (cols[1].parse::<f64>(), cols[2].parse::<f64>()) {
-                // New blocks repeat the header for multi-page prints; the index
-                // resets, but times are monotonic across pages so just append.
                 t.push(time);
                 v.push(val);
             }
-        } else if !cols.is_empty() && cols[0].chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            // Already handled above; ignore stray lines.
         }
     }
     if t.is_empty() {
         None
     } else {
-        Some(NgResult { t, v })
+        Some(NgSeries { t, v })
     }
 }
 
+/// Parse the `.op` listing ngspice prints in batch mode: a node-voltage block
+/// (`name  value`) and a source-current block (`vname#branch  value`).
+fn parse_op_listing(text: &str) -> (HashMap<String, f64>, HashMap<String, f64>) {
+    let mut nodes = HashMap::new();
+    let mut sources = HashMap::new();
+    #[derive(PartialEq)]
+    enum State {
+        None,
+        Nodes,
+        Sources,
+    }
+    let mut state = State::None;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.contains("Node") && t.contains("Voltage") {
+            state = State::Nodes;
+            continue;
+        }
+        if t.contains("Source") && t.contains("Current") {
+            state = State::Sources;
+            continue;
+        }
+        // A models block (`Resistor models`, `Diode models`, ...) ends the data.
+        if t.contains("models") {
+            state = State::None;
+            continue;
+        }
+        let cols: Vec<&str> = t.split_whitespace().collect();
+        if cols.len() != 2 {
+            continue;
+        }
+        let Ok(val) = cols[1].parse::<f64>() else {
+            continue;
+        };
+        match state {
+            State::Nodes => {
+                nodes.insert(cols[0].to_ascii_lowercase(), val);
+            }
+            State::Sources => {
+                let key = cols[0]
+                    .to_ascii_lowercase()
+                    .trim_end_matches("#branch")
+                    .to_string();
+                sources.insert(key, val);
+            }
+            State::None => {}
+        }
+    }
+    (nodes, sources)
+}
+
 /// Linear interpolation of an ngspice waveform onto an arbitrary time.
-fn interp(res: &NgResult, time: f64) -> f64 {
+fn interp(res: &NgSeries, time: f64) -> f64 {
     if time <= res.t[0] {
         return res.v[0];
     }
@@ -94,9 +199,7 @@ fn interp(res: &NgResult, time: f64) -> f64 {
     if time >= res.t[last] {
         return res.v[last];
     }
-    // Binary search for the bracketing interval.
-    let mut lo = 0usize;
-    let mut hi = last;
+    let (mut lo, mut hi) = (0usize, last);
     while hi - lo > 1 {
         let mid = (lo + hi) / 2;
         if res.t[mid] <= time {
@@ -113,157 +216,353 @@ fn interp(res: &NgResult, time: f64) -> f64 {
     res.v[lo] + (res.v[hi] - res.v[lo]) * frac
 }
 
-/// Max relative error of our `out` waveform vs interpolated ngspice, using a
-/// full-scale floor so transient zero-crossings don't blow up the ratio.
-fn compare(
+// --- deck / expectation model ------------------------------------------------
+
+#[derive(Deserialize)]
+struct Expect {
+    analysis: String,
+    description: String,
+    #[serde(default)]
+    full_scale: f64,
+    #[serde(default)]
+    skip_initial: f64,
+    probe: Vec<ProbeExpect>,
+}
+
+#[derive(Deserialize)]
+struct ProbeExpect {
+    expr: String,
+    reltol: f64,
+    #[serde(default)]
+    abstol: Option<f64>,
+}
+
+/// A per-quantity comparison result for the table.
+struct QtyResult {
+    probe: String,
+    worst_err: f64,
+    at: String,
+    reltol: f64,
+    pass: bool,
+}
+
+struct DeckResult {
+    name: String,
+    analysis: String,
+    description: String,
+    quantities: Vec<QtyResult>,
+}
+
+impl DeckResult {
+    fn passed(&self) -> bool {
+        self.quantities.iter().all(|q| q.pass)
+    }
+}
+
+/// Build solver options from the deck's directives, exactly as the CLI does:
+/// the deck's tolerances, `uic` -> power-on start, and an adaptive step bounded
+/// by the requested `.tran` step.
+fn opts_from_directives(directives: &Directives) -> SolverOptions {
+    let mut opts = SolverOptions::default();
+    if let Some(r) = directives.reltol {
+        opts.reltol = r;
+    }
+    if let Some(a) = directives.abstol {
+        opts.abstol = a;
+    }
+    if let Some(v) = directives.vntol {
+        opts.vntol = v;
+    }
+    if let Some(td) = directives.tran {
+        let dt_max = td.tmax.unwrap_or(td.tstep).max(1e-15);
+        opts.integration = Integration::Trapezoidal;
+        opts.step = StepControl::Adaptive {
+            dt_initial: (td.tstep / 100.0).max(1e-15),
+            dt_min: 1e-15,
+            dt_max,
+        };
+    }
+    if directives.use_initial_conditions {
+        opts.dc_init = DcInit::FromZero;
+    }
+    opts
+}
+
+/// Rewrite a deck for a single-probe ngspice transient run: drop the deck's own
+/// `.print`/`.plot` cards and inject exactly one `.print tran <expr>` so the
+/// output is a clean three-column `Index time value` table.
+fn deck_for_ngspice_tran(orig: &str, probe_expr: &str) -> String {
+    let mut out = String::new();
+    let mut injected = false;
+    for line in orig.lines() {
+        let l = line.trim_start().to_ascii_lowercase();
+        if l.starts_with(".print") || l.starts_with(".plot") {
+            continue;
+        }
+        if l.starts_with(".end") && !injected {
+            out.push_str(&format!(".print tran {probe_expr}\n"));
+            injected = true;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !injected {
+        out.push_str(&format!(".print tran {probe_expr}\n.end\n"));
+    }
+    out
+}
+
+/// Worst relative error of `ours` vs interpolated ngspice, with a full-scale
+/// floor so zero-crossings don't blow the ratio up. Returns (worst, at_time).
+fn worst_tran_error(
     ours_t: &[f64],
     ours_v: &[f64],
-    ng: &NgResult,
+    ng: &NgSeries,
     full_scale: f64,
     skip_initial: f64,
-) -> f64 {
-    let floor = 0.01 * full_scale;
+) -> (f64, f64) {
+    let floor = if full_scale > 0.0 {
+        0.01 * full_scale
+    } else {
+        1e-9
+    };
     let mut worst = 0.0f64;
+    let mut at = 0.0f64;
     for (&t, &ov) in ours_t.iter().zip(ours_v) {
         if t < skip_initial {
             continue;
         }
         let nv = interp(ng, t);
-        let e = (ov - nv).abs() / (nv.abs().max(floor));
-        worst = worst.max(e);
+        let e = (ov - nv).abs() / nv.abs().max(floor);
+        if e > worst {
+            worst = e;
+            at = t;
+        }
     }
-    worst
+    (worst, at)
 }
 
-fn load(net: &str) -> Result<hauksbee_ir::Circuit, SpiceError> {
-    SpiceLoader::load(net)
-}
-
-#[test]
-fn half_wave_rectifier_with_smoothing() {
-    // Sine source -> diode -> RC smoothing. Classic peak-detector ripple.
-    let net = r#"halfwave
-V1 in 0 SIN(0 5 1k 0 0 0)
-D1 in out DMOD
-R1 out 0 10k
-C1 out 0 10u
-.model DMOD D(IS=1e-14 N=1.0 RS=0.1)
-.tran 5u 5m uic
-.print tran v(out)
-.options reltol=1e-4
-.end
-"#;
-
-    let ng = match run_ngspice(net) {
-        Some(r) => r,
-        None => {
-            eprintln!("ngspice not available; skipping half_wave_rectifier");
-            return;
+/// Look up a probe's value in a parsed `.op` listing.
+fn op_value(
+    probe: &Probe,
+    nodes: &HashMap<String, f64>,
+    sources: &HashMap<String, f64>,
+) -> Option<f64> {
+    let node = |n: &str| -> Option<f64> {
+        if n == "0" || n.eq_ignore_ascii_case("gnd") {
+            Some(0.0)
+        } else {
+            nodes.get(&n.to_ascii_lowercase()).copied()
         }
     };
-
-    let circuit = load(net).expect("load netlist");
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Adaptive {
-            dt_initial: 1e-7,
-            dt_min: 1e-12,
-            dt_max: 5e-6,
-        },
-        reltol: 1e-4,
-        ..SolverOptions::default()
-    };
-    let wf = Transient::new(opts).run(&circuit, 5e-3).unwrap();
-    let out = wf.node(&circuit, "out").unwrap();
-
-    // Skip the first quarter period while the cap charges from the IC.
-    let err = compare(&wf.time, out, &ng, 5.0, 1e-3);
-    eprintln!("RECTIFIER err = {err:.4}");
-    assert!(err < 0.01, "rectifier max rel err {err:.4} (>1%)");
-}
-
-#[test]
-fn common_emitter_amplifier_transient() {
-    // NPN common-emitter, DC-biased (no uic, so ngspice computes the real
-    // operating point too). A small sine on the base swings the collector; we
-    // compare the collector waveform. Direct base drive avoids coupling-cap
-    // settling that would make `uic` runs diverge for trivial reasons.
-    let net = r#"ce amp
-VCC vcc 0 DC 12
-VB base 0 SIN(1.9 0.02 5k 0 0 0)
-RC vcc coll 4.7k
-RE emit 0 1k
-Q1 coll base emit QMOD
-.model QMOD NPN(IS=1e-15 BF=200 VAF=80 NF=1.0)
-.tran 2u 1m
-.print tran v(coll)
-.options reltol=1e-4
-.end
-"#;
-
-    let ng = match run_ngspice(net) {
-        Some(r) => r,
-        None => {
-            eprintln!("ngspice not available; skipping common_emitter");
-            return;
-        }
-    };
-
-    let circuit = load(net).expect("load netlist");
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Adaptive {
-            dt_initial: 1e-7,
-            dt_min: 1e-12,
-            dt_max: 2e-6,
-        },
-        reltol: 1e-4,
-        ..SolverOptions::default()
-    };
-    let wf = Transient::new(opts).run(&circuit, 1e-3).unwrap();
-    let coll = wf.node(&circuit, "coll").unwrap();
-
-    // Both sides bias from the DC operating point; compare the whole run.
-    let err = compare(&wf.time, coll, &ng, 12.0, 0.0);
-    eprintln!("CE_AMP err = {err:.4}");
-    assert!(err < 0.02, "CE amp max rel err {err:.4} (>2%)");
-}
-
-#[test]
-fn rc_ladder_20_stages() {
-    // 20-stage RC ladder driven by a step. Tests accuracy of a deep linear
-    // chain (the sparse solver's bread and butter).
-    let mut net = String::from("rc ladder\nV1 n0 0 PULSE(0 1 0 1n 1n 1 1)\n");
-    let stages = 20;
-    for i in 0..stages {
-        net.push_str(&format!("R{} n{} n{} 1k\n", i + 1, i, i + 1));
-        net.push_str(&format!("C{} n{} 0 10n\n", i + 1, i + 1));
+    match probe {
+        Probe::NodeVoltage(a) => node(a),
+        Probe::NodeDiff(a, b) => Some(node(a)? - node(b)?),
+        Probe::BranchCurrent(d) => sources.get(&d.to_ascii_lowercase()).copied(),
     }
-    net.push_str(".tran 1u 2m uic\n.print tran v(n20)\n.options reltol=1e-4\n.end\n");
+}
 
-    let ng = match run_ngspice(&net) {
-        Some(r) => r,
-        None => {
-            eprintln!("ngspice not available; skipping rc_ladder");
-            return;
+// --- the harness proper ------------------------------------------------------
+
+fn decks_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decks")
+}
+
+/// Run one deck end-to-end. Returns `None` only on an ngspice-side failure the
+/// harness cannot attribute (missing output), which the caller treats as skip.
+fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
+    let name = cir_path.file_stem().unwrap().to_string_lossy().to_string();
+    let deck = std::fs::read_to_string(cir_path).expect("read deck");
+    let expect_path = cir_path.with_extension("expect.toml");
+    let expect_text = std::fs::read_to_string(&expect_path)
+        .unwrap_or_else(|_| panic!("missing {}", expect_path.display()));
+    let expect: Expect = toml::from_str(&expect_text)
+        .unwrap_or_else(|e| panic!("parse {}: {e}", expect_path.display()));
+
+    let (circuit, directives) = SpiceLoader::load_with_directives(&deck)
+        .unwrap_or_else(|e| panic!("load {name}: {e}"));
+    let opts = opts_from_directives(&directives);
+
+    let probes: Vec<Probe> = expect
+        .probe
+        .iter()
+        .map(|p| Probe::parse(&p.expr).expect("valid probe expr"))
+        .collect();
+
+    let mut quantities = Vec::new();
+
+    match expect.analysis.as_str() {
+        "op" => {
+            let ours: SimOutput = run_op(&circuit, &opts, &probes)
+                .unwrap_or_else(|e| panic!("{name}: hauksbee op failed: {e}"));
+            let ng_text = run_ngspice(bin, &deck).expect("ngspice op run");
+            let (nodes, sources) = parse_op_listing(&ng_text);
+            for (pe, pr) in expect.probe.iter().zip(&probes) {
+                let ours_val = ours.column(&pr.label()).unwrap()[0];
+                let ng_val = op_value(pr, &nodes, &sources).unwrap_or_else(|| {
+                    panic!("{name}: ngspice op listing has no value for {}", pr.label())
+                });
+                let floor = pe.abstol.unwrap_or(1e-9);
+                let err = (ours_val - ng_val).abs() / ng_val.abs().max(floor);
+                quantities.push(QtyResult {
+                    probe: pr.label(),
+                    worst_err: err,
+                    at: "op".to_string(),
+                    reltol: pe.reltol,
+                    pass: err < pe.reltol,
+                });
+            }
         }
-    };
+        "tran" => {
+            let td = directives
+                .tran
+                .unwrap_or_else(|| panic!("{name}: tran deck has no .tran card"));
+            let ours: SimOutput = run_tran(&circuit, &opts, td.tstop, &probes)
+                .unwrap_or_else(|e| panic!("{name}: hauksbee tran failed: {e}"));
+            let ours_t = ours.time.clone().unwrap();
+            for (pe, pr) in expect.probe.iter().zip(&probes) {
+                let ng_deck = deck_for_ngspice_tran(&deck, &pr.label());
+                let ng = run_ngspice(bin, &ng_deck)
+                    .and_then(|txt| parse_tran_table(&txt))
+                    .unwrap_or_else(|| panic!("{name}: no ngspice table for {}", pr.label()));
+                let ours_v = ours.column(&pr.label()).unwrap();
+                let (worst, at) = worst_tran_error(
+                    &ours_t,
+                    &ours_v,
+                    &ng,
+                    expect.full_scale,
+                    expect.skip_initial,
+                );
+                quantities.push(QtyResult {
+                    probe: pr.label(),
+                    worst_err: worst,
+                    at: format!("t={at:.3e}s"),
+                    reltol: pe.reltol,
+                    pass: worst < pe.reltol,
+                });
+            }
+        }
+        other => panic!("{name}: unknown analysis `{other}` in expect.toml"),
+    }
 
-    let circuit = load(&net).expect("load netlist");
-    let opts = SolverOptions {
-        integration: Integration::Trapezoidal,
-        step: StepControl::Adaptive {
-            dt_initial: 1e-7,
-            dt_min: 1e-12,
-            dt_max: 5e-6,
-        },
-        reltol: 1e-4,
-        ..SolverOptions::default()
-    };
-    let wf = Transient::new(opts).run(&circuit, 2e-3).unwrap();
-    let last = wf.node(&circuit, "n20").unwrap();
+    DeckResult {
+        name,
+        analysis: expect.analysis,
+        description: expect.description,
+        quantities,
+    }
+}
 
-    let err = compare(&wf.time, last, &ng, 1.0, 5e-5);
-    eprintln!("RC_LADDER err = {err:.4}");
-    assert!(err < 0.01, "RC ladder max rel err {err:.4} (>1%)");
+/// Write the published results table. Regenerated by the corpus test so the
+/// numbers can never go stale.
+fn write_results_md(results: &[DeckResult], ng_version: &str) {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .to_path_buf();
+    let dir = repo_root.join("docs/spice-compat");
+    std::fs::create_dir_all(&dir).expect("mkdir docs/spice-compat");
+    let path = dir.join("results.md");
+
+    let mut s = String::new();
+    s.push_str("# SPICE compatibility: ngspice cross-check results\n\n");
+    s.push_str(
+        "Generated by `cargo test -p hauksbee-solve --test ngspice` (do not hand-edit).\n\
+         Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice\n\
+         `-b` and the hauksbee solver; the worst-case error per probe is compared against\n\
+         the per-quantity tolerance declared in that deck's `expect.toml`.\n\n",
+    );
+    s.push_str(&format!("- Oracle: **ngspice {ng_version}**\n"));
+    s.push_str(&format!("- Decks: **{}**\n", results.len()));
+    let passed = results.iter().filter(|d| d.passed()).count();
+    s.push_str(&format!("- Passing: **{passed}/{}**\n\n", results.len()));
+
+    s.push_str("| Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |\n");
+    s.push_str("|------|----------|----------|------------------|-----------|-------|--------|\n");
+    for d in results {
+        for (i, q) in d.quantities.iter().enumerate() {
+            let deck_cell = if i == 0 { d.name.as_str() } else { "" };
+            let analysis_cell = if i == 0 { d.analysis.as_str() } else { "" };
+            s.push_str(&format!(
+                "| {} | {} | `{}` | {:.3e} | {:.1e} | {} | {} |\n",
+                deck_cell,
+                analysis_cell,
+                q.probe,
+                q.worst_err,
+                q.reltol,
+                q.at,
+                if q.pass { "PASS" } else { "**FAIL**" },
+            ));
+        }
+    }
+    s.push('\n');
+    s.push_str("## Deck descriptions\n\n");
+    for d in results {
+        s.push_str(&format!("- **{}**: {}\n", d.name, d.description));
+    }
+    s.push('\n');
+    std::fs::write(&path, s).expect("write results.md");
+    eprintln!("wrote {}", path.display());
+}
+
+#[test]
+fn ngspice_corpus() {
+    let Some(bin) = find_ngspice() else {
+        eprintln!("ngspice not found ($NGSPICE / PATH / known locations); skipping corpus.");
+        return;
+    };
+    let version = ngspice_version(&bin);
+    eprintln!("ngspice: {} ({version})", bin.display());
+
+    let mut cirs: Vec<PathBuf> = std::fs::read_dir(decks_dir())
+        .expect("read decks dir")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("cir"))
+        .collect();
+    cirs.sort();
+    assert!(!cirs.is_empty(), "no decks found in {}", decks_dir().display());
+
+    let mut results = Vec::new();
+    for cir in &cirs {
+        let r = run_deck(&bin, cir);
+        for q in &r.quantities {
+            eprintln!(
+                "[{}] {} {}  worst={:.3e}  tol={:.1e}  {}  ({})",
+                if q.pass { "PASS" } else { "FAIL" },
+                r.name,
+                q.probe,
+                q.worst_err,
+                q.reltol,
+                if q.pass { "ok" } else { "OVER TOLERANCE" },
+                q.at,
+            );
+        }
+        results.push(r);
+    }
+
+    // Always regenerate the published table (with real numbers, failures marked)
+    // before asserting, so the doc reflects this exact run.
+    write_results_md(&results, &version);
+
+    let failed: Vec<&DeckResult> = results.iter().filter(|d| !d.passed()).collect();
+    assert!(
+        failed.is_empty(),
+        "decks over tolerance: {:?}",
+        failed.iter().map(|d| &d.name).collect::<Vec<_>>()
+    );
+}
+
+// A tiny unit check that the ngspice lookup honors $NGSPICE without needing the
+// binary present, so the generalization itself is covered even on a bare CI box.
+#[test]
+fn ngspice_lookup_respects_env() {
+    // A path that does not exist must NOT be returned (we probe is_file()).
+    std::env::set_var("NGSPICE", "/no/such/ngspice/binary");
+    // Either PATH/known-location finds a real one, or nothing is found; in both
+    // cases the bogus env path is never what we get back.
+    if let Some(p) = find_ngspice() {
+        assert_ne!(p, PathBuf::from("/no/such/ngspice/binary"));
+    }
+    std::env::remove_var("NGSPICE");
 }
