@@ -1,0 +1,11 @@
+vcvs gain block into rc lowpass
+V1 in 0 SIN(0 0.5 1k)
+R1 in a 1k
+R2 a 0 1k
+E1 x 0 a 0 4
+RF x out 1k
+CF out 0 100n
+.tran 5u 2m
+.print tran v(out)
+.options reltol=1e-4
+.end
