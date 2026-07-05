@@ -324,7 +324,11 @@ fn stamp_into<S: StampSink>(ctx: &StampCtx, sink: &mut S) {
     }
 }
 
-fn stamp_device<S: StampSink>(
+/// Stamp one device through a [`StampSink`]. `pub(crate)` so the compiled
+/// two-tier assembly (`plan.rs`) can re-stamp tier-2 devices through the SAME
+/// interpreted device code with a slot-resolving sink: the physics formulas
+/// exist here once, whichever assembly drives them.
+pub(crate) fn stamp_device<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
     dev: &Device,
