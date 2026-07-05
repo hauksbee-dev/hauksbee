@@ -1,0 +1,16 @@
+# VCCS (G) transconductance stage: a 1 V pulse drives G1 (gm = 1 mS) pushing
+# current into a 2k || 50n load (tau = 100 us), so the plateau is +2 V.
+# Exercises the four-entry transconductance stamp with zero control-port
+# current; percent tolerance on the RC-shaped output. Pulse edges are 10 us
+# (soft relative to tau) and TMAX is capped at 0.5 us so both engines save
+# dense points through the ramp: linear resampling of a coarse oracle grid in
+# the high-curvature region otherwise dominates the comparison (measured at
+# ~1.2 mV, larger than the actual engine disagreement).
+analysis = "tran"
+description = "VCCS gm-block (1 mS into 2k || 50n) pulse response"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

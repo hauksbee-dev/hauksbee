@@ -1,0 +1,12 @@
+# VCVS (E) gain block: 1 kHz sine through a resistive divider (a = in/2),
+# amplified x4 by E1, then RC low-passed (tau = 100 us). Exercises the VCVS
+# branch-current unknown and its ideal (zero-current) control port; percent
+# tolerance on the filtered output.
+analysis = "tran"
+description = "VCVS gain-4 block driving an RC low-pass (1 kHz sine)"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

@@ -223,6 +223,18 @@ impl Partition {
 
         // Union every device's non-ground, non-pinned nodes. A device's nodes
         // that are pinned act as boundaries and are not used to fuse islands.
+        //
+        // Controlled sources (Vcvs/Vccs) take this default path ON PURPOSE:
+        // only INDEPENDENT sources are cut. A VCVS pins its output-port
+        // differential like a Vsource, but its value is the live control-pair
+        // voltage, not a known time function — cutting the output while the
+        // control sits in another island would replay the control across a
+        // Gauss-Seidel step lag, exactly the O(dt) coupling error the tear
+        // rules forbid. So a dependent source never cuts: it unions its
+        // control nodes with its output nodes and the whole coupled region
+        // solves together (04-spice-compat.md §2.1). The decompose layer's
+        // sense-edge machinery may later prove specific one-directional tears;
+        // this partitioner stays conservative.
         for (_, dev) in circuit.iter() {
             if matches!(dev, Device::Vsource { .. }) {
                 continue;

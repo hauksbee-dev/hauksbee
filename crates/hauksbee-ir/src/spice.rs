@@ -1,7 +1,7 @@
 //! A pragmatic SPICE netlist loader.
 //!
 //! Parses a useful subset of `.cir` files into a [`Circuit`]: element lines for
-//! R/C/L/V/I/D/Q/M/S, `.model` cards for diodes, BJTs, and MOSFETs, the `sin`,
+//! R/C/L/V/I/D/Q/M/S/E/G, `.model` cards for diodes, BJTs, and MOSFETs, the `sin`,
 //! `pulse`, and `pwl` source functions, `.tran`, `.temp`, and `.options`. The
 //! goal is to ingest real test vectors and user-supplied netlists, not to be a
 //! complete SPICE3 front end; anything unsupported is reported with the line.
@@ -353,6 +353,8 @@ fn parse_element(
         'Q' => parse_bjt(line, raw, &toks, circuit, models),
         'M' => parse_mosfet(line, raw, &toks, circuit, models),
         'S' => parse_switch(line, raw, &toks, circuit, models),
+        'E' => parse_controlled(line, raw, &toks, circuit, true),
+        'G' => parse_controlled(line, raw, &toks, circuit, false),
         other => Err(SpiceError::UnknownElement {
             line,
             ch: other,
@@ -778,6 +780,92 @@ fn parse_switch(
     Ok(())
 }
 
+fn parse_controlled(
+    line: usize,
+    raw: &str,
+    toks: &[String],
+    circuit: &mut Circuit,
+    is_vcvs: bool,
+) -> Result<(), SpiceError> {
+    // E<name> n+ n- nc+ nc- gain   (VCVS)
+    // G<name> n+ n- nc+ nc- gm     (VCCS)
+    // The POLY / VALUE / TABLE behavioral forms are recognized and refused:
+    // a silent misparse (interning "poly" as a node) is exactly the failure
+    // mode the loader's line-numbered errors exist to prevent.
+    for t in &toks[1..] {
+        let l = t.to_ascii_lowercase();
+        if matches!(l.as_str(), "poly" | "value" | "table") {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!(
+                    "`{}` controlled-source form is unsupported (only the linear \
+                     `n+ n- nc+ nc- gain` form is)",
+                    l.to_ascii_uppercase()
+                ),
+                text: raw.into(),
+            });
+        }
+    }
+    if toks.len() < 6 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: "need n+, n-, nc+, nc-, and a gain".into(),
+            text: raw.into(),
+        });
+    }
+    let name = toks[0].clone();
+    let p = circuit.node(&toks[1]);
+    let n = circuit.node(&toks[2]);
+    let cp = circuit.node(&toks[3]);
+    let cn = circuit.node(&toks[4]);
+    let gain = number(line, &toks[5], raw)?;
+
+    if is_vcvs {
+        // Degenerate VCVS topologies make the MNA constraint row singular; the
+        // honest move is a named refusal, not a zero-pivot mystery at solve
+        // time. (A self-referential VCCS `G a b a b gm` is a legitimate
+        // conductance idiom and stays accepted.)
+        if p == n {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!(
+                    "VCVS `{name}` shorts its own output port (n+ == n-); its \
+                     branch current is indeterminate"
+                ),
+                text: raw.into(),
+            });
+        }
+        if (cp == p && cn == n && gain == 1.0) || (cp == n && cn == p && gain == -1.0) {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!(
+                    "VCVS `{name}` senses its own output at unity gain; the \
+                     constraint row is identically zero (singular)"
+                ),
+                text: raw.into(),
+            });
+        }
+        circuit.add(Device::Vcvs {
+            name,
+            p,
+            n,
+            cp,
+            cn,
+            gain,
+        });
+    } else {
+        circuit.add(Device::Vccs {
+            name,
+            p,
+            n,
+            cp,
+            cn,
+            gm: gain,
+        });
+    }
+    Ok(())
+}
+
 // --- control cards ----------------------------------------------------------
 
 fn parse_options(raw: &str, directives: &mut Directives) {
@@ -871,6 +959,53 @@ mod tests {
             }
             _ => panic!("expected bjt"),
         }
+    }
+
+    #[test]
+    fn parses_vcvs_and_vccs() {
+        let net = "controlled\nE1 out 0 a 0 4\nG1 0 out2 a 0 2.5m\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        match &c.devices[0] {
+            Device::Vcvs { name, gain, .. } => {
+                assert_eq!(name, "E1");
+                assert!((gain - 4.0).abs() < 1e-12);
+            }
+            other => panic!("expected VCVS, got {other:?}"),
+        }
+        match &c.devices[1] {
+            Device::Vccs { name, gm, .. } => {
+                assert_eq!(name, "G1");
+                assert!((gm - 2.5e-3).abs() < 1e-15);
+            }
+            other => panic!("expected VCCS, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refuses_poly_controlled_sources() {
+        let net = "poly\nE1 out 0 POLY(2) a 0 b 0 0 1 1\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("POLY"), "want a loud POLY refusal, got: {msg}");
+        assert!(msg.contains("line 2"), "error must carry the line: {msg}");
+    }
+
+    #[test]
+    fn refuses_degenerate_vcvs() {
+        // Self-referential unity gain: constraint row identically zero.
+        let net = "deg\nE1 out 0 out 0 1.0\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("E1") && err.contains("unity gain"), "{err}");
+        // Shorted output port: branch current indeterminate.
+        let net2 = "deg\nE1 x x a 0 2.0\n.end\n";
+        let err2 = SpiceLoader::load(net2).unwrap_err().to_string();
+        assert!(err2.contains("E1") && err2.contains("shorts"), "{err2}");
+        // The VCCS resistor idiom `G a b a b gm` stays legal.
+        let net3 = "ok\nG1 a b a b 1m\n.end\n";
+        assert!(SpiceLoader::load(net3).is_ok());
+        // A non-unity self-referential VCVS is solvable (forces v_p == v_n).
+        let net4 = "ok\nE1 out 0 out 0 2.0\n.end\n";
+        assert!(SpiceLoader::load(net4).is_ok());
     }
 
     #[test]

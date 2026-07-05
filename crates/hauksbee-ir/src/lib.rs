@@ -228,6 +228,28 @@ pub enum Device {
         out_hi: f64,
         hysteresis: f64,
     },
+    /// Voltage-controlled voltage source (SPICE `E` card):
+    /// `V(p,n) = gain * V(cp,cn)`. Owns a branch-current unknown exactly like
+    /// an ideal [`Device::Vsource`]; the control pair is read-only.
+    Vcvs {
+        name: String,
+        p: NodeId,
+        n: NodeId,
+        cp: NodeId,
+        cn: NodeId,
+        gain: f64,
+    },
+    /// Voltage-controlled current source (SPICE `G` card):
+    /// `I(p->n) = gm * V(cp,cn)`. Pure transconductance stamp, no branch
+    /// unknown, no RHS; the control pair is read-only.
+    Vccs {
+        name: String,
+        p: NodeId,
+        n: NodeId,
+        cp: NodeId,
+        cn: NodeId,
+        gm: f64,
+    },
 }
 
 impl Device {
@@ -244,7 +266,9 @@ impl Device {
             | Device::Mosfet { name, .. }
             | Device::VSwitch { name, .. }
             | Device::OpAmp { name, .. }
-            | Device::Comparator { name, .. } => name,
+            | Device::Comparator { name, .. }
+            | Device::Vcvs { name, .. }
+            | Device::Vccs { name, .. } => name,
         }
     }
 
@@ -286,6 +310,9 @@ impl Device {
             }
             Device::Comparator { out, inp, inn, .. } => {
                 vec![*out, *inp, *inn]
+            }
+            Device::Vcvs { p, n, cp, cn, .. } | Device::Vccs { p, n, cp, cn, .. } => {
+                vec![*p, *n, *cp, *cn]
             }
         }
     }
@@ -361,6 +388,12 @@ impl Device {
                 *inp = f(*inp);
                 *inn = f(*inn);
             }
+            Device::Vcvs { p, n, cp, cn, .. } | Device::Vccs { p, n, cp, cn, .. } => {
+                *p = f(*p);
+                *n = f(*n);
+                *cp = f(*cp);
+                *cn = f(*cn);
+            }
         }
     }
 
@@ -400,6 +433,13 @@ impl Device {
             // nothing; it appears as a column of the out row).
             Device::OpAmp { out, .. } => vec![*out],
             Device::Comparator { out, .. } => vec![*out],
+            // Controlled sources drive current through their output port only:
+            // the VCVS branch current enters the p/n KCL rows, the VCCS
+            // transconductance current likewise. The control pair appears
+            // exclusively as matrix COLUMNS of other rows — this is the
+            // canonical sense-vs-conduction split the W1 classifier was built
+            // for, and the solve-side cross-check test holds the stamp to it.
+            Device::Vcvs { p, n, .. } | Device::Vccs { p, n, .. } => vec![*p, *n],
         }
     }
 
@@ -442,6 +482,9 @@ impl Device {
                 v
             }
             Device::Comparator { inp, inn, .. } => vec![*inp, *inn],
+            // The control pair steers the gain term but its own KCL rows
+            // receive nothing (ideal infinite input impedance).
+            Device::Vcvs { cp, cn, .. } | Device::Vccs { cp, cn, .. } => vec![*cp, *cn],
         }
     }
 
@@ -541,6 +584,22 @@ impl Device {
                 out_hi: 5.0,
                 hysteresis: 1e-3,
             },
+            Device::Vcvs {
+                name: "Eex".into(),
+                p: n[0],
+                n: n[1],
+                cp: n[2],
+                cn: n[3],
+                gain: 10.0,
+            },
+            Device::Vccs {
+                name: "Gex".into(),
+                p: n[0],
+                n: n[1],
+                cp: n[2],
+                cn: n[3],
+                gm: 1e-3,
+            },
         ]
         ;
         // The derived variant count is the enforcement the match-arm trick
@@ -577,12 +636,21 @@ impl Device {
                 | Device::Inductor { .. }
                 | Device::Vsource { .. }
                 | Device::Isource { .. }
+                // Controlled sources E/G: the stamp is a CONSTANT gain/gm times
+                // node voltages, so the Jacobian never moves — linear. Linear
+                // does NOT mean state-space-reducible: `LinearIsland::compile`
+                // must still explicitly refuse islands containing them (it
+                // models only R/C/L/I) or they would vanish from the A matrix.
+                | Device::Vcvs { .. }
+                | Device::Vccs { .. }
         )
     }
 
     /// Whether the device is best handled by the event queue rather than the
     /// analog solver. The behavioral comparator is the one digital-ish element
-    /// here; the partitioning pass will use this to peel it off.
+    /// here; the partitioning pass will use this to peel it off. Controlled
+    /// sources (`Vcvs`/`Vccs`) are continuous analog constraints with no
+    /// discrete state, so they stay with the analog solver (`false`).
     pub fn is_event_driven(&self) -> bool {
         matches!(self, Device::Comparator { .. })
     }
