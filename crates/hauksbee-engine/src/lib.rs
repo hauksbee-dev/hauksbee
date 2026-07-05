@@ -25,6 +25,7 @@ pub mod boardcode;
 pub mod checks;
 pub mod decoupling;
 pub mod digital;
+pub mod logic;
 pub mod drivers;
 pub mod engine;
 pub mod frontdoor;
