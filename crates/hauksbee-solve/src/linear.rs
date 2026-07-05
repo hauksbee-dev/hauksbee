@@ -277,6 +277,18 @@ impl LinearIsland {
             }
         }
 
+        // Exhaustive device walk, no `_` arm ON PURPOSE. This reducer models
+        // exactly R (algebraic), C/L (states), and Isource (input columns);
+        // any other kind in a linear-classified island must route the WHOLE
+        // island back to MNA by returning `None`. A catch-all here is the most
+        // dangerous line in the solver: a device that `is_linear()` but is not
+        // assembled below (a VCVS in an RC chain) would leave the island on the
+        // matrix-exponential path with that device silently absent from the A
+        // matrix — a plausible wrong waveform, not a crash (see
+        // `docs/dev-plans/04-spice-compat.md` §1, the compile row). Modeling
+        // controlled sources inside the state-space reduction is future
+        // optimization work with its own exactness gate; refusing is exact
+        // today because the MNA sub-solve stamps them in full.
         let mut states: Vec<(DeviceId, StateKind)> = Vec::new();
         for &id in &island.devices {
             match &circuit.devices[id.0 as usize] {
@@ -300,7 +312,26 @@ impl LinearIsland {
                         },
                     ));
                 }
-                _ => {}
+                // Modeled by the dedicated loops below (resistive backbone,
+                // current-input columns).
+                Device::Resistor { .. } | Device::Isource { .. } => {}
+                // Linear but NOT modeled by this reducer: force the island to
+                // the MNA path. (Ideal Vsources are cut by the partitioner and
+                // never land in an island; if one ever does, refusing is the
+                // only honest answer here too.)
+                Device::Vcvs { .. } | Device::Vccs { .. } | Device::Vsource { .. } => {
+                    return None;
+                }
+                // Nonlinear / event-driven kinds cannot appear in a linear
+                // island (the `island.linear` gate above already returned
+                // `None`), but the match stays exhaustive so a future variant
+                // must be placed deliberately.
+                Device::Diode { .. }
+                | Device::Bjt { .. }
+                | Device::Mosfet { .. }
+                | Device::VSwitch { .. }
+                | Device::OpAmp { .. }
+                | Device::Comparator { .. } => return None,
             }
         }
         if states.is_empty() {

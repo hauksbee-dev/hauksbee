@@ -38,6 +38,26 @@ fn circuit_json_roundtrip() {
     assert_eq!(back.node_name(k), "k");
 }
 
+/// Every variant in the [`Device::examples`] inventory must round-trip
+/// losslessly. `examples()` panics if a variant ships without an example
+/// (the strum::EnumCount length assert), so a new device cannot dodge this
+/// test by omission.
+#[test]
+fn every_device_variant_roundtrips() {
+    let mut c = Circuit::new();
+    let n = [c.node("n1"), c.node("n2"), c.node("n3"), c.node("n4")];
+    for dev in Device::examples(n) {
+        let json = serde_json::to_string(&dev).expect("serialize");
+        let back: Device = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            format!("{dev:?}"),
+            format!("{back:?}"),
+            "{} must round-trip losslessly",
+            dev.name()
+        );
+    }
+}
+
 #[test]
 fn loaded_circuit_roundtrips() {
     let net = "rc\nV1 in 0 SIN(0 5 1k)\nR1 in out 1k\nC1 out 0 1u\n.end\n";

@@ -270,10 +270,13 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
             }
         }
         if let Some(br) = layout.branch(id) {
-            // Branch couples to its two primary nodes both ways, plus its own
-            // diagonal slot.
+            // Branch couples to every node the device touches, both ways, plus
+            // its own diagonal slot. Two-terminal branch devices (Vsource,
+            // Inductor) get exactly the p/n coupling they always did; the VCVS
+            // branch row additionally needs its control columns (br, cp) and
+            // (br, cn) reserved or `add_at` lands outside the frozen pattern.
             m.touch(br, br);
-            for &n in &ns[..2.min(ns.len())] {
+            for &n in &ns {
                 if let Some(n) = n {
                     m.touch(br, n);
                     m.touch(n, br);
@@ -377,6 +380,26 @@ pub(crate) fn stamp_device<S: StampSink>(
         Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => stamp_comparator(
             ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, sink,
         ),
+        Device::Vcvs {
+            p, n, cp, cn, gain, ..
+        } => stamp_vcvs(ctx, id, *p, *n, *cp, *cn, *gain, sink),
+        Device::Vccs {
+            p, n, cp, cn, gm, ..
+        } => {
+            // Current gm*(v_cp - v_cn) flows p -> n: +gm at (p,cp)/(n,cn),
+            // -gm at (p,cn)/(n,cp). Four matrix entries, no RHS, no unknown.
+            // The gain is a device property, not a source value, so it is NOT
+            // scaled by the source-stepping homotopy (matching SPICE, which
+            // steps independent sources only).
+            add_transconductance(
+                sink,
+                ctx.layout.node(*p),
+                ctx.layout.node(*n),
+                ctx.layout.node(*cp),
+                ctx.layout.node(*cn),
+                *gm,
+            );
+        }
     }
 }
 
@@ -527,6 +550,43 @@ fn stamp_vsource<S: StampSink>(
     }
     let val = source_value(ctx, kind) * ctx.src_scale;
     sink.i(br, val);
+}
+
+/// VCVS: the branch-current unknown pattern of an ideal Vsource, with the
+/// constraint row `v_p - v_n - gain*(v_cp - v_cn) = 0` in place of a fixed
+/// value. The branch incidence (`±1` in the p/n KCL rows and the branch row)
+/// is identical to `stamp_vsource`; the control terms land in the branch ROW
+/// only (columns cp/cn), so the control pair's own rows stay untouched — that
+/// is the sense-terminal contract `Device::sense_nodes` declares. The RHS is
+/// zero (nothing time-varying, nothing to src_scale: the gain is a device
+/// property, not an independent source value). The same stamp serves DC and
+/// transient — the constraint has no memory.
+#[allow(clippy::too_many_arguments)]
+fn stamp_vcvs<S: StampSink>(
+    ctx: &StampCtx,
+    id: DeviceId,
+    p: NodeId,
+    n: NodeId,
+    cp: NodeId,
+    cn: NodeId,
+    gain: f64,
+    sink: &mut S,
+) {
+    let br = ctx.layout.branch(id).expect("vcvs has a branch unknown");
+    if let Some(pi) = ctx.layout.node(p) {
+        sink.g(pi, br, 1.0);
+        sink.g(br, pi, 1.0);
+    }
+    if let Some(ni) = ctx.layout.node(n) {
+        sink.g(ni, br, -1.0);
+        sink.g(br, ni, -1.0);
+    }
+    if let Some(cpi) = ctx.layout.node(cp) {
+        sink.g(br, cpi, -gain);
+    }
+    if let Some(cni) = ctx.layout.node(cn) {
+        sink.g(br, cni, gain);
+    }
 }
 
 // --- nonlinear devices ------------------------------------------------------

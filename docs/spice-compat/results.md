@@ -6,8 +6,8 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **7**
-- Passing: **7/7**
+- Decks: **9**
+- Passing: **9/9**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -23,6 +23,8 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
 | rlc_series | tran | `V(out)` | 8.542e-3 | 2.0e-2 | t=3.120e-6s | PASS |
+| vccs_gm | tran | `V(out)` | 3.075e-3 | 1.0e-2 | t=1.010e-4s | PASS |
+| vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 
 ## Deck descriptions
 
@@ -33,4 +35,6 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **rc_lowpass**: RC low-pass step response (tau = 100 us)
 - **resistor_divider**: resistive divider DC operating point
 - **rlc_series**: series RLC underdamped step response
+- **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response
+- **vcvs_gain**: VCVS gain-4 block driving an RC low-pass (1 kHz sine)
 

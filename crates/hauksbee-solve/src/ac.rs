@@ -389,6 +389,63 @@ fn stamp_ac(
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(g, 0.0));
         }
         Device::Comparator { .. } => { /* digital output: no small-signal path */ }
+        // Controlled sources are linear and frequency-independent: the AC
+        // stamp is the transient stamp with real-valued entries.
+        Device::Vcvs {
+            p,
+            n: neg,
+            cp,
+            cn,
+            gain,
+            ..
+        } => {
+            // Branch row `v_p - v_n - gain*(v_cp - v_cn) = 0`, RHS 0 (a
+            // dependent source is never an AC drive).
+            let br = layout.branch(id).expect("vcvs has a branch unknown");
+            if let Some(pi) = n(*p) {
+                sys.add(pi, br, Complex64::new(1.0, 0.0));
+                sys.add(br, pi, Complex64::new(1.0, 0.0));
+            }
+            if let Some(ni) = n(*neg) {
+                sys.add(ni, br, Complex64::new(-1.0, 0.0));
+                sys.add(br, ni, Complex64::new(-1.0, 0.0));
+            }
+            if let Some(cpi) = n(*cp) {
+                sys.add(br, cpi, Complex64::new(-gain, 0.0));
+            }
+            if let Some(cni) = n(*cn) {
+                sys.add(br, cni, Complex64::new(*gain, 0.0));
+            }
+        }
+        Device::Vccs {
+            p,
+            n: neg,
+            cp,
+            cn,
+            gm,
+            ..
+        } => {
+            // i(p->n) = gm * v(cp,cn): the four transconductance entries.
+            let (pi, ni) = (n(*p), n(*neg));
+            let (cpi, cni) = (n(*cp), n(*cn));
+            let g = Complex64::new(*gm, 0.0);
+            if let Some(pi) = pi {
+                if let Some(cpi) = cpi {
+                    sys.add(pi, cpi, g);
+                }
+                if let Some(cni) = cni {
+                    sys.add(pi, cni, -g);
+                }
+            }
+            if let Some(ni) = ni {
+                if let Some(cpi) = cpi {
+                    sys.add(ni, cpi, -g);
+                }
+                if let Some(cni) = cni {
+                    sys.add(ni, cni, g);
+                }
+            }
+        }
     }
 }
 
