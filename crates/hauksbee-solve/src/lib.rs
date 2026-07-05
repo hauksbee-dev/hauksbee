@@ -53,6 +53,7 @@ pub mod orchestrate;
 mod partition;
 mod partitioned;
 mod plan;
+pub mod sim;
 mod sparse;
 mod stamp;
 mod system;
@@ -70,6 +71,7 @@ pub use options::{
 };
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;
+pub use sim::{default_probes, run_op, run_tran, Probe, SimOutput};
 pub use sparse::{SparseMatrix, Symbolic};
 pub use system::Layout;
 pub use transient::{StepSample, Transient, Waveforms};

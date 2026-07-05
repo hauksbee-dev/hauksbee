@@ -1,0 +1,11 @@
+# Half-wave rectifier + smoothing cap. The diode forward drop sets the peak,
+# so the smoothed output tracks ngspice's Shockley model closely; the first
+# quarter-period (cap charging from the uic rest state) is skipped.
+analysis = "tran"
+description = "half-wave rectifier with RC smoothing"
+full_scale = 5.0
+skip_initial = 1.0e-3
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.02

@@ -132,6 +132,23 @@ enum Command {
     ///   hauksbee check-code my_board.board --seconds 0.2
     CheckCode(CheckCodeArgs),
 
+    /// Simulate a SPICE deck (`.cir`) and write the results as CSV.
+    ///
+    /// Loads the netlist through the same loader the rest of the tool uses,
+    /// runs the analysis the deck asks for (or the one a flag forces), and
+    /// writes one column per probe. With no analysis flag: a `.tran` card runs
+    /// a transient, otherwise the DC operating point (`.op`).
+    ///
+    /// Honesty: an analysis the front-end cannot yet feed (`--ac`, `--dc`) and
+    /// an output format not yet built (`--format raw|both`) REFUSE with a clear
+    /// message and a non-zero exit — never a silent no-op or a wrong number. A
+    /// malformed deck prints the loader's line-numbered error and exits 2.
+    ///
+    /// Example:
+    ///   hauksbee sim rc.cir --out rc.csv
+    ///   hauksbee sim amp.cir --tran --print V(out) I(V1)
+    Sim(SimArgs),
+
     /// Start the local web front door: a "drop your board, get a report" page.
     ///
     /// Opens a local web server with no board pre-loaded. Point a browser at the
@@ -389,6 +406,61 @@ struct ServeArgs {
     port: u16,
 }
 
+/// Output file format for `hauksbee sim`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum SimFormat {
+    /// One column per probe, one row per timepoint (or one row for `.op`).
+    Csv,
+    /// ngspice ASCII rawfile — not yet implemented (plan step 14).
+    Raw,
+    /// CSV and rawfile side by side — not yet implemented (plan step 14).
+    Both,
+}
+
+#[derive(Parser)]
+// At most one analysis may be forced; with none, the deck's directives decide.
+#[command(group(
+    clap::ArgGroup::new("analysis")
+        .args(["op", "tran", "ac", "dc"])
+        .multiple(false)
+))]
+struct SimArgs {
+    /// SPICE deck to simulate (`.cir`).
+    #[arg(value_name = "DECK")]
+    file: PathBuf,
+
+    /// Write the CSV here (default: print to stdout).
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+
+    /// Output format. `csv` (default) is solid; `raw`/`both` refuse loudly until
+    /// the rawfile writer lands (plan step 14).
+    #[arg(long, value_enum, default_value_t = SimFormat::Csv)]
+    format: SimFormat,
+
+    /// Force the DC operating point analysis.
+    #[arg(long, group = "analysis")]
+    op: bool,
+
+    /// Force a transient run (needs a `.tran` card for the window).
+    #[arg(long, group = "analysis")]
+    tran: bool,
+
+    /// AC sweep — recognized but NOT yet wired in `hauksbee sim` (the front-end
+    /// does not parse `.ac`/AC source magnitudes yet, plan step 9). Refuses.
+    #[arg(long, group = "analysis")]
+    ac: bool,
+
+    /// DC sweep — recognized but NOT yet wired (plan step 9). Refuses.
+    #[arg(long, group = "analysis")]
+    dc: bool,
+
+    /// Probe expressions to output: `V(a)`, `V(a,b)`, `I(V1)`. Overrides the
+    /// deck's `.print`. Space-separated. Default: every node voltage.
+    #[arg(long, value_name = "PROBE", num_args = 1..)]
+    print: Vec<String>,
+}
+
 #[derive(Parser)]
 struct DoctorArgs {
     /// Report co-sim backend availability (the default and, for now, only
@@ -438,6 +510,7 @@ fn main() -> anyhow::Result<()> {
         Command::CheckCode(args) => cmd_check_code(args),
         Command::Serve(args) => cmd_serve(args),
         Command::Doctor(args) => cmd_doctor(args),
+        Command::Sim(args) => cmd_sim(args),
     };
     if let Err(e) = &result {
         if json {
@@ -1297,6 +1370,218 @@ fn cmd_run(args: RunArgs, quiet: bool) -> anyhow::Result<()> {
 /// Runs the small-signal AC analysis on the bound circuit and prints a Bode
 /// table (magnitude in dB, phase in degrees) for the requested net(s). With
 /// `--ac-loop`, also reports gain crossover and phase margin for that net.
+/// Exit code for a malformed deck (the loader rejected it). Distinct from the
+/// exit-3 "cannot honestly answer" (a well-formed deck we refuse to fake).
+const EXIT_MALFORMED_DECK: i32 = 2;
+
+/// `hauksbee sim`: load a `.cir`, run `.op` or `.tran`, write CSV.
+fn cmd_sim(args: SimArgs) -> anyhow::Result<()> {
+    use hauksbee_ir::SpiceLoader;
+    use hauksbee_solve::{
+        default_probes, run_op, run_tran, Integration, Probe, SimOutput, SolverOptions, StepControl,
+        DcInit,
+    };
+
+    // Read the deck. A missing file is an ordinary CLI error (exit 1) with an
+    // actionable message, not a deck-malformed refusal.
+    let text = std::fs::read_to_string(&args.file).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("no deck at '{}'. Check the path.", args.file.display())
+        } else {
+            anyhow::anyhow!("reading '{}': {e}", args.file.display())
+        }
+    })?;
+
+    // Parse. A SpiceError already carries its line number; print it verbatim and
+    // exit 2 (malformed deck) — never fall through to a wrong parse.
+    let (circuit, directives) = match SpiceLoader::load_with_directives(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(EXIT_MALFORMED_DECK);
+        }
+    };
+
+    // Output format: only CSV is implemented. Rawfile refuses loudly (plan
+    // step 14) rather than emitting nothing or the wrong thing.
+    if matches!(args.format, SimFormat::Raw | SimFormat::Both) {
+        eprintln!(
+            "error: --format {} is not yet implemented (ngspice rawfile output is \
+             SPICE-compat plan step 14). Use --format csv (the default).",
+            match args.format {
+                SimFormat::Raw => "raw",
+                SimFormat::Both => "both",
+                SimFormat::Csv => unreachable!(),
+            }
+        );
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
+
+    // Choose the analysis: an explicit flag wins; otherwise a `.tran` card means
+    // transient and anything else means the operating point.
+    enum Analysis {
+        Op,
+        Tran,
+        Ac,
+        Dc,
+    }
+    let analysis = if args.op {
+        Analysis::Op
+    } else if args.tran {
+        Analysis::Tran
+    } else if args.ac {
+        Analysis::Ac
+    } else if args.dc {
+        Analysis::Dc
+    } else if directives.tran.is_some() {
+        Analysis::Tran
+    } else {
+        Analysis::Op
+    };
+
+    // Refuse the unwired analyses loudly (exit 3): the netlist front-end does
+    // not parse `.ac`/`.dc` directives or AC source magnitudes yet, so there is
+    // nothing honest to compute. A loud refusal, never a silent no-op.
+    match analysis {
+        Analysis::Ac => {
+            eprintln!(
+                "error: --ac is recognized but not yet wired in `hauksbee sim`. The netlist \
+                 front-end does not yet parse `.ac` directives or AC source magnitudes \
+                 (SPICE-compat plan step 9). Refusing rather than emitting an empty or wrong \
+                 result. Use --op or --tran."
+            );
+            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        }
+        Analysis::Dc => {
+            eprintln!(
+                "error: --dc (DC sweep) is recognized but not yet wired in `hauksbee sim`. The \
+                 sweep driver is SPICE-compat plan step 9. Refusing rather than faking a result. \
+                 Use --op for a single operating point or --tran."
+            );
+            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        }
+        _ => {}
+    }
+
+    // Probes: an explicit --print wins; otherwise every node voltage (and we say
+    // so, on stderr, so the choice is never a silent surprise).
+    let probes: Vec<Probe> = if args.print.is_empty() {
+        eprintln!(
+            "note: no --print given and the loader does not yet parse `.print`; \
+             writing every node voltage."
+        );
+        default_probes(&circuit)
+    } else {
+        let mut ps = Vec::with_capacity(args.print.len());
+        for tok in &args.print {
+            match Probe::parse(tok) {
+                Ok(p) => ps.push(p),
+                Err(msg) => {
+                    eprintln!("error: --print: {msg}");
+                    std::process::exit(EXIT_MALFORMED_DECK);
+                }
+            }
+        }
+        ps
+    };
+
+    // Build solver options from the deck's tolerances.
+    let mut opts = SolverOptions::default();
+    if let Some(r) = directives.reltol {
+        opts.reltol = r;
+    }
+    if let Some(a) = directives.abstol {
+        opts.abstol = a;
+    }
+    if let Some(v) = directives.vntol {
+        opts.vntol = v;
+    }
+
+    let output: SimOutput = match analysis {
+        Analysis::Op => match run_op(&circuit, &opts, &probes) {
+            Ok(o) => o,
+            Err(msg) => {
+                eprintln!(
+                    "error: DC operating point did not converge (or a probe was invalid): {msg}"
+                );
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            }
+        },
+        Analysis::Tran => {
+            let Some(td) = directives.tran else {
+                eprintln!(
+                    "error: --tran requested but the deck has no `.tran` card, so there is no \
+                     stop time or step to run. Add `.tran <tstep> <tstop>` or use --op."
+                );
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            };
+            // Adaptive step bounded by the deck's requested step (its tmax if
+            // given, else tstep), the same shape the existing cross-check uses.
+            let dt_max = td.tmax.unwrap_or(td.tstep).max(1e-15);
+            opts.integration = Integration::Trapezoidal;
+            opts.step = StepControl::Adaptive {
+                dt_initial: (td.tstep / 100.0).max(1e-15),
+                dt_min: 1e-15,
+                dt_max,
+            };
+            // `uic` means power-on start: skip the DC solve, march from rest.
+            if directives.use_initial_conditions {
+                opts.dc_init = DcInit::FromZero;
+            }
+            match run_tran(&circuit, &opts, td.tstop, &probes) {
+                Ok(o) => o,
+                Err(msg) => {
+                    eprintln!("error: transient solve failed: {msg}");
+                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                }
+            }
+        }
+        Analysis::Ac | Analysis::Dc => unreachable!("refused above"),
+    };
+
+    // Serialize to CSV and write to --out or stdout.
+    let csv = sim_output_to_csv(&output);
+    match &args.out {
+        Some(path) => {
+            std::fs::write(path, csv)
+                .map_err(|e| anyhow::anyhow!("writing '{}': {e}", path.display()))?;
+            eprintln!(
+                "wrote {} row(s) x {} column(s) to {}",
+                output.rows.len(),
+                output.columns.len(),
+                path.display()
+            );
+        }
+        None => print!("{csv}"),
+    }
+    Ok(())
+}
+
+/// Render a [`hauksbee_solve::SimOutput`] as CSV. A transient prepends a
+/// `time_s` column; an operating point is a bare header + one row.
+fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
+    let mut s = String::new();
+    let mut header = Vec::new();
+    if o.time.is_some() {
+        header.push("time_s".to_string());
+    }
+    header.extend(o.columns.iter().cloned());
+    s.push_str(&header.join(","));
+    s.push('\n');
+    for (i, row) in o.rows.iter().enumerate() {
+        let mut cells = Vec::with_capacity(row.len() + 1);
+        if let Some(t) = &o.time {
+            cells.push(format!("{:.10e}", t[i]));
+        }
+        for v in row {
+            cells.push(format!("{v:.10e}"));
+        }
+        s.push_str(&cells.join(","));
+        s.push('\n');
+    }
+    s
+}
+
 fn cmd_ac(
     bound: &hauksbee_engine::BoundBoard,
     ac_arg: &str,

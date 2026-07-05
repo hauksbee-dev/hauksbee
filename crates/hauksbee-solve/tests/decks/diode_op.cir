@@ -1,0 +1,7 @@
+diode forward drop op
+V1 a 0 DC 5
+R1 a d 1k
+D1 d 0 DMOD
+.model DMOD D(IS=1e-14 N=1.0)
+.op
+.end

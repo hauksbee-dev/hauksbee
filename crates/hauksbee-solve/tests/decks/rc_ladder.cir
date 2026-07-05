@@ -1,0 +1,22 @@
+rc ladder 8 stages
+V1 n0 0 PULSE(0 1 0 1n 1n 1 1)
+R1 n0 n1 1k
+C1 n1 0 10n
+R2 n1 n2 1k
+C2 n2 0 10n
+R3 n2 n3 1k
+C3 n3 0 10n
+R4 n3 n4 1k
+C4 n4 0 10n
+R5 n4 n5 1k
+C5 n5 0 10n
+R6 n5 n6 1k
+C6 n6 0 10n
+R7 n6 n7 1k
+C7 n7 0 10n
+R8 n7 n8 1k
+C8 n8 0 10n
+.tran 1u 500u uic
+.print tran v(n8)
+.options reltol=1e-4
+.end

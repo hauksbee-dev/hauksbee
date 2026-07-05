@@ -1,0 +1,9 @@
+# 8-stage RC ladder driven by a step. A deep linear chain (sparse solver).
+analysis = "tran"
+description = "8-stage RC ladder step response"
+full_scale = 1.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(n8)"
+reltol = 0.01
