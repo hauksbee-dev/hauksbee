@@ -12,11 +12,19 @@
 //!   solved with the existing MNA + Newton engine on their *own* small matrix —
 //!   far cheaper than one global factorization.
 //!
-//! Islands exchange boundary node voltages once per step in a Gauss-Seidel
-//! sweep: each island reads the latest values its neighbours produced and writes
-//! back the nodes it owns. With `granularity == 1.0` the driver runs a few extra
-//! relaxation sweeps per step to tighten the coupling; at lower granularity it
-//! does a single sweep (faster, looser).
+//! Islands exchange boundary node voltages once per step in a DOUBLE-BUFFERED
+//! JACOBI sweep (dev-plan 03 §3.3): every island reads its inputs from the
+//! frozen previous-generation buffer and writes the nodes it owns into a write
+//! buffer; the buffers swap at sweep end. No island ever reads another's
+//! this-sweep output, so the sweep result is a pure function of (previous
+//! buffer, island state) — bit-for-bit independent of the order islands run
+//! in, and therefore of thread count and scheduling when the compute phase is
+//! parallelized ([`crate::ParallelPolicy`]). Sweeps repeat until the largest
+//! weighted boundary change drops below the Newton tolerance convention
+//! (reltol/vntol), replacing the old fixed 3/2/1 counts; a coupling that
+//! cannot converge within [`COUPLING_SWEEP_CAP`] sweeps fails the step loudly
+//! (see [`PartitionedTransient::relax_step`]) instead of accepting a
+//! half-relaxed exchange.
 //!
 //! ## Accuracy tradeoff
 //!
@@ -29,6 +37,21 @@
 //! island (a nonlinear device taints its whole island), so the strongly-coupled
 //! core is never split. `Partitioning::Off` disables all of this and is bit-for-
 //! bit identical to the monolithic engine.
+//!
+//! ## Why Jacobi and not Gauss-Seidel
+//!
+//! The pre-S4 sweep was sequential Gauss-Seidel: island *k+1* could read island
+//! *k*'s freshly written value. That ordering is exactly what a parallel sweep
+//! cannot preserve, and a lock-ordered parallel Gauss-Seidel would serialize the
+//! very dependency chain we want to spread across cores while still being
+//! "deterministic" only relative to an arbitrary lock order. Jacobi's
+//! order-independence is a property of the math, not of a lock discipline. The
+//! trade is convergence rate (Jacobi is the weaker relaxation), which is why the
+//! sweep count is convergence-gated rather than fixed. In every partition the
+//! current analyzer produces, island inputs are outer-written nodes (source pins
+//! and torn rails), never another island's owned node — the union-find fuses any
+//! shared free node into one island — so on real boards today the Jacobi sweep
+//! computes bit-for-bit what the Gauss-Seidel sweep did.
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 
@@ -57,6 +80,13 @@ struct NonlinearIsland {
     l2g: Vec<NodeId>,
     /// Boundary input nodes (global) and the sub Vsource id pinning each.
     boundary: Vec<(NodeId, DeviceId)>,
+    /// The nodes this island OWNS (writes to the exchange buffer), as
+    /// `(global node, index into ws.x)` pairs: every mapped non-ground node
+    /// that is not a boundary input. Precomputed at build so the scatter phase
+    /// is a flat copy with no per-write layout lookups, and so the build-time
+    /// single-writer check (see `verify_single_writer`) has an explicit owned
+    /// set to verify rather than an implicit "whatever write_back skips".
+    owned: Vec<(NodeId, usize)>,
     first_step: bool,
 }
 
@@ -71,6 +101,19 @@ const SMALL_ISLAND_STATES: usize = 48;
 /// block (~65 devices on the Tarski board) but far below the fused 5k-device
 /// island, so the win is taken only when it is real.
 const TEAR_MAX_BLOCK_DEVICES: usize = 600;
+
+/// Sweep-count cap for the convergence-gated Jacobi relaxation (plan §3.3).
+/// Jacobi's spectral radius on a genuinely tight coupling can sit near 1, so an
+/// uncapped loop would hang exactly on the boards that need help most; a
+/// coupling that has not relaxed to tolerance within this many sweeps is a sign
+/// the cut is stronger than the partitioner believed, and the step FAILS over
+/// to the caller's escalation path (the staged orchestrator re-solves the group
+/// fused/monolithic — see `orchestrate::staged::solve_group`) rather than
+/// silently accepting a half-converged exchange. 16 is the plan's starting
+/// value; every real partition today converges in <= 2 sweeps (island inputs
+/// are outer-written pins/rails), so the cap only bites on imposed partitions
+/// with genuine inter-island feedback.
+const COUPLING_SWEEP_CAP: usize = 16;
 
 /// Count the reactive states (caps + inductors) in an island.
 fn count_states(circuit: &Circuit, isl: &Island) -> usize {
@@ -112,8 +155,24 @@ pub struct PartitionedTransient {
     sources: Vec<DeviceId>,
     /// Detected shunt-fed rail tears, solved by scalar balance each step.
     tears: Vec<RailTearState>,
-    /// Global node-voltage exchange buffer, indexed by NodeId.0.
+    /// Global node-voltage exchange buffer, indexed by NodeId.0. Between
+    /// sweeps this is the committed (read) generation; `sweep` writes the next
+    /// generation into `vbuf_next` and swaps, so no island ever reads another
+    /// island's this-sweep output (the double-buffered Jacobi discipline).
     vbuf: Vec<f64>,
+    /// The write half of the double buffer. Only `sweep` touches it: seeded
+    /// each sweep by copying `vbuf` (so unowned slots — source pins, torn
+    /// rails, ground — carry through unchanged), overlaid with every island's
+    /// owned outputs, then swapped into place.
+    vbuf_next: Vec<f64>,
+    /// True iff some island READS a node another island OWNS, i.e. the Jacobi
+    /// exchange carries real inter-island data flow and relaxation sweeps can
+    /// make progress. False for every partition the analyzer produces today
+    /// (inputs are outer-written source pins / torn rails), in which case one
+    /// sweep is exact coupling-wise and the relaxation loop is skipped rather
+    /// than measured — a re-solved Newton island jitters by its own step
+    /// tolerance, which would flap a measured gate without conveying anything.
+    coupled: bool,
     n_nodes: usize,
 }
 
@@ -295,6 +354,43 @@ impl PartitionedTransient {
         // in-order sweep in `apply_sources` correct for stacked floating rails.
         let sources = order_sources(circuit, &part.sources);
 
+        // ---- Single-writer-per-slot invariant (plan §3.2, hazard A). ----
+        // Owned sets must be pairwise disjoint across ALL islands (linear and
+        // nonlinear alike), and no island may own an outer-written slot: a
+        // torn rail belongs to the scalar balance, not to any island. This is
+        // ENFORCED, not assumed, because `Partition`'s fields are public and
+        // `try_build_from_partition` accepts partitions from external decision
+        // layers: a violation means two islands would scatter into the same
+        // exchange slot and the result would depend on execution order. Debug
+        // builds scream; release builds refuse the torn build and the caller
+        // falls back to the exact monolithic path.
+        let nl_owned: Vec<Vec<NodeId>> = nonlinear
+            .iter()
+            .map(|nl| nl.owned.iter().map(|&(gn, _)| gn).collect())
+            .collect();
+        let mut owned_sets: Vec<&[NodeId]> =
+            Vec::with_capacity(lin_free_nodes.len() + nl_owned.len());
+        owned_sets.extend(lin_free_nodes.iter().map(|v| v.as_slice()));
+        owned_sets.extend(nl_owned.iter().map(|v| v.as_slice()));
+        let claimed = match verify_single_writer(&owned_sets, &rail_nodes, n_nodes) {
+            Ok(claimed) => claimed,
+            Err(msg) => {
+                debug_assert!(false, "partition ownership violation: {msg}");
+                return None;
+            }
+        };
+
+        // Does any island READ a slot some island OWNS? Only then does the
+        // Jacobi exchange carry inter-island data flow that relaxation sweeps
+        // can tighten; every partition the analyzer produces today reads only
+        // outer-written pins/rails, so this is normally false and the step
+        // loop runs exactly one sweep (see `relax_step`).
+        let coupled = linear
+            .iter()
+            .flat_map(|li| li.inputs().iter())
+            .chain(nonlinear.iter().flat_map(|nl| nl.boundary.iter().map(|(bn, _)| bn)))
+            .any(|n| claimed[n.0 as usize]);
+
         Some(PartitionedTransient {
             opts: *opts,
             linear,
@@ -306,6 +402,8 @@ impl PartitionedTransient {
             sources,
             tears,
             vbuf: vec![0.0; n_nodes + 1],
+            vbuf_next: vec![0.0; n_nodes + 1],
+            coupled,
             n_nodes,
         })
     }
@@ -340,14 +438,6 @@ impl PartitionedTransient {
             x: &xglobal,
         });
 
-        let relax_sweeps = if self.opts.granularity >= 0.999 {
-            3
-        } else if self.opts.granularity > 0.0 {
-            2
-        } else {
-            1
-        };
-
         let mut t = 0.0;
         let eps = dt * 1e-9;
         while t < tstop - eps {
@@ -359,12 +449,11 @@ impl PartitionedTransient {
             self.apply_sources(circuit, tnext);
 
             if self.tears.is_empty() {
-                // Gauss-Seidel sweeps over islands (unchanged legacy path).
-                for sweep in 0..relax_sweeps {
-                    self.sweep(circuit, h, tnext, sweep == 0)?;
-                }
+                // Convergence-gated Jacobi relaxation (replaces the fixed
+                // 3/2/1 sweep counts; see `relax_step` for the guard).
+                self.relax_step(circuit, h, tnext)?;
             } else {
-                self.step_with_rail_balance(circuit, h, tnext, relax_sweeps)?;
+                self.step_with_rail_balance(circuit, h, tnext)?;
             }
 
             // Commit accepted state in every island (advance reactive history).
@@ -403,7 +492,6 @@ impl PartitionedTransient {
         circuit: &Circuit,
         h: f64,
         tnext: f64,
-        _relax_sweeps: usize,
     ) -> Result<(), String> {
         // One sweep advances trial state from accepted history at the current
         // rail estimates (linear islands + every nonlinear block solved once).
@@ -452,10 +540,47 @@ impl PartitionedTransient {
         Ok(())
     }
 
-    /// One Gauss-Seidel sweep: advance each island reading the latest exchange
-    /// buffer and writing its owned node voltages back. `first` advances the
-    /// trial state from accepted history; later sweeps re-solve in place to
-    /// relax coupling without committing.
+    /// Advance one step on the tear-free path: the exact time-advance sweep,
+    /// then — only when the partition carries real inter-island coupling —
+    /// convergence-gated relaxation sweeps until the boundary exchange settles
+    /// under the reltol/vntol convention (replacing the old fixed 3/2/1
+    /// counts, which could silently under- or over-relax).
+    ///
+    /// The divergence guard mirrors the tear-refusal doctrine: a coupling that
+    /// cannot prove itself within [`COUPLING_SWEEP_CAP`] sweeps is refused
+    /// loudly (the error names the stalled node), never silently truncated.
+    /// The error leaves `run_streaming` through the same channel as a
+    /// per-island Newton failure, which is the channel the staged orchestrator
+    /// already escalates by re-solving the group fused on the monolithic
+    /// engine (`orchestrate::staged::solve_group`).
+    fn relax_step(&mut self, circuit: &Circuit, h: f64, tnext: f64) -> Result<(), String> {
+        // The time step itself: island states advance from accepted history.
+        // Its delta measures the physical step change, not coupling error, so
+        // it never participates in the convergence decision.
+        self.sweep(circuit, h, tnext, true)?;
+        if !self.coupled {
+            // No island reads a slot any island owns, so the sweep read only
+            // frozen outer-written inputs and the exchange is already exact:
+            // further sweeps could only re-polish each island's own Newton
+            // root by its step tolerance, which is noise, not coupling.
+            return Ok(());
+        }
+        let mut last = (f64::INFINITY, 0u32);
+        for _ in 1..COUPLING_SWEEP_CAP {
+            last = self.sweep(circuit, h, tnext, false)?;
+            if last.0 <= 1.0 {
+                return Ok(());
+            }
+        }
+        Err(format!(
+            "inter-island coupling failed to relax within {COUPLING_SWEEP_CAP} sweeps at \
+             t={tnext:.6e}: weighted boundary change {:.3e} (tolerance 1.0) still moving at \
+             node {} — the cut is stronger than the partitioner believed; refusing the \
+             partitioned step",
+            last.0, last.1
+        ))
+    }
+
     /// Test-only accessor for the S1 allocation-hygiene gate (plan §4.4): run
     /// one sweep directly so the `alloc_audit` counter can measure the per-step
     /// inner loop in isolation. Keeps `sweep` itself private; not engine API.
@@ -467,48 +592,98 @@ impl PartitionedTransient {
         tnext: f64,
         first: bool,
     ) -> Result<(), String> {
-        self.sweep(circuit, h, tnext, first)
+        self.sweep(circuit, h, tnext, first).map(|_| ())
     }
 
-    fn sweep(&mut self, circuit: &Circuit, h: f64, tnext: f64, first: bool) -> Result<(), String> {
-        // Linear islands.
-        for (idx, li) in self.linear.iter().enumerate() {
-            // Gather inputs: boundary voltages, then current-source values
-            // evaluated at the end of the step (ZOH over the interval).
-            let inputs = li.inputs();
-            let n_vin = inputs.len();
-            let buf = &mut self.lin_input_buf[idx];
-            for (k, n) in inputs.iter().enumerate() {
-                buf[k] = self.vbuf[n.0 as usize];
-            }
-            for (k, (id, _, _)) in li.isources().iter().enumerate() {
-                if let hauksbee_ir::Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
-                    buf[n_vin + k] = kind.eval(tnext);
+    /// One relaxation sweep over all islands, as an explicit double-buffered
+    /// Jacobi exchange (plan §3.3), in two phases:
+    ///
+    /// * **Compute** (phase a): every island reads the frozen `vbuf` and
+    ///   computes its owned outputs into private scratch — `lin_vfree` for
+    ///   linear islands (the S1 buffer, plan §4.2), the island's own workspace
+    ///   for nonlinear ones. No shared writes anywhere, so island order cannot
+    ///   affect a single bit of the result; this is the phase
+    ///   [`crate::ParallelPolicy`] may hand to the thread pool.
+    /// * **Scatter** (phase b): `vbuf_next` is seeded from `vbuf` (unowned
+    ///   slots — source pins, torn rails, ground — carry through unchanged),
+    ///   every island's owned scratch lands in its disjoint slots, and the
+    ///   buffers swap. Kept serial: it is a memcpy plus scattered stores, and
+    ///   the disjointness that would make it safely parallel also makes it too
+    ///   cheap to bother.
+    ///
+    /// Returns the largest weighted change `|Δv| / (reltol·max|v| + vntol)`
+    /// over all owned slots and the global node where it occurred; `<= 1.0`
+    /// means the exchange has relaxed to the solver's own tolerance convention.
+    ///
+    /// `first` advances island state from accepted history (the actual time
+    /// step); later sweeps re-solve in place to relax coupling without
+    /// committing.
+    fn sweep(
+        &mut self,
+        circuit: &Circuit,
+        h: f64,
+        tnext: f64,
+        first: bool,
+    ) -> Result<(f64, u32), String> {
+        // ---- Phase a: compute owned outputs into per-island scratch. ----
+        let vbuf: &[f64] = &self.vbuf;
+        let opts = &self.opts;
+        for (((li, state), buf), vfree) in self
+            .linear
+            .iter()
+            .zip(self.lin_state.iter_mut())
+            .zip(self.lin_input_buf.iter_mut())
+            .zip(self.lin_vfree.iter_mut())
+        {
+            linear_phase_a(li, circuit, vbuf, tnext, first, state, buf, vfree);
+        }
+        // Run EVERY island and surface the lowest-indexed failure, so the
+        // error message (not just the waveform) stays independent of execution
+        // order once this phase runs on the pool.
+        let mut first_err: Option<String> = None;
+        for nl in self.nonlinear.iter_mut() {
+            if let Err(e) = nl.phase_a(vbuf, h, tnext, first, opts) {
+                if first_err.is_none() {
+                    first_err = Some(e);
                 }
             }
-            // Advance state only on the first sweep (the exact step); later
-            // sweeps just re-read outputs with refreshed inputs.
-            if first {
-                li.step(&mut self.lin_state[idx], buf);
-            }
-            // Reconstruct free-node voltages and write back. `vfree` is the
-            // pre-allocated per-island buffer; `node_voltages` overwrites every
-            // entry, so no per-sweep allocation and no need to clear (plan §4.2).
-            let free = &self.lin_free_nodes[idx];
-            let vfree = &mut self.lin_vfree[idx];
-            li.node_voltages(&self.lin_state[idx], buf, vfree);
-            for (f, gn) in free.iter().enumerate() {
-                self.vbuf[gn.0 as usize] = vfree[f];
-            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
 
-        // Nonlinear islands.
-        for nl in &mut self.nonlinear {
-            nl.refresh_boundary(&self.vbuf);
-            nl.step(h, tnext, first, &self.opts)?;
-            nl.write_back(&mut self.vbuf);
+        // ---- Phase b: scatter owned scratch into the write buffer. ----
+        self.vbuf_next.copy_from_slice(&self.vbuf);
+        let reltol = self.opts.reltol;
+        let vntol = self.opts.vntol;
+        let mut worst = 0.0f64;
+        let mut worst_node = 0u32;
+        {
+            let read: &[f64] = &self.vbuf;
+            let write: &mut [f64] = &mut self.vbuf_next;
+            let mut scatter = |gn: NodeId, vnew: f64| {
+                let ni = gn.0 as usize;
+                let vold = read[ni];
+                let w = (vnew - vold).abs() / (reltol * vnew.abs().max(vold.abs()) + vntol);
+                if w > worst {
+                    worst = w;
+                    worst_node = gn.0;
+                }
+                write[ni] = vnew;
+            };
+            for (free, vfree) in self.lin_free_nodes.iter().zip(self.lin_vfree.iter()) {
+                for (f, gn) in free.iter().enumerate() {
+                    scatter(*gn, vfree[f]);
+                }
+            }
+            for nl in &self.nonlinear {
+                for &(gn, xi) in &nl.owned {
+                    scatter(gn, nl.ws.x[xi]);
+                }
+            }
         }
-        Ok(())
+        std::mem::swap(&mut self.vbuf, &mut self.vbuf_next);
+        Ok((worst, worst_node))
     }
 
     /// Commit reactive history after an accepted step.
@@ -741,6 +916,97 @@ impl RailLoads for PartitionedRailLoads<'_> {
     }
 }
 
+/// Phase (a) of the Jacobi sweep for one linear island: gather inputs from the
+/// frozen read buffer (boundary voltages, then current-source values evaluated
+/// at the end of the step — ZOH over the interval), advance the exact
+/// matrix-exponential state on the first sweep, and reconstruct free-node
+/// voltages into the island's private `vfree` scratch (pre-allocated per S1,
+/// plan §4.2; `node_voltages` overwrites every entry, so no clearing needed).
+///
+/// Reads only `vbuf` and island-private state; writes only island-private
+/// scratch. That is the whole safety argument for running every island's
+/// phase (a) concurrently, and it is enforced by the signature: nothing here
+/// can reach another island's data.
+#[allow(clippy::too_many_arguments)]
+fn linear_phase_a(
+    li: &LinearIsland,
+    circuit: &Circuit,
+    vbuf: &[f64],
+    tnext: f64,
+    first: bool,
+    state: &mut [f64],
+    buf: &mut [f64],
+    vfree: &mut [f64],
+) {
+    let inputs = li.inputs();
+    let n_vin = inputs.len();
+    for (k, n) in inputs.iter().enumerate() {
+        buf[k] = vbuf[n.0 as usize];
+    }
+    for (k, (id, _, _)) in li.isources().iter().enumerate() {
+        if let hauksbee_ir::Device::Isource { kind, .. } = &circuit.devices[id.0 as usize] {
+            buf[n_vin + k] = kind.eval(tnext);
+        }
+    }
+    if first {
+        li.step(state, buf);
+    }
+    li.node_voltages(state, buf, vfree);
+}
+
+/// Enforce the single-writer-per-slot invariant the Jacobi scatter relies on
+/// (plan §3.2, hazard A): every exchange-buffer slot is written by AT MOST one
+/// island, and never by an island when the outer loop owns it (a torn rail is
+/// written by the scalar balance; ground is never written). Returns the claim
+/// mask (slot -> owned by some island) on success, which the caller reuses to
+/// detect whether any island READS an island-owned slot (the `coupled` flag).
+///
+/// The baseline "ideal Vsources are the only cut points" partition satisfies
+/// disjointness by construction — the union-find fuses any shared free node
+/// into one island — but [`Partition`]'s fields are public and
+/// [`PartitionedTransient::try_build_from_partition`] accepts partitions from
+/// external decision layers (the decompose analysis, tests, future tearing
+/// passes), so the invariant is CHECKED rather than assumed.
+fn verify_single_writer(
+    owned_sets: &[&[NodeId]],
+    outer_written: &[NodeId],
+    n_nodes: usize,
+) -> Result<Vec<bool>, String> {
+    /// Slot written by the outer loop (balance-torn rail), not by any island.
+    const OUTER: usize = usize::MAX;
+    /// Slot nobody has claimed yet.
+    const FREE: usize = usize::MAX - 1;
+    let mut owner: Vec<usize> = vec![FREE; n_nodes + 1];
+    for n in outer_written {
+        if !n.is_ground() {
+            owner[n.0 as usize] = OUTER;
+        }
+    }
+    for (isl, set) in owned_sets.iter().enumerate() {
+        for n in *set {
+            let ni = n.0 as usize;
+            match owner[ni] {
+                FREE => owner[ni] = isl,
+                OUTER => {
+                    return Err(format!(
+                        "island {isl} claims node {ni}, which the outer loop writes (torn rail)"
+                    ))
+                }
+                other => {
+                    return Err(format!(
+                        "node {ni} owned by two islands ({other} and {isl}); \
+                         a parallel scatter would alias"
+                    ))
+                }
+            }
+        }
+    }
+    Ok(owner
+        .iter()
+        .map(|&o| o != FREE && o != OUTER)
+        .collect())
+}
+
 /// Order cut voltage sources so each source's *reference* terminal is resolved
 /// before the source is applied. A source resolves the node `v(p)` (when `n` is
 /// ground/resolved) or `v(n)` (when `p` is ground). We greedily emit sources
@@ -859,6 +1125,19 @@ impl NonlinearIsland {
         let ws = Workspace::new(&sub);
         let n_dev = sub.devices.len();
         let size = ws.layout.size;
+        // Owned slots: every mapped non-ground node that is not a boundary
+        // input, resolved once to (global node, ws.x index) so the per-sweep
+        // scatter is a flat copy with no layout lookups or boundary scans.
+        let mut owned = Vec::new();
+        for ln in 1..l2g.len() {
+            let gn = l2g[ln];
+            if gn.is_ground() || boundary.iter().any(|(bn, _)| *bn == gn) {
+                continue;
+            }
+            if let Some(i) = ws.layout.node(NodeId(ln as u32)) {
+                owned.push((gn, i));
+            }
+        }
         Some(NonlinearIsland {
             sub,
             ws,
@@ -866,6 +1145,7 @@ impl NonlinearIsland {
             x_accepted: vec![0.0; size],
             l2g,
             boundary,
+            owned,
             first_step: true,
         })
     }
@@ -996,20 +1276,30 @@ impl NonlinearIsland {
         self.boundary.iter().any(|(gn, _)| *gn == rail)
     }
 
+    /// Phase (a) of the Jacobi sweep for this island: refresh the boundary
+    /// pins from the frozen read buffer and solve the sub-circuit trial state
+    /// on this island's own workspace. Writes nothing shared — the owned
+    /// outputs stay in `ws.x` until the scatter phase reads them — so every
+    /// island's phase (a) can run concurrently.
+    fn phase_a(
+        &mut self,
+        vbuf: &[f64],
+        h: f64,
+        tnext: f64,
+        first: bool,
+        opts: &SolverOptions,
+    ) -> Result<(), String> {
+        self.refresh_boundary(vbuf);
+        self.step(h, tnext, first, opts)
+    }
+
     /// Write the island's owned node voltages back to the global buffer.
+    /// (The Jacobi sweep scatters through `owned` directly; this remains the
+    /// single-buffer write for the rail-balance resolve and the decomposed
+    /// seed, where the caller sequences reads and writes explicitly.)
     fn write_back(&self, vbuf: &mut [f64]) {
-        for ln in 1..self.l2g.len() {
-            let gn = self.l2g[ln];
-            if gn.is_ground() {
-                continue;
-            }
-            // Don't overwrite boundary inputs (owned elsewhere).
-            if self.boundary.iter().any(|(bn, _)| *bn == gn) {
-                continue;
-            }
-            if let Some(i) = self.ws.layout.node(NodeId(ln as u32)) {
-                vbuf[gn.0 as usize] = self.ws.x[i];
-            }
+        for &(gn, xi) in &self.owned {
+            vbuf[gn.0 as usize] = self.ws.x[xi];
         }
     }
 
@@ -1057,6 +1347,297 @@ fn seed_sub_reactive(state: &mut ReactiveState, sub: &Circuit, ws: &Workspace) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Disjoint owned sets pass, and the claim mask marks exactly the owned
+    /// slots (not the outer-written rail, not unclaimed nodes).
+    #[test]
+    fn single_writer_accepts_disjoint_ownership() {
+        let a = [NodeId(1), NodeId(2)];
+        let b = [NodeId(4)];
+        let owned: Vec<&[NodeId]> = vec![&a, &b];
+        let claimed = verify_single_writer(&owned, &[NodeId(3)], 5).expect("disjoint sets pass");
+        assert_eq!(claimed, vec![false, true, true, false, true, false]);
+    }
+
+    /// Two islands claiming the same slot is the write-aliasing hazard the
+    /// parallel scatter must never see; the check must name the node.
+    #[test]
+    fn single_writer_rejects_overlapping_ownership() {
+        let a = [NodeId(1), NodeId(2)];
+        let b = [NodeId(2), NodeId(3)];
+        let owned: Vec<&[NodeId]> = vec![&a, &b];
+        let err = verify_single_writer(&owned, &[], 4).unwrap_err();
+        assert!(
+            err.contains("node 2") && err.contains("two islands"),
+            "error must name the aliased node: {err}"
+        );
+    }
+
+    /// An island claiming a balance-torn rail would fight the scalar balance
+    /// for the slot (the outer loop writes it); refused explicitly.
+    #[test]
+    fn single_writer_rejects_island_owning_a_torn_rail() {
+        let a = [NodeId(1), NodeId(2)];
+        let owned: Vec<&[NodeId]> = vec![&a];
+        let err = verify_single_writer(&owned, &[NodeId(2)], 3).unwrap_err();
+        assert!(
+            err.contains("outer loop") && err.contains("node 2"),
+            "error must name the rail conflict: {err}"
+        );
+    }
+
+    use hauksbee_ir::{Device, SourceKind};
+
+    fn fixed_opts(dt: f64) -> SolverOptions {
+        SolverOptions {
+            step: StepControl::Fixed { dt },
+            ..SolverOptions::default()
+        }
+    }
+
+    /// END-TO-END proof the build-time single-writer check is live, not
+    /// vacuous: a hand-built partition in which two islands both claim node
+    /// `b` must be refused at construction. `Partition`'s fields are public
+    /// precisely so external decision layers can impose partitions, which is
+    /// exactly how a buggy layer could smuggle in an aliasing cut.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "partition ownership violation")]
+    fn aliased_partition_is_refused_at_build() {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let b = c.node("b");
+        let v1 = c.add(Device::Vsource {
+            name: "V1".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        let r1 = c.add(Device::Resistor {
+            name: "R1".into(),
+            a,
+            b,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let r2 = c.add(Device::Resistor {
+            name: "R2".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
+        // Both islands own `b`: island 0 (devices R1, boundary a) and island 1
+        // (devices R2, no boundary). `linear: false` routes both through the
+        // sub-circuit path; the aliasing is in the ownership, not the physics.
+        let part = Partition {
+            islands: vec![
+                Island {
+                    devices: vec![r1],
+                    nodes: vec![a, b],
+                    linear: false,
+                    boundary_in: vec![a],
+                },
+                Island {
+                    devices: vec![r2],
+                    nodes: vec![b],
+                    linear: false,
+                    boundary_in: vec![],
+                },
+            ],
+            sources: vec![v1],
+            n_nodes: c.max_node() as usize,
+            tears: Vec::new(),
+        };
+        let opts = fixed_opts(1e-6);
+        let _ = PartitionedTransient::try_build_from_partition(&c, &opts, part);
+    }
+
+    /// Build the cross-coupled comparator ring: an ODD-inversion feedback loop
+    /// split at its (current-free) sense couplings. U1 is non-inverting from x
+    /// to y; U2 is inverting from y to x — so no consistent discrete state
+    /// exists and a Jacobi relaxation between the two islands flips forever.
+    /// This is precisely the hazard the divergence guard exists for: a
+    /// FEEDBACK loop imposed on the exchange as if it were feedforward.
+    fn comparator_ring() -> (Circuit, Partition) {
+        let mut c = Circuit::new();
+        let vref = c.node("ref");
+        let x = c.node("x");
+        let y = c.node("y");
+        let vsrc = c.add(Device::Vsource {
+            name: "VREF".into(),
+            p: vref,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(0.5),
+        });
+        let u1 = c.add(Device::Comparator {
+            name: "U1".into(),
+            out: y,
+            inp: x,
+            inn: vref,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 0.0,
+        });
+        let u2 = c.add(Device::Comparator {
+            name: "U2".into(),
+            out: x,
+            inp: vref,
+            inn: y,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 0.0,
+        });
+        let part = Partition {
+            islands: vec![
+                Island {
+                    devices: vec![u1],
+                    nodes: vec![x, y, vref],
+                    linear: false,
+                    boundary_in: vec![x, vref],
+                },
+                Island {
+                    devices: vec![u2],
+                    nodes: vec![x, y, vref],
+                    linear: false,
+                    boundary_in: vec![y, vref],
+                },
+            ],
+            sources: vec![vsrc],
+            n_nodes: c.max_node() as usize,
+            tears: Vec::new(),
+        };
+        (c, part)
+    }
+
+    /// DIVERGENCE GUARD (plan §3.3): a coupling that cannot relax within the
+    /// sweep cap must FAIL the step loudly — never hang, never silently accept
+    /// a half-converged exchange. The comparator ring flips generation after
+    /// generation, so the guard must trip at the cap and name the stalled
+    /// node; the error leaves through the same channel as a per-island Newton
+    /// failure, which the staged orchestrator escalates to a fused monolithic
+    /// re-solve.
+    #[test]
+    fn unconvergent_coupling_fails_the_step_loudly() {
+        let (c, part) = comparator_ring();
+        let opts = fixed_opts(1e-6);
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
+            .expect("the ring partition is well-formed (disjoint owners), so the build succeeds");
+        assert!(engine.coupled, "the ring must register as inter-island coupled");
+        let err = engine
+            .run_streaming(&c, 10e-6, |_| {})
+            .expect_err("an odd-inversion ring can never satisfy the coupling tolerance");
+        assert!(
+            err.contains("failed to relax"),
+            "the guard must refuse, not mislabel: {err}"
+        );
+    }
+
+    /// The positive half of the convergence gate: a genuinely coupled but
+    /// FEEDFORWARD partition (linear RC island driving a comparator island
+    /// through a current-free sense boundary) relaxes within the cap and
+    /// reproduces the monolithic solve. This exercises the relaxation loop for
+    /// real — the analyzer's own partitions never couple islands, so without
+    /// an imposed partition the loop would be dead code in the test suite.
+    #[test]
+    fn coupled_feedforward_partition_converges_and_matches_monolithic() {
+        let mut c = Circuit::new();
+        let vin = c.node("vin");
+        let m = c.node("m");
+        let vref = c.node("ref");
+        let o = c.node("o");
+        let v1 = c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        let vr = c.add(Device::Vsource {
+            name: "VREF".into(),
+            p: vref,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(0.5),
+        });
+        let r1 = c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: m,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let c1 = c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: m,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: Some(0.0),
+        });
+        let cmp = c.add(Device::Comparator {
+            name: "CMP".into(),
+            out: o,
+            inp: m,
+            inn: vref,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 0.0,
+        });
+        let part = Partition {
+            islands: vec![
+                Island {
+                    devices: vec![r1, c1],
+                    nodes: vec![vin, m],
+                    linear: true,
+                    boundary_in: vec![vin],
+                },
+                Island {
+                    devices: vec![cmp],
+                    nodes: vec![o, m, vref],
+                    linear: false,
+                    boundary_in: vec![m, vref],
+                },
+            ],
+            sources: vec![v1, vr],
+            n_nodes: c.max_node() as usize,
+            tears: Vec::new(),
+        };
+        let dt = 5e-8;
+        let tstop = 10e-6; // 10 tau: m has settled at 1 V, o latched high
+        let opts = fixed_opts(dt);
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
+            .expect("well-formed feedforward partition builds");
+        assert!(engine.coupled, "the sense boundary must register as coupling");
+        let n = engine.global_x_len();
+        let mut last = vec![0.0; n];
+        engine
+            .run_streaming(&c, tstop, |s| last.copy_from_slice(s.x))
+            .expect("a feedforward coupling relaxes within the cap");
+
+        // Monolithic oracle on the same circuit.
+        let mono = crate::transient::Transient::new(SolverOptions {
+            partitioning: crate::options::Partitioning::Off,
+            ..opts
+        })
+        .run(&c, tstop)
+        .expect("monolithic oracle");
+        let m_mono = mono.final_node(&c, "m").expect("m present");
+        let o_mono = mono.final_node(&c, "o").expect("o present");
+        // The streamed x carries node k's voltage at index k-1 (gather_into).
+        let m_part = last[m.0 as usize - 1];
+        let o_part = last[o.0 as usize - 1];
+        assert!(
+            (m_mono - m_part).abs() <= 1e-6,
+            "membrane diverged: mono {m_mono} vs torn {m_part}"
+        );
+        assert!(
+            (o_mono - o_part).abs() <= 1e-6,
+            "comparator output diverged: mono {o_mono} vs torn {o_part}"
+        );
     }
 }
 

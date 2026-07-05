@@ -411,10 +411,12 @@ pub struct SolverOptions {
     /// construction), only wall time.
     #[serde(default)]
     pub parallel: ParallelPolicy,
-    /// Coupling granularity for the partitioned path, in `[0, 1]`. At `1.0` the
-    /// orchestrator runs extra Gauss-Seidel relaxation sweeps per step to tighten
-    /// inter-island agreement (more accurate, slower); at `0.0` it does a single
-    /// sweep (fastest, looser coupling). Ignored when `partitioning == Off`.
+    /// Fidelity granularity in `[0, 1]`, consumed by the engine layer to scale
+    /// tolerances and physics fidelity (1.0 = full). The partitioned path's
+    /// relaxation sweep count is no longer derived from it: since S4 the
+    /// inter-island exchange iterates until the boundary change relaxes under
+    /// the reltol/vntol convention (which granularity already loosens through
+    /// the tolerances themselves), replacing the old fixed 3/2/1 sweep counts.
     #[serde(default = "default_granularity")]
     pub granularity: f64,
     /// The robustness escalations this run may use. Empty (the default) is the
