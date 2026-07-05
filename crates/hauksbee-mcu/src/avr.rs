@@ -28,6 +28,13 @@ const fn ioport_getirq(name: u8) -> u32 {
     avr_ioctl_def(b'i', b'o', b'g', name)
 }
 
+/// `AVR_IOCTL_IOPORT_SET_EXTERNAL(name)`: install a persistent external drive
+/// on a port's input pins (simavr's `p->external.pull_mask/pull_value`). See
+/// [`drive_ioport_input`] for why a bare per-bit IRQ raise is not enough.
+const fn ioport_set_external(name: u8) -> u32 {
+    avr_ioctl_def(b'i', b'o', b'p', name)
+}
+
 const ADC_GETIRQ: u32 = avr_ioctl_def(b'a', b'd', b'c', b'0');
 const TWI_GETIRQ: u32 = avr_ioctl_def(b't', b'w', b'i', 0);
 const SPI_GETIRQ: u32 = avr_ioctl_def(b's', b'p', b'i', 0);
@@ -53,17 +60,64 @@ const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
 /// observation only, see `make_ddr_hook`.
 const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 
-/// Raise an external digital level on one input pin via its per-bit ioport IRQ.
-/// Used from inside the port-output hook by the synchronous input responder, so
-/// the drive lands before the firmware's next instruction (the 74HC165 readback
-/// path). `avr` must be the live core pointer (taken from `SharedState`).
-unsafe fn raise_ioport_input(avr: *mut ffi::avr_t, pin: PinId, high: bool) {
+/// Drive an external digital level onto one input pin, PERSISTENTLY.
+///
+/// Two simavr mechanisms compose here, and both are required:
+///
+/// 1. The per-bit ioport IRQ raise updates the PIN register immediately, so a
+///    drive issued from inside the port-output hook lands before the
+///    firmware's next instruction (the 74HC165 readback path, 05 §1.5).
+/// 2. The `SET_EXTERNAL` ioctl records the level in the port's
+///    `external.pull_mask/pull_value`. Without it the drive is a one-shot:
+///    simavr's `avr_ioport_update_irqs` runs after EVERY firmware PORT or DDR
+///    write to the port and re-derives every input pin's level from pull
+///    state — so a pin whose PORT bit the firmware left at 1 (the classic
+///    open-drain "release = input with pull-up" idiom of soft-I2C masters)
+///    snaps back to the internal pull-up's 1 on the very next SCL toggle,
+///    stomping the responder's ACK/data bit before the firmware reads it.
+///    The external-pull entry is simavr's own model of "an external device
+///    holds this line", which is exactly what a responder-driven pin is; it
+///    takes precedence over the internal pull-up in `update_irqs`, the same
+///    way a real (stronger) external driver beats the ~35k internal pull-up.
+///
+/// `ext_drive` is the engine-maintained per-port (mask, value) shadow of the
+/// external state — the ioctl REPLACES the whole port's pull bytes, so the
+/// merged state must be resent, not just the changed bit. Later drives to the
+/// same pin (responder updates, chunk-boundary `set_digital_in` syncs) simply
+/// overwrite: last external writer owns the line.
+///
+/// `avr` must be the live core pointer (taken from `SharedState`).
+unsafe fn drive_ioport_input(
+    avr: *mut ffi::avr_t,
+    ext_drive: &mut std::collections::HashMap<char, (u8, u8)>,
+    pin: PinId,
+    high: bool,
+) {
     if avr.is_null() {
         return;
     }
-    let irq = ffi::avr_io_getirq(avr, ioport_getirq(pin.port as u8), pin.bit as i32);
-    if !irq.is_null() {
-        ffi::avr_raise_irq(irq, high as u32);
+    let (mask, value) = ext_drive.entry(pin.port).or_insert((0, 0));
+    *mask |= 1 << pin.bit;
+    if high {
+        *value |= 1 << pin.bit;
+    } else {
+        *value &= !(1 << pin.bit);
+    }
+    // avr_ioport_external_t is a bitfield struct over one unsigned long:
+    // name:7 | mask:8 | value:8, LSB-first on every LP64 target we build for.
+    let mut ext: u64 = ((pin.port as u8 as u64) & 0x7f)
+        | ((*mask as u64) << 7)
+        | ((*value as u64) << 15);
+    unsafe {
+        ffi::avr_ioctl(
+            avr,
+            ioport_set_external(pin.port as u8),
+            &mut ext as *mut u64 as *mut std::os::raw::c_void,
+        );
+        let irq = ffi::avr_io_getirq(avr, ioport_getirq(pin.port as u8), pin.bit as i32);
+        if !irq.is_null() {
+            ffi::avr_raise_irq(irq, high as u32);
+        }
     }
 }
 
@@ -128,6 +182,11 @@ struct SharedState {
     /// Port register values indexed by port letter.
     /// We only track ports that have registered hooks.
     port_state: std::collections::HashMap<char, PortState>,
+
+    /// Per-port (mask, value) shadow of simavr's external input-drive state
+    /// (`external.pull_mask/pull_value`), maintained by [`drive_ioport_input`]
+    /// so each SET_EXTERNAL ioctl can resend the port's full merged state.
+    ext_drive: std::collections::HashMap<char, (u8, u8)>,
 
     /// Active I2C transaction accumulator.
     twi_addr: u8,
@@ -209,10 +268,20 @@ macro_rules! make_port_hook {
                         // Synchronous input drive: the responder may push a
                         // serial-out bit back onto an MCU input pin (e.g. the
                         // 74HC165 QH -> MISO) so the firmware reads it on its
-                        // next instruction, within this same run.
-                        if let Some(resp) = &mut s.callbacks.input_responder {
+                        // next instruction, within this same run. Split-borrow
+                        // the state so the drive can update the external-pull
+                        // shadow while the responder closure stays borrowed.
+                        let st = &mut *s;
+                        if let Some(resp) = &mut st.callbacks.input_responder {
                             for (in_pin, in_high) in resp(pin, high) {
-                                raise_ioport_input(avr, in_pin, in_high);
+                                unsafe {
+                                    drive_ioport_input(
+                                        avr,
+                                        &mut st.ext_drive,
+                                        in_pin,
+                                        in_high,
+                                    );
+                                }
                             }
                         }
                     }
@@ -520,6 +589,7 @@ impl AvrMcu {
         let state = Arc::new(Mutex::new(SharedState {
             avr_ptr: avr,
             port_state: std::collections::HashMap::new(),
+            ext_drive: std::collections::HashMap::new(),
             twi_addr: 0,
             twi_active: false,
             twi_read: false,
@@ -696,13 +766,17 @@ impl AvrMcu {
         }
     }
 
-    /// Set an individual pin via the ioport IRQ (indices 0-7 within the port).
+    /// Drive an individual input pin externally (indices 0-7 within the port).
+    /// Same persistent-drive path as the synchronous responder
+    /// ([`drive_ioport_input`]): the chunk-boundary net-voltage sync is also
+    /// "the outside world holds this pin", so it must survive the firmware's
+    /// PORT/DDR writes the same way, and the two writers share one external
+    /// state (last writer owns the line).
     fn set_pin_raw(&mut self, port: char, bit: u8, high: bool) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let ext = &mut s.ext_drive;
         unsafe {
-            let irq = ffi::avr_io_getirq(self.avr, ioport_getirq(port as u8), bit as i32);
-            if !irq.is_null() {
-                ffi::avr_raise_irq(irq, high as u32);
-            }
+            drive_ioport_input(self.avr, ext, PinId { port, bit }, high);
         }
     }
 

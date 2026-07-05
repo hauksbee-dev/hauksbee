@@ -32,6 +32,7 @@ pub mod peripherals;
 pub mod plain;
 pub mod power_supply;
 pub mod report;
+pub mod responders;
 pub mod result;
 pub mod scheduler;
 pub mod shorts;
@@ -76,6 +77,9 @@ pub use plain::{
 };
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};
+pub use responders::{
+    BitBangSpiPins, BitBangSpiResponder, InputResponder, ResponderRegistry, SoftI2cResponder,
+};
 pub use result::{
     ac_is_all_sentinel, no_signal_path_reason, thermal_validity, BindSummary, DrcStructured,
     Validity, EXIT_INVALID_FOR_ANALYSIS,
