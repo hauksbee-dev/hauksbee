@@ -1,0 +1,14 @@
+# DC forward drop: the mV-precision case the plan calls out. Both engines run
+# the same Shockley junction, so agreement is well under 0.1%.
+analysis = "op"
+description = "diode forward-drop DC operating point"
+
+[[probe]]
+expr = "V(d)"
+reltol = 1.0e-3
+abstol = 1.0e-3
+
+[[probe]]
+expr = "I(V1)"
+reltol = 5.0e-3
+abstol = 1.0e-9

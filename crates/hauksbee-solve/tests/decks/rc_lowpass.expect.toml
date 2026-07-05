@@ -1,0 +1,9 @@
+# RC low-pass step response. A clean linear tail; percent-level is plenty.
+analysis = "tran"
+description = "RC low-pass step response (tau = 100 us)"
+full_scale = 5.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01
