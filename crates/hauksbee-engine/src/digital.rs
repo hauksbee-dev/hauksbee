@@ -1156,6 +1156,68 @@ mod tests {
         c.register("store").expect("595 store register") as u8
     }
 
+    /// Chaining through the REAL generalized replay path (§1.1 "chaining needs
+    /// nothing special"): two spec-driven 595s wired qh_serial -> ser through a
+    /// shared net, driven by `replay_components_on_edges`. The overlay
+    /// propagation (outputs written back AFTER each cycle-group so all chips
+    /// sample pre-edge levels) is what carries the serial bit across the chip
+    /// boundary; a 16-bit MSB-first stream must land PATH B (first-sent byte in
+    /// the DOWNSTREAM chip).
+    #[test]
+    fn generalized_replay_carries_serial_across_chained_chips() {
+        let model = hc595_model();
+        let mut circuit = Circuit::new();
+        let n_ser0 = circuit.node("SER0");
+        let n_srclk = circuit.node("SRCLK");
+        let n_rclk = circuit.node("RCLK");
+        let n_tap = circuit.node("QHS0"); // chip0.qh_serial -> chip1.ser
+
+        let mk = |ser: NodeId, tap: Option<NodeId>, name: &str, circuit: &mut Circuit| {
+            let mut roles: HashMap<String, NodeId> = HashMap::new();
+            roles.insert("ser".into(), ser);
+            roles.insert("srclk".into(), n_srclk);
+            roles.insert("rclk".into(), n_rclk);
+            if let Some(t) = tap {
+                roles.insert("qh_serial".into(), t);
+            } else {
+                roles.insert("qh_serial".into(), circuit.node(&format!("{name}_TAP")));
+            }
+            DigitalComponent::new(name.into(), &model, roles, HashMap::new())
+                .expect("builtin 595 logic compiles")
+        };
+        let chip0 = mk(n_ser0, Some(n_tap), "U0", &mut circuit);
+        let chip1 = mk(n_tap, None, "U1", &mut circuit);
+        let mut comps = vec![chip0, chip1];
+
+        let mut pin_nets: HashMap<(char, u8), NodeId> = HashMap::new();
+        pin_nets.insert(('B', 3), n_ser0);
+        pin_nets.insert(('B', 5), n_srclk);
+        pin_nets.insert(('D', 6), n_rclk);
+
+        // shiftOut two known bytes MSB-first, then latch — the firmware shape.
+        let (first, second) = (0x9Du8, 0x3Cu8);
+        let mut log: Vec<PinEdge> = Vec::new();
+        let mut cyc = 0u64;
+        stamped_shift_out(&mut log, &mut cyc, first);
+        stamped_shift_out(&mut log, &mut cyc, second);
+        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: true });
+        cyc += 1;
+        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: false });
+
+        let base = vec![0.0; circuit.node_count()];
+        let ticks = replay_components_on_edges(
+            &mut comps, &[0, 1], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+        );
+        assert_eq!(ticks, log.len(), "one micro-tick per distinct-cycle edge");
+        assert_eq!(
+            pack_out(&comps[1]),
+            first,
+            "PATH B: the FIRST-sent byte crossed the qh_serial->ser boundary \
+             into the downstream chip"
+        );
+        assert_eq!(pack_out(&comps[0]), second, "the second byte stays in the head chip");
+    }
+
     /// The generalized-path proof (05 §1.2): a cycle-stamped `shiftOut` burst
     /// through the generic `replay_components_on_edges` produces N ordered
     /// micro-ticks (one per distinct-cycle edge), NOT one collapsed level, and
