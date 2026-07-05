@@ -161,6 +161,37 @@ enum Command {
     /// Example:
     ///   hauksbee doctor --backends
     Doctor(DoctorArgs),
+
+    /// Model-library tooling: validate model TOML before a board ever loads it.
+    ///
+    /// `models lint <file>` checks a `[[models]]` db file (params per kind,
+    /// plus each entry's `[models.logic]` block: schema validation, expression
+    /// compilation, and the exhaustive combinational-cycle convergence check)
+    /// or a `[sensor]` register-map spec. Every failure is a NAMED error tied
+    /// to its entry — the same validation binding performs, runnable
+    /// standalone so a spec author (or an LLM extraction pipeline) fails fast.
+    ///
+    /// Example:
+    ///   hauksbee models lint my_part.toml
+    Models(ModelsArgs),
+}
+
+#[derive(Parser)]
+struct ModelsArgs {
+    #[command(subcommand)]
+    command: ModelsCommand,
+}
+
+#[derive(Subcommand)]
+enum ModelsCommand {
+    /// Validate a model / sensor spec TOML file; exit 2 on any finding.
+    Lint(ModelsLintArgs),
+}
+
+#[derive(Parser)]
+struct ModelsLintArgs {
+    /// A `[[models]]` db TOML file or a `[sensor]` spec TOML file.
+    file: PathBuf,
 }
 
 #[derive(Parser)]
@@ -438,6 +469,9 @@ fn main() -> anyhow::Result<()> {
         Command::CheckCode(args) => cmd_check_code(args),
         Command::Serve(args) => cmd_serve(args),
         Command::Doctor(args) => cmd_doctor(args),
+        Command::Models(args) => match args.command {
+            ModelsCommand::Lint(args) => cmd_models_lint(args),
+        },
     };
     if let Err(e) = &result {
         if json {
@@ -450,6 +484,81 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     result
+}
+
+/// `hauksbee models lint <file>`: standalone validation of model TOML.
+///
+/// Dispatches on the file's root shape: a `[sensor]` table lints as a
+/// register-map sensor spec (`SensorSpec::from_toml`, the validation the
+/// engine interpreter applies); anything with `[[models]]` entries lints each
+/// entry's kind-specific params (`hauksbee_models::validate`) and, when a
+/// `[models.logic]` block is present, COMPILES it through the same
+/// `LogicComponent::compile` path binding uses — schema validation, expression
+/// lowering, and the exhaustive comb-cycle convergence check — so "lint said
+/// ok" and "the board binds it" can never disagree.
+fn cmd_models_lint(args: ModelsLintArgs) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(&args.file)
+        .map_err(|e| anyhow::anyhow!("reading '{}': {e}", args.file.display()))?;
+    let root: toml::Value = toml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("'{}' is not TOML: {e}", args.file.display()))?;
+
+    let mut findings = 0usize;
+    let mut checked = 0usize;
+
+    if root.get("sensor").is_some() {
+        checked += 1;
+        match hauksbee_models::SensorSpec::from_toml(&text) {
+            Ok(spec) => println!("sensor '{}': ok", spec.sensor().name),
+            Err(e) => {
+                findings += 1;
+                println!("sensor spec: ERROR: {e}");
+            }
+        }
+    } else if root.get("models").is_some() {
+        let db: hauksbee_models::schema::DbFile = toml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("'{}': [[models]] parse error: {e}", args.file.display()))?;
+        for entry in &db.models {
+            checked += 1;
+            let mut entry_findings = 0usize;
+            if let Err(errors) = hauksbee_models::validation::validate(entry) {
+                for err in errors {
+                    entry_findings += 1;
+                    println!("model '{}': ERROR: {err}", entry.id);
+                }
+            }
+            if !entry.logic.is_empty() {
+                match hauksbee_engine::logic::LogicComponent::compile(&entry.id, &entry.logic) {
+                    Ok(compiled) => {
+                        for w in &compiled.warnings {
+                            println!("model '{}' [models.logic]: warning: {w}", entry.id);
+                        }
+                    }
+                    Err(e) => {
+                        entry_findings += 1;
+                        println!("model '{}' [models.logic]: ERROR: {e}", entry.id);
+                    }
+                }
+            }
+            if entry_findings == 0 {
+                println!("model '{}': ok", entry.id);
+            }
+            findings += entry_findings;
+        }
+    } else {
+        anyhow::bail!(
+            "'{}' has neither a [sensor] table nor [[models]] entries — nothing to lint",
+            args.file.display()
+        );
+    }
+
+    println!(
+        "{checked} item(s) checked, {findings} finding(s){}",
+        if findings == 0 { " — clean" } else { "" }
+    );
+    if findings > 0 {
+        std::process::exit(2);
+    }
+    Ok(())
 }
 
 /// Read a board file, turning a missing file into an actionable message.
