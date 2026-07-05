@@ -17,7 +17,8 @@
 
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
-    Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl, Transient, Waveforms,
+    AssemblyMode, Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl,
+    Transient, Waveforms,
 };
 
 // Single source of truth for the graded-board topologies (see the header of
@@ -154,4 +155,30 @@ fn rc_fan_bit_identical_across_thread_counts() {
 fn rc_ladder_bit_identical_across_thread_counts() {
     let c = build_rc_ladder(200);
     check_board("rc_ladder/200", &c, 20e-6, 1e-6);
+}
+
+/// S3 composition under S4: islands inherit `AssemblyMode::Planned` through
+/// `clone_remapped` (their sub-workspaces compile their own StampPlans), and
+/// that must be exactly as thread-count-invariant as the interpreted path.
+#[test]
+fn planned_assembly_islands_bit_identical_across_thread_counts() {
+    let (c, _membranes) = build_shunt_array(90);
+    let dt = 1e-6;
+    let tstop = 20e-6;
+    let planned = |parallel: ParallelPolicy| {
+        Transient::new(SolverOptions {
+            assembly: AssemblyMode::Planned,
+            ..opts(dt, parallel)
+        })
+        .run(&c, tstop)
+        .expect("planned torn run")
+    };
+    let reference = planned(ParallelPolicy::Off);
+    for &threads in &THREAD_COUNTS {
+        let got = planned(ParallelPolicy::Threads(threads));
+        assert_bit_identical(&reference, &got, "mirror_array/90+planned", threads);
+        println!(
+            "[determinism] mirror_array/90+planned: {threads} thread(s) bit-identical to sequential"
+        );
+    }
 }
