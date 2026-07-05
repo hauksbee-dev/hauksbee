@@ -1,0 +1,22 @@
+# Deliberately-broken [models.logic] spec: exercised by cli_models_lint.rs to
+# prove `hauksbee models lint` refuses this category with its NAMED error.
+[[models]]
+id = "broken_undeclared_pin"
+kind = "digital"
+description = "comb references an undeclared name"
+
+[models.match]
+value_re = "(?i)^NEVER_MATCHES_BROKEN_UNDECLARED_PIN"
+
+[models.params]
+voh = 4.4
+vol = 0.1
+vih = 3.15
+vil = 1.35
+
+[models.logic]
+inputs  = ["a", "b"]
+outputs = ["y"]
+
+[models.logic.comb]
+"y" = "a & phantom_pin"

@@ -2039,12 +2039,18 @@ fn bind_digital(
             drivers.insert(role, drv);
         }
     }
-    digital.push(DigitalComponent::new(
-        comp.reference.clone(),
-        model,
-        roles.clone(),
-        drivers,
-    ));
+    match DigitalComponent::new(comp.reference.clone(), model, roles.clone(), drivers) {
+        Ok(d) => digital.push(d),
+        // Never silently downgrade a broken spec to a passthrough: the part is
+        // left unmodeled LOUDLY (its nets float — exactly the lore-#9 failure
+        // this message exists to surface early).
+        Err(e) => eprintln!(
+            "ERROR: {}: invalid [models.logic] for model '{}': {e}; the part is left \
+             unmodeled and its output nets will float — fix the spec (`hauksbee models \
+             lint`) or override it with --models-dir",
+            comp.reference, model.id
+        ),
+    }
 }
 
 /// Detect and bind cross-coupled NOR SR latches on a 74HC02 (the Tarski spike
@@ -2056,7 +2062,7 @@ fn bind_digital(
 ///   - the OTHER gate is the Q gate: its non-cross input is `set` (SPIKE<n>),
 ///     its output net is `q` (the observable L<n>, wired to the 165 inputs).
 /// Stamps a Thevenin driver on the `q` net and pushes one [`DigitalComponent`]
-/// (`DigitalKind::NorLatch`) per latch. Returns true if ≥1 latch was bound.
+/// (the builtin NOR-latch spec) per latch. Returns true if ≥1 latch was bound.
 fn bind_nor_latches(
     comp: &Component,
     model: &ModelEntry,
