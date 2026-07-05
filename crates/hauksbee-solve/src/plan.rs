@@ -268,6 +268,52 @@ impl StampPlan {
                     // Pure RHS device on the interpreted path already.
                     restamp.push(Restamp::RhsOnly { id });
                 }
+                Device::Vcvs {
+                    p, n, cp, cn, gain, ..
+                } => {
+                    // Fully constant: branch incidence plus the control-gain
+                    // terms in the branch row. Nothing varies per step or per
+                    // Newton iterate (RHS is zero), so no restamp entry at all.
+                    let br = layout.branch(id).expect("vcvs has a branch");
+                    if let Some(pi) = layout.node(*p) {
+                        push_at(&mut cond_ops, pi, br, 1.0);
+                        push_at(&mut cond_ops, br, pi, 1.0);
+                    }
+                    if let Some(ni) = layout.node(*n) {
+                        push_at(&mut cond_ops, ni, br, -1.0);
+                        push_at(&mut cond_ops, br, ni, -1.0);
+                    }
+                    if let Some(cpi) = layout.node(*cp) {
+                        push_at(&mut cond_ops, br, cpi, -*gain);
+                    }
+                    if let Some(cni) = layout.node(*cn) {
+                        push_at(&mut cond_ops, br, cni, *gain);
+                    }
+                }
+                Device::Vccs {
+                    p, n, cp, cn, gm, ..
+                } => {
+                    // Constant transconductance: the four (output-row,
+                    // control-column) entries fold into the backbone.
+                    let (pi, ni) = (layout.node(*p), layout.node(*n));
+                    let (cpi, cni) = (layout.node(*cp), layout.node(*cn));
+                    if let Some(pi) = pi {
+                        if let Some(cpi) = cpi {
+                            push_at(&mut cond_ops, pi, cpi, *gm);
+                        }
+                        if let Some(cni) = cni {
+                            push_at(&mut cond_ops, pi, cni, -*gm);
+                        }
+                    }
+                    if let Some(ni) = ni {
+                        if let Some(cpi) = cpi {
+                            push_at(&mut cond_ops, ni, cpi, -*gm);
+                        }
+                        if let Some(cni) = cni {
+                            push_at(&mut cond_ops, ni, cni, *gm);
+                        }
+                    }
+                }
                 Device::Diode { .. }
                 | Device::Bjt { .. }
                 | Device::Mosfet { .. }
