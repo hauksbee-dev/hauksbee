@@ -68,6 +68,30 @@ pub enum AssemblyMode {
     Planned,
 }
 
+/// Whether the partitioned engine may execute its per-sweep island work on a
+/// rayon thread pool (dev-plan 03 §3.4).
+///
+/// The sweep itself is an order-free double-buffered Jacobi exchange (see
+/// `partitioned::sweep`): every island reads a frozen exchange buffer and
+/// writes only its own scratch, so the result is bit-for-bit identical no
+/// matter how many threads execute it, or in what order. This policy therefore
+/// only chooses HOW the identical work runs, never WHAT it computes; `Off` is
+/// the sequential debugging/oracle switch, not a different numerical path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ParallelPolicy {
+    /// Parallelize when the island count clears a measured threshold (small
+    /// boards stay sequential: dispatching two islands to a pool loses to the
+    /// pool overhead). Pool sized by `available_parallelism`, capped.
+    #[default]
+    Auto,
+    /// Always sequential (the reference execution order).
+    Off,
+    /// Force a pool of exactly `n` threads and engage it regardless of the
+    /// Auto threshold. This is the explicit `--threads N`-style knob, and what
+    /// the determinism gate (§3.5) uses to pin 1/2/4/8-thread runs.
+    Threads(usize),
+}
+
 /// How the transient march obtains its state at `t = 0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DcInit {
@@ -382,10 +406,17 @@ pub struct SolverOptions {
     /// How Newton assembles the linearized system; see [`AssemblyMode`].
     #[serde(default)]
     pub assembly: AssemblyMode,
-    /// Coupling granularity for the partitioned path, in `[0, 1]`. At `1.0` the
-    /// orchestrator runs extra Gauss-Seidel relaxation sweeps per step to tighten
-    /// inter-island agreement (more accurate, slower); at `0.0` it does a single
-    /// sweep (fastest, looser coupling). Ignored when `partitioning == Off`.
+    /// Whether the partitioned sweep may run islands on a thread pool; see
+    /// [`ParallelPolicy`]. Never changes results (the sweep is order-free by
+    /// construction), only wall time.
+    #[serde(default)]
+    pub parallel: ParallelPolicy,
+    /// Fidelity granularity in `[0, 1]`, consumed by the engine layer to scale
+    /// tolerances and physics fidelity (1.0 = full). The partitioned path's
+    /// relaxation sweep count is no longer derived from it: since S4 the
+    /// inter-island exchange iterates until the boundary change relaxes under
+    /// the reltol/vntol convention (which granularity already loosens through
+    /// the tolerances themselves), replacing the old fixed 3/2/1 sweep counts.
     #[serde(default = "default_granularity")]
     pub granularity: f64,
     /// The robustness escalations this run may use. Empty (the default) is the
@@ -430,6 +461,7 @@ impl Default for SolverOptions {
             dc_init: DcInit::Solve,
             partitioning: Partitioning::Auto,
             assembly: AssemblyMode::Interpreted,
+            parallel: ParallelPolicy::Auto,
             granularity: 1.0,
             ladder: RobustnessLadder::none(),
             event_retry: EventRetryTuning::default(),
