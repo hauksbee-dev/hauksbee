@@ -29,8 +29,8 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 use hauksbee_ir::Circuit;
 use hauksbee_solve::{
-    dc_operating_point, Integration, Partitioning, SolverOptions, StepControl, Transient, Waveforms,
-    Workspace,
+    dc_operating_point, AssemblyMode, Integration, Partitioning, SolverOptions, StepControl,
+    Transient, Waveforms, Workspace,
 };
 
 #[path = "fixtures.rs"]
@@ -54,6 +54,17 @@ fn opts(part: Partitioning, dt: f64) -> SolverOptions {
     }
 }
 
+/// Same options with the S3 two-tier compiled assembly opted in
+/// (`AssemblyMode::Planned`). Benchmarked as SEPARATE ids next to the
+/// interpreted ones so criterion's table shows the compiled-assembly ratio
+/// directly, exactly like the torn-vs-mono pairing above.
+fn opts_planned(part: Partitioning, dt: f64) -> SolverOptions {
+    SolverOptions {
+        assembly: AssemblyMode::Planned,
+        ..opts(part, dt)
+    }
+}
+
 // --- RC ladder ------------------------------------------------------------
 
 const RC_STAGES: usize = 1000;
@@ -64,6 +75,12 @@ fn run_rc_ladder(c: &Circuit) -> Waveforms {
     Transient::new(opts(Partitioning::Off, RC_DT))
         .run(c, RC_TSTOP)
         .expect("rc ladder transient converged")
+}
+
+fn run_rc_ladder_planned(c: &Circuit) -> Waveforms {
+    Transient::new(opts_planned(Partitioning::Off, RC_DT))
+        .run(c, RC_TSTOP)
+        .expect("rc ladder planned transient converged")
 }
 
 /// Sanity window for the RC ladder final state. The driven end (`n0`) charges
@@ -101,6 +118,13 @@ fn bench_rc_ladder(cr: &mut Criterion) {
             black_box(wf.time.len())
         });
     });
+    group.bench_function("rc_ladder_1k/planned", |b| {
+        b.iter(|| {
+            let wf = run_rc_ladder_planned(black_box(&c));
+            assert_rc_sane(&c, &wf);
+            black_box(wf.time.len())
+        });
+    });
     group.finish();
 }
 
@@ -114,6 +138,12 @@ fn run_mirror(c: &Circuit, part: Partitioning) -> Waveforms {
     Transient::new(opts(part, MIRROR_DT))
         .run(c, MIRROR_TSTOP)
         .expect("mirror array transient converged")
+}
+
+fn run_mirror_planned(c: &Circuit, part: Partitioning) -> Waveforms {
+    Transient::new(opts_planned(part, MIRROR_DT))
+        .run(c, MIRROR_TSTOP)
+        .expect("mirror array planned transient converged")
 }
 
 /// Sanity window for a shunt-fed mirror array. The rail is fed from +5 V through
@@ -158,6 +188,23 @@ fn bench_mirror_array(cr: &mut Criterion) {
         group.bench_function(format!("{n}/mono"), |b| {
             b.iter(|| {
                 let wf = run_mirror(black_box(&c), Partitioning::Off);
+                assert_mirror_sane(&c, &wf);
+                black_box(wf.time.len())
+            });
+        });
+        // S3 compiled assembly, same fixtures: mono and torn with
+        // `AssemblyMode::Planned`, so the assembly win (and the island
+        // version of it) reads straight off the criterion table.
+        group.bench_function(format!("{n}/mono_planned"), |b| {
+            b.iter(|| {
+                let wf = run_mirror_planned(black_box(&c), Partitioning::Off);
+                assert_mirror_sane(&c, &wf);
+                black_box(wf.time.len())
+            });
+        });
+        group.bench_function(format!("{n}/torn_planned"), |b| {
+            b.iter(|| {
+                let wf = run_mirror_planned(black_box(&c), Partitioning::Auto);
                 assert_mirror_sane(&c, &wf);
                 black_box(wf.time.len())
             });
