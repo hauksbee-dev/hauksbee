@@ -1,0 +1,10 @@
+vccs transconductance into rc load
+V1 in 0 PULSE(0 1 100u 10u 10u 400u 1m)
+R1 in 0 10k
+G1 0 out in 0 1m
+RL out 0 2k
+CL out 0 50n
+.tran 5u 1m 0 0.5u
+.print tran v(out)
+.options reltol=1e-4
+.end
