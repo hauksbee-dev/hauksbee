@@ -30,7 +30,13 @@ impl Layout {
         let mut branch_of = vec![None; circuit.devices.len()];
         let mut next = n_nodes;
         for (id, dev) in circuit.iter() {
-            if matches!(dev, Device::Vsource { .. } | Device::Inductor { .. }) {
+            // A VCVS fixes its output-port voltage like an ideal Vsource, so it
+            // carries the same branch-current unknown (the VCCS does not: its
+            // stamp is a pure transconductance with no extra unknown).
+            if matches!(
+                dev,
+                Device::Vsource { .. } | Device::Inductor { .. } | Device::Vcvs { .. }
+            ) {
                 branch_of[id.0 as usize] = Some(next);
                 next += 1;
             }
