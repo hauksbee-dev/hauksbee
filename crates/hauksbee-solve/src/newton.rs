@@ -28,6 +28,21 @@ pub struct Workspace {
     pub rhs: Vec<f64>,
     pub x: Vec<f64>,
     pub x_prev_iter: Vec<f64>,
+    /// Persistent work buffer for `Symbolic::solve`'s permuted RHS. Owned by the
+    /// workspace and passed into every solve so the factorization stays `&self`
+    /// and no `vec![0.0; n]` is allocated per Newton iteration (plan §4.1).
+    solve_scratch: Vec<f64>,
+    /// Persistent linearization-point buffer: a snapshot of `x` taken at the top
+    /// of each Newton iteration (the point the Jacobian is stamped at), replacing
+    /// the per-iteration `x.clone()`. Fully overwritten each iteration before any
+    /// read, so its lifetime — not its value history — is all that changed (plan
+    /// §4.3).
+    lin_point: Vec<f64>,
+    /// Persistent buffer holding the PREVIOUS iteration's linearization point,
+    /// replacing the per-iteration `lin_point.clone()` that fed the singular-
+    /// refactor node-block convergence check. Copied from `x_prev_iter` before it
+    /// is refreshed, so the values are identical to the old clone (plan §4.3).
+    prev_iterate: Vec<f64>,
     /// Per-node UNDAMPED Newton step from the previous iteration, used by the
     /// staged-DC adaptive damping to detect oscillating nodes (a sign reversal)
     /// and damp only those, leaving converging nodes near-full steps. Allocated
@@ -257,6 +272,9 @@ impl Workspace {
             rhs: vec![0.0; size],
             x: vec![0.0; size],
             x_prev_iter: vec![0.0; size],
+            solve_scratch: vec![0.0; size],
+            lin_point: vec![0.0; size],
+            prev_iterate: vec![0.0; size],
             prev_step: vec![0.0; size],
             osc_count: vec![0; size],
             linear,
@@ -357,8 +375,11 @@ pub fn newton_solve(
     loop {
         iters += 1;
         // Snapshot the point we're about to linearize around BEFORE the solve
-        // overwrites ws.x, so it becomes next iteration's limiting anchor.
-        let lin_point = ws.x.clone();
+        // overwrites ws.x, so it becomes next iteration's limiting anchor. Copied
+        // into the persistent `lin_point` buffer rather than a fresh clone; the
+        // buffer is fully rewritten here every iteration, so this is a pure
+        // lifetime change (plan §4.3).
+        ws.lin_point.copy_from_slice(&ws.x);
         ws.matrix.clear_values();
         for v in ws.rhs.iter_mut() {
             *v = 0.0;
@@ -392,8 +413,13 @@ pub fn newton_solve(
         }
         // The iterate from the step before this one (the anchor we just used)
         // vs the current linearization point: if they already agree to
-        // tolerance, the previous Newton step had converged.
-        let prev_iterate = std::mem::replace(&mut ws.x_prev_iter, lin_point.clone());
+        // tolerance, the previous Newton step had converged. Persistent-buffer
+        // equivalent of `prev_iterate = mem::replace(&mut x_prev_iter,
+        // lin_point.clone())`: stash the OLD x_prev_iter into `prev_iterate`
+        // before overwriting x_prev_iter with this iteration's lin_point. Same
+        // values, no per-iteration clone (plan §4.3).
+        ws.prev_iterate.copy_from_slice(&ws.x_prev_iter);
+        ws.x_prev_iter.copy_from_slice(&ws.lin_point);
 
         let factored = crate::census::timed(crate::census::Phase::Factor, || {
             ws.symbolic.refactor(&ws.matrix)
@@ -418,7 +444,7 @@ pub fn newton_solve(
             // degeneracy and does not change the root we already hold.
             let already = branch_reg > 0.0
                 && iters > 1
-                && node_block_converged(&lin_point, &prev_iterate, &ws.layout, opts);
+                && node_block_converged(&ws.lin_point, &ws.prev_iterate, &ws.layout, opts);
             if dbg_staged {
                 eprintln!("[newton] refactor singular at iter {iters} (already_converged={already})");
             }
@@ -444,7 +470,7 @@ pub fn newton_solve(
                 let row = ws.matrix.row(i);
                 let mut acc = 0.0;
                 for &(col, val) in row {
-                    acc += val * lin_point[col];
+                    acc += val * ws.lin_point[col];
                 }
                 let f = (acc - ws.rhs[i]).abs();
                 if f > worst {
@@ -457,7 +483,7 @@ pub fn newton_solve(
         };
 
         crate::census::timed(crate::census::Phase::Backsolve, || {
-            ws.symbolic.solve(&mut ws.rhs)
+            ws.symbolic.solve(&mut ws.rhs, &mut ws.solve_scratch)
         });
         // rhs now holds the new (UNDAMPED) Newton iterate.
         ws.x.copy_from_slice(&ws.rhs);
@@ -482,7 +508,7 @@ pub fn newton_solve(
         // a heavily backtracked step reads as "not yet converged" and the loop
         // continues -- exactly what stops the traveling overshoot.
         if line_search {
-            let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - lin_point[i]).collect();
+            let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - ws.lin_point[i]).collect();
             // Lazy-arming predictor SHADOW (census only, no behaviour): a
             // two-state hysteresis machine. ARMED runs the search every
             // iteration and only DISARMS when the search itself accepts
@@ -517,7 +543,7 @@ pub fn newton_solve(
             loop {
                 // Trial point x = lin_point + alpha*dx, evaluated into ws.x scratch.
                 for i in 0..ws.x.len() {
-                    ws.x[i] = lin_point[i] + alpha * dx[i];
+                    ws.x[i] = ws.lin_point[i] + alpha * dx[i];
                 }
                 let trial_norm = crate::census::timed(crate::census::Phase::LineSearch, || {
                     residual_inf_norm_at(
@@ -560,7 +586,7 @@ pub fn newton_solve(
                 alpha
             };
             for i in 0..ws.x.len() {
-                ws.x[i] = lin_point[i] + use_alpha * dx[i];
+                ws.x[i] = ws.lin_point[i] + use_alpha * dx[i];
             }
             // Census: the alpha this iteration actually stepped with, and how
             // the search ended (the lever-1c lazy-arming decision data).
@@ -582,9 +608,9 @@ pub fn newton_solve(
         // judging convergence on the damped iterate would let a small damped step
         // masquerade as convergence. The normal (branch_reg==0) path damps
         // nothing, so this is identical to the old test there.
-        let undamped_converged = converged(&ws.x, &lin_point, &ws.layout, opts);
+        let undamped_converged = converged(&ws.x, &ws.lin_point, &ws.layout, opts);
         let undamped_node_converged =
-            node_block_converged(&ws.x, &lin_point, &ws.layout, opts);
+            node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
 
         // Census (lever-3 attribution): the node-block step norm this
         // iteration will be judged on, captured BEFORE the damping rewrites
@@ -592,7 +618,7 @@ pub fn newton_solve(
         let census_step_norm = if census_on {
             let mut n = 0.0f64;
             for i in 0..ws.layout.n_nodes {
-                let d = (ws.x[i] - lin_point[i]).abs();
+                let d = (ws.x[i] - ws.lin_point[i]).abs();
                 if d > n {
                     n = d;
                 }
@@ -624,7 +650,7 @@ pub fn newton_solve(
             const ALPHA_CONVERGING: f64 = 0.9; // same-sign: near-full step
             const ALPHA_OSCILLATING: f64 = 0.25; // sign reversed: base damping
             for i in 0..ws.layout.n_nodes {
-                let full = ws.x[i] - lin_point[i];
+                let full = ws.x[i] - ws.lin_point[i];
                 let prev = ws.prev_step[i];
                 // Oscillating if this step opposes the previous one and both are
                 // non-trivial.
@@ -657,7 +683,7 @@ pub fn newton_solve(
                     step = -NODE_STEP_MAX;
                 }
                 ws.prev_step[i] = step;
-                ws.x[i] = lin_point[i] + step;
+                ws.x[i] = ws.lin_point[i] + step;
             }
         }
 
@@ -695,7 +721,7 @@ pub fn newton_solve(
             let mut maxd = 0.0f64;
             let mut argi = 0usize;
             for i in 0..ws.layout.n_nodes {
-                let d = (ws.x[i] - lin_point[i]).abs();
+                let d = (ws.x[i] - ws.lin_point[i]).abs();
                 if d > maxd {
                     maxd = d;
                     argi = i;
@@ -715,7 +741,7 @@ pub fn newton_solve(
             // Norm of the undamped node step this iteration.
             let mut norm = 0.0f64;
             for i in 0..ws.layout.n_nodes {
-                let d = (ws.x[i] - lin_point[i]).abs();
+                let d = (ws.x[i] - ws.lin_point[i]).abs();
                 if d > norm {
                     norm = d;
                 }
