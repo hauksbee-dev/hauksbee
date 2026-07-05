@@ -43,6 +43,46 @@ gnd_pin    = "8"
 max_pin_current_a = 0.025  # ±25mA per output (TI abs max 35)
 max_voltage_v = 7.0
 
+[models.logic]
+# Behaviour source: TI SN74HC595 datasheet (SCLS041I), function table (§8.3):
+# SRCLR L clears the shift register asynchronously and DOMINATES SRCLK (the
+# "SRCLR L, SRCLK X" row); SRCLK rising shifts SER toward QH (QA is the first
+# stage, so bit 0 = QA); RCLK rising copies shift -> storage (with tied
+# clocks the storage register is one clock behind — simultaneous-commit
+# semantics); OE L enables QA..QH (QH' , the serial cascade tap, is not
+# OE-gated).
+inputs  = ["ser", "srclk", "rclk", "srclr_n", "oe_n"]
+outputs = ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh", "qh_serial"]
+
+[[models.logic.register]]
+name = "shift"
+bits = 8
+clock = { pin = "srclk", edge = "rising" }
+reset = { pin = "srclr_n", active = "low", value = 0 }
+op = "shift_left"
+data_in = "ser"
+
+[[models.logic.register]]
+name = "store"
+bits = 8
+clock = { pin = "rclk", edge = "rising" }
+op = "load"
+data_in = "shift"
+
+[models.logic.comb]
+"qa" = "store[0]"
+"qb" = "store[1]"
+"qc" = "store[2]"
+"qd" = "store[3]"
+"qe" = "store[4]"
+"qf" = "store[5]"
+"qg" = "store[6]"
+"qh" = "store[7]"
+"qh_serial" = "shift[7]"
+
+[models.logic.tristate]
+"qa..qh" = { enable = "oe_n", active = "low" }
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -86,6 +126,32 @@ gnd_pin    = "8"
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
 
+[models.logic]
+# Behaviour source: TI SN74HC165 datasheet (SCLS052I), function table: PL_n
+# (SH/LD) LOW loads A..H asynchronously (dominant over the clock); with PL_n
+# HIGH and CLK_INH LOW, a CLK rising edge shifts the data one stage TOWARD QH
+# (QH shows H after a load, then G, F, ... — shift_left with QH = bit 7) while
+# SER enters at the first stage. QH_n is the complement output.
+# NOTE: the pre-migration hardcoded tick shifted the OPPOSITE direction (a
+# modeling artifact nothing exercised — the real readback path is the
+# edge-driven Hc165Chain, which always had the datasheet direction). This spec
+# is the silicon behaviour; tests/logic_migration.rs documents the difference.
+inputs  = ["pl_n", "clk", "clk_inh", "ser", "a", "b", "c", "d", "e", "f", "g", "h"]
+outputs = ["qh", "qh_n"]
+
+[[models.logic.register]]
+name = "reg"
+bits = 8
+clock = { pin = "clk", edge = "rising" }
+clock_enable = { pin = "clk_inh", active = "low" }
+op = "shift_left"
+data_in = "ser"
+load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g", "h"] }
+
+[models.logic.comb]
+"qh" = "reg[7]"
+"qh_n" = "!reg[7]"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -126,6 +192,25 @@ gnd_pin    = "7"
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
 
+[models.logic]
+# Behaviour source: TI SN74HC125 datasheet (SCLS049), function table: each
+# buffer passes A to Y while its own OE_n is LOW; OE_n HIGH puts that Y in
+# high impedance (per-gate tristate, independent enables).
+inputs  = ["a1", "a2", "a3", "a4", "oe_n_1", "oe_n_2", "oe_n_3", "oe_n_4"]
+outputs = ["y1", "y2", "y3", "y4"]
+
+[models.logic.comb]
+"y1" = "a1"
+"y2" = "a2"
+"y3" = "a3"
+"y4" = "a4"
+
+[models.logic.tristate]
+"y1" = { enable = "oe_n_1", active = "low" }
+"y2" = { enable = "oe_n_2", active = "low" }
+"y3" = { enable = "oe_n_3", active = "low" }
+"y4" = { enable = "oe_n_4", active = "low" }
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
@@ -164,6 +249,19 @@ gnd_pin    = "7"
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC27 datasheet (SCLS089), function table: each
+# Y = NOR(A, B, C) — any input HIGH pulls the output LOW. (Before the
+# declarative migration this part fell back to the generic a*->y* buffer,
+# which mirrored only the A input — a real misbehaviour this block fixes.)
+inputs  = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"]
+outputs = ["y1", "y2", "y3"]
+
+[models.logic.comb]
+"y1" = "!(a1 | b1 | c1)"
+"y2" = "!(a2 | b2 | c2)"
+"y3" = "!(a3 | b3 | c3)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -211,3 +309,20 @@ gnd_pin    = "7"
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+[models.logic]
+# Behaviour source: TI SN74HC02 datasheet (SCLS050), function table: each
+# Y = NOR(A, B). Standalone (non-cross-coupled) gates evaluate here; gates
+# wired as cross-coupled SR latch PAIRS are intercepted by the binder's latch
+# detection (bind_nor_latches) and fused into one NOR-latch spec instance per
+# pair, because a cross-couple THROUGH BOARD NETS cannot settle at analog
+# chunk granularity — the fused latch resolves it in one evaluator fixpoint.
+inputs  = ["g1a", "g1b", "g2a", "g2b", "g3a", "g3b", "g4a", "g4b"]
+outputs = ["g1y", "g2y", "g3y", "g4y"]
+
+[models.logic.comb]
+"g1y" = "!(g1a | g1b)"
+"g2y" = "!(g2a | g2b)"
+"g3y" = "!(g3a | g3b)"
+"g4y" = "!(g4a | g4b)"
+

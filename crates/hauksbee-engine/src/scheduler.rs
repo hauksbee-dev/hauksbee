@@ -2518,7 +2518,7 @@ fn build_generic_replay_chips(
     chain_chips: &std::collections::HashSet<usize>,
     mcus: &[LiveMcu],
 ) -> (Vec<usize>, Vec<HashMap<(char, u8), NodeId>>) {
-    use crate::digital::{order_165_chains, DigitalKind};
+    use crate::digital::order_165_chains;
 
     let pin_nets: Vec<HashMap<(char, u8), NodeId>> = mcus
         .iter()
@@ -2543,21 +2543,25 @@ fn build_generic_replay_chips(
         }
     }
 
-    // Clock/data input roles whose net, if GPIO-driven, makes the part edge-driven.
-    const CLOCK_ROLES: &[&str] = &[
-        "srclk", "rclk", "ser", "srclr_n", "oe_n", "clk", "pl_n", "clk_inh",
-    ];
-
     let mut chips = Vec::new();
     for (i, d) in digital.iter().enumerate() {
         if chain_chips.contains(&i) || responder_chips.contains(&i) {
             continue;
         }
-        if !matches!(d.kind, DigitalKind::Hc595 | DigitalKind::Hc165) {
+        // A part qualifies when its spec declares at least one clocked
+        // register (sequential — pulse trains on its pins would collapse at
+        // chunk granularity) and one of those sequential pins (clock / reset /
+        // load / enable / serial data, straight from the spec) is wired to a
+        // GPIO-driven net. This is the old Hc595|Hc165 kind filter generalized
+        // to DATA: a declarative 74HC74 clocked by a GPIO rides the same edge
+        // path with no Rust change. Purely combinational parts (gates,
+        // latches) stay on the once-per-chunk analog tick, as before.
+        if !d.is_sequential() {
             continue;
         }
+        let seq_pins = d.sequential_pins();
         let gpio_clocked = d.roles.iter().any(|(role, n)| {
-            CLOCK_ROLES.contains(&role.as_str()) && driven_nets.contains(&(n.0 as i64))
+            seq_pins.contains(&role.as_str()) && driven_nets.contains(&(n.0 as i64))
         });
         if gpio_clocked {
             chips.push(i);
