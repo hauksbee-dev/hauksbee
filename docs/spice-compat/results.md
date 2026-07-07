@@ -6,14 +6,17 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **11**
-- Passing: **11/11**
+- Decks: **14**
+- Passing: **14/14**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
 | bjt_bias | op | `V(coll)` | 2.900e-4 | 5.0e-3 | op | PASS |
 |  |  | `V(base)` | 8.455e-5 | 5.0e-3 | op | PASS |
 |  |  | `V(emit)` | 6.600e-5 | 5.0e-3 | op | PASS |
+| cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
+| cccs_subckt | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
+| ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | t=9.225e-6s | PASS |
 | diode_op | op | `V(d)` | 4.572e-6 | 1.0e-3 | op | PASS |
 |  |  | `I(V1)` | 5.044e-7 | 5.0e-3 | op | PASS |
 | diode_rectifier | tran | `V(out)` | 4.860e-4 | 2.0e-2 | t=1.114e-3s | PASS |
@@ -33,6 +36,9 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 ## Deck descriptions
 
 - **bjt_bias**: NPN common-emitter bias point
+- **cccs_mirror**: CCCS mirror (gain 2 into 500 || 100n) of an ammeter current
+- **cccs_subckt**: CCCS in a subckt controlled by its own local ammeter
+- **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
 - **diode_op**: diode forward-drop DC operating point
 - **diode_rectifier**: half-wave rectifier with RC smoothing
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass

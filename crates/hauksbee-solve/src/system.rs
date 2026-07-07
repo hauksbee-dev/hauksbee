@@ -32,10 +32,19 @@ impl Layout {
         for (id, dev) in circuit.iter() {
             // A VCVS fixes its output-port voltage like an ideal Vsource, so it
             // carries the same branch-current unknown (the VCCS does not: its
-            // stamp is a pure transconductance with no extra unknown).
+            // stamp is a pure transconductance with no extra unknown). The CCVS
+            // is the H-card analogue of the VCVS: it too fixes its output-port
+            // voltage, so it owns a branch; the CCCS, like the VCCS/Isource,
+            // adds no unknown — it only WRITES into its control source's branch
+            // column, which `Layout::branch(ctrl_src)` resolves after this
+            // freeze (that is the `branch_index_of` accessor the F/H stamps and
+            // `reserve_pattern` consume).
             if matches!(
                 dev,
-                Device::Vsource { .. } | Device::Inductor { .. } | Device::Vcvs { .. }
+                Device::Vsource { .. }
+                    | Device::Inductor { .. }
+                    | Device::Vcvs { .. }
+                    | Device::Ccvs { .. }
             ) {
                 branch_of[id.0 as usize] = Some(next);
                 next += 1;
