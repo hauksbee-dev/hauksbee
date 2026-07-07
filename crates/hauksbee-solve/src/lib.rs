@@ -53,6 +53,7 @@ pub mod orchestrate;
 mod partition;
 mod partitioned;
 mod plan;
+pub mod rawfile;
 pub mod sim;
 mod sparse;
 mod stamp;
@@ -71,6 +72,7 @@ pub use options::{
 };
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;
+pub use rawfile::{write_ascii_rawfile, RawPlot};
 pub use sim::{default_probes, run_ac, run_dc, run_op, run_tran, Probe, SimOutput};
 pub use sparse::{SparseMatrix, Symbolic};
 pub use system::Layout;
