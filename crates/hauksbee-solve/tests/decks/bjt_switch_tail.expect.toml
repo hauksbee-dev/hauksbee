@@ -1,0 +1,14 @@
+# Switching turn-off tail vs ngspice (dev-plan 04 §3.2 cross-check target 2).
+# The observable is charge storage itself: with TF=300n at IC~5 mA the stored
+# base charge (~1.5 nC) bleeds through the 10k base pulldown for tens of us,
+# so the collector recovers at ~0.35 V/us instead of snapping up in ~100 ns.
+# Measured worst vs ngspice-46: 3.333e-5 (at t=2.06 us, the drive edge). The
+# bar is ~30x the measured worst, not a blind bound.
+analysis = "tran"
+description = "saturated switch turn-off: storage delay + charge-limited rise"
+full_scale = 5.0
+skip_initial = 0.2e-6
+
+[[probe]]
+expr = "V(c)"
+reltol = 0.001

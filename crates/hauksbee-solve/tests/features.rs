@@ -303,6 +303,109 @@ fn junction_caps_toggle_is_honored_for_diodes() {
     }
 }
 
+/// The §3.4 `DeviceEffects` contract for `junction_caps` on BJTs (dev-plan 04
+/// §3.2): flipping the toggle on a model carrying cje/cjc/tf must CHANGE the
+/// solution (both junction-charge companions appear), and on a default model
+/// the two runs must be BIT-IDENTICAL — the diode's contract, extended.
+#[test]
+fn junction_caps_toggle_is_honored_for_bjts() {
+    // A saturated switching transistor driven off: the stored base charge
+    // (tf + cje/cjc) visibly delays and slows the collector's rising edge.
+    let net_charge = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(5 0 1u 50n 50n 4u 10u)\n\
+                      RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QSW\n\
+                      .model QSW NPN(IS=1e-15 BF=100 CJE=20p CJC=8p TF=500n)\n.end\n";
+    let net_plain = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(5 0 1u 50n 50n 4u 10u)\n\
+                     RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QSW\n\
+                     .model QSW NPN(IS=1e-15 BF=100)\n.end\n";
+    let run = |net: &str, junction_caps: bool| {
+        let circuit = SpiceLoader::load(net).unwrap();
+        let opts = SolverOptions {
+            effects: DeviceEffects {
+                junction_caps,
+                ..DeviceEffects::default()
+            },
+            ..SolverOptions::fixed(10e-9)
+        };
+        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
+        out.node(&circuit, "c").unwrap().to_vec()
+    };
+    let w_on = run(net_charge, true);
+    let w_off = run(net_charge, false);
+    let max_diff = w_on
+        .iter()
+        .zip(&w_off)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff > 1e-2,
+        "junction_caps=on must change a charge-carrying BJT's waveform (max diff {max_diff:e})"
+    );
+    let p_on = run(net_plain, true);
+    let p_off = run(net_plain, false);
+    assert_eq!(p_on.len(), p_off.len());
+    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "charge-free BJT deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
+        );
+    }
+}
+
+/// The §3.4 contract for `series_resistance` on BJTs: flipping the toggle on
+/// a model carrying rb/re/rc must CHANGE the solution (the core moves onto
+/// internal nodes behind real ohmic drops), and on a default model the runs
+/// must be BIT-IDENTICAL (no internal node is even allocated).
+#[test]
+fn series_resistance_toggle_is_honored_for_bjts() {
+    // A saturating common-emitter stage (10k base drive, the same shape the
+    // junction_caps deck uses): the collector's saturation floor rises by
+    // ic·rc and the base path gains rb — a >10 mV waveform contrast. The
+    // drive is deliberately NOT stiffer (e.g. a 2k base): hard saturation
+    // sits on a legacy-Jacobian Newton marginality that predates this arc
+    // (the default-model deck itself fails there at the base commit's
+    // bytes), and the plain leg below must run on those pinned bytes.
+    let net_r = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
+                 RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n\
+                 .model QR NPN(IS=1e-15 BF=100 RB=500 RC=50 RE=5)\n.end\n";
+    let net_plain = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
+                     RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n\
+                     .model QR NPN(IS=1e-15 BF=100)\n.end\n";
+    let run = |net: &str, series: bool| {
+        let circuit = SpiceLoader::load(net).unwrap();
+        let opts = SolverOptions {
+            effects: DeviceEffects {
+                series_resistance: series,
+                ..DeviceEffects::default()
+            },
+            ..SolverOptions::fixed(10e-9)
+        };
+        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
+        out.node(&circuit, "c").unwrap().to_vec()
+    };
+    let w_on = run(net_r, true);
+    let w_off = run(net_r, false);
+    let max_diff = w_on
+        .iter()
+        .zip(&w_off)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff > 1e-2,
+        "series_resistance=on must change an rb/rc/re BJT's waveform (max diff {max_diff:e})"
+    );
+    let p_on = run(net_plain, true);
+    let p_off = run(net_plain, false);
+    assert_eq!(p_on.len(), p_off.len());
+    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "default-model BJT deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
+        );
+    }
+}
+
 #[test]
 fn voltage_switch_conducts_when_closed() {
     // A switch closes when its control exceeds the threshold, connecting a
