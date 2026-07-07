@@ -157,11 +157,20 @@ impl Transient {
         // regularized rescue fails honestly (the caller keeps its original
         // DC error); arming them under FromZero on nonlinear circuits is a
         // plausible improvement when the strategy ladder lands.
+        // `.ic V(node)=val` under `uic`: the named node voltages are the given
+        // initial conditions, everything else powers on from rest. (SPICE-compat
+        // §4.1: with `uic`, `.ic` values seed the start directly, no DC solve.)
+        let has_ic = !circuit.initial_conditions.is_empty();
         if from_zero {
             // Power-on: the unknown vector rests at zero. No DC solve to fail;
             // the ramp (paired Ramped sources) integrates the state up from here.
             for v in ws.x.iter_mut() {
                 *v = 0.0;
+            }
+            for &(nid, val) in &circuit.initial_conditions {
+                if let Some(i) = ws.layout.node(nid) {
+                    ws.x[i] = val;
+                }
             }
         } else {
             // The DC solve manages its own staged regularizers internally and
@@ -228,7 +237,13 @@ impl Transient {
         // value (x1 = x2 = 0, dx1 = 0 for every cap and inductor): the board
         // powers on from rest, ignoring any device initial conditions. Otherwise
         // seed it from the DC operating point as usual.
-        if !from_zero {
+        //
+        // EXCEPTION: FromZero WITH `.ic` node voltages — seed the reactive state
+        // from the now-nonzero ws.x so a capacitor spanning an `.ic` node starts
+        // at the corresponding voltage (`seed_reactive_state` derives the cap
+        // voltage from its node values), giving the physically-correct initial
+        // charge instead of a first-step current spike.
+        if !from_zero || has_ic {
             seed_reactive_state(&mut state, circuit, &ws);
         }
 
