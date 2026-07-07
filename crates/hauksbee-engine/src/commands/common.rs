@@ -38,7 +38,9 @@ pub fn serve(
     engine: HauksbeeEngine,
     port: u16,
     board_file: Option<(String, String)>,
+    startup_json: String,
 ) -> anyhow::Result<()> {
+    use std::sync::Arc;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let server = Server::new(Box::new(engine));
@@ -46,23 +48,38 @@ pub fn serve(
         let dir = static_dir.exists().then(|| static_dir.clone());
         let addr = format!("127.0.0.1:{port}");
 
+        // The analysis API the React landing calls (W6 §1: the report and the
+        // live sim are one app). Same callback `hauksbee serve` uses, so the two
+        // commands converge on one server path with a preload difference only.
+        let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
+            |name: &str, contents: &str, fw: Option<(&str, &[u8])>| match fw {
+                Some((fw_name, fw_bytes)) => {
+                    crate::analyze_with_firmware_json(name, contents, fw_name, fw_bytes)
+                }
+                None => crate::analyze_json(name, contents),
+            },
+        );
+
         if dir.is_some() {
             println!("\n  hauksbee is live. Open this in your browser:\n");
             println!("      http://{addr}\n");
-            println!("  (2D/3D board view; Ctrl-C to stop.)\n");
+            println!("  Lands on this board's report; press \"run it\" for the live 2D/3D sim.");
+            println!("  Ctrl-C to stop.\n");
         } else {
             // The frontend is a build artifact and is not checked in, so a fresh
-            // clone has no dist/ yet. Serve the websocket regardless (so the API
-            // and any external viewer still work) but tell the user exactly how
-            // to get the live view rather than leaving them on a blank 404 page.
+            // clone has no dist/ yet. Serve the websocket + API regardless (so an
+            // external viewer still works) but tell the user how to get the live
+            // view rather than leaving them on a blank 404 page.
             println!("\n  hauksbee websocket server is live at ws://{addr}/ws  (Ctrl-C to stop)\n");
-            println!("  The live 2D/3D viewer at http://{addr} needs the frontend built once:\n");
+            println!("  The live viewer at http://{addr} needs the frontend built once:\n");
             println!("      cd frontend && bun install && bun run build\n");
             println!("  then re-run this command. For a quick non-visual check, try:\n");
             println!("      hauksbee run <board> --report      # bind table");
             println!("      hauksbee run <board> --drc          # copper shorts");
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
-        server.serve_with_board(&addr, dir.as_deref(), board_file).await
+        server
+            .serve_app(&addr, dir.as_deref(), board_file, analyze, startup_json)
+            .await
     })
 }
