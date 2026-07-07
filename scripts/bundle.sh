@@ -22,7 +22,18 @@
 #   --target TRIPLE Override the target triple label (default: host os-arch).
 #   --out DIR      Output directory (default: dist).
 #   --no-build     Use existing target/release binaries; do not cargo build.
+#   --no-default-features
+#                  Pass --no-default-features to the cargo build (used by the
+#                  release workflow for the GPL-free renode+qemu shape).
+#   --features LIST Pass --features LIST to the cargo build (e.g. "renode,qemu").
 #   --help         Show this help.
+#
+# Feature note: with NO feature flags, cargo builds the default feature set
+# (avr + renode + qemu). The `avr` backend statically links libsimavr, which is
+# GPL-3.0 — so a default bundle is GPL-encumbered. Pass
+# `--no-default-features --features renode,qemu` for the MIT-clean shape (no
+# libsimavr link; verified avr-free). See the release.yml header and
+# docs/release-and-licensing.md for the licensing decision and the GPL guard.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -33,6 +44,10 @@ VERSION=""
 TARGET=""
 OUT="dist"
 DO_BUILD=1
+# Cargo feature selection for the build. Empty = default features (avr+renode+
+# qemu, GPL-encumbered). The release workflow sets these for the MIT-clean shape.
+NO_DEFAULT_FEATURES=0
+FEATURES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
@@ -42,6 +57,9 @@ while [ $# -gt 0 ]; do
     --out) OUT="${2:?--out needs a directory}"; shift 2 ;;
     --out=*) OUT="${1#*=}"; shift ;;
     --no-build) DO_BUILD=0; shift ;;
+    --no-default-features) NO_DEFAULT_FEATURES=1; shift ;;
+    --features) FEATURES="${2:?--features needs a value}"; shift 2 ;;
+    --features=*) FEATURES="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument '$1' (try --help)" ;;
   esac
@@ -65,8 +83,16 @@ fi
 SRC="$(hauksbee_target_bin)"
 if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust or pass --no-build."
-  log "Building release binaries"
-  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci )
+  # Assemble optional feature flags. Passed verbatim to `cargo build`.
+  FEATURE_ARGS=()
+  [ "$NO_DEFAULT_FEATURES" -eq 1 ] && FEATURE_ARGS+=(--no-default-features)
+  [ -n "$FEATURES" ] && FEATURE_ARGS+=(--features "$FEATURES")
+  if [ "${#FEATURE_ARGS[@]}" -gt 0 ]; then
+    log "Building release binaries (cargo ${FEATURE_ARGS[*]})"
+  else
+    log "Building release binaries (default features: avr+renode+qemu, GPL-encumbered)"
+  fi
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci "${FEATURE_ARGS[@]}" )
   log "Stripping release binaries"
   for bin in hauksbee hauksbee-ci; do
     strip "$SRC/$bin" 2>/dev/null || true
