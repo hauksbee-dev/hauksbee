@@ -160,13 +160,6 @@ impl Backend {
             other => Err(SocError::UnknownBackend(other.to_string())),
         }
     }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Backend::Renode => "renode",
-            Backend::Qemu => "qemu",
-        }
-    }
 }
 
 // ── The `[soc]` header, backend-agnostic ─────────────────────────────────────
@@ -629,11 +622,4 @@ fn override_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(home).join(".config/hauksbee/mcu"));
     }
     dirs
-}
-
-// Silence the unused-helper warning when a backend feature is off (the accessor
-// is only meaningful with a backend, but the enum/impl are always compiled).
-#[allow(dead_code)]
-fn _backend_str_is_used(b: Backend) -> &'static str {
-    b.as_str()
 }
