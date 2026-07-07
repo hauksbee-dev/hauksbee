@@ -435,8 +435,8 @@ pub(crate) fn stamp_device<S: StampSink>(
         }
         Device::Diode { a, k, model, .. } => stamp_diode(ctx, id, *a, *k, model, sink),
         Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, id, *c, *b, *e, model, sink),
-        Device::Mosfet { d, g: gate, s, model, .. } => {
-            stamp_mosfet(ctx, *d, *gate, *s, model, sink)
+        Device::Mosfet { d, g: gate, s, b, model, .. } => {
+            stamp_mosfet(ctx, id, *d, *gate, *s, *b, model, sink)
         }
         Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => stamp_vswitch(
             ctx, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, sink,
@@ -1271,6 +1271,178 @@ pub(crate) fn bjt_effective_nodes(
     }
 }
 
+// --- MOSFET charge helpers (dev-plan 04 §3.3) --------------------------------
+
+/// Meyer-limit intrinsic gate-drain capacitance fraction: `Cgd -> (1/2)·Cox`
+/// in deep triode (Meyer's `vds -> 0` limit); zero in saturation/cutoff where
+/// only the overlap remains — the Miller-charge asymmetry that sets switching
+/// timing.
+pub(crate) const MOS_CGD_MEYER: f64 = 0.5;
+
+/// Whether a MOSFET stores charge under the current effects toggles: the
+/// `junction_caps` gate AND at least one charge-producing model field (gate
+/// overlap/oxide caps or bulk depletion caps). A default model never stores
+/// charge, so decks whose MOS models predate this physics are bit-identical
+/// whatever the toggle — the [`diode_has_charge`]/[`bjt_has_charge`] contract.
+#[inline]
+pub(crate) fn mos_has_charge(
+    model: &MosfetModel,
+    effects: &crate::options::DeviceEffects,
+) -> bool {
+    effects.junction_caps && (model.has_gate_charge() || model.cbd > 0.0 || model.cbs > 0.0)
+}
+
+/// Numerically stable `ln(1 + e^x)` (softplus).
+#[inline]
+fn softplus(x: f64) -> f64 {
+    if x > 40.0 {
+        x
+    } else if x < -40.0 {
+        x.exp()
+    } else {
+        x.exp().ln_1p()
+    }
+}
+
+/// Numerically stable logistic `1 / (1 + e^-x)`.
+#[inline]
+fn sigmoid(x: f64) -> f64 {
+    if x >= 0.0 {
+        1.0 / (1.0 + (-x).exp())
+    } else {
+        let e = x.exp();
+        e / (1.0 + e)
+    }
+}
+
+/// THE CHARGE-MODEL CHOICE (dev-plan 04 §3.3, decided here): the gate
+/// charges are the "simpler-but-honest" per-junction alternative to true
+/// Meyer capacitances, for a structural reason, not just a stability one.
+/// Meyer's `Cgs(vgs, vds)`/`Cgd(vgs, vds)` depend on TWO junction voltages,
+/// so they do not integrate to a per-junction two-terminal `Q(v)` at all
+/// (the classic Meyer charge-non-conservation problem); the solver's
+/// reactive machinery is charge-based `Q(v)` companions (§3.1) precisely so
+/// nonlinear capacitance conserves charge. Instead each gate junction gets a
+/// genuine `Q(v)` whose capacitance matches Meyer's REGION LIMITS, smoothly
+/// interpolated over a `delta`-wide transition at the threshold (`softplus`
+/// makes Q C-infinity-smooth, so Newton sees continuous C and dC/dv through
+/// every switching edge — the FC-knee discipline applied to the region
+/// switch):
+///
+/// * [`mos_charge_gs`]: `C = c_ov + c_ox` BELOW threshold falling to
+///   `c_ov + (1/2)·c_ox` above. The below-threshold `c_ox` is Meyer's
+///   CUTOFF GATE-BULK capacitance (`Cgb = Cox`) REFERENCED TO THE SOURCE:
+///   in the target case (discrete MOSFET, bulk tied to source) that is
+///   electrically exact, and dropping it instead (the first cut of this
+///   model) made every gate charge ~`Cox` too fast below threshold — the
+///   switching edges led ngspice by the whole subthreshold gate-RC
+///   (measured on the §3.3 load-switch decks: worst pointwise errors 5.45
+///   NMOS / 54.5 PMOS without it). The ON value is Meyer's DEEP-TRIODE
+///   limit `Cox/2`, not the saturation `2/3·Cox`: a switch dwells in
+///   triode whenever it is on and only transits saturation briefly during
+///   the drain swing, and the choice is cross-check-driven — with `2/3`
+///   the load-switch turn-off edge lagged ngspice by 5-8 ns (gate
+///   discharging through an over-stated triode Cgs; worst pointwise error
+///   0.76), with `1/2` the same edge aligns to 0.8 ns (worst 0.32,
+///   mid-edge).
+/// * [`mos_charge_gd`]: `C = c_ov` in cutoff/saturation rising to
+///   `c_ov + (1/2)·c_ox` in triode (`vgd` crossing the threshold is the
+///   drain end of the channel forming) — the Miller-charge asymmetry that
+///   sets switching timing.
+///
+/// What is given up vs Meyer is the region interpolation only a
+/// two-voltage C can express (Meyer's Cgs rises to `2/3·Cox` in
+/// saturation; ours holds the triode `Cox/2` there), bounded and visible
+/// as nanosecond-scale edge skew in the ngspice cross-check tolerances of
+/// the §3.3 decks.
+#[inline]
+pub(crate) fn mos_charge_gs(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
+    let mut q = c_ov * v;
+    let mut c = c_ov;
+    if c_ox > 0.0 {
+        let u = (v - vth) / delta;
+        // C falls from c_ox to (1/2)c_ox across the threshold:
+        //   C = c_ox·(1 - sigmoid(u)/2),  Q = c_ox·((v-vth) - delta·softplus(u)/2)
+        // (charge referenced to v = vth; the companion only ever uses dQ).
+        q += c_ox * ((v - vth) - delta * softplus(u) / 2.0);
+        c += c_ox * (1.0 - sigmoid(u) / 2.0);
+    }
+    (q, c)
+}
+
+/// Gate-drain stored charge: overlap plus the triode-side intrinsic rise
+/// (see [`mos_charge_gs`] for the model choice discussion).
+#[inline]
+pub(crate) fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) -> (f64, f64) {
+    let mut q = c_ov * v;
+    let mut c = c_ov;
+    if c_ox > 0.0 {
+        let u = (v - vth) / delta;
+        q += MOS_CGD_MEYER * c_ox * delta * softplus(u);
+        c += MOS_CGD_MEYER * c_ox * sigmoid(u);
+    }
+    (q, c)
+}
+
+/// All four MOSFET stored charges `(Q_gs, Q_gd, Q_bd, Q_bs)` at FOLDED
+/// junction voltages — the seed/advance/LTE entry point, computing exactly
+/// what the stamp's companions integrate. Gate charges are the
+/// [`mos_gate_charge`] shape at the zero-bias threshold `vto` (the charge
+/// region switch deliberately ignores the body effect: the common
+/// bulk-tied-to-source switch has none, and a body-biased charge switch
+/// would couple three terminals into what must stay a two-terminal `Q(v)`);
+/// bulk charges are the §3.1 depletion helper with the model's `pb`/`mj`.
+pub(crate) fn mos_charges_at(
+    model: &MosfetModel,
+    vgs: f64,
+    vgd: f64,
+    vbd: f64,
+    vbs: f64,
+    t_c: f64,
+    temp_on: bool,
+) -> (f64, f64, f64, f64) {
+    let vt = hauksbee_ir_thermal(t_c, temp_on);
+    let delta = 2.0 * model.n_sub.max(1.0) * vt;
+    let q_gs = mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs).0;
+    let q_gd = mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd).0;
+    let q_bd = if model.cbd > 0.0 {
+        depletion_charge(model.cbd, model.pb, model.mj, vbd).0
+    } else {
+        0.0
+    };
+    let q_bs = if model.cbs > 0.0 {
+        depletion_charge(model.cbs, model.pb, model.mj, vbs).0
+    } else {
+        0.0
+    };
+    (q_gs, q_gd, q_bd, q_bs)
+}
+
+/// FOLDED junction voltages `(vgs, vgd, vbd, vbs)` of a MOSFET at the
+/// solution vector `x`, at the PHYSICAL terminals (no drain/source symmetry
+/// swap: the swap is a channel-evaluation device; the charges live on the
+/// real gate/bulk junctions). Bulk defaults to source when absent, exactly
+/// as the stamp resolves it.
+pub(crate) fn mos_junction_voltages(
+    layout: &Layout,
+    x: &[f64],
+    d: NodeId,
+    g: NodeId,
+    s: NodeId,
+    b: Option<NodeId>,
+    model: &MosfetModel,
+) -> (f64, f64, f64, f64) {
+    let v = |n: NodeId| layout.node(n).map(|i| x[i]).unwrap_or(0.0);
+    let sign = model.polarity.sign();
+    let bulk = b.unwrap_or(s);
+    (
+        sign * (v(g) - v(s)),
+        sign * (v(g) - v(d)),
+        sign * (v(bulk) - v(d)),
+        sign * (v(bulk) - v(s)),
+    )
+}
+
 /// §3.4 (`DeviceEffects` contract): a toggle the stamp cannot honor for a
 /// device must LOG ONCE rather than silently ignore the model fields. Each
 /// dishonored (effect, device) pair owns one flag; tests read the flag.
@@ -1608,18 +1780,21 @@ fn stamp_bjt<S: StampSink>(
 
     let geq_bc = ctx.coeffs.g * c_bc;
     let ieq_bc = (ctx.coeffs.g * q_bc
-        - hist(ctx.state.x1b[sl], ctx.state.dx1b[sl], ctx.state.x2b[sl]))
+        - hist(ctx.state.xb[0].x1[sl], ctx.state.xb[0].dx1[sl], ctx.state.xb[0].x2[sl]))
         - geq_bc * vbc;
     add_pair(sink, bi, ci, geq_bc);
     inject(sink, bi, -sign * ieq_bc);
     inject(sink, ci, sign * ieq_bc);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stamp_mosfet<S: StampSink>(
     ctx: &StampCtx,
+    id: DeviceId,
     d: NodeId,
     gnode: NodeId,
     s: NodeId,
+    b: Option<NodeId>,
     model: &MosfetModel,
     sink: &mut S,
 ) {
@@ -1641,7 +1816,36 @@ fn stamp_mosfet<S: StampSink>(
     }
     let vgs = vg - vs;
     let vds = vd - vs;
-    let vth = model.vto;
+
+    // Body-effect threshold shift (dev-plan 04 §3.3): `gamma` was parsed and
+    // silently ignored before this arc. With a bulk terminal present and
+    // `gamma > 0`, `vth = vto + gamma·(sqrt(phi - vbs) - sqrt(phi))` at the
+    // folded bulk-to-EFFECTIVE-source voltage (the post-swap source — ngspice
+    // measures the body effect from whichever terminal acts as the source).
+    // `gamma == 0` (every pre-§3.3 model, every db entry) takes the plain
+    // `vto` path bit-identically and never reads the bulk voltage.
+    let bulk = b.unwrap_or(s);
+    let mut vth = model.vto;
+    // d vth / d vbs, for the gmb transconductance below (0 unless body effect).
+    let mut dvth_dvbs = 0.0;
+    let mut vbs_f = 0.0;
+    let body_effect = model.gamma > 0.0 && b.is_some();
+    if body_effect {
+        let vb_f = sign * ctx.v(bulk);
+        vbs_f = vb_f - vs;
+        let phi = model.phi.max(1e-6);
+        let arg = phi - vbs_f;
+        if arg > 0.0 {
+            let sq = arg.sqrt();
+            vth = model.vto + model.gamma * (sq - phi.sqrt());
+            // Guard the sqrt singularity at vbs -> phi: cap the derivative at
+            // the value it has 1 mV short of the pole (vth itself stays exact).
+            dvth_dvbs = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
+        } else {
+            // Forward-biased bulk clamped at phi: threshold floor, no slope.
+            vth = model.vto + model.gamma * (0.0 - phi.sqrt());
+        }
+    }
 
     let nsub = model.n_sub.max(1.0);
     let (ids, gm, gds) = if vgs - vth < -nsub * vt * 10.0 {
@@ -1690,10 +1894,110 @@ fn stamp_mosfet<S: StampSink>(
     add_transconductance(sink, dn, sn, gi, sn, gm);
 
     // Equivalent current: id_eq = ids - gm*vgs - gds*vds, flowing d->s.
-    let ieq = ids - gm * vgs - gds * vds;
+    let mut ieq = ids - gm * vgs - gds * vds;
+    if body_effect {
+        // Bulk transconductance gmb = d ids / d vbs = -gm · d vth / d vbs:
+        // the drain current additionally depends on the bulk-to-effective-
+        // source voltage. The bulk row itself receives nothing (the bulk is
+        // still a SENSE terminal unless the model carries body-diode fields).
+        let gmb = -gm * dvth_dvbs;
+        let bi = ctx.layout.node(bulk);
+        add_transconductance(sink, dn, sn, bi, sn, gmb);
+        ieq -= gmb * vbs_f;
+    }
     let ieq_signed = sign * ieq;
     inject(sink, dn, -ieq_signed);
     inject(sink, sn, ieq_signed);
+
+    // Trapezoidal/Gear/BE history bracket shared by every charge companion
+    // below — the diode's §3.1 companion verbatim (slots hold CHARGE in
+    // x1/x2, dQ/dt in dx1; the discrete current is coeffs.g·Q(v) - hist).
+    let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
+        Integration::Trapezoidal => ctx.coeffs.g * x1 + dx1,
+        Integration::Gear2 => ctx.coeffs.a1 * x1 - ctx.coeffs.a2 * x2,
+        Integration::BackwardEuler => ctx.coeffs.a1 * x1,
+    };
+    let sl = id.0 as usize;
+
+    // Body diode (dev-plan 04 §3.3): STRUCTURAL bulk-junction physics, the
+    // BJT-junction discipline — the DC branches exist whenever the model
+    // carries them (`body_is > 0`), un-toggled; the depletion charges ride
+    // `junction_caps`. Each junction is bulk->drain / bulk->source in folded
+    // space (the bulk is the anode of an N-channel body diode; `sign` folds
+    // PMOS). A junction whose bulk IS its terminal (the discrete
+    // bulk-tied-to-source case) is a short: skipped, it can carry no state.
+    // This is the reverse-conduction path of every synchronous-rectifier /
+    // flyback deck; `body_is` defaults to 0 (BIT-IDENTITY deviation from
+    // ngspice's 1e-14 default, documented on the model field).
+    if model.has_body_diode() {
+        let bulk_i = ctx.layout.node(bulk);
+        // (terminal, its unknown, depletion cap, secondary bank index)
+        let junctions = [(d, di, model.cbd, 1usize), (s, si, model.cbs, 2usize)];
+        for (term, term_i, cbx, bank) in junctions {
+            if term == bulk {
+                continue;
+            }
+            let v_raw = sign * (ctx.v(bulk) - ctx.v(term));
+            // DC junction: Shockley branch with pn-junction limiting, exactly
+            // the diode's convergence discipline.
+            let vj = if model.body_is > 0.0 {
+                let v_prev = sign * (ctx.v_prev(bulk) - ctx.v_prev(term));
+                let vcr = vcrit(model.body_is, vt);
+                let vj = pnjlim(v_raw, v_prev, vt, vcr);
+                let e = (vj / vt).clamp(-40.0, 40.0).exp();
+                let ij = model.body_is * (e - 1.0);
+                let gj = (model.body_is * e / vt).max(ctx.opts.gmin);
+                add_pair(sink, bulk_i, term_i, gj);
+                let ieq_j = ij - gj * vj;
+                inject(sink, bulk_i, -sign * ieq_j);
+                inject(sink, term_i, sign * ieq_j);
+                vj
+            } else {
+                v_raw
+            };
+            // Depletion charge companion (open at DC like every capacitor).
+            if !ctx.dc && ctx.opts.effects.junction_caps && cbx > 0.0 {
+                let (q, c) = depletion_charge(cbx, model.pb, model.mj, vj);
+                let bk = &ctx.state.xb[bank];
+                let geq = ctx.coeffs.g * c;
+                let ieq_c =
+                    (ctx.coeffs.g * q - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq * vj;
+                add_pair(sink, bulk_i, term_i, geq);
+                inject(sink, bulk_i, -sign * ieq_c);
+                inject(sink, term_i, sign * ieq_c);
+            }
+        }
+    }
+
+    // Gate charges (dev-plan 04 §3.3, gated by `junction_caps` — "the single
+    // biggest reason a MOS switching deck disagrees with ngspice"): Q_gs on
+    // bank A, Q_gd on secondary bank 0, each a two-terminal charge companion
+    // at the PHYSICAL (unswapped) terminals — the charge sits on the real
+    // gate junction whichever way the channel evaluation swapped d/s. The
+    // charge-model choice (Meyer region limits on a smooth two-terminal
+    // Q(v)) is documented on [`mos_gate_charge`].
+    if !ctx.dc && ctx.opts.effects.junction_caps && model.has_gate_charge() {
+        let delta = 2.0 * nsub * vt;
+        let vgs_p = sign * (ctx.v(gnode) - ctx.v(s));
+        let vgd_p = sign * (ctx.v(gnode) - ctx.v(d));
+        let (q_gs, c_gs) = mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs_p);
+        let geq_gs = ctx.coeffs.g * c_gs;
+        let ieq_gs = (ctx.coeffs.g * q_gs
+            - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
+            - geq_gs * vgs_p;
+        add_pair(sink, gi, si, geq_gs);
+        inject(sink, gi, -sign * ieq_gs);
+        inject(sink, si, sign * ieq_gs);
+
+        let (q_gd, c_gd) = mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd_p);
+        let bk = &ctx.state.xb[0];
+        let geq_gd = ctx.coeffs.g * c_gd;
+        let ieq_gd =
+            (ctx.coeffs.g * q_gd - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq_gd * vgd_p;
+        add_pair(sink, gi, di, geq_gd);
+        inject(sink, gi, -sign * ieq_gd);
+        inject(sink, di, sign * ieq_gd);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2288,7 +2592,7 @@ mod bjt_physics_tests {
         }
         let mut state = ReactiveState::new(1);
         state.x1[0] = 1e-12; // nonzero history so RHS terms show too
-        state.x1b[0] = -2e-12;
+        state.xb[0].x1[0] = -2e-12;
         let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {

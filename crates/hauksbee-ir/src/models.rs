@@ -228,8 +228,11 @@ pub struct MosfetModel {
     pub level: MosLevel,
     /// N-channel or P-channel.
     pub polarity: Polarity,
-    /// Threshold voltage at zero `Vsb` (V), already signed for the polarity
-    /// convention used by the solver (positive for an enhancement NMOS).
+    /// Threshold voltage at zero `Vsb` (V), stored polarity-FOLDED: positive
+    /// for an enhancement device of EITHER polarity (the solver evaluates the
+    /// channel in N-channel space). SPICE cards and the model db state VTO in
+    /// device convention (negative for an enhancement PMOS); the loaders fold
+    /// it by the polarity sign on the way in.
     pub vto: f64,
     /// Transconductance parameter `KP = mu*Cox` (A/V^2).
     pub kp: f64,
@@ -243,6 +246,42 @@ pub struct MosfetModel {
     pub w_over_l: f64,
     /// Subthreshold slope factor (ideality); ~1.3 for a real device.
     pub n_sub: f64,
+    /// TOTAL gate-source overlap/constant capacitance (F): `CGSO·W` from a
+    /// SPICE card, or a datasheet-style total `cgs`. `0` = absent (the
+    /// default: existing decks stamp no gate charge).
+    pub cgs_ov: f64,
+    /// TOTAL gate-drain overlap/constant capacitance (F): `CGDO·W` or a
+    /// datasheet-style total `cgd`. `0` = absent.
+    pub cgd_ov: f64,
+    /// TOTAL intrinsic oxide capacitance `Cox·W·L` (F), derived from `TOX`
+    /// (with `W`/`L`) at load. Drives the operating-region-dependent
+    /// (Meyer-limit) part of the gate charge; `0` = overlap-only caps.
+    ///
+    /// DELIBERATE DEVIATION from ngspice: ngspice materializes a default
+    /// `TOX = 1e-7 m` (plus default `W = L = 100 um`) even when the card
+    /// omits them, so every ngspice level-1 MOS carries intrinsic Meyer
+    /// capacitance. Here an omitted `TOX` yields `c_ox = 0` — no intrinsic
+    /// gate charge — because the bit-identity bar requires default models to
+    /// stamp exactly what they stamped before this field existed. A deck
+    /// that wants the intrinsic caps states `TOX` (and real `W`/`L`).
+    pub c_ox: f64,
+    /// Body-diode saturation current (A), SPICE `IS`. `0` disables the body
+    /// diode entirely.
+    ///
+    /// DELIBERATE DEVIATION from ngspice: ngspice defaults MOS `IS` to
+    /// `1e-14 A`, so its bulk junctions always exist. Here the default is
+    /// `0` — no bulk junctions — for the same bit-identity reason as `c_ox`.
+    /// A deck that wants the body diode (synchronous rectification, flyback
+    /// reverse conduction) states `IS` on the card.
+    pub body_is: f64,
+    /// Zero-bias bulk-drain depletion capacitance (F), SPICE `CBD`. `0` = absent.
+    pub cbd: f64,
+    /// Zero-bias bulk-source depletion capacitance (F), SPICE `CBS`. `0` = absent.
+    pub cbs: f64,
+    /// Bulk-junction built-in potential (V), SPICE `PB`.
+    pub pb: f64,
+    /// Bulk-junction grading coefficient, SPICE `MJ`.
+    pub mj: f64,
 }
 
 impl Default for MosfetModel {
@@ -257,6 +296,14 @@ impl Default for MosfetModel {
             phi: 0.6,
             w_over_l: 1.0,
             n_sub: 1.3,
+            cgs_ov: 0.0,
+            cgd_ov: 0.0,
+            c_ox: 0.0,
+            body_is: 0.0,
+            cbd: 0.0,
+            cbs: 0.0,
+            pb: 0.8,
+            mj: 0.5,
         }
     }
 }
@@ -265,5 +312,19 @@ impl MosfetModel {
     /// Effective transconductance `beta = KP * (W/L)`.
     pub fn beta(&self) -> f64 {
         self.kp * self.w_over_l
+    }
+
+    /// Whether the model carries any gate capacitance (overlap or intrinsic).
+    /// The gate terminal conducts (displacement current) exactly when this
+    /// holds; a default model keeps the gate an ideal open, bit-identically.
+    pub fn has_gate_charge(&self) -> bool {
+        self.cgs_ov > 0.0 || self.cgd_ov > 0.0 || self.c_ox > 0.0
+    }
+
+    /// Whether the model carries bulk-junction physics: the body-diode DC
+    /// branch (`body_is`) or either depletion capacitance. The bulk terminal
+    /// conducts exactly when this holds.
+    pub fn has_body_diode(&self) -> bool {
+        self.body_is > 0.0 || self.cbd > 0.0 || self.cbs > 0.0
     }
 }

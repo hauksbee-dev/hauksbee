@@ -1701,16 +1701,33 @@ fn bind_mosfet(
     };
     let def = MosfetModel::default();
     let p = &model.params;
+    // The db states vto in SPICE device convention (negative for enhancement
+    // PMOS, e.g. AO3401A vto=-1.1); the solver stores it polarity-folded
+    // (positive = enhancement either way). Fold like the SPICE loader does.
+    let fold = polarity.sign();
     let m = MosfetModel {
         level: MosLevel::Level1,
         polarity,
-        vto: p.get_f64("vto").unwrap_or(def.vto),
+        vto: p.get_f64("vto").map(|v| fold * v).unwrap_or(def.vto),
         kp: p.get_f64("kp").unwrap_or(def.kp),
         lambda: p.get_f64("lambda").unwrap_or(def.lambda),
         gamma: p.get_f64("gamma").unwrap_or(def.gamma),
         phi: p.get_f64("phi").unwrap_or(def.phi),
         w_over_l: p.get_f64("w_over_l").unwrap_or(def.w_over_l),
         n_sub: p.get_f64("n_sub").unwrap_or(def.n_sub),
+        // Gate charge (dev-plan 04 §3.3): the db carries TOTAL capacitances
+        // (`cgs`/`cgd` in farads, datasheet-style), which map onto the model's
+        // total overlap fields directly. Absent fields leave the pre-§3.3
+        // no-gate-charge stamp bit-identically.
+        cgs_ov: p.get_f64("cgs").unwrap_or(def.cgs_ov),
+        cgd_ov: p.get_f64("cgd").unwrap_or(def.cgd_ov),
+        c_ox: def.c_ox,
+        // Body diode: only when the db entry states it (`is`/`cbd`/`cbs`).
+        body_is: p.get_f64("is").unwrap_or(def.body_is),
+        cbd: p.get_f64("cbd").unwrap_or(def.cbd),
+        cbs: p.get_f64("cbs").unwrap_or(def.cbs),
+        pb: p.get_f64("pb").unwrap_or(def.pb),
+        mj: p.get_f64("mj").unwrap_or(def.mj),
     };
     circuit.add(Device::Mosfet {
         name: comp.reference.clone(),
