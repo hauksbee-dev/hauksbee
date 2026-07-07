@@ -112,7 +112,7 @@
 //! enforced (the final voltage may differ from the seed).
 
 use crate::models::{BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity};
-use crate::source::{PwlPoint, SourceKind};
+use crate::source::{AcStim, PwlPoint, SourceKind};
 use crate::{Circuit, Device, DeviceId, NodeId};
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
@@ -142,6 +142,15 @@ pub struct Directives {
     pub vntol: Option<f64>,
     /// Whether `.tran` carried the `uic` flag.
     pub use_initial_conditions: bool,
+    /// `.ac <dec|oct|lin> <n> <fstart> <fstop>` if present.
+    pub ac: Option<AcDirective>,
+    /// `.dc <src> <start> <stop> <step> [<src2> ...]` if present, with the swept
+    /// source(s) already resolved to a device.
+    pub dc: Option<DcDirective>,
+    /// `.print`/`.plot ANALYSIS var...` output requests, in source order.
+    pub prints: Vec<PrintRequest>,
+    /// Whether any `.plot` card was seen (treated as `.print` — no ASCII plot).
+    pub saw_plot: bool,
 }
 
 /// Parsed `.tran` parameters (seconds).
@@ -151,6 +160,61 @@ pub struct TranDirective {
     pub tstop: f64,
     pub tstart: f64,
     pub tmax: Option<f64>,
+}
+
+/// How a `.ac` sweep spaces its frequency points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcSweep {
+    /// `dec`: `n` points per decade (log spacing).
+    Decade,
+    /// `oct`: `n` points per octave (log spacing).
+    Octave,
+    /// `lin`: `n` points total, linearly spaced.
+    Linear,
+}
+
+/// Parsed `.ac <dec|oct|lin> <n> <fstart> <fstop>`.
+#[derive(Debug, Clone, Copy)]
+pub struct AcDirective {
+    pub sweep: AcSweep,
+    /// Points per decade/octave (log) or total points (linear).
+    pub points: usize,
+    pub fstart: f64,
+    pub fstop: f64,
+}
+
+/// One swept source of a `.dc` analysis: a resolved V/I source and its range.
+#[derive(Debug, Clone)]
+pub struct DcSweep {
+    /// The resolved swept source (a `Vsource` or `Isource`).
+    pub source: DeviceId,
+    /// The source's name as written, for the output column label.
+    pub name: String,
+    pub start: f64,
+    pub stop: f64,
+    pub step: f64,
+}
+
+/// Parsed `.dc <src> <start> <stop> <step> [<src2> <start2> <stop2> <step2>]`.
+/// `inner` sweeps fastest (SPICE convention); `outer`, if present, wraps it.
+#[derive(Debug, Clone)]
+pub struct DcDirective {
+    pub inner: DcSweep,
+    pub outer: Option<DcSweep>,
+}
+
+/// A `.print`/`.plot ANALYSIS var...` request. Variable expressions are carried
+/// verbatim (e.g. `V(out)`, `V(a,b)`, `I(V1)`) and parsed into probes by the
+/// consumer (`hauksbee_solve::Probe::parse`) — the loader does not duplicate that
+/// parser.
+#[derive(Debug, Clone)]
+pub struct PrintRequest {
+    /// The analysis this line applies to, lowercased: `op`/`dc`/`ac`/`tran`.
+    pub analysis: String,
+    /// The output-variable expressions, verbatim.
+    pub vars: Vec<String>,
+    /// True if this came from `.plot` (rendered as a `.print`, never an ASCII plot).
+    pub is_plot: bool,
 }
 
 /// Loads SPICE netlists into the IR.
@@ -302,6 +366,24 @@ fn load_deck(
     // Third pass: resolve element-name references (§2.2).
     resolve_name_fixups(&mut circuit, &fixups)?;
 
+    // `.dc`: resolve the swept source name(s) against the flattened device table
+    // (case-insensitive, mangled-name composing), reusing the same conventions
+    // the F/H control-source fixups use. Refuses a name that is not a source, or
+    // a step that cannot reach its stop.
+    if let Some(pl) = col.dc_cards.first() {
+        if col.dc_cards.len() > 1 {
+            return Err(with_provenance(
+                SpiceError::Syntax {
+                    line: col.dc_cards[1].lineno,
+                    msg: "duplicate `.dc` card (only one DC sweep per deck)".into(),
+                    text: col.dc_cards[1].text.clone(),
+                },
+                &col.dc_cards[1].origin,
+            ));
+        }
+        directives.dc = Some(parse_dc(pl, &circuit).map_err(|e| with_provenance(e, &pl.origin))?);
+    }
+
     // Fourth pass (NEW): `.ic`/`.nodeset`, resolved now that every flattened
     // node exists. Values evaluate against the global parameter environment; a
     // mangled internal node (`X1.out`) resolves by its flattened name.
@@ -355,6 +437,9 @@ struct Collector {
     ic_cards: Vec<PhysLine>,
     /// `.nodeset` cards (raw), resolved the same way.
     nodeset_cards: Vec<PhysLine>,
+    /// `.dc` cards (raw); the swept source name resolves against the flattened
+    /// device table afterward, exactly as `.ic` resolves against nodes.
+    dc_cards: Vec<PhysLine>,
     /// The subckt currently being collected (definitions do not nest).
     current: Option<SubcktDef>,
 }
@@ -445,9 +530,29 @@ fn collect_line(
         col.ic_cards.push(pl.clone());
     } else if lower.starts_with(".nodeset") {
         col.nodeset_cards.push(pl.clone());
+    } else if lower.starts_with(".ac") {
+        if directives.ac.is_some() {
+            return Err(SpiceError::Syntax {
+                line: lineno,
+                msg: "duplicate `.ac` card (only one AC sweep per deck)".into(),
+                text: raw.clone(),
+            });
+        }
+        directives.ac = Some(parse_ac(lineno, raw)?);
+    } else if lower.starts_with(".dc") {
+        // The swept-source name cannot resolve until flattening; stash the raw
+        // card and resolve it against the flattened device table afterward,
+        // exactly as `.ic` resolves against the flattened node table.
+        col.dc_cards.push(pl.clone());
+    } else if lower.starts_with(".print") || lower.starts_with(".plot") {
+        let is_plot = lower.starts_with(".plot");
+        if is_plot {
+            directives.saw_plot = true;
+        }
+        directives.prints.push(parse_print(lineno, raw, is_plot)?);
     } else if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with('.') {
-        // Other directives (`.print`, `.ac`, `.end`, ...) are consumed elsewhere
-        // or out of scope for this step; skip them here.
+        // Other directives (`.end`, `.width`, ...) are consumed elsewhere or out
+        // of scope for this step; skip them here.
     } else {
         col.top_elems.push(pl.clone());
     }
@@ -2177,14 +2282,21 @@ fn parse_source(
     let p = circuit.node(&toks[1]);
     let n = circuit.node(&toks[2]);
     let name = toks[0].clone();
-    let kind = parse_source_kind(line, raw, &toks[3..], env)?;
+    // Peel off the `AC <mag> [phase]` small-signal stimulus before parsing the
+    // time-domain function: previously the AC keyword was silently dropped, so a
+    // `.ac` analysis had no honest drive.
+    let (ac, kind_toks) = extract_ac_spec(&toks[3..], env);
+    let kind = parse_source_kind(line, raw, &kind_toks, env)?;
 
     let device = if is_voltage {
         Device::Vsource { name, p, n, kind }
     } else {
         Device::Isource { name, p, n, kind }
     };
-    circuit.add(device);
+    let id = circuit.add(device);
+    if let Some(stim) = ac {
+        circuit.ac_stimulus.push((id, stim));
+    }
     Ok(())
 }
 
@@ -2748,6 +2860,271 @@ fn parse_tran(
     })
 }
 
+/// A source-card AC token: a plain number or a parameter name.
+fn ac_num_tok(t: &str, env: &ParamEnv) -> Option<f64> {
+    parse_spice_number(t).or_else(|| env.get(&t.to_ascii_lowercase()).copied())
+}
+
+/// Split a source card's spec tokens into an optional AC small-signal stimulus
+/// (`AC [mag] [phase]`) and the remaining tokens (the time-domain function),
+/// so [`parse_source_kind`] never sees the AC keyword it would misparse. A bare
+/// `AC` defaults to magnitude 1, phase 0 (SPICE convention).
+fn extract_ac_spec(rest: &[String], env: &ParamEnv) -> (Option<AcStim>, Vec<String>) {
+    let mut out = Vec::with_capacity(rest.len());
+    let mut ac = None;
+    let mut i = 0;
+    while i < rest.len() {
+        if rest[i].eq_ignore_ascii_case("ac") {
+            let mut mag = 1.0;
+            let mut phase_deg = 0.0;
+            let mut consumed = 1;
+            if let Some(m) = rest.get(i + 1).and_then(|t| ac_num_tok(t, env)) {
+                mag = m;
+                consumed += 1;
+                if let Some(p) = rest.get(i + 2).and_then(|t| ac_num_tok(t, env)) {
+                    phase_deg = p;
+                    consumed += 1;
+                }
+            }
+            ac = Some(AcStim { mag, phase_deg });
+            i += consumed;
+        } else {
+            out.push(rest[i].clone());
+            i += 1;
+        }
+    }
+    (ac, out)
+}
+
+/// Parse `.ac <dec|oct|lin> <n> <fstart> <fstop>`.
+fn parse_ac(line: usize, raw: &str) -> Result<AcDirective, SpiceError> {
+    let toks = tokenize(raw);
+    // toks[0] == ".ac"
+    if toks.len() < 5 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: ".ac needs <dec|oct|lin> <points> <fstart> <fstop>".into(),
+            text: raw.into(),
+        });
+    }
+    let sweep = match toks[1].to_ascii_lowercase().as_str() {
+        "dec" => AcSweep::Decade,
+        "oct" => AcSweep::Octave,
+        "lin" => AcSweep::Linear,
+        other => {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!("unknown `.ac` sweep type `{other}` (use dec, oct, or lin)"),
+                text: raw.into(),
+            });
+        }
+    };
+    let points = number(line, &toks[2], raw)?;
+    if points < 1.0 || points.fract() != 0.0 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!("`.ac` point count must be a positive integer, got `{}`", toks[2]),
+            text: raw.into(),
+        });
+    }
+    let fstart = number(line, &toks[3], raw)?;
+    let fstop = number(line, &toks[4], raw)?;
+    if fstart <= 0.0 || fstop <= fstart {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!("`.ac` needs 0 < fstart < fstop, got fstart={fstart}, fstop={fstop}"),
+            text: raw.into(),
+        });
+    }
+    Ok(AcDirective {
+        sweep,
+        points: points as usize,
+        fstart,
+        fstop,
+    })
+}
+
+/// Split a `.print`/`.plot` card into whitespace-separated tokens, but keep a
+/// parenthesized group (`V(out)`, `V(a,b)`, `I(V1)`) intact — the general
+/// tokenizer strips parentheses, which would shatter `V(out)` into `V` + `out`.
+fn split_print_tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Parse `.print`/`.plot ANALYSIS var...`, carrying the output-variable
+/// expressions verbatim (the consumer parses them into probes).
+fn parse_print(line: usize, raw: &str, is_plot: bool) -> Result<PrintRequest, SpiceError> {
+    let toks = split_print_tokens(raw);
+    // toks[0] == ".print"/".plot"; toks[1] == analysis type; the rest are vars.
+    let kind = if is_plot { ".plot" } else { ".print" };
+    if toks.len() < 2 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!("{kind} needs an analysis type (op/dc/ac/tran) and output variables"),
+            text: raw.into(),
+        });
+    }
+    let analysis = toks[1].to_ascii_lowercase();
+    if !matches!(analysis.as_str(), "op" | "dc" | "ac" | "tran") {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "{kind}: unknown analysis type `{}` (expected op, dc, ac, or tran)",
+                toks[1]
+            ),
+            text: raw.into(),
+        });
+    }
+    let vars: Vec<String> = toks[2..].to_vec();
+    if vars.is_empty() {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!("{kind} {analysis} has no output variables"),
+            text: raw.into(),
+        });
+    }
+    Ok(PrintRequest {
+        analysis,
+        vars,
+        is_plot,
+    })
+}
+
+/// Parse `.dc <src> <start> <stop> <step> [<src2> <start2> <stop2> <step2>]`,
+/// resolving each swept source name against the flattened device table
+/// (case-insensitive), refusing a name that is not a V/I source and a step that
+/// cannot reach its stop.
+fn parse_dc(pl: &PhysLine, circuit: &Circuit) -> Result<DcDirective, SpiceError> {
+    let line = pl.lineno;
+    let raw = &pl.text;
+    let toks = tokenize(raw);
+    // toks[0] == ".dc"; then groups of 4: <src> <start> <stop> <step>.
+    let args = &toks[1..];
+    if args.len() != 4 && args.len() != 8 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "`.dc` needs <src> <start> <stop> <step> (optionally a second such \
+                 group for a nested sweep); got {} argument(s)",
+                args.len()
+            ),
+            text: raw.clone(),
+        });
+    }
+    let inner = parse_dc_group(line, raw, &args[0..4], circuit)?;
+    let outer = if args.len() == 8 {
+        Some(parse_dc_group(line, raw, &args[4..8], circuit)?)
+    } else {
+        None
+    };
+    Ok(DcDirective { inner, outer })
+}
+
+fn parse_dc_group(
+    line: usize,
+    raw: &str,
+    group: &[String],
+    circuit: &Circuit,
+) -> Result<DcSweep, SpiceError> {
+    let name = &group[0];
+    let start = number(line, &group[1], raw)?;
+    let stop = number(line, &group[2], raw)?;
+    let step = number(line, &group[3], raw)?;
+    // Resolve the swept source name case-insensitively, exactly as the F/H
+    // control-source fixups resolve their referent.
+    let key = name.to_ascii_lowercase();
+    let matches: Vec<DeviceId> = circuit
+        .iter()
+        .filter(|(_, d)| d.name().to_ascii_lowercase() == key)
+        .map(|(id, _)| id)
+        .collect();
+    let source = match matches.as_slice() {
+        [] => {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!("`.dc` sweep source `{name}` does not exist in the deck"),
+                text: raw.into(),
+            });
+        }
+        [one] => *one,
+        _ => {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!(
+                    "`.dc` sweep source `{name}` is ambiguous (SPICE names are \
+                     case-insensitive; rename one)"
+                ),
+                text: raw.into(),
+            });
+        }
+    };
+    if !matches!(
+        circuit.devices[source.0 as usize],
+        Device::Vsource { .. } | Device::Isource { .. }
+    ) {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "`.dc` can only sweep an independent V or I source; `{name}` is not one. \
+                 To sweep a current through a device, put a zero-volt ammeter \
+                 (`Vsense a b 0`) in series and sweep that."
+            ),
+            text: raw.into(),
+        });
+    }
+    // A step must actually march from start toward stop. Zero step, or a sign
+    // that points away from stop, would loop forever or emit a single point that
+    // silently ignores the range — refuse rather than fake it.
+    if step == 0.0 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!("`.dc {name}` step is zero, so the sweep cannot advance"),
+            text: raw.into(),
+        });
+    }
+    if (stop - start).signum() != step.signum() && stop != start {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "`.dc {name}` step {step} has the wrong sign to reach stop {stop} from \
+                 start {start}"
+            ),
+            text: raw.into(),
+        });
+    }
+    Ok(DcSweep {
+        source,
+        name: name.clone(),
+        start,
+        stop,
+        step,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2760,6 +3137,102 @@ mod tests {
         assert!(d.tran.is_some());
         let tran = d.tran.unwrap();
         assert!((tran.tstop - 1e-3).abs() < 1e-12);
+    }
+
+    #[test]
+    fn captures_ac_stimulus_from_source_card() {
+        // A bare `AC` defaults to mag 1, phase 0; `AC 2 30` is captured verbatim;
+        // a combined `DC 0 AC 1 SIN(...)` keeps the transient function too.
+        let net = "ac cap\nV1 a 0 AC\nV2 b 0 AC 2 30\nV3 c 0 DC 0 AC 1 SIN(0 1 1k)\n\
+                   R1 a 0 1k\nR2 b 0 1k\nR3 c 0 1k\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        assert_eq!(c.ac_stimulus.len(), 3);
+        let stim: std::collections::HashMap<_, _> = c
+            .ac_stimulus
+            .iter()
+            .map(|(id, s)| (c.devices[id.0 as usize].name().to_string(), *s))
+            .collect();
+        assert_eq!(stim["V1"], AcStim { mag: 1.0, phase_deg: 0.0 });
+        assert_eq!(stim["V2"], AcStim { mag: 2.0, phase_deg: 30.0 });
+        assert_eq!(stim["V3"], AcStim { mag: 1.0, phase_deg: 0.0 });
+        // V3 still carries its SIN transient function (AC was peeled off).
+        match &c.devices[2] {
+            Device::Vsource { kind: SourceKind::Sin { freq, .. }, .. } => {
+                assert!((freq - 1e3).abs() < 1e-9)
+            }
+            other => panic!("expected V3 to keep SIN, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_ac_directive_variants() {
+        for (card, sweep, pts) in [
+            (".ac dec 10 10 1e6", AcSweep::Decade, 10),
+            (".ac oct 5 20 20k", AcSweep::Octave, 5),
+            (".ac lin 100 1 1000", AcSweep::Linear, 100),
+        ] {
+            let net = format!("ac\nV1 a 0 AC 1\nR1 a 0 1k\n{card}\n.end\n");
+            let (_, d) = SpiceLoader::load_with_directives(&net).unwrap();
+            let ac = d.ac.expect("ac directive");
+            assert_eq!(ac.sweep, sweep);
+            assert_eq!(ac.points, pts);
+        }
+        // Unknown sweep type and duplicate cards are line-numbered refusals.
+        let bad = "ac\nV1 a 0 AC 1\nR1 a 0 1k\n.ac bogus 5 10 1e6\n.end\n";
+        assert!(SpiceLoader::load(bad).unwrap_err().to_string().contains("sweep type"));
+        let dup = "ac\nV1 a 0 AC 1\nR1 a 0 1k\n.ac dec 5 10 1e6\n.ac lin 5 10 1e6\n.end\n";
+        assert!(SpiceLoader::load(dup).unwrap_err().to_string().contains("duplicate `.ac`"));
+    }
+
+    #[test]
+    fn parses_and_resolves_dc_sweep() {
+        let net = "dc\nVin a 0 DC 0\nVg g 0 DC 0\nR1 a 0 1k\n\
+                   .dc Vin 0 5 0.5 Vg 0 3 1\n.end\n";
+        let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
+        let dc = d.dc.expect("dc directive");
+        assert_eq!(dc.inner.name, "Vin");
+        assert_eq!(c.devices[dc.inner.source.0 as usize].name(), "Vin");
+        assert!((dc.inner.stop - 5.0).abs() < 1e-12);
+        let outer = dc.outer.expect("nested sweep");
+        assert_eq!(outer.name, "Vg");
+    }
+
+    #[test]
+    fn dc_sweep_guards_are_line_numbered() {
+        // Unknown source.
+        let e = SpiceLoader::load("dc\nVin a 0 DC 0\nR1 a 0 1k\n.dc Vnope 0 5 1\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("does not exist"), "{e}");
+        // Sweeping a non-source names the ammeter idiom.
+        let e = SpiceLoader::load("dc\nVin a 0 DC 0\nR1 a 0 1k\n.dc R1 0 5 1\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("ammeter") || e.contains("V or I source"), "{e}");
+        // Zero step cannot advance.
+        let e = SpiceLoader::load("dc\nVin a 0 DC 0\nR1 a 0 1k\n.dc Vin 0 5 0\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("step is zero"), "{e}");
+        // Wrong-sign step cannot reach stop.
+        let e = SpiceLoader::load("dc\nVin a 0 DC 0\nR1 a 0 1k\n.dc Vin 0 5 -1\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("wrong sign"), "{e}");
+    }
+
+    #[test]
+    fn parses_print_and_plot_vars_preserving_parens() {
+        let net = "p\nV1 a 0 DC 1\nR1 a b 1k\nR2 b 0 1k\n\
+                   .print dc V(b) V(a,b) I(V1)\n.plot ac V(b)\n.end\n";
+        let (_, d) = SpiceLoader::load_with_directives(net).unwrap();
+        assert!(d.saw_plot);
+        let dc = d.prints.iter().find(|p| p.analysis == "dc").unwrap();
+        assert_eq!(dc.vars, vec!["V(b)", "V(a,b)", "I(V1)"]);
+        assert!(!dc.is_plot);
+        let ac = d.prints.iter().find(|p| p.analysis == "ac").unwrap();
+        assert!(ac.is_plot);
+        assert_eq!(ac.vars, vec!["V(b)"]);
     }
 
     #[test]
