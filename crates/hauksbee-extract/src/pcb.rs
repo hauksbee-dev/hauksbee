@@ -1,5 +1,14 @@
-//! Extraction from a `.kicad_pcb` layout. Handles formats from KiCad 5
-//! (20171130, bare atoms) through KiCad 10 (20250907).
+//! Extraction from a `.kicad_pcb` layout into the canonical [`ExtractedBoard`].
+//!
+//! Handles the s-expression board format across a wide version range, from
+//! KiCad 5 (20171130, bare atoms) through KiCad 10 (20250907). The hard part is
+//! that the net representation drifted: KiCad =<9 declares `(net N "name")` with
+//! numeric ids at top level, while KiCad 10 dropped the ids and nets survive
+//! only as `(net "name")` references on pads. This module normalises both into
+//! one [`Net`] table (synthesising ids from names where absent) and walks the
+//! footprints to attach each pad to its [`Pin`], producing the same board form
+//! the schematic and netlist readers do. `extract_from_doc` lets a caller that
+//! already holds the parsed CST skip a re-parse.
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use forge_sexpr::{Document, List};
