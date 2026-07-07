@@ -1,7 +1,7 @@
 //! A pragmatic SPICE netlist loader.
 //!
 //! Parses a useful subset of `.cir` files into a [`Circuit`]: element lines for
-//! R/C/L/V/I/D/Q/M/S/E/G/F/H, `.model` cards for diodes, BJTs, and MOSFETs, the
+//! R/C/L/V/I/D/Q/M/S/E/G/F/H/B, `.model` cards for diodes, BJTs, and MOSFETs, the
 //! `sin`, `pulse`, and `pwl` source functions, `.tran`, `.temp`, and `.options`.
 //! The goal is to ingest real test vectors and user-supplied netlists, not to be
 //! a complete SPICE3 front end; anything unsupported is reported with the line.
@@ -113,7 +113,7 @@
 
 use crate::models::{BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity};
 use crate::source::{AcStim, PwlPoint, SourceKind};
-use crate::{Circuit, Device, DeviceId, NodeId};
+use crate::{BDep, BOutput, Circuit, CompiledExpr, Device, DeviceId, NodeId};
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
     Node as EvalNode, Value,
@@ -561,13 +561,17 @@ fn collect_line(
 
 // --- element-name references (§2.2) ------------------------------------------
 
-/// A deferred element-name reference: `device`'s control field names `name`,
-/// to be resolved once the whole deck is parsed. Generic on purpose — today
-/// only F/H defer (their `ctrl_src`), but the behavioral B-source will defer
-/// `V(...)`/`I(...)` references through the same pass.
+/// A deferred element-name reference: `device`'s control slot `slot` names
+/// `name`, to be resolved once the whole deck is parsed. Generic on purpose —
+/// F/H defer their single `ctrl_src` (slot 0), and the behavioral B-source
+/// defers each distinct `I(vname)` dependency through its own slot (the index
+/// into [`Device::controlling_sources`] order).
 struct NameFixup {
     /// The device whose reference needs patching.
     device: DeviceId,
+    /// Which control slot on that device (see
+    /// [`Device::retarget_controlling_source_slot`]).
+    slot: usize,
     /// The referenced element name, as written (matched case-insensitively).
     name: String,
     /// Line of the referring card, for errors.
@@ -642,12 +646,13 @@ fn resolve_name_fixups(circuit: &mut Circuit, fixups: &[NameFixup]) -> Result<()
         if !matches!(circuit.devices[target.0 as usize], Device::Vsource { .. }) {
             return Err(err(format!(
                 "controlling source `{}` is not an independent voltage source; \
-                 only a V element's branch current can control an F/H — insert \
-                 a zero-volt ammeter (`Vsense a b 0`) in series and name that",
+                 only a V element's branch current can be read (F/H control, \
+                 B-source `I(...)`) — insert a zero-volt ammeter \
+                 (`Vsense a b 0`) in series and name that",
                 fx.name
             )));
         }
-        circuit.devices[fx.device.0 as usize].retarget_controlling_source(target);
+        circuit.devices[fx.device.0 as usize].retarget_controlling_source_slot(fx.slot, target);
     }
     Ok(())
 }
@@ -1036,6 +1041,80 @@ fn map_node(tok: &str, port_map: &HashMap<String, String>, inst_path: &str) -> S
     }
 }
 
+/// Rewrite the `v(...)`/`i(...)` references inside a spliced B-source token
+/// (see the `kind == 'B'` arm of [`expand_instance`]): `v(node)` arguments go
+/// through [`map_node`] (formal port -> caller node, internal -> instance-
+/// prefixed, ground stays global), `i(vname)` arguments get the instance
+/// prefix like an F/H `vname`. Purely a rewrite — validation happens later in
+/// [`parse_behavioral`], with this line's provenance attached. Identifiers
+/// other than a call-shaped `v`/`i` (function names, params, `time`) pass
+/// through verbatim, as does anything malformed (whose refusal message should
+/// come from the parser, not a half-blind mangler).
+fn mangle_behavioral_token(
+    tok: &str,
+    port_map: &HashMap<String, String>,
+    inst_path: &str,
+) -> String {
+    let b: Vec<char> = tok.chars().collect();
+    let mut out = String::with_capacity(b.len() + 16);
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == '_' {
+            // Only an identifier START counts (`1e-3`'s `e` and the tail of
+            // `tanh` are mid-token and must not match).
+            let boundary =
+                i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == '_' || b[i - 1] == '.');
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == '_') {
+                i += 1;
+            }
+            let ident: String = b[start..i].iter().collect();
+            let low = ident.to_ascii_lowercase();
+            let mut j = i;
+            while j < b.len() && b[j].is_whitespace() {
+                j += 1;
+            }
+            if boundary && (low == "v" || low == "i") && j < b.len() && b[j] == '(' {
+                let mut k = j + 1;
+                let mut closed = false;
+                while k < b.len() {
+                    if b[k] == ')' {
+                        closed = true;
+                        break;
+                    }
+                    k += 1;
+                }
+                if closed {
+                    let argtext: String = b[j + 1..k].iter().collect();
+                    let mapped: Vec<String> = argtext
+                        .split(',')
+                        .map(|a| {
+                            let a = a.trim();
+                            if low == "v" {
+                                map_node(a, port_map, inst_path)
+                            } else {
+                                format!("{inst_path}.{a}")
+                            }
+                        })
+                        .collect();
+                    out.push_str(&ident);
+                    out.push('(');
+                    out.push_str(&mapped.join(","));
+                    out.push(')');
+                    i = k + 1;
+                    continue;
+                }
+            }
+            out.push_str(&ident);
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 /// Token positions that name nodes for a given element letter (name is index 0;
 /// values/models follow the nodes). `X` is handled separately. Unknown letters
 /// return an empty slice so an unsupported card is still spliced verbatim and
@@ -1047,6 +1126,10 @@ fn node_indices_for(kind: char) -> &'static [usize] {
         // (the controlling V source), rewritten separately in
         // `expand_instance` under the local-scope rule.
         'F' | 'H' => &[1, 2],
+        // B: output pair only; the node/element references INSIDE the braced
+        // expression token are rewritten separately in `expand_instance`
+        // (`mangle_behavioral_expr`) under the same local-scope rules.
+        'B' => &[1, 2],
         'Q' => &[1, 2, 3],
         'M' | 'S' | 'E' | 'G' => &[1, 2, 3, 4],
         _ => &[],
@@ -1268,6 +1351,17 @@ fn expand_instance(
                 && !btoks[3].eq_ignore_ascii_case("poly")
             {
                 new_toks[3] = format!("{}.{}", inst_name, btoks[3]);
+            }
+            // B-source expressions carry node and element references INSIDE
+            // their braced token (`v={2*v(mid)+i(Vs)}` survives tokenize_kv as
+            // one `v={...}` token): rewrite every `v(...)` argument through
+            // the port map / instance prefix and every `i(...)` argument
+            // through the instance prefix — the same local-scope rules as
+            // element nodes and F/H vnames. Ground stays global via map_node.
+            if kind == 'B' {
+                for t in new_toks.iter_mut().skip(3) {
+                    *t = mangle_behavioral_token(t, &port_map, &inst_name);
+                }
             }
             out.push(SplicedLine {
                 lineno: blineno,
@@ -2187,6 +2281,7 @@ fn parse_element(
         'G' => parse_controlled(line, raw, &toks, circuit, false, env),
         'F' => parse_current_controlled(line, raw, &toks, circuit, true, env, fixups),
         'H' => parse_current_controlled(line, raw, &toks, circuit, false, env, fixups),
+        'B' => parse_behavioral(line, raw, &toks, circuit, env, fixups),
         other => Err(SpiceError::UnknownElement {
             line,
             ch: other,
@@ -2807,12 +2902,344 @@ fn parse_current_controlled(
     };
     fixups.push(NameFixup {
         device: id,
+        slot: 0,
         name: vname,
         line,
         raw: raw.into(),
         provenance: String::new(),
     });
     Ok(())
+}
+
+// --- behavioral B-source (§2.5) ----------------------------------------------
+
+/// Parse `Bxxx n+ n- V={expr}` / `Bxxx n+ n- I={expr}`.
+///
+/// The expression is REQUIRED to be brace-wrapped (the tokenizer keeps a
+/// `{...}` atomic; an un-braced expression would shatter into node-looking
+/// tokens and misparse silently — exactly the failure §4.3 forbids). The raw
+/// text is rewritten to canonical form by [`rewrite_behavioral_expr`]:
+/// `V(node)`/`V(a,b)` and `I(vname)` become positional `__d{k}` dependency
+/// slots, `.param` names fold to constants, function names map onto evalexpr
+/// builtins (the exact subset lives in the `bexpr` module doc). Each distinct
+/// `I(vname)` defers through the same resolve-by-name pass as an F/H control,
+/// one [`NameFixup`] per slot.
+fn parse_behavioral(
+    line: usize,
+    raw: &str,
+    toks: &[String],
+    circuit: &mut Circuit,
+    env: &ParamEnv,
+    fixups: &mut Vec<NameFixup>,
+) -> Result<(), SpiceError> {
+    let syn = |msg: String| SpiceError::Syntax {
+        line,
+        msg,
+        text: raw.into(),
+    };
+    // Pointed refusals for the behavioral forms we do not ship, before any
+    // positional check (`V=TABLE {...} = (...)` has extra tokens, but "TABLE
+    // is unsupported" is the honest message, not "too many tokens").
+    for t in toks.iter().skip(3) {
+        let l = t.to_ascii_lowercase();
+        if matches!(l.as_str(), "poly" | "table" | "value") {
+            return Err(syn(format!(
+                "`{}` B-source form is unsupported (only `V={{expr}}` / \
+                 `I={{expr}}` over v()/i()/time/params is; see the supported \
+                 function list in the loader docs)",
+                l.to_ascii_uppercase()
+            )));
+        }
+    }
+    if toks.len() < 5 {
+        return Err(syn(
+            "B-source needs n+, n-, and `V={expr}` or `I={expr}`".into(),
+        ));
+    }
+    let name = toks[0].clone();
+    let p = circuit.node(&toks[1]);
+    let n = circuit.node(&toks[2]);
+    let output = match toks[3].to_ascii_lowercase().as_str() {
+        "v" => BOutput::Voltage,
+        "i" => BOutput::Current,
+        other => {
+            return Err(syn(format!(
+                "B-source output must be `V={{expr}}` or `I={{expr}}`, found `{other}=`"
+            )))
+        }
+    };
+    // Brace check BEFORE the trailing-token check: an un-braced expression
+    // shatters at whitespace/parens into many tokens, and "wrap it in braces"
+    // is the actionable message, not "too many tokens".
+    let Some(inner) = braced_inner(&toks[4]) else {
+        return Err(syn(format!(
+            "B-source expression must be brace-wrapped (`{}={{expr}}`); an \
+             un-braced expression would shatter at whitespace/parens and \
+             misparse",
+            toks[3].to_ascii_uppercase()
+        )));
+    };
+    if toks.len() > 5 {
+        return Err(syn(format!(
+            "unsupported trailing tokens on B-source card (found `{}` after \
+             the expression)",
+            toks[5]
+        )));
+    }
+    if output == BOutput::Voltage && p == n {
+        // Same singularity as the shorted VCVS/CCVS: the branch current of a
+        // voltage constraint across a shorted port is indeterminate.
+        return Err(syn(format!(
+            "B-source `{name}` shorts its own output port (n+ == n-) with a \
+             voltage output; its branch current is indeterminate"
+        )));
+    }
+    let (canon, deps, branch_names) = rewrite_behavioral_expr(line, raw, inner, env, circuit)?;
+    let expr = CompiledExpr::compile(&canon).map_err(|e| syn(e))?;
+    debug_assert_eq!(
+        expr.n_slots(),
+        deps.len(),
+        "every dependency slot is created by at least one occurrence"
+    );
+    let id = circuit.add(Device::Behavioral {
+        name,
+        p,
+        n,
+        output,
+        expr,
+        deps,
+    });
+    for (slot, vname) in branch_names {
+        fixups.push(NameFixup {
+            device: id,
+            slot,
+            name: vname,
+            line,
+            raw: raw.into(),
+            provenance: String::new(),
+        });
+    }
+    Ok(())
+}
+
+/// Bare function names accepted in a behavioral expression that map onto
+/// `evalexpr`'s `math::` builtins (input is matched case-insensitively).
+const B_MATH_FNS: &[&str] = &[
+    "ln", "log10", "log2", "exp", "pow", "sqrt", "cbrt", "abs", "sin", "cos", "tan", "asin",
+    "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "hypot",
+];
+/// Function names that are already bare `evalexpr` builtins.
+const B_BARE_FNS: &[&str] = &["min", "max", "if", "floor", "round", "ceil"];
+
+/// Rewrite a raw B-source expression into canonical form (see `bexpr`):
+/// returns `(canonical_text, deps, deferred_branch_names)` where
+/// `deferred_branch_names` is `(control_slot, vname)` per distinct `I(vname)`
+/// (`control_slot` indexes [`Device::controlling_sources`] order). `V(node)`
+/// arguments keep their as-written case for node interning (resolving
+/// case-insensitively against already-interned names first, so `v(OUT)` and a
+/// later `R1 out ...` agree); repeated references reuse one slot.
+fn rewrite_behavioral_expr(
+    line: usize,
+    raw: &str,
+    inner: &str,
+    env: &ParamEnv,
+    circuit: &mut Circuit,
+) -> Result<(String, Vec<BDep>, Vec<(usize, String)>), SpiceError> {
+    let syn = |msg: String| SpiceError::Syntax {
+        line,
+        msg,
+        text: raw.into(),
+    };
+    // ngspice accepts `**` for exponentiation; evalexpr's operator is `^`.
+    let text = inner.replace("**", "^");
+    let b: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(b.len() + 16);
+    let mut deps: Vec<BDep> = Vec::new();
+    let mut branch_names: Vec<(usize, String)> = Vec::new();
+    // Dedup maps: node/vname -> existing slot.
+    let mut volt_slots: HashMap<NodeId, usize> = HashMap::new();
+    let mut branch_slots: HashMap<String, usize> = HashMap::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        // Number literal (digits, optional dot, optional exponent). Consumed
+        // whole so `1e-3` never sheds an `e` identifier.
+        if c.is_ascii_digit() || (c == '.' && b.get(i + 1).is_some_and(|d| d.is_ascii_digit())) {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_digit() || b[i] == '.') {
+                i += 1;
+            }
+            if i < b.len() && (b[i] == 'e' || b[i] == 'E') {
+                let mut j = i + 1;
+                if j < b.len() && (b[j] == '+' || b[j] == '-') {
+                    j += 1;
+                }
+                if j < b.len() && b[j].is_ascii_digit() {
+                    i = j + 1;
+                    while i < b.len() && b[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+            }
+            if i < b.len() && (b[i].is_ascii_alphabetic() || b[i] == '_') {
+                // `2k` inside braces: the §4.2 suffix rule says braces hold
+                // pure arithmetic — refuse rather than drop the suffix.
+                return Err(syn(format!(
+                    "engineering suffix inside a braced expression \
+                     (`{}{}...`); write the bare value (`2000` not `2k`)",
+                    b[start..i].iter().collect::<String>(),
+                    b[i]
+                )));
+            }
+            out.extend(b[start..i].iter());
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == '_') {
+                i += 1;
+            }
+            let ident: String = b[start..i].iter().collect();
+            let low = ident.to_ascii_lowercase();
+            // Lookahead across whitespace: is this a function call?
+            let mut j = i;
+            while j < b.len() && b[j].is_whitespace() {
+                j += 1;
+            }
+            let is_call = j < b.len() && b[j] == '(';
+            if is_call && (low == "v" || low == "i") {
+                // Parse the argument list up to the matching `)`.
+                let mut k = j + 1;
+                let mut args: Vec<String> = Vec::new();
+                let mut cur = String::new();
+                let mut closed = false;
+                while k < b.len() {
+                    match b[k] {
+                        ')' => {
+                            closed = true;
+                            break;
+                        }
+                        '(' => {
+                            return Err(syn(format!(
+                                "nested `(` inside `{ident}(...)`; arguments must be \
+                                 plain node/element names"
+                            )))
+                        }
+                        ',' => {
+                            args.push(cur.trim().to_string());
+                            cur.clear();
+                        }
+                        ch => cur.push(ch),
+                    }
+                    k += 1;
+                }
+                if !closed {
+                    return Err(syn(format!("unclosed `{ident}(` in behavioral expression")));
+                }
+                args.push(cur.trim().to_string());
+                if args.iter().any(|a| a.is_empty() || a.chars().any(char::is_whitespace)) {
+                    return Err(syn(format!(
+                        "malformed `{ident}(...)` argument list in behavioral expression"
+                    )));
+                }
+                i = k + 1;
+                if low == "v" {
+                    let mut slot_of = |name: &str, circuit: &mut Circuit| -> usize {
+                        // Case-insensitive against already-interned names, so
+                        // `v(OUT)` binds the node a later `R1 out 0` uses.
+                        let node = circuit
+                            .find_node(name)
+                            .unwrap_or_else(|| circuit.node(name));
+                        *volt_slots.entry(node).or_insert_with(|| {
+                            deps.push(BDep::Volt(node));
+                            deps.len() - 1
+                        })
+                    };
+                    match args.len() {
+                        1 => {
+                            let s = slot_of(&args[0], circuit);
+                            out.push_str(&format!("__d{s}"));
+                        }
+                        2 => {
+                            // Differential V(a,b) = V(a) - V(b): supported,
+                            // as two ordinary voltage slots.
+                            let sa = slot_of(&args[0], circuit);
+                            let sb = slot_of(&args[1], circuit);
+                            out.push_str(&format!("(__d{sa} - __d{sb})"));
+                        }
+                        m => {
+                            return Err(syn(format!(
+                                "`v(...)` takes one node or a differential pair, found {m} \
+                                 arguments"
+                            )))
+                        }
+                    }
+                } else {
+                    if args.len() != 1 {
+                        return Err(syn(format!(
+                            "`i(...)` takes exactly one V-source name, found {} arguments",
+                            args.len()
+                        )));
+                    }
+                    let key = args[0].to_ascii_lowercase();
+                    let slot = *branch_slots.entry(key).or_insert_with(|| {
+                        deps.push(BDep::Branch(DeviceId(u32::MAX)));
+                        let dep_slot = deps.len() - 1;
+                        // Control slot = index among Branch deps, the order
+                        // `controlling_sources()` reports.
+                        let ctrl_slot = branch_names.len();
+                        branch_names.push((ctrl_slot, args[0].clone()));
+                        dep_slot
+                    });
+                    out.push_str(&format!("__d{slot}"));
+                }
+                continue;
+            }
+            if is_call {
+                if low == "log" {
+                    return Err(syn(
+                        "`log` is ambiguous across SPICE dialects (natural vs base-10); \
+                         write `ln` or `log10`"
+                            .into(),
+                    ));
+                }
+                if B_MATH_FNS.contains(&low.as_str()) {
+                    out.push_str("math::");
+                    out.push_str(&low);
+                    continue; // the `(` flows through verbatim below
+                }
+                if B_BARE_FNS.contains(&low.as_str()) {
+                    out.push_str(&low);
+                    continue;
+                }
+                return Err(syn(format!(
+                    "unsupported function `{ident}(...)` in behavioral expression \
+                     (supported: {}, {})",
+                    B_MATH_FNS.join(", "),
+                    B_BARE_FNS.join(", ")
+                )));
+            }
+            // Bare identifier: `time`, or a parameter that folds to a
+            // constant ({:?} formatting round-trips f64 exactly).
+            if low == "time" {
+                out.push_str("time");
+            } else if let Some(v) = env.get(&low) {
+                out.push_str(&format!("{:?}", v));
+            } else {
+                return Err(syn(format!(
+                    "behavioral expression references unknown identifier `{ident}` \
+                     (not a `.param`, `time`, `v(...)`, or `i(...)`)"
+                )));
+            }
+            continue;
+        }
+        if c == '{' || c == '}' {
+            return Err(syn("nested braces in behavioral expression".into()));
+        }
+        out.push(c);
+        i += 1;
+    }
+    Ok((out, deps, branch_names))
 }
 
 // --- control cards ----------------------------------------------------------
@@ -3939,5 +4366,175 @@ mod tests {
         let a = node_of(&c, "a");
         assert_eq!(c.nodesets, vec![(a, 2.5)]);
         assert!(c.initial_conditions.is_empty());
+    }
+
+    // --- behavioral B-source (§2.5) -------------------------------------------
+
+    /// The canonical rewrite: V(node) / differential V(a,b) / I(vname) become
+    /// positional `__d{k}` slots (deduped), params fold to constants, `time`
+    /// survives, function names map onto evalexpr builtins, and the I(...)
+    /// reference resolves through the same deferred pass as an F/H control —
+    /// including a FORWARD reference to a source defined later in the deck.
+    #[test]
+    fn parses_behavioral_with_all_dep_kinds() {
+        let net = "b\n\
+                   .param gain=2.5\n\
+                   B1 out 0 V={gain*v(a) + tanh(v(p,q)) + 3*i(Vs) + 0.1*time + v(a)}\n\
+                   Vin a 0 1\n\
+                   Vs p q 0\n\
+                   RL out 0 1k\n\
+                   Rp p 0 1k\n\
+                   Rq q 0 1k\n\
+                   .end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let b = &c.devices[dev_id(&c, "B1").0 as usize];
+        let Device::Behavioral {
+            output, expr, deps, ..
+        } = b
+        else {
+            panic!("expected Behavioral, got {b:?}")
+        };
+        assert_eq!(*output, BOutput::Voltage);
+        // Slots: 0 = V(a) (reused by the trailing v(a)), 1/2 = V(p)/V(q),
+        // 3 = I(Vs). Params folded: no `gain` identifier survives.
+        assert_eq!(deps.len(), 4);
+        assert_eq!(deps[0], BDep::Volt(node_of(&c, "a")));
+        assert_eq!(deps[1], BDep::Volt(node_of(&c, "p")));
+        assert_eq!(deps[2], BDep::Volt(node_of(&c, "q")));
+        assert_eq!(deps[3], BDep::Branch(dev_id(&c, "Vs")));
+        assert!(expr.src().contains("2.5"), "param folded: {}", expr.src());
+        assert!(expr.src().contains("math::tanh"), "{}", expr.src());
+        assert!(!expr.src().to_ascii_lowercase().contains("gain"));
+        // Evaluable end-to-end: V(a)=1, V(p)=V(q)=0, I(Vs)=0.2, t=10:
+        // 2.5*1 + tanh(0) + 3*0.2 + 0.1*10 + 1 = 5.1.
+        let v = expr.eval(&[1.0, 0.0, 0.0, 0.2], 10.0).unwrap();
+        assert!((v - 5.1).abs() < 1e-12, "got {v}");
+    }
+
+    /// Current output, `**` exponent rewrite, and case-insensitive node
+    /// binding: `v(OUT)` must bind the same node a later `R1 out ...` uses.
+    #[test]
+    fn behavioral_current_output_and_case_insensitive_nodes() {
+        let net = "b\nB1 0 drv I={v(OUT)**2}\nVx out 0 2\nR1 out 0 1k\nRL drv 0 1k\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let b = &c.devices[dev_id(&c, "B1").0 as usize];
+        let Device::Behavioral {
+            output, expr, deps, ..
+        } = b
+        else {
+            panic!("expected Behavioral, got {b:?}")
+        };
+        assert_eq!(*output, BOutput::Current);
+        assert_eq!(deps, &vec![BDep::Volt(node_of(&c, "out"))]);
+        assert!(expr.src().contains('^'), "** rewritten: {}", expr.src());
+        assert_eq!(expr.eval(&[3.0], 0.0).unwrap(), 9.0);
+    }
+
+    /// Every refusal is loud and line-numbered: unbraced expressions, unknown
+    /// identifiers/functions, ambiguous `log`, suffixes inside braces,
+    /// POLY/TABLE forms, dangling/non-V `i(...)` references, differential
+    /// arity, shorted V-output ports, and trailing junk.
+    #[test]
+    fn behavioral_refusals_are_loud() {
+        let cases: &[(&str, &str)] = &[
+            // (deck line, expected error fragment)
+            ("B1 out 0 V=v(a)*2", "brace-wrapped"),
+            ("B1 out 0 V={v(a)*2} tc=1", "trailing"),
+            ("B1 out 0 W={2}", "output must be"),
+            (
+                "B1 out 0 V={undefined_param*2}",
+                "unknown identifier `undefined_param`",
+            ),
+            ("B1 out 0 V={frob(v(a))}", "unsupported function `frob("),
+            ("B1 out 0 V={log(v(a))}", "ambiguous"),
+            ("B1 out 0 V={2k*v(a)}", "suffix inside a braced expression"),
+            ("B1 out 0 V={v(a,x,x)}", "differential pair"),
+            ("B1 out 0 V={i(Va,Vb)}", "exactly one V-source name"),
+            ("B1 out 0 V=POLY(2) a 0 b 0 1", "POLY"),
+            ("B1 out 0 V=TABLE {v(a)} = (0,0) (1,1)", "TABLE"),
+            ("B1 out 0 V={i(Vnope)}", "does not exist"),
+            ("B1 out 0 V={i(R9)}", "not an independent voltage source"),
+            ("B1 x x V={2}", "shorts its own output"),
+            ("B1 out 0 V={v(a}", "unclosed"),
+        ];
+        for (line, want) in cases {
+            let net = format!("b\n{line}\nVa a 0 1\nR9 a 0 1k\nRL out 0 1k\nRx x 0 1k\n.end\n");
+            let err = SpiceLoader::load(&net).unwrap_err().to_string();
+            assert!(
+                err.contains(want),
+                "deck line `{line}`: want fragment `{want}` in error, got: {err}"
+            );
+            assert!(err.contains("line 2"), "line number for `{line}`: {err}");
+        }
+    }
+
+    /// Zero-dependency expressions are legal (a constant / time-only source).
+    #[test]
+    fn behavioral_constant_and_time_only() {
+        let net = "b\nB1 out 0 V={3.3}\nB2 0 d I={0.001*sin(6.28*time)}\nRL out 0 1k\nRd d 0 1k\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        match &c.devices[dev_id(&c, "B1").0 as usize] {
+            Device::Behavioral { deps, expr, .. } => {
+                assert!(deps.is_empty());
+                assert_eq!(expr.eval(&[], 0.0).unwrap(), 3.3);
+            }
+            other => panic!("{other:?}"),
+        }
+        match &c.devices[dev_id(&c, "B2").0 as usize] {
+            Device::Behavioral { deps, expr, .. } => {
+                assert!(deps.is_empty());
+                let v = expr.eval(&[], 0.25).unwrap();
+                assert!((v - 0.001 * (6.28f64 * 0.25).sin()).abs() < 1e-15);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Subckt composition: `v(...)` args inside a body B-source map through
+    /// the port map (formal -> caller node) and the instance prefix
+    /// (internal -> `X1.mid`), `i(...)` args bind the instance's own ammeter,
+    /// ground stays global, and instance params fold per instance.
+    #[test]
+    fn behavioral_in_subckt_maps_ports_params_and_ammeters() {
+        let net = "b\n\
+                   .subckt amp inp outp gain=2\n\
+                   Vs inp mid 0\n\
+                   Rm mid 0 1k\n\
+                   B1 outp 0 V={gain*v(inp) + 100*i(Vs) + v(mid) + v(0)}\n\
+                   .ends\n\
+                   X1 a b amp gain=5\n\
+                   X2 c d amp\n\
+                   Va a 0 1\n\
+                   Vc c 0 1\n\
+                   RL1 b 0 1k\n\
+                   RL2 d 0 1k\n\
+                   .end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        for (inst, gain) in [("X1", 5.0), ("X2", 2.0)] {
+            let b = &c.devices[dev_id(&c, &format!("{inst}.B1")).0 as usize];
+            let Device::Behavioral { expr, deps, .. } = b else {
+                panic!("{b:?}")
+            };
+            // Slots: v(inp)->caller port node, i(Vs)->instance ammeter,
+            // v(mid)->mangled internal, v(0)->ground.
+            let caller = if inst == "X1" { "a" } else { "c" };
+            assert_eq!(deps[0], BDep::Volt(node_of(&c, caller)), "{inst}");
+            assert_eq!(
+                deps[1],
+                BDep::Branch(dev_id(&c, &format!("{inst}.Vs"))),
+                "{inst} ammeter binds per instance"
+            );
+            assert_eq!(deps[2], BDep::Volt(node_of(&c, &format!("{inst}.mid"))));
+            assert_eq!(
+                deps[3],
+                BDep::Volt(NodeId::GROUND),
+                "v(0) stays global ground"
+            );
+            assert!(
+                expr.src().contains(&format!("{gain}")),
+                "{inst}: per-instance param fold, src `{}`",
+                expr.src()
+            );
+        }
     }
 }
