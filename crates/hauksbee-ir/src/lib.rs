@@ -18,8 +18,11 @@ mod spice;
 pub use models::{
     thermal_voltage as thermal_voltage_c, BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity,
 };
-pub use source::{PwlPoint, SourceKind};
-pub use spice::{Directives, SpiceError, SpiceLoader, TranDirective};
+pub use source::{AcStim, PwlPoint, SourceKind};
+pub use spice::{
+    AcDirective, AcSweep, DcDirective, DcSweep, Directives, PrintRequest, SpiceError, SpiceLoader,
+    TranDirective,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +64,13 @@ pub struct Circuit {
     /// a deck without `.nodeset` cards.
     #[serde(default)]
     pub nodesets: Vec<(NodeId, f64)>,
+    /// Small-signal AC stimulus per source, captured from `AC <mag> [phase]`
+    /// tokens on source cards (consumed by `hauksbee_solve::AcAnalysis`). Empty
+    /// for a deck whose sources carry no `AC` spec — the honest signal that a
+    /// `.ac` analysis would have a zero stimulus and must be refused rather than
+    /// faked. The `DeviceId` is the flattened source's id, resolved post-splice.
+    #[serde(default)]
+    pub ac_stimulus: Vec<(DeviceId, AcStim)>,
 }
 
 impl Default for Circuit {
@@ -78,6 +88,7 @@ impl Circuit {
             temp_c: 27.0,
             initial_conditions: Vec::new(),
             nodesets: Vec::new(),
+            ac_stimulus: Vec::new(),
         }
     }
 

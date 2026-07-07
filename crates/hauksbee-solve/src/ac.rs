@@ -45,6 +45,8 @@ use hauksbee_ir::{BjtModel, Circuit, Device, MosLevel, MosfetModel, NodeId};
 pub enum Sweep {
     /// `points` per decade (log spacing). The SPICE `dec` sweep.
     Decade,
+    /// `points` per octave (log spacing). The SPICE `oct` sweep.
+    Octave,
     /// `points` total, linearly spaced between fstart and fstop.
     Linear,
 }
@@ -80,8 +82,9 @@ impl AcSpec {
             .map_err(|_| format!("bad points '{}'", parts[2]))?;
         let sweep = match parts.get(3).copied() {
             None | Some("dec") => Sweep::Decade,
+            Some("oct") => Sweep::Octave,
             Some("lin") => Sweep::Linear,
-            Some(other) => return Err(format!("unknown sweep mode '{other}' (dec|lin)")),
+            Some(other) => return Err(format!("unknown sweep mode '{other}' (dec|oct|lin)")),
         };
         if fstart <= 0.0 || fstop <= fstart {
             return Err("need 0 < fstart < fstop".into());
@@ -109,13 +112,15 @@ impl AcSpec {
                     .map(|i| self.fstart + step * i as f64)
                     .collect()
             }
-            Sweep::Decade => {
+            Sweep::Decade | Sweep::Octave => {
                 // Index-based geometric stepping avoids accumulated float drift,
                 // and the final point is pinned to fstop so a non-integer number
-                // of decades (e.g. 100 Hz .. 3 kHz) still includes the endpoint.
-                let decades = (self.fstop / self.fstart).log10();
-                let steps = (decades * self.points as f64).ceil() as usize;
-                let ratio = 10f64.powf(1.0 / self.points as f64);
+                // of decades/octaves (e.g. 100 Hz .. 3 kHz) still includes the
+                // endpoint. `base` is 10 for a decade, 2 for an octave.
+                let base = if self.sweep == Sweep::Octave { 2.0 } else { 10.0 };
+                let intervals = (self.fstop / self.fstart).log(base);
+                let steps = (intervals * self.points as f64).ceil() as usize;
+                let ratio = base.powf(1.0 / self.points as f64);
                 let mut out = Vec::with_capacity(steps + 1);
                 for i in 0..steps {
                     let f = self.fstart * ratio.powi(i as i32);
@@ -228,6 +233,18 @@ impl AcAnalysis {
     ) -> Result<Vec<Complex64>, String> {
         let mut sys = ComplexSystem::new(layout.size);
         let dedicated_ac_source = has_dedicated_ac_source(circuit);
+        // If the deck's sources carry explicit `AC <mag> [phase]` stimulus (the
+        // SPICE `.ac` drive), that is the authoritative source excitation: each
+        // listed source drives its complex amplitude, every other source is
+        // AC-grounded. With NO explicit stimulus we keep the board-level
+        // convention (dedicated injection source, else unit drive) so `hauksbee
+        // run --ac` and the analytic AC tests are unchanged.
+        let explicit: std::collections::HashMap<hauksbee_ir::DeviceId, Complex64> = circuit
+            .ac_stimulus
+            .iter()
+            .map(|(id, s)| (*id, Complex64::from_polar(s.mag, s.phase_deg.to_radians())))
+            .collect();
+        let use_explicit = !explicit.is_empty();
         // gmin on every node diagonal, mirroring the real solver (keeps a
         // floating node solvable and matches the OP's conditioning).
         let gmin = self.opts.gmin;
@@ -235,16 +252,17 @@ impl AcAnalysis {
             sys.add(i, i, Complex64::new(gmin, 0.0));
         }
         for (id, dev) in circuit.iter() {
-            stamp_ac(
-                &mut sys,
-                layout,
-                op,
-                dev,
-                id,
-                w,
-                &self.opts,
-                dedicated_ac_source,
-            );
+            let drive = match dev {
+                Device::Vsource { name, .. } | Device::Isource { name, .. } => {
+                    if use_explicit {
+                        explicit.get(&id).copied().unwrap_or(Complex64::new(0.0, 0.0))
+                    } else {
+                        source_ac_drive(name, dedicated_ac_source)
+                    }
+                }
+                _ => Complex64::new(0.0, 0.0),
+            };
+            stamp_ac(&mut sys, layout, op, dev, id, w, &self.opts, drive);
         }
         sys.solve().ok_or_else(|| {
             format!(
@@ -290,7 +308,9 @@ fn stamp_ac(
     id: hauksbee_ir::DeviceId,
     w: f64,
     opts: &SolverOptions,
-    dedicated_ac_source: bool,
+    // The complex AC drive amplitude for this device (0 for a non-source or an
+    // AC-grounded source), resolved by the caller from the deck's stimulus.
+    drive: Complex64,
 ) {
     let n = |node: NodeId| layout.node(node);
     match dev {
@@ -320,11 +340,8 @@ fn stamp_ac(
             }
             sys.add(br, br, Complex64::new(0.0, -w * *henries));
         }
-        Device::Vsource {
-            name, p, n: neg, ..
-        } => {
-            // Ideal AC voltage source of unit amplitude: branch row sets
-            // v_p - v_n = 1.
+        Device::Vsource { p, n: neg, .. } => {
+            // AC voltage source: branch row sets v_p - v_n = drive.
             let br = layout.branch(id).expect("vsource has a branch unknown");
             let (pi, ni) = (n(*p), n(*neg));
             if let Some(pi) = pi {
@@ -335,13 +352,10 @@ fn stamp_ac(
                 sys.add(ni, br, Complex64::new(-1.0, 0.0));
                 sys.add(br, ni, Complex64::new(-1.0, 0.0));
             }
-            sys.add_rhs(br, source_ac_drive(name, dedicated_ac_source));
+            sys.add_rhs(br, drive);
         }
-        Device::Isource {
-            name, p, n: neg, ..
-        } => {
-            // Unit AC current injected p -> n.
-            let drive = source_ac_drive(name, dedicated_ac_source);
+        Device::Isource { p, n: neg, .. } => {
+            // AC current injected p -> n.
             if let Some(pi) = n(*p) {
                 sys.add_rhs(pi, -drive);
             }
