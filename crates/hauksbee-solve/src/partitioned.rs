@@ -1371,7 +1371,7 @@ impl NonlinearIsland {
         dc_operating_point(&mut self.ws, &self.sub, opts)?;
         self.x_accepted.copy_from_slice(&self.ws.x);
         // Seed reactive history from the sub DC point.
-        seed_sub_reactive(&mut self.state, &self.sub, &self.ws);
+        seed_sub_reactive(&mut self.state, &self.sub, &self.ws, opts);
         Ok(())
     }
 
@@ -1406,7 +1406,7 @@ impl NonlinearIsland {
             }
         }
         self.x_accepted.copy_from_slice(&self.ws.x);
-        seed_sub_reactive(&mut self.state, &self.sub, &self.ws);
+        seed_sub_reactive(&mut self.state, &self.sub, &self.ws, opts);
     }
 
     /// Refresh boundary source values from the global exchange buffer.
@@ -1533,7 +1533,12 @@ fn clone_remapped(dev: &Device, mut f: impl FnMut(NodeId) -> NodeId) -> Device {
 // Reactive-state helpers mirroring the monolithic transient driver, applied to
 // a sub-circuit. Kept here so the partitioned path is self-contained.
 
-fn seed_sub_reactive(state: &mut ReactiveState, sub: &Circuit, ws: &Workspace) {
+fn seed_sub_reactive(
+    state: &mut ReactiveState,
+    sub: &Circuit,
+    ws: &Workspace,
+    opts: &SolverOptions,
+) {
     for (id, dev) in sub.iter() {
         let i = id.0 as usize;
         match dev {
@@ -1548,9 +1553,26 @@ fn seed_sub_reactive(state: &mut ReactiveState, sub: &Circuit, ws: &Workspace) {
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
+            // Charge-storing diode (dev-plan 04 §3.1): its slots hold CHARGE,
+            // seeded at the island's DC junction voltage.
+            Device::Diode { a, k, model, .. }
+                if crate::stamp::diode_has_charge(model, &opts.effects) =>
+            {
+                state.x1[i] = sub_diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                state.x2[i] = state.x1[i];
+                state.dx1[i] = 0.0;
+            }
             _ => {}
         }
     }
+}
+
+/// Diode stored charge at junction voltage `vd`, through the same model code
+/// the stamp uses (the sub-island mirror of the monolithic driver's helper).
+fn sub_diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -> f64 {
+    let (idc, gd) =
+        crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
+    crate::stamp::diode_charge(model, vd, idc, gd).0
 }
 
 // The graded-board fixtures (single source of truth in benches/, see the
@@ -2019,6 +2041,23 @@ fn advance_sub_reactive(
                 state.x2[i] = i_old;
                 state.x1[i] = i_new;
                 state.dx1[i] = di;
+            }
+            // Charge-storing diode: the capacitor roll, in CHARGE (dx1 is
+            // dQ/dt, the capacitive branch current the trapezoidal history
+            // term needs next step).
+            Device::Diode { a, k, model, .. }
+                if crate::stamp::diode_has_charge(model, &opts.effects) =>
+            {
+                let q_new = sub_diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_new - q_old) / h - state.dx1[i]
+                } else {
+                    (q_new - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_new;
+                state.dx1[i] = dq;
             }
             _ => {}
         }

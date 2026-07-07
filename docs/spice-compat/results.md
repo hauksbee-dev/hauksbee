@@ -6,8 +6,8 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **15**
-- Passing: **15/15**
+- Decks: **17**
+- Passing: **17/17**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -20,11 +20,13 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | diode_op | op | `V(d)` | 4.572e-6 | 1.0e-3 | op | PASS |
 |  |  | `I(V1)` | 5.044e-7 | 5.0e-3 | op | PASS |
 | diode_rectifier | tran | `V(out)` | 4.860e-4 | 2.0e-2 | t=1.114e-3s | PASS |
+| diode_rectifier_charge | tran | `V(out)` | 3.313e-4 | 2.0e-2 | t=2.192e-5s | PASS |
+| diode_reverse_recovery | tran | `V(a)` | 3.863e-2 | 5.0e-2 | t=1.308e-6s | PASS |
+| diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-3 | op | PASS |
 | opamp_subckt | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
-| rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-2 | t=0.000e0s | PASS |
 | rc_ladder | tran | `V(n8)` | 7.198e-4 | 1.0e-2 | t=3.118e-5s | PASS |
 | rc_lowpass | tran | `V(out)` | 8.925e-4 | 1.0e-2 | t=1.409e-6s | PASS |
 | resistor_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
@@ -42,9 +44,11 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
 - **diode_op**: diode forward-drop DC operating point
 - **diode_rectifier**: half-wave rectifier with RC smoothing
+- **diode_rectifier_charge**: half-wave rectifier, diode with junction+diffusion charge
+- **diode_reverse_recovery**: switching diode driven from forward into reverse (recovery tail)
+- **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
-- **rc_ic_decay**: RC discharge from .ic V(out)=5 under uic (tau = 1 ms)
 - **rc_ladder**: 8-stage RC ladder step response
 - **rc_lowpass**: RC low-pass step response (tau = 100 us)
 - **resistor_divider**: resistive divider DC operating point

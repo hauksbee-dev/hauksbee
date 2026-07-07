@@ -1,0 +1,10 @@
+# Reverse breakdown clamp: v(out) sits at BV plus the exponential knee's
+# overdrive (~0.68 V at 3.1 mA for IS=1e-14). IBV=IS on the deck aligns
+# ngspice's breakdown scale current with ours (see the .cir comment), so the
+# clamp voltages should agree to well under a percent.
+analysis = "op"
+description = "zener-style breakdown clamp voltage past BV"
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.005
