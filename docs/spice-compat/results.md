@@ -6,8 +6,8 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **29**
-- Passing: **29/29**
+- Decks: **33**
+- Passing: **33/33**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -31,10 +31,16 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | diode_reverse_recovery | tran | `V(a)` | 3.863e-2 | 5.0e-2 | t=1.308e-6s | PASS |
 | diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-3 | op | PASS |
 | flyback_diode | tran | `V(out)` | 1.595e-2 | 5.0e-2 | t=2.556e-5s | PASS |
+| mos_body_bias | dc | `V(d)` | 1.089e-2 | 3.0e-2 | sweep=1.750e0 | PASS |
+| mos_body_diode | tran | `V(d)` | 1.218e-1 | 2.5e-1 | t=2.050e-6s | PASS |
+| mos_load_switch | tran | `V(d)` | 3.226e-1 | 5.0e-1 | t=5.238e-6s | PASS |
+|  |  | `V(g)` | 6.872e-2 | 1.5e-1 | t=5.676e-6s | PASS |
 | opamp_subckt | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
+| pmos_load_switch | tran | `V(d)` | 9.291e-1 | 1.2e0 | t=1.110e-6s | PASS |
+|  |  | `V(g)` | 7.128e-2 | 1.5e-1 | t=5.110e-6s | PASS |
 | rc_ac_bode | ac | `V(out) mag` | 2.760e-7 | 1.0e-2 | f=1.259e4Hz | PASS |
 |  |  | `V(out) phase(deg)` | 2.706e-4 | 1.0e0 | f=2.512e5Hz | PASS |
 | rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-2 | t=0.000e0s | PASS |
@@ -70,8 +76,12 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **diode_reverse_recovery**: switching diode driven from forward into reverse (recovery tail)
 - **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
 - **flyback_diode**: flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R
+- **mos_body_bias**: reverse body bias shifts the threshold via GAMMA/PHI
+- **mos_body_diode**: body-diode reverse conduction, then synchronous channel takeover
+- **mos_load_switch**: NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
+- **pmos_load_switch**: PMOS high-side switch: folded negative VTO + P-channel gate charge
 - **rc_ac_bode**: RC low-pass Bode: magnitude and phase of V(out) vs a unit AC source, 10 Hz .. 1 MHz at 10 points/decade. Corner near 1 kHz (-3 dB, -45 deg).
 - **rc_ic_decay**: RC discharge from .ic V(out)=5 under uic (tau = 1 ms)
 - **rc_ladder**: 8-stage RC ladder step response
