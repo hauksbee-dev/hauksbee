@@ -6,8 +6,8 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **18**
-- Passing: **18/18**
+- Decks: **20**
+- Passing: **20/20**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -17,6 +17,8 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | t=9.225e-6s | PASS |
+| diode_iv_dc | dc | `V(d)` | 1.093e-4 | 2.0e-2 | sweep=8.500e-1 | PASS |
+|  |  | `V(a,d)` | 9.617e-4 | 2.0e-2 | sweep=6.500e-1 | PASS |
 | diode_op | op | `V(d)` | 4.572e-6 | 1.0e-3 | op | PASS |
 |  |  | `I(V1)` | 5.044e-7 | 5.0e-3 | op | PASS |
 | diode_rectifier | tran | `V(out)` | 4.860e-4 | 2.0e-2 | t=1.114e-3s | PASS |
@@ -27,6 +29,8 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
+| rc_ac_bode | ac | `V(out) mag` | 2.760e-7 | 1.0e-2 | f=1.259e4Hz | PASS |
+|  |  | `V(out) phase(deg)` | 2.706e-4 | 1.0e0 | f=2.512e5Hz | PASS |
 | rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-2 | t=0.000e0s | PASS |
 | rc_ladder | tran | `V(n8)` | 7.198e-4 | 1.0e-2 | t=3.118e-5s | PASS |
 | rc_lowpass | tran | `V(out)` | 8.925e-4 | 1.0e-2 | t=1.409e-6s | PASS |
@@ -43,6 +47,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **cccs_mirror**: CCCS mirror (gain 2 into 500 || 100n) of an ammeter current
 - **cccs_subckt**: CCCS in a subckt controlled by its own local ammeter
 - **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
+- **diode_iv_dc**: Diode forward V-I DC sweep (Vin 0..1 V): junction voltage V(d) and the drop V(a,d) across the 100 ohm series resistor, re-solving the nonlinear OP at every sweep point.
 - **diode_op**: diode forward-drop DC operating point
 - **diode_rectifier**: half-wave rectifier with RC smoothing
 - **diode_rectifier_charge**: half-wave rectifier, diode with junction+diffusion charge
@@ -50,6 +55,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
+- **rc_ac_bode**: RC low-pass Bode: magnitude and phase of V(out) vs a unit AC source, 10 Hz .. 1 MHz at 10 points/decade. Corner near 1 kHz (-3 dB, -45 deg).
 - **rc_ic_decay**: RC discharge from .ic V(out)=5 under uic (tau = 1 ms)
 - **rc_ladder**: 8-stage RC ladder step response
 - **rc_lowpass**: RC low-pass step response (tau = 100 us)
