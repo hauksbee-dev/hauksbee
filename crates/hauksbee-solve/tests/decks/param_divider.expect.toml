@@ -1,0 +1,20 @@
+# A resistive divider whose source and both resistor values come entirely from
+# `.param` cards and `{expr}` (rtop*ratio). Exercises the parameter environment
+# and expression evaluation at load against ngspice, which resolves the same
+# `.param`/`{}` cards. Output is exact to floating point:
+#   V(out) = vin * (rtop*ratio) / (rtop + rtop*ratio) = 5 * 3k/4k = 3.75 V.
+analysis = "op"
+description = ".param + {expr}-driven resistive divider DC operating point"
+
+[[probe]]
+expr = "V(out)"
+reltol = 1.0e-4
+
+[[probe]]
+expr = "V(in)"
+reltol = 1.0e-4
+
+[[probe]]
+expr = "I(V1)"
+reltol = 1.0e-4
+abstol = 1.0e-9

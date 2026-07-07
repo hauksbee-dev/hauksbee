@@ -1,0 +1,7 @@
+param-driven resistive divider
+.param vin=5 rtop=1k ratio=3
+V1 in 0 {vin}
+R1 in out {rtop}
+R2 out 0 {rtop*ratio}
+.op
+.end
