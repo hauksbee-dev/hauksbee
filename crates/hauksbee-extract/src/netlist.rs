@@ -1,5 +1,14 @@
-//! Extraction from a KiCad netlist export:
-//! `(export (components (comp ...)) (nets (net (node ...))))`.
+//! Extraction from a KiCad netlist export into the canonical [`ExtractedBoard`].
+//!
+//! The input is the s-expression `(export (components (comp ...)) (nets (net
+//! (node ...))))` that KiCad writes from the schematic. This is the most direct
+//! ingestion path: unlike the gerber reader it does not reconstruct
+//! connectivity, it reads the nets the schematic already declares. Each `comp`
+//! becomes a [`Component`] (refdes plus its `libsource` lib/part id) and each
+//! `net` becomes a [`Net`] whose `node` entries name the (refdes, pin) [`Pin`]s
+//! tied together. The result is the same neutral board form every other
+//! front-end lowers to, so downstream binding and simulation never see which
+//! reader produced it.
 
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use forge_sexpr::Document;
