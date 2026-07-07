@@ -929,6 +929,29 @@ pub fn dc_operating_point_seeded(
     dc_solve(ws, circuit, opts, use_ic, seed)
 }
 
+/// Copy each series-resistance BJT's EXTERNAL terminal voltages onto its
+/// device-private internal unknowns (dev-plan 04 §3.2). `.nodeset` can only
+/// name netlist nodes, so a cold start would otherwise leave the intrinsic
+/// nodes at zero volts behind a seeded external — putting the intrinsic
+/// junction back into the limiting-walk trap the nodeset was written to
+/// avoid. Through a small ohmic resistance "same voltage as the terminal" is
+/// the physically sensible guess. On the all-zero cold start this is a no-op
+/// (0 -> 0), and circuits without internal nodes take one empty-vec check.
+fn seed_bjt_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
+    for (id, dev) in circuit.iter() {
+        if let Device::Bjt { c, b, e, .. } = dev {
+            if let Some(&ints) = ws.layout.bjt_internal(id) {
+                let ext = [*c, *b, *e];
+                for t in 0..3 {
+                    if let Some(ii) = ints[t] {
+                        ws.x[ii] = ws.layout.node(ext[t]).map(|i| ws.x[i]).unwrap_or(0.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn dc_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -973,7 +996,12 @@ fn dc_solve(
             ws.x[i] = val;
         }
     }
+    seed_bjt_internal_nodes(ws, circuit);
+    let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     let r = solve(ws, opts.gmin, 1.0);
+    if dbg {
+        eprintln!("[dc] plain cold: converged={} iters={}", r.converged, r.iters);
+    }
     if r.converged {
         return Ok(());
     }
@@ -990,6 +1018,9 @@ fn dc_solve(
     while gmin > opts.gmin {
         let r = solve(ws, gmin, 1.0);
         if !r.converged {
+            if dbg {
+                eprintln!("[dc] gmin-step stalled at gmin={gmin:e} iters={}", r.iters);
+            }
             ok = false;
             break;
         }
@@ -997,6 +1028,9 @@ fn dc_solve(
     }
     if ok && solve(ws, opts.gmin, 1.0).converged {
         return Ok(());
+    }
+    if dbg {
+        eprintln!("[dc] gmin ladder failed (ok={ok})");
     }
 
     // Attempt 3: source stepping — ramp every source from 0 to full.
@@ -1013,6 +1047,9 @@ fn dc_solve(
         last_scale = scale;
         last_iters = r.iters;
         if !r.converged {
+            if dbg {
+                eprintln!("[dc] source-step stalled at scale={scale:.3} iters={}", r.iters);
+            }
             src_ok = false;
             break;
         }
@@ -1771,8 +1808,21 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     }
     let mut ws = Workspace::new(&relaxed);
     // Cold solve of the relaxed circuit (no seed). It is far better conditioned
-    // than the full one: the diode nonlinearity is gone.
-    dc_solve(&mut ws, &relaxed, opts, false, None).ok()?;
+    // than the full one: the diode nonlinearity is gone — and so is the BJT
+    // intrinsic mesh (dev-plan 04 §3.2): `series_resistance` is relaxed OFF,
+    // which pins each internal unknown behind a unit diagonal and puts the
+    // Gummel-Poon cores back on the external nodes, the base-topology system
+    // the cold ladder is known to converge (measured on the flagship board:
+    // with the intrinsic rb/rc/re mesh live, cold source-stepping limit-cycles
+    // on the mirror pairs' internal nodes at scale ~0.2 and the whole staged
+    // DC dies). The full-toggle solve then warm-starts from this converged
+    // point with the internal unknowns seeded from their external terminals —
+    // the same relax-then-continue discipline the diode OFF-conductance swap
+    // embodies. For a circuit with no series-R BJT both changes are no-ops.
+    let mut relaxed_opts = *opts;
+    relaxed_opts.effects.series_resistance = false;
+    dc_solve(&mut ws, &relaxed, &relaxed_opts, false, None).ok()?;
+    seed_bjt_internal_nodes(&mut ws, &relaxed);
     Some(ws.x.clone())
 }
 

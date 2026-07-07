@@ -1562,6 +1562,23 @@ fn seed_sub_reactive(
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
+            // Charge-storing BJT (dev-plan 04 §3.2): both junction charges
+            // seeded at the island's DC intrinsic junction voltages (the
+            // sub-workspace's own layout allocated any internal nodes, so
+            // the resolution rule is the monolithic one verbatim). Without
+            // this arm a torn-island BJT would read zero charge history on
+            // every step — the failure the diode arm already guards against.
+            Device::Bjt { c, b, e, model, .. }
+                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
+            {
+                let (q_be, q_bc) = sub_bjt_q(ws, id, *c, *b, *e, model, opts);
+                state.x1[i] = q_be;
+                state.x2[i] = q_be;
+                state.dx1[i] = 0.0;
+                state.x1b[i] = q_bc;
+                state.x2b[i] = q_bc;
+                state.dx1b[i] = 0.0;
+            }
             _ => {}
         }
     }
@@ -1573,6 +1590,31 @@ fn sub_diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -
     let (idc, gd) =
         crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
     crate::stamp::diode_charge(model, vd, idc, gd).0
+}
+
+/// BJT stored charges `(Q_be, Q_bc)` at the sub-island's solution, through
+/// the same model code and intrinsic-node resolution the stamp uses (the
+/// sub-island mirror of the monolithic driver's helper).
+fn sub_bjt_q(
+    ws: &Workspace,
+    id: hauksbee_ir::DeviceId,
+    c: NodeId,
+    b: NodeId,
+    e: NodeId,
+    model: &hauksbee_ir::BjtModel,
+    opts: &SolverOptions,
+) -> (f64, f64) {
+    let (vbe, vbc) = crate::stamp::bjt_junction_voltages(
+        &ws.layout,
+        &ws.x,
+        id,
+        c,
+        b,
+        e,
+        model,
+        &opts.effects,
+    );
+    crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
 }
 
 // The graded-board fixtures (single source of truth in benches/, see the
@@ -2058,6 +2100,31 @@ fn advance_sub_reactive(
                 state.x2[i] = q_old;
                 state.x1[i] = q_new;
                 state.dx1[i] = dq;
+            }
+            // Charge-storing BJT: the diode's roll applied to both charge
+            // banks (A = Q_be, B = Q_bc), mirroring the monolithic driver.
+            Device::Bjt { c, b, e, model, .. }
+                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
+            {
+                let (q_be, q_bc) = sub_bjt_q(ws, id, *c, *b, *e, model, opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_be - q_old) / h - state.dx1[i]
+                } else {
+                    (q_be - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_be;
+                state.dx1[i] = dq;
+                let qb_old = state.x1b[i];
+                let dqb = if trapz {
+                    2.0 * (q_bc - qb_old) / h - state.dx1b[i]
+                } else {
+                    (q_bc - qb_old) / h
+                };
+                state.x2b[i] = qb_old;
+                state.x1b[i] = q_bc;
+                state.dx1b[i] = dqb;
             }
             _ => {}
         }
