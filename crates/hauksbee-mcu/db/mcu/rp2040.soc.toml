@@ -1,0 +1,67 @@
+# RP2040 (Raspberry Pi Pico): dual Cortex-M0+, 125 MHz, one 30-pin GPIO bank
+# observed through the SIO.
+#
+# THE SIO FOOTGUN (an honest adaptation of the F4-vs-F103 ODR discipline)
+# ---------------------------------------------------------------------------
+# On the STM32 parts the output-state register is a per-port ODR inside a GPIO
+# port peripheral (F1 at 0x0C, F4 at 0x14). RP2040 is NOT a memory-mapped GPIO
+# port bank at all: its GPIO output value lives in the SIO (single-cycle IO)
+# block at SIO_BASE = 0xD000_0000 (RP2040 datasheet §2.3.1.7):
+#
+#   Register      Absolute       Offset from SIO_BASE
+#   GPIO_IN       0xD000_0004    0x04
+#   GPIO_OUT      0xD000_0010    0x10
+#   GPIO_OUT_SET  0xD000_0014    0x14
+#   GPIO_OE       0xD000_0020    0x20
+#
+# So "where do I read output state" is SIO GPIO_OUT (offset 0x10 within the SIO
+# peripheral), NOT a port ODR. The ODR-diff mechanism is pointed at the SIO
+# peripheral with odr_offset = 0x10 — the faithful adaptation: read the register
+# that actually holds the driven levels rather than invent a port-bank ODR that
+# does not exist.
+#
+# VERIFICATION STATUS — READ BEFORE TRUSTING THIS DESCRIPTOR
+# ---------------------------------------------------------------------------
+# The register offsets above are datasheet-verified. What is NOT verified is
+# Renode's side: the portable Renode v1.16.1 on this machine ships no rp2040
+# platform (platforms/cpus/ has only picosoc/litex_picorv32). So two things are
+# best-effort until a Renode build that carries the platform runs the smoke:
+#   1. the SIO peripheral's NAME in rp2040.repl (assumed "sio"; correct it here
+#      if a Renode build names it otherwise), and
+#   2. whether Renode's SIO model reads GPIO_OUT back as the driven value (the
+#      ODR-poll relies on read-back).
+# tests/renode_rp2040.rs is skip-gated on this absence and confirms/corrects both
+# the day it runs on a Renode that carries the platform.
+#
+# WHAT IS DELIBERATELY NOT WIRED (refuse rather than fake)
+# ---------------------------------------------------------------------------
+# - ADC: RP2040 has a SAR ADC, but no Renode ADC model is verified, so there is
+#   no [[soc.adc]] entry — an unmapped channel is the merged policy's LOUD
+#   once-per-channel drop, never a fake count.
+# - I2C/SPI: no controllers, because the RP2040 Renode peripheral set is
+#   unverified; the backend then installs no bridge rather than claim an
+#   unproven bus.
+[soc]
+backend = "renode"
+machine = "rp2040"
+platform_repl = "@platforms/cpus/rp2040.repl"
+# Dual-core; the SIO GPIO registers are shared single-cycle IO, so observation is
+# core-agnostic. State queries use core 0.
+cpu_path = "sysbus.cpu0"
+uart = "sysbus.uart0"
+frequency_hz = 125_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "RP2040 (dual Cortex-M0+)"
+
+[[soc.ports]]
+# SIO GPIO_OUT is the output-state register: a single 30-pin bank (GPIO0..GPIO29),
+# port letter '0', read at SIO offset 0x10.
+letter = "0"
+peripheral = "sio"
+odr_offset = 0x10
+width = 30
+
+[soc.i2c]
+controllers = []
+[soc.spi]
+controllers = []
