@@ -680,13 +680,54 @@ fn seed_reactive_state(
                 state.x1[i] = q_be;
                 state.x2[i] = q_be;
                 state.dx1[i] = 0.0;
-                state.x1b[i] = q_bc;
-                state.x2b[i] = q_bc;
-                state.dx1b[i] = 0.0;
+                state.xb[0].x1[i] = q_bc;
+                state.xb[0].x2[i] = q_bc;
+                state.xb[0].dx1[i] = 0.0;
+            }
+            // Charge-storing MOSFET (dev-plan 04 §3.3): all four charges at
+            // the operating-point junction voltages — bank A = Q_gs,
+            // xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs (the `ReactiveState`
+            // packing table).
+            Device::Mosfet { d, g, s, b, model, .. }
+                if crate::stamp::mos_has_charge(model, &opts.effects) =>
+            {
+                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
+                state.x1[i] = q_gs;
+                state.x2[i] = q_gs;
+                state.dx1[i] = 0.0;
+                for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
+                    state.xb[bank].x1[i] = q;
+                    state.xb[bank].x2[i] = q;
+                    state.xb[bank].dx1[i] = 0.0;
+                }
             }
             _ => {}
         }
     }
+}
+
+/// MOSFET stored charges `(Q_gs, Q_gd, Q_bd, Q_bs)` at the solution in `ws`,
+/// through the same model code and junction-voltage rule the stamp uses.
+fn mos_q(
+    ws: &Workspace,
+    d: NodeId,
+    g: NodeId,
+    s: NodeId,
+    b: Option<NodeId>,
+    model: &hauksbee_ir::MosfetModel,
+    opts: &SolverOptions,
+) -> (f64, f64, f64, f64) {
+    let (vgs, vgd, vbd, vbs) =
+        crate::stamp::mos_junction_voltages(&ws.layout, &ws.x, d, g, s, b, model);
+    crate::stamp::mos_charges_at(
+        model,
+        vgs,
+        vgd,
+        vbd,
+        vbs,
+        opts.model_temp(),
+        opts.effects.temperature,
+    )
 }
 
 /// Diode stored charge at junction voltage `vd` (the §3.1 companion's state
@@ -798,15 +839,44 @@ fn advance_reactive_state(
                 state.x2[i] = q_old;
                 state.x1[i] = q_be;
                 state.dx1[i] = dq;
-                let qb_old = state.x1b[i];
+                let qb_old = state.xb[0].x1[i];
                 let dqb = if trapz {
-                    2.0 * (q_bc - qb_old) / h - state.dx1b[i]
+                    2.0 * (q_bc - qb_old) / h - state.xb[0].dx1[i]
                 } else {
                     (q_bc - qb_old) / h
                 };
-                state.x2b[i] = qb_old;
-                state.x1b[i] = q_bc;
-                state.dx1b[i] = dqb;
+                state.xb[0].x2[i] = qb_old;
+                state.xb[0].x1[i] = q_bc;
+                state.xb[0].dx1[i] = dqb;
+            }
+            // Charge-storing MOSFET: the same roll applied to all four banks
+            // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs); each dx
+            // is that junction's dQ/dt, the capacitive current its
+            // trapezoidal history needs.
+            Device::Mosfet { d, g, s, b, model, .. }
+                if crate::stamp::mos_has_charge(model, &opts.effects) =>
+            {
+                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_gs - q_old) / h - state.dx1[i]
+                } else {
+                    (q_gs - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_gs;
+                state.dx1[i] = dq;
+                for (bank, q_new) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
+                    let q_old = state.xb[bank].x1[i];
+                    let dq = if trapz {
+                        2.0 * (q_new - q_old) / h - state.xb[bank].dx1[i]
+                    } else {
+                        (q_new - q_old) / h
+                    };
+                    state.xb[bank].x2[i] = q_old;
+                    state.xb[bank].x1[i] = q_new;
+                    state.xb[bank].dx1[i] = dq;
+                }
             }
             _ => {}
         }
@@ -895,7 +965,26 @@ fn lte_estimate(
             {
                 let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
                 worst = worst.max(err_of(q_be, state.x1[i], state.x2[i], opts.chgtol));
-                worst = worst.max(err_of(q_bc, state.x1b[i], state.x2b[i], opts.chgtol));
+                worst = worst.max(err_of(q_bc, state.xb[0].x1[i], state.xb[0].x2[i], opts.chgtol));
+                continue;
+            }
+            // A charge-storing MOSFET participates through all four charges
+            // (chgtol floor each) — gate charge is what shapes its switching
+            // edges, so it must gate the step size exactly as a capacitor
+            // would. Charge-free MOSFETs hit the `continue` exactly as before.
+            Device::Mosfet { d, g, s, b, model, .. }
+                if crate::stamp::mos_has_charge(model, &opts.effects) =>
+            {
+                let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
+                worst = worst.max(err_of(q_gs, state.x1[i], state.x2[i], opts.chgtol));
+                for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
+                    worst = worst.max(err_of(
+                        q,
+                        state.xb[bank].x1[i],
+                        state.xb[bank].x2[i],
+                        opts.chgtol,
+                    ));
+                }
                 continue;
             }
             _ => continue,

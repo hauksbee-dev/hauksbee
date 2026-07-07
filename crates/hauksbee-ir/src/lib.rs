@@ -730,11 +730,25 @@ impl Device {
             | Device::Diode { a, k: b, .. } => vec![*a, *b],
             Device::Vsource { p, n, .. } | Device::Isource { p, n, .. } => vec![*p, *n],
             Device::Bjt { c, b, e, .. } => vec![*c, *b, *e],
-            // Level-1 stamp: channel current flows d<->s; the gate row gets no
-            // entries (gm lands in the d/s rows referencing the gate COLUMN)
-            // and the optional bulk is not stamped at all. Both become
-            // conduction terminals when W3 adds gate charge / the body diode.
-            Device::Mosfet { d, s, .. } => vec![*d, *s],
+            // Level-1 channel current flows d<->s. The gate row receives
+            // entries exactly when the model carries gate capacitance
+            // (displacement current through the §3.3 charge companions), and
+            // the bulk row exactly when it carries bulk-junction physics
+            // (body-diode DC branch and/or depletion caps). A default model
+            // (no cap/body fields) keeps the pre-§3.3 [d, s] classification
+            // bit-identically — gate stays sense, bulk stays unstamped.
+            Device::Mosfet { d, g, s, b, model, .. } => {
+                let mut v = vec![*d, *s];
+                if model.has_gate_charge() {
+                    v.push(*g);
+                }
+                if model.has_body_diode() {
+                    if let Some(b) = b {
+                        v.push(*b);
+                    }
+                }
+                v
+            }
             // The switch channel conducts; the control pair only steers it.
             Device::VSwitch { a, b, .. } => vec![*a, *b],
             // Behavioral output stages drive their out node through a 1 Ohm
@@ -787,10 +801,18 @@ impl Device {
             | Device::Vsource { .. }
             | Device::Isource { .. }
             | Device::Bjt { .. } => Vec::new(),
-            Device::Mosfet { g, b, .. } => {
-                let mut v = vec![*g];
+            // Exactly the complement of the conduction claim above: gate and
+            // bulk are sense terminals only while the model gives their rows
+            // nothing (no gate caps / no bulk junctions, dev-plan 04 §3.3).
+            Device::Mosfet { g, b, model, .. } => {
+                let mut v = Vec::new();
+                if !model.has_gate_charge() {
+                    v.push(*g);
+                }
                 if let Some(b) = b {
-                    v.push(*b);
+                    if !model.has_body_diode() {
+                        v.push(*b);
+                    }
                 }
                 v
             }

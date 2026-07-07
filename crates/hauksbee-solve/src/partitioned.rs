@@ -1586,9 +1586,26 @@ fn seed_sub_reactive(
                 state.x1[i] = q_be;
                 state.x2[i] = q_be;
                 state.dx1[i] = 0.0;
-                state.x1b[i] = q_bc;
-                state.x2b[i] = q_bc;
-                state.dx1b[i] = 0.0;
+                state.xb[0].x1[i] = q_bc;
+                state.xb[0].x2[i] = q_bc;
+                state.xb[0].dx1[i] = 0.0;
+            }
+            // Charge-storing MOSFET (dev-plan 04 §3.3): all four charges
+            // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs) seeded at
+            // the island's DC junction voltages — the monolithic driver's
+            // arm, mirrored for the same reason as the diode's and BJT's.
+            Device::Mosfet { d, g, s, b, model, .. }
+                if crate::stamp::mos_has_charge(model, &opts.effects) =>
+            {
+                let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
+                state.x1[i] = q_gs;
+                state.x2[i] = q_gs;
+                state.dx1[i] = 0.0;
+                for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
+                    state.xb[bank].x1[i] = q;
+                    state.xb[bank].x2[i] = q;
+                    state.xb[bank].dx1[i] = 0.0;
+                }
             }
             _ => {}
         }
@@ -1626,6 +1643,31 @@ fn sub_bjt_q(
         &opts.effects,
     );
     crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
+}
+
+/// MOSFET stored charges `(Q_gs, Q_gd, Q_bd, Q_bs)` at the island solution,
+/// through the same model code the stamp uses (the sub-island mirror of the
+/// monolithic driver's helper).
+fn sub_mos_q(
+    ws: &Workspace,
+    d: NodeId,
+    g: NodeId,
+    s: NodeId,
+    b: Option<NodeId>,
+    model: &hauksbee_ir::MosfetModel,
+    opts: &SolverOptions,
+) -> (f64, f64, f64, f64) {
+    let (vgs, vgd, vbd, vbs) =
+        crate::stamp::mos_junction_voltages(&ws.layout, &ws.x, d, g, s, b, model);
+    crate::stamp::mos_charges_at(
+        model,
+        vgs,
+        vgd,
+        vbd,
+        vbs,
+        opts.model_temp(),
+        opts.effects.temperature,
+    )
 }
 
 // The graded-board fixtures (single source of truth in benches/, see the
@@ -2127,15 +2169,42 @@ fn advance_sub_reactive(
                 state.x2[i] = q_old;
                 state.x1[i] = q_be;
                 state.dx1[i] = dq;
-                let qb_old = state.x1b[i];
+                let qb_old = state.xb[0].x1[i];
                 let dqb = if trapz {
-                    2.0 * (q_bc - qb_old) / h - state.dx1b[i]
+                    2.0 * (q_bc - qb_old) / h - state.xb[0].dx1[i]
                 } else {
                     (q_bc - qb_old) / h
                 };
-                state.x2b[i] = qb_old;
-                state.x1b[i] = q_bc;
-                state.dx1b[i] = dqb;
+                state.xb[0].x2[i] = qb_old;
+                state.xb[0].x1[i] = q_bc;
+                state.xb[0].dx1[i] = dqb;
+            }
+            // Charge-storing MOSFET: the roll applied to all four banks,
+            // mirroring the monolithic driver.
+            Device::Mosfet { d, g, s, b, model, .. }
+                if crate::stamp::mos_has_charge(model, &opts.effects) =>
+            {
+                let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_gs - q_old) / h - state.dx1[i]
+                } else {
+                    (q_gs - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_gs;
+                state.dx1[i] = dq;
+                for (bank, q_new) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
+                    let q_old = state.xb[bank].x1[i];
+                    let dq = if trapz {
+                        2.0 * (q_new - q_old) / h - state.xb[bank].dx1[i]
+                    } else {
+                        (q_new - q_old) / h
+                    };
+                    state.xb[bank].x2[i] = q_old;
+                    state.xb[bank].x1[i] = q_new;
+                    state.xb[bank].dx1[i] = dq;
+                }
             }
             _ => {}
         }
