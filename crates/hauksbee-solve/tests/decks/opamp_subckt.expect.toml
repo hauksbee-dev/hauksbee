@@ -1,0 +1,16 @@
+# A VCVS-based opamp macro (`AMP`) instantiated as a subckt and driven by a
+# 1 kHz sine through a resistive divider (a = in/2), amplified x4, then RC
+# low-passed (tau = 100 us). Exercises subckt flatten-at-load together with the
+# VCVS branch unknown and a `gain` parameter threaded through the X-line. The
+# subckt has an internal node (`mid`) that must mangle to `X1.mid` and a 1-ohm
+# series resistor the ideal VCVS draws no current through, so the amplified
+# waveform is unchanged from a hand-flattened deck — which is the whole point of
+# flatten-at-load. Percent tolerance on the filtered output.
+analysis = "tran"
+description = "opamp subckt (VCVS macro, gain param) into an RC low-pass"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

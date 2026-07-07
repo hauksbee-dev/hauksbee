@@ -8,6 +8,13 @@ license.workspace = true
 strum = { version = "0.27", features = ["derive"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# The `.param` / `{expr}` environment and subckt parameter substitution evaluate
+# arithmetic expressions in the SPICE front-end. `evalexpr` is already the
+# workspace's expression engine (hauksbee-engine's behavioral/logic/register-map
+# code uses it); the SPICE loader consuming it here is a deliberate dependency
+# edge, noted in dev-plan 04 §4.2 — the same environment the future B-source
+# (§2.5) will consume, built once. `default-features = false` matches engine.
+evalexpr = { version = "13", default-features = false }
 
 [dev-dependencies]
 serde_json = { workspace = true }
