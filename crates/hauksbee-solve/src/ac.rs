@@ -279,6 +279,10 @@ impl AcAnalysis {
 struct OperatingPoint {
     /// Node voltage by `NodeId.0` (ground included as 0).
     node_v: Vec<f64>,
+    /// The full converged unknown vector, so stamps that live on layout-level
+    /// unknowns without a `NodeId` (a series-resistance BJT's internal nodes,
+    /// dev-plan 04 §3.2) can read their bias too.
+    x: Vec<f64>,
 }
 
 impl OperatingPoint {
@@ -290,12 +294,18 @@ impl OperatingPoint {
                 node_v[node] = ws.x[idx];
             }
         }
-        OperatingPoint { node_v }
+        OperatingPoint { node_v, x: ws.x.clone() }
     }
 
     #[inline]
     fn v(&self, n: NodeId) -> f64 {
         self.node_v.get(n.0 as usize).copied().unwrap_or(0.0)
+    }
+
+    /// Bias at a layout unknown index (`None` = ground = 0).
+    #[inline]
+    fn vx(&self, i: Option<usize>) -> f64 {
+        i.map(|i| self.x[i]).unwrap_or(0.0)
     }
 }
 
@@ -383,7 +393,7 @@ fn stamp_ac(
             sys.stamp_admittance(n(*a), n(*k), Complex64::new(gd, w * cap));
         }
         Device::Bjt { c, b, e, model, .. } => {
-            stamp_bjt_ac(sys, layout, op, *c, *b, *e, model, opts)
+            stamp_bjt_ac(sys, layout, op, id, *c, *b, *e, model, opts, w)
         }
         Device::Mosfet { d, g, s, model, .. } => {
             stamp_mosfet_ac(sys, layout, op, *d, *g, *s, model, opts)
@@ -553,17 +563,25 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
 
 /// BJT small-signal model at the bias: input conductances gpi (b-e), gmu (b-c),
 /// output go (c-e), and transconductance gm (ic vs vbe). This mirrors the
-/// Gummel-Poon tangents the transient stamp computes, frozen at the OP.
+/// Gummel-Poon tangents the transient stamp computes, frozen at the OP —
+/// including its §3.2 additions: the ohmic rb/re/rc between external and
+/// internal nodes (with the tangents relocated onto the internal nodes,
+/// through the same node-resolution rule), and `jw·C` per junction (depletion
+/// plus diffusion capacitance at the bias) when the model stores charge — an
+/// AC answer without them would silently miss the poles the transient model
+/// has. Default models add exactly 0.0j on the external nodes: bit-identical.
 #[allow(clippy::too_many_arguments)]
 fn stamp_bjt_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
     op: &OperatingPoint,
+    id: hauksbee_ir::DeviceId,
     c: NodeId,
     b: NodeId,
     e: NodeId,
     model: &BjtModel,
     opts: &SolverOptions,
+    w: f64,
 ) {
     let sign = model.polarity.sign();
     let temp_on = opts.effects.temperature;
@@ -571,33 +589,90 @@ fn stamp_bjt_ac(
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let vt = hauksbee_ir::thermal_voltage_c(if temp_on { t_c } else { 27.0 });
 
-    let vbe = sign * (op.v(b) - op.v(e));
-    let vbc = sign * (op.v(b) - op.v(c));
+    // Series resistances: ohmic admittances between external terminals and
+    // the layout's internal nodes; the intrinsic device moves inside. Toggle
+    // off: pin any allocated internal unknown (isolated row), mirroring the
+    // transient stamp.
+    let ext = [layout.node(c), layout.node(b), layout.node(e)];
+    let mut eff = ext;
+    if let Some(&ints) = layout.bjt_internal(id) {
+        if opts.effects.series_resistance {
+            let rs = [model.rc, model.rb, model.re];
+            for t in 0..3 {
+                if let Some(int_i) = ints[t] {
+                    sys.stamp_admittance(ext[t], Some(int_i), Complex64::new(1.0 / rs[t], 0.0));
+                    eff[t] = Some(int_i);
+                }
+            }
+        } else {
+            for int_i in ints.into_iter().flatten() {
+                sys.add(int_i, int_i, Complex64::new(1.0, 0.0));
+            }
+        }
+    }
+    let (ci, bi, ei) = (eff[0], eff[1], eff[2]);
+
+    let vbe = sign * (op.vx(bi) - op.vx(ei));
+    let vbc = sign * (op.vx(bi) - op.vx(ci));
     let nvf = model.nf * vt;
     let nvr = model.nr * vt;
     let ef = (vbe / nvf).clamp(-40.0, 40.0).exp();
     let er = (vbc / nvr).clamp(-40.0, 40.0).exp();
+    // SGP base-charge factor q1_inv = 1/qb = 1 - vbc/VAF (see the transient
+    // stamp for the inversion this arc fixed; identity for infinite vaf).
     let early = if opts.effects.early_effect && model.vaf.is_finite() {
         1.0 - vbc / model.vaf
     } else {
         1.0
     };
-    let inv_early = 1.0 / early.max(0.1);
+    let q1_inv = early.max(0.1);
 
     let gpi = (is * ef / (nvf * model.bf)).max(opts.gmin);
     let gmu = (is * er / (nvr * model.br)).max(opts.gmin);
     let gif = is * ef / nvf;
     let gir = is * er / nvr;
-    let gm = (gif * inv_early).max(opts.gmin);
-    let go = (gir * inv_early).max(opts.gmin);
+    let gm = (gif * q1_inv).max(opts.gmin);
+    let go = (gir * q1_inv).max(opts.gmin);
 
-    let (ci, bi, ei) = (layout.node(c), layout.node(b), layout.node(e));
-    stamp_pair(sys, bi, ei, gpi);
-    stamp_pair(sys, bi, ci, gmu);
-    stamp_pair(sys, ci, ei, go);
-    // Transconductance: ic depends on vbe = v(b) - v(e). Polarity sign cancels
-    // because gm multiplies the (sign-folded) vbe and the current is folded back.
-    stamp_transconductance(sys, ci, ei, bi, ei, gm);
+    if opts.effects.series_resistance && layout.bjt_internal(id).is_some() {
+        // Exact small-signal partials, mirroring the transient exact-tangent
+        // stamp a series-R model gets (same fork, same formulas): row c takes
+        // ∂ic/∂vbe over (b,e) and ∂ic/∂vbc over (b,c), row b takes gpi/gmu,
+        // row e their negated sum via the shared transconductance helper.
+        let cf = is * (ef - 1.0);
+        let cr = is * (er - 1.0);
+        let early_deriv = if opts.effects.early_effect && model.vaf.is_finite() && early > 0.1
+        {
+            -(cf - cr) / model.vaf
+        } else {
+            0.0
+        };
+        let gc_be = gm;
+        let gc_bc = -gir * q1_inv - gmu + early_deriv;
+        stamp_transconductance(sys, ci, ei, bi, ei, gc_be);
+        stamp_transconductance(sys, ci, ei, bi, ci, gc_bc);
+        stamp_transconductance(sys, bi, ei, bi, ei, gpi);
+        stamp_transconductance(sys, bi, ei, bi, ci, gmu);
+    } else {
+        stamp_pair(sys, bi, ei, gpi);
+        stamp_pair(sys, bi, ci, gmu);
+        stamp_pair(sys, ci, ei, go);
+        // Transconductance: ic depends on vbe = v(b) - v(e). Polarity sign
+        // cancels because gm multiplies the (sign-folded) vbe and the current
+        // is folded back.
+        stamp_transconductance(sys, ci, ei, bi, ei, gm);
+    }
+
+    // Junction + diffusion capacitances at the OP (dev-plan 04 §3.2), through
+    // the SAME charge eval the transient companion linearizes.
+    if crate::stamp::bjt_has_charge(model, &opts.effects) {
+        let cf = is * (ef - 1.0);
+        let cr = is * (er - 1.0);
+        let (_, c_be) = crate::stamp::bjt_charge_be(model, vbe, cf, gif);
+        let (_, c_bc) = crate::stamp::bjt_charge_bc(model, vbc, cr, gir);
+        sys.stamp_admittance(bi, ei, Complex64::new(0.0, w * c_be));
+        sys.stamp_admittance(bi, ci, Complex64::new(0.0, w * c_bc));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
