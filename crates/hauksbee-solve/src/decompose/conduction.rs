@@ -272,7 +272,26 @@ mod tests {
             // branch, so the assertion still isolates the example device's
             // sense claim — which for F/H is empty anyway, their control is a
             // branch-current read declared via `controlling_sources`).
-            if !d.controlling_sources().is_empty() {
+            // The K-coupling example's convention differs: it points its
+            // WINDINGS at DeviceId(0) and DeviceId(1), which must be
+            // inductors (Layout::new builds the mutual map from them and
+            // refuses anything else). Both n4-to-ground for the same
+            // row-isolation reason as the ammeter below.
+            if matches!(d, hauksbee_ir::Device::Coupling { .. }) {
+                for (i, nm) in ["Lw1", "Lw2"].iter().enumerate() {
+                    let lid = circuit.add(hauksbee_ir::Device::Inductor {
+                        name: (*nm).into(),
+                        a: m[3],
+                        b: hauksbee_ir::NodeId::GROUND,
+                        henries: 1e-6,
+                        ic: None,
+                    });
+                    assert_eq!(
+                        lid.0 as usize, i,
+                        "examples() convention: windings at indices 0 and 1"
+                    );
+                }
+            } else if !d.controlling_sources().is_empty() {
                 let vid = circuit.add(hauksbee_ir::Device::Vsource {
                     name: "Vctl".into(),
                     p: m[3],

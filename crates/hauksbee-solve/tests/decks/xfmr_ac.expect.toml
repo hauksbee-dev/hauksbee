@@ -1,0 +1,10 @@
+# jwM in the complex system: both engines solve the same linear 2-winding
+# small-signal network, so tight magnitude and 1-degree phase are honest.
+analysis = "ac"
+description = "1:2 transformer Bode: V(sec) magnitude+phase, 100 Hz .. 1 MHz"
+
+[[probe]]
+expr = "V(sec)"
+reltol = 0.01
+abstol = 1e-6
+phase_abstol = 1.0
