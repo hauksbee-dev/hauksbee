@@ -80,6 +80,12 @@ impl Transient {
             wf.branch_currents.push((name.clone(), Vec::new()));
         }
 
+        // Branch unknowns follow the node block in layout order. The node
+        // block can be larger than the netlist's node count: a series-
+        // resistance BJT owns device-private internal unknowns there
+        // (dev-plan 04 §3.2), so the offset comes from the layout, not from
+        // `node_count()` (for internal-node-free circuits the two are equal).
+        let branch_start = crate::system::Layout::new(circuit).n_nodes;
         self.run_streaming(circuit, tstop, |s| {
             wf.time.push(s.time);
             for node in 0..n_nodes {
@@ -87,8 +93,7 @@ impl Transient {
                 wf.node_voltages[node].push(v);
             }
             for (bi, slot) in wf.branch_currents.iter_mut().enumerate() {
-                // Branch unknowns follow the node block in layout order.
-                let idx = n_nodes - 1 + bi;
+                let idx = branch_start + bi;
                 slot.1.push(s.x.get(idx).copied().unwrap_or(0.0));
             }
         })?;
@@ -633,6 +638,21 @@ fn seed_reactive_state(
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
+            // Charge-storing BJT (dev-plan 04 §3.2): both junction charges,
+            // seeded at the operating-point INTRINSIC junction voltages
+            // (internal nodes when series resistance is stamped). Bank A is
+            // Q_be, bank B is Q_bc — the packing `ReactiveState` documents.
+            Device::Bjt { c, b, e, model, .. }
+                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
+            {
+                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
+                state.x1[i] = q_be;
+                state.x2[i] = q_be;
+                state.dx1[i] = 0.0;
+                state.x1b[i] = q_bc;
+                state.x2b[i] = q_bc;
+                state.dx1b[i] = 0.0;
+            }
             _ => {}
         }
     }
@@ -644,6 +664,31 @@ fn diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -> f6
     let (idc, gd) =
         crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
     crate::stamp::diode_charge(model, vd, idc, gd).0
+}
+
+/// BJT stored charges `(Q_be, Q_bc)` at the solution in `ws`, through the same
+/// model code and node-resolution rule the stamp uses (folded junction
+/// voltages, measured at the intrinsic nodes when series resistance applies).
+fn bjt_q(
+    ws: &Workspace,
+    id: hauksbee_ir::DeviceId,
+    c: NodeId,
+    b: NodeId,
+    e: NodeId,
+    model: &hauksbee_ir::BjtModel,
+    opts: &SolverOptions,
+) -> (f64, f64) {
+    let (vbe, vbc) = crate::stamp::bjt_junction_voltages(
+        &ws.layout,
+        &ws.x,
+        id,
+        c,
+        b,
+        e,
+        model,
+        &opts.effects,
+    );
+    crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
 }
 
 /// After an accepted step, roll history forward: x2 <- x1, x1 <- new value,
@@ -706,6 +751,32 @@ fn advance_reactive_state(
                 state.x1[i] = q_new;
                 state.dx1[i] = dq;
             }
+            // Charge-storing BJT: the diode's roll applied to both banks
+            // (bank A = Q_be, bank B = Q_bc); each dx is that junction's
+            // dQ/dt, the capacitive current its trapezoidal history needs.
+            Device::Bjt { c, b, e, model, .. }
+                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
+            {
+                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_be - q_old) / h - state.dx1[i]
+                } else {
+                    (q_be - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_be;
+                state.dx1[i] = dq;
+                let qb_old = state.x1b[i];
+                let dqb = if trapz {
+                    2.0 * (q_bc - qb_old) / h - state.dx1b[i]
+                } else {
+                    (q_bc - qb_old) / h
+                };
+                state.x2b[i] = qb_old;
+                state.x1b[i] = q_bc;
+                state.dx1b[i] = dqb;
+            }
             _ => {}
         }
     }
@@ -752,6 +823,16 @@ fn lte_estimate(
     opts: &SolverOptions,
 ) -> f64 {
     let mut worst = 0.0f64;
+    // Non-uniform divided-difference curvature of one state history (see the
+    // doc comment above): shared by the single-state tail below and the BJT's
+    // two charge banks, so the arithmetic exists once.
+    let err_of = |x_new: f64, x1: f64, x2: f64, atol: f64| {
+        let hp = if h_prev > 0.0 { h_prev } else { h };
+        let dd2 = 2.0 * ((x_new - x1) / h - (x1 - x2) / hp) / (h + hp);
+        let curv = (h * h * dd2).abs();
+        let tol = opts.reltol * x_new.abs().max(x1.abs()) + atol;
+        (curv / 12.0) / tol.max(1e-30)
+    };
     for (id, dev) in circuit.iter() {
         let i = id.0 as usize;
         let (x_new, atol) = match dev {
@@ -774,20 +855,27 @@ fn lte_estimate(
                 let q = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
                 (q, opts.chgtol)
             }
+            // A charge-storing BJT participates through BOTH junction
+            // charges (chgtol floor each) — two states, two curvature
+            // checks, same divided-difference estimator. Charge-free BJTs
+            // hit the `continue` exactly as before.
+            Device::Bjt { c, b, e, model, .. }
+                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
+            {
+                let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
+                worst = worst.max(err_of(q_be, state.x1[i], state.x2[i], opts.chgtol));
+                worst = worst.max(err_of(q_bc, state.x1b[i], state.x2b[i], opts.chgtol));
+                continue;
+            }
             _ => continue,
         };
         // Non-uniform second derivative from the three newest samples, scaled
         // by h^2 into the uniform-grid curvature the 1/12 coefficient expects.
         // On h == h_prev this equals x_new - 2*x1 + x2 (up to rounding); on a
         // linear trajectory it is zero regardless of the step-size history.
-        let hp = if h_prev > 0.0 { h_prev } else { h };
-        let dd2 =
-            2.0 * ((x_new - state.x1[i]) / h - (state.x1[i] - state.x2[i]) / hp) / (h + hp);
-        let curv = (h * h * dd2).abs();
-        let tol = opts.reltol * x_new.abs().max(state.x1[i].abs()) + atol;
-        // Trapezoidal error coefficient ~ 1/12; scale into a [0,1]-ish norm.
-        let err = (curv / 12.0) / tol.max(1e-30);
-        worst = worst.max(err);
+        // Trapezoidal error coefficient ~ 1/12, scaled into a [0,1]-ish norm
+        // (the shared `err_of` above).
+        worst = worst.max(err_of(x_new, state.x1[i], state.x2[i], atol));
     }
     worst
 }
