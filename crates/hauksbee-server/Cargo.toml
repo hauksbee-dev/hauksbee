@@ -4,10 +4,23 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Forward the MCU backend choices to hauksbee-mcu. All on by default so the
+# demo server binary keeps its AVR demo engine out of the box. The `avr`
+# feature statically links GPL-3.0 libsimavr; a `--no-default-features
+# --features renode,qemu` build of the workspace is the MIT-clean release
+# shape (see docs/release-and-licensing.md). Only `McuDemoEngine` (and the
+# demo `hauksbee-server` binary) need `avr`; the Engine trait, Server,
+# frontdoor, and protocol are backend-agnostic.
+default = ["avr", "renode", "qemu"]
+avr = ["hauksbee-mcu/avr"]
+renode = ["hauksbee-mcu/renode"]
+qemu = ["hauksbee-mcu/qemu"]
+
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8.9", features = ["ws", "multipart"] }
-hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu" }
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.52.3", features = ["full"] }

@@ -1,6 +1,11 @@
 //! End-to-end server test: boot the demo engine (real AVR firmware on
 //! simavr), connect a raw websocket client, drive the protocol, and verify
 //! frames + serial interaction.
+//!
+//! Whole file is gated on `avr`: the demo engine IS the simavr backend, so in
+//! the MIT-clean shape (`--no-default-features --features renode,qemu`) there
+//! is nothing to test here and the file compiles to nothing.
+#![cfg(feature = "avr")]
 
 use hauksbee_server::engine::McuDemoEngine;
 use hauksbee_server::protocol::ServerMessage;

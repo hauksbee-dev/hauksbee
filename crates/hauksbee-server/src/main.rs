@@ -1,7 +1,26 @@
+// The demo binary is AVR-only: it exists to run the synthetic McuDemoEngine
+// (a simavr-backed atmega328p). Without the `avr` feature (the MIT-clean
+// release shape) there is nothing for it to demo, so it compiles to a stub
+// that says so instead of dragging GPL libsimavr into a "GPL-free" build.
+#[cfg(not(feature = "avr"))]
+fn main() {
+    eprintln!(
+        "hauksbee-server was built without the `avr` feature, so the simavr demo \
+         engine is unavailable.\nRebuild with default features for the demo \
+         (`cargo run -p hauksbee-server`), or use the `hauksbee` binary to serve \
+         a real board (`hauksbee run <board> --serve`)."
+    );
+    std::process::exit(2);
+}
+
+#[cfg(feature = "avr")]
 use hauksbee_server::engine::McuDemoEngine;
+#[cfg(feature = "avr")]
 use hauksbee_server::Server;
+#[cfg(feature = "avr")]
 use std::path::PathBuf;
 
+#[cfg(feature = "avr")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let arg = std::env::args().nth(1);

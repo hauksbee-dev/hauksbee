@@ -29,21 +29,18 @@
 # without an explicit, documented decision to ship GPL binaries.
 #
 # ---------------------------------------------------------------------------
-# ⚠ KNOWN BLOCKER (as of this commit): the MIT-clean shape does NOT actually
-# exclude avr in this workspace yet. `hauksbee-server` uses `hauksbee_mcu::AvrMcu`
-# unconditionally and depends on hauksbee-mcu WITHOUT `default-features = false`,
-# and every binary depends on hauksbee-server — so `--no-default-features
-# --features renode,qemu` STILL activates `avr` and still links libsimavr
-# (verified: build.rs panics for "the avr co-sim feature needs a system
-# libsimavr" and nm finds 14 simavr symbols in hauksbee-ci). The fix is a
-# source change (3 files) documented in docs/release-and-licensing.md and is
-# OUT OF SCOPE for this release-automation change.
-#
-# Until that fix lands, the "Build MIT-clean bundle" step below is DESIGNED TO
-# FAIL FAST rather than ship a mislabeled GPL binary: it points simavr discovery
-# at a nonexistent path, so a clean shape ignores it and a leaky shape panics in
-# build.rs. That is the guard. A red release on a tag today means "the GPL-free
-# shape is not clean yet", not "the runner is misconfigured".
+# GPL guard (regression check, expected GREEN): the MIT-clean shape is
+# genuinely avr-free. hauksbee-server's AvrMcu usage is gated on its `avr`
+# feature, and every hauksbee-* path dependency in the workspace sets
+# `default-features = false` with explicit per-feature forwarding (cargo cannot
+# un-default a dependency from the command line, so one missing declaration
+# silently re-links GPL simavr). Verified by nm: ZERO simavr / AvrMcu symbols
+# in both release binaries. To keep it that way, the build step points simavr
+# discovery at a nonexistent path: a clean shape never reads it, and any future
+# regression that drags `avr` back into the graph panics in
+# hauksbee-mcu/build.rs BEFORE any GPL code is linked. A red release on a tag
+# means such a regression landed — fix the feature graph, never weaken the
+# guard. Details: docs/release-and-licensing.md.
 # ============================================================================
 #
 # aarch64-linux mechanism: we build NATIVELY on GitHub's `ubuntu-24.04-arm`
@@ -151,9 +148,9 @@ jobs:
                --version "${{ steps.ver.outputs.version }}" \
                --target "${{ matrix.label }}" \
                --out dist; then
-            echo "::error title=GPL guard tripped::The renode+qemu build still pulled in the avr backend (libsimavr, GPL-3.0)."
+            echo "::error title=GPL guard tripped::The renode+qemu build pulled in the avr backend (libsimavr, GPL-3.0)."
             echo "Refusing to build a GPL-encumbered binary and label it MIT-clean." >&2
-            echo "This is the expected failure until the source fix in docs/release-and-licensing.md lands." >&2
+            echo "A feature-graph regression re-enabled avr; see docs/release-and-licensing.md §2." >&2
             exit 1
           fi
 
