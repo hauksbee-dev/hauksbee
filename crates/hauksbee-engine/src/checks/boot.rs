@@ -326,3 +326,218 @@ pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> Strin
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        boot_gate_states, is_base_pad_name, is_gate_pad_name, is_power_or_ground_net,
+        net_drives_a_switch, net_has_no_bias_resistor, switch_control_pad, transistor_gate_nets,
+        BootGateState,
+    };
+    use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+
+    fn pin(net: Option<i64>) -> Pin {
+        Pin {
+            number: "1".into(),
+            net,
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+    fn resistor(reference: &str, a: i64, b: i64) -> Component {
+        Component {
+            reference: reference.into(),
+            value: "10k".into(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![pin(Some(a)), pin(Some(b))],
+        }
+    }
+    fn board(nets: &[(i64, &str)], comps: Vec<Component>) -> ExtractedBoard {
+        ExtractedBoard {
+            name: "t".into(),
+            nets: nets
+                .iter()
+                .map(|(id, n)| Net {
+                    id: *id,
+                    name: (*n).into(),
+                })
+                .collect(),
+            components: comps,
+        }
+    }
+
+    #[test]
+    fn rails_and_grounds_recognised_signals_not() {
+        let b = board(
+            &[
+                (1, "GND"), (2, "+3V3"), (3, "VCC"), (4, "GNDA"), (5, "5V"),
+                (6, "VMOT"), (7, "VSYS"), (8, "VIN"), (9, "12V"), (10, "1V8"),
+                (11, "SIG"), (12, "DATA0"),
+            ],
+            vec![],
+        );
+        for id in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+            assert!(is_power_or_ground_net(&b, id), "net {id} should be rail/ground");
+        }
+        assert!(!is_power_or_ground_net(&b, 11), "SIG must not read as rail/ground");
+        assert!(!is_power_or_ground_net(&b, 12), "DATA0 must not read as rail/ground");
+    }
+
+    #[test]
+    fn gate_net_with_no_resistor_has_no_bias() {
+        let b = board(&[(1, "GATE")], vec![]);
+        assert!(net_has_no_bias_resistor(&b, "GATE"));
+    }
+
+    #[test]
+    fn pulldown_to_ground_counts_as_bias() {
+        let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("R1", 1, 2)]);
+        assert!(!net_has_no_bias_resistor(&b, "GATE"));
+    }
+
+    #[test]
+    fn series_resistor_to_a_signal_is_not_a_bias() {
+        let b = board(&[(1, "GPIO"), (2, "GATE")], vec![resistor("R1", 1, 2)]);
+        assert!(net_has_no_bias_resistor(&b, "GPIO"));
+    }
+
+    #[test]
+    fn unknown_net_name_is_treated_as_biased() {
+        let b = board(&[(1, "GATE")], vec![]);
+        assert!(!net_has_no_bias_resistor(&b, "does-not-exist"));
+    }
+
+    fn part(reference: &str, net: i64) -> Component {
+        part_dnp(reference, net, false)
+    }
+    fn part_dnp(reference: &str, net: i64, dnp: bool) -> Component {
+        Component {
+            reference: reference.into(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp,
+            pins: vec![pin(Some(net))],
+        }
+    }
+
+    #[test]
+    fn net_to_transistor_or_relay_drives_a_switch() {
+        let b = board(
+            &[(1, "GATE"), (2, "COIL"), (3, "HDR"), (4, "DNPGATE")],
+            vec![
+                part("Q1", 1),
+                part("K1", 2),
+                part("J3", 3),
+                part("U7", 3),
+                part_dnp("Q9", 4, true),
+            ],
+        );
+        assert!(net_drives_a_switch(&b, "GATE"));
+        assert!(net_drives_a_switch(&b, "COIL"));
+        assert!(!net_drives_a_switch(&b, "HDR"));
+        assert!(!net_drives_a_switch(&b, "DNPGATE"), "a DNP transistor must not count");
+        assert!(!net_drives_a_switch(&b, "missing"));
+    }
+
+    #[test]
+    fn switch_control_pad_by_footprint() {
+        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23"), Some("1"));
+        assert_eq!(switch_control_pad("SOT-23-3"), Some("1"));
+        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:TO-252-3_DPAK"), Some("1"));
+        assert_eq!(switch_control_pad("SOT-23-8_Handsoldering"), Some("4"));
+        assert_eq!(switch_control_pad("Package_SO:SO-8_Power"), Some("4"));
+        assert_eq!(switch_control_pad("Package_SO:SO-8"), None);
+        assert_eq!(switch_control_pad("Package_SO:SOIC-8"), None);
+        assert_eq!(switch_control_pad("Package_TO_SOT_THT:TO-92"), None);
+        assert_eq!(switch_control_pad("Resistor_SMD:R_0402"), None);
+    }
+
+    #[test]
+    fn control_pad_names_recognised() {
+        // The control-terminal predicate is gate-name OR base-name.
+        let is_control = |s: &str| is_gate_pad_name(s) || is_base_pad_name(s);
+        for s in ["G", "GATE", "g", "Base", "B"] {
+            assert!(is_control(s), "{s} should be a control pad name");
+        }
+        for s in ["D", "S", "1", "drain", ""] {
+            assert!(!is_control(s), "{s} must not be a control pad name");
+        }
+    }
+
+    fn transistor(reference: &str, footprint: &str, pads: &[(&str, &str, i64)], dnp: bool) -> Component {
+        Component {
+            reference: reference.into(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp,
+            pins: pads
+                .iter()
+                .map(|(num, func, net)| Pin {
+                    number: (*num).into(),
+                    net: Some(*net),
+                    function: (*func).into(),
+                    kind: String::new(),
+                    position: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn transistor_gate_nets_prefers_named_pad_then_footprint() {
+        let b = board(
+            &[(1, "GATE_A"), (2, "DRN"), (3, "SRC"), (4, "GATE_B"), (5, "X"), (6, "BULK")],
+            vec![
+                transistor("Q1", "whatever", &[("G", "", 1), ("D", "", 2), ("S", "", 3)], false),
+                transistor("Q2", "SOT-23", &[("1", "", 4), ("2", "", 5), ("3", "", 2)], false),
+                transistor("Q3", "SOT-23", &[("1", "", 1)], true),
+                transistor("Q5", "TO-92", &[("1", "", 5)], false),
+                transistor("Q4", "SOT-23", &[("G", "", 1), ("S", "", 3), ("D", "", 2), ("B", "", 6)], false),
+            ],
+        );
+        let gates = transistor_gate_nets(&b);
+        assert_eq!(
+            gates,
+            vec![
+                ("Q1".to_string(), "GATE_A".to_string()),
+                ("Q2".to_string(), "GATE_B".to_string()),
+                ("Q4".to_string(), "GATE_A".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn boot_gate_states_classifies_high_low_floating() {
+        let gates = vec![
+            ("Q1".to_string(), "DrivenHi".to_string()),
+            ("Q2".to_string(), "PulledHi".to_string()),
+            ("Q3".to_string(), "LoNet".to_string()),
+            ("Q4".to_string(), "FloatNet".to_string()),
+        ];
+        let set = |xs: &[&str]| -> std::collections::HashSet<String> {
+            xs.iter().map(|s| s.to_string()).collect()
+        };
+        let held_high = set(&["DrivenHi", "PulledHi"]);
+        let configured = set(&["DrivenHi", "LoNet"]);
+        let driven = set(&["DrivenHi", "PulledHi", "LoNet"]);
+        let rows = boot_gate_states(&gates, &held_high, &configured, &driven);
+        assert_eq!(rows[0].2, BootGateState::DrivenHigh);
+        assert_eq!(rows[1].2, BootGateState::PulledHigh);
+        assert_eq!(rows[2].2, BootGateState::DrivenLow);
+        assert_eq!(rows[3].2, BootGateState::Floating);
+    }
+}
