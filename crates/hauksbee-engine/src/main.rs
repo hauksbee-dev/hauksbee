@@ -422,12 +422,12 @@ struct SimArgs {
     #[arg(long, group = "analysis")]
     tran: bool,
 
-    /// AC sweep — recognized but NOT yet wired in `hauksbee sim` (the front-end
-    /// does not parse `.ac`/AC source magnitudes yet, plan step 9). Refuses.
+    /// Run the deck's `.ac` sweep (small-signal). Needs an `.ac` card and at
+    /// least one source with an `AC <mag> [phase]` spec.
     #[arg(long, group = "analysis")]
     ac: bool,
 
-    /// DC sweep — recognized but NOT yet wired (plan step 9). Refuses.
+    /// Run the deck's `.dc` sweep. Needs a `.dc <src> <start> <stop> <step>` card.
     #[arg(long, group = "analysis")]
     dc: bool,
 

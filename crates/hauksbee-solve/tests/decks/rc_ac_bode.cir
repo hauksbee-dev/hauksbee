@@ -1,0 +1,7 @@
+* RC low-pass AC Bode (corner ~1 kHz): magnitude AND phase (SPICE-compat step 9).
+Vin in 0 AC 1
+R1 in out 1k
+C1 out 0 159.155n
+.ac dec 10 10 1e6
+.print ac V(out)
+.end

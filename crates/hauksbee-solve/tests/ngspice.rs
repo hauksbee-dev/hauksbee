@@ -16,7 +16,8 @@
 
 use hauksbee_ir::{Directives, SpiceLoader};
 use hauksbee_solve::{
-    run_op, run_tran, DcInit, Integration, Probe, SimOutput, SolverOptions, StepControl,
+    run_ac, run_dc, run_op, run_tran, DcInit, Integration, Probe, SimOutput, SolverOptions,
+    StepControl,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -139,6 +140,64 @@ fn parse_tran_table(text: &str) -> Option<NgSeries> {
     }
 }
 
+/// A parsed indexed table with any number of value columns: `x` is the sweep
+/// axis (column 1 — time / v-sweep / frequency) and `cols[k]` is value column
+/// `k` (column `k + 2`). Serves `.print dc` (one value column) and `.print ac`
+/// (a `vm` and a `vp` column requested side by side).
+struct NgTable {
+    x: Vec<f64>,
+    cols: Vec<Vec<f64>>,
+}
+
+/// Parse the `Index <axis> v1 [v2 ...]` block ngspice prints for `.print dc/ac`.
+fn parse_indexed_table(text: &str) -> Option<NgTable> {
+    let mut x = Vec::new();
+    let mut cols: Vec<Vec<f64>> = Vec::new();
+    let mut in_table = false;
+    let mut ncol = 0usize;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("Index") {
+            in_table = true;
+            continue;
+        }
+        if !in_table || t.starts_with("---") || t.is_empty() {
+            continue;
+        }
+        let c: Vec<&str> = t.split_whitespace().collect();
+        // A data row is `Index xval v1 [v2 ...]`; anything else ends the table.
+        if c.len() < 3 {
+            if !x.is_empty() {
+                break;
+            }
+            continue;
+        }
+        let Ok(xv) = c[1].parse::<f64>() else {
+            if !x.is_empty() {
+                break;
+            }
+            continue;
+        };
+        let vals: Vec<f64> = c[2..].iter().filter_map(|s| s.parse::<f64>().ok()).collect();
+        if cols.is_empty() {
+            ncol = vals.len();
+            cols = vec![Vec::new(); ncol];
+        }
+        if vals.len() != ncol || ncol == 0 {
+            continue;
+        }
+        x.push(xv);
+        for (i, v) in vals.iter().enumerate() {
+            cols[i].push(*v);
+        }
+    }
+    if x.is_empty() {
+        None
+    } else {
+        Some(NgTable { x, cols })
+    }
+}
+
 /// Parse the `.op` listing ngspice prints in batch mode: a node-voltage block
 /// (`name  value`) and a source-current block (`vname#branch  value`).
 fn parse_op_listing(text: &str) -> (HashMap<String, f64>, HashMap<String, f64>) {
@@ -232,9 +291,13 @@ struct Expect {
 #[derive(Deserialize)]
 struct ProbeExpect {
     expr: String,
+    /// Magnitude relative tolerance (also the DC / transient tolerance).
     reltol: f64,
     #[serde(default)]
     abstol: Option<f64>,
+    /// AC phase tolerance in degrees (absolute). Required for `.ac` probes.
+    #[serde(default)]
+    phase_abstol: Option<f64>,
 }
 
 /// A per-quantity comparison result for the table.
@@ -312,6 +375,44 @@ fn deck_for_ngspice_tran(orig: &str, probe_expr: &str) -> String {
     out
 }
 
+/// Rewrite a deck for a single-probe ngspice DC-sweep run: drop the deck's
+/// `.print`/`.plot` cards and inject one `.print dc <expr>`.
+fn deck_for_ngspice_dc(orig: &str, probe_expr: &str) -> String {
+    rewrite_with_print(orig, &format!(".print dc {probe_expr}"))
+}
+
+/// Rewrite a deck for a single-node ngspice AC run: drop the deck's own
+/// `.print`/`.plot` cards and inject `.print ac vm(<node>) vp(<node>)` so the
+/// output is a four-column `Index frequency vm vp` table (phase in radians).
+fn deck_for_ngspice_ac(orig: &str, node: &str) -> String {
+    rewrite_with_print(orig, &format!(".print ac vm({node}) vp({node})"))
+}
+
+/// Shared body of the ngspice deck rewriters: strip `.print`/`.plot`, then splice
+/// `print_card` in just before `.end`.
+fn rewrite_with_print(orig: &str, print_card: &str) -> String {
+    let mut out = String::new();
+    let mut injected = false;
+    for line in orig.lines() {
+        let l = line.trim_start().to_ascii_lowercase();
+        if l.starts_with(".print") || l.starts_with(".plot") {
+            continue;
+        }
+        if l.starts_with(".end") && !injected {
+            out.push_str(print_card);
+            out.push('\n');
+            injected = true;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !injected {
+        out.push_str(print_card);
+        out.push_str("\n.end\n");
+    }
+    out
+}
+
 /// Worst relative error of `ours` vs interpolated ngspice, with a full-scale
 /// floor so zero-crossings don't blow the ratio up. Returns (worst, at_time).
 fn worst_tran_error(
@@ -337,6 +438,39 @@ fn worst_tran_error(
         if e > worst {
             worst = e;
             at = t;
+        }
+    }
+    (worst, at)
+}
+
+/// Worst relative error of `ours(xs)` vs ngspice interpolated onto `xs`, with an
+/// absolute floor so a near-zero magnitude does not blow the ratio up. Used for
+/// DC-sweep and AC-magnitude columns. Returns `(worst, at_x)`.
+fn worst_rel_error(xs: &[f64], ours: &[f64], ng: &NgSeries, floor: f64) -> (f64, f64) {
+    let mut worst = 0.0f64;
+    let mut at = xs.first().copied().unwrap_or(0.0);
+    for (&x, &ov) in xs.iter().zip(ours) {
+        let nv = interp(ng, x);
+        let e = (ov - nv).abs() / nv.abs().max(floor);
+        if e > worst {
+            worst = e;
+            at = x;
+        }
+    }
+    (worst, at)
+}
+
+/// Worst ABSOLUTE error of `ours(xs)` vs ngspice interpolated onto `xs`. Used for
+/// AC phase (degrees), where an absolute tolerance is the honest bar.
+fn worst_abs_error(xs: &[f64], ours: &[f64], ng: &NgSeries) -> (f64, f64) {
+    let mut worst = 0.0f64;
+    let mut at = xs.first().copied().unwrap_or(0.0);
+    for (&x, &ov) in xs.iter().zip(ours) {
+        let nv = interp(ng, x);
+        let e = (ov - nv).abs();
+        if e > worst {
+            worst = e;
+            at = x;
         }
     }
     (worst, at)
@@ -439,6 +573,101 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     at: format!("t={at:.3e}s"),
                     reltol: pe.reltol,
                     pass: worst < pe.reltol,
+                });
+            }
+        }
+        "dc" => {
+            let dc = directives
+                .dc
+                .clone()
+                .unwrap_or_else(|| panic!("{name}: dc deck has no .dc card"));
+            let ours: SimOutput = run_dc(&circuit, &opts, &dc, &probes)
+                .unwrap_or_else(|e| panic!("{name}: hauksbee dc failed: {e}"));
+            // Column 0 of every row is the swept value (the sweep axis).
+            let ours_x: Vec<f64> = ours.rows.iter().map(|r| r[0]).collect();
+            for (pe, pr) in expect.probe.iter().zip(&probes) {
+                let ng_deck = deck_for_ngspice_dc(&deck, &pr.label());
+                let tbl = run_ngspice(bin, &ng_deck)
+                    .and_then(|txt| parse_indexed_table(&txt))
+                    .unwrap_or_else(|| panic!("{name}: no ngspice dc table for {}", pr.label()));
+                let ng = NgSeries {
+                    t: tbl.x,
+                    v: tbl.cols[0].clone(),
+                };
+                let ours_v = ours.column(&pr.label()).unwrap();
+                let floor = if expect.full_scale > 0.0 {
+                    0.01 * expect.full_scale
+                } else {
+                    pe.abstol.unwrap_or(1e-9)
+                };
+                let (worst, at) = worst_rel_error(&ours_x, &ours_v, &ng, floor);
+                quantities.push(QtyResult {
+                    probe: pr.label(),
+                    worst_err: worst,
+                    at: format!("sweep={at:.3e}"),
+                    reltol: pe.reltol,
+                    pass: worst < pe.reltol,
+                });
+            }
+        }
+        "ac" => {
+            let ac = directives
+                .ac
+                .unwrap_or_else(|| panic!("{name}: ac deck has no .ac card"));
+            let ours: SimOutput = run_ac(&circuit, &opts, &ac, &probes)
+                .unwrap_or_else(|e| panic!("{name}: hauksbee ac failed: {e}"));
+            let ours_f: Vec<f64> = ours.rows.iter().map(|r| r[0]).collect();
+            for (pe, pr) in expect.probe.iter().zip(&probes) {
+                let node = match pr {
+                    Probe::NodeVoltage(a) => a.clone(),
+                    other => panic!(
+                        "{name}: the AC cross-check supports V(node) probes only, got {:?}",
+                        other
+                    ),
+                };
+                let ng_deck = deck_for_ngspice_ac(&deck, &node);
+                let tbl = run_ngspice(bin, &ng_deck)
+                    .and_then(|txt| parse_indexed_table(&txt))
+                    .unwrap_or_else(|| panic!("{name}: no ngspice ac table for {}", pr.label()));
+                assert!(
+                    tbl.cols.len() >= 2,
+                    "{name}: ngspice ac table for {} has no vm/vp columns",
+                    pr.label()
+                );
+                // ngspice vp() is in RADIANS; our phase is degrees — convert to compare.
+                let ng_mag = NgSeries {
+                    t: tbl.x.clone(),
+                    v: tbl.cols[0].clone(),
+                };
+                let ng_phase_deg = NgSeries {
+                    t: tbl.x.clone(),
+                    v: tbl.cols[1].iter().map(|r| r.to_degrees()).collect(),
+                };
+
+                // Magnitude: relative tolerance with an absolute floor.
+                let ours_mag = ours.column(&pr.label()).unwrap();
+                let floor = pe.abstol.unwrap_or(1e-6);
+                let (wm, atm) = worst_rel_error(&ours_f, &ours_mag, &ng_mag, floor);
+                quantities.push(QtyResult {
+                    probe: format!("{} mag", pr.label()),
+                    worst_err: wm,
+                    at: format!("f={atm:.3e}Hz"),
+                    reltol: pe.reltol,
+                    pass: wm < pe.reltol,
+                });
+
+                // Phase: absolute tolerance in degrees.
+                let ph_tol = pe.phase_abstol.unwrap_or_else(|| {
+                    panic!("{name}: ac probe {} needs `phase_abstol`", pr.label())
+                });
+                let ours_ph = ours.column(&format!("{}:phase_deg", pr.label())).unwrap();
+                let (wp, atp) = worst_abs_error(&ours_f, &ours_ph, &ng_phase_deg);
+                quantities.push(QtyResult {
+                    probe: format!("{} phase(deg)", pr.label()),
+                    worst_err: wp,
+                    at: format!("f={atp:.3e}Hz"),
+                    reltol: ph_tol,
+                    pass: wp < ph_tol,
                 });
             }
         }
