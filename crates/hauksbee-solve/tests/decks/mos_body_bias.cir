@@ -1,0 +1,17 @@
+MOS body effect: threshold shift under reverse body bias (dev-plan 04 s3.3)
+* NMOS with the bulk held 2 V below the source: GAMMA/PHI shift the
+* threshold to vto + gamma*(sqrt(phi - vbs) - sqrt(phi)) = 1.75 V. Before
+* this arc GAMMA was parsed and silently ignored (the s3.4 sin); this deck
+* pins the implemented body effect against ngspice level 1, which uses the
+* identical expression. The known deviation is the smooth subthreshold
+* tail hauksbee adds below threshold (ngspice level 1 has zero current
+* there), visible as a small early droop of v(d) near the threshold.
+VDD vdd 0 DC 5
+RD vdd d 1k
+VG g 0 DC 0
+VB b 0 DC -2
+M1 d g 0 b MB
+.model MB NMOS(VTO=1 KP=2e-3 W=100u L=10u GAMMA=0.9 PHI=0.6)
+.dc VG 0 5 0.05
+.print dc v(d)
+.end

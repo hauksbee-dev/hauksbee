@@ -210,14 +210,22 @@ impl Layout {
 /// the previous step(s). This struct carries that history per timestep so the
 /// stamping code stays stateless.
 ///
-/// Slot packing for multi-state devices (dev-plan 04 §3.2): the primary bank
-/// (`x1`/`dx1`/`x2`) holds ONE state per device — capacitor voltage, inductor
-/// current, a charge-storing diode's junction charge, or a BJT's
-/// BASE-EMITTER charge. The secondary bank (`x1b`/`dx1b`/`x2b`) exists for
-/// the one device that stores TWO independent charges: the BJT's BASE-
-/// COLLECTOR junction. Both banks are indexed by `DeviceId.0` and roll
-/// forward together; every single-state device simply leaves its secondary
-/// slot at zero.
+/// Slot packing for multi-state devices (dev-plan 04 §3.2/§3.3): the primary
+/// bank (`x1`/`dx1`/`x2`) holds ONE state per device — capacitor voltage,
+/// inductor current, a charge-storing diode's junction charge, a BJT's
+/// BASE-EMITTER charge, or a MOSFET's GATE-SOURCE charge. Devices with more
+/// independent charges spill into the SECONDARY banks `xb[k]`, one extra
+/// state each, in a documented per-device order:
+///
+/// * BJT (two charges):    bank A = Q_be,  `xb[0]` = Q_bc.
+/// * MOSFET (up to four):  bank A = Q_gs,  `xb[0]` = Q_gd,
+///                         `xb[1]` = Q_bd, `xb[2]` = Q_bs.
+///
+/// (The §3.2 arc introduced a single named secondary bank for "the one
+/// device with two charges"; the MOSFET's four charges are why it is now an
+/// indexed array — bank letters do not scale, indices do.) All banks are
+/// indexed by `DeviceId.0` and roll forward together; a device leaves the
+/// banks it does not use at zero.
 #[derive(Debug, Clone, Default)]
 pub struct ReactiveState {
     /// Per-device stored voltage (caps) or current (inductors) at the accepted
@@ -227,24 +235,36 @@ pub struct ReactiveState {
     pub dx1: Vec<f64>,
     /// One step further back (for Gear-2's two-point history).
     pub x2: Vec<f64>,
-    /// Secondary bank (BJT base-collector charge), same indexing as `x1`.
-    pub x1b: Vec<f64>,
-    /// Secondary-bank derivative, same indexing as `dx1`.
-    pub dx1b: Vec<f64>,
-    /// Secondary-bank two-step history, same indexing as `x2`.
-    pub x2b: Vec<f64>,
+    /// Secondary banks (extra charges of multi-charge devices; see the
+    /// packing table above), same indexing as the primary bank.
+    pub xb: [SecondaryBank; 3],
+}
+
+/// One secondary reactive-history bank: the `x1`/`dx1`/`x2` trio of
+/// [`ReactiveState`], for one extra state of a multi-charge device.
+#[derive(Debug, Clone, Default)]
+pub struct SecondaryBank {
+    /// Stored state at the accepted previous step, indexed by `DeviceId.0`.
+    pub x1: Vec<f64>,
+    /// Time-derivative at the previous step.
+    pub dx1: Vec<f64>,
+    /// One step further back.
+    pub x2: Vec<f64>,
 }
 
 impl ReactiveState {
     /// History zeroed for `n` devices.
     pub fn new(n: usize) -> Self {
+        let bank = || SecondaryBank {
+            x1: vec![0.0; n],
+            dx1: vec![0.0; n],
+            x2: vec![0.0; n],
+        };
         ReactiveState {
             x1: vec![0.0; n],
             dx1: vec![0.0; n],
             x2: vec![0.0; n],
-            x1b: vec![0.0; n],
-            dx1b: vec![0.0; n],
-            x2b: vec![0.0; n],
+            xb: [bank(), bank(), bank()],
         }
     }
 }
