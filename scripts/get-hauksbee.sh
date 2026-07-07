@@ -72,13 +72,13 @@ ARCH="$(uname -m)"
 
 case "${OS}" in
   Linux)
+    # The release matrix (release.yml) builds all four promised targets natively:
+    # linux-x86_64, linux-aarch64, darwin-arm64, darwin-x86_64.
     case "${ARCH}" in
-      x86_64)  ASSET_SUFFIX="linux-x86_64" ;;
+      x86_64)          ASSET_SUFFIX="linux-x86_64" ;;
+      aarch64|arm64)   ASSET_SUFFIX="linux-aarch64" ;;
       *)
-        # The release matrix only builds linux-x86_64 + darwin-arm64. Anything
-        # else (incl. linux-aarch64) has NO prebuilt asset, so fail with a clear
-        # message instead of letting curl 404 on a non-existent download URL.
-        echo "No prebuilt hauksbee binary for Linux/${ARCH} yet (prebuilt: Linux x86_64, macOS arm64)." >&2
+        echo "No prebuilt hauksbee binary for Linux/${ARCH} (prebuilt: Linux x86_64/aarch64, macOS arm64/x86_64)." >&2
         echo "Build from source: https://github.com/${REPO}#quickstart" >&2
         exit 1
         ;;
@@ -86,10 +86,10 @@ case "${OS}" in
     ;;
   Darwin)
     case "${ARCH}" in
-      arm64)  ASSET_SUFFIX="darwin-arm64" ;;
+      arm64)   ASSET_SUFFIX="darwin-arm64" ;;
+      x86_64)  ASSET_SUFFIX="darwin-x86_64" ;;
       *)
-        # No darwin-x86_64 (Intel Mac) prebuilt asset in the release matrix.
-        echo "No prebuilt hauksbee binary for macOS/${ARCH} yet (prebuilt: macOS arm64, Linux x86_64)." >&2
+        echo "No prebuilt hauksbee binary for macOS/${ARCH} (prebuilt: macOS arm64/x86_64, Linux x86_64/aarch64)." >&2
         echo "Build from source: https://github.com/${REPO}#quickstart" >&2
         exit 1
         ;;
