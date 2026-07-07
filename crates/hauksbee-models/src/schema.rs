@@ -1,7 +1,14 @@
-//! TOML-serialisable schema for model database entries.
+//! TOML-serialisable schema for model database entries -- the on-disk shape of
+//! the declarative model library.
 //!
-//! Each entry describes how to match a KiCad component and what simulation
-//! model to produce for it.
+//! A model database file is a `[[models]]` array ([`DbFile`]); each
+//! [`ModelEntry`] describes how to recognise a real KiCad component and what
+//! simulation model to hand the solver for it. An entry carries a stable `id`
+//! (used in diagnostics and cross-references), a [`ComponentKind`] that decides
+//! which parameters the solver requires, the [`MatchRules`] that bind it to a
+//! part, and the kind-specific [`Params`]. This is the extension point the SDK
+//! story rests on: adding device physics means adding rows here, not writing
+//! Rust. `serde` derives keep the Rust structs and the TOML in lockstep.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
