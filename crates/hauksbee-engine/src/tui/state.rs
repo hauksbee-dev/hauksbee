@@ -12,6 +12,7 @@
 //! result; it never re-runs or re-implements a check.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crate::report::{BindOutcome, BindReport};
 use crate::result::{BindSummary, DrcStructured, JsonFinding};
@@ -227,12 +228,189 @@ enum LeftPaneIndex {
     None,
 }
 
+/// The maximum number of nets on the scope at once. Probing a fifth net evicts
+/// the oldest-probed one (FIFO), so the scope never grows unbounded and stays
+/// readable at small terminal heights. A deliberate UI constraint — the
+/// `scope_probe_caps_and_evicts_oldest` test mirrors it.
+pub const SCOPE_MAX_PROBES: usize = 4;
+
+/// Per-probed-net ring-buffer capacity, in samples. One co-sim chunk = one
+/// sample, so at the 5 ms QEMU/Renode cadence this holds ~5 s of history and at
+/// the 1 ms in-process AVR cadence ~1 s; older samples are dropped from the
+/// front. The pane downsamples this to the (narrow) pane width for display, so a
+/// generous buffer costs a little memory but never a wide render.
+pub const SCOPE_CAPACITY: usize = 1024;
+
+/// A per-net rolling voltage history for the scope: `(sim_ms, volts)` samples,
+/// oldest at the front, capped at [`SCOPE_CAPACITY`]. Pure and terminal-free so
+/// the ring-buffer behaviour is unit-testable without a PTY.
+#[derive(Debug, Clone, Default)]
+pub struct ScopeSeries {
+    samples: VecDeque<(f64, f64)>,
+}
+
+impl ScopeSeries {
+    /// Append one `(sim_ms, volts)` sample, evicting the oldest once the buffer
+    /// is at capacity so it never grows past [`SCOPE_CAPACITY`].
+    pub fn push(&mut self, sim_ms: f64, volts: f64) {
+        self.samples.push_back((sim_ms, volts));
+        while self.samples.len() > SCOPE_CAPACITY {
+            self.samples.pop_front();
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// The most recent voltage, if any sample has been recorded.
+    pub fn latest(&self) -> Option<f64> {
+        self.samples.back().map(|&(_, v)| v)
+    }
+
+    /// The (min, max) voltage across the buffered window, if non-empty.
+    pub fn min_max(&self) -> Option<(f64, f64)> {
+        let mut it = self.samples.iter().map(|&(_, v)| v);
+        let first = it.next()?;
+        let (mut lo, mut hi) = (first, first);
+        for v in it {
+            if v < lo {
+                lo = v;
+            }
+            if v > hi {
+                hi = v;
+            }
+        }
+        Some((lo, hi))
+    }
+
+    /// The buffered voltages, oldest→newest, for downsampling / plotting.
+    pub fn voltages(&self) -> Vec<f64> {
+        self.samples.iter().map(|&(_, v)| v).collect()
+    }
+}
+
+/// The scope's probe state: which nets are on the scope (in probe order, front =
+/// oldest) and their rolling voltage histories. Fed from the existing co-sim
+/// stream via [`ScopeState::record`]; entirely terminal-free.
+#[derive(Debug, Clone, Default)]
+pub struct ScopeState {
+    /// Probed net names in probe order — front is the oldest, evicted first when
+    /// the cap is hit.
+    order: Vec<String>,
+    /// Per-net rolling history, keyed by net name. Always in sync with `order`.
+    series: HashMap<String, ScopeSeries>,
+}
+
+impl ScopeState {
+    /// Toggle a net's probe: if already probed, remove it (and drop its history);
+    /// otherwise add it, evicting the oldest-probed net when at [`SCOPE_MAX_PROBES`].
+    /// Returns `true` if the net is probed after the call, `false` if it was removed.
+    pub fn toggle(&mut self, net: &str) -> bool {
+        if let Some(pos) = self.order.iter().position(|n| n == net) {
+            self.order.remove(pos);
+            self.series.remove(net);
+            false
+        } else {
+            if self.order.len() >= SCOPE_MAX_PROBES {
+                let evicted = self.order.remove(0);
+                self.series.remove(&evicted);
+            }
+            self.order.push(net.to_string());
+            self.series.insert(net.to_string(), ScopeSeries::default());
+            true
+        }
+    }
+
+    pub fn is_probed(&self, net: &str) -> bool {
+        self.series.contains_key(net)
+    }
+
+    /// The probed net names, in probe order (oldest first).
+    pub fn probed(&self) -> &[String] {
+        &self.order
+    }
+
+    /// The rolling history for a probed net, if any.
+    pub fn series(&self, net: &str) -> Option<&ScopeSeries> {
+        self.series.get(net)
+    }
+
+    /// Record one co-sim sample: for each probed net present in `voltages`, push
+    /// `(sim_ms, v)` onto its ring buffer. Nets not currently probed are ignored,
+    /// so the scope only ever buffers what the user asked to watch.
+    pub fn record(&mut self, sim_ms: f64, voltages: &HashMap<String, f64>) {
+        for name in &self.order {
+            if let Some(&v) = voltages.get(name) {
+                if let Some(s) = self.series.get_mut(name) {
+                    s.push(sim_ms, v);
+                }
+            }
+        }
+    }
+
+    /// Drop every buffered sample but keep the probe selection — used when a new
+    /// co-sim run starts (sim time resets to 0) so an old trace doesn't splice
+    /// onto the new one.
+    pub fn clear_samples(&mut self) {
+        for s in self.series.values_mut() {
+            *s = ScopeSeries::default();
+        }
+    }
+
+    /// True once any probed net has at least one recorded sample.
+    pub fn has_any_samples(&self) -> bool {
+        self.series.values().any(|s| !s.is_empty())
+    }
+}
+
+/// Which top-level state the scope pane should render, decided from pure state so
+/// the render path is a trivial (and testable) dispatch. The distinction between
+/// "waiting for the first sample" and "press r to run" is left to the renderer,
+/// which knows whether a co-sim is currently running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeView {
+    /// No MCU/firmware on this board — there are no live signals to scope.
+    NoMcu,
+    /// An MCU exists but no net is probed yet.
+    NoProbes,
+    /// Nets are probed but no samples have arrived (run not started, or just begun).
+    NoData,
+    /// At least one probed net has samples — draw the sparklines.
+    Live,
+}
+
+/// Reduce `values` to at most `target` points by bucket-averaging, so a long
+/// history renders in a narrow pane without dropping the overall shape. Values
+/// already within `target` (or a `target` of 0/empty input) are returned as-is.
+/// Pure and terminal-free for unit testing the narrow-width downsample.
+pub fn downsample(values: &[f64], target: usize) -> Vec<f64> {
+    if target == 0 || values.len() <= target {
+        return values.to_vec();
+    }
+    let n = values.len();
+    (0..target)
+        .map(|b| {
+            // Bucket b covers [start, end) of the source, averaged.
+            let start = b * n / target;
+            let end = ((b + 1) * n / target).max(start + 1).min(n);
+            let slice = &values[start..end];
+            slice.iter().sum::<f64>() / slice.len() as f64
+        })
+        .collect()
+}
+
 /// Which pane currently has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Parts,
     Findings,
     Cosim,
+    Scope,
 }
 
 impl Pane {
@@ -241,16 +419,18 @@ impl Pane {
         match self {
             Pane::Parts => Pane::Findings,
             Pane::Findings => Pane::Cosim,
-            Pane::Cosim => Pane::Parts,
+            Pane::Cosim => Pane::Scope,
+            Pane::Scope => Pane::Parts,
         }
     }
 
     /// Cycle to the previous pane (Shift-Tab / ←).
     pub fn prev(self) -> Pane {
         match self {
-            Pane::Parts => Pane::Cosim,
+            Pane::Parts => Pane::Scope,
             Pane::Findings => Pane::Parts,
             Pane::Cosim => Pane::Findings,
+            Pane::Scope => Pane::Cosim,
         }
     }
 
@@ -259,6 +439,7 @@ impl Pane {
             Pane::Parts => "Nets & Parts",
             Pane::Findings => "Findings",
             Pane::Cosim => "Co-sim",
+            Pane::Scope => "Scope",
         }
     }
 }
@@ -353,6 +534,10 @@ pub struct AppState {
     /// The one-line launch banner pointing at the other report surfaces is shown
     /// at the top until the first keypress dismisses it (see [`TUI_LAUNCH_BANNER`]).
     pub banner_dismissed: bool,
+    /// The scope: which nets are probed (`p` from the Nets & Parts list) and
+    /// their rolling voltage history, fed from the co-sim stream. Read-mostly —
+    /// the only mutation is the probe toggle plus sample recording.
+    pub scope: ScopeState,
 }
 
 /// The TUI launch banner: one line pointing a first-time user at the non-TUI
@@ -538,6 +723,7 @@ impl AppState {
             left_detail_open: false,
             should_quit: false,
             banner_dismissed: false,
+            scope: ScopeState::default(),
         }
     }
 
@@ -577,7 +763,8 @@ impl AppState {
                     self.findings_sel += 1;
                 }
             }
-            Pane::Cosim => {}
+            // Co-sim and Scope are display-only: nothing to select-navigate.
+            Pane::Cosim | Pane::Scope => {}
         }
     }
 
@@ -586,7 +773,7 @@ impl AppState {
         match self.focus {
             Pane::Parts => self.parts_sel = self.parts_sel.saturating_sub(1),
             Pane::Findings => self.findings_sel = self.findings_sel.saturating_sub(1),
-            Pane::Cosim => {}
+            Pane::Cosim | Pane::Scope => {}
         }
     }
 
@@ -671,7 +858,44 @@ impl AppState {
         match self.focus {
             Pane::Findings => self.toggle_detail(),
             Pane::Parts => self.toggle_left_detail(),
-            Pane::Cosim => {}
+            Pane::Cosim | Pane::Scope => {}
+        }
+    }
+
+    /// The net name the Nets & Parts cursor is currently on, but only when the
+    /// Parts pane is focused and the selection sits on a net row (not a part).
+    /// This is what `p` probes — probing is scoped to "a net from the parts/nets
+    /// list", so a part row or any other focused pane yields `None`.
+    pub fn selected_probe_net(&self) -> Option<&str> {
+        if self.focus != Pane::Parts {
+            return None;
+        }
+        match self.left_pane_index() {
+            LeftPaneIndex::Net(i) => Some(self.nets[i].name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Handle `p`: toggle the highlighted net onto/off the scope. No-op (returns
+    /// `None`) unless the Parts pane is focused with a net row selected. Returns
+    /// the toggled net name so the caller/tests can confirm what happened.
+    pub fn toggle_probe_selected(&mut self) -> Option<String> {
+        let name = self.selected_probe_net()?.to_string();
+        self.scope.toggle(&name);
+        Some(name)
+    }
+
+    /// Which top-level state the scope pane is in, decided from pure state. See
+    /// [`ScopeView`].
+    pub fn scope_view(&self) -> ScopeView {
+        if self.no_mcu {
+            ScopeView::NoMcu
+        } else if self.scope.probed().is_empty() {
+            ScopeView::NoProbes
+        } else if !self.scope.has_any_samples() {
+            ScopeView::NoData
+        } else {
+            ScopeView::Live
         }
     }
 
@@ -1042,9 +1266,131 @@ mod tests {
         st.focus_next();
         assert_eq!(st.focus, Pane::Cosim);
         st.focus_next();
-        assert_eq!(st.focus, Pane::Parts);
+        assert_eq!(st.focus, Pane::Scope);
+        st.focus_next();
+        assert_eq!(st.focus, Pane::Parts, "Scope wraps back to Parts");
+        // Backwards: Parts → Scope → Cosim.
+        st.focus_prev();
+        assert_eq!(st.focus, Pane::Scope);
         st.focus_prev();
         assert_eq!(st.focus, Pane::Cosim);
+    }
+
+    // ── W6 §2: scope probe + ring buffer + downsample ────────────────────────
+
+    #[test]
+    fn scope_probe_caps_and_evicts_oldest() {
+        let mut sc = ScopeState::default();
+        // Probe five nets; the cap is four, so the first-probed is evicted.
+        for n in ["/A", "/B", "/C", "/D"] {
+            assert!(sc.toggle(n), "{n} is now probed");
+        }
+        assert_eq!(sc.probed(), &["/A", "/B", "/C", "/D"]);
+        assert!(sc.toggle("/E"), "/E is now probed");
+        assert_eq!(sc.probed().len(), SCOPE_MAX_PROBES);
+        assert_eq!(sc.probed(), &["/B", "/C", "/D", "/E"], "oldest (/A) evicted");
+        assert!(!sc.is_probed("/A"));
+        // Toggling a probed net off removes it (and frees a slot).
+        assert!(!sc.toggle("/C"), "/C toggled off");
+        assert!(!sc.is_probed("/C"));
+        assert_eq!(sc.probed(), &["/B", "/D", "/E"]);
+    }
+
+    #[test]
+    fn scope_series_ring_buffer_caps_and_tracks_stats() {
+        let mut s = ScopeSeries::default();
+        // Push more than capacity; the oldest samples drop off the front.
+        for i in 0..(SCOPE_CAPACITY + 10) {
+            s.push(i as f64, i as f64);
+        }
+        assert_eq!(s.len(), SCOPE_CAPACITY, "buffer never exceeds capacity");
+        // Latest is the last pushed; the window is the most-recent CAPACITY samples.
+        assert_eq!(s.latest(), Some((SCOPE_CAPACITY + 9) as f64));
+        let (lo, hi) = s.min_max().unwrap();
+        assert_eq!(hi, (SCOPE_CAPACITY + 9) as f64);
+        assert_eq!(lo, 10.0, "the first ten samples were evicted");
+    }
+
+    #[test]
+    fn scope_records_only_probed_nets() {
+        let mut sc = ScopeState::default();
+        sc.toggle("/LED");
+        // A sample carrying several nets; only the probed one is buffered.
+        let mut v = HashMap::new();
+        v.insert("/LED".to_string(), 3.3);
+        v.insert("/GND".to_string(), 0.0);
+        v.insert("/UNPROBED".to_string(), 1.0);
+        sc.record(0.0, &v);
+        v.insert("/LED".to_string(), 0.0);
+        sc.record(5.0, &v);
+        assert!(sc.has_any_samples());
+        let led = sc.series("/LED").unwrap();
+        assert_eq!(led.len(), 2);
+        assert_eq!(led.latest(), Some(0.0));
+        assert_eq!(led.min_max(), Some((0.0, 3.3)));
+        assert!(sc.series("/GND").is_none(), "unprobed nets are never buffered");
+        // clear_samples keeps the probe but drops the history.
+        sc.clear_samples();
+        assert!(sc.is_probed("/LED"));
+        assert!(!sc.has_any_samples());
+    }
+
+    #[test]
+    fn downsample_narrows_and_preserves_range() {
+        // Fewer-or-equal-than-target passes through unchanged.
+        assert_eq!(downsample(&[1.0, 2.0, 3.0], 5), vec![1.0, 2.0, 3.0]);
+        assert_eq!(downsample(&[], 4), Vec::<f64>::new());
+        assert_eq!(downsample(&[1.0, 2.0], 0), vec![1.0, 2.0]);
+        // A ramp of 100 samples into 10 buckets: monotonic, spanning the range.
+        let ramp: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let ds = downsample(&ramp, 10);
+        assert_eq!(ds.len(), 10);
+        assert!(ds.windows(2).all(|w| w[0] < w[1]), "shape preserved (monotonic)");
+        assert!(ds[0] < 10.0 && *ds.last().unwrap() > 89.0, "spans the range");
+    }
+
+    #[test]
+    fn toggle_probe_selected_requires_parts_focus_and_a_net_row() {
+        let mut st = sample_state();
+        // Findings focus: `p` is a no-op even though a net is under the cursor.
+        st.focus = Pane::Findings;
+        assert_eq!(st.toggle_probe_selected(), None);
+        // Parts focus, cursor on a PART row (first row is the active IC U7): no-op.
+        st.focus = Pane::Parts;
+        st.parts_sel = 0;
+        assert_eq!(st.toggle_probe_selected(), None, "a part row is not probeable");
+        // Move onto the first net row and probe it.
+        st.parts_sel = st.parts.len();
+        let net = st.toggle_probe_selected().expect("net row is probeable");
+        assert_eq!(net, "/3V3");
+        assert!(st.scope.is_probed("/3V3"));
+        // Toggling again removes it.
+        assert_eq!(st.toggle_probe_selected().as_deref(), Some("/3V3"));
+        assert!(!st.scope.is_probed("/3V3"));
+    }
+
+    #[test]
+    fn scope_view_transitions_across_placeholder_states() {
+        // No-MCU board → NoMcu, regardless of probes.
+        let mut report = BindReport::default();
+        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, Confidence::Exact, None));
+        let summary = BindSummary::from_report(&report);
+        let no_mcu = AppState::new(
+            "Analog".into(), &report, &summary, &empty_drc(), &[], &[], vec![],
+            HashMap::new(), HashMap::new(),
+        );
+        assert_eq!(no_mcu.scope_view(), ScopeView::NoMcu);
+
+        // MCU board: NoProbes → NoData → Live as we probe then feed samples.
+        let mut st = sample_state();
+        assert!(!st.no_mcu);
+        assert_eq!(st.scope_view(), ScopeView::NoProbes);
+        st.scope.toggle("/3V3");
+        assert_eq!(st.scope_view(), ScopeView::NoData, "probed but no samples yet");
+        let mut v = HashMap::new();
+        v.insert("/3V3".to_string(), 3.3);
+        st.scope.record(0.0, &v);
+        assert_eq!(st.scope_view(), ScopeView::Live);
     }
 
     #[test]
