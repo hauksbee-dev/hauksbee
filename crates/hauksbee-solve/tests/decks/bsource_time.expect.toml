@@ -1,0 +1,18 @@
+# A time-dependent B-source as an arbitrary waveform generator: a two-tone
+# (1 kHz + 3 kHz) sum no built-in source function can produce, feeding an RC
+# low-pass (tau = 100 us) that attenuates and phase-shifts the third harmonic
+# differently from the fundamental. Exercises the `time` dependency (an
+# expression input that is NOT an unknown: no Jacobian column, pure RHS
+# re-evaluation each step) plus reactive dynamics downstream of a B-source.
+# Percent tolerance on the filtered waveform. TMAX capped at 0.5 us like the
+# cccs_mirror deck: the early charge-up of the tau = 100 us filter is high-
+# curvature, and linear resampling of a coarse oracle grid there otherwise
+# dominates the actual engine disagreement.
+analysis = "tran"
+description = "time-dependent B-source (two-tone) into an RC low-pass"
+full_scale = 1.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

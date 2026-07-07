@@ -291,19 +291,19 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
                 }
             }
         }
-        // Current-controlled sources reserve slots in the CONTROL source's
-        // branch COLUMN — a column belonging to a DIFFERENT device. This is
-        // the structurally new bit vs E/G: the reservation walk needs the
-        // resolved control branch index, and it has it because `Layout::new`
-        // runs before the pattern freeze and `ctrl_src` was resolved to a
-        // DeviceId at load time. A dangling id (control source without a
-        // branch, e.g. a partition that failed to keep it in this system) is
-        // unstampable, and the loud panic here beats `add_at` landing outside
-        // the frozen pattern later.
-        if let Some(ctrl) = dev.controlling_source() {
+        // Branch-current reads (F/H control, behavioral `I(...)` deps)
+        // reserve slots in the CONTROL source's branch COLUMN — a column
+        // belonging to a DIFFERENT device. This is the structurally new bit
+        // vs E/G: the reservation walk needs the resolved control branch
+        // index, and it has it because `Layout::new` runs before the pattern
+        // freeze and the reference was resolved to a DeviceId at load time. A
+        // dangling id (control source without a branch, e.g. a partition that
+        // failed to keep it in this system) is unstampable, and the loud
+        // panic here beats `add_at` landing outside the frozen pattern later.
+        for ctrl in dev.controlling_sources() {
             let cbr = layout
                 .branch(ctrl)
-                .expect("F/H control source must own a branch unknown in this system");
+                .expect("control source must own a branch unknown in this system");
             match dev {
                 // CCCS: gain*i_ctrl enters the p/n KCL rows.
                 Device::Cccs { .. } => {
@@ -320,7 +320,26 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
                         .expect("ccvs owns a branch unknown");
                     m.touch(br, cbr);
                 }
-                _ => unreachable!("controlling_source() is Some for F/H only"),
+                // Behavioral: an I(...) partial lands in the p/n rows
+                // (I-output) or the device's own branch row (V-output).
+                // Touching every node row × control column is the same
+                // superset rule as the all-pairs reservation above.
+                Device::Behavioral { output, .. } => match output {
+                    hauksbee_ir::BOutput::Current => {
+                        for &n in &ns {
+                            if let Some(n) = n {
+                                m.touch(n, cbr);
+                            }
+                        }
+                    }
+                    hauksbee_ir::BOutput::Voltage => {
+                        let br = layout
+                            .branch(id)
+                            .expect("V-output behavioral source owns a branch unknown");
+                        m.touch(br, cbr);
+                    }
+                },
+                _ => unreachable!("controlling_sources() is non-empty for F/H/B only"),
             }
         }
     }
@@ -463,6 +482,222 @@ pub(crate) fn stamp_device<S: StampSink>(
         Device::Ccvs {
             p, n, ctrl_src, transres, ..
         } => stamp_ccvs(ctx, id, *p, *n, *ctrl_src, *transres, sink),
+        Device::Behavioral {
+            name,
+            p,
+            n,
+            output,
+            expr,
+            deps,
+        } => stamp_behavioral(ctx, id, name, *p, *n, *output, expr, deps, sink),
+    }
+}
+
+// --- behavioral B-source (nonlinear expression device, dev-plan 04 §2.5) -----
+
+thread_local! {
+    /// First behavioral-expression fault of the current assembly (device-named,
+    /// human-readable). The stamp interface is infallible by design (a sink of
+    /// accumulations), so an expression that errors or produces a non-finite
+    /// value at some Newton iterate cannot return an error — instead the
+    /// faulting device stamps NOTHING, notes itself here, and the solve
+    /// drivers check [`take_behavioral_fault`] immediately after each
+    /// assembly: the Newton iteration is aborted as non-converged (never
+    /// solved against a silently incomplete matrix), a line-search trial
+    /// residual reads +inf (a poisoned point is never accepted), and the
+    /// final non-convergence refusal carries the device name. Thread-local
+    /// because assemblies run on rayon workers in the partitioned engine.
+    static BEHAVIORAL_FAULT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn note_behavioral_fault(name: &str, detail: String) {
+    BEHAVIORAL_FAULT.with(|f| {
+        let mut f = f.borrow_mut();
+        if f.is_none() {
+            *f = Some(format!("behavioral source `{name}`: {detail}"));
+        }
+    });
+}
+
+/// Drain the fault noted by the most recent assembly on this thread, if any.
+/// Callers MUST invoke this after every assembly that can contain a
+/// [`Device::Behavioral`] and treat `Some` as "this iterate is unusable".
+pub(crate) fn take_behavioral_fault() -> Option<String> {
+    BEHAVIORAL_FAULT.with(|f| f.borrow_mut().take())
+}
+
+/// Evaluate a behavioral expression and its finite-difference partials at the
+/// dependency values `vals` (slot-aligned with `deps`). Returns
+/// `(f, partials)` or a human-readable fault description.
+///
+/// FD scheme (plan §2.5, shipped default; symbolic d/dv is the later
+/// upgrade): forward difference per slot with step
+/// `delta_k = reltol*|x_k| + floor`, where the floor is the per-quantity
+/// convergence floor — `vntol` for a `V(...)` slot, `abstol` for an
+/// `I(...)` slot — so the perturbation is always resolvable at the same
+/// scale the Newton convergence test cares about. Any non-finite value
+/// (IEEE semantics: `1/0 = inf`, `ln(-1) = NaN`, see `CompiledExpr::eval`)
+/// or structural eval error is a fault: partial derivatives from a poisoned
+/// point must never enter the matrix.
+pub(crate) fn behavioral_eval_partials(
+    expr: &hauksbee_ir::CompiledExpr,
+    deps: &[hauksbee_ir::BDep],
+    vals: &mut [f64],
+    time: f64,
+    opts: &SolverOptions,
+) -> Result<(f64, Vec<f64>), String> {
+    let f0 = match expr.eval(vals, time) {
+        Ok(v) if v.is_finite() => v,
+        Ok(v) => {
+            return Err(format!(
+                "expression `{}` evaluated to {v} at the current iterate \
+                 (dep values {vals:?}, time {time:.6e})",
+                expr.src()
+            ))
+        }
+        Err(e) => return Err(e),
+    };
+    let mut partials = Vec::with_capacity(deps.len());
+    for k in 0..deps.len() {
+        let floor = match deps[k] {
+            hauksbee_ir::BDep::Volt(_) => opts.vntol,
+            hauksbee_ir::BDep::Branch(_) => opts.abstol,
+        };
+        let x0 = vals[k];
+        let delta = opts.reltol * x0.abs() + floor;
+        vals[k] = x0 + delta;
+        let fk = expr.eval(vals, time);
+        vals[k] = x0;
+        let fk = match fk {
+            Ok(v) if v.is_finite() => v,
+            Ok(v) => {
+                return Err(format!(
+                    "expression `{}` evaluated to {v} while probing the \
+                     partial for dependency {k} (perturbed value {})",
+                    expr.src(),
+                    x0 + delta
+                ))
+            }
+            Err(e) => return Err(e),
+        };
+        let g = (fk - f0) / delta;
+        if !g.is_finite() {
+            return Err(format!(
+                "finite-difference partial for dependency {k} of `{}` is {g}",
+                expr.src()
+            ));
+        }
+        partials.push(g);
+    }
+    Ok((f0, partials))
+}
+
+/// Stamp a behavioral B-source: the Newton companion of a nonlinear source.
+///
+/// With `f = f(x_dep, time)` and FD partials `g_k = df/dx_k` at the current
+/// iterate (`x_k0` the iterate's dependency values):
+///
+/// * **I-output**: `i(p->n) = f`, linearized
+///   `i = sum_k g_k*x_k + (f0 - sum_k g_k*x_k0)`. The `g_k` stamp into the
+///   p/n rows at each dependency's column (a multi-input VCCS with numeric
+///   gains); the constant term is an equivalent current source `p -> n`.
+/// * **V-output**: constraint row `v_p - v_n - f = 0` on its own branch
+///   unknown (incidence identical to `stamp_vsource`), linearized to
+///   `v_p - v_n - sum_k g_k*x_k = f0 - sum_k g_k*x_k0` — `-g_k` at
+///   `(branch_row, dep_col)`, the constant on the branch RHS (a VCVS with
+///   numeric gains plus a Newton-companion value).
+///
+/// A dependency column is a node unknown for `V(...)` slots (ground = no
+/// column) or the control source's branch unknown for `I(...)` slots. Like
+/// every dependent source, the value is a device property: never scaled by
+/// source-stepping homotopy (`src_scale`), matching SPICE. The same stamp
+/// serves DC (time = 0) and transient — the constraint has no memory. Sense
+/// contract: dependency-node ROWS receive nothing (only their columns are
+/// referenced), which the conduction cross-check enforces mechanically.
+///
+/// On an expression fault the device stamps NOTHING and notes a device-named
+/// fault for the drivers (see [`BEHAVIORAL_FAULT`]) — never a NaN into the
+/// matrix.
+#[allow(clippy::too_many_arguments)]
+fn stamp_behavioral<S: StampSink>(
+    ctx: &StampCtx,
+    id: DeviceId,
+    name: &str,
+    p: NodeId,
+    n: NodeId,
+    output: hauksbee_ir::BOutput,
+    expr: &hauksbee_ir::CompiledExpr,
+    deps: &[hauksbee_ir::BDep],
+    sink: &mut S,
+) {
+    // Dependency values and columns at the current iterate.
+    let mut vals: Vec<f64> = Vec::with_capacity(deps.len());
+    let mut cols: Vec<Option<usize>> = Vec::with_capacity(deps.len());
+    for d in deps {
+        match d {
+            hauksbee_ir::BDep::Volt(dn) => {
+                vals.push(ctx.v(*dn));
+                cols.push(ctx.layout.node(*dn));
+            }
+            hauksbee_ir::BDep::Branch(src) => {
+                let cbr = ctx
+                    .layout
+                    .branch(*src)
+                    .expect("behavioral I(...) control source owns a branch unknown");
+                vals.push(ctx.x[cbr]);
+                cols.push(Some(cbr));
+            }
+        }
+    }
+    let (f0, partials) = match behavioral_eval_partials(expr, deps, &mut vals, ctx.time, ctx.opts)
+    {
+        Ok(r) => r,
+        Err(detail) => {
+            note_behavioral_fault(name, detail);
+            return;
+        }
+    };
+    // Newton-companion constant: f0 - sum_k g_k * x_k0.
+    let mut const_term = f0;
+    for (g, x0) in partials.iter().zip(&vals) {
+        const_term -= g * x0;
+    }
+    match output {
+        hauksbee_ir::BOutput::Current => {
+            let (pi, ni) = (ctx.layout.node(p), ctx.layout.node(n));
+            for (g, col) in partials.iter().zip(&cols) {
+                if let Some(col) = col {
+                    if let Some(pi) = pi {
+                        sink.g(pi, *col, *g);
+                    }
+                    if let Some(ni) = ni {
+                        sink.g(ni, *col, -*g);
+                    }
+                }
+            }
+            stamp_current(sink, ctx.layout, p, n, const_term);
+        }
+        hauksbee_ir::BOutput::Voltage => {
+            let br = ctx
+                .layout
+                .branch(id)
+                .expect("V-output behavioral source owns a branch unknown");
+            if let Some(pi) = ctx.layout.node(p) {
+                sink.g(pi, br, 1.0);
+                sink.g(br, pi, 1.0);
+            }
+            if let Some(ni) = ctx.layout.node(n) {
+                sink.g(ni, br, -1.0);
+                sink.g(br, ni, -1.0);
+            }
+            for (g, col) in partials.iter().zip(&cols) {
+                if let Some(col) = col {
+                    sink.g(br, *col, -*g);
+                }
+            }
+            sink.i(br, const_term);
+        }
     }
 }
 
@@ -2332,5 +2567,92 @@ mod bench {
                 assembled,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod behavioral_fd_tests {
+    use super::*;
+    use hauksbee_ir::{BDep, CompiledExpr, DeviceId};
+
+    /// FD-Jacobian accuracy gate (plan §2.5): the forward-difference partials
+    /// must match ANALYTIC derivatives on a known expression at representative
+    /// operating points. With `delta = reltol*|x| + floor` the forward
+    /// difference carries an O(delta * f''/2) truncation term, so the bar is
+    /// set from reltol (1e-3) times the local curvature — a few 1e-3 relative
+    /// on curved terms, tighter on linear ones.
+    #[test]
+    fn fd_partials_match_analytic() {
+        // f(v, i) = 2 v + 100 tanh(5 i) + 0.1 t
+        //   df/dv = 2 (exactly, linear)
+        //   df/di = 500 sech^2(5 i)
+        let expr = CompiledExpr::compile("2.0*__d0 + 100.0*math::tanh(5.0*__d1) + 0.1*time")
+            .unwrap();
+        let deps = [BDep::Volt(hauksbee_ir::NodeId(1)), BDep::Branch(DeviceId(0))];
+        let opts = SolverOptions::default();
+        let mut worst_lin = 0.0f64;
+        let mut worst_curved = 0.0f64;
+        for &(v, i, t) in &[
+            (0.0, 0.0, 0.0),
+            (1.0, 0.05, 1e-3),
+            (-3.0, -0.2, 0.5),
+            (0.25, 0.4, 2.0),
+            (10.0, -0.02, 10.0),
+        ] {
+            let mut vals = vec![v, i];
+            let (f0, partials) =
+                behavioral_eval_partials(&expr, &deps, &mut vals, t, &opts).unwrap();
+            let f_true = 2.0 * v + 100.0 * (5.0 * i).tanh() + 0.1 * t;
+            assert!((f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0), "f0 at ({v},{i},{t})");
+            // Linear partial: FD is exact to rounding for a linear term...
+            // except for the tanh term's contribution? No: partials are per
+            // SLOT — slot 0 perturbs v only, and f is linear in v, so the
+            // difference quotient is exactly 2 up to cancellation rounding.
+            let dv_err = ((partials[0] - 2.0) / 2.0).abs();
+            worst_lin = worst_lin.max(dv_err);
+            assert!(dv_err < 1e-9, "df/dv at ({v},{i},{t}): {} (rel {dv_err:e})", partials[0]);
+            // Curved partial: truncation O(delta/2 * f''), delta ~ 1e-3|i|+1e-12.
+            let sech2 = 1.0 / (5.0f64 * i).cosh().powi(2);
+            let di_true = 500.0 * sech2;
+            let di_err = ((partials[1] - di_true) / di_true.abs().max(1e-12)).abs();
+            worst_curved = worst_curved.max(di_err);
+            assert!(
+                di_err < 5e-3,
+                "df/di at ({v},{i},{t}): fd={} analytic={di_true} rel={di_err:e}",
+                partials[1]
+            );
+        }
+        // Print the measured accuracy so the gate report carries real numbers
+        // (run with --nocapture).
+        println!(
+            "behavioral FD accuracy: worst linear rel err {worst_lin:.3e}, \
+             worst curved rel err {worst_curved:.3e}"
+        );
+    }
+
+    /// The fault contract of the partials helper: NaN values, INF values, and
+    /// eval errors all come back as Err — never as poisoned numbers.
+    #[test]
+    fn fd_partials_report_faults() {
+        let opts = SolverOptions::default();
+        let ln = CompiledExpr::compile("math::ln(__d0)").unwrap();
+        let deps = [BDep::Volt(hauksbee_ir::NodeId(1))];
+        // NaN at the base point.
+        let mut vals = vec![-1.0];
+        assert!(behavioral_eval_partials(&ln, &deps, &mut vals, 0.0, &opts).is_err());
+        // INF from division by zero.
+        let div = CompiledExpr::compile("1.0/__d0").unwrap();
+        let mut vals = vec![0.0];
+        assert!(behavioral_eval_partials(&div, &deps, &mut vals, 0.0, &opts).is_err());
+        // A fault while PROBING a partial (base point fine, perturbed point
+        // NaN): ln(x) at x just below 0 after the +delta probe crosses it...
+        // construct via ln(-__d0) with x = -1e-15: base -x = 1e-15 > 0 ok,
+        // probe x+delta makes -x negative -> NaN.
+        let flip = CompiledExpr::compile("math::ln(0.0 - __d0)").unwrap();
+        let mut vals = vec![-1e-15];
+        assert!(behavioral_eval_partials(&flip, &deps, &mut vals, 0.0, &opts).is_err());
+        // And vals is restored even on the fault path? The base value is
+        // written back before the error returns, so callers can reuse it.
+        assert_eq!(vals[0], -1e-15);
     }
 }
