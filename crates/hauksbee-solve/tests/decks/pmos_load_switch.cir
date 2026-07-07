@@ -1,0 +1,17 @@
+PMOS high-side load switch (dev-plan 04 s3.3)
+* P-channel high-side switch: source at VDD, drain into the load, gate
+* pulled from VDD to 0 through RG to turn it on. Pins two things against
+* ngspice: (1) the SPICE-convention negative VTO on a PMOS card is folded
+* into the solver's N-channel space (before this arc VTO=-2 was read as a
+* folded threshold of -2 V -- a depletion device, permanently on; this
+* deck would have failed grossly), and (2) the polarity-folded gate-charge
+* companions on a P-channel device.
+VDD vdd 0 DC 5
+VG in 0 PULSE(5 0 1u 100n 100n 4u 10u)
+RG in g 10k
+RL d 0 100
+M1 d g vdd vdd MPSW
+.model MPSW PMOS(VTO=-2 KP=1e-2 W=1m L=10u TOX=50n CGSO=2e-9 CGDO=2e-9)
+.tran 10n 8u
+.print tran v(d)
+.end
