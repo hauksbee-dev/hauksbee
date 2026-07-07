@@ -1,0 +1,31 @@
+common-emitter amplifier small-signal gain (dev-plan 04 s3.2)
+* Bypassed-emitter CE stage, sine in / sine out: the output amplitude is set
+* by the INTRINSIC small-signal chain -- gm at the bias, the base series
+* resistance rb dividing against the source impedance, and the Early factor
+* scaling the transport current. A wrong-signed Early factor (the inversion
+* this arc fixed) or an ignored RB moves the output amplitude at the
+* several-percent level, which is exactly what this deck pins against
+* ngspice. CJE/CJC/TF are carried at real (small) values; at 20 kHz they are
+* far below their poles, so the gain check stays a gain check.
+VCC vcc 0 DC 12
+VIN in 0 SIN(0 0.005 20k)
+RS in inb 1k
+CIN inb b 10u
+RB1 vcc b 47k
+RB2 b 0 10k
+RC vcc c 2.2k
+RE e 0 560
+CE e 0 100u
+Q1 c b e QA
+* Cold-start hint (honored by BOTH simulators): with the stiff divider the
+* solver's junction-limiting walk moves v(b)/v(e) by less than vntol per
+* iteration and plain Newton can declare convergence with the junction still
+* walking up (ngspice avoids the trap by initializing junctions at vcrit; a
+* solver-side junction seed is noted as follow-up). Seeding the emitter one
+* diode drop below the divider point puts the junction live at iteration 1.
+.nodeset v(b)=2.1 v(e)=1.45
+.model QA NPN(IS=1e-14 BF=200 NF=1 VAF=100 RB=250 RE=2 RC=20 CJE=25p CJC=8p TF=400p)
+.tran 0.5u 250u
+.print tran v(c)
+.options reltol=1e-4
+.end

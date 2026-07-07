@@ -261,7 +261,15 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
         m.touch(i, i);
     }
     for (id, dev) in circuit.iter() {
-        let ns: Vec<Option<usize>> = dev.nodes().iter().map(|&n| layout.node(n)).collect();
+        let mut ns: Vec<Option<usize>> = dev.nodes().iter().map(|&n| layout.node(n)).collect();
+        // A series-resistance BJT's internal unknowns (dev-plan 04 §3.2) join
+        // the all-pairs set: the ohmic stamps couple external<->internal and
+        // the relocated Gummel-Poon core couples the internals among
+        // themselves — the union's all-pairs covers both (and the toggle-off
+        // unit diagonal is inside it too).
+        if let Some(ints) = layout.bjt_internal(id) {
+            ns.extend(ints.iter().copied());
+        }
         // All-pairs structural coupling among a device's nodes covers every
         // companion/tangent stamp it can produce.
         for i in 0..ns.len() {
@@ -390,7 +398,7 @@ pub(crate) fn stamp_device<S: StampSink>(
             stamp_current(sink, ctx.layout, *p, *n, val * ctx.src_scale);
         }
         Device::Diode { a, k, model, .. } => stamp_diode(ctx, id, *a, *k, model, sink),
-        Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, *c, *b, *e, model, sink),
+        Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, id, *c, *b, *e, model, sink),
         Device::Mosfet { d, g: gate, s, model, .. } => {
             stamp_mosfet(ctx, *d, *gate, *s, model, sink)
         }
@@ -791,29 +799,9 @@ pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f6
     let mut q = 0.0;
     let mut c = 0.0;
     if model.cjo > 0.0 {
-        let (cjo, vj, m) = (model.cjo, model.vj, model.m);
-        let fcv = DIODE_FC * vj;
-        if vd < fcv {
-            let arg = 1.0 - vd / vj;
-            let sarg = arg.powf(-m);
-            c += cjo * sarg;
-            q += if (1.0 - m).abs() < 1e-9 {
-                -cjo * vj * arg.ln()
-            } else {
-                // arg^(1-m) == arg * arg^-m, reusing the power already paid.
-                cjo * vj * (1.0 - arg * sarg) / (1.0 - m)
-            };
-        } else {
-            let f2 = (1.0 - DIODE_FC).powf(1.0 + m);
-            let f3 = 1.0 - DIODE_FC * (1.0 + m);
-            let f1 = if (1.0 - m).abs() < 1e-9 {
-                -vj * (1.0 - DIODE_FC).ln()
-            } else {
-                vj * (1.0 - (1.0 - DIODE_FC).powf(1.0 - m)) / (1.0 - m)
-            };
-            c += cjo * (f3 + m * vd / vj) / f2;
-            q += cjo * (f1 + (f3 * (vd - fcv) + (m / (2.0 * vj)) * (vd * vd - fcv * fcv)) / f2);
-        }
+        let (qj, cj) = depletion_charge(model.cjo, model.vj, model.m, vd);
+        c += cj;
+        q += qj;
     }
     if model.tt > 0.0 {
         q += model.tt * id;
@@ -822,19 +810,186 @@ pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f6
     (q, c)
 }
 
+/// SPICE depletion charge/capacitance for one graded junction: `(Qj, Cj)` at
+/// junction voltage `vd`, with the FC-knee linear continuation documented on
+/// [`diode_charge`]. Shared by the diode (`cjo/vj/m` from its model card) and
+/// the BJT's two junctions (`cje`/`cjc` with the SPICE default `vj`/`m`, see
+/// [`BJT_VJ`]/[`BJT_MJ`]); the arithmetic is the diode's original,
+/// expression-for-expression, so extracting it moved no diode bit.
+pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, vd: f64) -> (f64, f64) {
+    let fcv = DIODE_FC * vj;
+    if vd < fcv {
+        let arg = 1.0 - vd / vj;
+        let sarg = arg.powf(-m);
+        let c = cjo * sarg;
+        let q = if (1.0 - m).abs() < 1e-9 {
+            -cjo * vj * arg.ln()
+        } else {
+            // arg^(1-m) == arg * arg^-m, reusing the power already paid.
+            cjo * vj * (1.0 - arg * sarg) / (1.0 - m)
+        };
+        (q, c)
+    } else {
+        let f2 = (1.0 - DIODE_FC).powf(1.0 + m);
+        let f3 = 1.0 - DIODE_FC * (1.0 + m);
+        let f1 = if (1.0 - m).abs() < 1e-9 {
+            -vj * (1.0 - DIODE_FC).ln()
+        } else {
+            vj * (1.0 - (1.0 - DIODE_FC).powf(1.0 - m)) / (1.0 - m)
+        };
+        let c = cjo * (f3 + m * vd / vj) / f2;
+        let q = cjo * (f1 + (f3 * (vd - fcv) + (m / (2.0 * vj)) * (vd * vd - fcv * fcv)) / f2);
+        (q, c)
+    }
+}
+
+/// SPICE default junction built-in potential / grading coefficient for the
+/// BJT's depletion capacitances (`VJE`/`VJC` = 0.75 V, `MJE`/`MJC` = 0.33).
+/// The loader does not parse per-junction `vj`/`m` overrides yet, so both
+/// junctions use the ngspice defaults — the value an ngspice model card
+/// without VJE/MJE also gets, which keeps the differential decks honest.
+pub(crate) const BJT_VJ: f64 = 0.75;
+pub(crate) const BJT_MJ: f64 = 0.33;
+
+/// Whether a BJT stores charge under the current effects toggles: the
+/// `junction_caps` gate AND at least one charge-producing model field. A
+/// default model (`cje == cjc == tf == tr == 0`) never stores charge, so
+/// decks whose BJT models predate this physics are bit-identical whatever
+/// the toggle — the same contract [`diode_has_charge`] pins for diodes.
+#[inline]
+pub(crate) fn bjt_has_charge(
+    model: &BjtModel,
+    effects: &crate::options::DeviceEffects,
+) -> bool {
+    effects.junction_caps
+        && (model.cje > 0.0 || model.cjc > 0.0 || model.tf > 0.0 || model.tr > 0.0)
+}
+
+/// BJT base-emitter stored charge `Q(vbe)` and capacitance `dQ/dvbe`, in
+/// POLARITY-FOLDED (NPN-reference) space: depletion (`cje`, SPICE-default
+/// knee) plus forward diffusion `tf·i_cc`, where `i_cc = cf` is the forward
+/// transport current the Gummel-Poon core already evaluates (`gif` its
+/// tangent) — the transit-time charge rides the core's own transport
+/// evaluation instead of recomputing it.
+pub(crate) fn bjt_charge_be(model: &BjtModel, vbe: f64, cf: f64, gif: f64) -> (f64, f64) {
+    let mut q = 0.0;
+    let mut c = 0.0;
+    if model.cje > 0.0 {
+        let (qj, cj) = depletion_charge(model.cje, BJT_VJ, BJT_MJ, vbe);
+        q += qj;
+        c += cj;
+    }
+    if model.tf > 0.0 {
+        q += model.tf * cf;
+        c += model.tf * gif;
+    }
+    (q, c)
+}
+
+/// BJT base-collector stored charge and capacitance (folded space):
+/// depletion (`cjc`) plus reverse diffusion `tr·i_ec` with `i_ec = cr` the
+/// reverse transport current (`gir` its tangent).
+pub(crate) fn bjt_charge_bc(model: &BjtModel, vbc: f64, cr: f64, gir: f64) -> (f64, f64) {
+    let mut q = 0.0;
+    let mut c = 0.0;
+    if model.cjc > 0.0 {
+        let (qj, cj) = depletion_charge(model.cjc, BJT_VJ, BJT_MJ, vbc);
+        q += qj;
+        c += cj;
+    }
+    if model.tr > 0.0 {
+        q += model.tr * cr;
+        c += model.tr * gir;
+    }
+    (q, c)
+}
+
+/// Both BJT stored charges `(Q_be, Q_bc)` at FOLDED junction voltages,
+/// recomputing the transport currents through the same clamped exponentials
+/// the stamp uses — the seed/advance/LTE entry point (the stamp itself reuses
+/// its already-evaluated `cf`/`gif`/`cr`/`gir` via the per-junction helpers).
+pub(crate) fn bjt_charges_at(
+    model: &BjtModel,
+    vbe: f64,
+    vbc: f64,
+    t_c: f64,
+    temp_on: bool,
+) -> (f64, f64) {
+    let is = if temp_on { model.is_at(t_c) } else { model.is };
+    let vt = hauksbee_ir_thermal(t_c, temp_on);
+    let nvf = model.nf * vt;
+    let nvr = model.nr * vt;
+    let ef = (vbe / nvf).clamp(-40.0, 40.0).exp();
+    let er = (vbc / nvr).clamp(-40.0, 40.0).exp();
+    let cf = is * (ef - 1.0);
+    let cr = is * (er - 1.0);
+    let gif = is * ef / nvf;
+    let gir = is * er / nvr;
+    (
+        bjt_charge_be(model, vbe, cf, gif).0,
+        bjt_charge_bc(model, vbc, cr, gir).0,
+    )
+}
+
+/// FOLDED junction voltages `(vbe, vbc)` of a BJT at the solution vector `x`,
+/// measured at the INTRINSIC (internal) nodes when series resistance is
+/// stamped — the voltages its stored charges are functions of. This is the
+/// single node-resolution rule the transient/partitioned seed-advance arms
+/// and the AC stamp share with `stamp_bjt`: internal unknowns when the
+/// `series_resistance` toggle is on AND the layout allocated them, the
+/// external nodes otherwise.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bjt_junction_voltages(
+    layout: &Layout,
+    x: &[f64],
+    id: DeviceId,
+    c: NodeId,
+    b: NodeId,
+    e: NodeId,
+    model: &BjtModel,
+    effects: &crate::options::DeviceEffects,
+) -> (f64, f64) {
+    let [ci, bi, ei] = bjt_effective_nodes(layout, id, c, b, e, effects);
+    let v = |i: Option<usize>| i.map(|i| x[i]).unwrap_or(0.0);
+    let sign = model.polarity.sign();
+    (sign * (v(bi) - v(ei)), sign * (v(bi) - v(ci)))
+}
+
+/// The unknown indices the Gummel-Poon core (and the charges) live on:
+/// `[c, b, e]` as internal-node indices where the layout allocated them and
+/// the `series_resistance` toggle honors them, external node indices
+/// otherwise (per terminal — a zero-valued resistance allocated no internal
+/// node and stays external).
+pub(crate) fn bjt_effective_nodes(
+    layout: &Layout,
+    id: DeviceId,
+    c: NodeId,
+    b: NodeId,
+    e: NodeId,
+    effects: &crate::options::DeviceEffects,
+) -> [Option<usize>; 3] {
+    let ext = [layout.node(c), layout.node(b), layout.node(e)];
+    if !effects.series_resistance {
+        return ext;
+    }
+    match layout.bjt_internal(id) {
+        Some(ints) => [ints[0].or(ext[0]), ints[1].or(ext[1]), ints[2].or(ext[2])],
+        None => ext,
+    }
+}
+
 /// §3.4 (`DeviceEffects` contract): a toggle the stamp cannot honor for a
 /// device must LOG ONCE rather than silently ignore the model fields. Each
 /// dishonored (effect, device) pair owns one flag; tests read the flag.
 pub(crate) mod effect_log {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// Diode `rs` is parsed but not stamped (series node work is dev-plan 04
-    /// §3.2 territory, landing with the BJT's rb/re/rc).
+    /// Diode `rs` is parsed but not stamped. The BJT's rb/re/rc landed the
+    /// internal-node machinery (dev-plan 04 §3.2), but wiring the diode's RS
+    /// through it is deliberately deferred: the diode's §3.1 numbers are a
+    /// regression surface this arc must not move (its decks omit RS for
+    /// exactly this reason).
     pub static DIODE_SERIES_R: AtomicBool = AtomicBool::new(false);
-    /// BJT `cje/cjc/tf/tr` are parsed but not stamped (dev-plan 04 §3.2).
-    pub static BJT_JUNCTION_CAPS: AtomicBool = AtomicBool::new(false);
-    /// BJT `rb/re/rc` are parsed but not stamped (dev-plan 04 §3.2).
-    pub static BJT_SERIES_R: AtomicBool = AtomicBool::new(false);
 
     /// Log `msg` the first time this flag fires; a no-op afterwards.
     pub fn log_once(flag: &AtomicBool, msg: &str) {
@@ -954,6 +1109,7 @@ fn stamp_diode<S: StampSink>(
 
 fn stamp_bjt<S: StampSink>(
     ctx: &StampCtx,
+    id: DeviceId,
     c: NodeId,
     b: NodeId,
     e: NodeId,
@@ -966,35 +1122,43 @@ fn stamp_bjt<S: StampSink>(
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let vt = hauksbee_ir_thermal(t_c, temp_on);
 
-    // §3.4: toggles this stamp cannot honor yet log once instead of silently
-    // ignoring the parsed model fields (BJT charge storage and series
-    // resistances are dev-plan 04 §3.2, not landed). The MOSFET model carries
-    // no capacitance/series fields at all, so there is nothing for it to
-    // dishonor until §3.3 adds them.
-    if ctx.opts.effects.junction_caps
-        && (model.cje > 0.0 || model.cjc > 0.0 || model.tf > 0.0 || model.tr > 0.0)
-    {
-        effect_log::log_once(
-            &effect_log::BJT_JUNCTION_CAPS,
-            "junction_caps: BJT charge storage (cje/cjc/tf/tr) is not stamped yet \
-             (dev-plan 04 §3.2); the toggle is honored for diodes only",
-        );
+    // Series resistances rb/re/rc (dev-plan 04 §3.2): the layout allocated an
+    // internal unknown per NONZERO terminal resistance (see
+    // `Layout::bjt_internal` — zero-valued resistances allocate nothing, so a
+    // default model takes none of these branches). With the toggle on, stamp
+    // the ohmic conductance between each external terminal and its internal
+    // node and move the Gummel-Poon core (and the charges below) onto the
+    // internal nodes. With the toggle off, the core stays on the external
+    // nodes — exactly the no-series-R physics — and each allocated-but-unused
+    // internal unknown is pinned to 0 by a unit diagonal (an isolated row
+    // coupled to nothing, so it cannot influence the solution).
+    let ext = [ctx.layout.node(c), ctx.layout.node(b), ctx.layout.node(e)];
+    let mut eff = ext;
+    if let Some(&ints) = ctx.layout.bjt_internal(id) {
+        if ctx.opts.effects.series_resistance {
+            let rs = [model.rc, model.rb, model.re];
+            for t in 0..3 {
+                if let Some(int_i) = ints[t] {
+                    add_pair(sink, ext[t], Some(int_i), 1.0 / rs[t]);
+                    eff[t] = Some(int_i);
+                }
+            }
+        } else {
+            for int_i in ints.into_iter().flatten() {
+                sink.g(int_i, int_i, 1.0);
+            }
+        }
     }
-    if ctx.opts.effects.series_resistance && (model.rb > 0.0 || model.re > 0.0 || model.rc > 0.0)
-    {
-        effect_log::log_once(
-            &effect_log::BJT_SERIES_R,
-            "series_resistance: BJT rb/re/rc are not stamped yet (dev-plan 04 §3.2); \
-             the model fields are ignored",
-        );
-    }
+    let (ci, bi, ei) = (eff[0], eff[1], eff[2]);
+    let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
+    let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
 
-    // Internal junction voltages with polarity folded in.
-    let vbe = sign * (ctx.v(b) - ctx.v(e));
-    let vbc = sign * (ctx.v(b) - ctx.v(c));
+    // Intrinsic junction voltages with polarity folded in.
+    let vbe = sign * (vx(bi) - vx(ei));
+    let vbc = sign * (vx(bi) - vx(ci));
     let vcrit_be = vcrit(is, model.nf * vt);
-    let vbe = pnjlim(vbe, sign * ctx.last_vbe(b, e), model.nf * vt, vcrit_be);
-    let vbc = pnjlim(vbc, sign * ctx.last_vbc(b, c), model.nr * vt, vcrit_be);
+    let vbe = pnjlim(vbe, sign * (vx_prev(bi) - vx_prev(ei)), model.nf * vt, vcrit_be);
+    let vbc = pnjlim(vbc, sign * (vx_prev(bi) - vx_prev(ci)), model.nr * vt, vcrit_be);
 
     let nvf = model.nf * vt;
     let nvr = model.nr * vt;
@@ -1005,16 +1169,25 @@ fn stamp_bjt<S: StampSink>(
     let cf = is * (ef - 1.0); // forward diffusion
     let cr = is * (er - 1.0); // reverse diffusion
 
-    // Base-width modulation (Early effect).
+    // Base-width modulation (Early effect): SGP's base-charge factor with
+    // VAR/IKF absent is qb = q1 = 1/(1 - vbc/VAF), and the transport current
+    // is DIVIDED by qb — i.e. MULTIPLIED by (1 - vbc/VAF), which is > 1 in
+    // forward-active (vbc < 0), so ic grows with vce and ro = VAF/IC, the
+    // classic Early slope. (This arc FIXED an inversion here: the previous
+    // code divided by (1 - vbc/VAF), shrinking ic with vce — undetected
+    // because the bias decks' collector points are bias-network-set, exposed
+    // by the §3.2 amplifier-gain cross-check against ngspice. For the
+    // default model `vaf` is infinite, `early == 1.0`, and `1/1.0 == 1.0`
+    // exactly: default-model decks are bit-identical across the fix.)
     let early = if ctx.opts.effects.early_effect && model.vaf.is_finite() {
         1.0 - vbc / model.vaf
     } else {
         1.0
     };
-    let inv_early = 1.0 / early.max(0.1);
+    let q1_inv = early.max(0.1); // = 1/qb (SGP q1 reciprocal), clamped far from use
 
     // Transport (collector) current and the two base components.
-    let ict = (cf - cr) * inv_early;
+    let ict = (cf - cr) * q1_inv;
     let ibe = cf / model.bf;
     let ibc = cr / model.br;
 
@@ -1023,40 +1196,130 @@ fn stamp_bjt<S: StampSink>(
     let gmu = is * er / (nvr * model.br); // d ibc / d vbc
     let gif = is * ef / nvf; // d cf / d vbe
     let gir = is * er / nvr; // d cr / d vbc
-    let gm = (gif * inv_early).max(ctx.opts.gmin); // forward transconductance
-    let go = (gir * inv_early).max(ctx.opts.gmin); // reverse / output
+    let gm = (gif * q1_inv).max(ctx.opts.gmin); // forward transconductance
+    let go = (gir * q1_inv).max(ctx.opts.gmin); // reverse / output
 
     // Terminal currents into c, b, e (NPN reference, then sign-folded).
     let ic = ict - ibc;
     let ib = ibe + ibc;
     let ie = -(ic + ib);
 
-    // Linearized stamp. We add conductances among (b,e) and (b,c) plus the
-    // transconductance gm coupling c to (vbe). This is the standard GP small
-    // companion: matrix entries follow the partials, RHS gets the residual.
-    let (ci, bi, ei) = (ctx.layout.node(c), ctx.layout.node(b), ctx.layout.node(e));
+    // Linearized stamp, two variants sharing the residual physics:
+    //
+    // LEGACY (external nodes — every pre-§3.2 deck): conductances among (b,e)
+    // and (b,c) plus the transconductance gm coupling c to vbe, with vce as
+    // the output coordinate. This Jacobian is APPROXIMATE in saturation
+    // (mapping ∂ic/∂vbc through go-between-c-e plus gm-on-vbe mismatches the
+    // true partial by gir), which board-level resistances damp fine — and it
+    // is the byte-for-byte path the fixture hash pins, so it stays.
+    //
+    // EXACT (core relocated onto internal nodes — the §3.2 opt-in honored):
+    // the true partials
+    //   ∂ic/∂vbe = gif·q1_inv
+    //   ∂ic/∂vbc = -gir·q1_inv - gmu - (cf-cr)/vaf  (Early term only when the
+    //              effect is active and the clamp is not)
+    //   ∂ib/∂vbe = gpi,  ∂ib/∂vbc = gmu
+    // stamped directly per junction voltage. The legacy approximation
+    // limit-cycles Newton on a hard-saturated switching edge (measured: a
+    // persistent ~0.1 V two-cycle at the collector, failing the step at
+    // dt_min); the exact tangent converges it. It applies exactly when the
+    // core sits on the internal nodes: every pre-§3.2 deck (and any toggle-
+    // off run) stays on the pinned legacy bytes, and the staged-DC relaxed
+    // pass (which solves with `series_resistance` OFF precisely to get the
+    // easier base-topology system) stays legacy too. Both Jacobians define
+    // the same root — the RHS residual brackets are the terminal currents
+    // either way.
+    //
+    // (ci, bi, ei) are the EFFECTIVE unknowns resolved above — the intrinsic
+    // internal nodes when series resistance is stamped, the externals
+    // otherwise. `sign` folds out of the matrix entries (sign² = 1) and folds
+    // the RHS brackets whole; folding only some terms breaks PNP convergence.
+    let exact_tangent = eff != ext;
+    if exact_tangent {
+        let gc_be = gm; // gif·q1_inv, gmin-floored like the legacy path
+        let early_deriv = if ctx.opts.effects.early_effect
+            && model.vaf.is_finite()
+            && early > 0.1
+        {
+            -(cf - cr) / model.vaf
+        } else {
+            0.0
+        };
+        let gc_bc = -gir * q1_inv - gmu + early_deriv;
+        // Row c: gc_be·vbe + gc_bc·vbc; row b: gpi·vbe + gmu·vbc; row e is
+        // minus their sum (KCL). Each junction-voltage dependence is a
+        // transconductance from the terminal pair into (b, x).
+        add_transconductance(sink, ci, ei, bi, ei, gc_be);
+        add_transconductance(sink, ci, ei, bi, ci, gc_bc);
+        add_transconductance(sink, bi, ei, bi, ei, gpi);
+        add_transconductance(sink, bi, ei, bi, ci, gmu);
+        let ic_eq = sign * (ic - (gc_be * vbe + gc_bc * vbc));
+        let ib_eq = sign * (ib - (gpi * vbe + gmu * vbc));
+        inject(sink, ci, -ic_eq);
+        inject(sink, bi, -ib_eq);
+        inject(sink, ei, ic_eq + ib_eq);
+    } else {
+        // gpi between b-e, gmu between b-c.
+        add_pair(sink, bi, ei, gpi);
+        add_pair(sink, bi, ci, gmu);
+        // output conductance go between c-e.
+        add_pair(sink, ci, ei, go);
+        // transconductance: ic depends on vbe = v(b)-v(e).
+        add_transconductance(sink, ci, ei, bi, ei, gm);
 
-    // gpi between b-e, gmu between b-c.
-    add_pair(sink, bi, ei, gpi);
-    add_pair(sink, bi, ci, gmu);
-    // output conductance go between c-e.
-    add_pair(sink, ci, ei, go);
-    // transconductance: ic depends on vbe = v(b)-v(e).
-    add_transconductance(sink, ci, ei, bi, ei, gm);
+        // Equivalent currents: residual = I_terminal - linearized part, both
+        // in folded (NPN-reference) space, then mapped to real space by
+        // `sign` (matrix rows in real space equal sign * folded linear part).
+        let vce_f = sign * (vx(ci) - vx(ei));
+        let ic_eq = sign * (ic - (gm * vbe + go * vce_f - gmu * vbc));
+        let ib_eq = sign * (ib - (gpi * vbe + gmu * vbc));
+        let ie_eq = sign * (ie + (gm + gpi) * vbe + go * vce_f);
 
-    // Equivalent currents: residual = I_terminal - linearized part, both in
-    // folded (NPN-reference) space, then mapped to real space by `sign`. The
-    // matrix rows in real space equal sign * (folded linear part), so the
-    // whole bracket folds together -- folding only some terms breaks PNP
-    // convergence (sign = -1 flips gm/gpi/gmu contributions).
-    let vce_f = sign * (ctx.v(c) - ctx.v(e));
-    let ic_eq = sign * (ic - (gm * vbe + go * vce_f - gmu * vbc));
-    let ib_eq = sign * (ib - (gpi * vbe + gmu * vbc));
-    let ie_eq = sign * (ie + (gm + gpi) * vbe + go * vce_f);
+        inject(sink, ci, -ic_eq);
+        inject(sink, bi, -ib_eq);
+        inject(sink, ei, -ie_eq);
+    }
 
-    inject(sink, ci, -ic_eq);
-    inject(sink, bi, -ib_eq);
-    inject(sink, ei, -ie_eq);
+    // Charge storage (dev-plan 04 §3.2): base-emitter and base-collector
+    // charges as CHARGE-BASED companions, exactly the diode's §3.1 companion
+    // applied per junction — bank A of the device's `ReactiveState` slots
+    // holds Q_be, bank B holds Q_bc (both in FOLDED space, like every voltage
+    // above). Open at DC like a capacitor; only active when the model stores
+    // charge AND the toggle allows, so charge-free decks are bit-identical.
+    if ctx.dc || !bjt_has_charge(model, &ctx.opts.effects) {
+        return;
+    }
+    // Diffusion charges reuse the transport currents (cf/cr) and tangents
+    // (gif/gir) the core just evaluated at the LIMITED junction voltages.
+    let (q_be, c_be) = bjt_charge_be(model, vbe, cf, gif);
+    let (q_bc, c_bc) = bjt_charge_bc(model, vbc, cr, gir);
+    let sl = id.0 as usize;
+    // Each junction's companion is the diode's, verbatim: the rule's discrete
+    // current i_hat(v) = coeffs.g·Q(v) - ieq_hist rides the same IntegCoeffs
+    // machinery (slots hold CHARGE in x1/x2, dQ/dt in dx1), Newton linearizes
+    // with dQ/dv = C at the iterate. The folded charge current flows b->e
+    // (resp. b->c) in NPN-reference space; `sign` maps it to real space —
+    // the conductance stamp is polarity-free (sign² = 1) while the RHS
+    // residual folds, mirroring the DC bracket above.
+    let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
+        Integration::Trapezoidal => ctx.coeffs.g * x1 + dx1,
+        Integration::Gear2 => ctx.coeffs.a1 * x1 - ctx.coeffs.a2 * x2,
+        Integration::BackwardEuler => ctx.coeffs.a1 * x1,
+    };
+    let geq_be = ctx.coeffs.g * c_be;
+    let ieq_be = (ctx.coeffs.g * q_be - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
+        - geq_be * vbe;
+    add_pair(sink, bi, ei, geq_be);
+    inject(sink, bi, -sign * ieq_be);
+    inject(sink, ei, sign * ieq_be);
+
+    let geq_bc = ctx.coeffs.g * c_bc;
+    let ieq_bc = (ctx.coeffs.g * q_bc
+        - hist(ctx.state.x1b[sl], ctx.state.dx1b[sl], ctx.state.x2b[sl]))
+        - geq_bc * vbc;
+    add_pair(sink, bi, ci, geq_bc);
+    inject(sink, bi, -sign * ieq_bc);
+    inject(sink, ci, sign * ieq_bc);
 }
 
 fn stamp_mosfet<S: StampSink>(
@@ -1496,12 +1759,6 @@ impl StampCtx<'_> {
     fn last_vd(&self, a: NodeId, k: NodeId) -> f64 {
         self.v_prev(a) - self.v_prev(k)
     }
-    fn last_vbe(&self, b: NodeId, e: NodeId) -> f64 {
-        self.v_prev(b) - self.v_prev(e)
-    }
-    fn last_vbc(&self, b: NodeId, c: NodeId) -> f64 {
-        self.v_prev(b) - self.v_prev(c)
-    }
 }
 
 
@@ -1652,33 +1909,26 @@ mod diode_physics_tests {
         assert_eq!(r_on0.to_bits(), r_off0.to_bits());
     }
 
-    /// §3.4 contract: toggles the stamps cannot honor yet (BJT charge storage
-    /// and series resistances, diode RS) LOG ONCE instead of silently
-    /// ignoring the parsed model fields — the once-flags flip when such a
-    /// model is stamped with the effect enabled.
+    /// §3.4 contract: the one toggle the stamps still cannot honor (diode RS
+    /// — deliberately deferred, see `effect_log::DIODE_SERIES_R`) LOGS ONCE
+    /// instead of silently ignoring the parsed model field. The BJT flags
+    /// this test used to read are GONE: cje/cjc/tf/tr and rb/re/rc are real
+    /// stamps now (§3.2), asserted by the toggle tests below.
     #[test]
     fn dishonored_effects_log_once() {
         let mut c = Circuit::new();
         let a = c.node("a");
-        let b = c.node("b");
         c.add(Device::Diode {
             name: "D1".into(),
             a,
             k: hauksbee_ir::NodeId::GROUND,
             model: DiodeModel { rs: 0.5, ..DiodeModel::default() },
         });
-        c.add(Device::Bjt {
-            name: "Q1".into(),
-            c: b,
-            b: a,
-            e: hauksbee_ir::NodeId::GROUND,
-            model: BjtModel { cje: 1e-12, rb: 10.0, ..BjtModel::default() },
-        });
         let layout = Layout::new(&c);
         let mut m = SparseMatrix::new(layout.size);
         reserve_pattern(&c, &layout, &mut m);
-        let x = vec![0.6, 3.0];
-        let state = ReactiveState::new(2);
+        let x = vec![0.6];
+        let state = ReactiveState::new(1);
         let opts = SolverOptions::default();
         let coeffs = IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, true);
         let spdt = std::collections::HashMap::new();
@@ -1704,8 +1954,193 @@ mod diode_physics_tests {
         stamp_all(&ctx, &mut m, &mut rhs);
         use std::sync::atomic::Ordering;
         assert!(effect_log::DIODE_SERIES_R.load(Ordering::Relaxed));
-        assert!(effect_log::BJT_JUNCTION_CAPS.load(Ordering::Relaxed));
-        assert!(effect_log::BJT_SERIES_R.load(Ordering::Relaxed));
+    }
+}
+
+#[cfg(test)]
+mod bjt_physics_tests {
+    use super::*;
+    use crate::system::ReactiveState;
+    use hauksbee_ir::{Circuit, Device};
+
+    fn charge_model() -> BjtModel {
+        BjtModel {
+            cje: 20e-12,
+            cjc: 8e-12,
+            tf: 400e-12,
+            tr: 50e-9,
+            ..BjtModel::default()
+        }
+    }
+
+    /// Stamp a one-BJT circuit (b at 0.65 V, c at 3 V, e grounded) and return
+    /// the base-row diagonal and base RHS entry.
+    fn stamp_bjt_system(model: BjtModel, opts: SolverOptions) -> (Layout, SparseMatrix, Vec<f64>) {
+        let mut cir = Circuit::new();
+        let nb = cir.node("b");
+        let nc = cir.node("c");
+        cir.add(Device::Bjt {
+            name: "Q1".into(),
+            c: nc,
+            b: nb,
+            e: hauksbee_ir::NodeId::GROUND,
+            model,
+        });
+        let layout = Layout::new(&cir);
+        let mut m = SparseMatrix::new(layout.size);
+        reserve_pattern(&cir, &layout, &mut m);
+        let mut x_full = vec![0.65; layout.size];
+        if let Some(i) = layout.node(nc) {
+            x_full[i] = 3.0;
+        }
+        let mut state = ReactiveState::new(1);
+        state.x1[0] = 1e-12; // nonzero history so RHS terms show too
+        state.x1b[0] = -2e-12;
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
+        let spdt = std::collections::HashMap::new();
+        let ctx = StampCtx {
+            circuit: &cir,
+            layout: &layout,
+            opts: &opts,
+            x: &x_full,
+            x_prev: &x_full,
+            time: 0.0,
+            coeffs,
+            state: &state,
+            dc: false,
+            use_ic: false,
+            gmin: 0.0,
+            src_scale: 1.0,
+            branch_reg: 0.0,
+            cmp_freeze: None,
+            switch_freeze: None,
+            spdt_sibling: &spdt,
+        };
+        let mut rhs = vec![0.0; layout.size];
+        stamp_all(&ctx, &mut m, &mut rhs);
+        (layout, m, rhs)
+    }
+
+    /// Diagonal entry and RHS value at `row`.
+    fn pair(m: &SparseMatrix, rhs: &[f64], row: usize) -> (f64, f64) {
+        let d = m
+            .row(row)
+            .iter()
+            .find(|(col, _)| *col == row)
+            .map(|&(_, v)| v)
+            .unwrap();
+        (d, rhs[row])
+    }
+
+    /// §3.4 contract, stamp level: flipping `junction_caps` on a BJT model
+    /// WITH cje/cjc/tf/tr changes the stamped system (two charge companions
+    /// appear); on a default model the two stamps are bit-identical.
+    #[test]
+    fn junction_caps_toggle_changes_bjt_stamp() {
+        let run = |model: BjtModel, junction_caps: bool| {
+            let mut opts = SolverOptions::default();
+            opts.effects.junction_caps = junction_caps;
+            let (layout, m, rhs) = stamp_bjt_system(model, opts);
+            let b_row = layout.node(hauksbee_ir::NodeId(1)).unwrap();
+            pair(&m, &rhs, b_row)
+        };
+        let (g_on, r_on) = run(charge_model(), true);
+        let (g_off, r_off) = run(charge_model(), false);
+        assert!(g_on > g_off, "junction_caps on must add companion conductance");
+        assert!(r_on != r_off, "junction_caps on must add history RHS terms");
+        let (g_on0, r_on0) = run(BjtModel::default(), true);
+        let (g_off0, r_off0) = run(BjtModel::default(), false);
+        assert_eq!(g_on0.to_bits(), g_off0.to_bits());
+        assert_eq!(r_on0.to_bits(), r_off0.to_bits());
+    }
+
+    /// §3.4 contract, stamp level: flipping `series_resistance` on a model
+    /// with rb/re/rc changes the stamp (the core moves onto internal nodes
+    /// behind ohmic resistors); on a default model (no internal nodes
+    /// allocated) the two stamps are bit-identical.
+    #[test]
+    fn series_resistance_toggle_changes_bjt_stamp() {
+        let model = BjtModel { rb: 100.0, re: 1.0, rc: 10.0, ..BjtModel::default() };
+        let run = |model: BjtModel, series: bool| {
+            let mut opts = SolverOptions::default();
+            opts.effects.series_resistance = series;
+            stamp_bjt_system(model, opts)
+        };
+        let (layout_on, m_on, _) = run(model, true);
+        let (_, m_off, _) = run(model, false);
+        // Three internal unknowns allocated either way (model-keyed).
+        assert_eq!(layout_on.n_nodes, 2 + 3);
+        let b_row = 0usize;
+        let d_on = m_on.row(b_row).iter().find(|(c, _)| *c == b_row).map(|&(_, v)| v).unwrap();
+        let d_off = m_off.row(b_row).iter().find(|(c, _)| *c == b_row).map(|&(_, v)| v).unwrap();
+        // Toggle ON: the external base row carries ONLY the 1/rb series
+        // conductance (the junction moved inside). Toggle OFF: it carries the
+        // junction tangents and no series term.
+        assert_eq!(d_on, 1.0 / 100.0);
+        assert!(d_off != d_on);
+        // Toggle OFF pins each internal unknown with a unit diagonal.
+        let int_diag = m_off.row(2).iter().find(|(c, _)| *c == 2).map(|&(_, v)| v).unwrap();
+        assert_eq!(int_diag, 1.0);
+        // Default model: no internal nodes, bit-identical across the toggle.
+        let (l_def_on, m_def_on, r_def_on) = run(BjtModel::default(), true);
+        let (_, m_def_off, r_def_off) = run(BjtModel::default(), false);
+        assert_eq!(l_def_on.n_nodes, 2);
+        let (g1, r1) = pair(&m_def_on, &r_def_on, 0);
+        let (g2, r2) = pair(&m_def_off, &r_def_off, 0);
+        assert_eq!(g1.to_bits(), g2.to_bits());
+        assert_eq!(r1.to_bits(), r2.to_bits());
+    }
+
+    /// The BJT junction charge is the integral of its capacitance (dQ/dv == C
+    /// by finite difference) on both sides of the FC knee, for both junctions
+    /// including the diffusion term.
+    #[test]
+    fn bjt_charge_is_integral_of_cap() {
+        let m = charge_model();
+        let q_be = |v: f64| {
+            let is = m.is;
+            let nvf = m.nf * hauksbee_ir::thermal_voltage_c(27.0);
+            let ef = (v / nvf).clamp(-40.0, 40.0).exp();
+            bjt_charge_be(&m, v, is * (ef - 1.0), is * ef / nvf)
+        };
+        for &v in &[-5.0, -1.0, 0.0, 0.2, 0.37, 0.5, 0.65] {
+            let (_, c) = q_be(v);
+            let d = 1e-7;
+            let dq = (q_be(v + d).0 - q_be(v - d).0) / (2.0 * d);
+            assert!(
+                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
+                "dQbe/dv != Cbe at v={v}: fd={dq:e} c={c:e}"
+            );
+        }
+        let q_bc = |v: f64| {
+            let is = m.is;
+            let nvr = m.nr * hauksbee_ir::thermal_voltage_c(27.0);
+            let er = (v / nvr).clamp(-40.0, 40.0).exp();
+            bjt_charge_bc(&m, v, is * (er - 1.0), is * er / nvr)
+        };
+        for &v in &[-12.0, -3.0, 0.0, 0.37, 0.5] {
+            let (_, c) = q_bc(v);
+            let d = 1e-7;
+            let dq = (q_bc(v + d).0 - q_bc(v - d).0) / (2.0 * d);
+            assert!(
+                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
+                "dQbc/dv != Cbc at v={v}: fd={dq:e} c={c:e}"
+            );
+        }
+    }
+
+    /// The extracted shared depletion helper reproduces the diode's charge
+    /// arithmetic bit-for-bit (the §3.1 regression surface must not move).
+    #[test]
+    fn depletion_helper_is_bit_identical_to_diode_charge() {
+        let m = DiodeModel { cjo: 4e-12, vj: 0.7, m: 0.45, ..DiodeModel::default() };
+        for &vd in &[-5.0, -1.0, 0.0, 0.2, 0.34, 0.35, 0.4, 0.9] {
+            let (q_h, c_h) = depletion_charge(m.cjo, m.vj, m.m, vd);
+            let (idc, gd) = diode_eval(&m, vd, 27.0, false);
+            let (q_d, c_d) = diode_charge(&m, vd, idc, gd);
+            assert_eq!(q_d.to_bits(), (0.0f64 + q_h).to_bits(), "Q mismatch at {vd}");
+            assert_eq!(c_d.to_bits(), (0.0f64 + c_h).to_bits(), "C mismatch at {vd}");
+        }
     }
 }
 

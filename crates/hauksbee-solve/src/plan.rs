@@ -195,13 +195,24 @@ impl StampPlan {
                 ops.push((s.0, s.1, v));
             }
         };
-        // Slot table over a device's deduped, non-ground node unknowns.
-        let node_table = |dev: &Device| {
+        // Slot table over a device's deduped, non-ground node unknowns, plus
+        // any device-private internal unknowns (a series-resistance BJT's
+        // intrinsic nodes, dev-plan 04 §3.2) — the relocated core and the
+        // ohmic couplings stamp there, and a table miss would fall back to
+        // the slow row search every iteration.
+        let node_table = |dev: &Device, id: hauksbee_ir::DeviceId| {
             let mut unknowns: Vec<u32> = Vec::new();
             for n in dev.nodes() {
                 if let Some(i) = layout.node(n) {
                     if !unknowns.contains(&(i as u32)) {
                         unknowns.push(i as u32);
+                    }
+                }
+            }
+            if let Some(ints) = layout.bjt_internal(id) {
+                for i in ints.iter().flatten() {
+                    if !unknowns.contains(&(*i as u32)) {
+                        unknowns.push(*i as u32);
                     }
                 }
             }
@@ -225,7 +236,7 @@ impl StampPlan {
                     } else {
                         restamp.push(Restamp::Slotted {
                             id,
-                            table: node_table(dev),
+                            table: node_table(dev, id),
                         });
                     }
                 }
@@ -363,7 +374,7 @@ impl StampPlan {
                 | Device::Comparator { .. } => {
                     restamp.push(Restamp::Slotted {
                         id,
-                        table: node_table(dev),
+                        table: node_table(dev, id),
                     });
                 }
             }
