@@ -16,9 +16,10 @@
 # libsimavr") and this job fails — telling us the "MIT-clean" release would in
 # fact be GPL-encumbered. See docs/release-and-licensing.md.
 #
-# ⚠ Expected to be RED until the source fix in docs/release-and-licensing.md
-# lands: as of this commit `hauksbee-server` unconditionally uses the avr
-# backend, so the shape is not yet clean. That red is the check doing its job.
+# Expected GREEN: the feature graph is clean (hauksbee-server gates its AvrMcu
+# usage on `avr`; every hauksbee-* path dependency uses default-features =
+# false with explicit per-feature forwarding). A red here means a feature-graph
+# regression re-enabled avr — fix the graph, never weaken this check.
 
 name: ci
 
