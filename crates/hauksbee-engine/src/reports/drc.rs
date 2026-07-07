@@ -1,0 +1,243 @@
+//! `--drc`: geometric copper short / clearance report. Also the `kicad-cli`
+//! oracle cross-check, which is DRC-only.
+
+use std::path::Path;
+
+use hauksbee_extract::ExtractedBoard;
+use hauksbee_models::ModelLibrary;
+
+use crate::binder::bind_board;
+use crate::result::{BindSummary, DrcStructured, JsonReport};
+
+use super::{kicad_pro_clearance_rules, OutputMode};
+
+/// Run geometric short / clearance detection, print it in `mode`, cross-check the
+/// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
+/// `Ok(())` on the non-gating paths; a strict short calls `std::process::exit(2)`.
+pub fn emit(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+    lib: &ModelLibrary,
+    mode: OutputMode,
+    oracle: bool,
+    strict: bool,
+) -> anyhow::Result<()> {
+    let report = if altium_present {
+        ExtractedBoard::altium_drc(raw)?
+    } else {
+        // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
+        // concrete net names here (the CLI has both the board path and the
+        // extracted netlist), then hand the DRC a pairwise clearance resolver.
+        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+    };
+    match mode {
+        OutputMode::Json => {
+            // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
+            // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
+            let bound = bind_board(board, lib);
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            jr.drc = Some(DrcStructured::from_report(&report));
+            println!("{}", jr.to_json());
+        }
+        OutputMode::Plain => {
+            // Plain mode renders from the SAME grouped structure as text/json so
+            // all surfaces agree: duplicates collapsed, and gap==rule labelled
+            // "at minimum clearance (no margin)" rather than the wrong "below".
+            print!(
+                "{}",
+                crate::plain_drc_structured(&DrcStructured::from_report(&report)).render()
+            );
+        }
+        OutputMode::Text => {
+            // Grouped, honest DRC: one line per (net pair + cause) with a count,
+            // and gap==rule labelled "at minimum clearance (no margin)" rather
+            // than the wrong "below the spacing the board asks for" (Fix #8).
+            print!("{}", DrcStructured::from_report(&report).render());
+        }
+    }
+    if oracle && mode != OutputMode::Json {
+        print!("{}", oracle_cross_check(board_path, &report));
+    }
+    // Strict: any true short fails the gate (clearance-only does not). An
+    // unvalidated board format (KiCad 10+) yields possibly-phantom shorts, so it
+    // does not gate (the printed caveat tells the user to cross-check).
+    if strict && report.version_warning.is_none() && report.short_count() > 0 {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+/// Parse a version string like "10.0.3" (or "KiCad 9.0.3") into a comparable
+/// (major, minor, patch) tuple, ignoring any surrounding text.
+fn parse_version(s: &str) -> (u32, u32, u32) {
+    let n: Vec<u32> = s
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|x| x.parse().ok())
+        .collect();
+    (
+        n.first().copied().unwrap_or(0),
+        n.get(1).copied().unwrap_or(0),
+        n.get(2).copied().unwrap_or(0),
+    )
+}
+
+/// Extract the "actual N mm" distance from a kicad-cli DRC violation description
+/// like "Clearance violation (zone clearance 0.5000 mm; actual 0.0000 mm)".
+fn actual_mm(desc: &str) -> Option<f64> {
+    let rest = &desc[desc.find("actual ")? + "actual ".len()..];
+    rest.split_whitespace().next()?.parse().ok()
+}
+
+/// Locate a usable `kicad-cli` (the geometric-DRC oracle): PATH first, then the
+/// standard macOS / Linux / Homebrew install locations, preferring the highest
+/// version (a KiCad-10 cli is needed to read v20260206 boards). KiCad is NOT
+/// bundled with hauksbee; this finds an existing install. Returns (path, version).
+fn find_kicad_cli() -> Option<(String, String)> {
+    let mut candidates: Vec<String> = vec!["kicad-cli".to_string()];
+    let home = std::env::var("HOME").unwrap_or_default();
+    for base in ["/Applications".to_string(), format!("{home}/Applications")] {
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                if name.to_str().is_some_and(|n| n.starts_with("KiCad")) {
+                    // Handles both `<base>/KiCad*.app/...` (entry is the bundle) and
+                    // `<base>/KiCad*/KiCad.app/...` (entry is a folder holding it,
+                    // the macOS .dmg / cask layout).
+                    for sub in ["Contents/MacOS/kicad-cli", "KiCad.app/Contents/MacOS/kicad-cli"] {
+                        let cli = e.path().join(sub);
+                        if cli.exists() {
+                            candidates.push(cli.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for p in ["/usr/bin/kicad-cli", "/usr/local/bin/kicad-cli", "/opt/homebrew/bin/kicad-cli"] {
+        if std::path::Path::new(p).exists() {
+            candidates.push(p.to_string());
+        }
+    }
+    let mut best: Option<(String, String, (u32, u32, u32))> = None;
+    for c in candidates {
+        let Ok(out) = std::process::Command::new(&c).arg("version").output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let parsed = parse_version(&ver);
+        if best.as_ref().is_none_or(|b| parsed > b.2) {
+            best = Some((c, ver, parsed));
+        }
+    }
+    best.map(|(p, v, _)| (p, v))
+}
+
+/// Cross-check hauksbee's geometric DRC against KiCad's own `kicad-cli pcb drc`,
+/// so a copper finding is self-confirming without running a second tool by hand.
+/// Honest about the two tools' different scopes (KiCad's violation count includes
+/// clearance / annular-ring / etc.), and flags the one case that matters: hauksbee
+/// reporting a short the oracle does not (a likely hauksbee false positive).
+fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> String {
+    let Some((cli, ver)) = find_kicad_cli() else {
+        return "\noracle: no kicad-cli found (PATH or /Applications). Install KiCad to \
+                cross-check geometric DRC; see docs/ORACLES.md.\n"
+            .to_string();
+    };
+    let tmp = std::env::temp_dir().join(format!(
+        "hauksbee_oracle_drc_{}_{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let _ = std::fs::remove_file(&tmp);
+    let run = std::process::Command::new(&cli)
+        .args(["pcb", "drc", "--severity-error", "--format", "json", "-o"])
+        .arg(&tmp)
+        .arg(board)
+        .output();
+    let Ok(out) = run else {
+        return format!("\noracle (kicad-cli {ver}): failed to launch.\n");
+    };
+    let Ok(text) = std::fs::read_to_string(&tmp) else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let mut detail = Vec::new();
+        if let Some(code) = out.status.code() {
+            detail.push(format!("exit status {code}"));
+        } else {
+            detail.push("terminated by signal".to_string());
+        }
+        if !stderr.trim().is_empty() {
+            detail.push(stderr.trim().to_string());
+        }
+        if !stdout.trim().is_empty() {
+            detail.push(stdout.trim().to_string());
+        }
+        let why = detail.join("; ");
+        return format!(
+            "\noracle (kicad-cli {ver}): could not load this board{}. A KiCad-10 (>= 10.0) \
+             cli is required for v20260206 boards.\n",
+            if why.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", why.trim())
+            }
+        );
+    };
+    let _ = std::fs::remove_file(&tmp);
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    let violations = v.get("violations").and_then(|x| x.as_array());
+    let nviol = violations.map_or(0, |a| a.len());
+    let nunconn = v
+        .get("unconnected_items")
+        .and_then(|x| x.as_array())
+        .map_or(0, |a| a.len());
+    // What "a short" means in each tool: hauksbee = copper of two nets at gap <= 0
+    // (touching). KiCad expresses the same fact two ways — a `shorting_items`
+    // violation (its connectivity merged the nets) OR a `clearance`/`hole_clearance`
+    // at actual ~0 mm (geometrically touching but not merged). Count both as the
+    // oracle's confirmed touches; KiCad's other violations (annular, mask-bridge,
+    // courtyard, sub-rule-but-positive clearance) are not net shorts. Counts do not
+    // map 1:1 (the tools decompose a touch into different numbers of rows), so the
+    // verdict is about presence/over-reporting, not exact equality.
+    let confirmed = violations.map_or(0, |a| {
+        a.iter()
+            .filter(|x| {
+                let ty = x.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty == "shorting_items" {
+                    return true;
+                }
+                (ty == "clearance" || ty == "hole_clearance")
+                    && x.get("description")
+                        .and_then(|d| d.as_str())
+                        .and_then(actual_mm)
+                        .is_some_and(|a| a < 0.005)
+            })
+            .count()
+    });
+    let (shorts, clear) = (report.short_count(), report.clearance_violations().count());
+    let verdict = if shorts == 0 && confirmed == 0 {
+        "agree: neither finds touching copper".to_string()
+    } else if shorts > 0 && confirmed == 0 {
+        format!("hauksbee finds {shorts} short(s) the oracle does not — likely false positives, investigate")
+    } else if shorts == 0 && confirmed > 0 {
+        format!("oracle finds {confirmed} touching-copper violation(s) hauksbee missed — investigate")
+    } else if shorts > confirmed * 2 {
+        format!("both find touching copper, but hauksbee's {shorts} >> the oracle's {confirmed} — hauksbee likely over-reports; compare by location")
+    } else {
+        format!("agree: both find touching copper ({shorts} hauksbee / {confirmed} oracle; counts differ by decomposition)")
+    };
+    format!(
+        "\noracle (kicad-cli {ver}): {confirmed} touching-copper violation(s), {nviol} total DRC \
+         violation(s), {nunconn} unconnected.\n\
+         hauksbee: {shorts} short(s), {clear} clearance. -> {verdict}.\n"
+    )
+}

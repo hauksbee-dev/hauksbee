@@ -1,0 +1,677 @@
+//! `hauksbee run <board>`: the run orchestrator. Loads/binds the board, then
+//! dispatches to the right report (reports/), the interactive TUI, a headless
+//! co-sim, or the websocket server. Argument parsing lives in the binary; this
+//! takes a plain [`RunConfig`].
+
+use hauksbee_extract::ExtractedBoard;
+use hauksbee_models::ModelLibrary;
+
+use crate::binder::bind_board;
+use crate::boardcode::code_to_board_text;
+use crate::engine::HauksbeeEngine;
+use crate::result::{
+    strict_analog_exit_code, BindSummary, BootGateJson, JsonNote, JsonNoteKind, JsonReport,
+    EXIT_INVALID_FOR_ANALYSIS,
+};
+
+/// Plain (non-clap) mirror of the binary's `RunArgs`, so the `run` orchestrator
+/// lives in the library while argument parsing stays in `main.rs`. Field types
+/// match `RunArgs` exactly; the binary builds one and hands it over.
+pub struct RunConfig {
+    pub board: std::path::PathBuf,
+    pub firmware: Option<std::path::PathBuf>,
+    pub seconds: f64,
+    pub headless: bool,
+    pub report: bool,
+    pub drc: bool,
+    pub ampacity: bool,
+    pub lint: bool,
+    pub si: bool,
+    pub resources: bool,
+    pub usb_c: bool,
+    pub thermal: bool,
+    pub ambient: f64,
+    pub plain: bool,
+    pub json: bool,
+    pub strict: bool,
+    pub strict_thermal: bool,
+    pub strict_boot: bool,
+    pub list_nets: bool,
+    pub check: bool,
+    pub oracle: bool,
+    pub apply_shorts: bool,
+    pub serve: bool,
+    pub tui: bool,
+    pub port: u16,
+    pub models_dir: Option<std::path::PathBuf>,
+    pub ac: Option<String>,
+    pub ac_node: Vec<String>,
+    pub ac_csv: Option<std::path::PathBuf>,
+    pub ac_loop: Option<String>,
+    pub probe: Vec<String>,
+    pub probe_csv: Option<std::path::PathBuf>,
+}
+
+pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+    // Validate `--firmware` up front, before any heavy work or the TUI takes over
+    // the terminal. The native emulator loaders segfault (exit 139) on a missing
+    // file instead of erroring; this turns a one-character typo into a clean,
+    // actionable message naming the absolute path that was tried.
+    if let Some(fw) = &cfg.firmware {
+        hauksbee_mcu::validate_firmware_path(fw)?;
+    }
+    // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
+    // would fail a UTF-8 read. Text formats (KiCad / Eagle / IPC) are recovered
+    // losslessly from these bytes. Keep the actionable not-found error.
+    let raw = std::fs::read(&cfg.board).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!(
+                "no board file at '{}'. Check the path, or try a bundled example:\n  \
+                 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
+                cfg.board.display()
+            )
+        } else {
+            anyhow::anyhow!("reading '{}': {e}", cfg.board.display())
+        }
+    })?;
+    // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
+    // product), say so — a clean verdict on one file is misleading if the user
+    // meant the whole thing. Routed through `Notes` so it stays on stderr and is
+    // silenced under --quiet / --json / a piped stdout (it is helpful exactly once
+    // for an interactive user, and pure noise in report and pipeline output).
+    let notes = Notes::new(quiet, cfg.json);
+    warn_sibling_boards(&cfg.board, notes);
+    // Binary board (Altium): auto-detected from the OLE2 magic + Altium streams,
+    // exactly as the Eagle path is auto-detected from XML content. No new CLI
+    // surface.
+    let altium = ExtractedBoard::from_auto_bytes(&raw).transpose()?;
+    // Text view for the text formats and the geometry-bearing text checks.
+    let mut text = if altium.is_some() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&raw).into_owned()
+    };
+    // Board-as-Code (`.board`): detected by extension or the DSL header. Parse
+    // the DSL, recompile it to `.kicad_pcb` text, then feed the same analysis
+    // path the layout formats use. The recompiled KiCad text replaces `text` so
+    // the geometry-bearing checks (DRC, SI) and the live viewer see the rebuilt
+    // board, not the DSL source they cannot parse.
+    let is_board_code = altium.is_none()
+        && (cfg.board.extension().and_then(|e| e.to_str()) == Some("board")
+            || crate::commands::common::is_board_code_header(&text));
+    if is_board_code {
+        text = code_to_board_text(&text)?;
+    }
+    // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
+    // it must be loaded by path to recurse the hierarchy; everything else is
+    // self-contained and sniffed from its content.
+    let board = if let Some(b) = altium.clone() {
+        b
+    } else if !is_board_code
+        && cfg.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch")
+    {
+        ExtractedBoard::from_kicad_schematic_path(&cfg.board)?
+    } else {
+        ExtractedBoard::from_auto(&text)?
+    };
+    // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
+    // < ~/.config/hauksbee/models (user) < --models-dir (highest). A custom
+    // behavioural part dropped in any of these loads with no recompile.
+    let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+
+    // --probe records live waveforms, which only exist during a co-sim; it is
+    // meaningless for the static reports and the interactive server. Fail loudly
+    // rather than silently ignore the flag.
+    if !cfg.probe.is_empty() && !cfg.headless {
+        anyhow::bail!("--probe records co-sim waveforms and needs --headless");
+    }
+
+    // --list-nets: print the board's net names so the user can pick one for
+    // --ac-node / --ac-loop without grepping the layout. One net per line on
+    // stdout (pipeable); a JSON array under --json.
+    if cfg.list_nets {
+        let bound = bind_board(&board, &lib);
+        let mut nets: Vec<String> = bound.net_names.clone();
+        nets.sort();
+        if cfg.json {
+            let body = nets
+                .iter()
+                .map(|n| format!("{n:?}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            println!("[{body}]");
+        } else {
+            eprintln!("{} net(s):", nets.len());
+            for n in &nets {
+                println!("{n}");
+            }
+        }
+        return Ok(());
+    }
+
+    // --check / --all: the whole static suite (bind + DRC + lint + SI) in ONE
+    // report, so a person (or an AI) gets everything in a single command instead
+    // of running one flag at a time. Honours --plain / --json / --strict.
+    if cfg.check {
+        return crate::reports::check::emit(&cfg.board, &board, &text, &raw, altium.is_some(), &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+    }
+
+    if cfg.report {
+        return crate::reports::bind::emit(&board, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain));
+    }
+
+    // --drc: run geometric short / clearance detection, print, exit.
+    if cfg.drc {
+        return crate::reports::drc::emit(&cfg.board, &board, &text, &raw, altium.is_some(), &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.oracle, cfg.strict);
+    }
+
+    // --ampacity: IPC-2221 capacity-only report. No current is fabricated here:
+    // without a per-net current spec this tells the user the bottleneck capacity
+    // and explicitly asks for a current before pass/fail.
+    if cfg.ampacity {
+        return crate::reports::ampacity::emit(&text, altium.is_some());
+    }
+
+    // --lint: run the connectivity lint-class checks, the boot strap-pin lint
+    // (which needs the model db's per-part strap tables), and the MCU internal
+    // resource-conflict check (a lint-class structural check too), print, exit.
+    if cfg.lint {
+        return crate::reports::lint::emit(&board, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+    }
+
+    // --resources: run only the MCU internal resource-conflict check, print, exit.
+    if cfg.resources {
+        return crate::reports::lint::emit_resources(&board, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+    }
+
+    // --usb-c: run the USB-C CC attach classifier (the RPi 4 re-derivation) and
+    // print the compliance report. The capability existed but was unreachable from
+    // any user-facing surface; this is its CLI front door.
+    if cfg.usb_c {
+        return crate::reports::usb_c::emit(&board, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+    }
+
+    // --si: run the signal-integrity / physics static checks, print, exit. The
+    // geometry-bearing checks (antenna keepout, USB length skew) need the raw
+    // KiCad layout text, so it is passed through.
+    if cfg.si {
+        return crate::reports::si::emit(&board, &text, altium.is_some(), &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+    }
+
+    // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
+    // loop-stability margins, then exit. Informational like the other reports.
+    if let Some(ac_arg) = &cfg.ac {
+        let bound = bind_board(&board, &lib);
+        return crate::reports::ac::emit(
+            &bound,
+            ac_arg,
+            &cfg.ac_node,
+            cfg.ac_csv.as_deref(),
+            cfg.ac_loop.as_deref(),
+            cfg.json,
+        );
+    }
+
+    // Bare `--json` with no specific report selector: emit a COMBINED machine
+    // report (bind + DRC + lint/straps/resources + SI) and exit. Without this,
+    // `--json` alone falls through to the TUI/websocket default below and hangs a
+    // piped / CI / AI caller (the regression a bare `run <board> --json` hit).
+    // `--json` is an explicit machine-intent flag, so it must never launch the TUI.
+    // `--thermal`/`--headless` are selectors handled further down with their OWN
+    // JSON emitters (thermal coverage, co-sim notes); they must fall THROUGH this
+    // combined branch or those JSON paths become unreachable dead code.
+    if cfg.json && !cfg.thermal && !cfg.headless {
+        return crate::reports::check::emit_combined_json(&cfg.board, &board, &text, &raw, altium.is_some(), &lib);
+    }
+
+    // Default flow (no report/headless/ac flag). The interactive terminal UI is
+    // the new human-facing default: bare `run <board>` on a TTY launches it. Any
+    // explicit report flag was handled above, so reaching here means none was
+    // given. `--serve` keeps the historical websocket frontend; a non-TTY stdout
+    // (piped / CI) also keeps the websocket behaviour untouched, so existing
+    // scripts and tests are unaffected.
+    //
+    // `--firmware`/`--apply-shorts` only matter for the simulating paths; the TUI
+    // honours `--firmware` for its co-sim pane. We branch to the TUI before
+    // building the websocket engine so we never spin up tokio for the TUI path.
+    let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    // Altium boards reach here with an empty `text` (binary parsed from bytes);
+    // the TUI's text-based build path can't analyse those, so they keep the
+    // websocket flow.
+    let launch_tui =
+        !cfg.serve && !cfg.headless && altium.is_none() && (cfg.tui || stdout_is_tty);
+    if launch_tui {
+        return crate::tui::run(
+            &cfg.board,
+            &text,
+            cfg.models_dir.as_deref(),
+            cfg.firmware.clone(),
+        );
+    }
+
+    // Bind with the layered library (so a --models-dir / user-dir custom part is
+    // in scope), then build the engine from the bound board.
+    let bound = bind_board(&board, &lib);
+    // Net names captured before `bound` is consumed, for --probe validation.
+    let probe_known_nets: Vec<String> = if cfg.probe.is_empty() {
+        Vec::new()
+    } else {
+        bound.net_names.clone()
+    };
+    let mut engine = HauksbeeEngine::from_bound(
+        bound,
+        cfg.firmware.as_deref(),
+        &format!("/boards/{}", crate::commands::common::file_name(&cfg.board)),
+    )?;
+
+    // --apply-shorts: bridge every detected copper short before simulating.
+    if cfg.apply_shorts {
+        let report = if altium.is_some() {
+            ExtractedBoard::altium_drc(&raw)?
+        } else {
+            ExtractedBoard::drc_with_clearance_rules(
+                &text,
+                crate::reports::kicad_pro_clearance_rules(&cfg.board, &board),
+            )?
+        };
+        let applied = engine.apply_drc_shorts(&report);
+        eprintln!(
+            "applied {applied} copper short(s) of {} detected ({} clearance violations)",
+            report.short_count(),
+            report.clearance_violations().count(),
+        );
+    }
+
+    // --thermal: run a short co-sim, then print the steady-state junction
+    // temperature per dissipating device and exit. Fix #1: a thermal table that
+    // covers ~no dissipating devices because the power ICs are UNRESOLVED is a
+    // meaningless result, not a "runs cool" pass — flag it invalid and exit 3.
+    if cfg.thermal {
+        return crate::reports::thermal::emit(&mut engine, cfg.ambient, cfg.seconds, cfg.json, cfg.strict_thermal);
+    }
+
+    if cfg.headless {
+        // --probe preconditions, checked before the run so a typo fails fast with
+        // the same near-match style the rest of the net-facing CLI uses.
+        let probes = crate::reports::cosim::dedup_probes(&cfg.probe);
+        crate::reports::cosim::validate_probes(&probes, cfg.probe_csv.as_deref(), &probe_known_nets)?;
+
+        let board_name = engine.report().board_name.clone();
+        let summary = BindSummary::from_report(engine.report());
+        let mut uart_seen = false;
+        let faults = crate::reports::cosim::run_headless(
+            &mut engine,
+            cfg.seconds,
+            &mut uart_seen,
+            cfg.json,
+            cfg.strict,
+            &probes,
+            cfg.probe_csv.as_deref(),
+        )?;
+
+        // Co-sim honesty summary (Track B): total net toggles, UART activity, and
+        // any chip substitution detected at build time. Built from the SAME run
+        // stats the text table reads, so every surface agrees.
+        let cosim = crate::reports::cosim::build_cosim_json(&engine, uart_seen);
+        let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
+        // Analog-fidelity honesty (05 §3b): once any chunk's analog solve failed,
+        // the run held stale voltages and cannot vouch for analog-derived findings
+        // over the failed windows. `analog_abort` is the stricter condition: the
+        // solve was stuck for a whole streak of chunks, so a strict run must
+        // refuse (exit 3) rather than complete a fake-quiet run.
+        let analog_valid = engine.scheduler().analog_valid();
+        let failed_chunk_count = engine.scheduler().failed_chunk_count();
+        let analog_abort = engine.scheduler().analog_abort_tripped();
+        // A co-sim that drove no GPIO, produced no net toggles, AND emitted no
+        // UART did not exercise the firmware. `any_gpio_driven()` is essential:
+        // a firmware that drives a control line high and HOLDS it (boot-gate style)
+        // has zero net toggles yet clearly ran, so a toggles-only test would cry
+        // wolf on it. Determined BEFORE emitting so the refusal reaches every
+        // surface — including --json when no MCU was instantiated (cosim is None).
+        let zero_activity =
+            total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
+
+        // Boot-safety advisory — derived once (so --json and --plain agree) from
+        // the library so the TUI and web get the same advisory from the same call.
+        // `held_high_control_nets` are the heads-up hazards (a control net driven/
+        // pulled HIGH and held from reset that switches a transistor/relay and has
+        // no bias resistor — a MOSFET gate / relay / igniter energised at power-up;
+        // the switch requirement is the zero-FP guard). `gate_states` is the
+        // informational per-gate panel, populated only when firmware actually ran
+        // (with no --firmware or a stalled one, every gate would read "floating").
+        let boot_advisory = crate::checks::boot::analyze(
+            &board,
+            &engine.scheduler().firmware_held_high_nets(),
+            &engine.scheduler().firmware_output_configured_nets(),
+            &engine.scheduler().firmware_driven_nets(),
+            cfg.firmware.is_some() && !zero_activity,
+        );
+        let held_high_boot_nets = &boot_advisory.held_high_control_nets;
+        let has_boot_advisory = !held_high_boot_nets.is_empty();
+        let gate_rows = &boot_advisory.gate_states;
+
+        if cfg.json {
+            let mut jr = JsonReport::new(&board_name, summary);
+            // A substitution is an info-level note that must never be silently
+            // absent (it changes how much the co-sim result can be trusted).
+            for sub in engine.scheduler().substitutions() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::CosimSubstitution,
+                    message: sub.message(),
+                });
+            }
+            if zero_activity {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: "co-sim saw zero net toggles and no UART output; the \
+                              firmware was not exercised — this result cannot vouch \
+                              for firmware behaviour"
+                        .to_string(),
+                });
+            }
+            // A non-convergent chunk held stale voltages: a loud coverage note so
+            // a CI consumer that filters notes (not just the CosimJson body) sees
+            // the analog side is not trustworthy over the failed windows (05 §3b).
+            if !analog_valid {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: format!(
+                        "co-sim analog solve failed to converge on {failed_chunk_count} \
+                         chunk(s); those windows held stale node voltages and are \
+                         reported as analog_valid:false; analog-derived findings over \
+                         them are not trustworthy"
+                    ),
+                });
+            }
+            for net in held_high_boot_nets {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::BootControlNet,
+                    message: format!(
+                        "control net '{net}' drives a transistor/relay, is driven HIGH and held \
+                         from power-up, and has no resistor setting a safe default. If a HIGH on \
+                         it turns the switched load ON when it must stay OFF until firmware \
+                         enables it, it is energised at power-up — confirm the polarity and that \
+                         this is intended."
+                    ),
+                });
+            }
+            if !gate_rows.is_empty() {
+                jr.boot_gates = Some(
+                    gate_rows
+                        .iter()
+                        .map(|(reference, net, state)| BootGateJson {
+                            reference: reference.clone(),
+                            net: net.clone(),
+                            state: state.json().to_string(),
+                        })
+                        .collect(),
+                );
+            }
+            jr.cosim = cosim;
+            println!("{}", jr.to_json());
+        } else if cfg.plain {
+            // A co-sim with no stress faults is NOT plainly "healthy" if it ran on
+            // a substitute chip or never exercised the firmware. Surface those as
+            // heads-up notes so the verdict reads "no failures, but N worth a look"
+            // (via PlainReport::verdict) instead of a bare "Looks healthy".
+            let mut report = crate::plain_faults(&faults);
+            for sub in engine.scheduler().substitutions() {
+                report
+                    .heads_up
+                    .push(format!("co-sim ran on a SUBSTITUTE chip — {}", sub.message()));
+            }
+            if zero_activity {
+                report.heads_up.push(
+                    "co-sim saw zero net toggles and no UART output — the firmware was not \
+                     exercised, so this result cannot vouch for firmware behaviour"
+                        .to_string(),
+                );
+            }
+            if !analog_valid {
+                report.heads_up.push(format!(
+                    "co-sim analog solve failed to converge on {failed_chunk_count} chunk(s); \
+                     those windows held stale voltages and cannot be trusted (analog_valid is \
+                     false); rerun with --json to see the exact failed windows"
+                ));
+            }
+            // Boot-safety heads-up: control nets the firmware switches ON and
+            // holds from power-up, with no resistor setting a safe default. The
+            // netlist alone cannot tell whether a power-up HIGH is intended;
+            // running the firmware can. This is what surfaces, e.g., a MOSFET /
+            // relay / igniter that energises at reset because firmware drove its
+            // gate high (or enabled a pull-up on it) before anything else ran.
+            for net in held_high_boot_nets {
+                report.heads_up.push(format!(
+                    "control net '{net}' switches a transistor/relay and is driven HIGH and held \
+                     from the moment the board powers up, with no resistor setting a safe default \
+                     level. If a HIGH on this net turns the load ON when it must stay OFF until \
+                     the firmware deliberately enables it (a MOSFET, relay, motor driver, or \
+                     igniter), it is energised at power-up — confirm the polarity and that this \
+                     is intended."
+                ));
+            }
+            println!();
+            print!("{}", report.render());
+            if !gate_rows.is_empty() {
+                print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
+            }
+        }
+
+        // 0-activity refusal (Track B): warn always; under --strict this is a hard
+        // refusal (exit 3), not a clean pass. The UART-AND-toggles guard avoids
+        // false positives on firmware that is busy on the bus but quiet on GPIO.
+        if zero_activity {
+            eprintln!(
+                "WARNING: co-sim saw zero net toggles; cannot vouch for firmware \
+                 behaviour (the MCU may have stalled at boot, run no I/O, or the \
+                 firmware may not match this board)."
+            );
+            if cfg.strict {
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            }
+        }
+
+        // Refuse-rather-than-fake (05 §3b): once the analog solve was stuck for a
+        // whole streak of chunks, a strict run must abort with the invalid code
+        // rather than complete a fake-quiet run. Warn always so the reason is never
+        // silent; only --strict turns it into a failing exit.
+        if analog_abort {
+            eprintln!(
+                "WARNING: co-sim analog solve failed to converge for {} chunks in a row \
+                 ({} failed chunks total); the run held stale voltages and cannot vouch \
+                 for the analog side.",
+                crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
+                failed_chunk_count,
+            );
+            if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
+                std::process::exit(code);
+            }
+        }
+
+        // Strict: any fault raised during the run fails the gate.
+        if cfg.strict && !faults.is_empty() {
+            std::process::exit(2);
+        }
+        // --strict-boot: opt-in escalation of the boot-safety advisory to a
+        // failing gate (exit 2). The run was valid and these are real findings
+        // about specific nets; default behaviour leaves them advisory-only. Print
+        // the reason to stderr so the failure is never silent — including in the
+        // default headless mode (neither --json nor --plain), where the advisory
+        // text is not otherwise emitted.
+        if cfg.strict_boot && has_boot_advisory {
+            for net in held_high_boot_nets {
+                eprintln!(
+                    "BOOT HAZARD (--strict-boot): control net '{net}' switches a transistor/relay \
+                     and is driven HIGH and held from power-up with no bias resistor — the load is \
+                     energised at reset."
+                );
+            }
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
+
+    // Non-TTY invocation with no report flag and no explicit --serve: rather than
+    // silently starting a websocket server a pipe / CI can't use (the "something
+    // different" §7 warns about), print a two-line hint pointing at the report
+    // surfaces and exit cleanly. A TTY would have launched the TUI above; an
+    // explicit --serve keeps the historical websocket behaviour untouched.
+    if !stdout_is_tty && !cfg.serve {
+        eprintln!(
+            "hauksbee run: stdout is not a terminal, so there is no interactive dashboard to show."
+        );
+        eprintln!(
+            "  For a report add a flag: --check (all static checks) · --plain (prose) · --json (machine); or --serve for the browser UI."
+        );
+        return Ok(());
+    }
+
+    // Serve the loaded board's own file at the URL the frontend fetches it from
+    // (`/boards/<name>`), so the 2D/3D viewer renders the real geometry for any
+    // board, not just the demo boards baked into dist/.
+    let board_url = format!("/boards/{}", crate::commands::common::file_name(&cfg.board));
+    crate::commands::common::serve(engine, cfg.port, Some((board_url, text)))
+}
+
+/// Warn (advisory, stderr) when the board sits among sibling `.kicad_pcb` files —
+/// a multi-board product (e.g. a main board with a separate ESC/daughter board in
+/// a sibling folder). A clean verdict on ONE file reads as "the product is fine"
+/// when the user may have meant the whole thing. Best-effort; never fails the run.
+/// Whether informational `note:` lines should be shown for this invocation.
+/// They go to stderr and only for an interactive human: suppressed under
+/// `--quiet`, under `--json` (machine output), and when stdout is piped or
+/// redirected (not a TTY), so report and pipeline output stays clean while the
+/// note stays discoverable for interactive users. Pure so it is unit-testable
+/// without a real terminal.
+fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
+    !quiet && !json && stdout_is_tty
+}
+
+/// The single gate every chatty informational note routes through, so `--quiet`
+/// (and JSON / non-TTY suppression) is honoured uniformly and future notes
+/// inherit the behaviour by going through here instead of a bare `eprintln!`.
+#[derive(Clone, Copy)]
+struct Notes {
+    enabled: bool,
+}
+
+impl Notes {
+    fn new(quiet: bool, json: bool) -> Self {
+        Notes {
+            enabled: notes_visible(
+                quiet,
+                json,
+                std::io::IsTerminal::is_terminal(&std::io::stdout()),
+            ),
+        }
+    }
+
+    /// Emit a single-line informational note (prefixed `note:`) on stderr, unless
+    /// notes are suppressed for this invocation.
+    fn say(&self, msg: impl std::fmt::Display) {
+        if self.enabled {
+            eprintln!("note: {msg}");
+        }
+    }
+}
+
+fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
+    if !notes.enabled {
+        return;
+    }
+    let Ok(abs) = std::fs::canonicalize(board) else {
+        return;
+    };
+    let Some(dir) = abs.parent() else {
+        return;
+    };
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    let is_hidden = |p: &std::path::Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with('.'))
+            .unwrap_or(false)
+    };
+    let mut scan = |d: &std::path::Path| {
+        if let Ok(rd) = std::fs::read_dir(d) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb") && p != abs {
+                    found.push(p);
+                }
+            }
+        }
+    };
+    scan(dir);
+    // Immediate CHILD directories (e.g. a daughter board in `KiCad/ESC_Board/`)
+    // and SIBLING directories (children of the grandparent). One level only, and
+    // hidden dirs (`.history`, `.git`) are skipped so we don't surface backups.
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && !is_hidden(&p) {
+                scan(&p);
+            }
+        }
+    }
+    if let Some(gp) = dir.parent() {
+        if let Ok(rd) = std::fs::read_dir(gp) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() && p != dir && !is_hidden(&p) {
+                    scan(&p);
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    if found.is_empty() {
+        return;
+    }
+    notes.say(format!(
+        "{} other board file(s) found nearby; this run only checks '{}':",
+        found.len(),
+        board.display()
+    ));
+    for p in found.iter().take(5) {
+        eprintln!("  - {}", p.display());
+    }
+    if found.len() > 5 {
+        eprintln!("  ... and {} more", found.len() - 5);
+    }
+    eprintln!("  If they are part of the same product, check each one separately.");
+}
+
+
+#[cfg(test)]
+mod notes_gate_tests {
+    use super::notes_visible;
+
+    #[test]
+    fn shown_only_for_interactive_non_json_non_quiet() {
+        // Default interactive terminal: the note is discoverable.
+        assert!(notes_visible(false, false, true));
+    }
+
+    #[test]
+    fn quiet_suppresses_notes() {
+        assert!(!notes_visible(true, false, true));
+        assert!(!notes_visible(true, false, false));
+        assert!(!notes_visible(true, true, true));
+    }
+
+    #[test]
+    fn json_never_emits_notes() {
+        // --json is machine output: no note regardless of TTY or quiet.
+        assert!(!notes_visible(false, true, true));
+        assert!(!notes_visible(false, true, false));
+    }
+
+    #[test]
+    fn piped_stdout_suppresses_notes() {
+        // Non-TTY stdout (piped / redirected / CI): keep report output clean.
+        assert!(!notes_visible(false, false, false));
+    }
+}

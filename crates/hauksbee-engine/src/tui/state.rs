@@ -350,7 +350,16 @@ pub struct AppState {
     pub left_detail_open: bool,
     /// Set when the user has pressed `q` and the event loop should exit.
     pub should_quit: bool,
+    /// The one-line launch banner pointing at the other report surfaces is shown
+    /// at the top until the first keypress dismisses it (see [`TUI_LAUNCH_BANNER`]).
+    pub banner_dismissed: bool,
 }
+
+/// The TUI launch banner: one line pointing a first-time user at the non-TUI
+/// report surfaces they might not know exist. Shown until any keypress dismisses
+/// it. Kept as a const so the first-run text is testable without a PTY.
+pub const TUI_LAUNCH_BANNER: &str =
+    "Report modes: --check for everything static · --plain for prose · serve for the browser  (any key dismisses)";
 
 impl AppState {
     /// Build the model from the structured-honest result. The caller passes the
@@ -528,7 +537,14 @@ impl AppState {
             detail_open: false,
             left_detail_open: false,
             should_quit: false,
+            banner_dismissed: false,
         }
+    }
+
+    /// Dismiss the launch banner (idempotent). Called on the first keypress so the
+    /// hint clears the moment the user starts interacting, without stealing the key.
+    pub fn dismiss_banner(&mut self) {
+        self.banner_dismissed = true;
     }
 
     /// Record that the requested MCU part was modelled by a less-specific core
@@ -956,6 +972,21 @@ mod tests {
         assert_eq!(st.backend.as_deref(), Some("renode:stm32f103"));
         // U2 is the only active IC and it bound; U7 counts toward total -> 1/2.
         assert_eq!(st.critical_parts_bound, "1/2");
+    }
+
+    #[test]
+    fn launch_banner_shows_then_dismisses() {
+        let mut st = sample_state();
+        // Fresh state shows the banner; the first keypress dismisses it for good.
+        assert!(!st.banner_dismissed, "banner is shown on launch");
+        st.dismiss_banner();
+        assert!(st.banner_dismissed, "first keypress dismisses the banner");
+        st.dismiss_banner(); // idempotent
+        assert!(st.banner_dismissed);
+        // The banner points at all three non-TUI report surfaces.
+        assert!(TUI_LAUNCH_BANNER.contains("--check"));
+        assert!(TUI_LAUNCH_BANNER.contains("--plain"));
+        assert!(TUI_LAUNCH_BANNER.contains("serve"));
     }
 
     #[test]

@@ -274,6 +274,10 @@ fn event_loop(
             continue;
         }
 
+        // First keypress clears the launch banner. Done before dispatch so the
+        // banner disappears the moment the user interacts, without eating the key.
+        state.dismiss_banner();
+
         // ── Overlay-first input handling ─────────────────────────────────────
         // When a detail overlay is open it is MODAL: it must consume every key,
         // so a rapidly-queued key can never leak through to an action (e.g. `r`

@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 use super::cosim::CosimUpdate;
-use super::state::{AppState, Level, LeftDetail, Pane, PartStatus, Severity};
+use super::state::{AppState, Level, LeftDetail, Pane, PartStatus, Severity, TUI_LAUNCH_BANNER};
 
 /// The ASCII marker prefixed to the focused pane's title, so focus is legible
 /// without colour (the personas were navigating "blind" in colour-stripped
@@ -69,10 +69,21 @@ fn focused_border(pane: Pane, focus: Pane) -> Style {
 
 /// Draw the whole UI for one frame.
 pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_running: bool) {
+    // The launch banner takes a single top line until the first keypress dismisses
+    // it; once dismissed it costs no rows, so the steady-state layout is unchanged.
+    let banner_rows = if state.banner_dismissed { 0 } else { 1 };
     let root = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(banner_rows),
+            Constraint::Min(3),
+            Constraint::Length(3),
+        ])
         .split(f.area());
+
+    if banner_rows > 0 {
+        draw_banner(f, root[0]);
+    }
 
     let panes = Layout::default()
         .direction(Direction::Horizontal)
@@ -81,12 +92,12 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
             Constraint::Percentage(44),
             Constraint::Percentage(28),
         ])
-        .split(root[0]);
+        .split(root[1]);
 
     draw_parts(f, panes[0], state);
     draw_findings(f, panes[1], state);
     draw_cosim(f, panes[2], state, cosim);
-    draw_footer(f, root[1], state, cosim_running);
+    draw_footer(f, root[2], state, cosim_running);
 
     if state.detail_open {
         draw_detail_overlay(f, state);
@@ -94,6 +105,17 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
     if state.left_detail_open {
         draw_left_detail_overlay(f, state);
     }
+}
+
+/// The dismissible one-line launch banner. Dim, borderless, and truncated to the
+/// terminal width — it points a first-time user at the non-TUI report surfaces
+/// and disappears on the first keypress.
+fn draw_banner(f: &mut Frame, area: Rect) {
+    let line = Line::from(Span::styled(
+        truncate(TUI_LAUNCH_BANNER, area.width as usize),
+        Style::default().fg(Color::DarkGray),
+    ));
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
