@@ -9,6 +9,7 @@
 //! renderers (`DrcStructured::render`, `plain_*`, `JsonReport`, the extract-crate
 //! text renderers) so the output stays byte-for-byte what it was.
 
+pub mod ac;
 pub mod ampacity;
 pub mod bind;
 pub mod check;
