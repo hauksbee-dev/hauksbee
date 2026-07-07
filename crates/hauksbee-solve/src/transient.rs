@@ -229,7 +229,7 @@ impl Transient {
         // powers on from rest, ignoring any device initial conditions. Otherwise
         // seed it from the DC operating point as usual.
         if !from_zero {
-            seed_reactive_state(&mut state, circuit, &ws);
+            seed_reactive_state(&mut state, circuit, &ws, opts);
         }
 
         let mut t = 0.0;
@@ -586,8 +586,17 @@ impl Transient {
 // --- reactive state bookkeeping ---------------------------------------------
 
 /// At the operating point, capacitor voltage = node-voltage difference and
-/// inductor current = its branch current; derivatives are zero (DC).
-fn seed_reactive_state(state: &mut ReactiveState, circuit: &Circuit, ws: &Workspace) {
+/// inductor current = its branch current; derivatives are zero (DC). A
+/// charge-storing diode (dev-plan 04 §3.1) seeds its CHARGE `Q(vd)` at the
+/// operating-point junction voltage — its `ReactiveState` slots hold charge,
+/// not voltage, so the companion stamp's history terms integrate `i = dQ/dt`
+/// on the same machinery the linear capacitor uses.
+fn seed_reactive_state(
+    state: &mut ReactiveState,
+    circuit: &Circuit,
+    ws: &Workspace,
+    opts: &SolverOptions,
+) {
     for (id, dev) in circuit.iter() {
         let i = id.0 as usize;
         match dev {
@@ -602,9 +611,24 @@ fn seed_reactive_state(state: &mut ReactiveState, circuit: &Circuit, ws: &Worksp
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
+            Device::Diode { a, k, model, .. }
+                if crate::stamp::diode_has_charge(model, &opts.effects) =>
+            {
+                state.x1[i] = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                state.x2[i] = state.x1[i];
+                state.dx1[i] = 0.0;
+            }
             _ => {}
         }
     }
+}
+
+/// Diode stored charge at junction voltage `vd` (the §3.1 companion's state
+/// variable), evaluated through the same model code the stamp uses.
+fn diode_q(model: &hauksbee_ir::DiodeModel, vd: f64, opts: &SolverOptions) -> f64 {
+    let (idc, gd) =
+        crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
+    crate::stamp::diode_charge(model, vd, idc, gd).0
 }
 
 /// After an accepted step, roll history forward: x2 <- x1, x1 <- new value,
@@ -649,6 +673,23 @@ fn advance_reactive_state(
                 state.x2[i] = i_old;
                 state.x1[i] = i_new;
                 state.dx1[i] = di;
+            }
+            // Charge-storing diode: the same roll as a capacitor, in CHARGE.
+            // dx1 is dQ/dt, i.e. the capacitive branch current the next step's
+            // trapezoidal history term needs.
+            Device::Diode { a, k, model, .. }
+                if crate::stamp::diode_has_charge(model, &opts.effects) =>
+            {
+                let q_new = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_new - q_old) / h - state.dx1[i]
+                } else {
+                    (q_new - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_new;
+                state.dx1[i] = dq;
             }
             _ => {}
         }
@@ -705,6 +746,18 @@ fn lte_estimate(
             Device::Inductor { .. } => {
                 let cur = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
                 (cur, opts.abstol.max(1e-9))
+            }
+            // A charge-storing diode is a reactive element: it participates in
+            // truncation-error control through its CHARGE (the state its
+            // companion integrates), with `chgtol` as the absolute floor —
+            // SPICE's classic charge-based LTE. Charge-free diodes (`cjo == 0`,
+            // `tt == 0`, or the toggle off) hit the `continue` below exactly as
+            // before, so existing decks' step sequences are untouched.
+            Device::Diode { a, k, model, .. }
+                if crate::stamp::diode_has_charge(model, &opts.effects) =>
+            {
+                let q = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                (q, opts.chgtol)
             }
             _ => continue,
         };
