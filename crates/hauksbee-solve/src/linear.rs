@@ -317,9 +317,18 @@ impl LinearIsland {
                 Device::Resistor { .. } | Device::Isource { .. } => {}
                 // Linear but NOT modeled by this reducer: force the island to
                 // the MNA path. (Ideal Vsources are cut by the partitioner and
-                // never land in an island; if one ever does, refusing is the
-                // only honest answer here too.)
-                Device::Vcvs { .. } | Device::Vccs { .. } | Device::Vsource { .. } => {
+                // never land in an island — EXCEPT one demoted to island
+                // member because an F/H reads its branch current; refusing is
+                // the only honest answer for it too.) F/H join E/G here:
+                // constant-gain, linear, and absent from the reducer's
+                // A-matrix vocabulary — compiling past them would be the
+                // silent-drop hazard of 04-spice-compat.md §1; the MNA
+                // sub-solve stamps them exactly.
+                Device::Vcvs { .. }
+                | Device::Vccs { .. }
+                | Device::Cccs { .. }
+                | Device::Ccvs { .. }
+                | Device::Vsource { .. } => {
                     return None;
                 }
                 // Nonlinear / event-driven kinds cannot appear in a linear

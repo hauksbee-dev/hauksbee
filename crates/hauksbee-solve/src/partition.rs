@@ -175,6 +175,47 @@ impl Partition {
 
         let mut sources = Vec::new();
 
+        // --- F/H control sources: demoted from cut to island member. -------
+        //
+        // An ideal Vsource is normally a cut point: its voltage is a KNOWN
+        // time function, so islands hanging off it exchange nothing that the
+        // exchange buffer cannot replay exactly. But a Vsource whose BRANCH
+        // CURRENT an F/H reads sits on that cut boundary with a live unknown:
+        // the current through it is decided by everything conducting through
+        // it, and the F/H stamp reads that unknown's matrix column DIRECTLY.
+        // If the source stayed a cut, its branch unknown would live in no
+        // island's sub-system (cut sources are global, applied as pinned
+        // boundary voltages only) and the F/H stamp would have no column to
+        // write — not even a lagged one. So "union the F/H island with the
+        // control source's island" (04-spice-compat.md §2.2) concretely means
+        // DEMOTING the control source from cut to ordinary island member:
+        //
+        //   * it does not pin its nodes (skipped in the propagation below),
+        //   * it unions its p/n like any conducting device,
+        //   * it joins the island's device list (so sub-circuit extraction
+        //     copies it and the F/H's ctrl_src can be retargeted to it),
+        //   * it is NOT in `Partition::sources` (or the executor would apply
+        //     it twice: once inside the island, once as a global pin),
+        //
+        // and additionally the F/H's own free nodes are unioned with the
+        // control source's free nodes, because the F/H's node list does not
+        // contain the control terminals (the control is a device reference).
+        // Cost: a supply that doubles as a control probe un-cuts and fuses its
+        // legs into one island — conservative, exact, merely slower. If the
+        // demoted source still ends up with every terminal pinned (a probe
+        // wedged directly between two supply rails), it is dropped from
+        // islands like any all-pinned device; the executor detects the missing
+        // control at island build and declines, falling back to the exact
+        // monolithic path.
+        let mut ctrl_demoted = vec![false; circuit.devices.len()];
+        for (_, dev) in circuit.iter() {
+            if let Some(ctrl) = dev.controlling_source() {
+                if let Some(slot) = ctrl_demoted.get_mut(ctrl.0 as usize) {
+                    *slot = true;
+                }
+            }
+        }
+
         // A node is "pinned" if an ideal voltage source fixes its voltage
         // (one terminal of the source on ground, or relative to another pinned
         // node). Pinned nodes are boundary inputs: a device that merely touches
@@ -193,6 +234,9 @@ impl Partition {
         }
         for (id, dev) in circuit.iter() {
             if let Device::Vsource { p, n, .. } = dev {
+                if ctrl_demoted[id.0 as usize] {
+                    continue; // island member, not a cut (see above)
+                }
                 sources.push(id);
                 // p is pinned if n is ground/pinned (the common rail-to-ground
                 // case). We do a couple of passes to propagate through stacked
@@ -203,8 +247,11 @@ impl Partition {
         // Propagate pinned-ness across ideal sources (handles stacked supplies).
         for _ in 0..circuit.devices.len().min(64) {
             let mut changed = false;
-            for (_, dev) in circuit.iter() {
+            for (id, dev) in circuit.iter() {
                 if let Device::Vsource { p, n, .. } = dev {
+                    if ctrl_demoted[id.0 as usize] {
+                        continue; // demoted control probes pin nothing
+                    }
                     let (pi, ni) = (p.0 as usize, n.0 as usize);
                     if pinned[ni] && !pinned[pi] {
                         pinned[pi] = true;
@@ -235,16 +282,29 @@ impl Partition {
         // solves together (04-spice-compat.md §2.1). The decompose layer's
         // sense-edge machinery may later prove specific one-directional tears;
         // this partitioner stays conservative.
-        for (_, dev) in circuit.iter() {
-            if matches!(dev, Device::Vsource { .. }) {
+        for (id, dev) in circuit.iter() {
+            if matches!(dev, Device::Vsource { .. }) && !ctrl_demoted[id.0 as usize] {
                 continue;
             }
-            let free: Vec<usize> = dev
+            let mut free: Vec<usize> = dev
                 .nodes()
                 .iter()
                 .filter(|n| !n.is_ground() && !pinned[n.0 as usize])
                 .map(|n| n.0 as usize)
                 .collect();
+            // F/H: the control terminals are not in `nodes()` (the control is
+            // a device reference), so the fuse the doc comment above promises
+            // needs an explicit edge — union this device's free nodes with the
+            // control source's free nodes.
+            if let Some(ctrl) = dev.controlling_source() {
+                free.extend(
+                    circuit.devices[ctrl.0 as usize]
+                        .nodes()
+                        .iter()
+                        .filter(|n| !n.is_ground() && !pinned[n.0 as usize])
+                        .map(|n| n.0 as usize),
+                );
+            }
             for w in free.windows(2) {
                 uf.union(w[0], w[1]);
             }
@@ -270,8 +330,8 @@ impl Partition {
         };
 
         for (id, dev) in circuit.iter() {
-            if matches!(dev, Device::Vsource { .. }) {
-                continue; // global, not in any island
+            if matches!(dev, Device::Vsource { .. }) && !ctrl_demoted[id.0 as usize] {
+                continue; // global, not in any island (demoted probes stay)
             }
             let Some(r0) = rep(dev) else { continue };
             let root = uf.find(r0);

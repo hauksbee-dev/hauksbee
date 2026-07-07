@@ -283,6 +283,38 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
                 }
             }
         }
+        // Current-controlled sources reserve slots in the CONTROL source's
+        // branch COLUMN — a column belonging to a DIFFERENT device. This is
+        // the structurally new bit vs E/G: the reservation walk needs the
+        // resolved control branch index, and it has it because `Layout::new`
+        // runs before the pattern freeze and `ctrl_src` was resolved to a
+        // DeviceId at load time. A dangling id (control source without a
+        // branch, e.g. a partition that failed to keep it in this system) is
+        // unstampable, and the loud panic here beats `add_at` landing outside
+        // the frozen pattern later.
+        if let Some(ctrl) = dev.controlling_source() {
+            let cbr = layout
+                .branch(ctrl)
+                .expect("F/H control source must own a branch unknown in this system");
+            match dev {
+                // CCCS: gain*i_ctrl enters the p/n KCL rows.
+                Device::Cccs { .. } => {
+                    for &n in &ns {
+                        if let Some(n) = n {
+                            m.touch(n, cbr);
+                        }
+                    }
+                }
+                // CCVS: -transres*i_ctrl lives in H's OWN branch row.
+                Device::Ccvs { .. } => {
+                    let br = layout
+                        .branch(id)
+                        .expect("ccvs owns a branch unknown");
+                    m.touch(br, cbr);
+                }
+                _ => unreachable!("controlling_source() is Some for F/H only"),
+            }
+        }
     }
 }
 
@@ -400,6 +432,29 @@ pub(crate) fn stamp_device<S: StampSink>(
                 *gm,
             );
         }
+        Device::Cccs {
+            p, n, ctrl_src, gain, ..
+        } => {
+            // I(p->n) = gain * i_ctrl, where i_ctrl is the LIVE branch-current
+            // unknown of the control Vsource (resolved by the loader's name
+            // pass, retargeted by sub-circuit extraction). Two matrix entries
+            // in the control branch COLUMN, no RHS, no unknown of its own. The
+            // gain is a device property, not a source value: not scaled by the
+            // source-stepping homotopy (matching SPICE).
+            let cbr = ctx
+                .layout
+                .branch(*ctrl_src)
+                .expect("cccs control source owns a branch unknown");
+            if let Some(pi) = ctx.layout.node(*p) {
+                sink.g(pi, cbr, *gain);
+            }
+            if let Some(ni) = ctx.layout.node(*n) {
+                sink.g(ni, cbr, -*gain);
+            }
+        }
+        Device::Ccvs {
+            p, n, ctrl_src, transres, ..
+        } => stamp_ccvs(ctx, id, *p, *n, *ctrl_src, *transres, sink),
     }
 }
 
@@ -587,6 +642,41 @@ fn stamp_vcvs<S: StampSink>(
     if let Some(cni) = ctx.layout.node(cn) {
         sink.g(br, cni, gain);
     }
+}
+
+/// CCVS: an ideal-Vsource branch pattern whose constraint row reads
+/// `v_p - v_n - transres*i_ctrl = 0`. The branch incidence (±1 in the p/n KCL
+/// rows and mirrored in the branch row) is identical to `stamp_vsource`; the
+/// dependence lands as a single `-transres` entry in H's OWN branch row at the
+/// CONTROL source's branch COLUMN — reading another device's unknown, never
+/// touching the control loop's node rows (the control coupling is declared via
+/// `Device::controlling_source`, not `sense_nodes`, precisely because it is a
+/// branch-current read). RHS is zero (the transresistance is a device
+/// property, not an independent source value — no src_scale). Same stamp for
+/// DC and transient: the constraint has no memory.
+fn stamp_ccvs<S: StampSink>(
+    ctx: &StampCtx,
+    id: DeviceId,
+    p: NodeId,
+    n: NodeId,
+    ctrl_src: DeviceId,
+    transres: f64,
+    sink: &mut S,
+) {
+    let br = ctx.layout.branch(id).expect("ccvs has a branch unknown");
+    let cbr = ctx
+        .layout
+        .branch(ctrl_src)
+        .expect("ccvs control source owns a branch unknown");
+    if let Some(pi) = ctx.layout.node(p) {
+        sink.g(pi, br, 1.0);
+        sink.g(br, pi, 1.0);
+    }
+    if let Some(ni) = ctx.layout.node(n) {
+        sink.g(ni, br, -1.0);
+        sink.g(br, ni, -1.0);
+    }
+    sink.g(br, cbr, -transres);
 }
 
 // --- nonlinear devices ------------------------------------------------------

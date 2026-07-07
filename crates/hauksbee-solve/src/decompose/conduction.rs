@@ -80,12 +80,32 @@ impl ConductionGraph {
         let mut uf = UnionFind::new(n_nodes + 1);
 
         for (_, dev) in circuit.iter() {
-            let cond: Vec<usize> = dev
+            let mut cond: Vec<usize> = dev
                 .conduction_nodes()
                 .into_iter()
                 .filter(|n| !n.is_ground())
                 .map(|n| n.0 as usize)
                 .collect();
+            // F/H control coupling FUSES islands here — deliberately NOT a
+            // sense edge. A sense edge is a node-voltage read whose free-tear
+            // replay (cut the wire, replay the voltage as a source) is exact
+            // because no current crosses it. What an F/H reads is the control
+            // source's BRANCH CURRENT: there is no wire to cut and no node
+            // voltage whose replay reproduces it, so offering it to the
+            // feedforward pass as a tear candidate would be a lie the
+            // one-directionality proof cannot catch (it reasons about node
+            // replays). Fusing the output island with the control source's
+            // island is the honest conservative encoding, mirroring the
+            // partitioner's demote-and-union rule (04-spice-compat.md §2.2).
+            if let Some(ctrl) = dev.controlling_source() {
+                cond.extend(
+                    circuit.devices[ctrl.0 as usize]
+                        .conduction_nodes()
+                        .into_iter()
+                        .filter(|n| !n.is_ground())
+                        .map(|n| n.0 as usize),
+                );
+            }
             for w in cond.windows(2) {
                 uf.union(w[0], w[1]);
             }
@@ -239,6 +259,22 @@ mod tests {
             // examples() was built against `c`'s nodes; ids are identical in
             // the fresh circuit (same insertion order), remap for hygiene.
             d.map_nodes(&mut |old| m[(old.0 - 1) as usize]);
+            // F/H examples reference DeviceId(0) as their control source (the
+            // documented examples() convention): honor it by making device 0 a
+            // zero-volt ammeter across n3/n4 BEFORE adding the example. Its own
+            // stamp writes only its own rows/branch, so the zero-row assertion
+            // below still isolates the example device's sense claim (which for
+            // F/H is empty — the control is a branch-current read declared via
+            // `controlling_source`, not a node-voltage sense).
+            if d.controlling_source().is_some() {
+                let vid = circuit.add(hauksbee_ir::Device::Vsource {
+                    name: "Vctl".into(),
+                    p: m[2],
+                    n: m[3],
+                    kind: hauksbee_ir::SourceKind::Dc(0.0),
+                });
+                assert_eq!(vid.0, 0, "examples() convention: control at index 0");
+            }
             let sense = d.sense_nodes();
             let conduction = d.conduction_nodes();
 

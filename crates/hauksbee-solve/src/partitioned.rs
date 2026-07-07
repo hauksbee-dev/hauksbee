@@ -1293,6 +1293,24 @@ impl NonlinearIsland {
             sub.add(nd);
         }
 
+        // Retarget F/H control references from GLOBAL device ids to the
+        // sub-circuit's LOCAL ids (`clone_remapped` walks nodes only; a
+        // DeviceId would otherwise silently point at whatever occupies that
+        // index in `sub`). The partitioner demotes a control Vsource from cut
+        // to island member precisely so it is present here; if a partition
+        // from an external decision layer split them anyway, there is no
+        // column for the F/H stamp to write and the only honest move is to
+        // refuse the build — `try_build*` then falls back to the exact
+        // monolithic path.
+        for li in 0..isl.devices.len() {
+            if let Some(gctrl) = sub.devices[li].controlling_source() {
+                let Some(local) = isl.devices.iter().position(|&d| d == gctrl) else {
+                    return None;
+                };
+                sub.devices[li].retarget_controlling_source(DeviceId(local as u32));
+            }
+        }
+
         // Add a pinned voltage source for each boundary input node.
         let mut boundary = Vec::new();
         for &bn in &isl.boundary_in {
