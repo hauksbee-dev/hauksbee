@@ -23,6 +23,7 @@ pub mod behavioral;
 pub mod binder;
 pub mod boardcode;
 pub mod checks;
+pub mod commands;
 pub mod decoupling;
 pub mod digital;
 pub mod logic;

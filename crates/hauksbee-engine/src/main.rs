@@ -42,10 +42,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 
 use hauksbee_engine::binder::bind_board;
-use hauksbee_engine::boardcode::{
-    check_code, code_to_board_text, decompile_any_to_code, load_code, render_check_report,
-    CheckOptions,
-};
+use hauksbee_engine::boardcode::code_to_board_text;
 use hauksbee_engine::result::{
     BindSummary, strict_analog_exit_code, BootGateJson, JsonNote, JsonNoteKind, JsonReport,
     EXIT_INVALID_FOR_ANALYSIS,
@@ -434,17 +431,6 @@ struct ServeArgs {
     port: u16,
 }
 
-/// Output file format for `hauksbee sim`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum SimFormat {
-    /// One column per probe, one row per timepoint (or one row for `.op`).
-    Csv,
-    /// ngspice ASCII rawfile — not yet implemented (plan step 14).
-    Raw,
-    /// CSV and rawfile side by side — not yet implemented (plan step 14).
-    Both,
-}
-
 #[derive(Parser)]
 // At most one analysis may be forced; with none, the deck's directives decide.
 #[command(group(
@@ -463,8 +449,8 @@ struct SimArgs {
 
     /// Output format. `csv` (default) is solid; `raw`/`both` refuse loudly until
     /// the rawfile writer lands (plan step 14).
-    #[arg(long, value_enum, default_value_t = SimFormat::Csv)]
-    format: SimFormat,
+    #[arg(long, value_enum, default_value_t = hauksbee_engine::commands::sim::SimFormat::Csv)]
+    format: hauksbee_engine::commands::sim::SimFormat,
 
     /// Force the DC operating point analysis.
     #[arg(long, group = "analysis")]
@@ -533,14 +519,39 @@ fn main() -> anyhow::Result<()> {
     let quiet = cli.quiet;
     let result = match cli.command {
         Command::Run(args) => cmd_run(args, quiet),
-        Command::ToCode(args) => cmd_to_code(args),
-        Command::FromCode(args) => cmd_from_code(args),
-        Command::CheckCode(args) => cmd_check_code(args),
-        Command::Serve(args) => cmd_serve(args),
-        Command::Doctor(args) => cmd_doctor(args),
-        Command::Sim(args) => cmd_sim(args),
+        Command::ToCode(args) => {
+            hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
+        }
+        Command::FromCode(args) => hauksbee_engine::commands::boardcode::from_code(
+            &args.code,
+            args.out.as_deref(),
+            args.relayout,
+            args.incremental,
+            args.route,
+            args.route_grid,
+        ),
+        Command::CheckCode(args) => hauksbee_engine::commands::boardcode::check(
+            &args.code,
+            args.seconds,
+            args.destructive,
+            args.ambient,
+        ),
+        Command::Serve(args) => hauksbee_engine::commands::serve::run(args.port),
+        Command::Doctor(args) => {
+            hauksbee_engine::commands::doctor::run(args.backends, args.json)
+        }
+        Command::Sim(args) => hauksbee_engine::commands::sim::run(
+            &args.file,
+            args.out.as_deref(),
+            args.format,
+            args.op,
+            args.tran,
+            args.ac,
+            args.dc,
+            &args.print,
+        ),
         Command::Models(args) => match args.command {
-            ModelsCommand::Lint(args) => cmd_models_lint(args),
+            ModelsCommand::Lint(args) => hauksbee_engine::commands::models::lint(&args.file),
         },
     };
     if let Err(e) = &result {
@@ -554,96 +565,6 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     result
-}
-
-/// `hauksbee models lint <file>`: standalone validation of model TOML.
-///
-/// Dispatches on the file's root shape: a `[sensor]` table lints as a
-/// register-map sensor spec (`SensorSpec::from_toml`, the validation the
-/// engine interpreter applies); anything with `[[models]]` entries lints each
-/// entry's kind-specific params (`hauksbee_models::validate`) and, when a
-/// `[models.logic]` block is present, COMPILES it through the same
-/// `LogicComponent::compile` path binding uses — schema validation, expression
-/// lowering, and the exhaustive comb-cycle convergence check — so "lint said
-/// ok" and "the board binds it" can never disagree.
-fn cmd_models_lint(args: ModelsLintArgs) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(&args.file)
-        .map_err(|e| anyhow::anyhow!("reading '{}': {e}", args.file.display()))?;
-    let root: toml::Value = toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("'{}' is not TOML: {e}", args.file.display()))?;
-
-    let mut findings = 0usize;
-    let mut checked = 0usize;
-
-    if root.get("sensor").is_some() {
-        checked += 1;
-        match hauksbee_models::SensorSpec::from_toml(&text) {
-            Ok(spec) => println!("sensor '{}': ok", spec.sensor().name),
-            Err(e) => {
-                findings += 1;
-                println!("sensor spec: ERROR: {e}");
-            }
-        }
-    } else if root.get("models").is_some() {
-        let db: hauksbee_models::schema::DbFile = toml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("'{}': [[models]] parse error: {e}", args.file.display()))?;
-        for entry in &db.models {
-            checked += 1;
-            let mut entry_findings = 0usize;
-            if let Err(errors) = hauksbee_models::validation::validate(entry) {
-                for err in errors {
-                    entry_findings += 1;
-                    println!("model '{}': ERROR: {err}", entry.id);
-                }
-            }
-            if !entry.logic.is_empty() {
-                match hauksbee_engine::logic::LogicComponent::compile(&entry.id, &entry.logic) {
-                    Ok(compiled) => {
-                        for w in &compiled.warnings {
-                            println!("model '{}' [models.logic]: warning: {w}", entry.id);
-                        }
-                    }
-                    Err(e) => {
-                        entry_findings += 1;
-                        println!("model '{}' [models.logic]: ERROR: {e}", entry.id);
-                    }
-                }
-            }
-            if entry_findings == 0 {
-                println!("model '{}': ok", entry.id);
-            }
-            findings += entry_findings;
-        }
-    } else {
-        anyhow::bail!(
-            "'{}' has neither a [sensor] table nor [[models]] entries — nothing to lint",
-            args.file.display()
-        );
-    }
-
-    println!(
-        "{checked} item(s) checked, {findings} finding(s){}",
-        if findings == 0 { " — clean" } else { "" }
-    );
-    if findings > 0 {
-        std::process::exit(2);
-    }
-    Ok(())
-}
-
-/// Read a board file, turning a missing file into an actionable message.
-fn read_board_text(path: &Path) -> anyhow::Result<String> {
-    std::fs::read_to_string(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(
-                "no board file at '{}'. Check the path, or try a bundled example:\n  \
-                 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
-                path.display()
-            )
-        } else {
-            anyhow::anyhow!("reading '{}': {e}", path.display())
-        }
-    })
 }
 
 /// True when the text is a Board-as-Code (`.board`) DSL source, recognised by
@@ -1134,564 +1055,6 @@ fn cmd_run(args: RunArgs, quiet: bool) -> anyhow::Result<()> {
     // board, not just the demo boards baked into dist/.
     let board_url = format!("/boards/{}", file_name(&args.board));
     serve(engine, args.port, Some((board_url, text)))
-}
-
-/// `hauksbee run <board> --ac <fstart>:<fstop>:<points> [--ac-node NET ...]
-/// [--ac-csv FILE] [--ac-loop NET]`
-///
-/// Runs the small-signal AC analysis on the bound circuit and prints a Bode
-/// table (magnitude in dB, phase in degrees) for the requested net(s). With
-/// `--ac-loop`, also reports gain crossover and phase margin for that net.
-/// Exit code for a malformed deck (the loader rejected it). Distinct from the
-/// exit-3 "cannot honestly answer" (a well-formed deck we refuse to fake).
-const EXIT_MALFORMED_DECK: i32 = 2;
-
-/// `hauksbee sim`: load a `.cir`, run `.op` or `.tran`, write CSV.
-fn cmd_sim(args: SimArgs) -> anyhow::Result<()> {
-    use hauksbee_ir::SpiceLoader;
-    use hauksbee_solve::{
-        default_probes, run_op, run_tran, Integration, Probe, SimOutput, SolverOptions, StepControl,
-        DcInit,
-    };
-
-    // Read the deck. A missing file is an ordinary CLI error (exit 1) with an
-    // actionable message, not a deck-malformed refusal.
-    let text = std::fs::read_to_string(&args.file).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!("no deck at '{}'. Check the path.", args.file.display())
-        } else {
-            anyhow::anyhow!("reading '{}': {e}", args.file.display())
-        }
-    })?;
-
-    // Parse. A SpiceError already carries its line number; print it verbatim and
-    // exit 2 (malformed deck) — never fall through to a wrong parse.
-    let (circuit, directives) = match SpiceLoader::load_with_directives(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(EXIT_MALFORMED_DECK);
-        }
-    };
-
-    // Output format: only CSV is implemented. Rawfile refuses loudly (plan
-    // step 14) rather than emitting nothing or the wrong thing.
-    if matches!(args.format, SimFormat::Raw | SimFormat::Both) {
-        eprintln!(
-            "error: --format {} is not yet implemented (ngspice rawfile output is \
-             SPICE-compat plan step 14). Use --format csv (the default).",
-            match args.format {
-                SimFormat::Raw => "raw",
-                SimFormat::Both => "both",
-                SimFormat::Csv => unreachable!(),
-            }
-        );
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-    }
-
-    // Choose the analysis: an explicit flag wins; otherwise a `.tran` card means
-    // transient and anything else means the operating point.
-    enum Analysis {
-        Op,
-        Tran,
-        Ac,
-        Dc,
-    }
-    let analysis = if args.op {
-        Analysis::Op
-    } else if args.tran {
-        Analysis::Tran
-    } else if args.ac {
-        Analysis::Ac
-    } else if args.dc {
-        Analysis::Dc
-    } else if directives.tran.is_some() {
-        Analysis::Tran
-    } else {
-        Analysis::Op
-    };
-
-    // Refuse the unwired analyses loudly (exit 3): the netlist front-end does
-    // not parse `.ac`/`.dc` directives or AC source magnitudes yet, so there is
-    // nothing honest to compute. A loud refusal, never a silent no-op.
-    match analysis {
-        Analysis::Ac => {
-            eprintln!(
-                "error: --ac is recognized but not yet wired in `hauksbee sim`. The netlist \
-                 front-end does not yet parse `.ac` directives or AC source magnitudes \
-                 (SPICE-compat plan step 9). Refusing rather than emitting an empty or wrong \
-                 result. Use --op or --tran."
-            );
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-        }
-        Analysis::Dc => {
-            eprintln!(
-                "error: --dc (DC sweep) is recognized but not yet wired in `hauksbee sim`. The \
-                 sweep driver is SPICE-compat plan step 9. Refusing rather than faking a result. \
-                 Use --op for a single operating point or --tran."
-            );
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-        }
-        _ => {}
-    }
-
-    // Probes: an explicit --print wins; otherwise every node voltage (and we say
-    // so, on stderr, so the choice is never a silent surprise).
-    let probes: Vec<Probe> = if args.print.is_empty() {
-        eprintln!(
-            "note: no --print given and the loader does not yet parse `.print`; \
-             writing every node voltage."
-        );
-        default_probes(&circuit)
-    } else {
-        let mut ps = Vec::with_capacity(args.print.len());
-        for tok in &args.print {
-            match Probe::parse(tok) {
-                Ok(p) => ps.push(p),
-                Err(msg) => {
-                    eprintln!("error: --print: {msg}");
-                    std::process::exit(EXIT_MALFORMED_DECK);
-                }
-            }
-        }
-        ps
-    };
-
-    // Build solver options from the deck's tolerances.
-    let mut opts = SolverOptions::default();
-    if let Some(r) = directives.reltol {
-        opts.reltol = r;
-    }
-    if let Some(a) = directives.abstol {
-        opts.abstol = a;
-    }
-    if let Some(v) = directives.vntol {
-        opts.vntol = v;
-    }
-
-    let output: SimOutput = match analysis {
-        Analysis::Op => match run_op(&circuit, &opts, &probes) {
-            Ok(o) => o,
-            Err(msg) => {
-                eprintln!(
-                    "error: DC operating point did not converge (or a probe was invalid): {msg}"
-                );
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-            }
-        },
-        Analysis::Tran => {
-            let Some(td) = directives.tran else {
-                eprintln!(
-                    "error: --tran requested but the deck has no `.tran` card, so there is no \
-                     stop time or step to run. Add `.tran <tstep> <tstop>` or use --op."
-                );
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-            };
-            // Adaptive step bounded by the deck's requested step (its tmax if
-            // given, else tstep), the same shape the existing cross-check uses.
-            let dt_max = td.tmax.unwrap_or(td.tstep).max(1e-15);
-            opts.integration = Integration::Trapezoidal;
-            opts.step = StepControl::Adaptive {
-                dt_initial: (td.tstep / 100.0).max(1e-15),
-                dt_min: 1e-15,
-                dt_max,
-            };
-            // `uic` means power-on start: skip the DC solve, march from rest.
-            if directives.use_initial_conditions {
-                opts.dc_init = DcInit::FromZero;
-            }
-            match run_tran(&circuit, &opts, td.tstop, &probes) {
-                Ok(o) => o,
-                Err(msg) => {
-                    eprintln!("error: transient solve failed: {msg}");
-                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-                }
-            }
-        }
-        Analysis::Ac | Analysis::Dc => unreachable!("refused above"),
-    };
-
-    // Serialize to CSV and write to --out or stdout.
-    let csv = sim_output_to_csv(&output);
-    match &args.out {
-        Some(path) => {
-            std::fs::write(path, csv)
-                .map_err(|e| anyhow::anyhow!("writing '{}': {e}", path.display()))?;
-            eprintln!(
-                "wrote {} row(s) x {} column(s) to {}",
-                output.rows.len(),
-                output.columns.len(),
-                path.display()
-            );
-        }
-        None => print!("{csv}"),
-    }
-    Ok(())
-}
-
-/// Render a [`hauksbee_solve::SimOutput`] as CSV. A transient prepends a
-/// `time_s` column; an operating point is a bare header + one row.
-fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
-    let mut s = String::new();
-    let mut header = Vec::new();
-    if o.time.is_some() {
-        header.push("time_s".to_string());
-    }
-    header.extend(o.columns.iter().cloned());
-    s.push_str(&header.join(","));
-    s.push('\n');
-    for (i, row) in o.rows.iter().enumerate() {
-        let mut cells = Vec::with_capacity(row.len() + 1);
-        if let Some(t) = &o.time {
-            cells.push(format!("{:.10e}", t[i]));
-        }
-        for v in row {
-            cells.push(format!("{v:.10e}"));
-        }
-        s.push_str(&cells.join(","));
-        s.push('\n');
-    }
-    s
-}
-
-/// `hauksbee to-code <board-file> [--out <file.board>]`
-///
-/// Accepts any text board the extractor understands. A `.kicad_pcb` keeps the
-/// cluster-aware geometry decompiler; a KiCad `.net` / IPC-D-356 / Eagle `.brd`
-/// / `.kicad_sch` is extracted and emitted flat (so a layout-free netlist also
-/// becomes editable Board-as-Code).
-fn cmd_to_code(args: ToCodeArgs) -> anyhow::Result<()> {
-    let text = read_board_text(&args.board)?;
-    let code = decompile_any_to_code(&text)?;
-    match args.out {
-        Some(p) => {
-            std::fs::write(&p, &code)?;
-            eprintln!("wrote {}", p.display());
-        }
-        None => print!("{code}"),
-    }
-    Ok(())
-}
-
-/// How to route the recompiled board.
-#[derive(Clone, Copy, PartialEq)]
-enum RouteMode {
-    /// No routing (placement only) - the historical default.
-    None,
-    /// Hand off to freerouting; fall back to the grid A* if it is absent.
-    Freerouting,
-    /// Force the in-tree grid A* fallback.
-    Grid,
-}
-
-/// `hauksbee from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid]`
-fn cmd_from_code(args: FromCodeArgs) -> anyhow::Result<()> {
-    use forge_codegen::{relayout, LayoutConfig, Program};
-
-    let layout: Option<LayoutConfig> = if args.relayout {
-        Some(LayoutConfig::full())
-    } else if args.incremental {
-        Some(LayoutConfig::incremental())
-    } else {
-        None
-    };
-    let route = if args.route {
-        RouteMode::Freerouting
-    } else if args.route_grid {
-        RouteMode::Grid
-    } else {
-        RouteMode::None
-    };
-
-    let code = load_code(&args.code)?;
-
-    // Parse + (optionally) re-place, then build a Pcb we can route on.
-    let base = Program::parse(&code).map_err(|e| anyhow::anyhow!("board code: {e}"))?;
-    let mut prog = base.clone();
-    if let Some(cfg) = layout {
-        let report = relayout(&mut prog, &base, &cfg);
-        eprintln!(
-            "re-layout: {} groups, {} moved, {} kept",
-            report.groups,
-            report.moved.len(),
-            report.kept
-        );
-    }
-    let mut pcb = prog.build();
-
-    if route != RouteMode::None {
-        route_board(&mut pcb, &prog, route, args.out.as_deref())?;
-    }
-
-    let board_text = pcb.emit();
-    match args.out {
-        Some(p) => {
-            std::fs::write(&p, &board_text)?;
-            eprintln!("wrote {}", p.display());
-        }
-        None => print!("{board_text}"),
-    }
-    Ok(())
-}
-
-/// Route a built board in place. Prefers freerouting; documents and falls back
-/// to the grid A* when freerouting is unavailable (or when explicitly forced).
-fn route_board(
-    pcb: &mut forge_model::Pcb,
-    prog: &forge_codegen::Program,
-    mode: RouteMode,
-    out: Option<&Path>,
-) -> anyhow::Result<()> {
-    use forge_codegen::{route_grid, FreeroutingConfig, RouteRules};
-
-    let rules = RouteRules::default();
-    let fr_cfg = FreeroutingConfig::default();
-
-    let use_grid = match mode {
-        RouteMode::Grid => true,
-        RouteMode::Freerouting => !forge_codegen::freerouting_available(&fr_cfg),
-        RouteMode::None => return Ok(()),
-    };
-
-    if !use_grid {
-        // Freerouting handoff (the production path).
-        let workdir = out
-            .and_then(|p| p.parent())
-            .map(|d| d.join("freerouting-work"))
-            .unwrap_or_else(|| std::env::temp_dir().join("hauksbee-freerouting"));
-        eprintln!("routing: freerouting handoff (DSN -> freerouting -> SES)...");
-        match forge_codegen::route_with_freerouting(pcb, prog.outline, &rules, &fr_cfg, &workdir) {
-            Ok(o) => {
-                let pct = if o.nets_to_route > 0 {
-                    o.nets_routed as f64 / o.nets_to_route as f64 * 100.0
-                } else {
-                    100.0
-                };
-                eprintln!(
-                    "routed: {}/{} nets ({:.0}%), {} segments, {} vias, {:.1}s (freerouting)",
-                    o.nets_routed, o.nets_to_route, pct, o.segments, o.vias, o.elapsed_secs
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                eprintln!("freerouting failed ({e}); falling back to grid A*");
-            }
-        }
-    } else {
-        eprintln!("routing: freerouting absent, using in-tree grid A* fallback");
-    }
-
-    // Grid A* fallback. Route on the program (it reads pad geometry from there)
-    // and merge tracks onto the board.
-    let res = route_grid(prog, 0.5);
-    let mut net_id = std::collections::HashMap::new();
-    for n in pcb.nets() {
-        net_id.insert(n.name.clone(), n.id);
-    }
-    let mut seg = 0usize;
-    for t in &res.tracks {
-        let id = net_id.get(&t.net).copied();
-        for pair in t.points.windows(2) {
-            pcb.add_segment(pair[0], pair[1], 0.25, "F.Cu", id);
-            seg += 1;
-        }
-    }
-    eprintln!(
-        "routed: {} tracks ({} segments), {} unrouted nets (grid A* fallback)",
-        res.tracks.len(),
-        seg,
-        res.unrouted.len()
-    );
-    Ok(())
-}
-
-/// `hauksbee check-code <code-dir|file> [--seconds N] [--destructive]`
-fn cmd_check_code(args: CheckCodeArgs) -> anyhow::Result<()> {
-    let opts = CheckOptions {
-        seconds: args.seconds,
-        destructive: args.destructive,
-        ambient_c: args.ambient,
-    };
-    let code = load_code(&args.code)?;
-    let report = check_code(&code, &opts)?;
-    print!("{}", render_check_report(&report));
-    if !report.healthy() {
-        std::process::exit(1);
-    }
-    Ok(())
-}
-
-/// `hauksbee serve [--port N]`: the local web front door (upload-and-report).
-fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
-    use std::sync::Arc;
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async move {
-        let addr = format!("127.0.0.1:{}", args.port);
-        // Inject the engine's analysis as the server's analyzer callback, so the
-        // server crate needs no dependency on the engine/extract crates. The
-        // firmware-aware callback handles both the board-only path (firmware ==
-        // None -> analyze_json) and the firmware co-sim path.
-        let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
-            |name: &str, contents: &str, fw: Option<(&str, &[u8])>| match fw {
-                Some((fw_name, fw_bytes)) => {
-                    hauksbee_engine::analyze_with_firmware_json(name, contents, fw_name, fw_bytes)
-                }
-                None => hauksbee_engine::analyze_json(name, contents),
-            },
-        );
-        hauksbee_server::frontdoor::serve_with_firmware(&addr, analyze).await
-    })
-}
-
-/// `hauksbee doctor --backends`: report co-sim backend availability using the
-/// engine's OWN discovery, so `scripts/doctor.sh` can never drift from what a
-/// real co-sim would accept.
-///
-/// For each backend this calls the exact resolver the scheduler uses
-/// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`) — no
-/// re-implemented search logic. `find_qemu` runs the Espressif-fork check
-/// (`is_esp_fork`), so a Homebrew mainline `qemu-system-xtensa` on PATH is
-/// reported `absent` here just as the co-sim rejects it, and a fork under
-/// `~/.galvani-qemu-esp` or a Renode under `~/renode-portable` is reported
-/// present with its resolved path.
-///
-/// stdout: one line per backend, `NAME<TAB>STATUS<TAB>DETAIL`, STATUS a single
-/// lowercase token (`ok` / `absent` / `builtin` / `disabled`); DETAIL is the
-/// resolved path or a one-line install hint and may contain spaces (parsers
-/// should read field 3 to end-of-line). The human header goes to stderr so the
-/// data stream stays clean.
-fn cmd_doctor(args: DoctorArgs) -> anyhow::Result<()> {
-    // A probed backend. `status` is a single token by contract (see above).
-    struct Backend {
-        name: &'static str,
-        status: &'static str,
-        detail: String,
-        summary: &'static str,
-    }
-
-    let mut backends: Vec<Backend> = Vec::new();
-
-    // AVR: built into this binary via libsimavr (feature `avr`); there is no
-    // external process to locate, so it is `builtin` when compiled in.
-    #[cfg(feature = "avr")]
-    backends.push(Backend {
-        name: "avr",
-        status: "builtin",
-        detail: "simavr linked into this binary".to_string(),
-        summary: "ATmega / ATtiny firmware co-sim",
-    });
-    #[cfg(not(feature = "avr"))]
-    backends.push(Backend {
-        name: "avr",
-        status: "disabled",
-        detail: "compiled out — rebuild with the default features + libsimavr \
-                 (scripts/install-sims.sh --avr)"
-            .to_string(),
-        summary: "ATmega / ATtiny firmware co-sim",
-    });
-
-    // Espressif QEMU (Xtensa ESP32 / ESP32-S3, RISC-V ESP32-C3). `find_qemu`
-    // verifies the binary is the Espressif fork before accepting it.
-    #[cfg(feature = "qemu")]
-    {
-        use hauksbee_mcu::qemu::{find_qemu, QemuArch};
-        let probes = [
-            (
-                "qemu-xtensa",
-                QemuArch::Xtensa,
-                "ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)",
-            ),
-            (
-                "qemu-riscv32",
-                QemuArch::Riscv32,
-                "ESP32-C3 firmware co-sim (Espressif QEMU fork)",
-            ),
-        ];
-        for (name, arch, summary) in probes {
-            match find_qemu(arch) {
-                Ok(p) => backends.push(Backend {
-                    name,
-                    status: "ok",
-                    detail: p.display().to_string(),
-                    summary,
-                }),
-                Err(e) => backends.push(Backend {
-                    name,
-                    status: "absent",
-                    detail: one_line(&e.to_string()),
-                    summary,
-                }),
-            }
-        }
-    }
-    #[cfg(not(feature = "qemu"))]
-    for (name, summary) in [
-        ("qemu-xtensa", "ESP32 / ESP32-S3 firmware co-sim"),
-        ("qemu-riscv32", "ESP32-C3 firmware co-sim"),
-    ] {
-        backends.push(Backend {
-            name,
-            status: "disabled",
-            detail: "built without the `qemu` feature".to_string(),
-            summary,
-        });
-    }
-
-    // Renode (STM32 / nRF52 / SiFive RISC-V, i.e. ARM Cortex-M and RISC-V).
-    #[cfg(feature = "renode")]
-    match hauksbee_mcu::renode::find_renode() {
-        Ok(p) => backends.push(Backend {
-            name: "renode",
-            status: "ok",
-            detail: p.display().to_string(),
-            summary: "STM32 / nRF52 / RISC-V firmware co-sim",
-        }),
-        Err(e) => backends.push(Backend {
-            name: "renode",
-            status: "absent",
-            detail: one_line(&e.to_string()),
-            summary: "STM32 / nRF52 / RISC-V firmware co-sim",
-        }),
-    }
-    #[cfg(not(feature = "renode"))]
-    backends.push(Backend {
-        name: "renode",
-        status: "disabled",
-        detail: "built without the `renode` feature".to_string(),
-        summary: "STM32 / nRF52 / RISC-V firmware co-sim",
-    });
-
-    if args.json {
-        let arr: Vec<serde_json::Value> = backends
-            .iter()
-            .map(|b| {
-                serde_json::json!({
-                    "name": b.name,
-                    "status": b.status,
-                    "available": b.status == "ok" || b.status == "builtin",
-                    "detail": b.detail,
-                    "summary": b.summary,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::json!({ "backends": arr }));
-        return Ok(());
-    }
-
-    // Human framing on stderr; the data table on stdout stays parseable.
-    eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
-    for b in &backends {
-        eprintln!("    {:<13} {}", b.name, b.summary);
-        println!("{}\t{}\t{}", b.name, b.status, b.detail);
-    }
-    Ok(())
-}
-
-/// Collapse a possibly multi-line message to its first line (discovery errors
-/// are one line today, but this keeps the doctor table one-row-per-backend even
-/// if a resolver's message grows).
-fn one_line(msg: &str) -> String {
-    msg.lines().next().unwrap_or("").to_string()
 }
 
 
