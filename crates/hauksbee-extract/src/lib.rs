@@ -28,6 +28,7 @@ mod ipc356;
 mod netlint;
 mod netlist;
 mod pcb;
+pub mod reader;
 pub mod resource_conflict;
 mod schematic;
 pub mod si;
@@ -65,6 +66,11 @@ pub enum ExtractError {
         expected: &'static str,
         found: Option<String>,
     },
+    /// No registered [`reader::BoardReader`] recognised the input. `tried`
+    /// enumerates every reader that was offered the bytes, in order — a more
+    /// actionable failure than the old "last fallback's error" behaviour.
+    #[error("unrecognized board format; tried {tried}")]
+    Unrecognized { tried: String },
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
@@ -223,12 +229,15 @@ impl ExtractedBoard {
     /// `.PcbDoc` path (OLE2 magic + Altium streams); everything else is text and
     /// goes through [`Self::from_auto`]. Returns `None` when the bytes are not a
     /// recognised binary board, so the caller can fall back to the text sniffer.
+    ///
+    /// Routes through the [`reader::Registry`], consulting only the binary
+    /// readers so a text file handed here is not force-parsed as bytes (it
+    /// returns `None` and the caller falls back to [`Self::from_auto`]).
     pub fn from_auto_bytes(bytes: &[u8]) -> Option<Result<Self, ExtractError>> {
-        if altium::looks_like_pcbdoc(bytes) {
-            Some(Self::from_altium_pcb(bytes))
-        } else {
-            None
-        }
+        let registry = reader::Registry::builtin();
+        registry
+            .detect_binary(bytes, None)
+            .map(|r| r.read(bytes, None))
     }
 
     /// Extract from an already-parsed forge-sexpr [`Document`], avoiding a
@@ -252,19 +261,13 @@ impl ExtractedBoard {
     }
 
     /// Sniff the format from content and extract accordingly.
+    ///
+    /// Delegates to the [`reader::Registry`]: each format is a
+    /// [`reader::BoardReader`] that owns its own detection, replacing the old
+    /// hard-coded substring ladder. An input no reader recognises now fails with
+    /// [`ExtractError::Unrecognized`], which names every reader that was tried.
     pub fn from_auto(text: &str) -> Result<Self, ExtractError> {
-        let head: String = text.chars().take(512).collect();
-        if head.contains("<eagle") {
-            Self::from_eagle_brd(text)
-        } else if head.trim_start().starts_with("(export") {
-            Self::from_kicad_netlist(text)
-        } else if head.contains("(kicad_sch") {
-            Self::from_kicad_schematic(text)
-        } else if head.contains("(kicad_pcb") {
-            Self::from_kicad_pcb(text)
-        } else {
-            Self::from_ipc_d356(text)
-        }
+        reader::Registry::builtin().read(text.as_bytes(), None)
     }
 
     pub fn net(&self, id: i64) -> Option<&Net> {
