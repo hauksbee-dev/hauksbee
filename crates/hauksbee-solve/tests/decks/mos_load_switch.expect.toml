@@ -1,0 +1,27 @@
+# MOS load switch vs ngspice-46 (dev-plan 04 §3.3 cross-check target 1).
+# The observable is switching timing through the gate charge. ngspice level 1
+# evaluates true Meyer capacitances Cgs(vgs,vds)/Cgd(vgs,vds); hauksbee's
+# charge-conserving two-terminal Q(v) matches Meyer's cutoff (Cox) and
+# deep-triode (Cox/2) limits but cannot express the saturation rise to
+# 2/3*Cox (see stamp.rs `mos_charge_gs`). Measured consequence: edge-timing
+# skew <= 2 ns on ~50 ns drain edges (turn-off 2.5 V crossing: 5.26666 us
+# ours vs 5.26589 us ngspice), which the pointwise relative metric reads as
+# a large mid-edge excursion while levels, delays and edge durations agree.
+# Measured worst: V(d) 3.23e-1 (mid turn-off edge), V(g) 6.87e-2 (gate tail).
+# The V(d) bar is ~1.5x the measured skew excursion — the same deck measured
+# 5.45 before the cutoff-Cgb charge landed, so the bar still catches a
+# broken gate-charge stamp by an order of magnitude. abstol = 5% of scale
+# floors the off-state millivolt tail (ours and ngspice agree sub-mV there).
+analysis = "tran"
+description = "NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing"
+full_scale = 5.0
+skip_initial = 0.2e-6
+
+[[probe]]
+expr = "V(d)"
+reltol = 0.5
+abstol = 0.25
+
+[[probe]]
+expr = "V(g)"
+reltol = 0.15
