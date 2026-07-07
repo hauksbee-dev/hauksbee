@@ -1,15 +1,22 @@
 //! `hauksbee-models` — PCB component model library.
 //!
 //! Given a component identified by lib_id, value, footprint, or part-number,
-//! this crate resolves a simulation model definition. Physics arrives by four
-//! authoring routes (built-in DB, codex datasheet extraction, hand-written
-//! behavioural models, user SPICE) that collapse into three resolution tiers,
-//! in priority order:
+//! this crate resolves a simulation model definition. Physics arrives by five
+//! authoring routes (built-in DB, installed model packs, codex datasheet
+//! extraction, hand-written behavioural models, user SPICE) that map onto
+//! explicit priority layers ([`SourceLayer`], 06-extensibility-sdk §3):
 //!
-//! 1. User-supplied SPICE models / `.subckt` cards.
-//! 2. User TOML (this is also where datasheet-extracted and hand-written
-//!    behavioural models land, via the user/extracted model directories).
-//! 3. Built-in defaults database (TOML files embedded at compile time).
+//! | layer                        | priority |
+//! |------------------------------|----------|
+//! | built-in db                  | 0        |
+//! | installed packs              | 10       |
+//! | user model dirs              | 20       |
+//! | `--models-dir`               | 30       |
+//! | user SPICE cards             | 40       |
+//!
+//! Higher layer wins outright; *within* a layer the specificity score breaks
+//! the tie (see [`matcher`]). Same-layer conflicts between two different
+//! packs are reported loudly at load, naming both packs.
 //!
 //! # Quick start
 //!
@@ -29,6 +36,7 @@
 pub mod behavioral;
 pub mod logic_spec;
 pub mod matcher;
+pub mod pack;
 pub mod pin_rules;
 pub mod profile;
 pub mod schema;
@@ -44,6 +52,7 @@ use regex::Error as RegexError;
 use thiserror::Error;
 
 pub use matcher::ComponentQuery;
+pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance};
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
 pub use schema::{
@@ -97,6 +106,61 @@ pub enum ModelError {
     Anyhow(#[from] anyhow::Error),
 }
 
+// ── Source layers ─────────────────────────────────────────────────────────────
+
+/// The explicit resolution priority layer an entry was loaded from
+/// (06-extensibility-sdk §3). A higher-priority layer beats a lower one
+/// *regardless of specificity*; specificity only breaks ties within a layer.
+/// Before this existed, user-over-builtin worked only because user entries
+/// happened to score higher on specificity; now the layer is the comparison's
+/// first key, by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceLayer {
+    /// The embedded `db/*.toml` database.
+    Builtin,
+    /// An installed model pack (`~/.hauksbee/packs/<name>@<version>/`).
+    Pack,
+    /// A standing user model directory (`~/.hauksbee/models`,
+    /// `~/.config/hauksbee/models`).
+    UserDir,
+    /// An explicit `--models-dir` flag.
+    ModelsDirFlag,
+    /// A user SPICE `.model`/`.subckt` card (always an exact name match, so
+    /// it is checked before the entry scan).
+    Spice,
+}
+
+impl SourceLayer {
+    /// The plan-mandated priority integer: builtin=0, pack=10, user dir=20,
+    /// `--models-dir`=30, user SPICE=40.
+    pub fn priority(self) -> u32 {
+        match self {
+            SourceLayer::Builtin => 0,
+            SourceLayer::Pack => 10,
+            SourceLayer::UserDir => 20,
+            SourceLayer::ModelsDirFlag => 30,
+            SourceLayer::Spice => 40,
+        }
+    }
+
+    /// Short name for reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            SourceLayer::Builtin => "builtin",
+            SourceLayer::Pack => "pack",
+            SourceLayer::UserDir => "user-dir",
+            SourceLayer::ModelsDirFlag => "models-dir",
+            SourceLayer::Spice => "spice",
+        }
+    }
+}
+
+impl std::fmt::Display for SourceLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.name(), self.priority())
+    }
+}
+
 // ── Resolution result ─────────────────────────────────────────────────────────
 
 /// How confident the library is in a resolved model.
@@ -132,13 +196,26 @@ pub struct Resolution {
     pub confidence: Confidence,
     /// The query that produced this result (for diagnostics).
     pub query: ComponentQuery,
-    /// Source that produced the match: `"builtin"`, `"user"`, or `"spice"`.
+    /// Coarse source string kept for existing consumers: `"builtin"`,
+    /// `"pack"`, `"user"` (user dir or --models-dir), or `"spice"`.
     pub source: Option<String>,
+    /// The explicit priority layer the winning entry came from.
+    pub layer: Option<SourceLayer>,
+    /// Where within the layer: the db/pack/file name that shipped the entry
+    /// (e.g. `"digital"`, `"acme-sensors@1.2.0"`, a user file stem).
+    pub origin: Option<String>,
 }
 
 impl Resolution {
     fn unresolved(query: ComponentQuery) -> Self {
-        Resolution { model: None, confidence: Confidence::Unresolved, query, source: None }
+        Resolution {
+            model: None,
+            confidence: Confidence::Unresolved,
+            query,
+            source: None,
+            layer: None,
+            origin: None,
+        }
     }
 }
 
@@ -159,15 +236,22 @@ impl std::fmt::Display for Resolution {
 
 // ── ModelLibrary ──────────────────────────────────────────────────────────────
 
+/// One compiled entry tagged with the layer and origin it was loaded from.
+struct LayeredEntry {
+    layer: SourceLayer,
+    /// The db file stem, pack `name@version`, or user file stem.
+    origin: String,
+    compiled: CompiledEntry,
+}
+
 /// The component model library.
 ///
-/// Holds compiled match rules from the built-in database plus any user-loaded
-/// entries and SPICE cards.
+/// Holds compiled match rules from every loaded source, each tagged with its
+/// explicit [`SourceLayer`], plus user SPICE cards (layer 40, matched by exact
+/// card name before the entry scan).
 pub struct ModelLibrary {
-    /// Compiled entries from the built-in database (highest priority after SPICE).
-    builtin: Vec<CompiledEntry>,
-    /// User-provided entries loaded from runtime TOML files.
-    user: Vec<CompiledEntry>,
+    /// All compiled TOML entries, in load order, each carrying its layer.
+    entries: Vec<LayeredEntry>,
     /// User-provided SPICE cards (`.model` / `.subckt`).
     spice: Vec<SpiceCard>,
     /// Pin-role inference rules (built-in seed + user `pin_rules.toml` files).
@@ -181,8 +265,7 @@ impl ModelLibrary {
     /// Create an empty library with no entries.
     pub fn empty() -> Self {
         ModelLibrary {
-            builtin: Vec::new(),
-            user: Vec::new(),
+            entries: Vec::new(),
             spice: Vec::new(),
             pin_rules: PinRuleTable::empty(),
         }
@@ -194,7 +277,7 @@ impl ModelLibrary {
     pub fn builtin() -> Self {
         let mut lib = ModelLibrary::empty();
         for (name, toml_src) in BUILTIN_TOML_FILES {
-            lib.load_toml_str(toml_src, name, false)
+            lib.load_toml_str(toml_src, name, SourceLayer::Builtin)
                 .unwrap_or_else(|e| panic!("built-in database '{}' failed to load: {}", name, e));
         }
         lib.pin_rules
@@ -216,34 +299,106 @@ impl ModelLibrary {
         &LIB
     }
 
-    /// Built-in library plus the user model directories, layered
-    /// `builtin < datasheet-extracted < user` (later wins). The standard user
-    /// directories, in increasing priority, are:
-    ///   1. `~/.hauksbee/models`        — where datasheet extraction writes.
-    ///   2. `~/.config/hauksbee/models` — the user's own custom models.
-    ///   3. each `extra_dirs` entry    — e.g. a `--models-dir` flag, highest.
+    /// Built-in library plus installed packs plus the user model directories,
+    /// in explicit layer order (lowest to highest priority):
+    ///   0. the embedded builtin db,
+    ///   1. installed packs (`~/.hauksbee/packs`, recorded in `packs.toml`),
+    ///   2. `~/.hauksbee/models`        — where datasheet extraction writes,
+    ///   3. `~/.config/hauksbee/models` — the user's own custom models,
+    ///   4. each `extra_dirs` entry    — e.g. a `--models-dir` flag, highest.
     /// A custom behavioural part dropped into one of these loads without
-    /// recompiling. Directory load errors are warned to stderr, not fatal, so a
-    /// single malformed user file never breaks the whole library.
+    /// recompiling. Directory and pack load errors are warned to stderr, not
+    /// fatal, so a single malformed user file never breaks the whole library.
     pub fn builtin_with_user_dirs(extra_dirs: &[&Path]) -> ModelLibrary {
         let mut lib = ModelLibrary::builtin();
-        let home = std::env::var("HOME").ok().map(PathBuf::from);
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        if let Some(h) = &home {
-            dirs.push(h.join(".hauksbee").join("models"));
-            dirs.push(h.join(".config").join("hauksbee").join("models"));
+        if let Some(store) = PackStore::default_location() {
+            for w in lib.load_packs(&store) {
+                eprintln!("[models] packs: {w}");
+            }
         }
-        dirs.extend(extra_dirs.iter().map(|p| p.to_path_buf()));
-        for dir in dirs {
-            // Load each dir's entries into the `user` bucket (highest priority
-            // after SPICE). Later dirs are loaded last; on a specificity tie the
-            // first-inserted wins, so we rely on user entries being more specific
-            // than builtin, which they are (an exact MPN/value match).
-            for e in lib.load_user_dir(&dir) {
-                eprintln!("[models] user dir {}: {e}", dir.display());
+        let home = std::env::var("HOME").ok().map(PathBuf::from);
+        if let Some(h) = &home {
+            for dir in [
+                h.join(".hauksbee").join("models"),
+                h.join(".config").join("hauksbee").join("models"),
+            ] {
+                for e in lib.load_dir_layer(&dir, SourceLayer::UserDir) {
+                    eprintln!("[models] user dir {}: {e}", dir.display());
+                }
+            }
+        }
+        for dir in extra_dirs {
+            for e in lib.load_dir_layer(dir, SourceLayer::ModelsDirFlag) {
+                eprintln!("[models] --models-dir {}: {e}", dir.display());
             }
         }
         lib
+    }
+
+    /// Load every installed pack from `store` at [`SourceLayer::Pack`].
+    ///
+    /// Returns human-readable warnings; nothing here is fatal (a library must
+    /// survive one bad installed pack), but nothing is silent either:
+    ///   - a recorded pack whose dir fails validation is skipped with a warning;
+    ///   - two packs shipping the same model id is a same-layer conflict,
+    ///     reported naming both packs (the plan forbids resolving it quietly —
+    ///     within a layer only specificity orders entries, so identical ids
+    ///     would tie on match rules and win by load order, i.e. by accident).
+    pub fn load_packs(&mut self, store: &PackStore) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let records = match store.list() {
+            Ok(r) => r,
+            Err(e) => return vec![format!("cannot read pack record: {e}")],
+        };
+        // model id -> pack dir_name that first shipped it, for conflict reports.
+        let mut seen: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for record in &records {
+            let dir = store.pack_dir(record);
+            let pack = match pack::Pack::load(&dir) {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(format!(
+                        "installed pack '{}@{}' failed to load and was skipped: {e}",
+                        record.name, record.version
+                    ));
+                    continue;
+                }
+            };
+            let origin = pack.manifest.dir_name();
+            for file in &pack.model_files {
+                let src = match std::fs::read_to_string(file) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warnings.push(format!(
+                            "pack '{origin}': reading '{}': {e}",
+                            file.display()
+                        ));
+                        continue;
+                    }
+                };
+                let before = self.entries.len();
+                if let Err(e) = self.load_toml_str(&src, &origin, SourceLayer::Pack) {
+                    warnings.push(format!("pack '{origin}': {e}"));
+                    continue;
+                }
+                for le in &self.entries[before..] {
+                    let id = le.compiled.entry.id.clone();
+                    if let Some(other) = seen.get(&id) {
+                        if *other != origin {
+                            warnings.push(format!(
+                                "same-layer conflict: model id '{id}' is shipped by both \
+                                 pack '{other}' and pack '{origin}'; within the pack layer \
+                                 nothing orders them — remove one pack or rename the entry"
+                            ));
+                        }
+                    } else {
+                        seen.insert(id, origin.clone());
+                    }
+                }
+            }
+        }
+        warnings
     }
 
     /// Append entries from a user TOML directory at runtime (consuming form).
@@ -257,11 +412,15 @@ impl ModelLibrary {
         }
     }
 
-    /// Append entries from a user TOML directory in place, returning any
-    /// per-file errors (an empty vec on success). Loading order: later dirs win
-    /// on a specificity tie, which is the basis for the
-    /// `builtin < datasheet-extracted < user` layering.
+    /// Append entries from a user TOML directory in place at
+    /// [`SourceLayer::UserDir`], returning any per-file errors (an empty vec
+    /// on success).
     pub fn load_user_dir(&mut self, dir: &Path) -> Vec<ModelError> {
+        self.load_dir_layer(dir, SourceLayer::UserDir)
+    }
+
+    /// Append entries from a TOML directory at an explicit layer.
+    pub fn load_dir_layer(&mut self, dir: &Path, layer: SourceLayer) -> Vec<ModelError> {
         let mut errors = Vec::new();
         if !dir.exists() {
             return errors;
@@ -292,7 +451,7 @@ impl ModelLibrary {
                 }
                 continue;
             }
-            if let Err(e) = self.load_toml_str(&src, &name, true) {
+            if let Err(e) = self.load_toml_str(&src, &name, layer) {
                 errors.push(e);
             }
         }
@@ -316,36 +475,50 @@ impl ModelLibrary {
 
     /// Resolve a component query to a model entry.
     ///
-    /// Priority order:
-    /// 1. User SPICE cards (by value / MPN matching the card name).
-    /// 2. User runtime TOML entries.
-    /// 3. Built-in TOML database entries.
-    ///
-    /// When multiple entries match, the one with the highest specificity score
-    /// wins. Ties are broken by insertion order (first wins).
+    /// The winner is the matching entry with the highest
+    /// ([`SourceLayer::priority`], specificity score) pair — the layer is the
+    /// *first* key of the comparison, so a user-dir entry beats a pack entry
+    /// beats a builtin entry no matter how the specificity scores fall.
+    /// Within a layer the specificity score orders entries; a full tie is
+    /// broken by insertion order (first loaded wins). User SPICE cards are
+    /// layer 40, the highest, and match by exact card name, so they are
+    /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
-        // 1. SPICE cards — match by card name against value and MPN
+        // Layer 40: SPICE cards — match by card name against value and MPN.
         if let Some(card) = self.find_spice_match(q) {
             return self.resolution_from_spice(card, q.clone());
         }
 
-        // 2. User entries (priority over builtin)
-        if let Some((entry, score)) = best_match(&self.user, q) {
-            return Resolution {
-                model: Some(entry.clone()),
-                confidence: score_to_confidence(score),
-                query: q.clone(),
-                source: Some("user".to_string()),
-            };
+        // Layers 0..30: one scan, best (layer priority, specificity) wins.
+        let mut best: Option<(&LayeredEntry, u32)> = None;
+        for le in &self.entries {
+            if !le.compiled.matches(q) {
+                continue;
+            }
+            let score = le.compiled.specificity_score(q);
+            let key = (le.layer.priority(), score);
+            if best
+                .map(|(b, s)| key > (b.layer.priority(), s))
+                .unwrap_or(true)
+            {
+                best = Some((le, score));
+            }
         }
-
-        // 3. Built-in entries
-        if let Some((entry, score)) = best_match(&self.builtin, q) {
+        if let Some((le, score)) = best {
+            let source = match le.layer {
+                SourceLayer::Builtin => "builtin",
+                SourceLayer::Pack => "pack",
+                // Both user layers keep the historical "user" string.
+                SourceLayer::UserDir | SourceLayer::ModelsDirFlag => "user",
+                SourceLayer::Spice => "spice",
+            };
             return Resolution {
-                model: Some(entry.clone()),
+                model: Some(le.compiled.entry.clone()),
                 confidence: score_to_confidence(score),
                 query: q.clone(),
-                source: Some("builtin".to_string()),
+                source: Some(source.to_string()),
+                layer: Some(le.layer),
+                origin: Some(le.origin.clone()),
             };
         }
 
@@ -364,7 +537,7 @@ impl ModelLibrary {
         &mut self,
         src: &str,
         source_name: &str,
-        is_user: bool,
+        layer: SourceLayer,
     ) -> Result<(), ModelError> {
         let db_file: schema::DbFile = toml::from_str(src).map_err(|e| ModelError::TomlParse {
             source: source_name.to_string(),
@@ -377,11 +550,11 @@ impl ModelLibrary {
                 id: id.clone(),
                 error: e,
             })?;
-            if is_user {
-                self.user.push(compiled);
-            } else {
-                self.builtin.push(compiled);
-            }
+            self.entries.push(LayeredEntry {
+                layer,
+                origin: source_name.to_string(),
+                compiled,
+            });
         }
         Ok(())
     }
@@ -429,22 +602,10 @@ impl ModelLibrary {
             confidence: Confidence::Exact,
             query,
             source: Some("spice".to_string()),
+            layer: Some(SourceLayer::Spice),
+            origin: Some(card.name.clone()),
         }
     }
-}
-
-/// Pick the best-matching compiled entry for a query.
-fn best_match<'a>(entries: &'a [CompiledEntry], q: &ComponentQuery) -> Option<(&'a ModelEntry, u32)> {
-    let mut best: Option<(&ModelEntry, u32)> = None;
-    for compiled in entries {
-        if compiled.matches(q) {
-            let score = compiled.specificity_score(q);
-            if best.map(|(_, s)| score > s).unwrap_or(true) {
-                best = Some((&compiled.entry, score));
-            }
-        }
-    }
-    best
 }
 
 /// Convert a specificity score to a confidence level.
