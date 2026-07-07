@@ -1466,6 +1466,21 @@ fn cmd_run(args: RunArgs, quiet: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Non-TTY invocation with no report flag and no explicit --serve: rather than
+    // silently starting a websocket server a pipe / CI can't use (the "something
+    // different" §7 warns about), print a two-line hint pointing at the report
+    // surfaces and exit cleanly. A TTY would have launched the TUI above; an
+    // explicit --serve keeps the historical websocket behaviour untouched.
+    if !stdout_is_tty && !args.serve {
+        eprintln!(
+            "hauksbee run: stdout is not a terminal, so there is no interactive dashboard to show."
+        );
+        eprintln!(
+            "  For a report add a flag: --check (all static checks) · --plain (prose) · --json (machine); or --serve for the browser UI."
+        );
+        return Ok(());
+    }
+
     // Serve the loaded board's own file at the URL the frontend fetches it from
     // (`/boards/<name>`), so the 2D/3D viewer renders the real geometry for any
     // board, not just the demo boards baked into dist/.
