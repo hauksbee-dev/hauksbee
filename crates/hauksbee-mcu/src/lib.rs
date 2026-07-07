@@ -47,6 +47,9 @@ pub mod renode;
 #[cfg(feature = "qemu")]
 pub mod qemu;
 
+/// Data-driven MCU/SoC descriptors: the `db/mcu/*.soc.toml` loader (06 §2).
+pub mod soc;
+
 pub use traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 
 use std::path::{Path, PathBuf};
@@ -111,6 +114,8 @@ pub use renode::{AdcChannelMap, AdcInject, RenodeBackend, RenodeConfig};
 
 #[cfg(feature = "qemu")]
 pub use qemu::{QemuBackend, QemuConfig};
+
+pub use soc::{Backend, SocConfig, SocError};
 
 #[cfg(test)]
 mod firmware_guard_tests {

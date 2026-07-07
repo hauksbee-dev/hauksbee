@@ -1,0 +1,63 @@
+# STM32F103C8 "blue pill": PA-PG, USART1, 8 MHz HSI.
+# The configuration the hauksbee STM32 demo board binds to.
+#
+# ODR FOOTGUN (the reason this data belongs in a reviewed file, 06 §2): the
+# STM32F1 GPIO output-data register is at offset 0x0C. The F4 family puts it at
+# 0x14 — read the wrong offset and you observe the wrong register. Compare
+# stm32f4_discovery.soc.toml, which sets odr_offset = 0x14.
+[soc]
+backend = "renode"
+machine = "f103"
+platform_repl = "@platforms/cpus/stm32f103.repl"
+cpu_path = "sysbus.cpu"
+uart = "sysbus.usart1"
+frequency_hz = 8_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "STM32F103 (ARM Cortex-M3)"
+
+[[soc.ports]]
+letter = "A"
+peripheral = "gpioPortA"
+odr_offset = 0x0C
+width = 16
+[[soc.ports]]
+letter = "B"
+peripheral = "gpioPortB"
+odr_offset = 0x0C
+width = 16
+[[soc.ports]]
+letter = "C"
+peripheral = "gpioPortC"
+odr_offset = 0x0C
+width = 16
+[[soc.ports]]
+letter = "D"
+peripheral = "gpioPortD"
+odr_offset = 0x0C
+width = 16
+[[soc.ports]]
+letter = "E"
+peripheral = "gpioPortE"
+odr_offset = 0x0C
+width = 16
+[[soc.ports]]
+letter = "F"
+peripheral = "gpioPortF"
+odr_offset = 0x0C
+width = 16
+[[soc.ports]]
+letter = "G"
+peripheral = "gpioPortG"
+odr_offset = 0x0C
+width = 16
+
+[soc.i2c]
+# The STM32F103 thermostat firmware uses i2c1.
+controllers = ["i2c1"]
+
+[soc.spi]
+# SPI1 is not in the stock stm32f103.repl; we add it via `extra_repl` when an SPI
+# slave is attached. A single-line definition without the IRQ connection works
+# for polling-mode firmware (the firmware checks SR flags, not the NVIC).
+controllers = ["spi1"]
+extra_repl = "spi1: SPI.STM32SPI @ sysbus 0x40013000"

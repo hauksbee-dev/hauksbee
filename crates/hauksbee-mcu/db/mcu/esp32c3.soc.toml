@@ -1,0 +1,21 @@
+# ESP32-C3 (RISC-V RV32IMC), 160 MHz. Same RAM-mailbox GPIO layout as the Xtensa
+# parts (see esp32.soc.toml); the difference is the ISA — this is a RISC-V core,
+# so expected_e_machine = EM_RISCV and arch = riscv32. Loading an Xtensa image
+# here is the mistake the arch gate refuses (crate::elf).
+[soc]
+backend = "qemu"
+arch = "riscv32"
+machine = "esp32c3"
+icount_shift = 2
+frequency_hz = 160_000_000
+expected_e_machine = "EM_RISCV"
+mcu_label = "ESP32-C3 (RISC-V RV32IMC)"
+
+[[soc.banks]]
+letter = "0"
+out_reg = 0x5000_0000
+in_reg = 0x5000_0004
+width = 32
+
+[soc.i2c]
+buses = ["/machine/soc/i2c0/i2c", "/machine/soc/i2c1/i2c"]
