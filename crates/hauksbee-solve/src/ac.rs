@@ -446,6 +446,42 @@ fn stamp_ac(
                 }
             }
         }
+        // Current-controlled sources: linear and frequency-independent like
+        // E/G — the AC stamp is the transient stamp with real entries. The
+        // control branch index resolves through the SAME layout the transient
+        // path froze, so the F/H coupling column is identical.
+        Device::Cccs {
+            p, n: neg, ctrl_src, gain, ..
+        } => {
+            let cbr = layout
+                .branch(*ctrl_src)
+                .expect("cccs control source owns a branch unknown");
+            if let Some(pi) = n(*p) {
+                sys.add(pi, cbr, Complex64::new(*gain, 0.0));
+            }
+            if let Some(ni) = n(*neg) {
+                sys.add(ni, cbr, Complex64::new(-*gain, 0.0));
+            }
+        }
+        Device::Ccvs {
+            p, n: neg, ctrl_src, transres, ..
+        } => {
+            // Branch row `v_p - v_n - transres*i_ctrl = 0`, RHS 0 (a dependent
+            // source is never an AC drive).
+            let br = layout.branch(id).expect("ccvs has a branch unknown");
+            let cbr = layout
+                .branch(*ctrl_src)
+                .expect("ccvs control source owns a branch unknown");
+            if let Some(pi) = n(*p) {
+                sys.add(pi, br, Complex64::new(1.0, 0.0));
+                sys.add(br, pi, Complex64::new(1.0, 0.0));
+            }
+            if let Some(ni) = n(*neg) {
+                sys.add(ni, br, Complex64::new(-1.0, 0.0));
+                sys.add(br, ni, Complex64::new(-1.0, 0.0));
+            }
+            sys.add(br, cbr, Complex64::new(-*transres, 0.0));
+        }
     }
 }
 
