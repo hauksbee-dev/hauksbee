@@ -252,6 +252,10 @@ fn event_loop(
                 if let Some(sub) = &u.substitution {
                     state.set_chip_substitution(sub.clone());
                 }
+                // Feed the scope's ring buffers from the SAME stream (each drained
+                // update is one time sample). Only probed nets are buffered; this
+                // adds no second co-sim path.
+                state.scope.record(u.sim_ms, &u.net_voltages);
                 last_update = Some(u);
                 if done {
                     cosim = None;
@@ -330,7 +334,10 @@ fn event_loop(
                     h.stop();
                     cosim = None;
                 } else {
-                    // Start the co-sim worker.
+                    // Start the co-sim worker. Drop any previous run's scope
+                    // samples (sim time restarts at 0) but keep the probes, so
+                    // an old trace never splices onto the new run's.
+                    state.scope.clear_samples();
                     state.focus = Pane::Cosim;
                     last_update = Some(CosimUpdate {
                         chunk_ms,
@@ -344,6 +351,12 @@ fn event_loop(
                         chunk_ms,
                     ));
                 }
+            }
+            // Probe: toggle the highlighted net onto/off the scope. Only fires
+            // from the Nets & Parts list with a net row selected (the state
+            // method enforces that); anywhere else `p` is a no-op.
+            KeyCode::Char('p') => {
+                let _ = state.toggle_probe_selected();
             }
             _ => {}
         }
