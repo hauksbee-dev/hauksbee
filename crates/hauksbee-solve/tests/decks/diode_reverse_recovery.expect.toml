@@ -1,0 +1,15 @@
+# Reverse recovery: the storage-time plateau and the turn-off tail are the
+# observables (both agree with ngspice to a few ns / a few mV). The worst
+# pointwise error (measured 3.9e-2 vs ngspice-46) sits at the tail's zero
+# crossing, where |V| is at the harness's 1%-of-full-scale floor and a
+# millivolt-scale offset (dominated by interpolating ngspice's 2 ns print
+# grid across a curving 20 V/us edge) reads as percent-scale error. The 5%
+# bar is set from that measured worst case, not loosened blindly.
+analysis = "tran"
+description = "switching diode driven from forward into reverse (recovery tail)"
+full_scale = 2.0
+skip_initial = 0.2e-6
+
+[[probe]]
+expr = "V(a)"
+reltol = 0.05

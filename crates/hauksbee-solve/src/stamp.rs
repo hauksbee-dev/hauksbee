@@ -389,7 +389,7 @@ pub(crate) fn stamp_device<S: StampSink>(
             let val = source_value(ctx, kind);
             stamp_current(sink, ctx.layout, *p, *n, val * ctx.src_scale);
         }
-        Device::Diode { a, k, model, .. } => stamp_diode(ctx, *a, *k, model, sink),
+        Device::Diode { a, k, model, .. } => stamp_diode(ctx, id, *a, *k, model, sink),
         Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, *c, *b, *e, model, sink),
         Device::Mosfet { d, g: gate, s, model, .. } => {
             stamp_mosfet(ctx, *d, *gate, *s, model, sink)
@@ -707,7 +707,24 @@ fn vcrit(is: f64, vt: f64) -> f64 {
 }
 
 /// Evaluate the diode current and conductance at junction voltage `vd`.
-fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -> (f64, f64) {
+///
+/// Three regions:
+/// * forward / weak reverse (`vd >= -3 n·Vt`): the Shockley exponential;
+/// * reverse (`-bv <= vd < -3 n·Vt`): tiny constant leakage `-Is`;
+/// * breakdown (`vd < -bv`, only when the model gives a finite `bv`):
+///   `i = -Is·exp(-(bv+vd)/(n·Vt))` — ngspice's `-IBV·exp(-(BV+v)/VT)` shape
+///   with `Is` standing in for `IBV`. The SIGN is the point: the current is
+///   REVERSE (negative, cathode->anode) and grows exponentially as `vd` drops
+///   below `-bv`. Using `Is` as the scale makes the current CONTINUOUS at
+///   `vd == -bv` (both branches give `-Is` there); decks that must match an
+///   ngspice `IBV` reconcile by setting `IBV=IS` on the ngspice side. The
+///   exponent is clamped like the BJT's (`exp(40)·Is` bounds the current to a
+///   few kA at typical `Is`), and `stamp_diode` additionally junction-limits
+///   the per-iteration move in MIRRORED coordinates (see there), so a Newton
+///   iterate far past breakdown cannot poison the solve. `bv` defaults to
+///   infinity, which makes the breakdown branch unreachable: existing decks
+///   are bit-identical.
+pub(crate) fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -> (f64, f64) {
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let nvt = model.n * hauksbee_ir_thermal(t_c, temp_on);
     if vd >= -3.0 * nvt {
@@ -715,11 +732,115 @@ fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -> (f64, f64
         let id = is * (e - 1.0);
         let gd = is * e / nvt;
         (id, gd)
-    } else {
+    } else if !model.bv.is_finite() || vd >= -model.bv {
         // Reverse region: tiny linear leakage, conductance ~ gmin handled outside.
         let id = -is;
         let gd = is / nvt * 1e-3;
         (id, gd)
+    } else {
+        // Reverse breakdown: exponentially growing REVERSE current.
+        let e = (-(model.bv + vd) / nvt).min(40.0).exp();
+        let id = -is * e;
+        let gd = is * e / nvt;
+        (id, gd)
+    }
+}
+
+/// SPICE's standard depletion-capacitance knee: below `FC·vj` the physical
+/// `Cj(v) = cjo (1 - v/vj)^-m` applies; above it the singular expression is
+/// replaced by its tangent-matched linear continuation.
+pub(crate) const DIODE_FC: f64 = 0.5;
+
+/// Whether a diode carries charge under the current effects toggles: the
+/// `junction_caps` gate AND at least one charge-producing model field. A
+/// default model (`cjo == 0`, `tt == 0`) never stores charge, so decks whose
+/// diode models predate this physics are bit-identical whatever the toggle.
+#[inline]
+pub(crate) fn diode_has_charge(
+    model: &DiodeModel,
+    effects: &crate::options::DeviceEffects,
+) -> bool {
+    effects.junction_caps && (model.cjo > 0.0 || model.tt > 0.0)
+}
+
+/// Diode stored charge `Q(vd)` and its derivative `C(vd) = dQ/dvd`, the pair
+/// the charge-based companion model integrates. `id`/`gd` are the junction
+/// current and conductance already evaluated at the same `vd` (diffusion
+/// charge is `tt·id`, diffusion capacitance `tt·gd`).
+///
+/// Junction (depletion) part, SPICE-standard with `FC = 0.5`:
+/// * `vd < FC·vj`:  `Cj = cjo·(1 - vd/vj)^-m`,
+///   `Qj = cjo·vj·(1 - (1 - vd/vj)^(1-m))/(1-m)` (log form at `m == 1`);
+/// * `vd >= FC·vj`: the linearized continuation
+///   `Cj = cjo·(F3 + m·vd/vj)/F2`,
+///   `Qj = cjo·(F1 + (F3·(vd - FC·vj) + (m/2vj)·(vd² - (FC·vj)²))/F2)`
+///   with `F1 = vj·(1-(1-FC)^(1-m))/(1-m)`, `F2 = (1-FC)^(1+m)`,
+///   `F3 = 1 - FC·(1+m)`.
+///
+/// At the knee both `Cj` and `dCj/dv` match (`Cj(FC·vj) = cjo·(1-FC)^-m`,
+/// slope `cjo·m/vj·(1-FC)^-(1+m)` from either side), so `Q` is C²-continuous:
+/// Newton sees no derivative kink to chatter on. The continuation exists
+/// because the physical form is singular at `vd == vj` and a forward-biased
+/// junction crosses `FC·vj` on every switching edge.
+///
+/// Stamping from `Q` (not from `C·dv/dt` with `C` frozen over the step) is
+/// what conserves charge for a NONLINEAR capacitance: the companion integrates
+/// `i = dQ/dt` exactly in `Q`, and Newton linearizes `Q(v)` afresh each
+/// iteration with `dQ/dv = C(v)`.
+pub(crate) fn diode_charge(model: &DiodeModel, vd: f64, id: f64, gd: f64) -> (f64, f64) {
+    let mut q = 0.0;
+    let mut c = 0.0;
+    if model.cjo > 0.0 {
+        let (cjo, vj, m) = (model.cjo, model.vj, model.m);
+        let fcv = DIODE_FC * vj;
+        if vd < fcv {
+            let arg = 1.0 - vd / vj;
+            let sarg = arg.powf(-m);
+            c += cjo * sarg;
+            q += if (1.0 - m).abs() < 1e-9 {
+                -cjo * vj * arg.ln()
+            } else {
+                // arg^(1-m) == arg * arg^-m, reusing the power already paid.
+                cjo * vj * (1.0 - arg * sarg) / (1.0 - m)
+            };
+        } else {
+            let f2 = (1.0 - DIODE_FC).powf(1.0 + m);
+            let f3 = 1.0 - DIODE_FC * (1.0 + m);
+            let f1 = if (1.0 - m).abs() < 1e-9 {
+                -vj * (1.0 - DIODE_FC).ln()
+            } else {
+                vj * (1.0 - (1.0 - DIODE_FC).powf(1.0 - m)) / (1.0 - m)
+            };
+            c += cjo * (f3 + m * vd / vj) / f2;
+            q += cjo * (f1 + (f3 * (vd - fcv) + (m / (2.0 * vj)) * (vd * vd - fcv * fcv)) / f2);
+        }
+    }
+    if model.tt > 0.0 {
+        q += model.tt * id;
+        c += model.tt * gd;
+    }
+    (q, c)
+}
+
+/// §3.4 (`DeviceEffects` contract): a toggle the stamp cannot honor for a
+/// device must LOG ONCE rather than silently ignore the model fields. Each
+/// dishonored (effect, device) pair owns one flag; tests read the flag.
+pub(crate) mod effect_log {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Diode `rs` is parsed but not stamped (series node work is dev-plan 04
+    /// §3.2 territory, landing with the BJT's rb/re/rc).
+    pub static DIODE_SERIES_R: AtomicBool = AtomicBool::new(false);
+    /// BJT `cje/cjc/tf/tr` are parsed but not stamped (dev-plan 04 §3.2).
+    pub static BJT_JUNCTION_CAPS: AtomicBool = AtomicBool::new(false);
+    /// BJT `rb/re/rc` are parsed but not stamped (dev-plan 04 §3.2).
+    pub static BJT_SERIES_R: AtomicBool = AtomicBool::new(false);
+
+    /// Log `msg` the first time this flag fires; a no-op afterwards.
+    pub fn log_once(flag: &AtomicBool, msg: &str) {
+        if !flag.swap(true, Ordering::Relaxed) {
+            eprintln!("[effects] {msg}");
+        }
     }
 }
 
@@ -731,6 +852,7 @@ fn hauksbee_ir_thermal(t_c: f64, temp_on: bool) -> f64 {
 
 fn stamp_diode<S: StampSink>(
     ctx: &StampCtx,
+    id: DeviceId,
     a: NodeId,
     k: NodeId,
     model: &DiodeModel,
@@ -743,9 +865,33 @@ fn stamp_diode<S: StampSink>(
     let nvt = model.n * vt;
     let vc = vcrit(is, nvt);
 
+    // §3.4: series resistance is promised by the toggle but not stamped yet
+    // (series-node insertion lands with the BJT's rb/re/rc, dev-plan 04 §3.2).
+    if ctx.opts.effects.series_resistance && model.rs > 0.0 {
+        effect_log::log_once(
+            &effect_log::DIODE_SERIES_R,
+            "series_resistance: diode RS is not stamped yet (dev-plan 04 §3.2); \
+             the model field is ignored",
+        );
+    }
+
     let vd_raw = ctx.v(a) - ctx.v(k);
-    // Use the last accepted junction voltage as the limiting anchor.
-    let mut vd = pnjlim(vd_raw, ctx.last_vd(a, k), nvt, vc);
+    let vd_last = ctx.last_vd(a, k);
+    // Junction limiting. The forward exponential is limited by pnjlim toward
+    // vcrit; the breakdown exponential is the same curve MIRRORED about
+    // vd = -bv, so in the breakdown region (vd below -bv, with a 10·nvt skirt,
+    // ngspice's region test) the per-iteration move is limited in mirrored
+    // coordinates vdtemp = -(vd + bv) — pnjlim toward the same vcrit — and
+    // mapped back. Without this, one Newton iterate landing volts past -bv
+    // evaluates exp() at full depth and poisons the step exactly the way the
+    // unlimited forward branch used to. `bv == INFINITY` (the default) makes
+    // the region test unsatisfiable, keeping every existing deck on the
+    // byte-for-byte identical pnjlim path.
+    let mut vd = if model.bv.is_finite() && vd_raw < (10.0 * nvt - model.bv).min(0.0) {
+        -(pnjlim(-(vd_raw + model.bv), -(vd_last + model.bv), nvt, vc) + model.bv)
+    } else {
+        pnjlim(vd_raw, vd_last, nvt, vc)
+    };
 
     // STAGED-DC diode pre-limit (the relaxed-seed overflow cure). On the staged
     // path only (branch_reg > 0), HARD-CLAMP the junction voltage so the very
@@ -766,12 +912,44 @@ fn stamp_diode<S: StampSink>(
         }
     }
 
-    let (id, gd) = diode_eval(model, vd, t_c, temp_on);
-    let gd = gd.max(ctx.opts.gmin);
+    let (idc, gd_raw) = diode_eval(model, vd, t_c, temp_on);
+    let gd = gd_raw.max(ctx.opts.gmin);
     // Newton equivalent current: ieq = id - gd*vd.
-    let ieq = id - gd * vd;
+    let ieq = idc - gd * vd;
     stamp_cond(sink, ctx.layout, a, k, gd);
     stamp_current(sink, ctx.layout, a, k, ieq);
+
+    // Charge storage (dev-plan 04 §3.1): junction (depletion) + diffusion
+    // capacitance as a CHARGE-BASED companion in parallel with the DC
+    // junction. Open at DC exactly like a capacitor; only active when the
+    // model actually stores charge AND effects.junction_caps is on, so
+    // charge-free decks are bit-identical whatever the toggle.
+    if ctx.dc || !diode_has_charge(model, &ctx.opts.effects) {
+        return;
+    }
+    let (q, c) = diode_charge(model, vd, idc, gd_raw);
+    // The companion integrates i = dQ/dt in Q itself (charge conservation for
+    // a voltage-DEPENDENT capacitance): with the same IntegCoeffs the linear
+    // capacitor uses, the rule's discrete current is
+    //   i_hat(v) = coeffs.g·Q(v) - ieq_hist,
+    // where ieq_hist carries the Q/dQ history exactly as the capacitor's
+    // history term carries C·v_prev (= Q_prev) and C·dv_prev (= i_prev): the
+    // diode's ReactiveState slots hold CHARGE in x1/x2 and dQ/dt in dx1, so
+    // this rides the identical integration machinery — the linear capacitor
+    // IS this formula specialized to Q = C·v. Newton then linearizes Q(v) at
+    // the iterate with dQ/dv = C(vd):
+    //   i_lin(v) = geq·v + (i_hat(vd) - geq·vd),  geq = coeffs.g·C(vd).
+    let sl = id.0 as usize;
+    let q_prev = ctx.state.x1[sl];
+    let ieq_hist = match ctx.opts.integration {
+        Integration::Trapezoidal => ctx.coeffs.g * q_prev + ctx.state.dx1[sl],
+        Integration::Gear2 => ctx.coeffs.a1 * q_prev - ctx.coeffs.a2 * ctx.state.x2[sl],
+        Integration::BackwardEuler => ctx.coeffs.a1 * q_prev,
+    };
+    let geq = ctx.coeffs.g * c;
+    let ieq_q = (ctx.coeffs.g * q - ieq_hist) - geq * vd;
+    stamp_cond(sink, ctx.layout, a, k, geq);
+    stamp_current(sink, ctx.layout, a, k, ieq_q);
 }
 
 fn stamp_bjt<S: StampSink>(
@@ -787,6 +965,29 @@ fn stamp_bjt<S: StampSink>(
     let t_c = ctx.opts.model_temp();
     let is = if temp_on { model.is_at(t_c) } else { model.is };
     let vt = hauksbee_ir_thermal(t_c, temp_on);
+
+    // §3.4: toggles this stamp cannot honor yet log once instead of silently
+    // ignoring the parsed model fields (BJT charge storage and series
+    // resistances are dev-plan 04 §3.2, not landed). The MOSFET model carries
+    // no capacitance/series fields at all, so there is nothing for it to
+    // dishonor until §3.3 adds them.
+    if ctx.opts.effects.junction_caps
+        && (model.cje > 0.0 || model.cjc > 0.0 || model.tf > 0.0 || model.tr > 0.0)
+    {
+        effect_log::log_once(
+            &effect_log::BJT_JUNCTION_CAPS,
+            "junction_caps: BJT charge storage (cje/cjc/tf/tr) is not stamped yet \
+             (dev-plan 04 §3.2); the toggle is honored for diodes only",
+        );
+    }
+    if ctx.opts.effects.series_resistance && (model.rb > 0.0 || model.re > 0.0 || model.rc > 0.0)
+    {
+        effect_log::log_once(
+            &effect_log::BJT_SERIES_R,
+            "series_resistance: BJT rb/re/rc are not stamped yet (dev-plan 04 §3.2); \
+             the model fields are ignored",
+        );
+    }
 
     // Internal junction voltages with polarity folded in.
     let vbe = sign * (ctx.v(b) - ctx.v(e));
@@ -1303,6 +1504,210 @@ impl StampCtx<'_> {
     }
 }
 
+
+#[cfg(test)]
+mod diode_physics_tests {
+    use super::*;
+    use crate::system::ReactiveState;
+    use hauksbee_ir::{Circuit, Device};
+
+    fn charge_model() -> DiodeModel {
+        DiodeModel {
+            cjo: 4e-12,
+            vj: 0.7,
+            m: 0.45,
+            tt: 20e-9,
+            ..DiodeModel::default()
+        }
+    }
+
+    /// The FC-knee continuation must be C1 in the CAPACITANCE (C and dC/dv
+    /// continuous), i.e. C2 in the charge — the property that keeps Newton
+    /// from chattering when a switching edge crosses FC·vj.
+    #[test]
+    fn junction_cap_knee_is_c1_continuous() {
+        let m = charge_model();
+        let knee = DIODE_FC * m.vj;
+        let eps = 1e-9;
+        let eval = |vd: f64| {
+            let (idc, gd) = diode_eval(&m, vd, 27.0, false);
+            diode_charge(&m, vd, idc, gd)
+        };
+        let (q_lo, c_lo) = eval(knee - eps);
+        let (q_hi, c_hi) = eval(knee + eps);
+        // Q and C continuous across the knee.
+        assert!((q_hi - q_lo).abs() < 1e-6 * q_lo.abs().max(1e-15), "Q jump at knee");
+        assert!((c_hi - c_lo).abs() < 1e-6 * c_lo, "C jump at knee");
+        // dC/dv continuous: one-sided slopes agree.
+        let d = 1e-6;
+        let slope_lo = (eval(knee - eps).1 - eval(knee - eps - d).1) / d;
+        let slope_hi = (eval(knee + eps + d).1 - eval(knee + eps).1) / d;
+        assert!(
+            (slope_hi - slope_lo).abs() < 1e-3 * slope_lo.abs(),
+            "dC/dv kink at knee: {slope_lo:e} vs {slope_hi:e}"
+        );
+    }
+
+    /// Analytic sanity below the knee: C = cjo (1 - v/vj)^-m, and Q'(v) == C
+    /// by finite difference (the charge really is the integral of the cap).
+    #[test]
+    fn junction_charge_is_integral_of_cap() {
+        let m = charge_model();
+        for &vd in &[-5.0, -1.0, -0.2, 0.0, 0.2, 0.34, 0.4, 0.6, 0.9] {
+            let (idc, gd) = diode_eval(&m, vd, 27.0, false);
+            let (_q, c) = diode_charge(&m, vd, idc, gd);
+            let d = 1e-7;
+            let q_of = |v: f64| {
+                let (i2, g2) = diode_eval(&m, v, 27.0, false);
+                diode_charge(&m, v, i2, g2).0
+            };
+            let dq = (q_of(vd + d) - q_of(vd - d)) / (2.0 * d);
+            assert!(
+                (dq - c).abs() < 1e-4 * c.abs().max(1e-18),
+                "dQ/dv != C at vd={vd}: fd={dq:e} c={c:e}"
+            );
+        }
+    }
+
+    /// Breakdown branch: REVERSE (negative) current growing exponentially
+    /// below -bv, continuous with the -Is leakage at -bv, and bounded by the
+    /// exponent clamp far past breakdown.
+    #[test]
+    fn breakdown_current_is_reverse_continuous_and_bounded() {
+        let m = DiodeModel { bv: 6.2, ..DiodeModel::default() };
+        let nvt = m.n * hauksbee_ir::thermal_voltage_c(27.0);
+        let (i_at, _) = diode_eval(&m, -6.2, 27.0, false);
+        assert!((i_at + m.is).abs() < 1e-3 * m.is, "not continuous at -bv: {i_at:e}");
+        let (i_past, g_past) = diode_eval(&m, -6.2 - 5.0 * nvt, 27.0, false);
+        assert!(i_past < 0.0, "breakdown current must be REVERSE, got {i_past:e}");
+        assert!(
+            (i_past + m.is * 5.0f64.exp()).abs() < 1e-6 * m.is * 5.0f64.exp(),
+            "wrong exponential shape: {i_past:e}"
+        );
+        assert!(g_past > 0.0);
+        // Deep past breakdown: exponent clamped, current finite.
+        let (i_deep, g_deep) = diode_eval(&m, -1e6, 27.0, false);
+        assert!(i_deep.is_finite() && g_deep.is_finite());
+        assert!((i_deep + m.is * 40.0f64.exp()).abs() < 1e-6 * m.is * 40.0f64.exp());
+        // bv = INFINITY keeps the old reverse branch bit-identical.
+        let m_inf = DiodeModel::default();
+        let (i_rev, g_rev) = diode_eval(&m_inf, -100.0, 27.0, false);
+        assert_eq!(i_rev, -m_inf.is);
+        assert_eq!(g_rev, m_inf.is / nvt * 1e-3);
+    }
+
+    /// §3.4 contract, stamp level: flipping `junction_caps` on a model WITH
+    /// cjo/tt changes the stamped system (charge terms appear); on a model
+    /// WITHOUT charge fields the two stamps are bit-identical.
+    #[test]
+    fn junction_caps_toggle_changes_diode_stamp() {
+        let stamp_with = |model: DiodeModel, junction_caps: bool| {
+            let mut c = Circuit::new();
+            let a = c.node("a");
+            c.add(Device::Diode { name: "D1".into(), a, k: hauksbee_ir::NodeId::GROUND, model });
+            let layout = Layout::new(&c);
+            let mut m = SparseMatrix::new(layout.size);
+            reserve_pattern(&c, &layout, &mut m);
+            let x = vec![0.62];
+            let mut state = ReactiveState::new(1);
+            state.x1[0] = 1e-12; // nonzero history so RHS terms show too
+            let mut opts = SolverOptions::default();
+            opts.effects.junction_caps = junction_caps;
+            let coeffs =
+                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
+            let spdt = std::collections::HashMap::new();
+            let ctx = StampCtx {
+                circuit: &c,
+                layout: &layout,
+                opts: &opts,
+                x: &x,
+                x_prev: &x,
+                time: 0.0,
+                coeffs,
+                state: &state,
+                dc: false,
+                use_ic: false,
+                gmin: 0.0,
+                src_scale: 1.0,
+                branch_reg: 0.0,
+                cmp_freeze: None,
+                switch_freeze: None,
+                spdt_sibling: &spdt,
+            };
+            let mut rhs = vec![0.0; layout.size];
+            let mut mat = m;
+            stamp_all(&ctx, &mut mat, &mut rhs);
+            let diag = mat.row(0).iter().find(|(col, _)| *col == 0).map(|&(_, v)| v).unwrap();
+            (diag, rhs[0])
+        };
+        // Charge-carrying model: the toggle must CHANGE the stamp.
+        let (g_on, r_on) = stamp_with(charge_model(), true);
+        let (g_off, r_off) = stamp_with(charge_model(), false);
+        assert!(g_on > g_off, "junction_caps on must add companion conductance");
+        assert!(r_on != r_off, "junction_caps on must add history RHS terms");
+        // Charge-free (default) model: bit-identical either way.
+        let (g_on0, r_on0) = stamp_with(DiodeModel::default(), true);
+        let (g_off0, r_off0) = stamp_with(DiodeModel::default(), false);
+        assert_eq!(g_on0.to_bits(), g_off0.to_bits());
+        assert_eq!(r_on0.to_bits(), r_off0.to_bits());
+    }
+
+    /// §3.4 contract: toggles the stamps cannot honor yet (BJT charge storage
+    /// and series resistances, diode RS) LOG ONCE instead of silently
+    /// ignoring the parsed model fields — the once-flags flip when such a
+    /// model is stamped with the effect enabled.
+    #[test]
+    fn dishonored_effects_log_once() {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let b = c.node("b");
+        c.add(Device::Diode {
+            name: "D1".into(),
+            a,
+            k: hauksbee_ir::NodeId::GROUND,
+            model: DiodeModel { rs: 0.5, ..DiodeModel::default() },
+        });
+        c.add(Device::Bjt {
+            name: "Q1".into(),
+            c: b,
+            b: a,
+            e: hauksbee_ir::NodeId::GROUND,
+            model: BjtModel { cje: 1e-12, rb: 10.0, ..BjtModel::default() },
+        });
+        let layout = Layout::new(&c);
+        let mut m = SparseMatrix::new(layout.size);
+        reserve_pattern(&c, &layout, &mut m);
+        let x = vec![0.6, 3.0];
+        let state = ReactiveState::new(2);
+        let opts = SolverOptions::default();
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, true);
+        let spdt = std::collections::HashMap::new();
+        let ctx = StampCtx {
+            circuit: &c,
+            layout: &layout,
+            opts: &opts,
+            x: &x,
+            x_prev: &x,
+            time: 0.0,
+            coeffs,
+            state: &state,
+            dc: false,
+            use_ic: false,
+            gmin: 0.0,
+            src_scale: 1.0,
+            branch_reg: 0.0,
+            cmp_freeze: None,
+            switch_freeze: None,
+            spdt_sibling: &spdt,
+        };
+        let mut rhs = vec![0.0; layout.size];
+        stamp_all(&ctx, &mut m, &mut rhs);
+        use std::sync::atomic::Ordering;
+        assert!(effect_log::DIODE_SERIES_R.load(Ordering::Relaxed));
+        assert!(effect_log::BJT_JUNCTION_CAPS.load(Ordering::Relaxed));
+        assert!(effect_log::BJT_SERIES_R.load(Ordering::Relaxed));
+    }
+}
 
 #[cfg(test)]
 mod bench {

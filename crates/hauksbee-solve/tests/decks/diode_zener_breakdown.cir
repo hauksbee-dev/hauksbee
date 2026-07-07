@@ -1,0 +1,12 @@
+zener-style reverse breakdown clamp (dev-plan 04 s3.1)
+* Drive the diode past BV and assert the clamp voltage. IBV=IS on the model
+* card is the reconciliation knob: our breakdown branch is
+* i = -Is*exp(-(BV+v)/(n*Vt)), which is ngspice's -IBV*exp(-(BV+v)/VT) shape
+* with IBV pinned to IS; setting IBV=IS makes the two knees coincide
+* (verified: ngspice-46 gives v(out)=6.8846 V = BV + n*Vt*ln(i/IS)).
+V1 in 0 DC 10
+R1 in out 1k
+D1 0 out DZ
+.model DZ D(IS=1e-14 N=1 BV=6.2 IBV=1e-14)
+.op
+.end
