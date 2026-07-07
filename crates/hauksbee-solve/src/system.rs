@@ -6,7 +6,7 @@
 //! the system matrix once; the index is stable for the whole run so the sparse
 //! pattern stays frozen.
 
-use hauksbee_ir::{Circuit, Device, DeviceId};
+use hauksbee_ir::{BOutput, Circuit, Device, DeviceId};
 
 /// Maps circuit nodes and extra branches to dense unknown indices.
 ///
@@ -93,12 +93,20 @@ impl Layout {
             // column, which `Layout::branch(ctrl_src)` resolves after this
             // freeze (that is the `branch_index_of` accessor the F/H stamps and
             // `reserve_pattern` consume).
+            // A V-output B-source (`Bxxx p n V={expr}`) fixes its output-port
+            // voltage like a VCVS/CCVS, so it owns the same branch-current
+            // unknown; the I-output form injects current like an Isource and
+            // adds nothing.
             if matches!(
                 dev,
                 Device::Vsource { .. }
                     | Device::Inductor { .. }
                     | Device::Vcvs { .. }
                     | Device::Ccvs { .. }
+                    | Device::Behavioral {
+                        output: BOutput::Voltage,
+                        ..
+                    }
             ) {
                 branch_of[id.0 as usize] = Some(next);
                 next += 1;

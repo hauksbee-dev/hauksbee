@@ -1,0 +1,8 @@
+b-source arbitrary time waveform into an rc low-pass
+B1 src 0 V={0.5*sin(6.283185307179586e3*time) + 0.25*sin(1.8849555921538758e4*time)}
+R1 src out 1k
+C1 out 0 100n
+.tran 5u 2m 0 0.5u
+.print tran v(out)
+.options reltol=1e-4
+.end

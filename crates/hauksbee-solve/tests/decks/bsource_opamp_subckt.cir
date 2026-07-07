@@ -1,0 +1,13 @@
+behavioral opamp macro in a subckt, closed-loop x10
+.subckt bamp inp inn outp gain=1000 vmax=4
+Bamp outp 0 V={vmax*tanh(gain*(v(inp)-v(inn))/vmax)}
+.ends
+Vin in 0 SIN(0 0.1 1k)
+X1 in fb out bamp gain=1000 vmax=4
+R1 out fb 9k
+R2 fb 0 1k
+RL out 0 10k
+.tran 5u 2m
+.print tran v(out)
+.options reltol=1e-4
+.end
