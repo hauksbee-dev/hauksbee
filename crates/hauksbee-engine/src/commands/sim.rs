@@ -16,9 +16,9 @@ pub const EXIT_MALFORMED_DECK: i32 = 2;
 pub enum SimFormat {
     /// One column per probe, one row per timepoint (or one row for `.op`).
     Csv,
-    /// ngspice ASCII rawfile — not yet implemented (plan step 14).
+    /// ngspice ASCII rawfile — the format `ngnutmeg`/`gaw`/`spicelib` read.
     Raw,
-    /// CSV and rawfile side by side — not yet implemented (plan step 14).
+    /// CSV and rawfile side by side (needs `--out` so the two files have names).
     Both,
 }
 
@@ -35,8 +35,8 @@ pub fn run(
 ) -> anyhow::Result<()> {
     use hauksbee_ir::SpiceLoader;
     use hauksbee_solve::{
-        default_probes, run_ac, run_dc, run_op, run_tran, DcInit, Integration, Probe, SimOutput,
-        SolverOptions, StepControl,
+        default_probes, run_ac, run_dc, run_op, run_tran, write_ascii_rawfile, DcInit, Integration,
+        Probe, RawPlot, SimOutput, SolverOptions, StepControl,
     };
 
     // Read the deck. A missing file is an ordinary CLI error (exit 1) with an
@@ -59,23 +59,31 @@ pub fn run(
         }
     };
 
-    // Output format: only CSV is implemented. Rawfile refuses loudly (plan
-    // step 14) rather than emitting nothing or the wrong thing.
-    if matches!(format, SimFormat::Raw | SimFormat::Both) {
+    // `--format both` writes two files side by side, so it needs a base name to
+    // derive them from. Refuse early (rather than dump a rawfile to a terminal)
+    // if there is nowhere to put them.
+    if matches!(format, SimFormat::Both) && out.is_none() {
         eprintln!(
-            "error: --format {} is not yet implemented (ngspice rawfile output is \
-             SPICE-compat plan step 14). Use --format csv (the default).",
-            match format {
-                SimFormat::Raw => "raw",
-                SimFormat::Both => "both",
-                SimFormat::Csv => unreachable!(),
-            }
+            "error: --format both writes a CSV and a rawfile side by side, so it needs \
+             --out <FILE> to name them (e.g. --out results.csv writes results.csv and \
+             results.raw). Use --format csv or --format raw to print a single format to stdout."
         );
-        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+        std::process::exit(EXIT_MALFORMED_DECK);
     }
+
+    // The deck's title line (SPICE convention: line 1) becomes the rawfile
+    // `Title:`. Fall back to a stable placeholder when the deck omits it.
+    let title = text
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("hauksbee sim")
+        .to_string();
 
     // Choose the analysis: an explicit flag wins; otherwise a `.tran` card means
     // transient and anything else means the operating point.
+    #[derive(Clone, Copy)]
     enum Analysis {
         Op,
         Tran,
@@ -242,20 +250,80 @@ pub fn run(
         }
     };
 
-    // Serialize to CSV and write to --out or stdout.
-    let csv = sim_output_to_csv(&output);
-    match out {
-        Some(path) => {
-            std::fs::write(path, csv)
-                .map_err(|e| anyhow::anyhow!("writing '{}': {e}", path.display()))?;
-            eprintln!(
-                "wrote {} row(s) x {} column(s) to {}",
-                output.rows.len(),
-                output.columns.len(),
-                path.display()
-            );
+    // The rawfile writer lives solve-side next to SimOutput; the CLI only needs
+    // to tell it which plot this is (the SimOutput does not record its analysis).
+    let plot = match analysis {
+        Analysis::Op => RawPlot::OperatingPoint,
+        Analysis::Tran => RawPlot::Transient,
+        Analysis::Dc => RawPlot::Dc,
+        Analysis::Ac => RawPlot::Ac,
+    };
+
+    // Path rules (documented in --help via SimFormat):
+    //   raw  + --out X  -> write the rawfile to X if X ends `.raw`, else to
+    //                      X-with-`.raw` (so `--out r.csv` -> `r.raw`).
+    //   raw  + no --out -> print the rawfile to stdout.
+    //   both + --out X  -> CSV to X (or X-with-`.csv` if X ends `.raw`) AND
+    //                      rawfile to X-with-`.raw`, side by side.
+    //   csv keeps its existing behavior (X or stdout).
+    let raw_path = |base: &std::path::Path| -> std::path::PathBuf {
+        if base.extension().and_then(|e| e.to_str()) == Some("raw") {
+            base.to_path_buf()
+        } else {
+            base.with_extension("raw")
         }
-        None => print!("{csv}"),
+    };
+    let announce = |path: &std::path::Path| {
+        eprintln!(
+            "wrote {} row(s) x {} column(s) to {}",
+            output.rows.len(),
+            output.columns.len(),
+            path.display()
+        );
+    };
+
+    match format {
+        SimFormat::Csv => {
+            let csv = sim_output_to_csv(&output);
+            match out {
+                Some(path) => {
+                    std::fs::write(path, csv)
+                        .map_err(|e| anyhow::anyhow!("writing '{}': {e}", path.display()))?;
+                    announce(path);
+                }
+                None => print!("{csv}"),
+            }
+        }
+        SimFormat::Raw => {
+            let raw = write_ascii_rawfile(&output, plot, &title);
+            match out {
+                Some(base) => {
+                    let path = raw_path(base);
+                    std::fs::write(&path, raw)
+                        .map_err(|e| anyhow::anyhow!("writing '{}': {e}", path.display()))?;
+                    announce(&path);
+                }
+                None => print!("{raw}"),
+            }
+        }
+        SimFormat::Both => {
+            // `out` is Some here (refused above when it is not).
+            let base = out.expect("--format both requires --out (refused above)");
+            let csv_path = if base.extension().and_then(|e| e.to_str()) == Some("raw") {
+                base.with_extension("csv")
+            } else {
+                base.to_path_buf()
+            };
+            let raw = raw_path(base);
+            let csv_text = sim_output_to_csv(&output);
+            std::fs::write(&csv_path, csv_text)
+                .map_err(|e| anyhow::anyhow!("writing '{}': {e}", csv_path.display()))?;
+            announce(&csv_path);
+            let raw_text = write_ascii_rawfile(&output, plot, &title);
+            std::fs::write(&raw, raw_text)
+                .map_err(|e| anyhow::anyhow!("writing '{}': {e}", raw.display()))?;
+            announce(&raw);
+        }
     }
     Ok(())
 }
