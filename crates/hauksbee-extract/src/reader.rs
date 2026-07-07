@@ -1,0 +1,276 @@
+//! The board-format reader registry.
+//!
+//! Extraction used to pick a format with one hard-coded substring sniff (a
+//! 512-char `head.contains(...)` ladder inside `ExtractedBoard::from_auto`).
+//! Adding or reordering a format meant editing that ladder, and the failure
+//! mode for an unknown file was whatever the last fallback (`ipc356`) happened
+//! to say.
+//!
+//! This module replaces the ladder with a small registry. Each format is a
+//! [`BoardReader`] that owns its own detection ([`BoardReader::detects`]) and
+//! its own parse ([`BoardReader::read`]). The [`Registry`] holds them in a
+//! documented order and, when nothing matches, reports *what it tried*
+//! ([`ReadError::Unrecognized`]).
+//!
+//! # Third-party formats (no dynamic loading)
+//!
+//! A `.so` plugin ABI is deliberately out of scope (Rust's unstable ABI makes
+//! it a maintenance sink; see plan 06 §4). A fork adds a format with one
+//! registration line against the small stable trait:
+//!
+//! ```no_run
+//! use hauksbee_extract::reader::{BoardReader, Registry};
+//! # struct MyReader;
+//! # impl BoardReader for MyReader {
+//! #     fn name(&self) -> &str { "my-format" }
+//! #     fn detects(&self, _b: &[u8], _p: Option<&std::path::Path>) -> bool { false }
+//! #     fn read(&self, _b: &[u8], _p: Option<&std::path::Path>)
+//! #         -> Result<hauksbee_extract::ExtractedBoard, hauksbee_extract::reader::ReadError> {
+//! #         unimplemented!()
+//! #     }
+//! # }
+//! let mut registry = Registry::builtin();
+//! registry.register(Box::new(MyReader)); // consulted before the builtins
+//! ```
+
+use crate::{ExtractError, ExtractedBoard};
+use std::path::Path;
+
+/// The error a [`BoardReader::read`] returns. Aliased to the crate's
+/// [`ExtractError`] so every existing per-format extractor plugs in unchanged;
+/// the trait sketch in plan 06 §4 names it `ReadError`.
+pub type ReadError = ExtractError;
+
+/// One board file format: how to recognise it, and how to read it.
+///
+/// Implementations must keep [`detects`](BoardReader::detects) cheap (a magic /
+/// structural prefix check, never a full parse) and must **not** false-positive
+/// on another format's files — the detection-matrix test
+/// (`tests/reader_matrix.rs`) enforces this pairwise across every fixture.
+pub trait BoardReader: Send + Sync {
+    /// Stable short identifier, e.g. `"kicad-pcb"`. Shown in
+    /// [`ReadError::Unrecognized`] and used as the matrix-test key.
+    fn name(&self) -> &str;
+
+    /// Cheap magic / structure check. Must not false-positive on other formats.
+    ///
+    /// `bytes` is the file content; `path` is a filename hint when the caller
+    /// has one (the content sniff is authoritative — path is only ever a
+    /// tie-break, and the builtin readers do not need it).
+    fn detects(&self, bytes: &[u8], path: Option<&Path>) -> bool;
+
+    /// Parse a file this reader has claimed into an [`ExtractedBoard`].
+    fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError>;
+
+    /// True for formats whose content is binary (OLE2 etc.). The byte-input
+    /// entry point ([`crate::ExtractedBoard::from_auto_bytes`]) only claims
+    /// binary readers, so a text file handed to it falls through to the text
+    /// sniffer instead of being parsed as bytes.
+    fn is_binary(&self) -> bool {
+        false
+    }
+}
+
+/// The largest content prefix any builtin reader inspects for a magic string
+/// (kicad/eagle/netlist magics all sit at byte 0; this window is generous).
+const MAGIC_WINDOW: usize = 2048;
+/// The prefix IPC-D-356 record detection scans. Real fab netlists begin their
+/// `3xx` records right after a short `P`/`C` header (pic_programmer.d356: the
+/// first `317` is at byte ~48); 64 KiB is far past any realistic header.
+const IPC_WINDOW: usize = 64 * 1024;
+
+/// The first ≤512 chars of the content, lossy-decoded from the leading
+/// [`MAGIC_WINDOW`] bytes. This reproduces the legacy sniff's
+/// `text.chars().take(512)` window for the ASCII headers every text board
+/// format uses.
+fn magic_head(bytes: &[u8]) -> String {
+    let window = &bytes[..bytes.len().min(MAGIC_WINDOW)];
+    String::from_utf8_lossy(window).chars().take(512).collect()
+}
+
+// ── The six builtin readers ───────────────────────────────────────────────────
+
+/// KiCad `.kicad_pcb` layout (`(kicad_pcb ...`).
+pub struct KicadPcbReader;
+impl BoardReader for KicadPcbReader {
+    fn name(&self) -> &str {
+        "kicad-pcb"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        magic_head(bytes).contains("(kicad_pcb")
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_kicad_pcb(&String::from_utf8_lossy(bytes))
+    }
+}
+
+/// KiCad `.kicad_sch` schematic (`(kicad_sch ...`). When a real file `path` is
+/// supplied the reader recurses the sub-sheet hierarchy; without one it reads
+/// the single sheet in `bytes` (the historical `from_auto` behaviour).
+pub struct KicadSchematicReader;
+impl BoardReader for KicadSchematicReader {
+    fn name(&self) -> &str {
+        "kicad-schematic"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        magic_head(bytes).contains("(kicad_sch")
+    }
+    fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        match path {
+            Some(p) if p.is_file() => ExtractedBoard::from_kicad_schematic_path(p),
+            _ => ExtractedBoard::from_kicad_schematic(&String::from_utf8_lossy(bytes)),
+        }
+    }
+}
+
+/// KiCad s-expression netlist export (`(export ...`).
+pub struct KicadNetlistReader;
+impl BoardReader for KicadNetlistReader {
+    fn name(&self) -> &str {
+        "kicad-netlist"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        magic_head(bytes).trim_start().starts_with("(export")
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_kicad_netlist(&String::from_utf8_lossy(bytes))
+    }
+}
+
+/// Eagle `.brd` board XML (`<eagle ...`).
+pub struct EagleReader;
+impl BoardReader for EagleReader {
+    fn name(&self) -> &str {
+        "eagle"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        magic_head(bytes).contains("<eagle")
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_eagle_brd(&String::from_utf8_lossy(bytes))
+    }
+}
+
+/// IPC-D-356/356A fab netlist. Detected by its fixed-column test records
+/// (`317`/`327`/`367` at column 0) — the same records
+/// [`ExtractedBoard::from_ipc_d356`] requires, so detection and a successful
+/// read coincide exactly (a file with no such record was rejected by the old
+/// fallback too).
+pub struct Ipc356Reader;
+impl BoardReader for Ipc356Reader {
+    fn name(&self) -> &str {
+        "ipc-d356"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        let window = &bytes[..bytes.len().min(IPC_WINDOW)];
+        String::from_utf8_lossy(window)
+            .lines()
+            .any(|l| l.starts_with("317") || l.starts_with("327") || l.starts_with("367"))
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_ipc_d356(&String::from_utf8_lossy(bytes))
+    }
+}
+
+/// Altium Designer `.PcbDoc` (binary OLE2). Detection is the container +
+/// Altium-stream check ([`crate::altium::looks_like_pcbdoc`]); the OLE2 magic
+/// `D0 CF 11 E0` cannot appear in any text format, so this never contends with
+/// the text readers.
+pub struct AltiumReader;
+impl BoardReader for AltiumReader {
+    fn name(&self) -> &str {
+        "altium"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        crate::altium::looks_like_pcbdoc(bytes)
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_altium_pcb(bytes)
+    }
+    fn is_binary(&self) -> bool {
+        true
+    }
+}
+
+// ── The registry ──────────────────────────────────────────────────────────────
+
+/// An ordered set of [`BoardReader`]s. Detection walks the list front-to-back
+/// and the first reader that claims the bytes wins.
+///
+/// ## Order
+///
+/// The builtin readers are mutually exclusive by construction (distinct magics;
+/// the Altium reader keys on the OLE2 container, which no text format contains),
+/// so order only ever matters if a third-party reader overlaps a builtin.
+/// [`register`](Registry::register) therefore inserts at the **front**, so a
+/// fork can deliberately shadow a builtin. Among the builtins the order mirrors
+/// the legacy sniff precedence — eagle → netlist → schematic → pcb → ipc356 —
+/// with the binary Altium reader consulted first (its check is a couple of
+/// bytes and it can never match text).
+pub struct Registry {
+    readers: Vec<Box<dyn BoardReader>>,
+}
+
+impl Registry {
+    /// The six formats hauksbee reads natively.
+    pub fn builtin() -> Self {
+        Registry {
+            readers: vec![
+                Box::new(AltiumReader),
+                Box::new(EagleReader),
+                Box::new(KicadNetlistReader),
+                Box::new(KicadSchematicReader),
+                Box::new(KicadPcbReader),
+                Box::new(Ipc356Reader),
+            ],
+        }
+    }
+
+    /// Add a reader, consulted **before** the builtins (see the order note on
+    /// [`Registry`]). This is the third-party extension point; see the module
+    /// docs for the one-line fork example.
+    pub fn register(&mut self, reader: Box<dyn BoardReader>) {
+        self.readers.insert(0, reader);
+    }
+
+    /// The reader that claims these bytes, if any.
+    pub fn detect(&self, bytes: &[u8], path: Option<&Path>) -> Option<&dyn BoardReader> {
+        self.readers
+            .iter()
+            .find(|r| r.detects(bytes, path))
+            .map(|b| b.as_ref())
+    }
+
+    /// The *binary* reader that claims these bytes, if any. Used by the
+    /// byte-input entry point so text handed to it is not force-parsed as a
+    /// binary format.
+    pub fn detect_binary(&self, bytes: &[u8], path: Option<&Path>) -> Option<&dyn BoardReader> {
+        self.readers
+            .iter()
+            .find(|r| r.is_binary() && r.detects(bytes, path))
+            .map(|b| b.as_ref())
+    }
+
+    /// Detect and read in one step. When nothing matches, the error enumerates
+    /// every reader that was tried ([`ReadError::Unrecognized`]) — the
+    /// improvement over the old generic fallback failure.
+    pub fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        match self.detect(bytes, path) {
+            Some(r) => r.read(bytes, path),
+            None => Err(ExtractError::Unrecognized {
+                tried: self.reader_names().join(", "),
+            }),
+        }
+    }
+
+    /// The names of every registered reader, in consultation order.
+    pub fn reader_names(&self) -> Vec<&str> {
+        self.readers.iter().map(|r| r.name()).collect()
+    }
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::builtin()
+    }
+}
