@@ -530,8 +530,36 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Serve the loaded board's own file at the URL the frontend fetches it from
     // (`/boards/<name>`), so the 2D/3D viewer renders the real geometry for any
     // board, not just the demo boards baked into dist/.
-    let board_url = format!("/boards/{}", crate::commands::common::file_name(&cfg.board));
-    crate::commands::common::serve(engine, cfg.port, Some((board_url, text)))
+    let file_name = crate::commands::common::file_name(&cfg.board);
+    let board_url = format!("/boards/{file_name}");
+
+    // W6 §1: `run --serve` preloads the board, so the React app lands on THIS
+    // board's report (the same JSON the drop path produces) and "run it" expands
+    // it into the live sim already running on `/ws`. Compute the report once here
+    // and hand it to the app via `/api/startup`. Board-only unless firmware was
+    // supplied (then include the in-process co-sim, matching the drop path).
+    let report_json = match &cfg.firmware {
+        Some(fw) => {
+            let fw_name = crate::commands::common::file_name(fw);
+            match std::fs::read(fw) {
+                Ok(bytes) => crate::analyze_with_firmware_json(&file_name, &text, &fw_name, &bytes),
+                // Firmware was already path-validated above; a read error here is
+                // unexpected, so fall back to the board-only report rather than fail.
+                Err(_) => crate::analyze_json(&file_name, &text),
+            }
+        }
+        None => crate::analyze_json(&file_name, &text),
+    };
+    let report_val: serde_json::Value =
+        serde_json::from_str(&report_json).unwrap_or(serde_json::Value::Null);
+    let startup_json = serde_json::json!({
+        "preloaded": true,
+        "board_name": file_name,
+        "report": report_val,
+    })
+    .to_string();
+
+    crate::commands::common::serve(engine, cfg.port, Some((board_url, text)), startup_json)
 }
 
 /// Warn (advisory, stderr) when the board sits among sibling `.kicad_pcb` files —
