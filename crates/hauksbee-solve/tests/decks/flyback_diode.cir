@@ -1,0 +1,18 @@
+* Flyback-shaped deck (SPICE-compat step 11 corpus): pulsed primary charges
+* the magnetizing inductance; at turn-off the primary current decays through
+* R1 and the INVERTED secondary (L2 wired 0->sec) forward-biases the catch
+* diode, pumping the output capacitor — the classic flyback energy transfer,
+* using this week's diode physics as the catch. k=0.95 leaves honest leakage.
+V1 in 0 PULSE(0 5 5u 100n 100n 20u 50u)
+R1 in pri 10
+L1 pri 0 100u
+L2 0 sec 100u
+K1 L1 L2 0.95
+D1 sec out DMOD
+C1 out 0 1u
+RL out 0 1k
+.model DMOD D(IS=1e-12 N=1.05)
+.tran 0.2u 250u
+.print tran v(out)
+.options reltol=1e-4
+.end

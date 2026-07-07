@@ -1,0 +1,12 @@
+# Coupled inductors + nonlinear diode + charge pump: the transfer happens in
+# sharp turn-off edges, so the tolerance is honest about edge-alignment error
+# between two adaptive integrators (the pumped OUTPUT level is the physics
+# being graded; skip the pre-charge dead time).
+analysis = "tran"
+description = "flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R"
+full_scale = 4.0
+skip_initial = 5e-6
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.05
