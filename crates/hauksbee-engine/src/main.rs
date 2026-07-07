@@ -135,7 +135,8 @@ enum Command {
     ///   hauksbee doctor --backends
     Doctor(DoctorArgs),
 
-    /// Model-library tooling: validate model TOML before a board ever loads it.
+    /// Model-library tooling: validate model TOML, manage installed model
+    /// packs, and debug which entry wins resolution.
     ///
     /// `models lint <file>` checks a `[[models]]` db file (params per kind,
     /// plus each entry's `[models.logic]` block: schema validation, expression
@@ -144,8 +145,17 @@ enum Command {
     /// to its entry — the same validation binding performs, runnable
     /// standalone so a spec author (or an LLM extraction pipeline) fails fast.
     ///
-    /// Example:
+    /// `models add <path|url>` installs a model pack (a directory with a
+    /// pack.toml manifest and models/*.toml) into ~/.hauksbee/packs;
+    /// `models remove <name>` uninstalls it; `models list` shows what is
+    /// installed. `models resolve <board>` prints, per component, which model
+    /// entry won and from which priority layer (builtin=0 < pack=10 <
+    /// user-dir=20 < --models-dir=30 < spice=40).
+    ///
+    /// Examples:
     ///   hauksbee models lint my_part.toml
+    ///   hauksbee models add ./acme-sensors
+    ///   hauksbee models resolve my_board.kicad_pcb
     Models(ModelsArgs),
 
     /// Watch a target and re-run the right check on every file change: a board
@@ -180,12 +190,41 @@ struct ModelsArgs {
 enum ModelsCommand {
     /// Validate a model / sensor spec TOML file; exit 2 on any finding.
     Lint(ModelsLintArgs),
+    /// Install a model pack from a directory, tarball, or git URL.
+    Add(ModelsAddArgs),
+    /// Uninstall a model pack by name.
+    Remove(ModelsRemoveArgs),
+    /// List installed model packs.
+    List,
+    /// Show, per board component, which model entry won and from which layer.
+    Resolve(ModelsResolveArgs),
 }
 
 #[derive(Parser)]
 struct ModelsLintArgs {
     /// A `[[models]]` db TOML file or a `[sensor]` spec TOML file.
     file: PathBuf,
+}
+
+#[derive(Parser)]
+struct ModelsAddArgs {
+    /// A pack directory, a .tar.gz/.tgz/.tar archive, or a git URL.
+    source: String,
+}
+
+#[derive(Parser)]
+struct ModelsRemoveArgs {
+    /// The pack name (as shown by `models list`).
+    name: String,
+}
+
+#[derive(Parser)]
+struct ModelsResolveArgs {
+    /// Board file to resolve (.kicad_pcb, .kicad_sch, .brd, .d356, gerbers…).
+    board: PathBuf,
+    /// Extra model directory, loaded at the --models-dir layer (priority 30).
+    #[arg(long, value_name = "DIR")]
+    models_dir: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -535,6 +574,13 @@ fn main() -> anyhow::Result<()> {
         ),
         Command::Models(args) => match args.command {
             ModelsCommand::Lint(args) => hauksbee_engine::commands::models::lint(&args.file),
+            ModelsCommand::Add(args) => hauksbee_engine::commands::models::add(&args.source),
+            ModelsCommand::Remove(args) => hauksbee_engine::commands::models::remove(&args.name),
+            ModelsCommand::List => hauksbee_engine::commands::models::list(),
+            ModelsCommand::Resolve(args) => hauksbee_engine::commands::models::resolve(
+                &args.board,
+                args.models_dir.as_deref(),
+            ),
         },
         Command::Watch(args) => {
             hauksbee_engine::commands::watch::run(args.target, args.plain, args.once)
