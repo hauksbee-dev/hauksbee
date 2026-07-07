@@ -1,0 +1,16 @@
+# The B-source escape hatch on a genuinely nonlinear shape: a 3 V sine is
+# halved by a divider (a = in/2, peaks 1.5 V) and pushed through the soft
+# limiter `V = 2*tanh(v(a))`, which drives well past the tanh knee (output
+# saturates near +/-1.81 V). Exercises the finite-difference Newton tangent of
+# a curved expression at every timestep, the V-output branch unknown, and the
+# sense contract (the divider must be undisturbed). Both engines evaluate the
+# same closed form, so the disagreement budget is timestep/resample error;
+# percent tolerance on the clamped waveform.
+analysis = "tran"
+description = "B-source tanh soft clamp (V-output) of a divided 1 kHz sine"
+full_scale = 3.62
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

@@ -97,7 +97,10 @@ impl ConductionGraph {
             // replays). Fusing the output island with the control source's
             // island is the honest conservative encoding, mirroring the
             // partitioner's demote-and-union rule (04-spice-compat.md §2.2).
-            if let Some(ctrl) = dev.controlling_source() {
+            // Plural since the behavioral B-source: each `I(vname)` dep is one
+            // such branch-current coupling (its `V(node)` deps, by contrast,
+            // surface as ordinary sense edges below via `sense_nodes`).
+            for ctrl in dev.controlling_sources() {
                 cond.extend(
                     circuit.devices[ctrl.0 as usize]
                         .conduction_nodes()
@@ -259,18 +262,21 @@ mod tests {
             // examples() was built against `c`'s nodes; ids are identical in
             // the fresh circuit (same insertion order), remap for hygiene.
             d.map_nodes(&mut |old| m[(old.0 - 1) as usize]);
-            // F/H examples reference DeviceId(0) as their control source (the
-            // documented examples() convention): honor it by making device 0 a
-            // zero-volt ammeter across n3/n4 BEFORE adding the example. Its own
-            // stamp writes only its own rows/branch, so the zero-row assertion
-            // below still isolates the example device's sense claim (which for
-            // F/H is empty — the control is a branch-current read declared via
-            // `controlling_source`, not a node-voltage sense).
-            if d.controlling_source().is_some() {
+            // F/H/B examples reference DeviceId(0) as their control source
+            // (the documented examples() convention): honor it by making
+            // device 0 a zero-volt ammeter from n4 to ground BEFORE adding
+            // the example. n4-to-ground ON PURPOSE: the Behavioral example
+            // declares n3 as a SENSE node whose row the zero-row assertion
+            // below must prove clean, so the ammeter's own incidence entries
+            // must stay off it (the ammeter writes only its own p row and
+            // branch, so the assertion still isolates the example device's
+            // sense claim — which for F/H is empty anyway, their control is a
+            // branch-current read declared via `controlling_sources`).
+            if !d.controlling_sources().is_empty() {
                 let vid = circuit.add(hauksbee_ir::Device::Vsource {
                     name: "Vctl".into(),
-                    p: m[2],
-                    n: m[3],
+                    p: m[3],
+                    n: hauksbee_ir::NodeId::GROUND,
                     kind: hauksbee_ir::SourceKind::Dc(0.0),
                 });
                 assert_eq!(vid.0, 0, "examples() convention: control at index 0");

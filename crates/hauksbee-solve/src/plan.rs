@@ -72,11 +72,12 @@ enum Restamp {
     Slotted { id: DeviceId, table: SlotTable },
 }
 
-/// Pre-resolved slots for every `(row, col)` pair a device can touch. Tier-2
-/// slotted devices own no branch unknowns, so the table is over the device's
-/// (deduped, non-ground) node unknowns — at most 4 of them, which makes the
-/// local index scan a couple of register compares instead of a binary search
-/// over a (possibly hub-length) matrix row.
+/// Pre-resolved slots for every `(row, col)` pair a device can touch: the
+/// device's (deduped, non-ground) node unknowns, plus — for the behavioral
+/// B-source — its own branch unknown and any control-source branch columns.
+/// A handful of entries either way, which makes the local index scan a couple
+/// of register compares instead of a binary search over a (possibly
+/// hub-length) matrix row.
 struct SlotTable {
     /// Global unknown indices this device touches.
     unknowns: Vec<u32>,
@@ -375,6 +376,41 @@ impl StampPlan {
                     restamp.push(Restamp::Slotted {
                         id,
                         table: node_table(dev, id),
+                    });
+                }
+                // Behavioral B-source: tier-2 nonlinear re-stamp like the BJT
+                // (its FD tangents move every Newton iterate), NOT backbone.
+                // Unlike the node-only nonlinear devices above, its writes
+                // reach beyond its node unknowns: a V-output owns a branch
+                // row/column, and every I(...) dep references another
+                // device's branch COLUMN — extend the slot table with those
+                // unknowns so the re-stamp stays search-free (the SlottedSink
+                // fallback would keep a miss correct, but the table is the
+                // point of the plan).
+                Device::Behavioral { .. } => {
+                    let mut unknowns: Vec<u32> = Vec::new();
+                    for n in dev.nodes() {
+                        if let Some(i) = layout.node(n) {
+                            if !unknowns.contains(&(i as u32)) {
+                                unknowns.push(i as u32);
+                            }
+                        }
+                    }
+                    if let Some(br) = layout.branch(id) {
+                        unknowns.push(br as u32);
+                    }
+                    for ctrl in dev.controlling_sources() {
+                        let cbr = layout
+                            .branch(ctrl)
+                            .expect("behavioral control source owns a branch")
+                            as u32;
+                        if !unknowns.contains(&cbr) {
+                            unknowns.push(cbr);
+                        }
+                    }
+                    restamp.push(Restamp::Slotted {
+                        id,
+                        table: SlotTable::build(unknowns, matrix),
                     });
                 }
             }

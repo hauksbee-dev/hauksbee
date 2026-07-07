@@ -152,6 +152,28 @@ impl Transient {
         let mut ws = Workspace::new(circuit);
         let n_dev = circuit.devices.len();
 
+        // Convergence doctrine for behavioral sources (dev-plan 04 §2.5):
+        // B-sources are where decks go to diverge — an arbitrary expression's
+        // tangent can overshoot Newton exactly like the traveling stiff-mesh
+        // case the Armijo line search was built for. Their PRESENCE arms the
+        // per-step line search unconditionally: it is a no-op on steps that
+        // already converge (alpha = 1 accepts the full step, and the ladder
+        // rung is bit-identical when never reached), so ordinary B-decks pay
+        // one residual evaluation per iteration and stubborn ones get the
+        // globalization instead of a dt_min death. Decks WITHOUT a B-source
+        // take the `false` branch and stay bit-identical (the flagship
+        // fixture hash pins that). Heavier rungs (TransientDyn, staged
+        // regularizers) stay caller-granted — the corpus converges without
+        // them, and a non-converged march still REFUSES loudly with the
+        // device-named fault rather than emitting a wrong waveform.
+        if circuit
+            .devices
+            .iter()
+            .any(|d| matches!(d, hauksbee_ir::Device::Behavioral { .. }))
+        {
+            ws.set_tran_line_search(true);
+        }
+
         // Seed t = 0. Normally a DC operating point (warm-started from the prior
         // chunk when a seed is supplied); under FromZero a power-on start with
         // no DC solve at all: x(0) = 0 and reactive history zeroed further down.
@@ -470,7 +492,16 @@ impl Transient {
                 }
                 // Cut the step hard and retry.
                 if h <= dt_min * 1.0001 {
-                    return Err(format!("Newton failed at t={t} even at dt_min={dt_min}"));
+                    // A behavioral-expression fault on the final attempt names
+                    // the device: refuse loudly with the cause, never emit a
+                    // truncated waveform (exit-3 discipline at the CLI).
+                    let fault = ws
+                        .behavioral_fault()
+                        .map(|f| format!("; {f}"))
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "Newton failed at t={t} even at dt_min={dt_min}{fault}"
+                    ));
                 }
                 dt = (h * 0.25).max(dt_min);
                 continue;
