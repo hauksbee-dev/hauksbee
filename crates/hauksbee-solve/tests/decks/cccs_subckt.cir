@@ -1,0 +1,14 @@
+cccs inside a subckt senses its own local ammeter
+.subckt mir inp outp
+Vsense inp 0 0
+F1 0 outp Vsense 2
+.ends
+V1 in 0 SIN(0 1 1k)
+R1 in a 1k
+X1 a out mir
+RL out 0 500
+CL out 0 100n
+.tran 5u 2m 0 0.5u
+.print tran v(out)
+.options reltol=1e-4
+.end

@@ -1,0 +1,11 @@
+cccs current mirror x2 into rc load
+V1 in 0 SIN(0 1 1k)
+R1 in s 1k
+VS s 0 0
+F1 0 out VS 2
+RL out 0 500
+CL out 0 100n
+.tran 5u 2m 0 0.5u
+.print tran v(out)
+.options reltol=1e-4
+.end
