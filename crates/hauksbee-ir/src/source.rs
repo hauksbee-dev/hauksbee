@@ -7,6 +7,19 @@
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 
+/// A source's small-signal AC stimulus, captured from its `AC <mag> [phase]`
+/// spec (SPICE `.AC` drive). This is *not* a time-domain waveform: it is the
+/// complex amplitude the linearized AC analysis injects at the swept frequency,
+/// held constant across the sweep. Phase is in degrees, matching the SPICE
+/// source-card convention.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AcStim {
+    /// AC magnitude (V or A). SPICE defaults a bare `AC` token to 1.0.
+    pub mag: f64,
+    /// AC phase in degrees. Defaults to 0 when the card gives only a magnitude.
+    pub phase_deg: f64,
+}
+
 /// One breakpoint of a piecewise-linear source.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PwlPoint {
