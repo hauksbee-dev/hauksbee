@@ -1,0 +1,21 @@
+{
+  "board": "",
+  "bind": {
+    "resolved": 6,
+    "unresolved": 0,
+    "non_ignored": 6,
+    "critical_parts_bound": "1/1",
+    "critical_parts_bound_n": 1,
+    "critical_parts_total": 1,
+    "mcu_bound": true,
+    "active_path_unresolved": []
+  },
+  "findings": [],
+  "drc": {
+    "clearance_rule_mm": 0.2,
+    "primitive_count": 14,
+    "shorts": [],
+    "violations": [],
+    "at_limit": []
+  }
+}

@@ -1,17 +1,40 @@
 {
   "name": "hauksbee-board",
-  "displayName": "Hauksbee Board DSL",
-  "description": "Syntax highlighting for hauksbee Board-as-Code .board files (hauksbee board DSL v1)",
-  "version": "0.1.0",
+  "displayName": "Hauksbee",
+  "description": "Hauksbee hardware checks in VS Code: syntax highlighting for .board files, run CI specs and board checks, findings as diagnostics, spec TOML schema.",
+  "version": "0.2.0",
   "publisher": "tarski",
   "license": "MIT",
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Testing"
+  ],
+  "keywords": [
+    "hardware",
+    "pcb",
+    "kicad",
+    "ci",
+    "hauksbee"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/tarski/galvani"
+  },
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -p . --watch",
+    "test": "bun test src/",
+    "package": "bunx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "~1.75.0",
+    "typescript": "^5.4.0"
   },
   "contributes": {
     "languages": [
@@ -27,6 +50,41 @@
         "language": "hauksbee-board",
         "scopeName": "source.board",
         "path": "./syntax/board.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "hauksbee.runCiSpec",
+        "title": "Hauksbee: Run CI Spec"
+      },
+      {
+        "command": "hauksbee.checkBoard",
+        "title": "Hauksbee: Check Board File"
+      },
+      {
+        "command": "hauksbee.rerunLast",
+        "title": "Hauksbee: Re-run Last Check"
+      }
+    ],
+    "configuration": {
+      "title": "Hauksbee",
+      "properties": {
+        "hauksbee.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `hauksbee` engine binary. When empty, `hauksbee` is looked up on PATH."
+        },
+        "hauksbee.ciPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `hauksbee-ci` spec-runner binary. When empty, `hauksbee-ci` is looked up on PATH."
+        }
+      }
+    },
+    "tomlValidation": [
+      {
+        "regexMatch": "(^|[/\\\\])(hauksbee[^/\\\\]*|[^/\\\\]*\\.hauksbee)\\.toml$",
+        "url": "./schemas/hauksbee-ci-spec.schema.json"
       }
     ]
   }
