@@ -6,8 +6,8 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **14**
-- Passing: **14/14**
+- Decks: **15**
+- Passing: **15/15**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -24,6 +24,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
+| rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-2 | t=0.000e0s | PASS |
 | rc_ladder | tran | `V(n8)` | 7.198e-4 | 1.0e-2 | t=3.118e-5s | PASS |
 | rc_lowpass | tran | `V(out)` | 8.925e-4 | 1.0e-2 | t=1.409e-6s | PASS |
 | resistor_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
@@ -43,6 +44,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **diode_rectifier**: half-wave rectifier with RC smoothing
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
+- **rc_ic_decay**: RC discharge from .ic V(out)=5 under uic (tau = 1 ms)
 - **rc_ladder**: 8-stage RC ladder step response
 - **rc_lowpass**: RC low-pass step response (tau = 100 us)
 - **resistor_divider**: resistive divider DC operating point

@@ -1,0 +1,2 @@
+* shared diode model library (pulled in via .include)
+.model DMOD D(IS=1e-14 N=1.6)

@@ -1,0 +1,9 @@
+half-wave rectifier using an included diode model
+.include diode.lib
+V1 in 0 SIN(0 5 1k)
+D1 in out DMOD
+R1 out 0 1k
+C1 out 0 4.7u
+.tran 20u 2m
+.print tran v(out)
+.end
