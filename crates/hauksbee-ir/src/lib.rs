@@ -369,6 +369,29 @@ pub enum Device {
         expr: CompiledExpr,
         deps: Vec<BDep>,
     },
+    /// Mutual-inductance coupling (SPICE `K` card, dev-plan 04 §2.3):
+    /// `Kxxx L1 L2 k` couples two existing [`Device::Inductor`]s with mutual
+    /// inductance `M = k·sqrt(L1·L2)`. This is a RELATIONSHIP between two
+    /// devices, not a stamped-per-Newton element: it has NO terminals of its
+    /// own (empty `nodes()`), it stamps NOTHING itself, and the solver's
+    /// inductor stamps consult the coupling map derived from these variants
+    /// to add the symmetric `−M·(rule/dt)` cross terms between the windings'
+    /// branch rows/columns plus each winding's mutual history voltage.
+    /// `l1`/`l2` are device references like an F/H `ctrl_src`, resolved by the
+    /// loader's name pass and retargeted per slot by sub-circuit extraction;
+    /// they surface through [`Device::controlling_sources`] because the
+    /// coupled stamp reads BOTH windings' branch-current unknowns — which is
+    /// exactly the fusion/retargeting contract that accessor already carries.
+    /// `0 < k <= 1` (validated at load); `k == 1` makes the group inductance
+    /// matrix singular, which is legal on the card — the stamp uses L itself,
+    /// never its inverse. Multiple K cards may chain 3+ windings; each card
+    /// contributes one pairwise M.
+    Coupling {
+        name: String,
+        l1: DeviceId,
+        l2: DeviceId,
+        k: f64,
+    },
 }
 
 impl Device {
@@ -390,7 +413,8 @@ impl Device {
             | Device::Vccs { name, .. }
             | Device::Cccs { name, .. }
             | Device::Ccvs { name, .. }
-            | Device::Behavioral { name, .. } => name,
+            | Device::Behavioral { name, .. }
+            | Device::Coupling { name, .. } => name,
         }
     }
 
@@ -452,6 +476,13 @@ impl Device {
                 }
                 v
             }
+            // A coupling is a relationship between two inductors, not a wired
+            // element: it touches NO nodes of its own (the windings' terminals
+            // belong to the windings). Node walks (max_node, partitioner
+            // unions, sub-circuit remapping) legitimately see nothing here;
+            // the l1/l2 device references participate through
+            // `controlling_sources` instead.
+            Device::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -555,11 +586,19 @@ impl Device {
                     }
                 }
             }
+            // Deliberately empty, NOT an oversight: a coupling carries no
+            // NodeId at all — `l1`/`l2` are DeviceIds, the same reference
+            // class as an F/H `ctrl_src`, and extraction passes retarget them
+            // through `retarget_controlling_source_slot` (slots 0 and 1).
+            Device::Coupling { .. } => {}
         }
     }
 
     /// The devices whose BRANCH CURRENTS this device reads, in slot order
-    /// (the F/H control; a B-source's `I(vname)` deps). This is a sense
+    /// (the F/H control; a B-source's `I(vname)` deps; a K-coupling's two
+    /// windings — the mutual stamp reads BOTH inductors' branch-current
+    /// unknowns, so the coupling declares them here and inherits the fusion
+    /// and retargeting contracts below wholesale). This is a sense
     /// declaration in a vocabulary [`Device::sense_nodes`] cannot express:
     /// the coupling is to another device's branch-current unknown, not to any
     /// node voltage. Plural since the B-source landed — an expression may
@@ -588,6 +627,13 @@ impl Device {
                     BDep::Volt(_) => None,
                 })
                 .collect(),
+            // Slot 0 = l1, slot 1 = l2. The mutual companion writes into (and
+            // its history reads from) both windings' branch unknowns, so the
+            // partitioner must union the two windings' islands (mutual flux is
+            // never a tear candidate) and sub-circuit extraction must carry
+            // both inductors along and retarget these ids — exactly the F/H
+            // contracts this accessor already grants.
+            Device::Coupling { l1, l2, .. } => vec![*l1, *l2],
             Device::Resistor { .. }
             | Device::Capacitor { .. }
             | Device::Inductor { .. }
@@ -632,6 +678,11 @@ impl Device {
                     None => panic!("behavioral source has no branch-dep slot {slot}"),
                 }
             }
+            Device::Coupling { l1, l2, .. } => match slot {
+                0 => *l1 = new_id,
+                1 => *l2 = new_id,
+                _ => panic!("coupling has exactly two winding slots, not slot {slot}"),
+            },
             Device::Resistor { .. }
             | Device::Capacitor { .. }
             | Device::Inductor { .. }
@@ -701,6 +752,14 @@ impl Device {
             // rows) — the maximal-coupling device is still, per terminal, the
             // same conduct-vs-sense split as a VCVS.
             Device::Behavioral { p, n, .. } => vec![*p, *n],
+            // A coupling has NO terminals: current flows through the WINDINGS,
+            // whose own a/b declarations above carry the conduction claim. The
+            // stamp cross-check holds this to account trivially (the coupling
+            // variant stamps nothing itself; the mutual terms land in the
+            // windings' branch rows, which are not node rows). The inter-
+            // winding solver coupling is declared via `controlling_sources`,
+            // the branch-current vocabulary, exactly like F/H.
+            Device::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -778,6 +837,11 @@ impl Device {
                 v.dedup();
                 v
             }
+            // No node-voltage reads either: what a coupling "senses" is both
+            // windings' BRANCH CURRENTS, which this node vocabulary cannot
+            // express (the F/H precedent, same reasoning verbatim) — declared
+            // through `controlling_sources`, never as a free-tear candidate.
+            Device::Coupling { .. } => Vec::new(),
         }
     }
 
@@ -933,6 +997,21 @@ impl Device {
                     .expect("examples(): canonical behavioral expression compiles"),
                 deps: vec![BDep::Volt(n[2]), BDep::Branch(DeviceId(0))],
             },
+            // CONVENTION (the coupling analogue of the F/H/B ammeter rule
+            // above): the Coupling example points its windings at DeviceId(0)
+            // and DeviceId(1). A consumer that builds a STAMPABLE circuit
+            // around it must place two Inductors at indices 0 and 1 before
+            // adding it (the solve-side cross-check does exactly that);
+            // structure-only consumers (serde, node walks) need nothing.
+            // Named `KMex`, not `Kex`: the Comparator example above already
+            // wears `Kex`, and a duplicate refdes would poison any consumer
+            // that indexes examples by name.
+            Device::Coupling {
+                name: "KMex".into(),
+                l1: DeviceId(0),
+                l2: DeviceId(1),
+                k: 0.9,
+            },
         ]
         ;
         // The derived variant count is the enforcement the match-arm trick
@@ -986,6 +1065,16 @@ impl Device {
                 // refuses islands containing them.
                 | Device::Cccs { .. }
                 | Device::Ccvs { .. }
+                // Coupled inductors: the mutual inductance M = k*sqrt(L1*L2)
+                // is a CONSTANT — the companion cross terms scale with 1/dt
+                // like any inductor's, never with the iterate, so coupling
+                // never taints an island nonlinear. Linear does NOT mean
+                // state-space-reducible: `LinearIsland::compile` refuses
+                // islands containing a Coupling (the reduction would need the
+                // group inductance matrix INVERTED, and k == 1 makes it
+                // legally singular), routing them to MNA which stamps L
+                // directly.
+                | Device::Coupling { .. }
         )
     }
 
