@@ -71,7 +71,7 @@ pub use options::{
 };
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;
-pub use sim::{default_probes, run_op, run_tran, Probe, SimOutput};
+pub use sim::{default_probes, run_ac, run_dc, run_op, run_tran, Probe, SimOutput};
 pub use sparse::{SparseMatrix, Symbolic};
 pub use system::Layout;
 pub use transient::{StepSample, Transient, Waveforms};

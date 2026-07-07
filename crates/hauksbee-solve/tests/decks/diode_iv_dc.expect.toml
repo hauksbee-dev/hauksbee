@@ -1,0 +1,11 @@
+analysis = "dc"
+description = "Diode forward V-I DC sweep (Vin 0..1 V): junction voltage V(d) and the drop V(a,d) across the 100 ohm series resistor, re-solving the nonlinear OP at every sweep point."
+full_scale = 1.0
+[[probe]]
+expr = "V(d)"
+reltol = 0.02
+abstol = 1e-3
+[[probe]]
+expr = "V(a,d)"
+reltol = 0.02
+abstol = 1e-3
