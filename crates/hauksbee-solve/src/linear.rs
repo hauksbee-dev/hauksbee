@@ -334,13 +334,17 @@ impl LinearIsland {
                 // Nonlinear / event-driven kinds cannot appear in a linear
                 // island (the `island.linear` gate above already returned
                 // `None`), but the match stays exhaustive so a future variant
-                // must be placed deliberately.
+                // must be placed deliberately. The behavioral B-source is
+                // nonlinear by construction (`is_linear() == false` taints the
+                // island), so it can only reach this walk through that gate —
+                // and refusing is still the only honest answer here.
                 Device::Diode { .. }
                 | Device::Bjt { .. }
                 | Device::Mosfet { .. }
                 | Device::VSwitch { .. }
                 | Device::OpAmp { .. }
-                | Device::Comparator { .. } => return None,
+                | Device::Comparator { .. }
+                | Device::Behavioral { .. } => return None,
             }
         }
         if states.is_empty() {
