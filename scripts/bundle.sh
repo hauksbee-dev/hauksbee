@@ -24,16 +24,16 @@
 #   --no-build     Use existing target/release binaries; do not cargo build.
 #   --no-default-features
 #                  Pass --no-default-features to the cargo build (used by the
-#                  release workflow to attempt the GPL-free renode+qemu shape).
+#                  release workflow for the GPL-free renode+qemu shape).
 #   --features LIST Pass --features LIST to the cargo build (e.g. "renode,qemu").
 #   --help         Show this help.
 #
 # Feature note: with NO feature flags, cargo builds the default feature set
 # (avr + renode + qemu). The `avr` backend statically links libsimavr, which is
 # GPL-3.0 — so a default bundle is GPL-encumbered. Pass
-# `--no-default-features --features renode,qemu` for the MIT-clean shape. See the
-# release.yml header and docs/release-and-licensing.md for the important caveat
-# that this shape does NOT currently exclude avr in this workspace.
+# `--no-default-features --features renode,qemu` for the MIT-clean shape (no
+# libsimavr link; verified avr-free). See the release.yml header and
+# docs/release-and-licensing.md for the licensing decision and the GPL guard.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"

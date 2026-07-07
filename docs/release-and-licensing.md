@@ -34,68 +34,62 @@ cargo build --release --no-default-features --features renode,qemu
   renode,qemu` "the GPL-free build". The release workflow makes that stance the
   shipping default rather than an aspiration.
 
-## 2. ⚠ Blocker: the MIT-clean shape is not actually avr-free today
+## 2. The avr feature leak (found, fixed) and the standing GPL guard
 
-The shape `--no-default-features --features renode,qemu` **still activates `avr`
-and still links libsimavr** in this workspace. This was verified, not assumed:
+When release automation first landed, the shape `--no-default-features
+--features renode,qemu` **still activated `avr` and still linked libsimavr**.
+This was verified, not assumed: with simavr discovery pointed at a nonexistent
+path the build panicked in `crates/hauksbee-mcu/build.rs:48` (*"the `avr`
+co-sim feature needs a system libsimavr"*), and `nm` found 14 simavr C symbols +
+42 `AvrMcu` symbols in each of `hauksbee` and `hauksbee-ci`.
 
-- With simavr discovery pointed at a nonexistent path, an engine-alone
-  `--no-default-features --features renode,qemu` build **panics** in
-  `crates/hauksbee-mcu/build.rs:48`: *"the `avr` co-sim feature needs a system
-  libsimavr"* — proving `avr` is active under those flags.
-- `nm` on a two-binary release build (`-p hauksbee-engine -p hauksbee-ci
-  --no-default-features --features renode,qemu`) finds **14 simavr C symbols +
-  42 `AvrMcu` symbols in each of `hauksbee` and `hauksbee-ci`**.
-- `cargo tree -e features` shows `hauksbee-mcu feature "avr"` and `"default"`
-  activated under those flags.
+### Root cause (for the next person who adds a hauksbee-* dependency)
 
-### Root cause
+1. `hauksbee-server` declared its `hauksbee-mcu` dependency **without**
+   `default-features = false`, pulling mcu's default set (`avr, renode, qemu`).
+2. `hauksbee-server/src/engine.rs` used `hauksbee_mcu::AvrMcu` unconditionally,
+   so the crate could not even compile without `avr`.
+3. Every shipped binary depends on `hauksbee-server`, and **cargo cannot
+   override a dependency's `default-features` from the command line** — one
+   missing `default-features = false` anywhere in the graph silently re-links
+   GPL simavr no matter what flags the release build passes.
 
-1. `crates/hauksbee-server/Cargo.toml`: the `hauksbee-mcu` dependency is declared
-   **without** `default-features = false`, so it pulls mcu's default feature set
-   (`avr, renode, qemu`).
-2. `crates/hauksbee-server/src/engine.rs`: `hauksbee_mcu::AvrMcu::…` is used
-   **unconditionally** (no `#[cfg(feature = "avr")]`), so the server crate does
-   not even compile without `avr`.
-3. Every shipped binary depends on `hauksbee-server` (`hauksbee-engine` and
-   `hauksbee-ci` both), so `avr` is dragged into every build regardless of the
-   command-line feature flags — cargo cannot override a dependency's
-   `default-features` from the CLI.
+### The fix (landed on this branch)
 
-`hauksbee-engine` itself is correct (it declares `hauksbee-mcu = { …,
-default-features = false }`); the leak is entirely via the `server` crate, plus
-`hauksbee-ci`'s own `hauksbee-engine`/`hauksbee-server` deps not disabling
-defaults.
+- `crates/hauksbee-server/Cargo.toml`: `[features]` table (`default = ["avr",
+  "renode", "qemu"]`, each forwarding to `hauksbee-mcu/*`); the mcu dep now sets
+  `default-features = false`.
+- `crates/hauksbee-server/src/engine.rs`: `McuDemoEngine` (the only AvrMcu user)
+  is gated `#[cfg(feature = "avr")]`; `src/main.rs` (the AVR demo binary)
+  compiles to an explanatory stub without `avr`; `tests/ws_roundtrip.rs` is
+  gated on `avr`.
+- `crates/hauksbee-engine/Cargo.toml`: the server dep sets `default-features =
+  false`; `avr`/`renode`/`qemu` forward to both `hauksbee-mcu/*` and
+  `hauksbee-server/*`.
+- `crates/hauksbee-ci/Cargo.toml`: its own `[features]` table (so `--features
+  renode,qemu` resolves against the `hauksbee-ci` package — previously a hard
+  error); engine + server deps set `default-features = false`.
 
-### The fix (source change — out of scope for release automation)
+**Default behaviour is unchanged**: every crate's `default` still includes
+`avr`, so a plain `cargo build --workspace`, the Docker images, and the demo
+server keep AVR co-sim exactly as before. Verified after the fix:
 
-Three files, no logic changes beyond feature-gating:
+- `nm` on the MIT-clean release binaries: **0 simavr symbols, 0 AvrMcu symbols**
+  in both `hauksbee` and `hauksbee-ci` (renode/qemu backends present).
+- The MIT-clean shape builds with simavr discovery pointed at a nonexistent
+  path (the guard below) — it never even looks for libsimavr.
+- Default-features release binaries still link simavr (AVR available as before),
+  and the full default test suites stay green.
 
-- `crates/hauksbee-server/Cargo.toml`: `hauksbee-mcu = { …, default-features =
-  false }`; add a `[features]` table forwarding `avr`/`renode`/`qemu` to
-  `hauksbee-mcu/*` (and a `default` that does **not** include `avr`).
-- `crates/hauksbee-server/src/engine.rs`: gate the `AvrMcu` construction behind
-  `#[cfg(feature = "avr")]` (and provide a non-avr code path / error).
-- `crates/hauksbee-ci/Cargo.toml`: `default-features = false` on its
-  `hauksbee-engine` and `hauksbee-server` deps, plus forwarding features so
-  `--features renode,qemu` resolves against the `hauksbee-ci` package (today it
-  errors: *"none of the selected packages contains these features"*).
+### The standing GPL guard (expected green)
 
-This touches product source and changes the default build/runtime behaviour
-(default builds and the Docker `full`/`slim` images currently rely on `avr`
-being on), so it belongs to a source-owning change, not this
-release-automation work.
-
-### How the workflow behaves until the fix lands
-
-Both `release.yml` and `ci.yml` fail **fast and loudly** rather than ship a
-mislabeled GPL binary: they point `SIMAVR_INCLUDE_DIR`/`SIMAVR_LIB_DIR` at a
-nonexistent path. A genuinely avr-free build ignores them; a leaky one panics in
-`build.rs`. So a red release/CI today means "the GPL-free shape is not clean
-yet", and no GPL-encumbered binary is ever built or attached. The moment the
-source fix lands, the guard passes and releases flow with **zero** system
-dependencies (no simavr, no libclang/bindgen — those are only reached by the
-avr path).
+Both `release.yml` and `ci.yml` point `SIMAVR_INCLUDE_DIR`/`SIMAVR_LIB_DIR` at a
+nonexistent path. A genuinely avr-free build never reads them; any future
+feature-graph regression that drags `avr` back in panics in `build.rs` **before
+any GPL code is linked**, turning the release/CI red. A red guard means "fix the
+feature graph", never "weaken the guard". With the graph clean, releases flow
+with **zero** system dependencies (no simavr, no libclang/bindgen — those are
+only reached by the avr path).
 
 ## 3. Naming contract with `scripts/get-hauksbee.sh`
 

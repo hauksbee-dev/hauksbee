@@ -9,11 +9,14 @@ description = "Integration heart: binds an extracted board to models and co-simu
 # Propagate the MCU backend choices. All on by default so the engine runs AVR,
 # Renode (STM32 / nRF52 / RISC-V), and Espressif-QEMU (ESP32 family) firmware
 # out of the box. A `--no-default-features --features renode,qemu` build is
-# GPL-free (no libsimavr link).
+# GPL-free (no libsimavr link) — this only holds because every hauksbee-* path
+# dependency here sets `default-features = false` and each feature forwards
+# explicitly (cargo cannot un-default a dependency from the command line).
+# See docs/release-and-licensing.md.
 default = ["avr", "renode", "qemu"]
-avr = ["hauksbee-mcu/avr"]
-renode = ["hauksbee-mcu/renode"]
-qemu = ["hauksbee-mcu/qemu"]
+avr = ["hauksbee-mcu/avr", "hauksbee-server/avr"]
+renode = ["hauksbee-mcu/renode", "hauksbee-server/renode"]
+qemu = ["hauksbee-mcu/qemu", "hauksbee-server/qemu"]
 
 [[bin]]
 name = "hauksbee"
@@ -34,7 +37,7 @@ hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
 hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
-hauksbee-server = { version = "0.1.0", path = "../hauksbee-server" }
+hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false }
 forge-model = { workspace = true }
 forge-codegen = { workspace = true }
 forge-sexpr.workspace = true
