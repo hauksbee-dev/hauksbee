@@ -35,8 +35,8 @@ pub fn run(
 ) -> anyhow::Result<()> {
     use hauksbee_ir::SpiceLoader;
     use hauksbee_solve::{
-        default_probes, run_op, run_tran, Integration, Probe, SimOutput, SolverOptions, StepControl,
-        DcInit,
+        default_probes, run_ac, run_dc, run_op, run_tran, DcInit, Integration, Probe, SimOutput,
+        SolverOptions, StepControl,
     };
 
     // Read the deck. A missing file is an ordinary CLI error (exit 1) with an
@@ -92,43 +92,27 @@ pub fn run(
         Analysis::Dc
     } else if directives.tran.is_some() {
         Analysis::Tran
+    } else if directives.dc.is_some() {
+        Analysis::Dc
+    } else if directives.ac.is_some() {
+        Analysis::Ac
     } else {
         Analysis::Op
     };
 
-    // Refuse the unwired analyses loudly (exit 3): the netlist front-end does
-    // not parse `.ac`/`.dc` directives or AC source magnitudes yet, so there is
-    // nothing honest to compute. A loud refusal, never a silent no-op.
-    match analysis {
-        Analysis::Ac => {
-            eprintln!(
-                "error: --ac is recognized but not yet wired in `hauksbee sim`. The netlist \
-                 front-end does not yet parse `.ac` directives or AC source magnitudes \
-                 (SPICE-compat plan step 9). Refusing rather than emitting an empty or wrong \
-                 result. Use --op or --tran."
-            );
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-        }
-        Analysis::Dc => {
-            eprintln!(
-                "error: --dc (DC sweep) is recognized but not yet wired in `hauksbee sim`. The \
-                 sweep driver is SPICE-compat plan step 9. Refusing rather than faking a result. \
-                 Use --op for a single operating point or --tran."
-            );
-            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
-        }
-        _ => {}
-    }
+    // The `.print`/`.plot ANALYSIS` label that matches the chosen analysis.
+    let analysis_tag = match analysis {
+        Analysis::Op => "op",
+        Analysis::Tran => "tran",
+        Analysis::Ac => "ac",
+        Analysis::Dc => "dc",
+    };
 
-    // Probes: an explicit --print wins; otherwise every node voltage (and we say
-    // so, on stderr, so the choice is never a silent surprise).
-    let probes: Vec<Probe> = if print.is_empty() {
-        eprintln!(
-            "note: no --print given and the loader does not yet parse `.print`; \
-             writing every node voltage."
-        );
-        default_probes(&circuit)
-    } else {
+    // Probes, in priority order:
+    //   1. `--print` on the command line wins outright.
+    //   2. else the deck's `.print`/`.plot` cards for this analysis.
+    //   3. else every node voltage (announced, so it is never a silent surprise).
+    let probes: Vec<Probe> = if !print.is_empty() {
         let mut ps = Vec::with_capacity(print.len());
         for tok in print {
             match Probe::parse(tok) {
@@ -140,6 +124,37 @@ pub fn run(
             }
         }
         ps
+    } else {
+        // Collect the deck's output variables for this analysis. `.plot` is
+        // treated as `.print` (we emit CSV, never an ASCII plot) — noted once.
+        let mut deck_vars: Vec<String> = Vec::new();
+        for pr in &directives.prints {
+            if pr.analysis == analysis_tag {
+                deck_vars.extend(pr.vars.iter().cloned());
+            }
+        }
+        if directives.saw_plot {
+            eprintln!("note: `.plot` cards are treated as `.print` (CSV output; no ASCII plot).");
+        }
+        if deck_vars.is_empty() {
+            eprintln!(
+                "note: no --print and no matching `.print {analysis_tag}` card; \
+                 writing every node voltage."
+            );
+            default_probes(&circuit)
+        } else {
+            let mut ps = Vec::with_capacity(deck_vars.len());
+            for tok in &deck_vars {
+                match Probe::parse(tok) {
+                    Ok(p) => ps.push(p),
+                    Err(msg) => {
+                        eprintln!("error: `.print {analysis_tag}` output variable: {msg}");
+                        std::process::exit(EXIT_MALFORMED_DECK);
+                    }
+                }
+            }
+            ps
+        }
     };
 
     // Build solver options from the deck's tolerances.
@@ -193,7 +208,38 @@ pub fn run(
                 }
             }
         }
-        Analysis::Ac | Analysis::Dc => unreachable!("refused above"),
+        Analysis::Dc => {
+            let Some(dc_card) = &directives.dc else {
+                eprintln!(
+                    "error: --dc requested but the deck has no `.dc` card, so there is no \
+                     source or range to sweep. Add `.dc <src> <start> <stop> <step>` or use --op."
+                );
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            };
+            match run_dc(&circuit, &opts, dc_card, &probes) {
+                Ok(o) => o,
+                Err(msg) => {
+                    eprintln!("error: DC sweep failed (a point did not converge or a probe was invalid): {msg}");
+                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                }
+            }
+        }
+        Analysis::Ac => {
+            let Some(ac_card) = &directives.ac else {
+                eprintln!(
+                    "error: --ac requested but the deck has no `.ac` card, so there is no \
+                     frequency sweep to run. Add `.ac <dec|oct|lin> <n> <fstart> <fstop>`."
+                );
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            };
+            match run_ac(&circuit, &opts, ac_card, &probes) {
+                Ok(o) => o,
+                Err(msg) => {
+                    eprintln!("error: AC analysis refused: {msg}");
+                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                }
+            }
+        }
     };
 
     // Serialize to CSV and write to --out or stdout.

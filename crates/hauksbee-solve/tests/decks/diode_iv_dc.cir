@@ -1,0 +1,9 @@
+* Diode forward V-I DC transfer curve (SPICE-compat plan step 9).
+* Sweep the source, re-solving the nonlinear operating point at each point.
+Vin a 0 DC 0
+R1 a d 100
+D1 d 0 DMOD
+.model DMOD D(IS=1e-14 N=1.0)
+.dc Vin 0 1 0.05
+.print dc V(d) V(a,d)
+.end
