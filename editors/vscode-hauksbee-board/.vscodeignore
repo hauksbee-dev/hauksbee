@@ -5,3 +5,9 @@
 **/node_modules/**
 **/npm-debug.log
 **/*.map
+src/**
+test/**
+tsconfig.json
+bun.lock
+bun.lockb
+out/**/*.test.js
