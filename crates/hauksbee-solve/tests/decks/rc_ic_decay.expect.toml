@@ -1,0 +1,12 @@
+# RC discharge from a `.ic V(out)=5` initial condition under `uic` (no DC
+# solve, both engines start at 5 V). tau = R*C = 1k * 1u = 1 ms. The whole
+# observable IS the initial-condition semantics: if `.ic`/`uic` were mishandled
+# the t=0 value (and thus the tail) would be wrong.
+analysis = "tran"
+description = "RC discharge from .ic V(out)=5 under uic (tau = 1 ms)"
+full_scale = 5.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.02

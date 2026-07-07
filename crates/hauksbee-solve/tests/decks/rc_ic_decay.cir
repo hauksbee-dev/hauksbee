@@ -1,0 +1,8 @@
+rc initial-condition decay
+C1 out 0 1u
+R1 out 0 1k
+.ic V(out)=5
+.tran 10u 3m uic
+.print tran v(out)
+.options reltol=1e-4
+.end
