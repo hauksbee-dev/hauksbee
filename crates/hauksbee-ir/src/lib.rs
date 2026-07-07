@@ -386,6 +386,12 @@ pub enum Device {
     /// matrix singular, which is legal on the card — the stamp uses L itself,
     /// never its inverse. Multiple K cards may chain 3+ windings; each card
     /// contributes one pairwise M.
+    ///
+    /// Fidelity (plan §2.3): this is the LOSSLESS LINEAR mutual model, which
+    /// matches ngspice's `K` closely (the differential decks pin it).
+    /// Saturating/hysteretic cores are UNSUPPORTED — no core model card
+    /// parses, so a deck needing one refuses at load rather than running
+    /// linear physics under a nonlinear name.
     Coupling {
         name: String,
         l1: DeviceId,

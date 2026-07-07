@@ -1,0 +1,11 @@
+# k=1: legally singular group matrix. The gate is that BOTH engines solve it
+# and agree — ngspice's mutual stamp is also L-direct, so disagreement here
+# would mean our singular-group handling is wrong.
+analysis = "tran"
+description = "perfect coupling k=1 transformer: the singular-L-matrix trap"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(sec)"
+reltol = 0.02
