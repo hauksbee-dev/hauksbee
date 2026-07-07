@@ -67,15 +67,59 @@
 //! single global table with a collision check: identical redefinitions are
 //! allowed, conflicting same-name definitions refuse loudly (never silently
 //! shadow).
+//!
+//! # File inclusion (dev-plan 04 §4.1, `.include` / `.lib`)
+//!
+//! `.include <file>` splices another file's text in place; `.lib <file>
+//! <section>` splices only the named `.lib <section> ... .endl` block from a
+//! library file. Inclusion happens FIRST, at the physical-line level, before
+//! any other pass — so included `.model`/`.subckt`/`.param` cards and elements
+//! participate in every later pass exactly as if they had been typed inline.
+//!
+//! **Search path:** a relative include resolves against the INCLUDING file's
+//! directory first, then the top deck's directory; an absolute path is used
+//! as-is. When the deck is loaded from a string (`load_with_directives`) there
+//! is no file path, so both locations collapse to the process working
+//! directory; load via [`SpiceLoader::load_file`] to get directory-relative
+//! resolution. Missing files, inclusion cycles (direct or transitive), and a
+//! depth past [`MAX_INCLUDE_DEPTH`] are line-numbered refusals that name the
+//! resolved-path attempts / the cycle chain. Errors inside an included file
+//! name the file, its own line, and the inclusion site (the same
+//! provenance-breadcrumb discipline subckt splicing uses).
+//!
+//! **Bare `.lib <file>` (one argument) is refused**, not silently treated like
+//! `.include`: the one-argument form is ambiguous (a section-open inside a
+//! library vs. a whole-file pull), so the loader points the user at
+//! `.include <file>` for a whole file or `.lib <file> <section>` for a section.
+//!
+//! # Initial conditions (dev-plan 04 §4.1, `.ic` / `.nodeset`)
+//!
+//! `.ic V(node)=val` seeds transient node voltages; `.nodeset V(node)=val`
+//! seeds the DC Newton start vector. Both are parsed AFTER subckt flattening so
+//! a node name resolves against the final (flattened) node table — including a
+//! mangled internal node like `.ic V(X1.out)=2` (the flattened-name contract).
+//! Values accept `{expr}` and suffixed numbers through the same [`ParamEnv`] as
+//! element values. An unknown node is a line-numbered error with did-you-mean
+//! candidates.
+//!
+//! `.ic` semantics: with `uic` on the `.tran` card the named node voltages seed
+//! the power-on start directly (the solver's `FromZero` path, extended to read
+//! these values). WITHOUT `uic`, SPICE pins the named nodes DURING the DC solve
+//! — machinery the solver does not have (only device-level capacitor `ic=`
+//! pinning exists) — so the loader REFUSES `.ic` without `uic` loudly rather
+//! than silently downgrading it to a start-vector seed. `.nodeset` is a
+//! convergence GUESS only: it influences which root Newton finds but is never
+//! enforced (the final voltage may differ from the seed).
 
 use crate::models::{BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity};
 use crate::source::{PwlPoint, SourceKind};
-use crate::{Circuit, Device, DeviceId};
+use crate::{Circuit, Device, DeviceId, NodeId};
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
     Node as EvalNode, Value,
 };
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use thiserror::Error;
 
@@ -143,174 +187,271 @@ impl SpiceLoader {
         Ok(Self::load_with_directives(text)?.0)
     }
 
-    /// Parse a netlist into a [`Circuit`] plus the [`Directives`] it carried.
+    /// Parse a netlist STRING into a [`Circuit`] plus the [`Directives`] it
+    /// carried. `.include`/`.lib` file paths resolve against the process working
+    /// directory (a bare string has no file location of its own); use
+    /// [`SpiceLoader::load_file`] for directory-relative inclusion.
     pub fn load_with_directives(text: &str) -> Result<(Circuit, Directives), SpiceError> {
-        let logical = join_continuations(text);
-        let mut circuit = Circuit::new();
-        let mut directives = Directives::default();
+        load_deck(text, Path::new("."), "<deck>", None)
+    }
 
-        // First pass: collect `.model` cards (top-level and hoisted from subckt
-        // bodies), `.subckt` definitions, global `.param` cards, and the
-        // top-level `.temp`/`.options`/`.tran` directives — so element lines can
-        // resolve models and parameters regardless of order.
-        let mut models: HashMap<String, ModelCard> = HashMap::new();
-        let mut subckts: HashMap<String, SubcktDef> = HashMap::new();
-        let mut param_cards: Vec<ParamCard> = Vec::new();
-        // Top-level element / X-instantiation lines, in source order.
-        let mut top_elems: Vec<(usize, String)> = Vec::new();
-        // The subckt currently being collected (subckt definitions do not nest).
-        let mut current: Option<SubcktDef> = None;
+    /// Parse a netlist FILE into a [`Circuit`]. `.include`/`.lib` paths resolve
+    /// against this file's directory first, then the top deck's directory.
+    pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Circuit, SpiceError> {
+        Ok(Self::load_file_with_directives(path)?.0)
+    }
 
-        for (lineno, raw) in &logical {
-            let trimmed = raw.trim_start();
-            let lower = trimmed.to_ascii_lowercase();
+    /// [`SpiceLoader::load_file`], also returning the parsed [`Directives`].
+    pub fn load_file_with_directives<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<(Circuit, Directives), SpiceError> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path).map_err(|e| SpiceError::Syntax {
+            line: 0,
+            msg: format!("cannot read deck `{}`: {e}", path.display()),
+            text: String::new(),
+        })?;
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let canon = path.canonicalize().ok();
+        load_deck(&text, dir, &name, canon)
+    }
+}
 
-            if lower.starts_with(".subckt") {
-                if current.is_some() {
-                    return Err(SpiceError::Syntax {
-                        line: *lineno,
-                        msg: "nested `.subckt` definitions are unsupported".into(),
-                        text: raw.clone(),
-                    });
-                }
-                current = Some(parse_subckt_header(*lineno, raw)?);
-                continue;
-            }
-            if lower.starts_with(".ends") {
-                match current.take() {
-                    Some(def) => {
-                        if let Some(prev) = subckts.insert(def.name.to_ascii_lowercase(), def) {
-                            return Err(SpiceError::Syntax {
-                                line: *lineno,
-                                msg: format!("duplicate `.subckt {}` definition", prev.name),
-                                text: raw.clone(),
-                            });
-                        }
-                    }
-                    None => {
-                        return Err(SpiceError::Syntax {
-                            line: *lineno,
-                            msg: "`.ends` without a matching `.subckt`".into(),
-                            text: raw.clone(),
-                        });
-                    }
-                }
-                continue;
-            }
+/// The multi-pass core, shared by the string and file entry points.
+fn load_deck(
+    text: &str,
+    top_dir: &Path,
+    top_name: &str,
+    top_canon: Option<PathBuf>,
+) -> Result<(Circuit, Directives), SpiceError> {
+    let mut circuit = Circuit::new();
+    let mut directives = Directives::default();
 
-            // Inside a subckt body: hoist `.model`, keep `.param`/elements/X for
-            // the body, and refuse analysis/topology directives that make no
-            // sense inside a subckt.
-            if let Some(def) = current.as_mut() {
-                if lower.starts_with(".model") {
-                    let card = parse_model_card(*lineno, raw)?;
-                    insert_model(&mut models, card, *lineno, raw)?;
-                } else if lower.starts_with('.') && !lower.starts_with(".param") {
-                    return Err(SpiceError::Syntax {
-                        line: *lineno,
-                        msg: format!(
-                            "directive `{}` is not allowed inside a `.subckt` body",
-                            first_token(trimmed)
-                        ),
-                        text: raw.clone(),
-                    });
-                } else if !trimmed.is_empty() && !trimmed.starts_with('*') {
-                    def.body.push((*lineno, raw.clone()));
-                }
-                continue;
-            }
+    // Pass 0 (NEW): expand `.include`/`.lib` at the physical-line level so
+    // included content participates in EVERY later pass, then join
+    // continuations. Each line carries a provenance breadcrumb naming its file
+    // and inclusion site, appended to any error raised from it.
+    let mut ctx = IncludeCtx {
+        top_dir: top_dir.to_path_buf(),
+        stack: top_canon.into_iter().collect(),
+    };
+    let mut phys: Vec<PhysLine> = Vec::new();
+    read_source(text, top_dir, top_name, Rc::from(""), true, &mut ctx, &mut phys)?;
+    let logical = join_continuations(&phys);
 
-            // Top level.
-            if lower.starts_with(".model") {
-                let card = parse_model_card(*lineno, raw)?;
-                insert_model(&mut models, card, *lineno, raw)?;
-            } else if lower.starts_with(".param") {
-                parse_param_card(*lineno, raw, &mut param_cards)?;
-            } else if lower.starts_with(".temp") {
-                let toks = tokenize(raw);
-                if let Some(t) = toks.get(1) {
-                    // `.temp` may reference a parameter, but the environment is
-                    // not built yet; support only a literal here (parameterized
-                    // temperature is out of scope for this step).
-                    circuit.temp_c = number(*lineno, t, raw)?;
-                }
-            } else if lower.starts_with(".options") || lower.starts_with(".option") {
-                parse_options(raw, &mut directives);
-            } else if lower.starts_with(".tran") {
-                directives.tran = Some(parse_tran(*lineno, raw, &mut directives)?);
-            } else if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with('.') {
-                // Other directives (`.print`, `.ac`, `.end`, ...) are consumed
-                // elsewhere or out of scope for this step; skip them here.
-            } else {
-                top_elems.push((*lineno, raw.clone()));
-            }
-        }
+    // First pass: collect `.model`/`.subckt`/`.param`/directives, set aside
+    // top-level elements, and stash `.ic`/`.nodeset` cards (resolved after
+    // flattening, once every node exists).
+    let mut col = Collector::default();
+    for pl in &logical {
+        collect_line(pl, &mut col, &mut circuit, &mut directives)
+            .map_err(|e| with_provenance(e, &pl.origin))?;
+    }
+    if let Some(def) = col.current {
+        return Err(SpiceError::Syntax {
+            line: def.def_line,
+            msg: format!("`.subckt {}` is never closed with `.ends`", def.name),
+            text: String::new(),
+        });
+    }
 
-        if let Some(def) = current {
-            return Err(SpiceError::Syntax {
-                line: def.def_line,
-                msg: format!("`.subckt {}` is never closed with `.ends`", def.name),
-                text: String::new(),
+    // Build the global parameter environment (order-independent topological
+    // resolve; cycles and undefined names error with a line number).
+    let global_env: Rc<ParamEnv> = Rc::new(resolve_params(&col.param_cards, &ParamEnv::new())?);
+
+    // Flatten: splice every `X` call into a flat list of element lines, each
+    // carrying its parameter environment and a provenance breadcrumb.
+    let mut expanded: Vec<SplicedLine> = Vec::new();
+    for pl in &col.top_elems {
+        if starts_with_letter(&pl.text, 'x') {
+            expand_instance(
+                pl.lineno,
+                &pl.text,
+                &col.subckts,
+                global_env.clone(),
+                &pl.origin,
+                &mut Vec::new(),
+                &mut expanded,
+            )?;
+        } else {
+            expanded.push(SplicedLine {
+                lineno: pl.lineno,
+                text: pl.text.clone(),
+                provenance: pl.origin.to_string(),
+                env: global_env.clone(),
             });
         }
+    }
 
-        // Build the global parameter environment (order-independent topological
-        // resolve; cycles and undefined names error with a line number).
-        let global_env: Rc<ParamEnv> =
-            Rc::new(resolve_params(&param_cards, &ParamEnv::new())?);
+    // Second pass: parse the flattened element lines. Errors from a spliced body
+    // are annotated with where the body came from and where it was instantiated.
+    let mut fixups: Vec<NameFixup> = Vec::new();
+    for sl in &expanded {
+        let before = fixups.len();
+        parse_element(sl.lineno, &sl.text, &mut circuit, &col.models, &sl.env, &mut fixups)
+            .map_err(|e| with_provenance(e, &sl.provenance))?;
+        for fx in &mut fixups[before..] {
+            fx.provenance = sl.provenance.clone();
+        }
+    }
 
-        // Flatten: splice every `X` call into a flat list of element lines, each
-        // carrying its parameter environment and a provenance breadcrumb.
-        let mut expanded: Vec<SplicedLine> = Vec::new();
-        for (lineno, raw) in &top_elems {
-            if starts_with_letter(raw, 'x') {
-                expand_instance(
-                    *lineno,
-                    raw,
-                    &subckts,
-                    global_env.clone(),
-                    &mut Vec::new(),
-                    &mut expanded,
-                )?;
-            } else {
-                expanded.push(SplicedLine {
-                    lineno: *lineno,
+    // Third pass: resolve element-name references (§2.2).
+    resolve_name_fixups(&mut circuit, &fixups)?;
+
+    // Fourth pass (NEW): `.ic`/`.nodeset`, resolved now that every flattened
+    // node exists. Values evaluate against the global parameter environment; a
+    // mangled internal node (`X1.out`) resolves by its flattened name.
+    let mut ic_out: Vec<(NodeId, f64)> = Vec::new();
+    for pl in &col.ic_cards {
+        parse_ic_values(pl, &circuit, &global_env, "`.ic`", &mut ic_out)
+            .map_err(|e| with_provenance(e, &pl.origin))?;
+    }
+    let mut ns_out: Vec<(NodeId, f64)> = Vec::new();
+    for pl in &col.nodeset_cards {
+        parse_ic_values(pl, &circuit, &global_env, "`.nodeset`", &mut ns_out)
+            .map_err(|e| with_provenance(e, &pl.origin))?;
+    }
+
+    // `.ic` is only honestly supported on the `uic` power-on path: hauksbee has
+    // no machinery to PIN a node during the DC operating-point solve (only
+    // device-level capacitor `ic=` pinning exists). Refuse `.ic` without `uic`
+    // loudly rather than silently downgrading it to a start-vector seed.
+    if !ic_out.is_empty() && !directives.use_initial_conditions {
+        let first = &col.ic_cards[0];
+        return Err(with_provenance(
+            SpiceError::Syntax {
+                line: first.lineno,
+                msg: "`.ic` requires `uic` on the `.tran` card. hauksbee seeds the named \
+                      node voltages at the power-on (uic) start; it does NOT implement \
+                      pinning them during a DC operating-point solve. Add `uic` to the \
+                      `.tran` card, or remove the `.ic`."
+                    .into(),
+                text: first.text.clone(),
+            },
+            &first.origin,
+        ));
+    }
+
+    circuit.initial_conditions = ic_out;
+    circuit.nodesets = ns_out;
+
+    Ok((circuit, directives))
+}
+
+/// Accumulators for the first pass, extracted so each line's processing can be
+/// wrapped once with its provenance breadcrumb (see [`load_deck`]).
+#[derive(Default)]
+struct Collector {
+    models: HashMap<String, ModelCard>,
+    subckts: HashMap<String, SubcktDef>,
+    param_cards: Vec<ParamCard>,
+    /// Top-level element / `X`-instantiation lines, in source order.
+    top_elems: Vec<PhysLine>,
+    /// `.ic` cards (raw), resolved against the flattened node table afterward.
+    ic_cards: Vec<PhysLine>,
+    /// `.nodeset` cards (raw), resolved the same way.
+    nodeset_cards: Vec<PhysLine>,
+    /// The subckt currently being collected (definitions do not nest).
+    current: Option<SubcktDef>,
+}
+
+/// Process one logical line in the first pass. Returns a bare (un-provenanced)
+/// error; [`load_deck`] wraps it with the line's breadcrumb.
+fn collect_line(
+    pl: &PhysLine,
+    col: &mut Collector,
+    circuit: &mut Circuit,
+    directives: &mut Directives,
+) -> Result<(), SpiceError> {
+    let lineno = pl.lineno;
+    let raw = &pl.text;
+    let trimmed = raw.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+
+    if lower.starts_with(".subckt") {
+        if col.current.is_some() {
+            return Err(SpiceError::Syntax {
+                line: lineno,
+                msg: "nested `.subckt` definitions are unsupported".into(),
+                text: raw.clone(),
+            });
+        }
+        col.current = Some(parse_subckt_header(lineno, raw)?);
+        return Ok(());
+    }
+    if lower.starts_with(".ends") {
+        match col.current.take() {
+            Some(def) => {
+                if let Some(prev) = col.subckts.insert(def.name.to_ascii_lowercase(), def) {
+                    return Err(SpiceError::Syntax {
+                        line: lineno,
+                        msg: format!("duplicate `.subckt {}` definition", prev.name),
+                        text: raw.clone(),
+                    });
+                }
+            }
+            None => {
+                return Err(SpiceError::Syntax {
+                    line: lineno,
+                    msg: "`.ends` without a matching `.subckt`".into(),
                     text: raw.clone(),
-                    provenance: String::new(),
-                    env: global_env.clone(),
                 });
             }
         }
-
-        // Second pass: parse the flattened element lines. Errors from a spliced
-        // body are annotated with where the body came from and where it was
-        // instantiated. Cards that reference another element BY NAME (F/H
-        // control sources) defer the reference into `fixups` — the referent may
-        // appear later in the deck — and the third pass below resolves them.
-        let mut fixups: Vec<NameFixup> = Vec::new();
-        for sl in &expanded {
-            let before = fixups.len();
-            parse_element(
-                sl.lineno,
-                &sl.text,
-                &mut circuit,
-                &models,
-                &sl.env,
-                &mut fixups,
-            )
-            .map_err(|e| with_provenance(e, &sl.provenance))?;
-            // Resolution errors surface after this loop; carry the breadcrumb
-            // so they still name the subckt instantiation site.
-            for fx in &mut fixups[before..] {
-                fx.provenance = sl.provenance.clone();
-            }
-        }
-
-        // Third pass: resolve element-name references (§2.2).
-        resolve_name_fixups(&mut circuit, &fixups)?;
-
-        Ok((circuit, directives))
+        return Ok(());
     }
+
+    // Inside a subckt body: hoist `.model`, keep `.param`/elements/X for the
+    // body, refuse analysis/topology directives that make no sense in a subckt.
+    if let Some(def) = col.current.as_mut() {
+        if lower.starts_with(".model") {
+            let card = parse_model_card(lineno, raw)?;
+            insert_model(&mut col.models, card, lineno, raw)?;
+        } else if lower.starts_with('.') && !lower.starts_with(".param") {
+            return Err(SpiceError::Syntax {
+                line: lineno,
+                msg: format!(
+                    "directive `{}` is not allowed inside a `.subckt` body",
+                    first_token(trimmed)
+                ),
+                text: raw.clone(),
+            });
+        } else if !trimmed.is_empty() && !trimmed.starts_with('*') {
+            def.body.push(pl.clone());
+        }
+        return Ok(());
+    }
+
+    // Top level.
+    if lower.starts_with(".model") {
+        let card = parse_model_card(lineno, raw)?;
+        insert_model(&mut col.models, card, lineno, raw)?;
+    } else if lower.starts_with(".param") {
+        parse_param_card(lineno, raw, &mut col.param_cards)?;
+    } else if lower.starts_with(".temp") {
+        let toks = tokenize(raw);
+        if let Some(t) = toks.get(1) {
+            circuit.temp_c = number(lineno, t, raw)?;
+        }
+    } else if lower.starts_with(".options") || lower.starts_with(".option") {
+        parse_options(raw, directives);
+    } else if lower.starts_with(".tran") {
+        directives.tran = Some(parse_tran(lineno, raw, directives)?);
+    } else if lower.starts_with(".ic") {
+        col.ic_cards.push(pl.clone());
+    } else if lower.starts_with(".nodeset") {
+        col.nodeset_cards.push(pl.clone());
+    } else if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with('.') {
+        // Other directives (`.print`, `.ac`, `.end`, ...) are consumed elsewhere
+        // or out of scope for this step; skip them here.
+    } else {
+        col.top_elems.push(pl.clone());
+    }
+    Ok(())
 }
 
 // --- element-name references (§2.2) ------------------------------------------
@@ -709,8 +850,10 @@ struct SubcktDef {
     ports: Vec<String>,
     /// `(param_lower, raw_value)` defaults, in declaration order.
     defaults: Vec<(String, String)>,
-    /// Body cards (elements, nested `X`, and local `.param`), with file lines.
-    body: Vec<(usize, String)>,
+    /// Body cards (elements, nested `X`, and local `.param`), each keeping its
+    /// file line and inclusion provenance (a subckt defined in an included file
+    /// carries that file's breadcrumb into every spliced instance).
+    body: Vec<PhysLine>,
     /// The line of the `.subckt` header, for "never closed" errors.
     def_line: usize,
 }
@@ -808,11 +951,13 @@ fn node_indices_for(kind: char) -> &'static [usize] {
 /// Expand one `Xxxx ... NAME [k=v ...]` instantiation into `out`, recursing for
 /// nested `X` calls. `chain` is the stack of subckt names currently being
 /// expanded, for the self-instantiation cycle check.
+#[allow(clippy::too_many_arguments)]
 fn expand_instance(
     lineno: usize,
     raw: &str,
     subckts: &HashMap<String, SubcktDef>,
     caller_env: Rc<ParamEnv>,
+    caller_origin: &Rc<str>,
     chain: &mut Vec<String>,
     out: &mut Vec<SplicedLine>,
 ) -> Result<(), SpiceError> {
@@ -920,10 +1065,10 @@ fn expand_instance(
     let local_cards: Vec<ParamCard> = def
         .body
         .iter()
-        .filter(|(_, b)| b.trim_start().to_ascii_lowercase().starts_with(".param"))
-        .map(|(bl, b)| -> Result<Vec<ParamCard>, SpiceError> {
+        .filter(|pl| pl.text.trim_start().to_ascii_lowercase().starts_with(".param"))
+        .map(|pl| -> Result<Vec<ParamCard>, SpiceError> {
             let mut tmp = Vec::new();
-            parse_param_card(*bl, b, &mut tmp)?;
+            parse_param_card(pl.lineno, &pl.text, &mut tmp)?;
             Ok(tmp)
         })
         .collect::<Result<Vec<_>, _>>()?
@@ -940,13 +1085,22 @@ fn expand_instance(
         .map(|(p, a)| (p.to_ascii_lowercase(), a.to_string()))
         .collect();
 
-    let breadcrumb = format!(
-        " (in subckt {}, instantiated at line {} as {})",
-        def.name, lineno, inst_name
+    // The subckt breadcrumb, plus the inclusion breadcrumb of the `X` call site
+    // (empty at top level) so an error names the file the instantiation lives in
+    // as well as the subckt. Passed down as the nested caller's origin so deeper
+    // errors chain the whole instantiation path.
+    let breadcrumb: Rc<str> = Rc::from(
+        format!(
+            " (in subckt {}, instantiated at line {} as {}{})",
+            def.name, lineno, inst_name, caller_origin
+        )
+        .as_str(),
     );
 
     chain.push(key);
-    for (blineno, bline) in &def.body {
+    for pl in &def.body {
+        let blineno = pl.lineno;
+        let bline = &pl.text;
         let lower = bline.trim_start().to_ascii_lowercase();
         if lower.starts_with(".param") {
             continue; // folded into inst_env above
@@ -974,10 +1128,11 @@ fn expand_instance(
             }
             let rewritten = new_toks.join(" ");
             expand_instance(
-                *blineno,
+                blineno,
                 &rewritten,
                 subckts,
                 inst_env.clone(),
+                &breadcrumb,
                 chain,
                 out,
             )?;
@@ -1010,9 +1165,12 @@ fn expand_instance(
                 new_toks[3] = format!("{}.{}", inst_name, btoks[3]);
             }
             out.push(SplicedLine {
-                lineno: *blineno,
+                lineno: blineno,
+                // The breadcrumb (subckt + instantiation site) plus THIS body
+                // line's own inclusion origin, so an error names the subckt AND
+                // the file the body card physically lives in.
                 text: new_toks.join(" "),
-                provenance: breadcrumb.clone(),
+                provenance: format!("{}{}", breadcrumb, pl.origin),
                 env: inst_env.clone(),
             });
         }
@@ -1093,33 +1251,567 @@ fn with_provenance(err: SpiceError, prov: &str) -> SpiceError {
     }
 }
 
-// --- line joining -----------------------------------------------------------
+// --- file inclusion (§4.1, `.include` / `.lib`) ------------------------------
 
-/// Strip comments, join `+` continuation lines, and drop the title line.
-/// Returns `(line_number, text)` for each logical line.
-fn join_continuations(text: &str) -> Vec<(usize, String)> {
-    let mut out: Vec<(usize, String)> = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        let lineno = i + 1;
-        // The very first non-blank line is the title in SPICE.
-        if out.is_empty() && lineno == 1 {
+/// The maximum `.include`/`.lib` nesting depth (a backstop beyond the exact
+/// cycle check).
+pub const MAX_INCLUDE_DEPTH: usize = 50;
+
+/// One physical source line tagged with where it came from. `origin` is a
+/// provenance breadcrumb (empty for the top deck) appended to any error raised
+/// from this line, so a failure inside an included file names the file, its
+/// own line, and the inclusion site — the same discipline subckt splicing uses.
+#[derive(Clone)]
+struct PhysLine {
+    /// Line number within the file the line came from (1-based).
+    lineno: usize,
+    /// The raw physical text (post-continuation-join for logical lines).
+    text: String,
+    /// Inclusion breadcrumb; empty for the top deck.
+    origin: Rc<str>,
+}
+
+/// State threaded through the recursive include expansion.
+struct IncludeCtx {
+    /// The top deck's directory — the second search location for every include.
+    top_dir: PathBuf,
+    /// Canonicalized paths currently open on the include stack (cycle check).
+    stack: Vec<PathBuf>,
+}
+
+/// Build a line-numbered [`SpiceError::Syntax`] carrying an inclusion breadcrumb.
+fn provenanced_syntax(line: usize, raw: &str, origin: &Rc<str>, msg: String) -> SpiceError {
+    with_provenance(
+        SpiceError::Syntax {
+            line,
+            msg,
+            text: raw.to_string(),
+        },
+        origin,
+    )
+}
+
+/// Split a `.include`/`.lib` argument list: a possibly quoted path, optionally
+/// followed by a bare section token. Quotes let a path contain spaces.
+fn parse_directive_args(rest: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = rest.trim().chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
             continue;
         }
+        if c == '"' || c == '\'' {
+            let q = c;
+            chars.next();
+            let mut s = String::new();
+            for ch in chars.by_ref() {
+                if ch == q {
+                    break;
+                }
+                s.push(ch);
+            }
+            args.push(s);
+        } else {
+            let mut s = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() {
+                    break;
+                }
+                s.push(ch);
+                chars.next();
+            }
+            args.push(s);
+        }
+    }
+    args
+}
+
+/// Resolve an include path: the including file's directory first, then the top
+/// deck's directory; an absolute path is used as-is. On failure returns the
+/// list of paths tried (for a not-found error).
+fn resolve_include(arg: &str, this_dir: &Path, top_dir: &Path) -> Result<PathBuf, Vec<PathBuf>> {
+    let p = Path::new(arg);
+    if p.is_absolute() {
+        return if p.is_file() {
+            Ok(p.to_path_buf())
+        } else {
+            Err(vec![p.to_path_buf()])
+        };
+    }
+    let mut attempts = Vec::new();
+    for base in [this_dir, top_dir] {
+        let cand = base.join(p);
+        if cand.is_file() {
+            return Ok(cand);
+        }
+        if !attempts.contains(&cand) {
+            attempts.push(cand);
+        }
+    }
+    Err(attempts)
+}
+
+/// Read a source file's lines, expanding `.include`/`.lib` inline into `out`.
+/// `is_top` drops the SPICE title line (line 1) of the TOP deck only — included
+/// files have no title. `origin` is the breadcrumb for lines from this file.
+fn read_source(
+    text: &str,
+    this_dir: &Path,
+    this_name: &str,
+    origin: Rc<str>,
+    is_top: bool,
+    ctx: &mut IncludeCtx,
+    out: &mut Vec<PhysLine>,
+) -> Result<(), SpiceError> {
+    for (i, raw) in text.lines().enumerate() {
+        let lineno = i + 1;
+        if is_top && lineno == 1 {
+            continue; // SPICE title line (top deck only)
+        }
+        let trimmed = raw.trim_start();
+        let tok = first_token(trimmed);
+        if tok.eq_ignore_ascii_case(".include") || tok.eq_ignore_ascii_case(".inc") {
+            let args = parse_directive_args(&trimmed[tok.len()..]);
+            include_file(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
+        } else if tok.eq_ignore_ascii_case(".lib") {
+            let args = parse_directive_args(&trimmed[tok.len()..]);
+            lib_call(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
+        } else if tok.eq_ignore_ascii_case(".endl") {
+            return Err(provenanced_syntax(
+                lineno,
+                raw,
+                &origin,
+                "`.endl` without an open `.lib` section".into(),
+            ));
+        } else {
+            out.push(PhysLine {
+                lineno,
+                text: raw.to_string(),
+                origin: origin.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Handle a `.include <file>` card.
+#[allow(clippy::too_many_arguments)]
+fn include_file(
+    args: &[String],
+    site: usize,
+    raw: &str,
+    this_dir: &Path,
+    this_name: &str,
+    origin: &Rc<str>,
+    ctx: &mut IncludeCtx,
+    out: &mut Vec<PhysLine>,
+) -> Result<(), SpiceError> {
+    if args.len() != 1 {
+        return Err(provenanced_syntax(
+            site,
+            raw,
+            origin,
+            format!("`.include` takes exactly one file path (got {})", args.len()),
+        ));
+    }
+    let path = resolve_include(&args[0], this_dir, &ctx.top_dir).map_err(|attempts| {
+        provenanced_syntax(
+            site,
+            raw,
+            origin,
+            format!(
+                "`.include` file `{}` not found (tried: {})",
+                args[0],
+                attempts
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    })?;
+    let child_origin: Rc<str> = Rc::from(
+        format!(
+            " (in included file \"{}\", included from {} line {})",
+            args[0], this_name, site
+        )
+        .as_str(),
+    );
+    splice_file(&path, &args[0], child_origin, None, site, raw, origin, ctx, out)
+}
+
+/// Handle a `.lib <file> <section>` call — or refuse the ambiguous one-arg form.
+#[allow(clippy::too_many_arguments)]
+fn lib_call(
+    args: &[String],
+    site: usize,
+    raw: &str,
+    this_dir: &Path,
+    this_name: &str,
+    origin: &Rc<str>,
+    ctx: &mut IncludeCtx,
+    out: &mut Vec<PhysLine>,
+) -> Result<(), SpiceError> {
+    match args.len() {
+        2 => {
+            let (file, section) = (&args[0], &args[1]);
+            let path = resolve_include(file, this_dir, &ctx.top_dir).map_err(|attempts| {
+                provenanced_syntax(
+                    site,
+                    raw,
+                    origin,
+                    format!(
+                        "`.lib` file `{}` not found (tried: {})",
+                        file,
+                        attempts
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?;
+            let child_origin: Rc<str> = Rc::from(
+                format!(
+                    " (from .lib section \"{}\" of file \"{}\", included from {} line {})",
+                    section, file, this_name, site
+                )
+                .as_str(),
+            );
+            splice_file(&path, file, child_origin, Some(section), site, raw, origin, ctx, out)
+        }
+        1 => Err(provenanced_syntax(
+            site,
+            raw,
+            origin,
+            format!(
+                "one-argument `.lib {0}` is ambiguous: use `.include {0}` to pull the whole \
+                 file, or `.lib {0} <section>` to pull a named `.lib`/`.endl` section",
+                args[0]
+            ),
+        )),
+        n => Err(provenanced_syntax(
+            site,
+            raw,
+            origin,
+            format!("`.lib` takes `<file> <section>` (got {n} arguments)"),
+        )),
+    }
+}
+
+/// Read `path`, guarding cycles/depth, then dispatch to whole-file or
+/// section-only splicing.
+#[allow(clippy::too_many_arguments)]
+fn splice_file(
+    path: &Path,
+    display_arg: &str,
+    child_origin: Rc<str>,
+    section: Option<&str>,
+    site: usize,
+    site_raw: &str,
+    site_origin: &Rc<str>,
+    ctx: &mut IncludeCtx,
+    out: &mut Vec<PhysLine>,
+) -> Result<(), SpiceError> {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if ctx.stack.contains(&canon) {
+        let chain = ctx
+            .stack
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        return Err(provenanced_syntax(
+            site,
+            site_raw,
+            site_origin,
+            format!(
+                "include cycle: `{}` is already open ({} -> {})",
+                display_arg,
+                chain,
+                canon.display()
+            ),
+        ));
+    }
+    if ctx.stack.len() >= MAX_INCLUDE_DEPTH {
+        return Err(provenanced_syntax(
+            site,
+            site_raw,
+            site_origin,
+            format!("include nesting exceeds depth {MAX_INCLUDE_DEPTH} at `{display_arg}`"),
+        ));
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        provenanced_syntax(
+            site,
+            site_raw,
+            site_origin,
+            format!("cannot read included file `{}`: {e}", path.display()),
+        )
+    })?;
+    let child_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let child_name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    ctx.stack.push(canon);
+    let r = match section {
+        Some(sec) => read_section(&text, &child_dir, &child_name, sec, display_arg, child_origin, ctx, out),
+        None => read_source(&text, &child_dir, &child_name, child_origin, false, ctx, out),
+    };
+    ctx.stack.pop();
+    r
+}
+
+/// Splice ONLY the named `.lib <section> ... .endl` block from a library file.
+/// Nested `.include`/`.lib <file> <section>` calls inside the section expand;
+/// nested `.lib <section>` DEFINITIONS are refused (unsupported).
+#[allow(clippy::too_many_arguments)]
+fn read_section(
+    text: &str,
+    this_dir: &Path,
+    this_name: &str,
+    section: &str,
+    file_arg: &str,
+    origin: Rc<str>,
+    ctx: &mut IncludeCtx,
+    out: &mut Vec<PhysLine>,
+) -> Result<(), SpiceError> {
+    let mut available: Vec<String> = Vec::new();
+    let mut in_section = false;
+    let mut found = false;
+    for (i, raw) in text.lines().enumerate() {
+        let lineno = i + 1;
+        let trimmed = raw.trim_start();
+        let tok = first_token(trimmed);
+        if tok.eq_ignore_ascii_case(".lib") {
+            let args = parse_directive_args(&trimmed[tok.len()..]);
+            if args.len() == 1 {
+                // A section-open inside the library file.
+                if in_section {
+                    return Err(provenanced_syntax(
+                        lineno,
+                        raw,
+                        &origin,
+                        "nested `.lib` sections are unsupported".into(),
+                    ));
+                }
+                available.push(args[0].clone());
+                if args[0].eq_ignore_ascii_case(section) {
+                    in_section = true;
+                    found = true;
+                }
+                continue;
+            } else if in_section && args.len() == 2 {
+                // A `.lib file section` CALL inside our section: expand it.
+                let path = resolve_include(&args[0], this_dir, &ctx.top_dir).map_err(|att| {
+                    provenanced_syntax(
+                        lineno,
+                        raw,
+                        &origin,
+                        format!(
+                            "`.lib` file `{}` not found (tried: {})",
+                            args[0],
+                            att.iter()
+                                .map(|p| p.display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    )
+                })?;
+                let child_origin: Rc<str> = Rc::from(
+                    format!(
+                        " (from .lib section \"{}\" of file \"{}\", included from {} line {})",
+                        args[1], args[0], this_name, lineno
+                    )
+                    .as_str(),
+                );
+                splice_file(&path, &args[0], child_origin, Some(&args[1]), lineno, raw, &origin, ctx, out)?;
+                continue;
+            } else if in_section {
+                return Err(provenanced_syntax(
+                    lineno,
+                    raw,
+                    &origin,
+                    format!("malformed `.lib` inside section `{section}`"),
+                ));
+            } else {
+                continue; // belongs to a section we are not pulling
+            }
+        }
+        if tok.eq_ignore_ascii_case(".endl") {
+            if in_section {
+                return Ok(()); // our section closed
+            }
+            continue; // `.endl` for a section we are not pulling
+        }
+        if tok.eq_ignore_ascii_case(".include") || tok.eq_ignore_ascii_case(".inc") {
+            if in_section {
+                let args = parse_directive_args(&trimmed[tok.len()..]);
+                include_file(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
+            }
+            continue;
+        }
+        if in_section {
+            out.push(PhysLine {
+                lineno,
+                text: raw.to_string(),
+                origin: origin.clone(),
+            });
+        }
+    }
+    if !found {
+        return Err(provenanced_syntax(
+            0,
+            "",
+            &origin,
+            format!(
+                "`.lib` section `{}` not found in file `{}`; available sections: {}",
+                section,
+                file_arg,
+                if available.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    available.join(", ")
+                }
+            ),
+        ));
+    }
+    Err(provenanced_syntax(
+        0,
+        "",
+        &origin,
+        format!("`.lib` section `{section}` in file `{file_arg}` is not closed with `.endl`"),
+    ))
+}
+
+// --- .ic / .nodeset (§4.1) ---------------------------------------------------
+
+/// Parse a `.ic`/`.nodeset` card's `V(node)=value` groups, resolving each node
+/// against the (flattened) circuit and evaluating each value against `env`.
+/// A bare (un-provenanced) error; the caller wraps it with the card's breadcrumb.
+fn parse_ic_values(
+    pl: &PhysLine,
+    circuit: &Circuit,
+    env: &ParamEnv,
+    what: &str,
+    out: &mut Vec<(NodeId, f64)>,
+) -> Result<(), SpiceError> {
+    // `tokenize` drops `(`, `)`, `,`, `=`, keeping `{expr}` atomic, so
+    // `.ic V(out)={a*2} V(b)=1` becomes [".ic","V","out","{a*2}","V","b","1"].
+    let toks = tokenize(&pl.text);
+    let syn = |msg: String| SpiceError::Syntax {
+        line: pl.lineno,
+        msg,
+        text: pl.text.clone(),
+    };
+    let mut i = 1;
+    let mut any = false;
+    while i < toks.len() {
+        if !toks[i].eq_ignore_ascii_case("v") {
+            return Err(syn(format!(
+                "{what} expects `V(node)=value` groups, found `{}`",
+                toks[i]
+            )));
+        }
+        let node = toks
+            .get(i + 1)
+            .ok_or_else(|| syn(format!("{what}: `V(` without a node name")))?;
+        let valtok = toks
+            .get(i + 2)
+            .ok_or_else(|| syn(format!("{what}: `V({node})` without a value")))?;
+        let value = eval_value(pl.lineno, valtok, &pl.text, env)?;
+        let nid = circuit
+            .find_node(node)
+            .ok_or_else(|| syn(format!(
+                "{what} references unknown node `{node}`{}",
+                did_you_mean(circuit, node)
+            )))?;
+        out.push((nid, value));
+        any = true;
+        i += 3;
+    }
+    if !any {
+        return Err(syn(format!("{what} card sets nothing")));
+    }
+    Ok(())
+}
+
+/// Suggest close node names for an unresolved `.ic`/`.nodeset` reference. Empty
+/// when nothing is within a small edit distance.
+fn did_you_mean(circuit: &Circuit, target: &str) -> String {
+    let t = target.to_ascii_lowercase();
+    let mut cands: Vec<String> = circuit
+        .node_names()
+        .filter(|n| *n != "0")
+        .filter(|n| {
+            let nl = n.to_ascii_lowercase();
+            levenshtein(&nl, &t) <= 2
+        })
+        .map(|s| s.to_string())
+        .collect();
+    cands.sort();
+    cands.dedup();
+    if cands.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " (did you mean {}?)",
+            cands
+                .iter()
+                .map(|c| format!("`{c}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+/// Iterative Levenshtein edit distance (small strings; node names).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+// --- line joining -----------------------------------------------------------
+
+/// Strip comments and join `+` continuation lines across the already-expanded
+/// physical-line list. The SPICE title line was dropped during inclusion
+/// (top-deck line 1), so there is none to drop here. Each logical line keeps
+/// the file line number and inclusion breadcrumb of its FIRST physical line.
+fn join_continuations(phys: &[PhysLine]) -> Vec<PhysLine> {
+    let mut out: Vec<PhysLine> = Vec::new();
+    for pl in phys {
         // Inline `;` and trailing `$` comments are stripped; full-line `*` too.
-        let stripped = strip_inline_comment(line);
+        let stripped = strip_inline_comment(&pl.text);
         let t = stripped.trim_end();
         if t.trim_start().starts_with('+') {
             if let Some(last) = out.last_mut() {
                 let cont = t.trim_start().trim_start_matches('+');
-                last.1.push(' ');
-                last.1.push_str(cont.trim());
+                last.text.push(' ');
+                last.text.push_str(cont.trim());
                 continue;
             }
         }
         if t.trim().is_empty() {
             continue;
         }
-        out.push((lineno, t.to_string()));
+        out.push(PhysLine {
+            lineno: pl.lineno,
+            text: t.to_string(),
+            origin: pl.origin.clone(),
+        });
     }
     out
 }
@@ -2565,5 +3257,214 @@ mod tests {
             }
             _ => panic!("expected pulse vsource"),
         }
+    }
+
+    // --- .include / .lib (§4.1) ---------------------------------------------
+
+    use std::path::PathBuf;
+
+    /// A throwaway directory under the OS temp dir, cleaned on drop, for the
+    /// file-inclusion tests (which genuinely need files on disk).
+    struct TmpDir(PathBuf);
+    impl TmpDir {
+        fn new(tag: &str) -> TmpDir {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let p = std::env::temp_dir().join(format!(
+                "hauksbee_inc_{}_{}_{}",
+                std::process::id(),
+                tag,
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&p).unwrap();
+            TmpDir(p)
+        }
+        fn write(&self, name: &str, body: &str) -> PathBuf {
+            let path = self.0.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&path, body).unwrap();
+            path
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn include_pulls_model_library_end_to_end() {
+        // The main deck references a diode model DEFINED in an included file.
+        // Inclusion must run before `.model` collection so the diode binds it.
+        let d = TmpDir::new("modlib");
+        d.write("models.lib", "* a model library\n.model DFAST D(IS=3e-15 N=1.7)\n");
+        let main = d.write(
+            "main.cir",
+            "main deck\nD1 a 0 DFAST\nR1 a 0 1k\n.include models.lib\n.end\n",
+        );
+        let c = SpiceLoader::load_file(&main).unwrap();
+        let diode = c
+            .devices
+            .iter()
+            .find(|dev| matches!(dev, Device::Diode { .. }))
+            .expect("diode present");
+        match diode {
+            Device::Diode { model, .. } => {
+                assert!((model.is - 3e-15).abs() < 1e-20, "IS from included .model");
+                assert!((model.n - 1.7).abs() < 1e-12, "N from included .model");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn include_missing_file_is_line_numbered_refusal() {
+        let d = TmpDir::new("missing");
+        let main = d.write("main.cir", "m\nR1 a 0 1k\n.include no_such.lib\n.end\n");
+        let err = SpiceLoader::load_file(&main).unwrap_err().to_string();
+        assert!(err.contains("not found"), "{err}");
+        assert!(err.contains("no_such.lib"), "names the file: {err}");
+        assert!(err.contains("line 3"), "carries the include line: {err}");
+        assert!(err.contains("tried"), "lists resolved-path attempts: {err}");
+    }
+
+    #[test]
+    fn include_cycle_is_refused() {
+        let d = TmpDir::new("cycle");
+        d.write("a.cir", "* a\nR1 x 0 1k\n.include b.cir\n");
+        d.write("b.cir", "* b\nR2 y 0 1k\n.include a.cir\n");
+        let top = d.write("top.cir", "top\nR0 z 0 1k\n.include a.cir\n.end\n");
+        let err = SpiceLoader::load_file(&top).unwrap_err().to_string();
+        assert!(err.contains("cycle"), "want a cycle refusal, got: {err}");
+    }
+
+    #[test]
+    fn lib_section_pulls_only_the_named_block() {
+        // Two sections; pulling `fast` must bring ONLY the fast model, not slow.
+        let d = TmpDir::new("libsec");
+        d.write(
+            "corner.lib",
+            "* corner library\n\
+             .lib fast\n.model MM NMOS(VTO=0.5 KP=5e-3)\n.endl\n\
+             .lib slow\n.model MM NMOS(VTO=1.5 KP=1e-3)\n.endl\n",
+        );
+        let main = d.write(
+            "main.cir",
+            "m\nM1 d g 0 0 MM\n.lib corner.lib fast\n.end\n",
+        );
+        let c = SpiceLoader::load_file(&main).unwrap();
+        match c.devices.iter().find(|x| matches!(x, Device::Mosfet { .. })).unwrap() {
+            Device::Mosfet { model, .. } => {
+                assert!((model.vto - 0.5).abs() < 1e-9, "fast VTO, not slow: {}", model.vto);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn lib_unknown_section_lists_available() {
+        let d = TmpDir::new("libunk");
+        d.write(
+            "corner.lib",
+            ".lib fast\n.model MM NMOS(VTO=0.5)\n.endl\n.lib slow\n.model MM NMOS(VTO=1.5)\n.endl\n",
+        );
+        let main = d.write("main.cir", "m\nM1 d g 0 0 MM\n.lib corner.lib typ\n.end\n");
+        let err = SpiceLoader::load_file(&main).unwrap_err().to_string();
+        assert!(err.contains("not found"), "{err}");
+        assert!(err.contains("fast") && err.contains("slow"), "lists sections: {err}");
+    }
+
+    #[test]
+    fn bare_lib_one_arg_is_refused_not_treated_as_include() {
+        let d = TmpDir::new("libbare");
+        d.write("stuff.lib", ".model MM NMOS(VTO=0.5)\n");
+        let main = d.write("main.cir", "m\nM1 d g 0 0 MM\n.lib stuff.lib\n.end\n");
+        let err = SpiceLoader::load_file(&main).unwrap_err().to_string();
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(err.contains(".include") && err.contains("<section>"), "guides the user: {err}");
+    }
+
+    #[test]
+    fn error_in_included_file_names_file_and_site() {
+        // A malformed element inside the included file must report the included
+        // file's own line AND the inclusion site.
+        let d = TmpDir::new("incerr");
+        d.write("bad.lib", "* bad lib\nZ9 a b 5\n"); // Z is unsupported
+        let main = d.write("main.cir", "m\nR1 a 0 1k\n.include bad.lib\n.end\n");
+        let err = SpiceLoader::load_file(&main).unwrap_err().to_string();
+        assert!(err.contains("line 2"), "included-file line: {err}");
+        assert!(err.contains("bad.lib"), "names the included file: {err}");
+        assert!(err.contains("line 3"), "names the inclusion site: {err}");
+    }
+
+    // --- .ic / .nodeset (§4.1) ----------------------------------------------
+
+    /// Find a node id by name (test helper).
+    fn node_of(c: &Circuit, name: &str) -> NodeId {
+        c.find_node(name).unwrap_or_else(|| panic!("no node {name}"))
+    }
+
+    #[test]
+    fn ic_requires_uic_or_refuses() {
+        // Without `uic`: loud refusal (no pin-during-DC machinery).
+        let net = "rc\nC1 out 0 1u\nR1 out 0 1k\n.ic V(out)=5\n.tran 1u 1m\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("uic"), "must cite uic: {err}");
+        assert!(err.contains("line 4"), "points at the .ic line: {err}");
+
+        // With `uic`: accepted, and the node voltage is recorded.
+        let net2 = "rc\nC1 out 0 1u\nR1 out 0 1k\n.ic V(out)=5\n.tran 1u 1m uic\n.end\n";
+        let (c, _d) = SpiceLoader::load_with_directives(net2).unwrap();
+        let out = node_of(&c, "out");
+        assert_eq!(c.initial_conditions, vec![(out, 5.0)]);
+    }
+
+    #[test]
+    fn ic_value_through_param_env() {
+        let net = "rc\n.param vstart=3.3\nC1 out 0 1u\nR1 out 0 1k\n\
+                   .ic V(out)={vstart*2}\n.tran 1u 1m uic\n.end\n";
+        let (c, _d) = SpiceLoader::load_with_directives(net).unwrap();
+        let out = node_of(&c, "out");
+        assert_eq!(c.initial_conditions.len(), 1);
+        assert_eq!(c.initial_conditions[0].0, out);
+        assert!((c.initial_conditions[0].1 - 6.6).abs() < 1e-9, "expr value");
+    }
+
+    #[test]
+    fn ic_unknown_node_suggests_candidate() {
+        let net = "rc\nC1 out 0 1u\nR1 out 0 1k\n.ic V(ott)=5\n.tran 1u 1m uic\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("unknown node") && err.contains("ott"), "{err}");
+        assert!(err.contains("did you mean") && err.contains("out"), "candidate: {err}");
+    }
+
+    #[test]
+    fn ic_targets_flattened_subckt_node() {
+        // `.ic V(X1.out)=2` must resolve against the mangled internal node.
+        let net = "s\n\
+                   .subckt BUF inp\n\
+                   R1 inp out 1k\n\
+                   C1 out 0 1u\n\
+                   .ends\n\
+                   X1 a BUF\n\
+                   Vd a 0 1\n\
+                   .ic V(X1.out)=2\n\
+                   .tran 1u 1m uic\n\
+                   .end\n";
+        let (c, _d) = SpiceLoader::load_with_directives(net).unwrap();
+        let n = node_of(&c, "X1.out");
+        assert_eq!(c.initial_conditions, vec![(n, 2.0)], "flattened-name contract");
+    }
+
+    #[test]
+    fn nodeset_populates_without_uic() {
+        // `.nodeset` is a DC guess; it needs no `uic` and is not an `.ic`.
+        let net = "n\nR1 a 0 1k\nR2 a b 1k\nVd b 0 5\n.nodeset V(a)=2.5\n.op\n.end\n";
+        let (c, _d) = SpiceLoader::load_with_directives(net).unwrap();
+        let a = node_of(&c, "a");
+        assert_eq!(c.nodesets, vec![(a, 2.5)]);
+        assert!(c.initial_conditions.is_empty());
     }
 }

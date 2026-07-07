@@ -959,9 +959,19 @@ fn dc_solve(
         }
     }
 
-    // Attempt 1: direct (cold, zeroed).
+    // Attempt 1: direct cold start. Normally the zero vector; but `.nodeset`
+    // cards (SPICE-compat §4.1) seed the START VECTOR for named nodes. This is a
+    // convergence GUESS only — Newton is free to walk away from it (nothing is
+    // pinned), so on a well-posed circuit the root is unchanged, while on a
+    // multi-stable one the seed selects which root is found. Every other node
+    // stays zero, exactly as before.
     for v in ws.x.iter_mut() {
         *v = 0.0;
+    }
+    for &(nid, val) in &circuit.nodesets {
+        if let Some(i) = ws.layout.node(nid) {
+            ws.x[i] = val;
+        }
     }
     let r = solve(ws, opts.gmin, 1.0);
     if r.converged {

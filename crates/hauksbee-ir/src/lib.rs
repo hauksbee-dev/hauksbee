@@ -50,6 +50,17 @@ pub struct Circuit {
     pub devices: Vec<Device>,
     /// Ambient temperature in Celsius. SPICE default is 27 C.
     pub temp_c: f64,
+    /// `.ic V(node)=val` transient initial conditions: node voltages the
+    /// `uic`-flagged transient starts from at `t = 0` (consumed by
+    /// `transient.rs`). Empty for a deck without `.ic` cards.
+    #[serde(default)]
+    pub initial_conditions: Vec<(NodeId, f64)>,
+    /// `.nodeset V(node)=val` DC convergence aids: seed values for the DC Newton
+    /// start vector. Unlike `.ic` these are a GUESS, not a constraint — the
+    /// solver may converge elsewhere (consumed by `newton::dc_solve`). Empty for
+    /// a deck without `.nodeset` cards.
+    #[serde(default)]
+    pub nodesets: Vec<(NodeId, f64)>,
 }
 
 impl Default for Circuit {
@@ -65,6 +76,8 @@ impl Circuit {
             node_names: vec!["0".to_string()],
             devices: Vec::new(),
             temp_c: 27.0,
+            initial_conditions: Vec::new(),
+            nodesets: Vec::new(),
         }
     }
 
@@ -93,6 +106,27 @@ impl Circuit {
     /// Number of nodes including ground.
     pub fn node_count(&self) -> usize {
         self.node_names.len()
+    }
+
+    /// Look up an already-interned node by name (case-insensitive), honoring the
+    /// `0`/`gnd` ground aliases. Unlike [`Circuit::node`] this does NOT create a
+    /// new node for an unknown name — it returns `None`, so callers that must
+    /// reference an EXISTING node (`.ic`/`.nodeset`) can refuse a typo rather
+    /// than silently interning a floating node.
+    pub fn find_node(&self, name: &str) -> Option<NodeId> {
+        if name == "0" || name.eq_ignore_ascii_case("gnd") {
+            return Some(NodeId::GROUND);
+        }
+        self.node_names
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(name))
+            .map(|i| NodeId(i as u32))
+    }
+
+    /// All node names (including ground at index 0), for diagnostics such as
+    /// did-you-mean suggestions on an unresolved `.ic`/`.nodeset` reference.
+    pub fn node_names(&self) -> impl Iterator<Item = &str> {
+        self.node_names.iter().map(String::as_str)
     }
 
     /// Append a device and return its id.
