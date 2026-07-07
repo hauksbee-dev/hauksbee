@@ -14,8 +14,8 @@
 //! Everything here is a wrapper over code that already exists. It adds no
 //! physics; it only routes.
 
-use crate::{dc_operating_point, SolverOptions, Transient, Workspace};
-use hauksbee_ir::{Circuit, NodeId};
+use crate::{dc_operating_point, AcAnalysis, AcSpec, SolverOptions, Sweep, Transient, Workspace};
+use hauksbee_ir::{AcDirective, AcSweep, Circuit, DcDirective, Device, NodeId, SourceKind};
 
 /// One output quantity requested from a run.
 #[derive(Debug, Clone, PartialEq)]
@@ -236,9 +236,234 @@ pub fn run_tran(
     })
 }
 
+/// The values a single `.dc` source visits, `start` to `stop` inclusive by
+/// `step`. The loader guarantees a nonzero step whose sign reaches `stop`, so a
+/// simple integer count is safe and float drift never overshoots the endpoint.
+fn dc_sweep_values(start: f64, stop: f64, step: f64) -> Vec<f64> {
+    let n = ((stop - start) / step).floor().max(0.0) as u64;
+    (0..=n).map(|i| start + step * i as f64).collect()
+}
+
+/// Overwrite an independent source's value in a scratch circuit for one sweep
+/// point. The loader guaranteed the swept device is a V/I source.
+fn set_source_value(circuit: &mut Circuit, id: hauksbee_ir::DeviceId, value: f64) {
+    match &mut circuit.devices[id.0 as usize] {
+        Device::Vsource { kind, .. } | Device::Isource { kind, .. } => {
+            *kind = SourceKind::Dc(value);
+        }
+        _ => unreachable!("`.dc` sweep target resolved to a non-source device"),
+    }
+}
+
+/// Run a `.dc` sweep: loop the operating point, re-stamping the swept source's
+/// value at every point. A nested (second) source wraps the inner one, and the
+/// inner source is the reported sweep axis (SPICE convention). Blocks for each
+/// outer value are concatenated. The first output column is the inner swept
+/// value; the remaining columns are the probes.
+pub fn run_dc(
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    dc: &DcDirective,
+    probes: &[Probe],
+) -> Result<SimOutput, String> {
+    let inner_vals = dc_sweep_values(dc.inner.start, dc.inner.stop, dc.inner.step);
+    let outer_vals = match &dc.outer {
+        Some(o) => dc_sweep_values(o.start, o.stop, o.step),
+        None => vec![f64::NAN], // one pass, no outer source touched
+    };
+
+    let mut columns = Vec::with_capacity(probes.len() + 1);
+    columns.push(dc.inner.name.clone());
+    columns.extend(probes.iter().map(Probe::label));
+
+    // A scratch circuit we re-stamp in place, so each point solves a fresh OP.
+    let mut scratch = circuit.clone();
+    let mut rows = Vec::with_capacity(inner_vals.len() * outer_vals.len());
+    for &ov in &outer_vals {
+        if let Some(outer) = &dc.outer {
+            set_source_value(&mut scratch, outer.source, ov);
+        }
+        for &iv in &inner_vals {
+            set_source_value(&mut scratch, dc.inner.source, iv);
+            let point = run_op(&scratch, opts, probes)?;
+            let mut row = Vec::with_capacity(probes.len() + 1);
+            row.push(iv);
+            row.extend_from_slice(&point.rows[0]);
+            rows.push(row);
+        }
+    }
+
+    Ok(SimOutput {
+        columns,
+        time: None,
+        rows,
+    })
+}
+
+/// Run a `.ac` sweep against the existing [`AcAnalysis`], reading magnitude
+/// (linear) and phase (degrees) at each probe per frequency. The first output
+/// column is `frequency`; each probe contributes a magnitude column and a
+/// `<probe>:phase_deg` column.
+///
+/// Refuses (rather than fakes) when the deck carries no AC stimulus: a `.ac`
+/// with no `AC`-tagged source would run with a zero drive and hand back an
+/// all-zeros answer that looks like a result but is not one.
+pub fn run_ac(
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    ac: &AcDirective,
+    probes: &[Probe],
+) -> Result<SimOutput, String> {
+    if circuit.ac_stimulus.is_empty() {
+        return Err(
+            "`.ac` analysis has no AC stimulus: no source carries an `AC <mag> [phase]` \
+             spec, so the small-signal drive is identically zero and the response would be \
+             a meaningless all-zeros table. Add `AC 1` to the driving source (e.g. \
+             `VIN in 0 AC 1`)."
+                .to_string(),
+        );
+    }
+
+    // AC responds at nodes; a branch-current phasor is not captured here.
+    for p in probes {
+        if let Probe::BranchCurrent(d) = p {
+            return Err(format!(
+                "AC output `I({d})` is not supported: the AC analysis reports node-voltage \
+                 phasors, not branch currents. Probe a node voltage (e.g. `V(out)`)."
+            ));
+        }
+    }
+
+    let sweep = match ac.sweep {
+        AcSweep::Decade => Sweep::Decade,
+        AcSweep::Octave => Sweep::Octave,
+        AcSweep::Linear => Sweep::Linear,
+    };
+    let spec = AcSpec {
+        fstart: ac.fstart,
+        fstop: ac.fstop,
+        points: ac.points,
+        sweep,
+    };
+    let resp = AcAnalysis::new(opts.clone()).run(circuit, &spec)?;
+
+    // Resolve each probe's node id(s) once, up front, so a typo fails cleanly.
+    enum AcTarget {
+        Node(NodeId),
+        Diff(NodeId, NodeId),
+    }
+    let mut targets = Vec::with_capacity(probes.len());
+    let mut columns = vec!["frequency".to_string()];
+    for p in probes {
+        match p {
+            Probe::NodeVoltage(a) => targets.push(AcTarget::Node(resolve_node(circuit, a)?)),
+            Probe::NodeDiff(a, b) => {
+                targets.push(AcTarget::Diff(resolve_node(circuit, a)?, resolve_node(circuit, b)?))
+            }
+            Probe::BranchCurrent(_) => unreachable!("refused above"),
+        }
+        columns.push(p.label());
+        columns.push(format!("{}:phase_deg", p.label()));
+    }
+
+    let phasor = |pt: &crate::AcPoint, id: NodeId| -> num_complex::Complex64 {
+        if id.is_ground() {
+            num_complex::Complex64::new(0.0, 0.0)
+        } else {
+            pt.node_phasor
+                .get(id.0 as usize)
+                .copied()
+                .unwrap_or_else(|| num_complex::Complex64::new(0.0, 0.0))
+        }
+    };
+
+    let mut rows = Vec::with_capacity(resp.points.len());
+    for pt in &resp.points {
+        let mut row = Vec::with_capacity(1 + 2 * probes.len());
+        row.push(pt.freq);
+        for t in &targets {
+            let v = match t {
+                AcTarget::Node(id) => phasor(pt, *id),
+                AcTarget::Diff(a, b) => phasor(pt, *a) - phasor(pt, *b),
+            };
+            row.push(v.norm());
+            row.push(v.arg().to_degrees());
+        }
+        rows.push(row);
+    }
+
+    Ok(SimOutput {
+        columns,
+        time: None,
+        rows,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use hauksbee_ir::SpiceLoader;
+
+    #[test]
+    fn dc_sweep_walks_the_source_and_reads_probes() {
+        // VCVS gain 2: out = 2 * in, swept 0..3 V by 1 V.
+        let net = "dc\nVin in 0 DC 0\nE1 out 0 in 0 2.0\nRl out 0 1k\n\
+                   .dc Vin 0 3 1\n.end\n";
+        let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
+        let probes = [Probe::NodeVoltage("out".into())];
+        let out = run_dc(&c, &SolverOptions::default(), d.dc.as_ref().unwrap(), &probes).unwrap();
+        assert_eq!(out.columns, vec!["Vin", "V(out)"]);
+        assert_eq!(out.rows.len(), 4); // 0,1,2,3
+        for (i, row) in out.rows.iter().enumerate() {
+            let vin = i as f64;
+            assert!((row[0] - vin).abs() < 1e-9, "sweep value");
+            assert!((row[1] - 2.0 * vin).abs() < 1e-6, "gain-2 output");
+        }
+    }
+
+    #[test]
+    fn dc_nested_sweep_concatenates_blocks() {
+        let net = "dc\nVin in 0 DC 0\nVg g 0 DC 0\nRi in 0 1k\nRg g 0 1k\n\
+                   .dc Vin 0 2 1 Vg 0 1 1\n.end\n";
+        let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
+        let probes = [Probe::NodeVoltage("in".into())];
+        let out = run_dc(&c, &SolverOptions::default(), d.dc.as_ref().unwrap(), &probes).unwrap();
+        // inner 0,1,2 (3 pts) x outer 0,1 (2 pts) = 6 rows; the inner value is
+        // the reported sweep axis and repeats per outer block.
+        assert_eq!(out.rows.len(), 6);
+        let axis: Vec<f64> = out.rows.iter().map(|r| r[0]).collect();
+        assert_eq!(axis, vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn ac_refuses_a_deck_with_no_ac_stimulus() {
+        // A `.ac` deck whose sources carry no `AC` spec would run with a zero
+        // drive — refuse rather than hand back all zeros.
+        let net = "ac\nVin in 0 DC 1\nR1 in out 1k\nC1 out 0 159.155n\n\
+                   .ac dec 5 10 1e6\n.end\n";
+        let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
+        let probes = [Probe::NodeVoltage("out".into())];
+        let err = run_ac(&c, &SolverOptions::default(), d.ac.as_ref().unwrap(), &probes)
+            .unwrap_err();
+        assert!(err.contains("no AC stimulus"), "{err}");
+    }
+
+    #[test]
+    fn ac_lowpass_hits_the_corner() {
+        // RC low-pass with fc = 1 kHz: at the corner |H| ~ 0.707 and phase ~ -45.
+        // A 2-point linear sweep 1 kHz .. 2 kHz: the first point is exactly fc.
+        let net = "ac\nVin in 0 AC 1\nR1 in out 1k\nC1 out 0 159.155n\n\
+                   .ac lin 2 1000 2000\n.end\n";
+        let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
+        let probes = [Probe::NodeVoltage("out".into())];
+        let out = run_ac(&c, &SolverOptions::default(), d.ac.as_ref().unwrap(), &probes).unwrap();
+        assert_eq!(out.columns, vec!["frequency", "V(out)", "V(out):phase_deg"]);
+        let row = &out.rows[0];
+        assert!((row[0] - 1000.0).abs() < 1e-6, "first freq is the corner");
+        assert!((row[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-3, "mag {}", row[1]);
+        assert!((row[2] + 45.0).abs() < 0.2, "phase {}", row[2]);
+    }
 
     #[test]
     fn parse_probe_forms() {
