@@ -339,7 +339,24 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
                         m.touch(br, cbr);
                     }
                 },
-                _ => unreachable!("controlling_sources() is non-empty for F/H/B only"),
+                // Coupling: the mutual companion writes the SYMMETRIC pair of
+                // branch-row cross slots (l1 row × l2 column and vice versa).
+                // Each of the two controlling_sources iterations touches both
+                // (touch is idempotent), keeping this arm self-contained
+                // instead of splitting one reservation across iterations. The
+                // windings' own diagonals/incidence are already covered by
+                // their branch reservation above.
+                Device::Coupling { l1, l2, .. } => {
+                    let b1 = layout
+                        .branch(*l1)
+                        .expect("coupled winding owns a branch unknown");
+                    let b2 = layout
+                        .branch(*l2)
+                        .expect("coupled winding owns a branch unknown");
+                    m.touch(b1, b2);
+                    m.touch(b2, b1);
+                }
+                _ => unreachable!("controlling_sources() is non-empty for F/H/B/K only"),
             }
         }
     }
@@ -490,6 +507,14 @@ pub(crate) fn stamp_device<S: StampSink>(
             expr,
             deps,
         } => stamp_behavioral(ctx, id, name, *p, *n, *output, expr, deps, sink),
+        // A coupling stamps NOTHING here on purpose: it is a relationship,
+        // not an element. Its physics lives in the WINDINGS' stamps —
+        // `stamp_inductor` consults `layout.mutual_partners` (built from the
+        // Coupling devices at layout time) for the −M·coeffs.g cross terms
+        // and each winding's mutual history voltage. An arm that stamped the
+        // cross terms HERE as well would double-count them, so the one home
+        // is the inductor stamp and this arm is deliberately inert.
+        Device::Coupling { .. } => {}
     }
 }
 
@@ -825,6 +850,39 @@ fn stamp_inductor<S: StampSink>(
     // Branch row: v_a - v_b - req*i = -(req*i_prev + v_prev) = -veq.
     sink.g(br, br, -req);
     sink.i(br, -(veq));
+
+    // Mutual inductance (dev-plan 04 §2.3): with couplings the branch relation
+    // generalizes verbatim from `v = L·di/dt` to `v_j = Σ_k L_jk·di_k/dt`
+    // (L_jj the self term already stamped above, L_jk = M = k·sqrt(Lj·Lk)).
+    // Per partner k this adds one matrix cross term −M·coeffs.g at
+    // (this branch row, partner branch column) — L stamped DIRECTLY, never
+    // inverted, so a k=1 group's singular inductance matrix is harmless (the
+    // node-incidence terms keep the MNA system regular) — plus the partner's
+    // history contribution to this winding's veq, the exact mutual analogue
+    // of the self expressions above (each history is the PARTNER's own
+    // ReactiveState slot; no shared state exists or is needed, because the
+    // state advance derives di/dt from divided differences of branch current
+    // without touching L). K-free decks take the empty-slice fast path: one
+    // branch, zero float ops, bit-identical.
+    for &(pid, m) in ctx.layout.mutual_partners(id) {
+        let pbr = ctx
+            .layout
+            .branch(pid)
+            .expect("coupled winding owns a branch unknown");
+        sink.g(br, pbr, -(m * ctx.coeffs.g));
+        let veq_m = match ctx.opts.integration {
+            Integration::Trapezoidal => {
+                m * ctx.coeffs.g * ctx.state.x1[pid.0 as usize]
+                    + m * ctx.state.dx1[pid.0 as usize]
+            }
+            Integration::Gear2 => {
+                m * (ctx.coeffs.a1 * ctx.state.x1[pid.0 as usize]
+                    - ctx.coeffs.a2 * ctx.state.x2[pid.0 as usize])
+            }
+            Integration::BackwardEuler => m * ctx.coeffs.a1 * ctx.state.x1[pid.0 as usize],
+        };
+        sink.i(br, -veq_m);
+    }
 }
 
 fn stamp_vsource<S: StampSink>(

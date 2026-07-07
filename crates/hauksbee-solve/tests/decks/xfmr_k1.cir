@@ -1,0 +1,14 @@
+* Perfect coupling k=1 (SPICE-compat step 11, THE TRAP): the group inductance
+* matrix [[L1,M],[M,L2]] is exactly singular at k=1, which is LEGAL on the
+* card — the companion stamps L directly and never inverts it, so this deck
+* must solve, not die. Same topology as xfmr_1to2 with k=1.
+V1 in 0 SIN(0 1 10k)
+R1 in pri 50
+L1 pri 0 1m
+L2 sec 0 4m
+K1 L1 L2 1
+RL sec 0 1k
+.tran 1u 500u
+.print tran v(sec)
+.options reltol=1e-4
+.end

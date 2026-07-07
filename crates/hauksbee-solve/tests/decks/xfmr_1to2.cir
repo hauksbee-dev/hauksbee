@@ -1,0 +1,14 @@
+* 1:2 step-up transformer (SPICE-compat step 11): K coupling, k=0.999.
+* 10 kHz sine through 50 ohm source impedance into a 1 mH / 4 mH pair
+* loaded by 1k — exercises the mutual companion's voltage ratio AND the
+* loading (secondary current reflected into the primary).
+V1 in 0 SIN(0 1 10k)
+R1 in pri 50
+L1 pri 0 1m
+L2 sec 0 4m
+K1 L1 L2 0.999
+RL sec 0 1k
+.tran 1u 500u
+.print tran v(sec) v(pri)
+.options reltol=1e-4
+.end

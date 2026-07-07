@@ -574,12 +574,26 @@ struct NameFixup {
     slot: usize,
     /// The referenced element name, as written (matched case-insensitively).
     name: String,
+    /// What the referent must BE — the type check
+    /// [`resolve_name_fixups`] enforces once the name resolves.
+    referent: Referent,
     /// Line of the referring card, for errors.
     line: usize,
     /// Raw card text, for errors.
     raw: String,
     /// Subckt breadcrumb of the referring card (filled by the load loop).
     provenance: String,
+}
+
+/// The referent type a [`NameFixup`] demands. F/H controls and behavioral
+/// `I(vname)` reads want an independent V source's branch current; a K card's
+/// two names must be inductors (the windings the mutual term couples).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Referent {
+    /// An independent `V` source (branch-current read).
+    VsourceBranch,
+    /// An `L` element (a K-coupling winding).
+    Inductor,
 }
 
 /// Resolve every [`NameFixup`] against one case-insensitive index of the
@@ -643,18 +657,86 @@ fn resolve_name_fixups(circuit: &mut Circuit, fixups: &[NameFixup]) -> Result<()
                 )));
             }
         };
-        if !matches!(circuit.devices[target.0 as usize], Device::Vsource { .. }) {
-            return Err(err(format!(
-                "controlling source `{}` is not an independent voltage source; \
-                 only a V element's branch current can be read (F/H control, \
-                 B-source `I(...)`) — insert a zero-volt ammeter \
-                 (`Vsense a b 0`) in series and name that",
-                fx.name
-            )));
+        match fx.referent {
+            Referent::VsourceBranch => {
+                if !matches!(circuit.devices[target.0 as usize], Device::Vsource { .. }) {
+                    return Err(err(format!(
+                        "controlling source `{}` is not an independent voltage source; \
+                         only a V element's branch current can be read (F/H control, \
+                         B-source `I(...)`) — insert a zero-volt ammeter \
+                         (`Vsense a b 0`) in series and name that",
+                        fx.name
+                    )));
+                }
+            }
+            Referent::Inductor => {
+                let dev = &circuit.devices[target.0 as usize];
+                if !matches!(dev, Device::Inductor { .. }) {
+                    return Err(err(format!(
+                        "`{}` names {} `{}`, not an inductor; a K card couples \
+                         two L elements",
+                        fx.name,
+                        device_kind_article(dev),
+                        dev.name()
+                    )));
+                }
+            }
         }
         circuit.devices[fx.device.0 as usize].retarget_controlling_source_slot(fx.slot, target);
     }
+    // Duplicate-pair refusal: two K cards over the same winding pair would
+    // silently SUM their mutual terms in the solver's coupling map — refuse
+    // with the second card's line instead (ngspice also rejects redefinition).
+    {
+        let mut seen: HashMap<(u32, u32), ()> = HashMap::new();
+        for fx in fixups {
+            if fx.referent != Referent::Inductor || fx.slot != 0 {
+                continue; // one check per K card, keyed off its slot-0 fixup
+            }
+            if let Device::Coupling { l1, l2, .. } = &circuit.devices[fx.device.0 as usize] {
+                let pair = (l1.0.min(l2.0), l1.0.max(l2.0));
+                if seen.insert(pair, ()).is_some() {
+                    return Err(with_provenance(
+                        SpiceError::Syntax {
+                            line: fx.line,
+                            msg: format!(
+                                "duplicate coupling: another K card already couples \
+                                 this inductor pair (`{}`)",
+                                fx.name
+                            ),
+                            text: fx.raw.clone(),
+                        },
+                        &fx.provenance,
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+/// Human-readable device kind with its article, for referent-type errors
+/// (`"a resistor"`, `"an inductor"`, ...).
+fn device_kind_article(dev: &Device) -> &'static str {
+    match dev {
+        Device::Resistor { .. } => "a resistor",
+        Device::Capacitor { .. } => "a capacitor",
+        Device::Inductor { .. } => "an inductor",
+        Device::Vsource { .. } => "a voltage source",
+        Device::Isource { .. } => "a current source",
+        Device::Diode { .. } => "a diode",
+        Device::Bjt { .. } => "a BJT",
+        Device::Mosfet { .. } => "a MOSFET",
+        Device::VSwitch { .. } => "a switch",
+        Device::OpAmp { .. } => "an op-amp",
+        Device::Comparator { .. } => "a comparator",
+        Device::Vcvs { .. } => "a VCVS (E element)",
+        Device::Vccs { .. } => "a VCCS (G element)",
+        Device::Cccs { .. } => "a CCCS (F element)",
+        Device::Ccvs { .. } => "a CCVS (H element)",
+        Device::Behavioral { .. } => "a behavioral source (B element)",
+        Device::Coupling { .. } => "a coupling (K element)",
+    }
 }
 
 // --- parameters & expressions (§4.2) ----------------------------------------
@@ -1132,6 +1214,9 @@ fn node_indices_for(kind: char) -> &'static [usize] {
         'B' => &[1, 2],
         'Q' => &[1, 2, 3],
         'M' | 'S' | 'E' | 'G' => &[1, 2, 3, 4],
+        // K: NO node tokens — positions 1 and 2 are INDUCTOR NAMES, rewritten
+        // in `expand_instance` under the local-scope rule like F/H vnames.
+        'K' => &[],
         _ => &[],
     }
 }
@@ -1351,6 +1436,18 @@ fn expand_instance(
                 && !btoks[3].eq_ignore_ascii_case("poly")
             {
                 new_toks[3] = format!("{}.{}", inst_name, btoks[3]);
+            }
+            // K couplings reference two INDUCTOR names (tokens 1 and 2, no
+            // node tokens at all — `node_indices_for('K')` is empty): both
+            // are local to the subckt body under the same scoping rule as an
+            // F/H vname, so prefix them unconditionally and let a typo dangle
+            // loudly at resolution.
+            if kind == 'K' {
+                for i in [1usize, 2] {
+                    if i < btoks.len() {
+                        new_toks[i] = format!("{}.{}", inst_name, btoks[i]);
+                    }
+                }
             }
             // B-source expressions carry node and element references INSIDE
             // their braced token (`v={2*v(mid)+i(Vs)}` survives tokenize_kv as
@@ -2282,6 +2379,7 @@ fn parse_element(
         'F' => parse_current_controlled(line, raw, &toks, circuit, true, env, fixups),
         'H' => parse_current_controlled(line, raw, &toks, circuit, false, env, fixups),
         'B' => parse_behavioral(line, raw, &toks, circuit, env, fixups),
+        'K' => parse_coupling(line, raw, &toks, circuit, env, fixups),
         other => Err(SpiceError::UnknownElement {
             line,
             ch: other,
@@ -2904,10 +3002,80 @@ fn parse_current_controlled(
         device: id,
         slot: 0,
         name: vname,
+        referent: Referent::VsourceBranch,
         line,
         raw: raw.into(),
         provenance: String::new(),
     });
+    Ok(())
+}
+
+/// Parse `Kxxx Lname1 Lname2 k` (dev-plan 04 §2.3): mutual coupling between
+/// two inductors named elsewhere in the deck. Both names defer through the
+/// same resolve-by-name pass as an F/H control (slot 0 = L1, slot 1 = L2),
+/// with [`Referent::Inductor`] making the type check refuse anything that is
+/// not an `L` element. `k` must satisfy `0 < k <= 1` — `k == 1` (a perfect
+/// transformer) is LEGAL and the solver's L-matrix companion handles the
+/// singular group without inverting it; `k <= 0` and `k > 1` are refused with
+/// the line (a negative k in ngspice flips a winding's dot; supporting that
+/// is a polarity feature this loader does not fake — swap the winding's
+/// terminals in the netlist instead).
+fn parse_coupling(
+    line: usize,
+    raw: &str,
+    toks: &[String],
+    circuit: &mut Circuit,
+    env: &ParamEnv,
+    fixups: &mut Vec<NameFixup>,
+) -> Result<(), SpiceError> {
+    if toks.len() < 4 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: "need two inductor names and a coupling coefficient \
+                  (`Kxxx L1 L2 k`)"
+                .into(),
+            text: raw.into(),
+        });
+    }
+    let name = toks[0].clone();
+    let l1name = toks[1].clone();
+    let l2name = toks[2].clone();
+    if l1name.eq_ignore_ascii_case(&l2name) {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!("coupling `{name}` couples inductor `{l1name}` to itself"),
+            text: raw.into(),
+        });
+    }
+    let k = eval_value(line, &toks[3], raw, env)?;
+    if !(k > 0.0 && k <= 1.0) {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "coupling coefficient k={k} is outside 0 < k <= 1 (to invert \
+                 a winding's polarity, swap its terminals instead of negating k)"
+            ),
+            text: raw.into(),
+        });
+    }
+    let placeholder = DeviceId(u32::MAX);
+    let id = circuit.add(Device::Coupling {
+        name,
+        l1: placeholder,
+        l2: placeholder,
+        k,
+    });
+    for (slot, lname) in [(0usize, l1name), (1usize, l2name)] {
+        fixups.push(NameFixup {
+            device: id,
+            slot,
+            name: lname,
+            referent: Referent::Inductor,
+            line,
+            raw: raw.into(),
+            provenance: String::new(),
+        });
+    }
     Ok(())
 }
 
@@ -3014,6 +3182,7 @@ fn parse_behavioral(
             device: id,
             slot,
             name: vname,
+            referent: Referent::VsourceBranch,
             line,
             raw: raw.into(),
             provenance: String::new(),
@@ -3834,6 +4003,113 @@ mod tests {
         // at one node), mirroring the legal self-referential VCCS idiom.
         let net3 = "ok\nF1 a a Vs 2\nVs a 0 0\n.end\n";
         assert!(SpiceLoader::load(net3).is_ok());
+    }
+
+    #[test]
+    fn parses_coupling_card() {
+        // K resolves both inductor names case-insensitively, and forward
+        // references work (L2 appears after the K card).
+        let net = "xfmr\nL1 a 0 1m\nK1 l1 L2 0.99\nL2 b 0 4m\nR1 b 0 100\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let (l1, l2) = (dev_id(&c, "L1"), dev_id(&c, "L2"));
+        match &c.devices[dev_id(&c, "K1").0 as usize] {
+            Device::Coupling { l1: a, l2: b, k, .. } => {
+                assert_eq!((*a, *b), (l1, l2), "K1 must resolve to L1/L2");
+                assert!((k - 0.99).abs() < 1e-12);
+            }
+            other => panic!("expected Coupling, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refuses_out_of_range_coupling_coefficient() {
+        // 0 < k <= 1: zero, negative, and >1 all refuse with the line. k=1
+        // itself is LEGAL (perfect coupling; the solver never inverts the
+        // group matrix).
+        for bad in ["0", "-0.5", "1.5"] {
+            let net = format!("badk\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 {bad}\n.end\n");
+            let err = SpiceLoader::load(&net).unwrap_err().to_string();
+            assert!(
+                err.contains("outside 0 < k <= 1") && err.contains("line 4"),
+                "k={bad}: {err}"
+            );
+        }
+        let ok = "k1\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 1\nR1 a 0 1\nR2 b 0 1\n.end\n";
+        assert!(SpiceLoader::load(ok).is_ok(), "k=1 must load");
+    }
+
+    #[test]
+    fn refuses_non_inductor_coupling_referent() {
+        // The refusal names what the referent actually IS.
+        let net = "badref\nL1 a 0 1m\nR2 b 0 1k\nK1 L1 R2 0.9\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(
+            err.contains("a resistor") && err.contains("not an inductor"),
+            "{err}"
+        );
+        // Dangling name: the standard resolve error, with the line.
+        let net2 = "dangle\nL1 a 0 1m\nK1 L1 Lnope 0.9\n.end\n";
+        let err2 = SpiceLoader::load(net2).unwrap_err().to_string();
+        assert!(err2.contains("Lnope") && err2.contains("does not exist"), "{err2}");
+    }
+
+    #[test]
+    fn refuses_self_and_duplicate_coupling() {
+        // Self-coupling (case-insensitive) is degenerate.
+        let net = "selfk\nL1 a 0 1m\nK1 L1 l1 0.9\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("itself"), "{err}");
+        // Two K cards over the same pair (either order) would silently sum M.
+        let net2 =
+            "dupk\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 0.9\nK2 L2 L1 0.5\n.end\n";
+        let err2 = SpiceLoader::load(net2).unwrap_err().to_string();
+        assert!(
+            err2.contains("duplicate coupling") && err2.contains("line 5"),
+            "{err2}"
+        );
+    }
+
+    #[test]
+    fn coupling_chains_three_windings() {
+        // Multiple K cards union 3+ windings pairwise into one group.
+        let net = "tri\nL1 a 0 1m\nL2 b 0 1m\nL3 c 0 1m\n\
+                   K12 L1 L2 0.9\nK13 L1 L3 0.8\nK23 L2 L3 0.7\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let n_k = c
+            .devices
+            .iter()
+            .filter(|d| matches!(d, Device::Coupling { .. }))
+            .count();
+        assert_eq!(n_k, 3);
+    }
+
+    /// K names inside a subckt body are LOCAL like F/H vnames: `K1 LP LS k`
+    /// in instance `X1` couples `X1.LP` to `X1.LS`, never a same-named global.
+    #[test]
+    fn coupling_names_are_subckt_local() {
+        let net = "kscope\n\
+                   .subckt xf in out\n\
+                   LP in 0 1m\n\
+                   LS out 0 4m\n\
+                   K1 LP LS 0.99\n\
+                   .ends\n\
+                   X1 a b xf\n\
+                   X2 c d xf\n\
+                   LP z 0 9\n\
+                   R1 b 0 100\nR2 d 0 100\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        for inst in ["X1", "X2"] {
+            let (lp, ls) = (
+                dev_id(&c, &format!("{inst}.LP")),
+                dev_id(&c, &format!("{inst}.LS")),
+            );
+            match &c.devices[dev_id(&c, &format!("{inst}.K1")).0 as usize] {
+                Device::Coupling { l1, l2, .. } => {
+                    assert_eq!((*l1, *l2), (lp, ls), "{inst}.K1 must bind locally");
+                }
+                other => panic!("expected Coupling, got {other:?}"),
+            }
+        }
     }
 
     /// The subckt-composition rule: a vname inside a body is LOCAL — it
