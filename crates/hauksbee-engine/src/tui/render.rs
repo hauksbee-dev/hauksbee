@@ -1,15 +1,20 @@
-//! ratatui rendering of the three-pane + footer layout. This module is the only
+//! ratatui rendering of the four-pane + footer layout. This module is the only
 //! place that touches ratatui widgets; the state it reads is the pure
 //! [`AppState`] from [`super::state`].
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use super::cosim::CosimUpdate;
-use super::state::{AppState, Level, LeftDetail, Pane, PartStatus, Severity, TUI_LAUNCH_BANNER};
+use super::state::{
+    downsample, AppState, Level, LeftDetail, Pane, PartStatus, ScopeView, Severity,
+    TUI_LAUNCH_BANNER,
+};
 
 /// The ASCII marker prefixed to the focused pane's title, so focus is legible
 /// without colour (the personas were navigating "blind" in colour-stripped
@@ -88,15 +93,17 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(28),
-            Constraint::Percentage(44),
-            Constraint::Percentage(28),
+            Constraint::Percentage(24),
+            Constraint::Percentage(32),
+            Constraint::Percentage(22),
+            Constraint::Percentage(22),
         ])
         .split(root[1]);
 
     draw_parts(f, panes[0], state);
     draw_findings(f, panes[1], state);
     draw_cosim(f, panes[2], state, cosim);
+    draw_scope(f, panes[3], state, cosim_running);
     draw_footer(f, root[2], state, cosim_running);
 
     if state.detail_open {
@@ -173,9 +180,17 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
             ),
             None => Span::styled("    —   ", Style::default().fg(Color::DarkGray)),
         };
+        // Probed-net indicator: nets on the scope get a "◉" in their series
+        // colour, so the list shows what the scope is tracing (and which trace
+        // is whose). Unprobed nets get a space to keep the columns aligned.
+        let probe_mark = match state.scope.probed().iter().position(|p| p == &n.name) {
+            Some(idx) => Span::styled("◉ ", Style::default().fg(series_color(idx))),
+            None => Span::raw("  "),
+        };
         items.push(ListItem::new(Line::from(vec![
             Span::raw(row_marker(selected)),
-            Span::raw(format!("{:<16}", truncate(&n.name, 16))),
+            probe_mark,
+            Span::raw(format!("{:<14}", truncate(&n.name, 14))),
             v,
         ])));
     }
@@ -527,6 +542,178 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
+/// The per-series trace colour, by probe order. Four distinguishable hues for
+/// the four probe slots; the same colour marks the net's "◉" in the list, so
+/// list and trace are visually paired.
+fn series_color(idx: usize) -> Color {
+    const COLORS: [Color; 4] = [Color::Cyan, Color::Yellow, Color::Green, Color::Magenta];
+    COLORS[idx % COLORS.len()]
+}
+
+/// The scope pane: probed nets' recent voltage history as stacked braille
+/// sparklines (one mini-chart per net — at these pane widths separate y-scales
+/// with a per-net label read far better than one shared multi-series chart).
+/// Display-only: the sole interaction is the `p` probe-toggle in the list.
+fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) {
+    let probed = state.scope.probed().len();
+    let title = if probed > 0 {
+        format!("Scope ({probed} probed)")
+    } else {
+        "Scope".to_string()
+    };
+    let block = Block::default()
+        .title(pane_title(&title, Pane::Scope, state.focus))
+        .borders(Borders::ALL)
+        .border_style(focused_border(Pane::Scope, state.focus));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Placeholder states: say plainly what the pane needs, never an empty box.
+    let placeholder = match state.scope_view() {
+        ScopeView::NoMcu => Some(vec![
+            Line::from(Span::styled(
+                "no live signals — run with firmware/co-sim",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(Span::styled(
+                "this board has no MCU: static analysis only.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "DC voltages are in the Nets & Parts pane.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]),
+        ScopeView::NoProbes => Some(vec![
+            Line::from(Span::styled(
+                "no nets probed",
+                Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "press [p] on a net in Nets & Parts",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                format!("(up to {} nets; oldest is dropped)", super::state::SCOPE_MAX_PROBES),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]),
+        ScopeView::NoData => {
+            let hint = if cosim_running {
+                "co-sim running — waiting for the first samples…"
+            } else {
+                "no live signals — press [r] to run co-sim"
+            };
+            let mut lines = vec![Line::from(Span::styled(
+                hint,
+                Style::default().fg(Color::Gray),
+            ))];
+            for (i, name) in state.scope.probed().iter().enumerate() {
+                lines.push(Line::from(Span::styled(
+                    format!("◉ {}", truncate(name, inner.width.saturating_sub(2) as usize)),
+                    Style::default().fg(series_color(i)),
+                )));
+            }
+            Some(lines)
+        }
+        ScopeView::Live => None,
+    };
+    if let Some(lines) = placeholder {
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        return;
+    }
+
+    // Live traces: stack one mini-chart per probed net, splitting the pane
+    // height evenly. Each mini = a one-line header (name · latest · min..max in
+    // the series colour) over a braille canvas of the recent history.
+    let probed_nets: Vec<&String> = state.scope.probed().iter().collect();
+    let constraints: Vec<Constraint> = probed_nets
+        .iter()
+        .map(|_| Constraint::Ratio(1, probed_nets.len() as u32))
+        .collect();
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
+
+    for (i, name) in probed_nets.iter().enumerate() {
+        let color = series_color(i);
+        let cell = rows[i];
+        if cell.height == 0 {
+            continue;
+        }
+        let Some(series) = state.scope.series(name) else {
+            continue;
+        };
+
+        // Header: "◉ NET 1.23V 0.00..3.30" — compact so latest + min..max
+        // survive a ~24-column pane; the net name yields first.
+        let header = match (series.latest(), series.min_max()) {
+            (Some(last), Some((lo, hi))) => {
+                let stats = format!(" {last:.2}V {lo:.2}..{hi:.2}");
+                let name_w = (cell.width as usize)
+                    .saturating_sub(2 + stats.chars().count())
+                    .max(4);
+                format!("◉ {}{stats}", truncate(name, name_w))
+            }
+            _ => format!("◉ {} (no samples)", truncate(name, cell.width as usize)),
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(&header, cell.width as usize),
+                Style::default().fg(color),
+            ))),
+            Rect { height: 1, ..cell },
+        );
+
+        let chart = Rect {
+            y: cell.y + 1,
+            height: cell.height.saturating_sub(1),
+            ..cell
+        };
+        if chart.height == 0 || chart.width == 0 {
+            continue;
+        }
+
+        // Downsample the history to the braille x-resolution (2 dots per cell)
+        // and draw line segments between consecutive points. Y bounds pad the
+        // observed range so a flat trace still sits mid-canvas instead of on an
+        // edge.
+        let volts = downsample(&series.voltages(), (chart.width as usize) * 2);
+        let (lo, hi) = series.min_max().unwrap_or((0.0, 1.0));
+        let pad = ((hi - lo) * 0.1).max(0.05);
+        let (y_lo, y_hi) = (lo - pad, hi + pad);
+        let n = volts.len();
+        f.render_widget(
+            Canvas::default()
+                .marker(Marker::Braille)
+                .x_bounds([0.0, (n.saturating_sub(1)).max(1) as f64])
+                .y_bounds([y_lo, y_hi])
+                .paint(move |ctx| {
+                    if n == 1 {
+                        // A single sample: draw a short flat tick so it's visible.
+                        ctx.draw(&CanvasLine::new(0.0, volts[0], 1.0, volts[0], color));
+                        return;
+                    }
+                    for w in volts.windows(2).enumerate() {
+                        let (x, pair) = w;
+                        ctx.draw(&CanvasLine::new(
+                            x as f64,
+                            pair[0],
+                            (x + 1) as f64,
+                            pair[1],
+                            color,
+                        ));
+                    }
+                }),
+            chart,
+        );
+    }
+}
+
 fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
     let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
@@ -556,7 +743,7 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
             Style::default().fg(Color::Green),
         ),
         Span::styled(
-            format!("│ Tab/←→ pane  ↑↓ nav  Enter detail{run_hint}  q quit"),
+            format!("│ Tab/←→ pane  ↑↓ nav  Enter detail  p probe{run_hint}  q quit"),
             Style::default().fg(Color::Gray),
         ),
     ]);
@@ -808,6 +995,150 @@ fn wrap_words(s: &str, width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::{BindOutcome, BindReport, BindRow};
+    use crate::result::{BindSummary, DrcStructured};
+    use hauksbee_models::Confidence;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::collections::HashMap;
+
+    /// A minimal MCU board state with two nets, for driving the real `draw`.
+    fn scope_sample_state() -> AppState {
+        let mut report = BindReport::default();
+        report.push(BindRow {
+            reference: "U1".into(),
+            value: "STM32".into(),
+            model_id: None,
+            confidence: Confidence::Exact,
+            outcome: BindOutcome::Mcu { backend: "renode:stm32f103".into() },
+            warning: None,
+            guesses: Vec::new(),
+        });
+        let summary = BindSummary::from_report(&report);
+        let drc = DrcStructured {
+            clearance_rule_mm: 0.2,
+            primitive_count: 0,
+            shorts: Vec::new(),
+            violations: Vec::new(),
+            at_limit: Vec::new(),
+            version_warning: None,
+        };
+        AppState::new(
+            "ScopeDemo".into(),
+            &report,
+            &summary,
+            &drc,
+            &[],
+            &[],
+            vec![
+                crate::tui::state::Net { name: "/LED".into(), voltage_v: Some(0.0) },
+                crate::tui::state::Net { name: "/PA5".into(), voltage_v: Some(3.3) },
+            ],
+            HashMap::new(),
+            HashMap::new(),
+        )
+    }
+
+    /// Render one frame of the full TUI into a TestBackend and return the
+    /// buffer's rows as strings (the poor man's snapshot).
+    fn render_rows(state: &AppState, w: u16, h: u16) -> Vec<String> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw(f, state, None, false)).unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scope_pane_renders_braille_traces_for_probed_nets() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        // Probe both nets and feed a blink-ish history through the SAME path the
+        // event loop uses (ScopeState::record on a per-net voltage snapshot).
+        st.scope.toggle("/LED");
+        st.scope.toggle("/PA5");
+        for i in 0..200 {
+            let mut v = HashMap::new();
+            v.insert("/LED".to_string(), if (i / 20) % 2 == 0 { 0.0 } else { 3.3 });
+            v.insert("/PA5".to_string(), 3.3);
+            st.scope.record(i as f64 * 5.0, &v);
+        }
+        assert_eq!(st.scope_view(), ScopeView::Live);
+
+        let rows = render_rows(&st, 120, 30);
+        let all = rows.join("\n");
+        // The pane exists, titled with the probe count.
+        assert!(all.contains("Scope (2 probed)"), "scope pane title:\n{all}");
+        // Both series headers: name, latest value, min..max window.
+        assert!(all.contains("◉ /LED"), "LED header:\n{all}");
+        assert!(all.contains("◉ /PA5"), "PA5 header:\n{all}");
+        assert!(all.contains("0.00..3.30"), "LED min..max window:\n{all}");
+        assert!(all.contains("3.30V"), "latest value shown:\n{all}");
+        // Braille dots actually drawn (U+2800..U+28FF) — the trace itself.
+        assert!(
+            all.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c) && c != '\u{2800}'),
+            "braille trace glyphs present:\n{all}"
+        );
+        // The probed nets are marked in the Nets & Parts list too.
+        let list_row = rows.iter().find(|r| r.contains("/LED") && r.contains("◉")).unwrap();
+        assert!(list_row.contains("◉ /LED"), "probe marker in the list: {list_row}");
+        // The footer advertises the probe key.
+        assert!(all.contains("p probe"), "footer lists the p key:\n{all}");
+    }
+
+    /// Not an assertion — a viewer. `cargo test -p hauksbee-engine --lib
+    /// scope_pane_snapshot -- --ignored --nocapture` prints the rendered frame
+    /// so a human can eyeball the scope pane without a PTY.
+    #[test]
+    #[ignore = "visual snapshot dump; run with --ignored --nocapture to view"]
+    fn scope_pane_snapshot_dump() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        st.scope.toggle("/LED");
+        st.scope.toggle("/PA5");
+        for i in 0..200 {
+            let mut v = HashMap::new();
+            v.insert("/LED".to_string(), if (i / 20) % 2 == 0 { 0.0 } else { 3.3 });
+            v.insert("/PA5".to_string(), 3.3);
+            st.scope.record(i as f64 * 5.0, &v);
+        }
+        for row in render_rows(&st, 120, 24) {
+            eprintln!("{row}");
+        }
+    }
+
+    #[test]
+    fn scope_pane_placeholders_never_render_an_empty_box() {
+        // No probes yet: the pane says how to probe.
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        let all = render_rows(&st, 120, 30).join("\n");
+        assert!(all.contains("no nets probed"), "{all}");
+        assert!(all.contains("press [p]"), "{all}");
+
+        // Probed but no samples and not running: points at `r`.
+        st.scope.toggle("/LED");
+        let all = render_rows(&st, 120, 30).join("\n");
+        assert!(all.contains("no live signals"), "{all}");
+        assert!(all.contains("[r]"), "{all}");
+
+        // A no-MCU board: the static-only placeholder, not an empty box. The
+        // narrow pane word-wraps the sentence, so assert on wrap-safe fragments.
+        st.no_mcu = true;
+        let all = render_rows(&st, 120, 30).join("\n");
+        assert!(all.contains("no live signals"), "{all}");
+        assert!(all.contains("firmware/co-sim"), "{all}");
+    }
 }
 
 /// A centered rect `pct_x` % wide and `pct_y` % tall, for the overlay.

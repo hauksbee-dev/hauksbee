@@ -8,6 +8,7 @@
 //! UI thread keeps the latest snapshot and renders it. A `stop` flag lets the UI
 //! ask the worker to wind down cleanly.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,6 +75,12 @@ pub struct CosimUpdate {
     pub done: bool,
     /// Set on a hard error (e.g. firmware failed to load).
     pub error: Option<String>,
+    /// The full per-net voltage snapshot at this chunk (the same
+    /// `frame.net_voltages` the tracker reads). Carried so the scope pane can
+    /// sample the history of ANY net the user probes from the parts/nets list —
+    /// not just the watched GPIO subset in `gpio_nets`. This reuses the worker's
+    /// existing per-chunk data; it is not a second co-sim path.
+    pub net_voltages: HashMap<String, f64>,
 }
 
 /// One watched GPIO / control / LED net in a co-sim snapshot.
@@ -189,6 +196,9 @@ fn run_worker(
     let mut uart_partial = String::new();
     let mut uart_seen = false;
     let mut t = 0.0;
+    // The most recent per-net voltage snapshot, kept so the final `done` update
+    // carries the last frame's voltages too (parity with the in-loop sends).
+    let mut last_voltages: HashMap<String, f64> = HashMap::new();
 
     // Per-net activity tracker: remember each watched net's boot baseline level
     // and whether it has ever moved off it. A net that moves is one the firmware
@@ -246,11 +256,16 @@ fn run_worker(
             .map(|(b, _)| b)
             .collect();
 
+        // Move the frame's net voltages into the snapshot; keep a copy so the
+        // final `done` update can carry the last frame's voltages too.
+        let net_voltages = frame.net_voltages;
         // If the UI has gone away, stop.
         let update = build_update(
             t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven,
             substitution, analog_valid, failed_chunk_count, heuristic_spi_buses, false,
+            net_voltages.clone(),
         );
+        last_voltages = net_voltages;
         if tx.send(update).is_err() {
             return;
         }
@@ -275,7 +290,7 @@ fn run_worker(
         .collect();
     let _ = tx.send(build_update(
         t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven, substitution,
-        analog_valid, failed_chunk_count, heuristic_spi_buses, true,
+        analog_valid, failed_chunk_count, heuristic_spi_buses, true, last_voltages,
     ));
 }
 
@@ -296,6 +311,7 @@ fn build_update(
     failed_chunk_count: u64,
     heuristic_spi_buses: Vec<String>,
     done: bool,
+    net_voltages: HashMap<String, f64>,
 ) -> CosimUpdate {
     CosimUpdate {
         sim_ms: t * 1000.0,
@@ -312,6 +328,7 @@ fn build_update(
         heuristic_spi_buses,
         done,
         error: None,
+        net_voltages,
     }
 }
 
@@ -552,7 +569,7 @@ mod tests {
         // A clean run: valid, zero failed chunks.
         let clean = build_update(
             0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ true,
-            /*failed_chunk_count*/ 0, Vec::new(), false,
+            /*failed_chunk_count*/ 0, Vec::new(), false, HashMap::new(),
         );
         assert!(clean.analog_valid, "clean run stays analog-valid");
         assert_eq!(clean.failed_chunk_count, 0);
@@ -560,7 +577,7 @@ mod tests {
         // A diverged run: invalid, with the failed-chunk count carried through.
         let bad = build_update(
             0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ false,
-            /*failed_chunk_count*/ 3, Vec::new(), true,
+            /*failed_chunk_count*/ 3, Vec::new(), true, HashMap::new(),
         );
         assert!(!bad.analog_valid, "a failed chunk makes the update analog-invalid");
         assert_eq!(
