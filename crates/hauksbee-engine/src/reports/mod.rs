@@ -13,6 +13,7 @@ pub mod ac;
 pub mod ampacity;
 pub mod bind;
 pub mod check;
+pub mod cosim;
 pub mod drc;
 pub mod lint;
 pub mod si;
