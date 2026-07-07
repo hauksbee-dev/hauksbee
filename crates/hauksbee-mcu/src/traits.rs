@@ -1,4 +1,18 @@
-//! Public API traits and types for hauksbee-mcu.
+//! The MCU abstraction: the lockstep contract between firmware and the analog
+//! engine that every backend (native AVR, QEMU, Renode) implements.
+//!
+//! The core is the [`Mcu`] trait. A co-sim run advances firmware in bounded
+//! chunks ([`Mcu::run_cycles`]/[`run_micros`](Mcu::run_micros)), couples pins in
+//! both directions ([`Mcu::set_digital_in`]/[`set_analog_in`](Mcu::set_analog_in)
+//! drive the firmware; [`Mcu::on_pin_change`] reports GPIO output edges back with
+//! the MCU cycle at which they happened), and reads execution state
+//! ([`McuState`], [`Mcu::frequency`]). The cycle stamp on each reported edge is
+//! what lets the analog side replay a sub-microsecond bit-banged burst in the
+//! exact order the firmware produced it; [`Mcu::cycle_exact`] tells the caller
+//! whether those stamps are true edge cycles (push backends) or coarse
+//! slice-boundary times (poll backends). This file also defines the small value
+//! types the coupling speaks in: [`PinId`], [`McuState`], and the intercepted
+//! bus events [`I2cEvent`]/[`SpiEvent`].
 
 use anyhow::Result;
 use std::path::Path;
