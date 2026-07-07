@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="hauksbee-ci" tests="2" failures="0" errors="0" time="0.053">
+  <testsuite name="boot-coverage: MOSFET gate driven promptly (PASS)" tests="2" failures="0" errors="0" time="0.053">
+    <testcase classname="boot-coverage" name="GATE_CTRL driven to &gt;= 3 V within 20 ms of reset">
+      <system-out>control net &apos;GATE_CTRL&apos; driven to &gt;= 3 V at 1.00 ms (&lt;= 20 ms), boot window clean</system-out>
+    </testcase>
+    <testcase classname="no_faults" name="no stress faults raised">
+      <system-out>no stress faults</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>
