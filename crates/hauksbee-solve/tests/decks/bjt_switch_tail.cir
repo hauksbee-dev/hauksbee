@@ -1,0 +1,18 @@
+switching transistor turn-off tail (dev-plan 04 s3.2)
+* Saturated switch driven off -- THE charge-storage observable. While the
+* base drive falls, the stored charge (TR-scaled reverse diffusion through
+* the forward-biased b-c junction in saturation, TF forward diffusion,
+* CJE/CJC depletion) holds the collector at its saturation floor for the
+* storage delay, then the rise is charge-limited. Without cje/cjc/tf/tr
+* stamped the collector would snap up with the drive edge -- the once-log
+* this arc replaced with real physics. RB=100 keeps the base path honest.
+VCC vcc 0 DC 5
+VB in 0 PULSE(5 0 2u 50n 50n 6u 12u)
+RB in b 10k
+RC vcc c 1k
+Q1 c b 0 QSW
+.model QSW NPN(IS=1e-14 BF=100 NF=1 CJE=20p CJC=10p TF=300n TR=50n RB=100)
+.tran 5n 8u
+.print tran v(c)
+.options reltol=1e-4
+.end

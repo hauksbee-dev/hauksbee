@@ -6,14 +6,16 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **18**
-- Passing: **18/18**
+- Decks: **20**
+- Passing: **20/20**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
-| bjt_bias | op | `V(coll)` | 2.900e-4 | 5.0e-3 | op | PASS |
-|  |  | `V(base)` | 8.455e-5 | 5.0e-3 | op | PASS |
-|  |  | `V(emit)` | 6.600e-5 | 5.0e-3 | op | PASS |
+| bjt_bias | op | `V(coll)` | 1.088e-5 | 5.0e-3 | op | PASS |
+|  |  | `V(base)` | 1.922e-6 | 5.0e-3 | op | PASS |
+|  |  | `V(emit)` | 2.563e-6 | 5.0e-3 | op | PASS |
+| bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | t=6.213e-5s | PASS |
+| bjt_switch_tail | tran | `V(c)` | 3.333e-5 | 1.0e-3 | t=2.060e-6s | PASS |
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | t=9.225e-6s | PASS |
@@ -40,6 +42,8 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 ## Deck descriptions
 
 - **bjt_bias**: NPN common-emitter bias point
+- **bjt_ce_amp**: bypassed-emitter CE amplifier, 20 kHz sine gain
+- **bjt_switch_tail**: saturated switch turn-off: storage delay + charge-limited rise
 - **cccs_mirror**: CCCS mirror (gain 2 into 500 || 100n) of an ammeter current
 - **cccs_subckt**: CCCS in a subckt controlled by its own local ammeter
 - **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
