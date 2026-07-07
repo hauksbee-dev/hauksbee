@@ -1,0 +1,12 @@
+# Half-wave rectifier with a charge-carrying diode model (CJO/TT): the
+# depletion + diffusion charge shapes the conduction edges at 100 kHz, so
+# agreement here exercises the s3.1 charge companion, not just Shockley.
+# First period (cap charging from uic rest) skipped.
+analysis = "tran"
+description = "half-wave rectifier, diode with junction+diffusion charge"
+full_scale = 5.0
+skip_initial = 10.0e-6
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.02
