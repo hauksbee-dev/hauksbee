@@ -1,21 +1,60 @@
 # Build hauksbee release binaries and attach them to a GitHub Release on a tag.
 #
 # Trigger: push a tag like `v0.1.0`. The workflow builds the `hauksbee` and
-# `hauksbee-ci` binaries on macOS and Linux, packages each with scripts/bundle.sh
-# into a versioned tarball (+ sha256), and uploads them as release assets, so
-# users can download a prebuilt binary instead of compiling. The composite
-# Action and the KiCad plugin both prefer these assets and fall back to building.
+# `hauksbee-ci` binaries on four native runners, packages each with
+# scripts/bundle.sh into a versioned tarball (+ sha256), and uploads them as
+# release assets. scripts/get-hauksbee.sh downloads, verifies the sha256, and
+# installs the two binaries; the composite Action and the KiCad plugin also
+# prefer these assets and fall back to building from source.
 #
-# Cross-compilation note: this builds natively on each runner (a macOS runner
-# for the macOS artifact, a Linux runner for the Linux artifact), which is the
-# honest, tested path. We deliberately do NOT cross-compile (e.g. linux->mac or
-# building aarch64-linux on x86) because that is untested here and would ship
-# binaries no one ran. The matrix can be extended with real runners (e.g. a
-# macos-13 x86 runner, an arm64 linux runner) when they are available.
+# ============================================================================
+# LICENSING DECISION — READ THIS (W6 §6). Product- and user-facing.
+# ============================================================================
+# hauksbee is MIT. Its optional `avr` co-sim backend STATICALLY LINKS libsimavr,
+# which is GPL-3.0. Statically linking GPL code makes the resulting BINARY a GPL
+# derivative work — distributing it puts the whole download under GPL-3.0, even
+# though the source stays MIT. That is a real, irreversible licensing
+# consequence for anyone who `curl | bash`-installs a release.
+#
+# Decision: release binaries ship in the **MIT-clean shape** — the renode+qemu
+# backends only, no avr / no libsimavr:
+#
+#     cargo build --release --no-default-features --features renode,qemu
+#
+# AVR co-sim remains available to users who build from source and run
+# `scripts/install-sims.sh --avr` (which builds GPL simavr on THEIR machine —
+# their choice, their combined work, not something we distribute). The full
+# GPL-encumbered shape (option A) is left below as a clearly-marked,
+# commented-out variant; it is NOT the shipping default. Do not un-comment it
+# without an explicit, documented decision to ship GPL binaries.
+#
+# ---------------------------------------------------------------------------
+# ⚠ KNOWN BLOCKER (as of this commit): the MIT-clean shape does NOT actually
+# exclude avr in this workspace yet. `hauksbee-server` uses `hauksbee_mcu::AvrMcu`
+# unconditionally and depends on hauksbee-mcu WITHOUT `default-features = false`,
+# and every binary depends on hauksbee-server — so `--no-default-features
+# --features renode,qemu` STILL activates `avr` and still links libsimavr
+# (verified: build.rs panics for "the avr co-sim feature needs a system
+# libsimavr" and nm finds 14 simavr symbols in hauksbee-ci). The fix is a
+# source change (3 files) documented in docs/release-and-licensing.md and is
+# OUT OF SCOPE for this release-automation change.
+#
+# Until that fix lands, the "Build MIT-clean bundle" step below is DESIGNED TO
+# FAIL FAST rather than ship a mislabeled GPL binary: it points simavr discovery
+# at a nonexistent path, so a clean shape ignores it and a leaky shape panics in
+# build.rs. That is the guard. A red release on a tag today means "the GPL-free
+# shape is not clean yet", not "the runner is misconfigured".
+# ============================================================================
+#
+# aarch64-linux mechanism: we build NATIVELY on GitHub's `ubuntu-24.04-arm`
+# runner (and Intel macOS on `macos-13`), matching the honest, tested,
+# no-cross-compilation philosophy this workflow has always had. No `cross`, no
+# QEMU userland emulation — every artifact is produced on its own architecture.
 #
 # Dependency note: the forge-* crates are vendored into this repo
-# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), so the build is
-# self-contained and no sibling checkout is required.
+# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), and the MIT-clean
+# shape links NO system libraries (no simavr, no libclang/bindgen — those are
+# only reached by the avr path), so the build is self-contained with just Rust.
 
 name: release
 
@@ -41,8 +80,12 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x86_64
-          - os: macos-latest
+          - os: ubuntu-24.04-arm     # native arm64 GitHub-hosted runner
+            label: linux-aarch64
+          - os: macos-latest         # Apple Silicon
             label: darwin-arm64
+          - os: macos-13             # Intel
+            label: darwin-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       # Checkout into a subdirectory; the build steps cd into it explicitly. The
@@ -63,46 +106,14 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             hauksbee/target
-          key: release-${{ matrix.os }}-${{ hashFiles('hauksbee/Cargo.lock') }}
+          key: release-${{ matrix.label }}-${{ hashFiles('hauksbee/Cargo.lock') }}
           restore-keys: |
-            release-${{ matrix.os }}-
+            release-${{ matrix.label }}-
 
-      # -----------------------------------------------------------------------
-      # Linux: replicate Dockerfile.slim Stage 1+2 build environment.
-      # Stage 1: apt build-essential + git + libelf-dev + zlib1g-dev for simavr.
-      # Stage 2: clang + libclang-dev for bindgen; build simavr from source;
-      #          export the env vars the hauksbee build.rs expects.
-      # -----------------------------------------------------------------------
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            git \
-            libelf-dev \
-            zlib1g-dev \
-            clang \
-            libclang-dev \
-            pkg-config
-
-      - name: Build simavr from source (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          git clone --depth 1 --branch v1.8 https://github.com/buserror/simavr.git /tmp/simavr-src
-          make -C /tmp/simavr-src CC=gcc RELEASE=1 build-simavr
-          sudo make -C /tmp/simavr-src CC=gcc RELEASE=1 DESTDIR=/usr/local PREFIX=/usr/local install-simavr
-          sudo ldconfig
-
-      # -----------------------------------------------------------------------
-      # macOS: simavr and llvm (for libclang / bindgen) via Homebrew.
-      # build.rs already sets /opt/homebrew/include/simavr in its include path;
-      # LIBCLANG_PATH tells bindgen where to find libclang.dylib.
-      # -----------------------------------------------------------------------
-      - name: Install macOS build dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install simavr llvm
+      # NOTE: the MIT-clean shape deliberately installs NO system build deps.
+      # It needs neither libsimavr (avr backend) nor libclang/bindgen. If you
+      # switch to the GPL full-featured variant (option A) you must restore the
+      # simavr + clang install steps — see the commented block at the bottom.
 
       - name: Resolve version
         id: ver
@@ -122,33 +133,29 @@ jobs:
           fi
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build bundle (Linux)
-        if: runner.os == 'Linux'
+      - name: Build MIT-clean bundle (renode+qemu; refuses to link GPL simavr)
         shell: bash
         env:
-          LIBRARY_PATH: /usr/local/lib
-          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
-          BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/local/include -I/usr/local/include/simavr"
+          # The GPL guard (see header). If `avr` is genuinely excluded,
+          # hauksbee-mcu/build.rs early-returns and ignores these paths. If it
+          # leaks in, build.rs panics HERE, before any GPL code is linked —
+          # so we can never accidentally build, let alone ship, a GPL binary
+          # while calling it MIT-clean.
+          SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
+          SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
         run: |
           chmod +x hauksbee/scripts/*.sh
           cd hauksbee
-          scripts/bundle.sh \
-            --version "${{ steps.ver.outputs.version }}" \
-            --target "${{ matrix.label }}" \
-            --out dist
-
-      - name: Build bundle (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          LIBCLANG_PATH: "/opt/homebrew/opt/llvm/lib"
-        run: |
-          chmod +x hauksbee/scripts/*.sh
-          cd hauksbee
-          scripts/bundle.sh \
-            --version "${{ steps.ver.outputs.version }}" \
-            --target "${{ matrix.label }}" \
-            --out dist
+          if ! scripts/bundle.sh \
+               --no-default-features --features renode,qemu \
+               --version "${{ steps.ver.outputs.version }}" \
+               --target "${{ matrix.label }}" \
+               --out dist; then
+            echo "::error title=GPL guard tripped::The renode+qemu build still pulled in the avr backend (libsimavr, GPL-3.0)."
+            echo "Refusing to build a GPL-encumbered binary and label it MIT-clean." >&2
+            echo "This is the expected failure until the source fix in docs/release-and-licensing.md lands." >&2
+            exit 1
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -179,6 +186,18 @@ jobs:
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} dist/ \;
           ls -la dist
 
+      - name: Verify every manifest before publishing
+        shell: bash
+        run: |
+          # Belt-and-suspenders: re-check each sha256 the way get-hauksbee.sh
+          # does (relative basename, from inside the dir) so a corrupted upload
+          # never becomes a published release.
+          cd dist
+          for sum in *.sha256; do
+            echo "checking $sum"
+            sha256sum --check "$sum"
+          done
+
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -187,3 +206,51 @@ jobs:
             dist/*.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+# =============================================================================
+# OPTION A (NOT SHIPPED): full-featured, GPL-encumbered binaries.
+# =============================================================================
+# The variant below builds with DEFAULT features (avr + renode + qemu), which
+# statically links GPL-3.0 libsimavr. The resulting binaries — and therefore the
+# published release download — are GPL-3.0 licensed, not MIT. Shipping this is a
+# deliberate product/licensing decision that must be made and documented by a
+# human; it is intentionally left commented out.
+#
+# To use it: replace the matrix "Build MIT-clean bundle" step with per-OS build
+# steps that (1) install simavr + clang and (2) call bundle.sh WITHOUT the
+# --no-default-features/--features flags. Reference steps (previously the
+# shipping path before the MIT-clean decision):
+#
+#   - name: Install Linux build dependencies
+#     if: runner.os == 'Linux'
+#     run: |
+#       sudo apt-get update
+#       sudo apt-get install -y --no-install-recommends \
+#         build-essential git libelf-dev zlib1g-dev clang libclang-dev pkg-config
+#   - name: Build simavr from source (Linux)
+#     if: runner.os == 'Linux'
+#     run: |
+#       git clone --depth 1 --branch v1.8 https://github.com/buserror/simavr.git /tmp/simavr-src
+#       make -C /tmp/simavr-src CC=gcc RELEASE=1 build-simavr
+#       sudo make -C /tmp/simavr-src CC=gcc RELEASE=1 DESTDIR=/usr/local PREFIX=/usr/local install-simavr
+#       sudo ldconfig
+#   - name: Install macOS build dependencies
+#     if: runner.os == 'macOS'
+#     run: brew install simavr llvm
+#   - name: Build FULL (GPL) bundle
+#     if: runner.os == 'Linux'
+#     env:
+#       LIBRARY_PATH: /usr/local/lib
+#       PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+#       BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/local/include -I/usr/local/include/simavr"
+#     run: |
+#       cd hauksbee
+#       scripts/bundle.sh --version "$V" --target "$LABEL" --out dist   # default features
+#   - name: Build FULL (GPL) bundle (macOS)
+#     if: runner.os == 'macOS'
+#     env:
+#       LIBCLANG_PATH: "/opt/homebrew/opt/llvm/lib"   # /usr/local/opt/llvm on macos-13
+#     run: |
+#       cd hauksbee
+#       scripts/bundle.sh --version "$V" --target "$LABEL" --out dist
+# =============================================================================
