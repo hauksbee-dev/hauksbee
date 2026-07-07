@@ -5,6 +5,16 @@ edition.workspace = true
 license.workspace = true
 description = "CI for hardware: run a board+firmware spec headless, assert on rails/UART/blink/faults, emit JUnit + GitHub annotations"
 
+[features]
+# Mirror the engine's MCU backend features so `cargo build -p hauksbee-ci
+# --no-default-features --features renode,qemu` (the MIT-clean release shape;
+# see docs/release-and-licensing.md) resolves against THIS package. All on by
+# default, matching the engine. `avr` pulls in GPL-3.0 libsimavr.
+default = ["avr", "renode", "qemu"]
+avr = ["hauksbee-engine/avr", "hauksbee-server/avr"]
+renode = ["hauksbee-engine/renode", "hauksbee-server/renode"]
+qemu = ["hauksbee-engine/qemu", "hauksbee-server/qemu"]
+
 [[bin]]
 name = "hauksbee-ci"
 path = "src/main.rs"
@@ -23,8 +33,8 @@ hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
 hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
-hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine" }
-hauksbee-server = { version = "0.1.0", path = "../hauksbee-server" }
+hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine", default-features = false }
+hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false }
 
 [dev-dependencies]
 # Boot-coverage tests reuse the backend's real Espressif-QEMU discovery

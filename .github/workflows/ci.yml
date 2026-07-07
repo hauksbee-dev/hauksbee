@@ -1,0 +1,66 @@
+# Fast PR/push CI for hauksbee. Deliberately CHECK-only (no test run) so it
+# stays quick; the heavier build/test paths live in the Docker and release
+# workflows and in local `scripts/ci.sh`.
+#
+# Primary job: exercise the MIT-clean (GPL-free) build shape. An earlier ledger
+# noted that nothing in CI ever built `--no-default-features --features
+# renode,qemu`, so a regression that made that shape stop compiling — or that
+# quietly pulled the GPL `avr`/libsimavr backend back into it — would go
+# unnoticed until release time. This job closes that gap.
+#
+# It is also a genuine GPL-freeness ASSERTION, not just a compile check: it
+# points simavr discovery at a nonexistent path (SIMAVR_*_DIR). If the
+# renode+qemu shape is truly avr-free, hauksbee-mcu/build.rs early-returns and
+# ignores those paths and the check passes with zero system dependencies. If
+# `avr` leaks in, build.rs panics ("the avr co-sim feature needs a system
+# libsimavr") and this job fails — telling us the "MIT-clean" release would in
+# fact be GPL-encumbered. See docs/release-and-licensing.md.
+#
+# Expected GREEN: the feature graph is clean (hauksbee-server gates its AvrMcu
+# usage on `avr`; every hauksbee-* path dependency uses default-features =
+# false with explicit per-feature forwarding). A red here means a feature-graph
+# regression re-enabled avr — fix the graph, never weaken this check.
+
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gpl-free-check:
+    name: cargo check (MIT-clean renode+qemu shape)
+    runs-on: ubuntu-latest
+    env:
+      # GPL-freeness guard: a clean shape ignores these; a leaky shape panics.
+      SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
+      SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ci-gplfree-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ci-gplfree-
+      - name: cargo check --workspace --no-default-features --features renode,qemu
+        run: |
+          if ! cargo check --workspace --no-default-features --features renode,qemu; then
+            echo "::error title=GPL-free shape broken::--no-default-features --features renode,qemu failed."
+            echo "Either it stopped compiling, or it pulled in the GPL avr/libsimavr backend." >&2
+            echo "See docs/release-and-licensing.md." >&2
+            exit 1
+          fi

@@ -27,6 +27,12 @@ pub trait Engine: Send + 'static {
 
 /// Demo engine: an emulated AVR running real firmware with a synthetic
 /// analog environment. Proves the server/MCU/frontend stack end to end.
+///
+/// Feature-gated on `avr`: this is the only place the server crate touches the
+/// simavr-backed [`hauksbee_mcu::AvrMcu`]. Keeping it behind the gate is what
+/// lets the MIT-clean release shape (`--no-default-features --features
+/// renode,qemu`) build the server crate without linking GPL-3.0 libsimavr.
+#[cfg(feature = "avr")]
 pub struct McuDemoEngine {
     mcu: Box<dyn hauksbee_mcu::Mcu + Send>,
     name: String,
@@ -38,6 +44,7 @@ pub struct McuDemoEngine {
     adc_volts: f64,
 }
 
+#[cfg(feature = "avr")]
 impl McuDemoEngine {
     pub fn new(
         firmware_hex: &std::path::Path,
@@ -73,6 +80,7 @@ impl McuDemoEngine {
     }
 }
 
+#[cfg(feature = "avr")]
 impl Engine for McuDemoEngine {
     fn board_info(&self) -> BoardInfo {
         BoardInfo {
