@@ -8,5 +8,6 @@ pub mod boardcode;
 pub mod common;
 pub mod doctor;
 pub mod models;
+pub mod run;
 pub mod serve;
 pub mod sim;
