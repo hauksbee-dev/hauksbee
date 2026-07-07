@@ -331,6 +331,16 @@ impl LinearIsland {
                 | Device::Vsource { .. } => {
                     return None;
                 }
+                // Coupled inductors are linear-with-state but NOT modeled by
+                // this reducer: its inductor states assume `di/dt = v/L` per
+                // winding, and a coupled group's `di/dt = L⁻¹·v` needs the
+                // group inductance matrix INVERTED — which k = 1 (legal on
+                // the K card) makes singular. The MNA path stamps L directly
+                // and never inverts it, so refusing the island is both exact
+                // and the only shape that survives perfect coupling. Modeling
+                // k < 1 groups in the reduction is a later optimization with
+                // its own exactness gate (the E/G precedent).
+                Device::Coupling { .. } => return None,
                 // Nonlinear / event-driven kinds cannot appear in a linear
                 // island (the `island.linear` gate above already returned
                 // `None`), but the match stays exhaustive so a future variant
