@@ -1,0 +1,13 @@
+half-wave rectifier + smoothing, charge-carrying diode (dev-plan 04 s3.1)
+* 1N4148-style model WITH cjo/tt so junction+diffusion charge shapes the
+* edges at 100 kHz. RS is omitted deliberately: the solver parses but does
+* not yet stamp series resistance (s3.2 territory), and ngspice would.
+V1 in 0 SIN(0 5 100k)
+D1 in out DSW
+R1 out 0 1k
+C1 out 0 100n
+.model DSW D(IS=2.52e-9 N=1.752 CJO=4p M=0.4 VJ=0.7 TT=20n)
+.tran 50n 50u uic
+.print tran v(out)
+.options reltol=1e-4
+.end

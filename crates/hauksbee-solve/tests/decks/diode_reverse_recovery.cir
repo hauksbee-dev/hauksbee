@@ -1,0 +1,17 @@
+reverse recovery of a switching diode (dev-plan 04 s3.1)
+* Forward-biased diode driven sharply into reverse: the stored diffusion
+* charge (TT) holds the anode near the forward drop for the storage time
+* before the junction snaps off -- THE observable that junction+diffusion
+* charge is real physics, not a parallel linearized capacitor. R is 10k so
+* the post-storage fall is CJO*R-limited (~100 ns): a finite slope BOTH
+* simulators resolve, which keeps the harness's pointwise comparison
+* meaningful (with a stiff drive the snap is near-vertical and a few ns of
+* edge-timing difference reads as a huge pointwise error at the crossing).
+V1 in 0 PULSE(2 -2 1u 100n 100n 10u 20u)
+R1 in a 10k
+D1 a 0 DSW
+.model DSW D(IS=1e-9 N=1.8 CJO=10p TT=500n)
+.tran 2n 6u
+.print tran v(a)
+.options reltol=1e-4
+.end
