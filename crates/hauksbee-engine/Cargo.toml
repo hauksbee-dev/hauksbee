@@ -41,6 +41,11 @@ forge-sexpr.workspace = true
 tempfile = { workspace = true }
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "0.8"
+# Watch mode (`hauksbee watch`): cross-platform filesystem notifications. Default
+# features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
+# on Linux/Windows) — the recommended-watcher + watch-a-dir-and-filter pattern
+# needs nothing more.
+notify = "8"
 # Interactive TUI: the default human-facing surface when `hauksbee run <board>`
 # is invoked with no output flag on a TTY. Adapts ratatui + crossterm rather
 # than hand-rolling a terminal renderer.

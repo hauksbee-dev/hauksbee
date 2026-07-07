@@ -147,6 +147,27 @@ enum Command {
     /// Example:
     ///   hauksbee models lint my_part.toml
     Models(ModelsArgs),
+
+    /// Watch a target and re-run the right check on every file change: a board
+    /// runs `run --check`, a `.board` runs `check-code`, a `.toml` runs the spec
+    /// through `hauksbee-ci`. Ctrl-C exits with the last run's code.
+    ///
+    /// Example:
+    ///   hauksbee watch my_board.kicad_pcb --plain
+    Watch(WatchArgs),
+}
+
+#[derive(Parser)]
+struct WatchArgs {
+    /// Board, `.board`, or hauksbee-ci spec (`.toml`) to watch.
+    #[arg(value_name = "TARGET")]
+    target: PathBuf,
+    /// Stream plain-language reports (default: the expert report).
+    #[arg(long, visible_alias = "explain")]
+    plain: bool,
+    /// Run the check once and exit (test the plumbing without watching).
+    #[arg(long)]
+    once: bool,
 }
 
 #[derive(Parser)]
@@ -515,6 +536,9 @@ fn main() -> anyhow::Result<()> {
         Command::Models(args) => match args.command {
             ModelsCommand::Lint(args) => hauksbee_engine::commands::models::lint(&args.file),
         },
+        Command::Watch(args) => {
+            hauksbee_engine::commands::watch::run(args.target, args.plain, args.once)
+        }
     };
     if let Err(e) = &result {
         if json {
@@ -528,17 +552,6 @@ fn main() -> anyhow::Result<()> {
     }
     result
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 /// Deconstruct the parsed `RunArgs` (clap) into the library's plain [`RunConfig`],
