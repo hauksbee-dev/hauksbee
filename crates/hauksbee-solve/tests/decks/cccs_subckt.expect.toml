@@ -1,0 +1,14 @@
+# The subckt-composition case for current control: the F card lives INSIDE a
+# .subckt body and names an ammeter from the same body, so both engines must
+# apply their instance-name mangling to the control reference (ours resolves
+# `Vsense` to the flattened `X1.Vsense` under the local-scope rule; ngspice
+# does its own subckt translation). Electrically identical to cccs_mirror,
+# including its TMAX cap (see cccs_mirror.expect.toml).
+analysis = "tran"
+description = "CCCS in a subckt controlled by its own local ammeter"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01
