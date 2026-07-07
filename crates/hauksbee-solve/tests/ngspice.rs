@@ -413,20 +413,25 @@ fn rewrite_with_print(orig: &str, print_card: &str) -> String {
     out
 }
 
-/// Worst relative error of `ours` vs interpolated ngspice, with a full-scale
-/// floor so zero-crossings don't blow the ratio up. Returns (worst, at_time).
+/// Worst relative error of `ours` vs interpolated ngspice, with a floor so
+/// zero-crossings don't blow the ratio up: the probe's own `abstol` when the
+/// expect file states one (the op-branch convention, extended to tran for
+/// probes whose off-state is an exponential tail toward zero — a switch
+/// drain settling to millivolts turns sub-mV agreement into O(1) "relative"
+/// noise without it), else 1% of `full_scale`. Returns (worst, at_time).
 fn worst_tran_error(
     ours_t: &[f64],
     ours_v: &[f64],
     ng: &NgSeries,
     full_scale: f64,
     skip_initial: f64,
+    abstol: Option<f64>,
 ) -> (f64, f64) {
-    let floor = if full_scale > 0.0 {
+    let floor = abstol.unwrap_or(if full_scale > 0.0 {
         0.01 * full_scale
     } else {
         1e-9
-    };
+    });
     let mut worst = 0.0f64;
     let mut at = 0.0f64;
     for (&t, &ov) in ours_t.iter().zip(ours_v) {
@@ -566,6 +571,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     &ng,
                     expect.full_scale,
                     expect.skip_initial,
+                    pe.abstol,
                 );
                 quantities.push(QtyResult {
                     probe: pr.label(),

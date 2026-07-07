@@ -1,0 +1,15 @@
+# MOS body diode vs ngspice-46 (dev-plan 04 §3.3 cross-check target 2).
+# Gate off: drain clamps one body-diode drop below the grounded bulk
+# (reverse conduction); gate on: the channel takes over (synchronous
+# rectification). Both levels agree to sub-mV; the worst point is the
+# takeover edge at the gate rise (t = 2.05 us), where the CBD depletion
+# charge model and Meyer gate-cap differences skew the transition by
+# nanoseconds. Measured worst 1.22e-1; the bar is ~2x that.
+analysis = "tran"
+description = "body-diode reverse conduction, then synchronous channel takeover"
+full_scale = 5.0
+skip_initial = 0.2e-6
+
+[[probe]]
+expr = "V(d)"
+reltol = 0.25

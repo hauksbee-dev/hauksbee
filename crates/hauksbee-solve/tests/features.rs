@@ -352,6 +352,103 @@ fn junction_caps_toggle_is_honored_for_bjts() {
     }
 }
 
+/// The §3.4 `DeviceEffects` contract for `junction_caps` on MOSFETs
+/// (dev-plan 04 §3.3): flipping the toggle on a model carrying gate-charge
+/// fields (overlap CGSO/CGDO + TOX intrinsic) must CHANGE the solution (both
+/// gate-charge companions appear and reshape the switching edges), and on a
+/// default model the two runs must be BIT-IDENTICAL — the diode's and BJT's
+/// contract, extended to the third junction device.
+#[test]
+fn junction_caps_toggle_is_honored_for_mosfets() {
+    // The §3.3 load-switch shape: gate driven through RG so the gate charge
+    // sets the switching timing; without the charge companions the drain
+    // would snap with the (RG-free) gate voltage.
+    let net_charge = "m\nVDD vdd 0 DC 5\nVG in 0 PULSE(0 5 1u 100n 100n 4u 10u)\n\
+                      RG in g 10k\nRL vdd d 100\nM1 d g 0 0 MSW\n\
+                      .model MSW NMOS(VTO=2 KP=1e-2 W=1m L=10u TOX=50n CGSO=2e-9 CGDO=2e-9)\n\
+                      .end\n";
+    let net_plain = "m\nVDD vdd 0 DC 5\nVG in 0 PULSE(0 5 1u 100n 100n 4u 10u)\n\
+                     RG in g 10k\nRL vdd d 100\nM1 d g 0 0 MSW\n\
+                     .model MSW NMOS(VTO=2 KP=1e-2 W=1m L=10u)\n.end\n";
+    let run = |net: &str, junction_caps: bool| {
+        let circuit = SpiceLoader::load(net).unwrap();
+        let opts = SolverOptions {
+            effects: DeviceEffects {
+                junction_caps,
+                ..DeviceEffects::default()
+            },
+            ..SolverOptions::fixed(10e-9)
+        };
+        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
+        out.node(&circuit, "d").unwrap().to_vec()
+    };
+    let w_on = run(net_charge, true);
+    let w_off = run(net_charge, false);
+    let max_diff = w_on
+        .iter()
+        .zip(&w_off)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff > 1e-2,
+        "junction_caps=on must change a gate-charge-carrying MOSFET's waveform \
+         (max diff {max_diff:e})"
+    );
+    let p_on = run(net_plain, true);
+    let p_off = run(net_plain, false);
+    assert_eq!(p_on.len(), p_off.len());
+    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "charge-free MOS deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
+        );
+    }
+}
+
+/// The MOS body diode is STRUCTURAL physics like the BJT's junctions — no
+/// toggle gates its DC branch, only the model fields do (`IS` on the card;
+/// deliberately default-OFF, unlike ngspice's 1e-14 default, so pre-§3.3
+/// decks are bit-identical). This pins both halves: a card with IS conducts
+/// in reverse (the synchronous-rectifier path), a default card leaves the
+/// drain UNCLAMPED at the current source's rail.
+#[test]
+fn mos_body_diode_is_structural_and_model_gated() {
+    // ~1 mA pulled out of the drain of an off NMOS through a 1k pulldown to
+    // -1.5 V: with the body diode the drain clamps near -0.6 V; without it
+    // the drain follows the pulldown to -1.5 V. The rail is deliberately
+    // BELOW ground by less than vth: any deeper (e.g. -5 V) and the
+    // symmetric Level-1 channel itself conducts in INVERTED mode (the
+    // grounded source becomes the effective drain and vgd = +5 exceeds the
+    // threshold) — real physics ngspice reproduces, but not the body-diode
+    // observable this test isolates.
+    let net = |model: &str| {
+        format!(
+            "m\nVNEG neg 0 DC -1.5\nRD neg d 1k\nM1 d 0 0 0 MB\n{model}\n.op\n.end\n"
+        )
+    };
+    let with_diode = net(".model MB NMOS(VTO=2 KP=1e-2 IS=1e-12)");
+    let plain = net(".model MB NMOS(VTO=2 KP=1e-2)");
+    let run = |net: &str| {
+        let circuit = SpiceLoader::load(net).unwrap();
+        let mut ws = hauksbee_solve::Workspace::new(&circuit);
+        hauksbee_solve::dc_operating_point(&mut ws, &circuit, &SolverOptions::default()).unwrap();
+        ws.x[ws.layout.node(circuit.find_node("d").unwrap()).unwrap()]
+    };
+    let vd_diode = run(&with_diode);
+    let vd_plain = run(&plain);
+    assert!(
+        (-0.75..=-0.4).contains(&vd_diode),
+        "body diode must clamp the drain about one forward drop below the bulk \
+         (got {vd_diode} V)"
+    );
+    assert!(
+        vd_plain < -1.4,
+        "a default model has NO body diode (bit-identity with pre-§3.3 decks): \
+         the drain must follow the pulldown rail (got {vd_plain} V)"
+    );
+}
+
 /// The §3.4 contract for `series_resistance` on BJTs: flipping the toggle on
 /// a model carrying rb/re/rc must CHANGE the solution (the core moves onto
 /// internal nodes behind real ohmic drops), and on a default model the runs
