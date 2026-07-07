@@ -1,0 +1,119 @@
+//! `--check` / `--all`: the whole static suite (bind + DRC + lint + SI + USB-C)
+//! in ONE report, plus the bare-`--json` combined report (bind + DRC + lint + SI,
+//! no USB-C) that a `run <board> --json` with no specific selector emits.
+
+use std::path::Path;
+
+use hauksbee_extract::ExtractedBoard;
+use hauksbee_models::ModelLibrary;
+
+use crate::binder::bind_board;
+use crate::result::{
+    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured, JsonReport,
+};
+
+use super::{kicad_pro_clearance_rules, lint_fails, si_fails, OutputMode};
+
+/// Run the full static suite and print it in `mode`, then (under `strict`) exit
+/// non-zero if any real finding gates.
+pub fn emit(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+    lib: &ModelLibrary,
+    mode: OutputMode,
+    strict: bool,
+) -> anyhow::Result<()> {
+    let bound = bind_board(board, lib);
+    let summary = BindSummary::from_report(&bound.report);
+    let drc = if altium_present {
+        ExtractedBoard::altium_drc(raw)?
+    } else {
+        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+    };
+    let drc_structured = DrcStructured::from_report(&drc);
+    let lint = crate::checks::engine_lint(board, lib);
+    let geo_text = if altium_present { None } else { Some(text) };
+    let si = board.si_checks(geo_text);
+    // USB-C CC compliance, only when the board has a USB-C receptacle.
+    let usbc = crate::usb_c_report(board);
+
+    match mode {
+        OutputMode::Json => {
+            let mut jr = JsonReport::new(&bound.name, summary);
+            jr.drc = Some(drc_structured);
+            let mut findings = lint_findings_json(&lint);
+            findings.extend(si_findings_json(&si));
+            // Fold USB-C in as a finding so the aggregate stays one valid JSON doc.
+            findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+            jr.findings = Some(findings);
+            println!("{}", jr.to_json());
+        }
+        OutputMode::Plain => {
+            println!("== Copper spacing (DRC) ==");
+            print!("{}", crate::plain_drc_structured(&drc_structured).render());
+            println!("\n== Connectivity / lint ==");
+            print!("{}", crate::plain_netlint(&lint).render());
+            println!("\n== Signal integrity ==");
+            print!("{}", crate::plain_si(&si).render());
+            if let Some(u) = &usbc {
+                println!("\n== USB-C CC compliance ==");
+                print!("{}", u.render_plain());
+            }
+        }
+        OutputMode::Text => {
+            print!("{}", bound.report.render_table());
+            print!("{}", summary.render_banner());
+            println!("\n== Copper spacing (DRC) ==");
+            print!("{}", drc_structured.render());
+            println!("\n== Connectivity / lint ==");
+            print!("{}", hauksbee_extract::render_netlint(&lint));
+            println!("\n== Signal integrity ==");
+            print!("{}", hauksbee_extract::render_si(&si));
+            if let Some(u) = &usbc {
+                println!("\n== USB-C CC compliance ==");
+                print!("{}", u.render());
+            }
+        }
+    }
+    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+    // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do not
+    // fail the gate on them (the caveat is still printed above).
+    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+    if strict && (drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious) {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+/// The bare-`--json` combined machine report (bind + DRC + lint/straps/resources
+/// + SI) for a `run <board> --json` with no specific report selector. Without it
+/// a bare `--json` would fall through to the TUI/websocket default and hang a
+/// piped / CI / AI caller. Distinct from [`emit`]'s JSON: no USB-C finding.
+pub fn emit_combined_json(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+    lib: &ModelLibrary,
+) -> anyhow::Result<()> {
+    let bound = bind_board(board, lib);
+    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+    let drc = if altium_present {
+        ExtractedBoard::altium_drc(raw)?
+    } else {
+        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+    };
+    jr.drc = Some(DrcStructured::from_report(&drc));
+    let lint = crate::checks::engine_lint(board, lib);
+    let geo_text = if altium_present { None } else { Some(text) };
+    let si = board.si_checks(geo_text);
+    let mut findings = lint_findings_json(&lint);
+    findings.extend(si_findings_json(&si));
+    jr.findings = Some(findings);
+    println!("{}", jr.to_json());
+    Ok(())
+}

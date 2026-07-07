@@ -28,6 +28,7 @@
 //! - [`ripple`]: input bulk-capacitor ripple-current overstress on a buck.
 
 pub mod ampacity;
+pub mod boot;
 pub mod converter;
 pub mod device_decode;
 pub mod mcu_coverage;
