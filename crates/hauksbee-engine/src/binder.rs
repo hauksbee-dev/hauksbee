@@ -590,6 +590,8 @@ pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::
             confidence: Confidence::Guessed,
             query: q,
             source: Some("engine-fallback".to_string()),
+            layer: None,
+            origin: Some("engine-fallback".to_string()),
         };
     }
     res
