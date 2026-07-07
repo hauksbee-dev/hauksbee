@@ -2321,6 +2321,26 @@ fn parse_model_card(line: usize, raw: &str) -> Result<ModelCard, SpiceError> {
             }
         }
     }
+    // LEVEL refusal (dev-plan 04 §3.3/§4.3): the stamp implements exactly
+    // level 1 (Shichman-Hodges + switch-relevant gate charge / body diode).
+    // A card asking for LEVEL=2/3/… used to be SILENTLY stamped as level 1 —
+    // the misparse sin §4.3 names. Refuse it at load, with the line.
+    if kind == "mos" {
+        if let Some(lv) = params.get("level").copied() {
+            if lv != 1.0 {
+                return Err(SpiceError::Syntax {
+                    line,
+                    msg: format!(
+                        "MOSFET LEVEL={lv} is not implemented (supported: LEVEL=1, \
+                         the Shichman-Hodges square law with switch-relevant gate \
+                         charge and body diode); refusing rather than silently \
+                         stamping level-1 physics"
+                    ),
+                    text: raw.into(),
+                });
+            }
+        }
+    }
     Ok(ModelCard {
         name,
         kind,
@@ -2774,16 +2794,45 @@ fn mosfet_from_card(card: &ModelCard, kv: &HashMap<String, f64>) -> MosfetModel 
         .or_else(|| card.get("w"))
         .unwrap_or(1.0);
     let w_over_l = if l != 0.0 { w / l } else { 1.0 };
+    // Gate capacitances (dev-plan 04 §3.3): overlap capacitances CGSO/CGDO
+    // are per meter of width; TOX yields the total intrinsic oxide
+    // capacitance Cox·W·L. An omitted TOX leaves c_ox = 0 (no intrinsic gate
+    // charge) — a DOCUMENTED deviation from ngspice, which materializes
+    // default TOX/W/L; see `MosfetModel::c_ox`.
+    const EPS_OX: f64 = 3.9 * 8.854_214_871e-12; // SiO2 permittivity (F/m)
+    let c_ox = match card.get("tox") {
+        Some(tox) if tox > 0.0 => EPS_OX / tox * w * l,
+        _ => 0.0,
+    };
+    // SPICE cards state VTO in device convention (NEGATIVE for an enhancement
+    // PMOS); the solver stores it polarity-FOLDED (positive = enhancement for
+    // either polarity, see `MosfetModel::vto`). Fold here. Before this fix a
+    // SPICE-convention PMOS card (VTO=-1.1) was read as a folded threshold of
+    // -1.1 V — a depletion-mode device, permanently on. NMOS cards
+    // (sign = +1) are bit-identical across the fix.
+    let fold = polarity.sign();
     MosfetModel {
         level: MosLevel::Level1,
         polarity,
-        vto: card.get("vto").or_else(|| card.get("vt0")).unwrap_or(d.vto),
+        vto: card
+            .get("vto")
+            .or_else(|| card.get("vt0"))
+            .map(|v| fold * v)
+            .unwrap_or(d.vto),
         kp: card.get_or("kp", d.kp),
         lambda: card.get_or("lambda", d.lambda),
         gamma: card.get_or("gamma", d.gamma),
         phi: card.get_or("phi", d.phi),
         w_over_l,
         n_sub: card.get_or("nsub_factor", d.n_sub),
+        cgs_ov: card.get_or("cgso", 0.0) * w,
+        cgd_ov: card.get_or("cgdo", 0.0) * w,
+        c_ox,
+        body_is: card.get_or("is", d.body_is),
+        cbd: card.get_or("cbd", d.cbd),
+        cbs: card.get_or("cbs", d.cbs),
+        pb: card.get_or("pb", d.pb),
+        mj: card.get_or("mj", d.mj),
     }
 }
 
@@ -3724,6 +3773,70 @@ fn parse_dc_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dev-plan 04 §3.3/§4.3: a `.model` card asking for a MOS level the
+    /// stamp does not implement must REFUSE at load, with the line — it used
+    /// to be silently stamped as level 1 (the misparse sin). An explicit
+    /// `LEVEL=1` (and no LEVEL at all) parses as before.
+    #[test]
+    fn mos_level_refusal_is_loud_and_line_numbered() {
+        let bad = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=3 VTO=1)\n.end\n";
+        let err = SpiceLoader::load(bad).unwrap_err();
+        match &err {
+            SpiceError::Syntax { line, msg, .. } => {
+                assert_eq!(*line, 3, "refusal must carry the .model card's line");
+                assert!(
+                    msg.contains("LEVEL=3") && msg.contains("LEVEL=1"),
+                    "refusal must name the asked and the supported levels: {msg}"
+                );
+            }
+            other => panic!("expected a line-numbered Syntax refusal, got {other:?}"),
+        }
+        let ok = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=1 VTO=1)\n.end\n";
+        assert!(SpiceLoader::load(ok).is_ok(), "LEVEL=1 must stay accepted");
+    }
+
+    /// Dev-plan 04 §3.3: SPICE-convention PMOS threshold (negative VTO for
+    /// an enhancement device) folds into the solver's N-channel space, and
+    /// the §3.3 capacitance/body fields scale as documented (CGSO/CGDO per
+    /// meter of width, TOX to a total Cox·W·L, IS/CBD/CBS/PB/MJ direct).
+    #[test]
+    fn mos_card_folds_pmos_vto_and_scales_cap_fields() {
+        let net = "m\nM1 d g 0 0 MP\n\
+                   .model MP PMOS(VTO=-1.1 KP=4.5 W=1m L=10u TOX=50n \
+                   CGSO=2e-9 CGDO=1e-9 IS=1e-12 CBD=50p CBS=20p PB=0.7 MJ=0.4)\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let m = match c.devices.iter().find(|d| matches!(d, Device::Mosfet { .. })) {
+            Some(Device::Mosfet { model, .. }) => model,
+            _ => unreachable!(),
+        };
+        assert_eq!(m.polarity, Polarity::P);
+        assert!((m.vto - 1.1).abs() < 1e-12, "PMOS VTO folds positive: {}", m.vto);
+        assert!((m.cgs_ov - 2e-12).abs() < 1e-18, "CGSO·W: {}", m.cgs_ov);
+        assert!((m.cgd_ov - 1e-12).abs() < 1e-18, "CGDO·W: {}", m.cgd_ov);
+        let c_ox_want = 3.9 * 8.854_214_871e-12 / 50e-9 * 1e-3 * 10e-6;
+        assert!(
+            (m.c_ox - c_ox_want).abs() < 1e-18,
+            "TOX -> Cox·W·L: {} vs {}",
+            m.c_ox,
+            c_ox_want
+        );
+        assert_eq!(m.body_is, 1e-12);
+        assert_eq!(m.cbd, 50e-12);
+        assert_eq!(m.cbs, 20e-12);
+        assert_eq!(m.pb, 0.7);
+        assert_eq!(m.mj, 0.4);
+        // The bit-identity contract: a card WITHOUT the §3.3 fields yields a
+        // charge-free, body-diode-free model (ngspice would default TOX and
+        // IS; hauksbee deliberately does not — documented on the fields).
+        let plain = "m\nM1 d g 0 0 MN\n.model MN NMOS(VTO=2 KP=1e-3)\n.end\n";
+        let c2 = SpiceLoader::load(plain).unwrap();
+        let m2 = match c2.devices.iter().find(|d| matches!(d, Device::Mosfet { .. })) {
+            Some(Device::Mosfet { model, .. }) => model,
+            _ => unreachable!(),
+        };
+        assert!(!m2.has_gate_charge() && !m2.has_body_diode());
+    }
 
     #[test]
     fn parses_rc_divider() {

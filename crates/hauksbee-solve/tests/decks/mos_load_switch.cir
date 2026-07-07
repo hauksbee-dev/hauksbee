@@ -1,0 +1,19 @@
+MOS load switch: gate charge shapes the switching edges (dev-plan 04 s3.3)
+* NMOS low-side switch, gate driven through RG from a pulse -- the plan's
+* "MOS load switch" cross-check target. The observable is switching timing
+* through the gate charge: CGSO/CGDO overlap plus the TOX intrinsic
+* capacitance delay the drain edges and produce the Miller shelf on the
+* gate node. Our charge model is the smooth Meyer-limit two-terminal Q(v)
+* (stamp.rs mos_gate_charge); ngspice-46 level 1 evaluates true Meyer
+* capacitances Cgs(vgs,vds)/Cgd(vgs,vds), so the tolerance carries the
+* documented in-triode Cgs difference (ours holds 2/3*Cox where Meyer
+* falls toward Cox/2).
+VDD vdd 0 DC 5
+VG in 0 PULSE(0 5 1u 100n 100n 4u 10u)
+RG in g 10k
+RL vdd d 100
+M1 d g 0 0 MSW
+.model MSW NMOS(LEVEL=1 VTO=2 KP=1e-2 W=1m L=10u TOX=50n CGSO=2e-9 CGDO=2e-9)
+.tran 10n 8u
+.print tran v(d) v(g)
+.end

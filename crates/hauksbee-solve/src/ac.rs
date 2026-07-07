@@ -412,8 +412,8 @@ fn stamp_ac(
         Device::Bjt { c, b, e, model, .. } => {
             stamp_bjt_ac(sys, layout, op, id, *c, *b, *e, model, opts, w)
         }
-        Device::Mosfet { d, g, s, model, .. } => {
-            stamp_mosfet_ac(sys, layout, op, *d, *g, *s, model, opts)
+        Device::Mosfet { d, g, s, b, model, .. } => {
+            stamp_mosfet_ac(sys, layout, op, *d, *g, *s, *b, model, opts, w)
         }
         Device::OpAmp {
             out,
@@ -783,8 +783,10 @@ fn stamp_mosfet_ac(
     d: NodeId,
     gnode: NodeId,
     s: NodeId,
+    b: Option<NodeId>,
     model: &MosfetModel,
     opts: &SolverOptions,
+    w: f64,
 ) {
     match model.level {
         MosLevel::Level1 => {}
@@ -800,12 +802,29 @@ fn stamp_mosfet_ac(
     }
     let vgs = vg - vs;
     let vds = vd - vs;
-    let vth = model.vto;
     let vt = hauksbee_ir::thermal_voltage_c(if opts.effects.temperature {
         opts.model_temp()
     } else {
         27.0
     });
+    // Body-effect threshold at the OP, mirroring the transient stamp; gamma-
+    // free models take the plain-vto path bit-identically.
+    let bulk = b.unwrap_or(s);
+    let mut vth = model.vto;
+    let mut dvth_dvbs = 0.0;
+    let body_effect = model.gamma > 0.0 && b.is_some();
+    if body_effect {
+        let vbs_f = sign * op.v(bulk) - vs;
+        let phi = model.phi.max(1e-6);
+        let arg = phi - vbs_f;
+        if arg > 0.0 {
+            let sq = arg.sqrt();
+            vth = model.vto + model.gamma * (sq - phi.sqrt());
+            dvth_dvbs = -model.gamma / (2.0 * sq.max(1e-3 * phi.sqrt()));
+        } else {
+            vth = model.vto + model.gamma * (0.0 - phi.sqrt());
+        }
+    }
     let nsub = model.n_sub.max(1.0);
 
     let (gm, gds) = if vgs - vth < -nsub * vt * 10.0 {
@@ -837,6 +856,53 @@ fn stamp_mosfet_ac(
     let (dn, sn) = if swap { (si, di) } else { (di, si) };
     stamp_pair(sys, dn, sn, gds);
     stamp_transconductance(sys, dn, sn, gi, sn, gm);
+    if body_effect {
+        // Bulk transconductance gmb = -gm·dvth/dvbs, the transient tangent.
+        let bi = layout.node(bulk);
+        stamp_transconductance(sys, dn, sn, bi, sn, -gm * dvth_dvbs);
+    }
+
+    // Gate-charge capacitances at the OP (dev-plan 04 §3.3): jw·C per gate
+    // junction, the small-signal image of the transient charge companions —
+    // an AC answer without them would miss the very poles the switching
+    // physics adds. Charge-free models add exactly nothing: bit-identical.
+    if crate::stamp::mos_has_charge(model, &opts.effects) {
+        let delta = 2.0 * nsub * vt;
+        if model.has_gate_charge() {
+            let vgs_p = sign * (op.v(gnode) - op.v(s));
+            let vgd_p = sign * (op.v(gnode) - op.v(d));
+            let c_gs =
+                crate::stamp::mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs_p).1;
+            let c_gd =
+                crate::stamp::mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd_p).1;
+            sys.stamp_admittance(gi, si, Complex64::new(0.0, w * c_gs));
+            sys.stamp_admittance(gi, di, Complex64::new(0.0, w * c_gd));
+        }
+        // Bulk depletion capacitances at the OP.
+        let bi = layout.node(bulk);
+        for (term, term_i, cbx) in [(d, di, model.cbd), (s, si, model.cbs)] {
+            if term == bulk || cbx <= 0.0 {
+                continue;
+            }
+            let vj = sign * (op.v(bulk) - op.v(term));
+            let c = crate::stamp::depletion_charge(cbx, model.pb, model.mj, vj).1;
+            sys.stamp_admittance(bi, term_i, Complex64::new(0.0, w * c));
+        }
+    }
+    // Body-diode DC branch at the OP (structural, like the transient stamp):
+    // the small-signal junction conductance per bulk junction.
+    if model.body_is > 0.0 {
+        let bi = layout.node(bulk);
+        for (term, term_i) in [(d, di), (s, si)] {
+            if term == bulk {
+                continue;
+            }
+            let vj = sign * (op.v(bulk) - op.v(term));
+            let e = (vj / vt).clamp(-40.0, 40.0).exp();
+            let gj = (model.body_is * e / vt).max(opts.gmin);
+            stamp_pair(sys, bi, term_i, gj);
+        }
+    }
 }
 
 /// Behavioral op-amp small-signal: within the rails, `out = gain*(vp - vn)`

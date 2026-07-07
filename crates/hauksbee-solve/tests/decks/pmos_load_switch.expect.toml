@@ -1,0 +1,24 @@
+# PMOS high-side switch vs ngspice-46 (dev-plan 04 §3.3).
+# Pins the SPICE-convention negative-VTO fold and the polarity-folded gate
+# charges. Levels, delays and edge durations agree (on-state drain 4.9801 vs
+# 4.9800 at 5.15 us; off-state sub-mV); the worst point is the turn-ON edge,
+# where a ~2 ns charge-model skew (same Meyer-vs-Q(v) reconciliation as
+# mos_load_switch) lands on values rising from zero, so the pointwise ratio
+# maximizes: measured worst V(d) 9.29e-1 mid-edge, V(g) 7.13e-2. The V(d)
+# bar is ~1.3x that excursion; before the VTO fold fix this deck measured
+# 5.45e1 (a permanently-on depletion device), 45x the bar — the bar still
+# fails a broken fold or charge stamp outright. The tight V(g) probe is the
+# clean gate-charge observable on the same run.
+analysis = "tran"
+description = "PMOS high-side switch: folded negative VTO + P-channel gate charge"
+full_scale = 5.0
+skip_initial = 0.2e-6
+
+[[probe]]
+expr = "V(d)"
+reltol = 1.2
+abstol = 0.25
+
+[[probe]]
+expr = "V(g)"
+reltol = 0.15
