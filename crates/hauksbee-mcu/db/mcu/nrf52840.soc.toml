@@ -1,0 +1,31 @@
+# nRF52840: two 32-bit GPIO ports (gpio0/gpio1), uart0, 64 MHz.
+#
+# The nRF GPIO OUT register is at offset 0x504 (not an STM32-style 0x0C/0x14),
+# and the ports are 32-bit rather than 16 — another instance of the per-part
+# register data that belongs in a descriptor.
+[soc]
+backend = "renode"
+machine = "nrf52"
+platform_repl = "@platforms/cpus/nrf52840.repl"
+cpu_path = "sysbus.cpu"
+uart = "sysbus.uart0"
+frequency_hz = 64_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "nRF52840 (ARM Cortex-M4)"
+
+[[soc.ports]]
+letter = "0"
+peripheral = "gpio0"
+odr_offset = 0x504
+width = 32
+[[soc.ports]]
+letter = "1"
+peripheral = "gpio1"
+odr_offset = 0x504
+width = 32
+
+# No I2C/SPI controllers wired for this part.
+[soc.i2c]
+controllers = []
+[soc.spi]
+controllers = []

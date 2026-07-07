@@ -1,0 +1,33 @@
+# SiFive FE310 (HiFive1) RISC-V: one 32-bit GPIO port, uart0, 16 MHz.
+# The FE310 GPIO output value register (`port`) is at offset 0x0C.
+#
+# BRING-UP FOOTGUN (why post_load_setup exists): the FE310 Zephyr shell demo's
+# ELF entry does not point at the bring-up code. The upstream Renode resc sets PC
+# to `vinit` and tags the PRCI clock registers so the HFROSC/PLL config reads as
+# ready. Those three Monitor commands run AFTER the ELF is loaded. The literal
+# `{cpu}` token is substituted with `cpu_path` so the command stays SoC-generic.
+[soc]
+backend = "renode"
+machine = "fe310"
+platform_repl = "@platforms/cpus/sifive-fe310.repl"
+cpu_path = "sysbus.cpu"
+uart = "sysbus.uart0"
+frequency_hz = 16_000_000
+expected_e_machine = "EM_RISCV"
+mcu_label = "SiFive FE310 (RISC-V)"
+post_load_setup = [
+    'sysbus Tag <0x10008000 4> "PRCI_HFROSCCFG" 0xFFFFFFFF',
+    'sysbus Tag <0x10008008 4> "PRCI_PLLCFG" 0xFFFFFFFF',
+    '{cpu} PC `sysbus GetSymbolAddress "vinit"`',
+]
+
+[[soc.ports]]
+letter = "0"
+peripheral = "gpio0"
+odr_offset = 0x0C
+width = 32
+
+[soc.i2c]
+controllers = []
+[soc.spi]
+controllers = []

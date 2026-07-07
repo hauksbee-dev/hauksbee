@@ -1,0 +1,20 @@
+# ESP32-S3 (Xtensa LX7), 240 MHz. Same RAM-mailbox GPIO layout as classic ESP32
+# (see esp32.soc.toml for why GPIO is observed through the mailbox, not a
+# register).
+[soc]
+backend = "qemu"
+arch = "xtensa"
+machine = "esp32s3"
+icount_shift = 2
+frequency_hz = 240_000_000
+expected_e_machine = "EM_XTENSA"
+mcu_label = "ESP32-S3 (Xtensa LX7)"
+
+[[soc.banks]]
+letter = "0"
+out_reg = 0x5000_0000
+in_reg = 0x5000_0004
+width = 32
+
+[soc.i2c]
+buses = ["/machine/soc/i2c0/i2c", "/machine/soc/i2c1/i2c"]

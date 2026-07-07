@@ -60,6 +60,42 @@ A `--no-default-features --features renode,qemu` build is GPL-free: both the
 Renode and QEMU backends talk to their emulator over TCP and spawn it as a child
 process, so they link no GPL code.
 
+### Parts are data, not code (`db/mcu/*.soc.toml`, 06 §2)
+
+A *part* (an STM32F103, an ESP32-C3) is no longer a hand-written Rust
+constructor. Each is a reviewed descriptor file under
+`crates/hauksbee-mcu/db/mcu/<part>.soc.toml`, loaded through one validated path
+(`RenodeConfig::from_soc_toml` / `QemuConfig::from_soc_toml`) with fail-loud,
+named errors — the same discipline as `sensor_spec.rs`. The descriptor carries
+everything the constructor used to embed: the platform `.repl` path, the CPU
+path, the per-port register offsets (the F1-vs-F4 ODR footgun lives here as
+`odr_offset` data, not scattered logic), the UART/I2C/SPI controller names, the
+expected ISA (`expected_e_machine = "EM_ARM"`), and the awkward per-part fixups
+(`post_load_setup` for the FE310 PRCI/`vinit` bring-up, `[soc.spi].extra_repl`
+for the F103 SPI1 fragment, `[[soc.adc]]` injection recipes). The shipped
+descriptors are embedded via `include_str!` (the binary stays self-contained,
+the file stays the single source of truth — the `mcp4728.toml` precedent), and
+`RenodeConfig::stm32f103()` and friends are now thin accessors that load their
+descriptor. Validation refuses rather than fakes: unknown/mismatched backend,
+empty `platform_repl`, zero-width or overlapping ports, duplicate controllers,
+unknown `expected_e_machine`, ambiguous ADC inject, and (via
+`deny_unknown_fields`) any mistyped field are all named load-time errors.
+
+**Add an MCU variant (purely as data, no recompile).** Copy the closest
+`db/mcu/<part>.soc.toml`, edit the fields (platform `.repl`, ODR offsets, UART,
+ISA), drop it in `$HAUKSBEE_MCU_DIR` or `~/.config/hauksbee/mcu/`, and resolve it
+with `SocConfig::resolve("renode:<yourpart>")` (an override directory wins over a
+built-in of the same name). That is the 06 §6.4 acceptance bar — a new Renode MCU
+added without touching hauksbee's source. The equivalence and validation tests
+live in `crates/hauksbee-mcu/tests/soc_descriptors.rs`; the full worked
+walkthrough (`docs/extending/add-an-mcu-variant.md`) is a later W5 item.
+
+**What honestly stays Rust.** A descriptor only *configures* one of the three
+existing backends. A wholly new emulator backend is a new `Mcu` trait
+implementation, not a descriptor; and simavr part support is not data here
+either — simavr's own part database does the work, and the descriptor would only
+name the part. Those two remain code changes by design.
+
 ### Peripheral-coupling coverage (what each backend actually implements)
 
 The `Mcu` trait above is the full contract, and all three backends now
@@ -220,7 +256,9 @@ control and the peripheral models, so the firmware runs unmodified.
 
 A row is **Proven** only if it was actually run end-to-end on this branch (a real
 emulator booting real firmware against the solved circuit, with the output
-recorded). Anything not run for real is labelled honestly.
+recorded). Anything not run for real is labelled honestly. Every row's config is
+a `db/mcu/<part>.soc.toml` descriptor (06 §2), named by the `backend:part` in the
+first column; the built-in constructors load these files.
 
 | Architecture | Backend | Emulator / platform | Proof run on this branch |
 |--------------|---------|---------------------|--------------------------|
@@ -248,10 +286,11 @@ portable build and was not run).
 
 ### RP2040 / Raspberry Pi Pico, honestly
 
-`RenodeConfig::rp2040()` ships as the first config written directly against the
-data-driven struct shape (05-cosim-fidelity §5.4/§5.5), and it is unit-tested
-(`rp2040_config_shape`, plus the serde round-trip). What is **proven** is the
-config shape and the datasheet-grounded register offsets; what is **not** proven
+`db/mcu/rp2040.soc.toml` (loaded by `RenodeConfig::rp2040()`) ships as a
+data-driven descriptor (05-cosim-fidelity §5.4/§5.5, 06 §2), and it is unit-tested
+(`rp2040_config_shape`, the serde round-trip, and the descriptor equivalence
+suite). What is **proven** is the config shape and the datasheet-grounded register
+offsets; what is **not** proven
 is a real boot, for one honest reason: the Renode build installed here (portable
 **v1.16.1.16858**) ships **no rp2040 platform** — `platforms/cpus/` carries only
 `picosoc` and `litex_picorv32` (unrelated RISC-V soft cores), no `rp2040.repl`
@@ -260,7 +299,7 @@ therefore checks for the platform `.repl` first and **skips loudly** with that
 reason rather than pretending.
 
 Two things could not be verified offline and are best-effort in the config,
-called out in `RenodeConfig::rp2040()`'s doc comment:
+called out in `db/mcu/rp2040.soc.toml`'s header comment:
 
 - **SIO, not a port bank.** RP2040 GPIO output does not live in a per-port ODR;
   it lives in the SIO (single-cycle IO) block. The output-state register is SIO

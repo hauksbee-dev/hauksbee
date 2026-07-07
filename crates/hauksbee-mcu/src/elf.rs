@@ -46,6 +46,24 @@ pub const EM_XTENSA: u16 = 0x5E; // 94
 /// Renode).
 pub const EM_RISCV: u16 = 0xF3; // 243
 
+/// Map a canonical `EM_*` name (as written in a `*.soc.toml` descriptor's
+/// `expected_e_machine` field) to its `e_machine` number.
+///
+/// This is the reviewable-string side of the numeric [`EM_ARM`]/[`EM_RISCV`]/…
+/// constants: an SoC descriptor says `expected_e_machine = "EM_ARM"` (06 §2's
+/// example shape) rather than a raw `40`, and the loader resolves it here.
+/// Returns `None` for an unrecognised name so the loader raises a named
+/// "unknown e_machine" error instead of silently accepting garbage.
+pub fn e_machine_from_name(name: &str) -> Option<u16> {
+    match name {
+        "EM_ARM" => Some(EM_ARM),
+        "EM_AVR" => Some(EM_AVR),
+        "EM_XTENSA" => Some(EM_XTENSA),
+        "EM_RISCV" => Some(EM_RISCV),
+        _ => None,
+    }
+}
+
 /// Human-readable name for an `e_machine` value, for error messages.
 pub fn machine_name(e_machine: u16) -> &'static str {
     match e_machine {
