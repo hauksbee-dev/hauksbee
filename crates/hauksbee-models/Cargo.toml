@@ -20,3 +20,4 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 forge-sexpr = { workspace = true }
+tempfile = { workspace = true }
