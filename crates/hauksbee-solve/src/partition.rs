@@ -336,7 +336,29 @@ impl Partition {
             if matches!(dev, Device::Vsource { .. }) && !ctrl_demoted[id.0 as usize] {
                 continue; // global, not in any island (demoted probes stay)
             }
-            let Some(r0) = rep(dev) else { continue };
+            // A K-coupling has NO nodes of its own, so `rep` sees nothing —
+            // but it must NOT drop from islands: sub-circuit extraction
+            // rebuilds each island's own Layout, and a coupling absent from
+            // the device list would silently decouple the windings there (the
+            // silent-drop hazard class of 04-spice-compat.md §1). Its island
+            // is its windings' island — ONE island by construction, because
+            // the `controlling_sources` union above fused the two windings'
+            // free nodes — so borrow the first winding rep. If BOTH windings
+            // are all-pinned (dropped from islands themselves), the coupling
+            // drops with them, consistently.
+            let coupling_rep = || -> Option<usize> {
+                dev.controlling_sources()
+                    .iter()
+                    .find_map(|c| rep(&circuit.devices[c.0 as usize]))
+            };
+            let r0 = match rep(dev) {
+                Some(r) => r,
+                None if matches!(dev, Device::Coupling { .. }) => match coupling_rep() {
+                    Some(r) => r,
+                    None => continue,
+                },
+                None => continue,
+            };
             let root = uf.find(r0);
             let island = by_root.entry(root).or_insert_with(|| Island {
                 devices: Vec::new(),

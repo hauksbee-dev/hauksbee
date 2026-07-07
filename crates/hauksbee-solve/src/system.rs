@@ -46,6 +46,16 @@ pub struct Layout {
     /// series resistance is zero). Empty when the circuit has no such BJT,
     /// so existing circuits pay one `is_empty` check and nothing else.
     bjt_internal_of: Vec<[Option<usize>; 3]>,
+    /// Mutual-inductance partners per device, indexed by `DeviceId.0`
+    /// (dev-plan 04 §2.3): for each inductor in a coupled group, the OTHER
+    /// windings it couples to as `(partner, M)` with `M = k·sqrt(L1·L2)`
+    /// precomputed from the deck's `Device::Coupling` relationships. Chained
+    /// K cards compose pairwise, so a row here IS the off-diagonal of the
+    /// group's inductance matrix — the inductor stamp sums over it directly.
+    /// EMPTY (zero-length outer vec) when the circuit has no coupling, so a
+    /// K-free deck pays one `is_empty` branch per inductor stamp and not one
+    /// float op — the bit-identity fast path.
+    couplings: Vec<Vec<(DeviceId, f64)>>,
 }
 
 impl Layout {
@@ -112,11 +122,39 @@ impl Layout {
                 next += 1;
             }
         }
+        // Mutual-inductance map from the deck's Coupling relationships. The
+        // loader guarantees l1/l2 resolve to inductors; a PROGRAMMATIC circuit
+        // (or an extraction pass that copied a Coupling without its windings /
+        // without retargeting) violating that is unstampable, and the loud
+        // panic here beats a mutual term silently landing on the wrong device.
+        let mut couplings: Vec<Vec<(DeviceId, f64)>> = Vec::new();
+        for (_, dev) in circuit.iter() {
+            if let Device::Coupling { name, l1, l2, k } = dev {
+                if couplings.is_empty() {
+                    couplings = vec![Vec::new(); circuit.devices.len()];
+                }
+                let henries_of = |id: DeviceId| -> f64 {
+                    match circuit.devices.get(id.0 as usize) {
+                        Some(Device::Inductor { henries, .. }) => *henries,
+                        other => panic!(
+                            "coupling `{name}` references device {id:?} which is \
+                             not an inductor in this system ({other:?}); a pass \
+                             that extracts sub-circuits must carry both windings \
+                             and retarget the coupling's slots"
+                        ),
+                    }
+                };
+                let m = k * (henries_of(*l1) * henries_of(*l2)).sqrt();
+                couplings[l1.0 as usize].push((*l2, m));
+                couplings[l2.0 as usize].push((*l1, m));
+            }
+        }
         Layout {
             n_nodes,
             size: next,
             branch_of,
             bjt_internal_of,
+            couplings,
         }
     }
 
@@ -134,6 +172,18 @@ impl Layout {
     #[inline]
     pub fn branch(&self, id: DeviceId) -> Option<usize> {
         self.branch_of[id.0 as usize]
+    }
+
+    /// Mutual-inductance partners of an inductor: `(other winding, M)` per
+    /// coupling it participates in. The empty slice for every device in a
+    /// K-free circuit (one `is_empty` branch, no allocation, no float math —
+    /// the fast path the bit-identity bar demands), and for non-inductors.
+    #[inline]
+    pub fn mutual_partners(&self, id: DeviceId) -> &[(DeviceId, f64)] {
+        if self.couplings.is_empty() {
+            return &[];
+        }
+        &self.couplings[id.0 as usize]
     }
 
     /// Internal-node unknowns of a series-resistance BJT, in terminal order

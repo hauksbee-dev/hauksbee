@@ -260,6 +260,22 @@ impl StampPlan {
                     }
                     // Branch self-term -req = -(L * coeffs.g).
                     push_at(&mut reactive_ops, br, br, -*henries);
+                    // Mutual terms (dev-plan 04 §2.3): −M·coeffs.g at (this
+                    // branch row, partner branch column) folds into the
+                    // reactive backbone with multiplier −M — the exact same
+                    // (slot, multiplier)×coeffs.g dt-dependence as the self
+                    // term above, sound for the same reason the CCCS fold is:
+                    // the plan compiles AFTER the layout freeze, so the
+                    // partner branch index is the one the interpreted stamp
+                    // uses. The mutual HISTORY rides the RhsOnly restamp
+                    // below (stamp_inductor's veq loop; the RhsOnlySink
+                    // discards its matrix writes, so nothing double-stamps).
+                    for &(pid, m) in layout.mutual_partners(id) {
+                        let pbr = layout
+                            .branch(pid)
+                            .expect("coupled winding owns a branch unknown");
+                        push_at(&mut reactive_ops, br, pbr, -m);
+                    }
                     // History voltage veq changes every step: RHS-only.
                     restamp.push(Restamp::RhsOnly { id });
                 }
@@ -413,6 +429,12 @@ impl StampPlan {
                         table: SlotTable::build(unknowns, matrix),
                     });
                 }
+                // A coupling contributes NOTHING to the plan as a device: its
+                // matrix cross terms folded into the reactive backbone at the
+                // Inductor arm above (via `mutual_partners`), and its history
+                // rides the windings' RhsOnly restamps. Mirrors the inert
+                // `stamp_device` arm — one home for the physics.
+                Device::Coupling { .. } => {}
             }
         }
 

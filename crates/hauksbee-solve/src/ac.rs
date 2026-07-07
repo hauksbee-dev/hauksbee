@@ -355,6 +355,17 @@ fn stamp_ac(
                 sys.add(br, bi, Complex64::new(-1.0, 0.0));
             }
             sys.add(br, br, Complex64::new(0.0, -w * *henries));
+            // Mutual inductance: the coupled branch relation
+            // `v_j = jw·Σ_k L_jk·i_k` adds −jwM at (this branch row, partner
+            // branch column) — real transformer behavior in `.ac`, same
+            // L-direct (never inverted) form as the transient companion, so
+            // k = 1 is as legal here as there. Empty slice for K-free decks.
+            for &(pid, m) in layout.mutual_partners(id) {
+                let pbr = layout
+                    .branch(pid)
+                    .expect("coupled winding owns a branch unknown");
+                sys.add(br, pbr, Complex64::new(0.0, -w * m));
+            }
         }
         Device::Vsource { p, n: neg, .. } => {
             // AC voltage source: branch row sets v_p - v_n = drive.
@@ -606,6 +617,10 @@ fn stamp_ac(
                 }
             }
         }
+        // Inert for the same reason as the transient arm: the jwM cross terms
+        // live in the WINDINGS' Inductor arm above (via `mutual_partners`);
+        // stamping them here too would double-count.
+        Device::Coupling { .. } => {}
     }
 }
 
