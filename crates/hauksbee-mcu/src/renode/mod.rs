@@ -184,237 +184,51 @@ pub struct RenodeConfig {
 }
 
 impl RenodeConfig {
-    /// STM32F103C8 ("blue pill"): PA-PG, USART1, 8 MHz HSI.
-    ///
-    /// ODR is at offset 0x0C, ports are 16-bit. This is the configuration the
-    /// hauksbee STM32 demo board binds to.
+    // ── Built-in parts (06 §2) ──────────────────────────────────────────────
+    //
+    // These are named accessors over the shipped `db/mcu/*.soc.toml` descriptors:
+    // the register offsets, platform paths, and port maps that used to be
+    // hand-written here now live in the TOML (the single source of truth,
+    // embedded via `include_str!` so the binary stays self-contained — the
+    // mcp4728.toml precedent). Each descriptor's header comment carries the
+    // hard-won knowledge (the F1-vs-F4 ODR footgun, the RP2040 SIO adaptation,
+    // the F4 SPI-redefinition trap, the FE310 PRCI/vinit bring-up). A fresh part
+    // is added purely as data via [`crate::SocConfig::resolve`] — these
+    // constructors exist only for the in-tree callers that name a part directly.
+    //
+    // `.expect` is correct here: a shipped descriptor failing to load is a build
+    // bug the `tests/soc_descriptors.rs` equivalence suite catches, never a
+    // runtime condition.
+
+    /// STM32F103C8 "blue pill". See `db/mcu/stm32f103.soc.toml`.
     pub fn stm32f103() -> Self {
-        let ports = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
-            .into_iter()
-            .map(|l| PortMap {
-                letter: l,
-                peripheral: format!("gpioPort{l}"),
-                odr_offset: 0x0C,
-                width: 16,
-            })
-            .collect();
-        RenodeConfig {
-            machine: "f103".to_string(),
-            platform: "@platforms/cpus/stm32f103.repl".to_string(),
-            cpu: "sysbus.cpu".to_string(),
-            uart: Some("sysbus.usart1".to_string()),
-            ports,
-            frequency_hz: 8_000_000,
-            extra_setup: Vec::new(),
-            post_load_setup: Vec::new(),
-            i2c_controllers: vec!["i2c1".to_string()],
-            // SPI1 is not in the stock stm32f103.repl; we add it when an SPI
-            // slave is attached (see install_spi_bridge).
-            // A single-line definition without the IRQ connection works for
-            // polling-mode firmware (the firmware checks SR flags, not NVIC).
-            spi_controllers: vec!["spi1".to_string()],
-            spi_extra_repl: Some(
-                "spi1: SPI.STM32SPI @ sysbus 0x40013000".to_string(),
-            ),
-            expected_e_machine: crate::elf::EM_ARM,
-            mcu_label: "STM32F103 (ARM Cortex-M3)".to_string(),
-            adc_channels: Vec::new(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/stm32f103.soc.toml"))
+            .expect("built-in stm32f103.soc.toml is valid")
     }
 
-    /// STM32F4 Discovery (STM32F407): PA-PE, USART2, 16 MHz HSI default.
-    /// STM32F4 GPIO ODR is at offset 0x14.
+    /// STM32F4 Discovery (STM32F407). See `db/mcu/stm32f4_discovery.soc.toml`.
     pub fn stm32f4_discovery() -> Self {
-        let ports = ['A', 'B', 'C', 'D', 'E']
-            .into_iter()
-            .map(|l| PortMap {
-                letter: l,
-                peripheral: format!("gpioPort{l}"),
-                odr_offset: 0x14,
-                width: 16,
-            })
-            .collect();
-        RenodeConfig {
-            machine: "f4disco".to_string(),
-            platform: "@platforms/boards/stm32f4_discovery.repl".to_string(),
-            cpu: "sysbus.cpu".to_string(),
-            uart: Some("sysbus.usart2".to_string()),
-            ports,
-            frequency_hz: 16_000_000,
-            extra_setup: Vec::new(),
-            post_load_setup: Vec::new(),
-            i2c_controllers: vec!["i2c1".to_string()],
-            // spi1, spi2, and spi3 are already defined in the base stm32f4.repl
-            // that stm32f4_discovery.repl includes. Registering them again via
-            // spi_extra_repl causes a Renode redefinition/address-conflict error
-            // (the Monitor dumps the peripheral's method list instead of accepting
-            // the command, then panics on the bridge registration that follows).
-            // Fix: set spi_extra_repl = None so install_spi_bridge_for skips the
-            // fragment load and goes straight to registering the bridge peripheral
-            // on the already-existing spi2/spi3 controllers.
-            spi_controllers: vec!["spi2".to_string(), "spi3".to_string()],
-            spi_extra_repl: None,
-            expected_e_machine: crate::elf::EM_ARM,
-            mcu_label: "STM32F407 (ARM Cortex-M4)".to_string(),
-            adc_channels: Vec::new(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/stm32f4_discovery.soc.toml"))
+            .expect("built-in stm32f4_discovery.soc.toml is valid")
     }
 
-    /// nRF52840: two 32-bit GPIO ports (gpio0/gpio1), uart0, 64 MHz.
-    /// The nRF GPIO OUT register is at offset 0x504.
+    /// nRF52840. See `db/mcu/nrf52840.soc.toml`.
     pub fn nrf52840() -> Self {
-        let ports = vec![
-            PortMap {
-                letter: '0',
-                peripheral: "gpio0".to_string(),
-                odr_offset: 0x504,
-                width: 32,
-            },
-            PortMap {
-                letter: '1',
-                peripheral: "gpio1".to_string(),
-                odr_offset: 0x504,
-                width: 32,
-            },
-        ];
-        RenodeConfig {
-            machine: "nrf52".to_string(),
-            platform: "@platforms/cpus/nrf52840.repl".to_string(),
-            cpu: "sysbus.cpu".to_string(),
-            uart: Some("sysbus.uart0".to_string()),
-            ports,
-            frequency_hz: 64_000_000,
-            extra_setup: Vec::new(),
-            post_load_setup: Vec::new(),
-            i2c_controllers: Vec::new(),
-            spi_controllers: Vec::new(),
-            spi_extra_repl: None,
-            expected_e_machine: crate::elf::EM_ARM,
-            mcu_label: "nRF52840 (ARM Cortex-M4)".to_string(),
-            adc_channels: Vec::new(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/nrf52840.soc.toml"))
+            .expect("built-in nrf52840.soc.toml is valid")
     }
 
-    /// SiFive FE310 (HiFive1) RISC-V: one 32-bit GPIO port, uart0, 16 MHz.
-    /// The FE310 GPIO output value register (`port`) is at offset 0x0C.
+    /// SiFive FE310 (HiFive1) RISC-V. See `db/mcu/sifive_fe310.soc.toml`.
     pub fn sifive_fe310() -> Self {
-        let ports = vec![PortMap {
-            letter: '0',
-            peripheral: "gpio0".to_string(),
-            odr_offset: 0x0C,
-            width: 32,
-        }];
-        RenodeConfig {
-            machine: "fe310".to_string(),
-            platform: "@platforms/cpus/sifive-fe310.repl".to_string(),
-            cpu: "sysbus.cpu".to_string(),
-            uart: Some("sysbus.uart0".to_string()),
-            ports,
-            frequency_hz: 16_000_000,
-            extra_setup: Vec::new(),
-            // The FE310 Zephyr shell demo's ELF entry does not point at the
-            // bring-up code; the upstream Renode resc sets PC to `vinit` and
-            // tags the PRCI clock regs so the HFROSC/PLL config reads as ready.
-            post_load_setup: vec![
-                r#"sysbus Tag <0x10008000 4> "PRCI_HFROSCCFG" 0xFFFFFFFF"#.to_string(),
-                r#"sysbus Tag <0x10008008 4> "PRCI_PLLCFG" 0xFFFFFFFF"#.to_string(),
-                "{cpu} PC `sysbus GetSymbolAddress \"vinit\"`".to_string(),
-            ],
-            i2c_controllers: Vec::new(),
-            spi_controllers: Vec::new(),
-            spi_extra_repl: None,
-            expected_e_machine: crate::elf::EM_RISCV,
-            mcu_label: "SiFive FE310 (RISC-V)".to_string(),
-            adc_channels: Vec::new(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/sifive_fe310.soc.toml"))
+            .expect("built-in sifive_fe310.soc.toml is valid")
     }
 
-    /// RP2040 (Raspberry Pi Pico): dual Cortex-M0+, 125 MHz, one 30-pin GPIO
-    /// bank observed through the SIO. This is the first config written directly
-    /// against the plain-data struct shape (05-cosim-fidelity §5.4/§5.5).
-    ///
-    /// # The SIO footgun (an honest adaptation of the F4-vs-F103 ODR discipline)
-    ///
-    /// On the STM32 parts the output-state register is a per-port ODR inside a
-    /// GPIO port peripheral (F1 at offset `0x0C`, F4 at `0x14` — the documented
-    /// footgun: use the wrong offset and you read the wrong register). **RP2040
-    /// is not a memory-mapped GPIO port bank at all.** Its GPIO output value
-    /// lives in the SIO (single-cycle IO) block at `SIO_BASE = 0xD000_0000`
-    /// (RP2040 datasheet §2.3.1.7):
-    ///
-    /// | Register     | Absolute      | Offset from SIO_BASE |
-    /// |--------------|---------------|----------------------|
-    /// | `GPIO_IN`    | `0xD000_0004` | `0x04`               |
-    /// | `GPIO_OUT`   | `0xD000_0010` | `0x10`               |
-    /// | `GPIO_OUT_SET`| `0xD000_0014`| `0x14`               |
-    /// | `GPIO_OE`    | `0xD000_0020` | `0x20`               |
-    ///
-    /// So "where do I read output state" is **SIO `GPIO_OUT`** (offset `0x10`
-    /// within the SIO peripheral), not a port ODR. The ODR-diff mechanism
-    /// (`read_odr` → `sysbus.<peripheral> ReadDoubleWord <offset>`) is pointed
-    /// at the SIO peripheral with `odr_offset = 0x10`, which is the faithful
-    /// adaptation: read the register that actually holds the driven levels
-    /// rather than invent a port-bank ODR that does not exist.
-    ///
-    /// # Verification status — READ THIS BEFORE TRUSTING THIS CONFIG
-    ///
-    /// The register offsets above are datasheet-verified. What is **NOT** verified
-    /// is Renode's side, because the Renode build installed on this machine
-    /// (portable **v1.16.1**) ships **no `rp2040` platform** — `platforms/cpus/`
-    /// has only `picosoc`/`litex_picorv32` (unrelated RISC-V soft cores), no
-    /// `rp2040.repl` and no Raspberry Pi Pico board. So two things could not be
-    /// confirmed against a running platform and are best-effort:
-    ///   1. the SIO peripheral's **name** in Renode's `rp2040.repl` (assumed
-    ///      `sio`; correct it here if a Renode build that ships rp2040 names it
-    ///      otherwise), and
-    ///   2. whether Renode's SIO model **reads `GPIO_OUT` back** as the driven
-    ///      value (the STM32 ODR-poll relies on read-back; if Renode tracks the
-    ///      pin level in the IO-bank peripheral instead, the poll target moves).
-    /// The integration smoke `tests/renode_rp2040.rs` is skip-gated precisely on
-    /// this absence and will exercise (and thereby confirm/correct) both points
-    /// the day it runs on a Renode that carries the platform.
-    ///
-    /// # What is deliberately NOT wired (refuse rather than fake)
-    ///
-    /// - **ADC**: RP2040 has a SAR ADC, but no Renode ADC model is verified here,
-    ///   so `adc_channels` is empty — an unmapped channel is the merged policy's
-    ///   LOUD once-per-channel drop, never a fake count.
-    /// - **I2C/SPI**: `i2c_controllers`/`spi_controllers` are empty because the
-    ///   RP2040 Renode peripheral set is unverified; the backend then installs no
-    ///   bridge rather than claiming an unproven bus.
-    /// - **GPIO input**: `set_digital_in` drives `OnGPIO` on the configured
-    ///   peripheral; on RP2040 an input is a pad/IO-bank concern, not SIO, so
-    ///   input injection is unverified. The output smoke does not use it.
+    /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml` — that file
+    /// carries the full SIO-footgun and verification-status notes.
     pub fn rp2040() -> Self {
-        // SIO GPIO_OUT is the output-state register (see the doc comment): a
-        // single 30-pin bank, port letter '0', read at SIO offset 0x10.
-        let ports = vec![PortMap {
-            letter: '0',
-            peripheral: "sio".to_string(),
-            odr_offset: 0x10, // SIO GPIO_OUT, relative to SIO_BASE 0xD0000000
-            width: 30,        // GPIO0..GPIO29
-        }];
-        RenodeConfig {
-            machine: "rp2040".to_string(),
-            platform: "@platforms/cpus/rp2040.repl".to_string(),
-            // Dual-core; the SIO GPIO registers are shared single-cycle IO, so
-            // observation is core-agnostic. State queries use core 0.
-            cpu: "sysbus.cpu0".to_string(),
-            uart: Some("sysbus.uart0".to_string()),
-            ports,
-            frequency_hz: 125_000_000,
-            extra_setup: Vec::new(),
-            post_load_setup: Vec::new(),
-            // Unverified against a running Renode rp2040 platform: leave the bus
-            // controllers empty rather than claim an unproven capability.
-            i2c_controllers: Vec::new(),
-            spi_controllers: Vec::new(),
-            spi_extra_repl: None,
-            expected_e_machine: crate::elf::EM_ARM,
-            mcu_label: "RP2040 (dual Cortex-M0+)".to_string(),
-            // No verified Renode ADC model → no map → loud drop (merged policy).
-            adc_channels: Vec::new(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/rp2040.soc.toml"))
+            .expect("built-in rp2040.soc.toml is valid")
     }
 
     /// Add one ADC channel injection recipe (05 §5.1). Chainable.

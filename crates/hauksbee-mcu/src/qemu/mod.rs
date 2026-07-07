@@ -284,74 +284,30 @@ pub struct QemuConfig {
 }
 
 impl QemuConfig {
-    /// The QOM bus paths the Espressif ESP32-family machines expose. The firmware
-    /// default I2C0 (GPIO21/22) is `i2c0`; `i2c1` is searched too for boards that
-    /// use it. The machine auto-instantiates a `tmp105` at 0x48 on `i2c0`.
-    fn esp_i2c_buses() -> Vec<String> {
-        vec![
-            "/machine/soc/i2c0/i2c".to_string(),
-            "/machine/soc/i2c1/i2c".to_string(),
-        ]
-    }
+    // ── Built-in parts (06 §2) ──────────────────────────────────────────────
+    //
+    // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors (embedded
+    // via `include_str!`): the mailbox layout, arch, and clocking that used to be
+    // hand-written here now live in the TOML. A fresh part is addable purely as
+    // data via [`crate::SocConfig::resolve`]. `.expect` is correct — a shipped
+    // descriptor failing to load is a build bug caught by tests/soc_descriptors.rs.
 
-    /// Classic ESP32 (Xtensa LX6 dual-core), 240 MHz, single 32-bit GPIO bank
-    /// for pins 0..31 (the demo and most products use only low pins). GPIO is
-    /// observed through the RAM mailbox (the gpio model has no register
-    /// read-back).
+    /// Classic ESP32 (Xtensa LX6). See `db/mcu/esp32.soc.toml`.
     pub fn esp32() -> Self {
-        QemuConfig {
-            arch: QemuArch::Xtensa,
-            machine: "esp32".to_string(),
-            banks: vec![GpioBank {
-                letter: '0',
-                out_reg: mailbox::GPIO_OUT,
-                in_reg: mailbox::GPIO_IN,
-                width: 32,
-            }],
-            icount_shift: 2,
-            frequency_hz: 240_000_000,
-            expected_e_machine: crate::elf::EM_XTENSA,
-            mcu_label: "ESP32 (Xtensa LX6)".to_string(),
-            i2c_buses: Self::esp_i2c_buses(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/esp32.soc.toml"))
+            .expect("built-in esp32.soc.toml is valid")
     }
 
-    /// ESP32-S3 (Xtensa LX7). Same mailbox layout as classic ESP32.
+    /// ESP32-S3 (Xtensa LX7). See `db/mcu/esp32s3.soc.toml`.
     pub fn esp32s3() -> Self {
-        QemuConfig {
-            arch: QemuArch::Xtensa,
-            machine: "esp32s3".to_string(),
-            banks: vec![GpioBank {
-                letter: '0',
-                out_reg: mailbox::GPIO_OUT,
-                in_reg: mailbox::GPIO_IN,
-                width: 32,
-            }],
-            icount_shift: 2,
-            frequency_hz: 240_000_000,
-            expected_e_machine: crate::elf::EM_XTENSA,
-            mcu_label: "ESP32-S3 (Xtensa LX7)".to_string(),
-            i2c_buses: Self::esp_i2c_buses(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/esp32s3.soc.toml"))
+            .expect("built-in esp32s3.soc.toml is valid")
     }
 
-    /// ESP32-C3 (RISC-V RV32IMC), 160 MHz. Same RAM mailbox layout.
+    /// ESP32-C3 (RISC-V RV32IMC). See `db/mcu/esp32c3.soc.toml`.
     pub fn esp32c3() -> Self {
-        QemuConfig {
-            arch: QemuArch::Riscv32,
-            machine: "esp32c3".to_string(),
-            banks: vec![GpioBank {
-                letter: '0',
-                out_reg: mailbox::GPIO_OUT,
-                in_reg: mailbox::GPIO_IN,
-                width: 32,
-            }],
-            icount_shift: 2,
-            frequency_hz: 160_000_000,
-            expected_e_machine: crate::elf::EM_RISCV,
-            mcu_label: "ESP32-C3 (RISC-V RV32IMC)".to_string(),
-            i2c_buses: Self::esp_i2c_buses(),
-        }
+        Self::from_soc_toml(include_str!("../../db/mcu/esp32c3.soc.toml"))
+            .expect("built-in esp32c3.soc.toml is valid")
     }
 }
 
