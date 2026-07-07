@@ -26,6 +26,12 @@ libc = "0.2"
 # the same "make it a struct now, load it from a file later" move sensor_spec.rs
 # already uses. No file loading lives here yet; that is the W5 deliverable.
 serde = { workspace = true }
+# The W5 data-driven MCU descriptor loader (06 §2): `db/mcu/*.soc.toml` files
+# parsed into RenodeConfig/QemuConfig through one validated path. `toml` is the
+# file format; `thiserror` gives the loader the same named-error style
+# sensor_spec.rs uses (unknown backend, zero-width port, duplicate controller…).
+toml = "0.8"
+thiserror = { workspace = true }
 
 [build-dependencies]
 bindgen = "0.71"

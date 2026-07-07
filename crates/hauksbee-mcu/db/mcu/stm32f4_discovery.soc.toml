@@ -1,0 +1,52 @@
+# STM32F4 Discovery (STM32F407): PA-PE, USART2, 16 MHz HSI default.
+#
+# ODR FOOTGUN: STM32F4 GPIO ODR is at offset 0x14 (the F1 puts it at 0x0C — see
+# stm32f103.soc.toml). This single differing offset is exactly the data that
+# belongs in a reviewed descriptor rather than scattered through the backend.
+[soc]
+backend = "renode"
+machine = "f4disco"
+platform_repl = "@platforms/boards/stm32f4_discovery.repl"
+cpu_path = "sysbus.cpu"
+uart = "sysbus.usart2"
+frequency_hz = 16_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "STM32F407 (ARM Cortex-M4)"
+
+[[soc.ports]]
+letter = "A"
+peripheral = "gpioPortA"
+odr_offset = 0x14
+width = 16
+[[soc.ports]]
+letter = "B"
+peripheral = "gpioPortB"
+odr_offset = 0x14
+width = 16
+[[soc.ports]]
+letter = "C"
+peripheral = "gpioPortC"
+odr_offset = 0x14
+width = 16
+[[soc.ports]]
+letter = "D"
+peripheral = "gpioPortD"
+odr_offset = 0x14
+width = 16
+[[soc.ports]]
+letter = "E"
+peripheral = "gpioPortE"
+odr_offset = 0x14
+width = 16
+
+[soc.i2c]
+controllers = ["i2c1"]
+
+[soc.spi]
+# spi1/spi2/spi3 are ALREADY defined in the base stm32f4.repl that
+# stm32f4_discovery.repl includes. Registering them again (i.e. setting
+# `extra_repl`) causes a Renode redefinition/address-conflict error: the Monitor
+# dumps the peripheral's method list instead of accepting the command, then
+# panics on the bridge registration that follows. So `extra_repl` is omitted and
+# the bridge is registered on the already-existing spi2/spi3 controllers.
+controllers = ["spi2", "spi3"]
