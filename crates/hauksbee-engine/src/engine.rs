@@ -1,6 +1,15 @@
-//! [`HauksbeeEngine`]: the real engine behind `hauksbee-server`'s [`Engine`]
-//! trait. Wraps a [`Scheduler`] over a [`BoundBoard`] and translates the wire
-//! [`SolverControls`] onto [`SolverOptions`].
+//! [`HauksbeeEngine`]: the concrete engine behind `hauksbee-server`'s [`Engine`]
+//! trait, the object that turns a bound board plus optional firmware into a
+//! running co-simulation the server (and its many front-ends) can drive.
+//!
+//! It wraps a [`Scheduler`] over a [`BoundBoard`] and owns the board metadata
+//! the wire protocol reports (net names, component kinds, MCU backends, the bind
+//! report). Its main job at the boundary is translation: the protocol's
+//! human-facing [`SolverControls`] are mapped onto the solver's
+//! [`SolverOptions`]/[`Integration`]/[`StepControl`], and each protocol request
+//! is serviced by stepping the scheduler and emitting a [`SimFrame`]. This is
+//! where the "one engine, many front-ends" story is made real -- the server, the
+//! TUI, and CI all talk to this one type rather than the solver directly.
 
 use std::collections::HashMap;
 use std::path::Path;
