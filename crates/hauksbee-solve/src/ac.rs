@@ -38,7 +38,7 @@ use crate::cmatrix::ComplexSystem;
 use crate::newton::{dc_operating_point, Workspace};
 use crate::options::SolverOptions;
 use crate::system::Layout;
-use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, MosLevel, MosfetModel, NodeId};
+use hauksbee_ir::{BjtModel, Circuit, Device, MosLevel, MosfetModel, NodeId};
 
 /// How to space the frequency sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,8 +350,23 @@ fn stamp_ac(
             }
         }
         Device::Diode { a, k, model, .. } => {
-            let gd = diode_gd(model, op.v(*a) - op.v(*k), opts).max(opts.gmin);
-            sys.stamp_admittance(n(*a), n(*k), Complex64::new(gd, 0.0));
+            // Small-signal tangent at the bias, through the SAME device eval
+            // the transient stamp uses (so breakdown biases get the breakdown
+            // conductance). A charge-storing diode (dev-plan 04 §3.1)
+            // additionally contributes jw*C(vd): junction depletion plus
+            // diffusion capacitance frozen at the operating point — an AC
+            // answer without it would silently miss the pole the transient
+            // model has. Charge-free models add exactly 0.0j: bit-identical.
+            let vd = op.v(*a) - op.v(*k);
+            let (idc, gd_raw) =
+                crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
+            let gd = gd_raw.max(opts.gmin);
+            let cap = if crate::stamp::diode_has_charge(model, &opts.effects) {
+                crate::stamp::diode_charge(model, vd, idc, gd_raw).1
+            } else {
+                0.0
+            };
+            sys.stamp_admittance(n(*a), n(*k), Complex64::new(gd, w * cap));
         }
         Device::Bjt { c, b, e, model, .. } => {
             stamp_bjt_ac(sys, layout, op, *c, *b, *e, model, opts)
@@ -519,20 +534,6 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
     match tc1 {
         Some(tc) if opts.effects.temperature => ohms * (1.0 + tc * (opts.model_temp() - 27.0)),
         _ => ohms,
-    }
-}
-
-/// Diode small-signal conductance `gd = dI/dVd` at the bias `vd`.
-fn diode_gd(model: &DiodeModel, vd: f64, opts: &SolverOptions) -> f64 {
-    let temp_on = opts.effects.temperature;
-    let t_c = opts.model_temp();
-    let is = if temp_on { model.is_at(t_c) } else { model.is };
-    let vt = hauksbee_ir::thermal_voltage_c(if temp_on { t_c } else { 27.0 });
-    let nvt = model.n * vt;
-    if vd >= -3.0 * nvt {
-        is * (vd / nvt).exp() / nvt
-    } else {
-        is / nvt * 1e-3
     }
 }
 

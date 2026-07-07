@@ -252,6 +252,57 @@ fn temperature_toggle_changes_diode_drop() {
     );
 }
 
+/// The §3.4 `DeviceEffects` contract for `junction_caps` (dev-plan 04):
+/// flipping the toggle on a diode model that carries charge fields must CHANGE
+/// the solution (charge terms appear in the stamp), and on a model without
+/// them the two runs must be BIT-IDENTICAL — the physics only activates when
+/// the model asks for it AND the toggle allows it.
+#[test]
+fn junction_caps_toggle_is_honored_for_diodes() {
+    // A pulse through R into a charge-heavy diode: the depletion+diffusion
+    // charge visibly slows the cathode node's edges.
+    let net_charge = "d\nV1 in 0 PULSE(0 5 1u 100n 100n 4u 10u)\nR1 in n 1k\nD1 n 0 DMOD\n\
+                      .model DMOD D(IS=1e-14 N=1 CJO=100p TT=100n)\n.end\n";
+    let net_plain = "d\nV1 in 0 PULSE(0 5 1u 100n 100n 4u 10u)\nR1 in n 1k\nD1 n 0 DMOD\n\
+                     .model DMOD D(IS=1e-14 N=1)\n.end\n";
+    let run = |net: &str, junction_caps: bool| {
+        let circuit = SpiceLoader::load(net).unwrap();
+        let opts = SolverOptions {
+            effects: DeviceEffects {
+                junction_caps,
+                ..DeviceEffects::default()
+            },
+            ..SolverOptions::fixed(10e-9)
+        };
+        let out = Transient::new(opts).run(&circuit, 8e-6).unwrap();
+        out.node(&circuit, "n").unwrap().to_vec()
+    };
+    // Charge-carrying model: the toggle must change the waveform.
+    let w_on = run(net_charge, true);
+    let w_off = run(net_charge, false);
+    let max_diff = w_on
+        .iter()
+        .zip(&w_off)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff > 1e-3,
+        "junction_caps=on must change a charge-carrying diode's waveform (max diff {max_diff:e})"
+    );
+    // Charge-free model: bit-identical whatever the toggle (the existing-deck
+    // compatibility bar).
+    let p_on = run(net_plain, true);
+    let p_off = run(net_plain, false);
+    assert_eq!(p_on.len(), p_off.len());
+    for (i, (a, b)) in p_on.iter().zip(&p_off).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "charge-free deck must be BIT-identical across the toggle (sample {i}: {a} vs {b})"
+        );
+    }
+}
+
 #[test]
 fn voltage_switch_conducts_when_closed() {
     // A switch closes when its control exceeds the threshold, connecting a
