@@ -6,8 +6,8 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
 - Oracle: **ngspice ngspice-46**
-- Decks: **25**
-- Passing: **25/25**
+- Decks: **29**
+- Passing: **29/29**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -30,6 +30,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | diode_rectifier_charge | tran | `V(out)` | 3.313e-4 | 2.0e-2 | t=2.192e-5s | PASS |
 | diode_reverse_recovery | tran | `V(a)` | 3.863e-2 | 5.0e-2 | t=1.308e-6s | PASS |
 | diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-3 | op | PASS |
+| flyback_diode | tran | `V(out)` | 1.595e-2 | 5.0e-2 | t=2.556e-5s | PASS |
 | opamp_subckt | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
@@ -45,6 +46,11 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 | rlc_series | tran | `V(out)` | 8.542e-3 | 2.0e-2 | t=3.120e-6s | PASS |
 | vccs_gm | tran | `V(out)` | 3.075e-3 | 1.0e-2 | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
+| xfmr_1to2 | tran | `V(sec)` | 1.118e-2 | 2.0e-2 | t=3.914e-5s | PASS |
+|  |  | `V(pri)` | 5.589e-3 | 2.0e-2 | t=3.914e-5s | PASS |
+| xfmr_ac | ac | `V(sec) mag` | 4.783e-7 | 1.0e-2 | f=1.259e2Hz | PASS |
+|  |  | `V(sec) phase(deg)` | 2.673e-5 | 1.0e0 | f=6.310e2Hz | PASS |
+| xfmr_k1 | tran | `V(sec)` | 8.638e-3 | 2.0e-2 | t=4.907e-4s | PASS |
 
 ## Deck descriptions
 
@@ -63,6 +69,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **diode_rectifier_charge**: half-wave rectifier, diode with junction+diffusion charge
 - **diode_reverse_recovery**: switching diode driven from forward into reverse (recovery tail)
 - **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
+- **flyback_diode**: flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
 - **rc_ac_bode**: RC low-pass Bode: magnitude and phase of V(out) vs a unit AC source, 10 Hz .. 1 MHz at 10 points/decade. Corner near 1 kHz (-3 dB, -45 deg).
@@ -73,4 +80,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **rlc_series**: series RLC underdamped step response
 - **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response
 - **vcvs_gain**: VCVS gain-4 block driving an RC low-pass (1 kHz sine)
+- **xfmr_1to2**: 1:2 transformer, k=0.999, 10 kHz sine, 1k load: ratio + loading
+- **xfmr_ac**: 1:2 transformer Bode: V(sec) magnitude+phase, 100 Hz .. 1 MHz
+- **xfmr_k1**: perfect coupling k=1 transformer: the singular-L-matrix trap
 
