@@ -11,10 +11,12 @@
 //! partitioning pass needs to split a circuit into linear / nonlinear /
 //! digital islands. Nothing here commits to a solution method.
 
+mod bexpr;
 mod models;
 mod source;
 mod spice;
 
+pub use bexpr::CompiledExpr;
 pub use models::{
     thermal_voltage as thermal_voltage_c, BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity,
 };
@@ -25,6 +27,31 @@ pub use spice::{
 };
 
 use serde::{Deserialize, Serialize};
+
+/// What a behavioral B-source's expression drives (dev-plan 04 §2.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BOutput {
+    /// `Bxxx n+ n- V={expr}`: the output port voltage is constrained to the
+    /// expression value. Owns a branch-current unknown like an ideal Vsource.
+    Voltage,
+    /// `Bxxx n+ n- I={expr}`: the expression value flows as a current
+    /// `p -> n`. No unknown of its own (an Isource-like injection).
+    Current,
+}
+
+/// One dependency slot of a behavioral expression, positionally aligned with
+/// the `__d{k}` variables in its [`CompiledExpr`] (slot `k` = `deps[k]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BDep {
+    /// `V(node)`: reads a node voltage. A NODE reference — it must remap in
+    /// [`Device::map_nodes`] and it is a SENSE terminal for the tear layers.
+    Volt(NodeId),
+    /// `I(vname)`: reads the branch current of an independent Vsource,
+    /// resolved by the loader's resolve-by-name pass exactly like an F/H
+    /// control (and retargeted by the same
+    /// [`Device::retarget_controlling_source_slot`] machinery).
+    Branch(DeviceId),
+}
 
 /// Index of a circuit node. Node 0 is ground by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -324,6 +351,24 @@ pub enum Device {
         ctrl_src: DeviceId,
         transres: f64,
     },
+    /// Behavioral B-source (SPICE `B` card, dev-plan 04 §2.5): the output is
+    /// an arbitrary expression `f(V(...), I(...), time)`. `V={expr}` owns a
+    /// branch unknown (constraint row `v_p - v_n - f = 0`); `I={expr}` injects
+    /// `f` as a current `p -> n`. The expression is canonical (see
+    /// [`CompiledExpr`]): its `__d{k}` variables align positionally with
+    /// `deps[k]`, so cloning/remapping the device means keeping `expr` and
+    /// `deps` in lock-step (the expression itself carries no node/device ids).
+    /// `V(node)` deps are node references that MUST remap in `map_nodes`;
+    /// `I(vname)` deps are device references resolved by the loader's
+    /// name pass and retargeted per slot by sub-circuit extraction.
+    Behavioral {
+        name: String,
+        p: NodeId,
+        n: NodeId,
+        output: BOutput,
+        expr: CompiledExpr,
+        deps: Vec<BDep>,
+    },
 }
 
 impl Device {
@@ -344,7 +389,8 @@ impl Device {
             | Device::Vcvs { name, .. }
             | Device::Vccs { name, .. }
             | Device::Cccs { name, .. }
-            | Device::Ccvs { name, .. } => name,
+            | Device::Ccvs { name, .. }
+            | Device::Behavioral { name, .. } => name,
         }
     }
 
@@ -393,6 +439,19 @@ impl Device {
             // The control of an F/H is a DEVICE reference, not a node: the
             // only wires these touch are their output port.
             Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
+            // Output port plus every V(node) dependency: like the E/G control
+            // pair, a sensed node IS a node reference this device carries, so
+            // it participates in node walks (partitioner union, max_node).
+            // I(vname) deps are device references, not nodes (see F/H).
+            Device::Behavioral { p, n, deps, .. } => {
+                let mut v = vec![*p, *n];
+                for d in deps {
+                    if let BDep::Volt(dn) = d {
+                        v.push(*dn);
+                    }
+                }
+                v
+            }
         }
     }
 
@@ -482,30 +541,53 @@ impl Device {
                 *p = f(*p);
                 *n = f(*n);
             }
+            // The dep list carries the device's V(node) references: remap
+            // every one IN PLACE, keeping slot order (the expression's __d{k}
+            // variables are positional). BDep::Branch is a DeviceId, untouched
+            // here — extraction passes retarget it via
+            // `retarget_controlling_source_slot`, exactly like F/H.
+            Device::Behavioral { p, n, deps, .. } => {
+                *p = f(*p);
+                *n = f(*n);
+                for d in deps.iter_mut() {
+                    if let BDep::Volt(dn) = d {
+                        *dn = f(*dn);
+                    }
+                }
+            }
         }
     }
 
-    /// The device whose BRANCH CURRENT this device reads, if any (the F/H
-    /// control). This is a sense declaration in a vocabulary
-    /// [`Device::sense_nodes`] cannot express: the coupling is to another
-    /// device's branch-current unknown, not to any node voltage. Consumers:
+    /// The devices whose BRANCH CURRENTS this device reads, in slot order
+    /// (the F/H control; a B-source's `I(vname)` deps). This is a sense
+    /// declaration in a vocabulary [`Device::sense_nodes`] cannot express:
+    /// the coupling is to another device's branch-current unknown, not to any
+    /// node voltage. Plural since the B-source landed — an expression may
+    /// read several ammeters; F/H return exactly one. Consumers:
     ///
     /// * the partitioner and the conduction graph, which must FUSE this
-    ///   device's island with the control source's island (a branch current is
-    ///   not replayable across a Gauss-Seidel lag, and unlike a sensed node
+    ///   device's island with EVERY control source's island (a branch current
+    ///   is not replayable across a Gauss-Seidel lag, and unlike a sensed node
     ///   voltage it cannot even be expressed as a boundary source — so this
     ///   coupling is never a tear candidate);
-    /// * sub-circuit extraction, which must keep the control source in the
-    ///   same sub-system (the stamp needs its branch column) and retarget the
-    ///   id via [`Device::retarget_controlling_source`];
-    /// * tests, which must place a `Vsource` behind the id before stamping.
-    pub fn controlling_source(&self) -> Option<DeviceId> {
+    /// * sub-circuit extraction, which must keep every control source in the
+    ///   same sub-system (the stamp needs its branch column) and retarget each
+    ///   id via [`Device::retarget_controlling_source_slot`];
+    /// * tests, which must place a `Vsource` behind the id(s) before stamping.
+    pub fn controlling_sources(&self) -> Vec<DeviceId> {
         // Exhaustive, no `_` arm: a future variant carrying a device reference
-        // that fell into a catch-all `None` would be invisible to the
+        // that fell into a catch-all empty-vec would be invisible to the
         // partitioner's fusion rule and to sub-circuit retargeting — the same
         // silent-drop hazard class as a `_` arm in `map_nodes`.
         match self {
-            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => Some(*ctrl_src),
+            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => vec![*ctrl_src],
+            Device::Behavioral { deps, .. } => deps
+                .iter()
+                .filter_map(|d| match d {
+                    BDep::Branch(id) => Some(*id),
+                    BDep::Volt(_) => None,
+                })
+                .collect(),
             Device::Resistor { .. }
             | Device::Capacitor { .. }
             | Device::Inductor { .. }
@@ -518,18 +600,38 @@ impl Device {
             | Device::OpAmp { .. }
             | Device::Comparator { .. }
             | Device::Vcvs { .. }
-            | Device::Vccs { .. } => None,
+            | Device::Vccs { .. } => Vec::new(),
         }
     }
 
-    /// Rewrite the [`DeviceId`] returned by [`Device::controlling_source`], in
-    /// place. The device-reference analogue of [`Device::map_nodes`]: any pass
-    /// that copies devices into a circuit with different device indices routes
-    /// through here. No-op for devices without a control reference.
-    pub fn retarget_controlling_source(&mut self, new_id: DeviceId) {
-        // Exhaustive for the same reason as `controlling_source`.
+    /// Rewrite the `slot`-th [`DeviceId`] of [`Device::controlling_sources`]
+    /// (its index in that vec), in place. The device-reference analogue of
+    /// [`Device::map_nodes`]: any pass that copies devices into a circuit with
+    /// different device indices routes through here, once per slot — and the
+    /// loader's resolve-by-name pass patches each deferred `vname` through its
+    /// own slot. Panics on a slot the device does not have: a mis-addressed
+    /// retarget is the silent-corruption bug class this API exists to prevent,
+    /// so it fails loudly.
+    pub fn retarget_controlling_source_slot(&mut self, slot: usize, new_id: DeviceId) {
+        // Exhaustive for the same reason as `controlling_sources`.
         match self {
-            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => *ctrl_src = new_id,
+            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => {
+                assert_eq!(slot, 0, "F/H have exactly one control slot");
+                *ctrl_src = new_id;
+            }
+            Device::Behavioral { deps, .. } => {
+                let target = deps
+                    .iter_mut()
+                    .filter_map(|d| match d {
+                        BDep::Branch(id) => Some(id),
+                        BDep::Volt(_) => None,
+                    })
+                    .nth(slot);
+                match target {
+                    Some(id) => *id = new_id,
+                    None => panic!("behavioral source has no branch-dep slot {slot}"),
+                }
+            }
             Device::Resistor { .. }
             | Device::Capacitor { .. }
             | Device::Inductor { .. }
@@ -542,7 +644,9 @@ impl Device {
             | Device::OpAmp { .. }
             | Device::Comparator { .. }
             | Device::Vcvs { .. }
-            | Device::Vccs { .. } => {}
+            | Device::Vccs { .. } => {
+                panic!("device without control references cannot retarget slot {slot}")
+            }
         }
     }
 
@@ -590,8 +694,13 @@ impl Device {
             // for, and the solve-side cross-check test holds the stamp to it.
             Device::Vcvs { p, n, .. } | Device::Vccs { p, n, .. } => vec![*p, *n],
             // F/H drive current through their output port; the control is not
-            // a terminal at all (see `controlling_source`).
+            // a terminal at all (see `controlling_sources`).
             Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
+            // A B-source drives current through its output port only. Every
+            // V(node) dep is read-only (Jacobian COLUMNS of the p/n or branch
+            // rows) — the maximal-coupling device is still, per terminal, the
+            // same conduct-vs-sense split as a VCVS.
+            Device::Behavioral { p, n, .. } => vec![*p, *n],
         }
     }
 
@@ -645,9 +754,30 @@ impl Device {
             // zero-row cross-check would pass vacuously while the tearing
             // passes drew the wrong conclusion (a node-voltage sense is a free
             // tear candidate; a branch-current sense never is). The coupling
-            // is declared through [`Device::controlling_source`] instead, and
+            // is declared through [`Device::controlling_sources`] instead, and
             // the partitioner/conduction graph consume that directly.
             Device::Cccs { .. } | Device::Ccvs { .. } => Vec::new(),
+            // Every V(node) dep is a declared SENSE edge — the tear layers
+            // must see that this device reads across island boundaries (plan
+            // §2.5). Deduped, and EXCLUDING the output terminals: a
+            // self-referencing expression (`B1 out 0 I={tanh(V(out))}`, the
+            // nonlinear-resistor idiom) senses a node it also conducts into,
+            // and a terminal must be in exactly one of the two sets — the
+            // conduction claim wins because the p/n rows really do receive
+            // current. I(vname) deps are branch-current reads with no node
+            // vocabulary, declared via `controlling_sources` like F/H.
+            Device::Behavioral { p, n, deps, .. } => {
+                let mut v: Vec<NodeId> = deps
+                    .iter()
+                    .filter_map(|d| match d {
+                        BDep::Volt(dn) if dn != p && dn != n => Some(*dn),
+                        _ => None,
+                    })
+                    .collect();
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
         }
     }
 
@@ -764,13 +894,16 @@ impl Device {
                 gm: 1e-3,
             },
             // CONVENTION (load-bearing for every consumer that stamps these):
-            // the F/H examples point their control at `DeviceId(0)`. A
+            // the F/H/B examples point their control at `DeviceId(0)`. A
             // consumer that builds a circuit around an example must ensure
-            // device index 0 is an independent Vsource BEFORE adding the F/H
-            // (the conduction cross-check in hauksbee-solve inserts a 0 V
-            // ammeter across n[2]/n[3] first for exactly this reason).
-            // Consumers that only inspect structure (serde round-trip, node
-            // walks) need nothing: DeviceId round-trips like any field.
+            // device index 0 is an independent Vsource BEFORE adding the
+            // example (the conduction cross-check in hauksbee-solve inserts a
+            // 0 V ammeter from n[3] to ground first for exactly this reason —
+            // n[3]-to-ground so the ammeter's own incidence entries stay off
+            // n[2], which the Behavioral example declares as a SENSE node
+            // whose row must provably receive nothing). Consumers that only
+            // inspect structure (serde round-trip, node walks) need nothing:
+            // DeviceId round-trips like any field.
             Device::Cccs {
                 name: "Fex".into(),
                 p: n[0],
@@ -784,6 +917,21 @@ impl Device {
                 n: n[1],
                 ctrl_src: DeviceId(0),
                 transres: 50.0,
+            },
+            // Exercises every structural feature at once: a V(node) dep
+            // (slot 0, remappable node reference), an I(vname) dep (slot 1,
+            // the DeviceId(0) control convention above), a `time` read, and a
+            // Voltage output (owns a branch unknown). The canonical expression
+            // compiles here so every property-test consumer gets a genuinely
+            // evaluable device; `expect` is safe — the text is a constant.
+            Device::Behavioral {
+                name: "Bex".into(),
+                p: n[0],
+                n: n[1],
+                output: BOutput::Voltage,
+                expr: CompiledExpr::compile("0.5*__d0 + 100.0*math::tanh(__d1) + 0.1*time")
+                    .expect("examples(): canonical behavioral expression compiles"),
+                deps: vec![BDep::Volt(n[2]), BDep::Branch(DeviceId(0))],
             },
         ]
         ;
@@ -812,7 +960,10 @@ impl Device {
     /// Independent sources are linear in the MNA sense (their value depends on
     /// time, not on the solution). Diodes, transistors, switches, and the
     /// behavioral blocks are nonlinear and force Newton iteration in any island
-    /// that contains them.
+    /// that contains them. `Device::Behavioral` is nonlinear BY CONSTRUCTION
+    /// (an arbitrary expression's Jacobian moves with the iterate — even a
+    /// linear-looking `{2*V(a)}` ships the finite-difference tangent path), so
+    /// it deliberately stays off this whitelist and taints its island.
     pub fn is_linear(&self) -> bool {
         matches!(
             self,

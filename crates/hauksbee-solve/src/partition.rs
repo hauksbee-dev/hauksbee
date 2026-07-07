@@ -209,7 +209,7 @@ impl Partition {
         // monolithic path.
         let mut ctrl_demoted = vec![false; circuit.devices.len()];
         for (_, dev) in circuit.iter() {
-            if let Some(ctrl) = dev.controlling_source() {
+            for ctrl in dev.controlling_sources() {
                 if let Some(slot) = ctrl_demoted.get_mut(ctrl.0 as usize) {
                     *slot = true;
                 }
@@ -292,11 +292,14 @@ impl Partition {
                 .filter(|n| !n.is_ground() && !pinned[n.0 as usize])
                 .map(|n| n.0 as usize)
                 .collect();
-            // F/H: the control terminals are not in `nodes()` (the control is
-            // a device reference), so the fuse the doc comment above promises
-            // needs an explicit edge — union this device's free nodes with the
-            // control source's free nodes.
-            if let Some(ctrl) = dev.controlling_source() {
+            // F/H (and behavioral `I(...)` deps): the control terminals are
+            // not in `nodes()` (the control is a device reference), so the
+            // fuse the doc comment above promises needs an explicit edge —
+            // union this device's free nodes with EVERY control source's free
+            // nodes. (A B-source's `V(node)` deps need nothing here: they ARE
+            // in `nodes()`, so the default union above already fuses them,
+            // exactly like an E/G control pair.)
+            for ctrl in dev.controlling_sources() {
                 free.extend(
                     circuit.devices[ctrl.0 as usize]
                         .nodes()

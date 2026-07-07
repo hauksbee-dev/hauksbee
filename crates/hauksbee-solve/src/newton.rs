@@ -102,6 +102,14 @@ pub struct Workspace {
     /// per-step path is bit-identical (no residual evaluation). Also force-on via
     /// Strategy::LineSearch for direct grants.
     tran_line_search: bool,
+    /// The device-named fault of the most recent Newton solve that aborted on
+    /// a behavioral-expression error (`stamp::take_behavioral_fault`): an
+    /// expression that errored or went non-finite at some iterate. Cleared at
+    /// the top of every `newton_solve`, so `Some` here always describes the
+    /// LAST attempt — the drivers append it to their final refusal message so
+    /// a non-convergence caused by `ln(-2)` names the device instead of
+    /// reading as generic Newton failure. Never set on a converged solve.
+    behavioral_fault: Option<String>,
     /// SPDT leg sibling map (device id -> the device id of its complementary
     /// throw), recovered once at construction. Two `VSwitch` legs are siblings
     /// when they share the common node `a` and their names differ only in the
@@ -191,6 +199,11 @@ impl Workspace {
             spdt_sibling: &self.spdt_sibling,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
+        // A faulting behavioral expression stamped nothing: the residual of an
+        // incomplete system is meaningless, and a poisoned point is not a root.
+        if crate::stamp::take_behavioral_fault().is_some() {
+            return f64::INFINITY;
+        }
         // F = g*x - rhs, infinity norm over node rows.
         let mut worst = 0.0f64;
         for i in 0..self.layout.n_nodes {
@@ -238,6 +251,10 @@ impl Workspace {
             spdt_sibling: &self.spdt_sibling,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
+        // Same poisoned-point rule as `dc_residual_inf_norm`.
+        if crate::stamp::take_behavioral_fault().is_some() {
+            return (f64::INFINITY, 0);
+        }
         let mut worst = (0.0f64, 0usize);
         for i in 0..self.layout.n_nodes {
             let row = self.matrix.row(i);
@@ -285,8 +302,16 @@ impl Workspace {
             switch_freeze: None,
             tran_event: false,
             tran_line_search: false,
+            behavioral_fault: None,
             spdt_sibling,
         }
+    }
+
+    /// The behavioral-expression fault of the last failed Newton attempt, if
+    /// that is why it failed (see the field doc). Drivers fold this into their
+    /// refusal messages.
+    pub fn behavioral_fault(&self) -> Option<&str> {
+        self.behavioral_fault.as_deref()
     }
 }
 
@@ -346,6 +371,8 @@ pub fn newton_solve(
     // iteration's anchor equals its own linearization point (pnjlim then sees
     // zero delta and does not limit), exactly as a cold SPICE iteration.
     ws.x_prev_iter.copy_from_slice(&ws.x);
+    // A fresh attempt: any behavioral fault recorded here describes THIS solve.
+    ws.behavioral_fault = None;
     for s in ws.prev_step.iter_mut() {
         *s = 0.0;
     }
@@ -422,6 +449,21 @@ pub fn newton_solve(
                     stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs)
                 }
             });
+        }
+        // A behavioral expression that faulted at this iterate stamped
+        // nothing: the assembled system is silently incomplete, so it must
+        // never be solved. Abort as non-converged with the device-named
+        // fault latched for the drivers' refusal messages (a retry at a
+        // different iterate / smaller dt may legitimately clear it).
+        if let Some(fault) = crate::stamp::take_behavioral_fault() {
+            ws.behavioral_fault = Some(fault);
+            if census_on {
+                crate::census::newton_exit(crate::census::NewtonExit::MaxIters, iters);
+            }
+            return NewtonResult {
+                converged: false,
+                iters,
+            };
         }
         // The iterate from the step before this one (the anchor we just used)
         // vs the current linearization point: if they already agree to
@@ -830,6 +872,15 @@ fn residual_inf_norm_at(
         };
         stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
     }
+    // A behavioral expression that faulted at this TRIAL point stamped
+    // nothing, so the residual below would be measured against an incomplete
+    // system and could look spuriously small. Poison the trial instead: +inf
+    // is never accepted, the line search backtracks toward the last good
+    // point — a fault at a probe point is a reason to shorten the step, not
+    // to kill the solve.
+    if crate::stamp::take_behavioral_fault().is_some() {
+        return f64::INFINITY;
+    }
     let mut worst = 0.0f64;
     for i in 0..ws.layout.n_nodes {
         let row = ws.matrix.row(i);
@@ -1006,7 +1057,15 @@ fn dc_solve(
         return Ok(());
     }
     if !opts.dc_homotopy {
-        return Err(format!("DC Newton did not converge in {} iters", r.iters));
+        let fault = ws
+            .behavioral_fault
+            .as_ref()
+            .map(|f| format!("; {f}"))
+            .unwrap_or_default();
+        return Err(format!(
+            "DC Newton did not converge in {} iters{fault}",
+            r.iters
+        ));
     }
 
     // Attempt 2: gmin stepping — start with a large shunt and ramp it down.
@@ -1277,9 +1336,17 @@ fn dc_solve(
         }
     }
 
+    // If the LAST attempt died on a behavioral-expression fault, say so by
+    // device name: "ln of a negative node voltage" is actionable, "homotopy
+    // failed" is not.
+    let fault = ws
+        .behavioral_fault
+        .as_ref()
+        .map(|f| format!("; {f}"))
+        .unwrap_or_default();
     Err(format!(
         "DC homotopy failed (source scale {last_scale:.3}, {last_iters} iters; \
-         staged-DC relaxation did not recover)"
+         staged-DC relaxation did not recover){fault}"
     ))
 }
 

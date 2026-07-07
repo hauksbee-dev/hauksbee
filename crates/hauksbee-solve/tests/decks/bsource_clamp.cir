@@ -1,0 +1,10 @@
+b-source tanh soft clamp
+V1 in 0 SIN(0 3 1k)
+Rin in a 1k
+Ra a 0 1k
+B1 out 0 V={2*tanh(v(a))}
+RL out 0 1k
+.tran 5u 2m
+.print tran v(out)
+.options reltol=1e-4
+.end

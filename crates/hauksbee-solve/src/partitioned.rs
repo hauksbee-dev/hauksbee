@@ -1293,21 +1293,21 @@ impl NonlinearIsland {
             sub.add(nd);
         }
 
-        // Retarget F/H control references from GLOBAL device ids to the
-        // sub-circuit's LOCAL ids (`clone_remapped` walks nodes only; a
-        // DeviceId would otherwise silently point at whatever occupies that
-        // index in `sub`). The partitioner demotes a control Vsource from cut
-        // to island member precisely so it is present here; if a partition
-        // from an external decision layer split them anyway, there is no
-        // column for the F/H stamp to write and the only honest move is to
-        // refuse the build — `try_build*` then falls back to the exact
-        // monolithic path.
+        // Retarget control references (F/H `ctrl_src`, behavioral `I(...)`
+        // deps) from GLOBAL device ids to the sub-circuit's LOCAL ids
+        // (`clone_remapped` walks nodes only; a DeviceId would otherwise
+        // silently point at whatever occupies that index in `sub`). The
+        // partitioner demotes a control Vsource from cut to island member
+        // precisely so it is present here; if a partition from an external
+        // decision layer split them anyway, there is no column for the stamp
+        // to write and the only honest move is to refuse the build —
+        // `try_build*` then falls back to the exact monolithic path.
         for li in 0..isl.devices.len() {
-            if let Some(gctrl) = sub.devices[li].controlling_source() {
+            for (slot, gctrl) in sub.devices[li].controlling_sources().into_iter().enumerate() {
                 let Some(local) = isl.devices.iter().position(|&d| d == gctrl) else {
                     return None;
                 };
-                sub.devices[li].retarget_controlling_source(DeviceId(local as u32));
+                sub.devices[li].retarget_controlling_source_slot(slot, DeviceId(local as u32));
             }
         }
 
@@ -1325,7 +1325,18 @@ impl NonlinearIsland {
         }
 
         let _ = (opts, &g2l);
-        let ws = Workspace::new(&sub);
+        let mut ws = Workspace::new(&sub);
+        // Same convergence doctrine as the monolithic transient driver: a
+        // behavioral source's presence arms the per-step Armijo line search
+        // for this island's Newton (a no-op on already-converging steps;
+        // B-free islands take the false branch and stay bit-identical).
+        if sub
+            .devices
+            .iter()
+            .any(|d| matches!(d, Device::Behavioral { .. }))
+        {
+            ws.set_tran_line_search(true);
+        }
         let n_dev = sub.devices.len();
         let size = ws.layout.size;
         // Owned slots: every mapped non-ground node that is not a boundary

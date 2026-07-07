@@ -1,0 +1,16 @@
+# A behavioral op-amp macro: the gain stage is a single B-source
+# `V = vmax*tanh(gain*(v(inp)-v(inn))/vmax)` (rail-saturating, finite gain)
+# inside a `.subckt` with `gain`/`vmax` parameters threaded through the X
+# line, closed at x10 by a 9k/1k feedback divider. Exercises subckt + .param +
+# B together: the expression's v() references must survive port mapping and
+# per-instance param folding, and every Newton step solves the nonlinear
+# feedback loop through the FD tangent. Closed-loop output ~0.99 V peak
+# (finite loop gain), well below vmax. Percent tolerance.
+analysis = "tran"
+description = "behavioral opamp subckt (B gain stage), closed-loop x10 sine"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

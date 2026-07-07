@@ -264,6 +264,12 @@ impl AcAnalysis {
             };
             stamp_ac(&mut sys, layout, op, dev, id, w, &self.opts, drive);
         }
+        // A behavioral expression that faults AT THE OPERATING POINT (should
+        // be impossible — the OP solve just evaluated it cleanly — but a
+        // refusal here beats a silently incomplete complex system).
+        if let Some(fault) = crate::stamp::take_behavioral_fault() {
+            return Err(format!("AC linearization refused: {fault}"));
+        }
         sys.solve().ok_or_else(|| {
             format!(
                 "AC system singular at w={w:.4} rad/s (f={:.4} Hz)",
@@ -520,6 +526,85 @@ fn stamp_ac(
                 sys.add(br, ni, Complex64::new(-1.0, 0.0));
             }
             sys.add(br, cbr, Complex64::new(-*transres, 0.0));
+        }
+        // Behavioral B-source: a LINEARIZED AC stamp at the operating point,
+        // through the SAME finite-difference partials the transient Newton
+        // uses (frozen at the OP, evaluated at time = 0 — the DC bias the OP
+        // was solved at). The result is a VCVS/VCCS-shaped stamp with numeric
+        // gains, real-valued and frequency-independent (the expression device
+        // stores no charge); RHS 0 — a dependent source is never an AC drive,
+        // and `time` is a bias input with no small-signal excitation. This is
+        // exactly the textbook `g = df/dx at the OP` contract the module doc
+        // promises for nonlinear devices. A fault at the OP stamps nothing
+        // and notes itself; the sweep driver refuses (never a silently
+        // incomplete complex system).
+        Device::Behavioral {
+            name,
+            p,
+            n: neg,
+            output,
+            expr,
+            deps,
+        } => {
+            let mut vals: Vec<f64> = Vec::with_capacity(deps.len());
+            let mut cols: Vec<Option<usize>> = Vec::with_capacity(deps.len());
+            for d in deps {
+                match d {
+                    hauksbee_ir::BDep::Volt(dn) => {
+                        vals.push(op.v(*dn));
+                        cols.push(layout.node(*dn));
+                    }
+                    hauksbee_ir::BDep::Branch(src) => {
+                        let cbr = layout
+                            .branch(*src)
+                            .expect("behavioral I(...) control source owns a branch unknown");
+                        vals.push(op.x[cbr]);
+                        cols.push(Some(cbr));
+                    }
+                }
+            }
+            let partials = match crate::stamp::behavioral_eval_partials(
+                expr, deps, &mut vals, 0.0, opts,
+            ) {
+                Ok((_f0, partials)) => partials,
+                Err(detail) => {
+                    crate::stamp::note_behavioral_fault(name, detail);
+                    return;
+                }
+            };
+            match output {
+                hauksbee_ir::BOutput::Current => {
+                    let (pi, ni) = (n(*p), n(*neg));
+                    for (g, col) in partials.iter().zip(&cols) {
+                        if let Some(col) = col {
+                            if let Some(pi) = pi {
+                                sys.add(pi, *col, Complex64::new(*g, 0.0));
+                            }
+                            if let Some(ni) = ni {
+                                sys.add(ni, *col, Complex64::new(-*g, 0.0));
+                            }
+                        }
+                    }
+                }
+                hauksbee_ir::BOutput::Voltage => {
+                    let br = layout
+                        .branch(id)
+                        .expect("V-output behavioral source owns a branch unknown");
+                    if let Some(pi) = n(*p) {
+                        sys.add(pi, br, Complex64::new(1.0, 0.0));
+                        sys.add(br, pi, Complex64::new(1.0, 0.0));
+                    }
+                    if let Some(ni) = n(*neg) {
+                        sys.add(ni, br, Complex64::new(-1.0, 0.0));
+                        sys.add(br, ni, Complex64::new(-1.0, 0.0));
+                    }
+                    for (g, col) in partials.iter().zip(&cols) {
+                        if let Some(col) = col {
+                            sys.add(br, *col, Complex64::new(-*g, 0.0));
+                        }
+                    }
+                }
+            }
         }
     }
 }
