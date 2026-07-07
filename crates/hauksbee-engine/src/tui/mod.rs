@@ -10,7 +10,8 @@
 //!                 focus, selection, verdict). Fully unit-testable with no PTY.
 //! - [`cosim`]   — the background co-sim worker that streams incremental UART /
 //!                 GPIO / progress updates to the UI over a channel.
-//! - [`render`]  — ratatui drawing of the three panes + footer.
+//! - [`render`]  — ratatui drawing of the four panes (Nets & Parts, Findings,
+//!                 Co-sim, Scope) + footer.
 //! - [`app`]     — terminal lifecycle (alt-screen, raw mode, panic-safe restore)
 //!                 and the event loop.
 
@@ -20,4 +21,7 @@ pub mod render;
 pub mod state;
 
 pub use app::{build_state, run};
-pub use state::{AppState, Finding, Net, Pane, Part, PartStatus, Severity, Verdict};
+pub use state::{
+    AppState, Finding, Net, Pane, Part, PartStatus, ScopeSeries, ScopeState, ScopeView, Severity,
+    Verdict,
+};
