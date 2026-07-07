@@ -1,0 +1,17 @@
+# CCCS (F) current mirror: a 1 kHz sine pushes i = v(in)/1k through the
+# zero-volt ammeter VS (the idiomatic branch-current probe); F1 mirrors it x2
+# into a 500 || 100n load (tau = 50 us), so the plateau gain is x1 overall.
+# Exercises the two-entry control-branch-column stamp, the deferred
+# resolve-by-name pass (F1 precedes VS in the deck), and the ammeter idiom;
+# percent tolerance on the filtered output. TMAX is capped at 0.5 us for the
+# same reason as vccs_gm: with tau = 50 us the early sine ramp is high-
+# curvature, and linear resampling of a coarse oracle grid there (~1.4e-2)
+# otherwise dominates the actual engine disagreement (~1.9e-4).
+analysis = "tran"
+description = "CCCS mirror (gain 2 into 500 || 100n) of an ammeter current"
+full_scale = 2.0
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01

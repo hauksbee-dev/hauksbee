@@ -250,6 +250,35 @@ pub enum Device {
         cn: NodeId,
         gm: f64,
     },
+    /// Current-controlled current source (SPICE `F` card):
+    /// `I(p->n) = gain * I(ctrl_src)`, where `ctrl_src` must be an independent
+    /// [`Device::Vsource`] whose branch current is the control (the idiomatic
+    /// probe is a zero-volt "ammeter" `V... a b 0` in series with the sensed
+    /// wire). The first device variant that references ANOTHER DEVICE by id:
+    /// the loader resolves the card's `vname` in a deferred second pass, and
+    /// every pass that clones devices into a sub-circuit must retarget
+    /// `ctrl_src` through [`Device::retarget_controlling_source`] or the id
+    /// goes stale. No branch unknown of its own; two matrix entries in the
+    /// control source's branch COLUMN.
+    Cccs {
+        name: String,
+        p: NodeId,
+        n: NodeId,
+        ctrl_src: DeviceId,
+        gain: f64,
+    },
+    /// Current-controlled voltage source (SPICE `H` card):
+    /// `V(p,n) = transres * I(ctrl_src)`. Same control-by-branch-current
+    /// coupling as [`Device::Cccs`]; additionally owns a branch-current
+    /// unknown of its own, exactly like an ideal [`Device::Vsource`], because
+    /// it fixes its output-port voltage.
+    Ccvs {
+        name: String,
+        p: NodeId,
+        n: NodeId,
+        ctrl_src: DeviceId,
+        transres: f64,
+    },
 }
 
 impl Device {
@@ -268,7 +297,9 @@ impl Device {
             | Device::OpAmp { name, .. }
             | Device::Comparator { name, .. }
             | Device::Vcvs { name, .. }
-            | Device::Vccs { name, .. } => name,
+            | Device::Vccs { name, .. }
+            | Device::Cccs { name, .. }
+            | Device::Ccvs { name, .. } => name,
         }
     }
 
@@ -314,6 +345,9 @@ impl Device {
             Device::Vcvs { p, n, cp, cn, .. } | Device::Vccs { p, n, cp, cn, .. } => {
                 vec![*p, *n, *cp, *cn]
             }
+            // The control of an F/H is a DEVICE reference, not a node: the
+            // only wires these touch are their output port.
+            Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
         }
     }
 
@@ -394,6 +428,76 @@ impl Device {
                 *cp = f(*cp);
                 *cn = f(*cn);
             }
+            // NOTE: `ctrl_src` is a DeviceId, not a node — node remapping does
+            // not touch it. A pass that extracts devices into a sub-circuit
+            // must ALSO call [`Device::retarget_controlling_source`] or the
+            // reference silently points at whatever occupies that index in the
+            // new circuit (see the partitioned executor's island build).
+            Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => {
+                *p = f(*p);
+                *n = f(*n);
+            }
+        }
+    }
+
+    /// The device whose BRANCH CURRENT this device reads, if any (the F/H
+    /// control). This is a sense declaration in a vocabulary
+    /// [`Device::sense_nodes`] cannot express: the coupling is to another
+    /// device's branch-current unknown, not to any node voltage. Consumers:
+    ///
+    /// * the partitioner and the conduction graph, which must FUSE this
+    ///   device's island with the control source's island (a branch current is
+    ///   not replayable across a Gauss-Seidel lag, and unlike a sensed node
+    ///   voltage it cannot even be expressed as a boundary source — so this
+    ///   coupling is never a tear candidate);
+    /// * sub-circuit extraction, which must keep the control source in the
+    ///   same sub-system (the stamp needs its branch column) and retarget the
+    ///   id via [`Device::retarget_controlling_source`];
+    /// * tests, which must place a `Vsource` behind the id before stamping.
+    pub fn controlling_source(&self) -> Option<DeviceId> {
+        // Exhaustive, no `_` arm: a future variant carrying a device reference
+        // that fell into a catch-all `None` would be invisible to the
+        // partitioner's fusion rule and to sub-circuit retargeting — the same
+        // silent-drop hazard class as a `_` arm in `map_nodes`.
+        match self {
+            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => Some(*ctrl_src),
+            Device::Resistor { .. }
+            | Device::Capacitor { .. }
+            | Device::Inductor { .. }
+            | Device::Vsource { .. }
+            | Device::Isource { .. }
+            | Device::Diode { .. }
+            | Device::Bjt { .. }
+            | Device::Mosfet { .. }
+            | Device::VSwitch { .. }
+            | Device::OpAmp { .. }
+            | Device::Comparator { .. }
+            | Device::Vcvs { .. }
+            | Device::Vccs { .. } => None,
+        }
+    }
+
+    /// Rewrite the [`DeviceId`] returned by [`Device::controlling_source`], in
+    /// place. The device-reference analogue of [`Device::map_nodes`]: any pass
+    /// that copies devices into a circuit with different device indices routes
+    /// through here. No-op for devices without a control reference.
+    pub fn retarget_controlling_source(&mut self, new_id: DeviceId) {
+        // Exhaustive for the same reason as `controlling_source`.
+        match self {
+            Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => *ctrl_src = new_id,
+            Device::Resistor { .. }
+            | Device::Capacitor { .. }
+            | Device::Inductor { .. }
+            | Device::Vsource { .. }
+            | Device::Isource { .. }
+            | Device::Diode { .. }
+            | Device::Bjt { .. }
+            | Device::Mosfet { .. }
+            | Device::VSwitch { .. }
+            | Device::OpAmp { .. }
+            | Device::Comparator { .. }
+            | Device::Vcvs { .. }
+            | Device::Vccs { .. } => {}
         }
     }
 
@@ -440,6 +544,9 @@ impl Device {
             // canonical sense-vs-conduction split the W1 classifier was built
             // for, and the solve-side cross-check test holds the stamp to it.
             Device::Vcvs { p, n, .. } | Device::Vccs { p, n, .. } => vec![*p, *n],
+            // F/H drive current through their output port; the control is not
+            // a terminal at all (see `controlling_source`).
+            Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
         }
     }
 
@@ -485,6 +592,17 @@ impl Device {
             // The control pair steers the gain term but its own KCL rows
             // receive nothing (ideal infinite input impedance).
             Device::Vcvs { cp, cn, .. } | Device::Vccs { cp, cn, .. } => vec![*cp, *cn],
+            // DELIBERATELY EMPTY, and a vocabulary gap made explicit: what an
+            // F/H senses is another device's BRANCH CURRENT, which this
+            // node-voltage sense list cannot express. Declaring the control
+            // source's nodes here would be a lie — the stamp never reads their
+            // voltages (it reads the control branch-current COLUMN), and the
+            // zero-row cross-check would pass vacuously while the tearing
+            // passes drew the wrong conclusion (a node-voltage sense is a free
+            // tear candidate; a branch-current sense never is). The coupling
+            // is declared through [`Device::controlling_source`] instead, and
+            // the partitioner/conduction graph consume that directly.
+            Device::Cccs { .. } | Device::Ccvs { .. } => Vec::new(),
         }
     }
 
@@ -600,6 +718,28 @@ impl Device {
                 cn: n[3],
                 gm: 1e-3,
             },
+            // CONVENTION (load-bearing for every consumer that stamps these):
+            // the F/H examples point their control at `DeviceId(0)`. A
+            // consumer that builds a circuit around an example must ensure
+            // device index 0 is an independent Vsource BEFORE adding the F/H
+            // (the conduction cross-check in hauksbee-solve inserts a 0 V
+            // ammeter across n[2]/n[3] first for exactly this reason).
+            // Consumers that only inspect structure (serde round-trip, node
+            // walks) need nothing: DeviceId round-trips like any field.
+            Device::Cccs {
+                name: "Fex".into(),
+                p: n[0],
+                n: n[1],
+                ctrl_src: DeviceId(0),
+                gain: 2.0,
+            },
+            Device::Ccvs {
+                name: "Hex".into(),
+                p: n[0],
+                n: n[1],
+                ctrl_src: DeviceId(0),
+                transres: 50.0,
+            },
         ]
         ;
         // The derived variant count is the enforcement the match-arm trick
@@ -643,14 +783,21 @@ impl Device {
                 // models only R/C/L/I) or they would vanish from the A matrix.
                 | Device::Vcvs { .. }
                 | Device::Vccs { .. }
+                // Controlled sources F/H: constant gain/transresistance times
+                // a branch-current UNKNOWN — still constant matrix entries, so
+                // the Jacobian never moves. Same caveat as E/G: linear does
+                // not mean state-space-reducible, and `LinearIsland::compile`
+                // refuses islands containing them.
+                | Device::Cccs { .. }
+                | Device::Ccvs { .. }
         )
     }
 
     /// Whether the device is best handled by the event queue rather than the
     /// analog solver. The behavioral comparator is the one digital-ish element
     /// here; the partitioning pass will use this to peel it off. Controlled
-    /// sources (`Vcvs`/`Vccs`) are continuous analog constraints with no
-    /// discrete state, so they stay with the analog solver (`false`).
+    /// sources (`Vcvs`/`Vccs`/`Cccs`/`Ccvs`) are continuous analog constraints
+    /// with no discrete state, so they stay with the analog solver (`false`).
     pub fn is_event_driven(&self) -> bool {
         matches!(self, Device::Comparator { .. })
     }

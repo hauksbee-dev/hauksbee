@@ -314,6 +314,47 @@ impl StampPlan {
                         }
                     }
                 }
+                Device::Cccs {
+                    p, n, ctrl_src, gain, ..
+                } => {
+                    // Fully constant like the VCCS: two (output-row,
+                    // control-branch-column) entries fold into the backbone.
+                    // The folding is SOUND here — this compilation runs after
+                    // layout freeze, so `layout.branch(ctrl_src)` is the same
+                    // resolved index the interpreted stamp uses (the question
+                    // §2.2 flags for F/H is answered by construction: the plan
+                    // is built from the layout, never before it). No restamp:
+                    // gain is a device constant and the RHS is zero.
+                    let cbr = layout
+                        .branch(*ctrl_src)
+                        .expect("cccs control source owns a branch");
+                    if let Some(pi) = layout.node(*p) {
+                        push_at(&mut cond_ops, pi, cbr, *gain);
+                    }
+                    if let Some(ni) = layout.node(*n) {
+                        push_at(&mut cond_ops, ni, cbr, -*gain);
+                    }
+                }
+                Device::Ccvs {
+                    p, n, ctrl_src, transres, ..
+                } => {
+                    // Branch incidence (a VCVS-shaped constraint) plus the
+                    // -transres dependence at the control source's branch
+                    // column. Fully constant, no restamp (RHS is zero).
+                    let br = layout.branch(id).expect("ccvs has a branch");
+                    let cbr = layout
+                        .branch(*ctrl_src)
+                        .expect("ccvs control source owns a branch");
+                    if let Some(pi) = layout.node(*p) {
+                        push_at(&mut cond_ops, pi, br, 1.0);
+                        push_at(&mut cond_ops, br, pi, 1.0);
+                    }
+                    if let Some(ni) = layout.node(*n) {
+                        push_at(&mut cond_ops, ni, br, -1.0);
+                        push_at(&mut cond_ops, br, ni, -1.0);
+                    }
+                    push_at(&mut cond_ops, br, cbr, -*transres);
+                }
                 Device::Diode { .. }
                 | Device::Bjt { .. }
                 | Device::Mosfet { .. }

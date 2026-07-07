@@ -1,10 +1,36 @@
 //! A pragmatic SPICE netlist loader.
 //!
 //! Parses a useful subset of `.cir` files into a [`Circuit`]: element lines for
-//! R/C/L/V/I/D/Q/M/S/E/G, `.model` cards for diodes, BJTs, and MOSFETs, the `sin`,
-//! `pulse`, and `pwl` source functions, `.tran`, `.temp`, and `.options`. The
-//! goal is to ingest real test vectors and user-supplied netlists, not to be a
-//! complete SPICE3 front end; anything unsupported is reported with the line.
+//! R/C/L/V/I/D/Q/M/S/E/G/F/H, `.model` cards for diodes, BJTs, and MOSFETs, the
+//! `sin`, `pulse`, and `pwl` source functions, `.tran`, `.temp`, and `.options`.
+//! The goal is to ingest real test vectors and user-supplied netlists, not to be
+//! a complete SPICE3 front end; anything unsupported is reported with the line.
+//!
+//! # Element-name references (dev-plan 04 §2.2, resolve-by-name)
+//!
+//! `F`/`H` cards name ANOTHER ELEMENT — the voltage source whose branch current
+//! controls them: `F1 n+ n- Vsense gain`. The referent may appear later in the
+//! deck, so these resolve in a deferred second pass: parsing records a
+//! [`NameFixup`] with a placeholder id, and after the whole (flattened) deck is
+//! parsed, [`resolve_name_fixups`] builds one case-insensitive name index and
+//! patches each reference — a dangling name, an ambiguous name (two devices
+//! differing only in case), or a referent that is not an independent `V` source
+//! is a line-numbered error. SPICE allows only V-source control; to read the
+//! current of anything else, insert the idiomatic zero-volt ammeter
+//! (`Vsense a b 0`) in series and name that. The pass is deliberately generic
+//! (any card kind can defer any device-name field) because the behavioral
+//! B-source (§2.5) will reuse it.
+//!
+//! **Scoping across subckts:** a `vname` inside a `.subckt` body is LOCAL —
+//! flattening prefixes it with the instance path exactly like a refdes
+//! (`Vsense` in instance `X3` resolves to `X3.Vsense`), matching ngspice's
+//! subckt name translation. There is no fallback to a same-named global source:
+//! a typo'd local name fails loudly instead of silently binding outside the
+//! subckt, and a subckt that wants a global control current should take it in
+//! through a port with a local ammeter. (Dotted references compose: `X9.Vs`
+//! written inside a body becomes `X3.X9.Vs`.) A TOP-LEVEL card may reference a
+//! source inside an instance by its flattened name (`F1 a b X3.Vsense 2`) —
+//! unambiguous, though not portable to other SPICE dialects.
 //!
 //! Conventions: the first line is a title (ignored), `*` begins a comment,
 //! `+` continues the previous line, and node `0`/`gnd` is ground. SI suffixes
@@ -44,7 +70,7 @@
 
 use crate::models::{BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity};
 use crate::source::{PwlPoint, SourceKind};
-use crate::{Circuit, Device};
+use crate::{Circuit, Device, DeviceId};
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
     Node as EvalNode, Value,
@@ -258,14 +284,126 @@ impl SpiceLoader {
 
         // Second pass: parse the flattened element lines. Errors from a spliced
         // body are annotated with where the body came from and where it was
-        // instantiated.
+        // instantiated. Cards that reference another element BY NAME (F/H
+        // control sources) defer the reference into `fixups` — the referent may
+        // appear later in the deck — and the third pass below resolves them.
+        let mut fixups: Vec<NameFixup> = Vec::new();
         for sl in &expanded {
-            parse_element(sl.lineno, &sl.text, &mut circuit, &models, &sl.env)
-                .map_err(|e| with_provenance(e, &sl.provenance))?;
+            let before = fixups.len();
+            parse_element(
+                sl.lineno,
+                &sl.text,
+                &mut circuit,
+                &models,
+                &sl.env,
+                &mut fixups,
+            )
+            .map_err(|e| with_provenance(e, &sl.provenance))?;
+            // Resolution errors surface after this loop; carry the breadcrumb
+            // so they still name the subckt instantiation site.
+            for fx in &mut fixups[before..] {
+                fx.provenance = sl.provenance.clone();
+            }
         }
+
+        // Third pass: resolve element-name references (§2.2).
+        resolve_name_fixups(&mut circuit, &fixups)?;
 
         Ok((circuit, directives))
     }
+}
+
+// --- element-name references (§2.2) ------------------------------------------
+
+/// A deferred element-name reference: `device`'s control field names `name`,
+/// to be resolved once the whole deck is parsed. Generic on purpose — today
+/// only F/H defer (their `ctrl_src`), but the behavioral B-source will defer
+/// `V(...)`/`I(...)` references through the same pass.
+struct NameFixup {
+    /// The device whose reference needs patching.
+    device: DeviceId,
+    /// The referenced element name, as written (matched case-insensitively).
+    name: String,
+    /// Line of the referring card, for errors.
+    line: usize,
+    /// Raw card text, for errors.
+    raw: String,
+    /// Subckt breadcrumb of the referring card (filled by the load loop).
+    provenance: String,
+}
+
+/// Resolve every [`NameFixup`] against one case-insensitive index of the
+/// final (flattened) device names, patching each referring device in place.
+///
+/// Errors, all line-numbered against the referring card:
+/// * the name matches nothing (dangling reference);
+/// * the name matches two devices differing only in case (SPICE names are
+///   case-insensitive, so this is genuinely ambiguous — refuse, don't pick);
+/// * the referent is not an independent `V` source. Every branch-current
+///   carrier (an `E`, an inductor, another `H`) is refused with the same
+///   pointer: SPICE control semantics are V-source-only, and the zero-volt
+///   series ammeter is the idiom that works everywhere. This also settles
+///   self-reference for free: an `F`/`H` can never name itself because it is
+///   not a `V` source.
+fn resolve_name_fixups(circuit: &mut Circuit, fixups: &[NameFixup]) -> Result<(), SpiceError> {
+    if fixups.is_empty() {
+        return Ok(());
+    }
+    // name (lowercased) -> every device wearing it. Built once; O(devices).
+    let mut index: HashMap<String, Vec<DeviceId>> = HashMap::new();
+    for (id, dev) in circuit.iter() {
+        index
+            .entry(dev.name().to_ascii_lowercase())
+            .or_default()
+            .push(id);
+    }
+    for fx in fixups {
+        let err = |msg: String| {
+            with_provenance(
+                SpiceError::Syntax {
+                    line: fx.line,
+                    msg,
+                    text: fx.raw.clone(),
+                },
+                &fx.provenance,
+            )
+        };
+        let matches = index
+            .get(&fx.name.to_ascii_lowercase())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let target = match matches {
+            [] => {
+                return Err(err(format!(
+                    "controlling source `{}` does not exist in the deck",
+                    fx.name
+                )))
+            }
+            [one] => *one,
+            many => {
+                let names: Vec<&str> = many
+                    .iter()
+                    .map(|id| circuit.devices[id.0 as usize].name())
+                    .collect();
+                return Err(err(format!(
+                    "controlling source `{}` is ambiguous: matches {} \
+                     (SPICE names are case-insensitive; rename one)",
+                    fx.name,
+                    names.join(", ")
+                )));
+            }
+        };
+        if !matches!(circuit.devices[target.0 as usize], Device::Vsource { .. }) {
+            return Err(err(format!(
+                "controlling source `{}` is not an independent voltage source; \
+                 only a V element's branch current can control an F/H — insert \
+                 a zero-volt ammeter (`Vsense a b 0`) in series and name that",
+                fx.name
+            )));
+        }
+        circuit.devices[fx.device.0 as usize].retarget_controlling_source(target);
+    }
+    Ok(())
 }
 
 // --- parameters & expressions (§4.2) ----------------------------------------
@@ -657,6 +795,10 @@ fn map_node(tok: &str, port_map: &HashMap<String, String>, inst_path: &str) -> S
 fn node_indices_for(kind: char) -> &'static [usize] {
     match kind {
         'R' | 'C' | 'L' | 'V' | 'I' | 'D' => &[1, 2],
+        // F/H: only the output pair are nodes — token 3 is an ELEMENT NAME
+        // (the controlling V source), rewritten separately in
+        // `expand_instance` under the local-scope rule.
+        'F' | 'H' => &[1, 2],
         'Q' => &[1, 2, 3],
         'M' | 'S' | 'E' | 'G' => &[1, 2, 3, 4],
         _ => &[],
@@ -852,6 +994,20 @@ fn expand_instance(
                 if i < btoks.len() {
                     new_toks[i] = map_node(&btoks[i], &port_map, &inst_name);
                 }
+            }
+            // F/H control references are LOCAL to the subckt body (see the
+            // module doc's scoping rule): prefix the vname with the instance
+            // path exactly like a refdes, so `Vsense` written in the body of
+            // instance `X3` resolves to the spliced `X3.Vsense`. Unconditional
+            // on purpose — no fallback to a same-named global source, so a
+            // typo'd local name dangles and fails loudly at resolution instead
+            // of silently binding outside the subckt. (Skip `poly`: it must
+            // survive verbatim for the parser's refusal to name it.)
+            if matches!(kind, 'F' | 'H')
+                && btoks.len() > 3
+                && !btoks[3].eq_ignore_ascii_case("poly")
+            {
+                new_toks[3] = format!("{}.{}", inst_name, btoks[3]);
             }
             out.push(SplicedLine {
                 lineno: *blineno,
@@ -1203,6 +1359,7 @@ fn parse_element(
     circuit: &mut Circuit,
     models: &HashMap<String, ModelCard>,
     env: &ParamEnv,
+    fixups: &mut Vec<NameFixup>,
 ) -> Result<(), SpiceError> {
     let toks = tokenize(raw);
     if toks.is_empty() {
@@ -1231,6 +1388,8 @@ fn parse_element(
         'S' => parse_switch(line, raw, &toks, circuit, models),
         'E' => parse_controlled(line, raw, &toks, circuit, true, env),
         'G' => parse_controlled(line, raw, &toks, circuit, false, env),
+        'F' => parse_current_controlled(line, raw, &toks, circuit, true, env, fixups),
+        'H' => parse_current_controlled(line, raw, &toks, circuit, false, env, fixups),
         other => Err(SpiceError::UnknownElement {
             line,
             ch: other,
@@ -1762,6 +1921,96 @@ fn parse_controlled(
     Ok(())
 }
 
+fn parse_current_controlled(
+    line: usize,
+    raw: &str,
+    toks: &[String],
+    circuit: &mut Circuit,
+    is_cccs: bool,
+    env: &ParamEnv,
+    fixups: &mut Vec<NameFixup>,
+) -> Result<(), SpiceError> {
+    // F<name> n+ n- vname gain       (CCCS: I(n+ -> n-) = gain * I(vname))
+    // H<name> n+ n- vname transres   (CCVS: V(n+, n-) = transres * I(vname))
+    //
+    // POLY is recognized and refused like the E/G behavioral forms — but ONLY
+    // at the vname position: unlike E/G there is no VALUE/TABLE form for F/H,
+    // and a blanket token scan would refuse a legitimately named source (a
+    // `Vtable`, or literally `Value`). `poly` cannot be a vname (a V-source
+    // name starts with `V`), so the check is unambiguous.
+    if toks
+        .get(3)
+        .is_some_and(|t| t.eq_ignore_ascii_case("poly"))
+    {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: "`POLY` controlled-source form is unsupported (only the linear \
+                  `n+ n- vname gain` form is)"
+                .into(),
+            text: raw.into(),
+        });
+    }
+    if toks.len() < 5 {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: "need n+, n-, a controlling V-source name, and a gain".into(),
+            text: raw.into(),
+        });
+    }
+    let name = toks[0].clone();
+    let p = circuit.node(&toks[1]);
+    let n = circuit.node(&toks[2]);
+    let vname = toks[3].clone();
+    let gain = eval_value(line, &toks[4], raw, env)?;
+
+    if !is_cccs && p == n {
+        // A CCVS with a shorted output port has an indeterminate branch
+        // current (its constraint row collapses and its branch column cancels
+        // to zero) — the same singularity as the shorted VCVS, refused with a
+        // name instead of dying at a zero pivot. The CCCS variant is harmless:
+        // `F a a ...` injects and withdraws the same current at one node (a
+        // no-op, like the legal self-referential VCCS idiom).
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "CCVS `{name}` shorts its own output port (n+ == n-); its \
+                 branch current is indeterminate"
+            ),
+            text: raw.into(),
+        });
+    }
+
+    // The referent may appear later in the deck: park a placeholder id and
+    // defer the lookup to `resolve_name_fixups` (which also enforces that the
+    // name exists, is unambiguous, and is an independent V source).
+    let placeholder = DeviceId(u32::MAX);
+    let id = if is_cccs {
+        circuit.add(Device::Cccs {
+            name,
+            p,
+            n,
+            ctrl_src: placeholder,
+            gain,
+        })
+    } else {
+        circuit.add(Device::Ccvs {
+            name,
+            p,
+            n,
+            ctrl_src: placeholder,
+            transres: gain,
+        })
+    };
+    fixups.push(NameFixup {
+        device: id,
+        name: vname,
+        line,
+        raw: raw.into(),
+        provenance: String::new(),
+    });
+    Ok(())
+}
+
 // --- control cards ----------------------------------------------------------
 
 fn parse_options(raw: &str, directives: &mut Directives) {
@@ -1902,6 +2151,165 @@ mod tests {
         // A non-unity self-referential VCVS is solvable (forces v_p == v_n).
         let net4 = "ok\nE1 out 0 out 0 2.0\n.end\n";
         assert!(SpiceLoader::load(net4).is_ok());
+    }
+
+    // --- F/H cards and the resolve-by-name pass (§2.2) ----------------------
+
+    /// Find a device id by exact name (test helper).
+    fn dev_id(c: &Circuit, name: &str) -> DeviceId {
+        c.iter()
+            .find(|(_, d)| d.name() == name)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| panic!("no device named {name}"))
+    }
+
+    #[test]
+    fn parses_cccs_and_ccvs_with_forward_reference() {
+        // Both cards name Vs BEFORE it appears in the deck: the deferred pass
+        // must resolve it anyway. Vs is the idiomatic zero-volt ammeter.
+        let net = "f/h\nF1 out 0 Vs 2\nH1 x 0 vs 50\nR1 in m 1k\nVs m 0 0\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let vs = dev_id(&c, "Vs");
+        match &c.devices[dev_id(&c, "F1").0 as usize] {
+            Device::Cccs { ctrl_src, gain, .. } => {
+                assert_eq!(*ctrl_src, vs, "F1 must resolve to Vs");
+                assert!((gain - 2.0).abs() < 1e-12);
+            }
+            other => panic!("expected CCCS, got {other:?}"),
+        }
+        // `vs` (lowercase) resolves too: SPICE names are case-insensitive.
+        match &c.devices[dev_id(&c, "H1").0 as usize] {
+            Device::Ccvs {
+                ctrl_src, transres, ..
+            } => {
+                assert_eq!(*ctrl_src, vs, "H1 must resolve to Vs");
+                assert!((transres - 50.0).abs() < 1e-12);
+            }
+            other => panic!("expected CCVS, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refuses_dangling_control_name() {
+        let net = "dangle\nF1 out 0 Vnope 2\nR1 out 0 1k\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("Vnope") && err.contains("does not exist"), "{err}");
+        assert!(err.contains("line 2"), "error must carry the line: {err}");
+    }
+
+    #[test]
+    fn refuses_non_vsource_control() {
+        // Every branch-current carrier that is not an independent V source is
+        // refused with the ammeter hint: an inductor, an E source (both own
+        // branch currents!), and a plain resistor alike. This also covers
+        // self-reference: an F/H is never a V source, so `H1 ... H1 ...`
+        // lands here too.
+        for (card, referent) in [
+            ("F1 out 0 L1 2", "L1 a 0 1m"),
+            ("F1 out 0 E1 2", "E1 x 0 a 0 4"),
+            ("H1 out 0 R1 50", "R1 a 0 1k"),
+            ("H1 out 0 H1 50", "R1 a 0 1k"),
+        ] {
+            let net = format!("bad\n{card}\n{referent}\n.end\n");
+            let err = SpiceLoader::load(&net).unwrap_err().to_string();
+            assert!(
+                err.contains("not an independent voltage source")
+                    && err.contains("zero-volt ammeter"),
+                "card `{card}`: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_ambiguous_control_name() {
+        // Two sources differing only in case: genuinely ambiguous under
+        // SPICE's case-insensitive names — refuse, never pick one.
+        let net = "amb\nVs a 0 1\nVS b 0 2\nF1 out 0 vs 2\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("ambiguous"), "{err}");
+    }
+
+    #[test]
+    fn refuses_poly_and_degenerate_current_controlled() {
+        let net = "poly\nF1 out 0 POLY(2) V1 V2 0 1 1\n.end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(err.contains("POLY"), "want a loud POLY refusal: {err}");
+        // CCVS shorted output port: branch current indeterminate.
+        let net2 = "deg\nH1 x x Vs 50\nVs a 0 0\n.end\n";
+        let err2 = SpiceLoader::load(net2).unwrap_err().to_string();
+        assert!(err2.contains("H1") && err2.contains("shorts"), "{err2}");
+        // The CCCS no-op form `F a a ...` stays legal (injects and withdraws
+        // at one node), mirroring the legal self-referential VCCS idiom.
+        let net3 = "ok\nF1 a a Vs 2\nVs a 0 0\n.end\n";
+        assert!(SpiceLoader::load(net3).is_ok());
+    }
+
+    /// The subckt-composition rule: a vname inside a body is LOCAL — it
+    /// resolves to the instance-mangled source (`X3.Vsense`), per instance.
+    #[test]
+    fn subckt_local_control_name_resolves_to_mangled_instance() {
+        let net = "mirror\n\
+                   .subckt mir inp outp\n\
+                   Vsense inp 0 0\n\
+                   F1 0 outp Vsense 2\n\
+                   .ends\n\
+                   X3 a b mir\n\
+                   X4 c d mir\n\
+                   R1 a 0 1k\nR2 b 0 1k\nR3 c 0 1k\nR4 d 0 1k\n\
+                   .end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        for inst in ["X3", "X4"] {
+            let vs = dev_id(&c, &format!("{inst}.Vsense"));
+            match &c.devices[dev_id(&c, &format!("{inst}.F1")).0 as usize] {
+                Device::Cccs { ctrl_src, .. } => assert_eq!(
+                    *ctrl_src, vs,
+                    "{inst}.F1 must bind its OWN instance's ammeter"
+                ),
+                other => panic!("expected CCCS, got {other:?}"),
+            }
+        }
+    }
+
+    /// No global fallback: a body vname that does not exist locally dangles
+    /// (as the mangled name) even when a same-named global source exists.
+    #[test]
+    fn subckt_control_name_never_binds_global() {
+        let net = "scope\n\
+                   Vs top 0 1\n\
+                   .subckt blk outp\n\
+                   F1 0 outp Vs 2\n\
+                   .ends\n\
+                   X1 w blk\n\
+                   R1 w 0 1k\n\
+                   .end\n";
+        let err = SpiceLoader::load(net).unwrap_err().to_string();
+        assert!(
+            err.contains("X1.Vs") && err.contains("does not exist"),
+            "the local-scope rule must dangle as `X1.Vs`, not bind global Vs: {err}"
+        );
+        // ...and the error names the instantiation site (provenance).
+        assert!(err.contains("in subckt blk"), "{err}");
+    }
+
+    /// A TOP-LEVEL card may name a source inside an instance by its flattened
+    /// dotted name (unambiguous, documented as non-portable).
+    #[test]
+    fn top_level_card_may_reference_flattened_name() {
+        let net = "dotted\n\
+                   .subckt probe inp\n\
+                   Vsense inp 0 0\n\
+                   .ends\n\
+                   X1 a probe\n\
+                   R1 a 0 1k\n\
+                   F1 0 out X1.Vsense 2\n\
+                   RL out 0 1k\n\
+                   .end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let vs = dev_id(&c, "X1.Vsense");
+        match &c.devices[dev_id(&c, "F1").0 as usize] {
+            Device::Cccs { ctrl_src, .. } => assert_eq!(*ctrl_src, vs),
+            other => panic!("expected CCCS, got {other:?}"),
+        }
     }
 
     // --- helpers for param/subckt tests ------------------------------------

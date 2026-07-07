@@ -1,0 +1,13 @@
+# CCVS (H) transresistance stage: i = v(in)/2k through the ammeter VS, then
+# v(x) = 3k * i = 1.5 * v(in), RC low-passed (tau = 100 us). Exercises the H
+# branch-current unknown, its -transres entry at the CONTROL branch column,
+# and the ideal (zero-perturbation) control loop; percent tolerance on the
+# filtered output.
+analysis = "tran"
+description = "CCVS transresistance (3k on a 2k-sourced ammeter) into RC"
+full_scale = 1.5
+skip_initial = 0.0
+
+[[probe]]
+expr = "V(out)"
+reltol = 0.01
