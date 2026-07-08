@@ -196,6 +196,12 @@ pin→level map per function-table row, and assert `output_level` (and
 test's comment. If a row can't be expressed, that is a finding about the
 schema — record it, don't approximate silently.
 
+One honest caveat: this closing proof pattern is a Rust test, so it needs a
+hauksbee **checkout** to run in. The data-only promise holds for *using* the
+part — writing the entry, `hauksbee models lint`, `models resolve`, and the
+co-sim attaching it at runtime need no checkout — but pinning it with a
+function-table test the way the shipped parts are pinned does.
+
 ## The honest boundary
 
 Not everything digital is a boolean-comb data entry, on purpose:
