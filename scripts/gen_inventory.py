@@ -24,6 +24,7 @@ PRI = {
     # ── hauksbee-solve (the numerical heart) ────────────────────────────────
     "crates/hauksbee-solve/src/ac.rs": "P1",
     "crates/hauksbee-solve/src/alloc_audit.rs": "P2",   # NEW: alloc-hygiene test gate, off hot path
+    "crates/hauksbee-solve/src/bypass.rs": "P1",       # NEW: device-eval bypass cache, solver hot path
     "crates/hauksbee-solve/src/census.rs": "P2",        # NEW: step census diagnostic
     "crates/hauksbee-solve/src/cmatrix.rs": "P2",
     "crates/hauksbee-solve/src/decompose/conduction.rs": "P0",
@@ -176,6 +177,7 @@ PRI = {
     # ── hauksbee-ci (hardware-CI, crate P1/P2) ──────────────────────────────
     "crates/hauksbee-ci/src/assertions.rs": "P2",
     "crates/hauksbee-ci/src/error.rs": "P2",           # NEW
+    "crates/hauksbee-ci/src/hwtrace.rs": "P1",         # T6 hardware-trace oracle surface
     "crates/hauksbee-ci/src/init.rs": "P2",            # NEW
     "crates/hauksbee-ci/src/lib.rs": "P1",
     "crates/hauksbee-ci/src/main.rs": "P2",            # binary entry point
