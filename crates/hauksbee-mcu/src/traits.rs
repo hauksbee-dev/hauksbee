@@ -13,6 +13,8 @@
 //! slice-boundary times (poll backends). This file also defines the small value
 //! types the coupling speaks in: [`PinId`], [`McuState`], and the intercepted
 //! bus events [`I2cEvent`]/[`SpiEvent`].
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/traits.md.
 
 use anyhow::Result;
 use std::path::Path;
