@@ -1,4 +1,6 @@
 //! Generic declarative register-map sensor interpreter.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md and
+//! docs/how-and-why/hauksbee-models/sensor_spec.md (the format side).
 //!
 //! [`RegisterMapSensor`] reads a [`SensorSpec`] (the declarative `[sensor]`
 //! TOML defined in `hauksbee-models`) and *realizes* it as a live bus slave:

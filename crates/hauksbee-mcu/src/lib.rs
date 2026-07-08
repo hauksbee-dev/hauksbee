@@ -22,6 +22,8 @@
 //! built from it is subject to the GPL. The `renode` backend links nothing
 //! native (it talks to Renode over sockets), so a `--no-default-features
 //! --features renode` build is GPL-free.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/README.md.
 
 #![allow(
     non_upper_case_globals,

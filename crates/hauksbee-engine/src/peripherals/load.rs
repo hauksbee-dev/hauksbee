@@ -1,4 +1,5 @@
 //! Dynamic load: a chip-activity current sink driven by a [`LoadProfile`].
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! This is the transient consumer of the `hauksbee-models` load profiles. It
 //! owns an `Isource` stamped from the part's supply node to ground and, each

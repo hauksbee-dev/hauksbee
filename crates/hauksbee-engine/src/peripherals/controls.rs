@@ -1,5 +1,6 @@
 //! Analog / contact controls: pushbutton, toggle switch, potentiometer, rotary
 //! encoder, and a generic voltage/current stimulus.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! Each control attaches to one or more nets and drives them through the same
 //! stamped-source machinery the rest of the engine uses (an ideal `Vsource`

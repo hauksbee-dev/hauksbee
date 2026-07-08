@@ -19,6 +19,8 @@
 //! `qemu-system-xtensa` (which has only `lx60`/`kc705`/`sim` machines and cannot
 //! boot an ESP32 image). [`is_esp_fork`] verifies the binary advertises an
 //! `esp32` machine before it is accepted.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
