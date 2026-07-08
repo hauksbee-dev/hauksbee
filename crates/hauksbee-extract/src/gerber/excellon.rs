@@ -14,6 +14,8 @@
 //! wrote it (`Plated,...,PTH` vs `NonPlated,...,NPTH`), else inferred from the
 //! filename by the caller. Plated through-holes stitch copper layers and form
 //! pads; non-plated holes are mechanical and ignored for connectivity.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
 /// One drilled hole.
 #[derive(Debug, Clone)]
