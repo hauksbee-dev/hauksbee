@@ -34,8 +34,12 @@ import subprocess
 import sys
 
 # Make the shared, pcbnew-free core importable whether this runs from the repo
-# root or from .git/hooks.
-_HERE = os.path.dirname(os.path.abspath(__file__))
+# root or from .git/hooks. Use realpath, not abspath: the README-documented
+# install symlinks this file into `.git/hooks/pre-commit`, and abspath does not
+# follow the symlink, so `_HERE` would resolve to `.git/hooks` and the sibling
+# `../kicad-plugin/hauksbee_ci_core.py` would be missing (ModuleNotFoundError).
+# realpath resolves the link back to the real integrations/pre-commit directory.
+_HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "..", "kicad-plugin"))
 
 import hauksbee_ci_core as core  # noqa: E402

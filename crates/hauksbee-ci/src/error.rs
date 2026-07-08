@@ -50,6 +50,10 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
     let t_lower = target.to_ascii_lowercase();
     let mut scored: Vec<(usize, &String)> = known
         .iter()
+        // Skip the empty/unnamed net (KiCad's "no net" bucket): suggesting it
+        // produces a bare leading comma in the "did you mean: , +5V?" list and
+        // is never a real net a user meant to reference.
+        .filter(|name| !name.trim().is_empty())
         .map(|name| {
             let n_lower = name.to_ascii_lowercase();
             // Substring containment is a strong signal; give it a big bonus.
@@ -113,6 +117,20 @@ mod tests {
         ];
         let s = near_matches("ANALOG_VDDD", &known, 3);
         assert_eq!(s.first().map(String::as_str), Some("ANALOG_VDD"));
+    }
+
+    #[test]
+    fn empty_net_is_never_suggested() {
+        // KiCad's unnamed "no net" bucket must not leak into the suggestion list
+        // (it renders as a leading comma). A near-miss of a real net still wins.
+        let known = vec![
+            String::new(),
+            "+5V".to_string(),
+            "GND".to_string(),
+        ];
+        let s = near_matches("+5W", &known, 5);
+        assert!(!s.iter().any(|n| n.is_empty()), "empty net leaked: {s:?}");
+        assert_eq!(s.first().map(String::as_str), Some("+5V"));
     }
 
     #[test]
