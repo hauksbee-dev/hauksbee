@@ -1,0 +1,72 @@
+# Perf baseline — machine class "apple-silicon-dev" (the dev box: Apple Silicon,
+# aarch64, macOS). Consumed by `tests/perf_gate.rs` (the W7 ±15% soft speed gate,
+# 08-validation-and-test-campaign.md §4 / 03-solver-performance.md §9.3).
+#
+# HONEST-UPDATE RULE (08 §4, load-bearing): this file changes ONLY in its own
+# commit whose message explains the delta — a flame-graph diff or a written
+# reason. Never fold a baseline move into an unrelated change; never loosen the
+# gate silently to make a regression pass. The numerical gates
+# (tests/rail_tear.rs, tests/planned_assembly.rs) are the hard ones; this is the
+# soft speed gate.
+#
+# THE GATE NUMBER IS `quiet_ms`: the MINIMUM wall time across reps, not the
+# median. This dev box is a shared machine that routinely sits at load 20+ while
+# sibling builds run, so the median is unstable (it swung ~2x between captures).
+# Contention only ever ADDS time, so the minimum is the least-disturbed estimate
+# of true compute cost, and it is reproducible: three independent captures agreed
+# to ~1.5% even on the noisiest boards. `median_ms` / `spread_frac` are recorded
+# for transparency (they show how loaded the box was at capture), not gated on.
+#
+# Captured 2026-07-08 on the dev box under load ~15-22 (min-of-25 reps, three
+# capture runs; the lowest reproducible min recorded here). Recapturing:
+#   HAUKSBEE_PERF_CLASS=apple-silicon-dev cargo test -p hauksbee-solve --release \
+#     --test perf_gate perf_capture_baseline -- --ignored --nocapture
+
+class = "apple-silicon-dev"
+arch = "aarch64"
+tolerance_frac = 0.15
+
+[boards.rc_ladder_1k]
+quiet_ms = 17.87
+median_ms = 18.3
+spread_frac = 0.06
+
+[boards.mirror_24_mono]
+quiet_ms = 0.693
+median_ms = 0.71
+spread_frac = 0.07
+
+[boards.mirror_24_torn]
+quiet_ms = 1.283
+median_ms = 1.32
+spread_frac = 0.12
+
+[boards.mirror_90_mono]
+quiet_ms = 2.966
+median_ms = 3.09
+spread_frac = 0.05
+
+# ADVISORY (tracked, non-blocking). The quiet number IS reproducible (5.07-5.15
+# ms across three captures), but this is a ~20ms-window torn solve, and catching
+# a near-clean window for a run that long on a load-22 box at gate time is
+# load-sensitive in a way the short boards are not. Gated advisory until a
+# quiet/dedicated machine confirms it, then flip advisory=false to promote to
+# blocking.
+[boards.mirror_90_torn]
+quiet_ms = 5.075
+median_ms = 7.0
+spread_frac = 0.78
+advisory = true
+
+[boards.mirror_240_mono]
+quiet_ms = 10.176
+median_ms = 10.5
+spread_frac = 0.05
+
+# ADVISORY (tracked, non-blocking) — same reasoning as mirror_90_torn; this is
+# the longest torn run in the set.
+[boards.mirror_240_torn]
+quiet_ms = 18.25
+median_ms = 20.0
+spread_frac = 0.53
+advisory = true
