@@ -1,0 +1,45 @@
+# Board-as-Code (hauksbee board DSL v1)
+#
+# Minimal committed nRF52840 board, paired with the bundled Zephyr shell ELF
+# (nrf52840-zephyr_shell.elf) so `hauksbee run` co-sims it out of the box:
+#
+#   hauksbee run testdata/firmware/renode_demos/nrf52840-zephyr_shell.board \
+#     --firmware testdata/firmware/renode_demos/nrf52840-zephyr_shell.elf \
+#     --headless --seconds 2
+#
+# U1's value "nRF52840" binds to the built-in `nrf52840` MCU model
+# (renode:nrf52840 backend); no --models-dir needed. The board is a Nordic
+# nRF52840-DK-style skeleton: the SoC on a 3V3 rail (VDD/GND), P0.13 driving
+# LED1 through a 330R limit resistor (the analog current path the solver
+# computes), and P0.06/P0.08 broken out as the UART the shell talks over.
+board version 20171130
+
+fn main {
+    net "+3V3"
+    net "GND"
+    net "LED_A"
+    net "P014"
+    net "UART_TXD"
+    net "UART_RXD"
+
+    # U1: the nRF52840 SoC. Pad order matches the built-in model's [models.pins]:
+    #   1 vss, 2 vdd, 3 p013 (LED), 4 p014, 5 p006_txd, 6 p008_rxd.
+    comp U1 lib "Package_DFN_QFN:AQFN-73_9x9mm_P0.5mm" val "nRF52840" layer "F.Cu" at 100 100 rot 0 {
+        pad "1" smd rect at -3 0 size 1 1 layers [F.Cu] net "GND"
+        pad "2" smd rect at -3 1 size 1 1 layers [F.Cu] net "+3V3"
+        pad "3" smd rect at 3 0 size 1 1 layers [F.Cu] net "LED_A"
+        pad "4" smd rect at 3 1 size 1 1 layers [F.Cu] net "P014"
+        pad "5" smd rect at 3 2 size 1 1 layers [F.Cu] net "UART_TXD"
+        pad "6" smd rect at 3 3 size 1 1 layers [F.Cu] net "UART_RXD"
+    }
+
+    # LED1 on P0.13 through a 330R current-limit resistor to GND.
+    comp R1 lib "Resistor_SMD:R_0805_2012Metric" val "330" layer "F.Cu" at 110 100 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "LED_A"
+        pad "2" smd rect at 2 0 size 1 1 layers [F.Cu] net "GND"
+    }
+    comp D1 lib "LED_SMD:LED_0805_2012Metric" val "RED_LED" layer "F.Cu" at 115 100 rot 0 {
+        pad "A" smd rect at 0 0 size 1 1 layers [F.Cu] net "LED_A"
+        pad "K" smd rect at 2 0 size 1 1 layers [F.Cu] net "GND"
+    }
+}

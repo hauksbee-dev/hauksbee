@@ -95,16 +95,27 @@ enum Command {
     /// writes one column per probe. With no analysis flag: a `.tran` card runs
     /// a transient, otherwise the DC operating point (`.op`).
     ///
-    /// Honesty: an analysis the front-end cannot yet feed (`--ac`, `--dc`) and
-    /// an output format not yet built (`--format raw|both`) REFUSE with a clear
-    /// message and a non-zero exit — never a silent no-op or a wrong number. A
-    /// malformed deck prints the loader's line-numbered error and exits 2. The
-    /// exact supported/refused card list is the compatibility statement,
+    /// All four analyses run: operating point (`--op`), transient (`--tran`),
+    /// AC small-signal sweep (`--ac`), and DC sweep (`--dc`) — force one with
+    /// its flag, or let the deck's own directives choose. Output is CSV by
+    /// default; `--format raw` writes an ngspice ASCII rawfile (the format
+    /// `ngnutmeg`/`gaw`/`spicelib` read) and `--format both` writes CSV and
+    /// rawfile side by side.
+    ///
+    /// Honesty: the tool refuses loudly rather than fake a number. `--format
+    /// both` needs `--out` to name its two files and refuses (exit 2) without
+    /// it. A well-formed deck we cannot honestly answer — e.g. `.ac` with no AC
+    /// source — exits 3 explaining why. A malformed deck prints the loader's
+    /// line-numbered error and exits 2. Only the ngspice *ASCII* rawfile is
+    /// emitted (the binary rawfile variant is not written). The exact
+    /// supported/refused card list is the drift-tested compatibility statement,
     /// `docs/spice-compat/compatibility.md`.
     ///
     /// Example:
     ///   hauksbee sim rc.cir --out rc.csv
     ///   hauksbee sim amp.cir --tran --print V(out) I(V1)
+    ///   hauksbee sim rc.cir --ac --print V(out)   # Bode table (needs an AC source + .ac card)
+    ///   hauksbee sim rc.cir --format raw --out rc.csv   # also writes rc.raw
     Sim(SimArgs),
 
     /// Start the local web front door: a "drop your board, get a report" page.
@@ -471,8 +482,9 @@ struct SimArgs {
     #[arg(long, value_name = "FILE")]
     out: Option<PathBuf>,
 
-    /// Output format. `csv` (default) is solid; `raw`/`both` refuse loudly until
-    /// the rawfile writer lands (plan step 14).
+    /// Output format. `csv` (default) writes one column per probe; `raw` writes
+    /// an ngspice ASCII rawfile (to `--out` if given, else stdout); `both` writes
+    /// a CSV and a rawfile side by side and requires `--out` to name them.
     #[arg(long, value_enum, default_value_t = hauksbee_engine::commands::sim::SimFormat::Csv)]
     format: hauksbee_engine::commands::sim::SimFormat,
 
