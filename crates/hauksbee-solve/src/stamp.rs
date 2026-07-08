@@ -11,6 +11,9 @@
 //! the second (anode->cathode, drain->source, ...). Conductance between nodes
 //! `a` and `b` stamps `+g` on the diagonals and `-g` off-diagonal, the standard
 //! nodal pattern.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/stamp.md
 
 use crate::options::{Integration, SolverOptions};
 use crate::sparse::SparseMatrix;

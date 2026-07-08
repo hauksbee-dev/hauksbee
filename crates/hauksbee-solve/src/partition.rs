@@ -32,6 +32,9 @@
 //! Gauss-Seidel exchange at each step boundary. A node is "internal" to an
 //! island if every device touching it lives in that island; otherwise it is a
 //! shared/boundary node and participates in coupling.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/partition.md
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 

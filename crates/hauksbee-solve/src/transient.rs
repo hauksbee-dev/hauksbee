@@ -6,6 +6,9 @@
 //! step (advancing history) or shrinks `dt` and retries. Comparators and
 //! switches are watched for threshold crossings; when one is straddled, the
 //! step is bisected to land near the crossing so edges aren't smeared.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/transient.md
 
 use crate::newton::{dc_operating_point_seeded, newton_solve, newton_solve_event, Workspace};
 use crate::options::{DcInit, Integration, SolverOptions, StepControl, Strategy};
