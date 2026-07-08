@@ -50,6 +50,10 @@ pub struct RunConfig {
     pub ac_loop: Option<String>,
     pub probe: Vec<String>,
     pub probe_csv: Option<std::path::PathBuf>,
+    /// `.asbuilt.toml` overlay: the declarative physical delta (cuts, jumpers,
+    /// fitted values) between the design files and the real reworked board,
+    /// applied to the bound board before the engine is built.
+    pub asbuilt: Option<std::path::PathBuf>,
 }
 
 pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
@@ -252,7 +256,21 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 
     // Bind with the layered library (so a --models-dir / user-dir custom part is
     // in scope), then build the engine from the bound board.
-    let bound = bind_board(&board, &lib);
+    let mut bound = bind_board(&board, &lib);
+    // --asbuilt: apply the declarative rework overlay post-bind, pre-engine
+    // (the same seam the flagship prep uses). Fail-loud: an overlay that does
+    // not describe this board aborts the run with its line-numbered error.
+    if let Some(asbuilt_path) = &cfg.asbuilt {
+        let overlay = crate::asbuilt::AsBuiltOverlay::load(asbuilt_path)?;
+        let report = overlay.apply(&mut bound)?;
+        if !quiet {
+            println!("as-built overlay {} applied:", asbuilt_path.display());
+            for line in &report.lines {
+                println!("  {line}");
+            }
+        }
+    }
+    let bound = bound;
     // Net names captured before `bound` is consumed, for --probe validation.
     let probe_known_nets: Vec<String> = if cfg.probe.is_empty() {
         Vec::new()

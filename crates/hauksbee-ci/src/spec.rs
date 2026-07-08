@@ -100,6 +100,14 @@ pub struct Spec {
     /// Optional firmware ELF/hex, relative to the spec file's directory.
     #[serde(default)]
     pub firmware: Option<PathBuf>,
+    /// Optional as-built overlay (.asbuilt.toml), relative to the spec file's
+    /// directory: the declarative physical delta between the design files and
+    /// the real reworked board (cut traces, jumpers, lifted pins, fitted
+    /// values), applied to the bound board before every run. Distinct from
+    /// `[[override]]`, which swaps a component's VALUE string pre-bind: the
+    /// overlay performs post-bind structural surgery.
+    #[serde(default)]
+    pub asbuilt: Option<PathBuf>,
     /// Optional MCU-kind hint (informational; the binder detects the MCU).
     #[serde(default)]
     pub mcu: Option<String>,
@@ -739,6 +747,11 @@ impl Spec {
     /// The firmware path, resolved against the spec's directory.
     pub fn firmware_path(&self) -> Option<PathBuf> {
         self.firmware.as_ref().map(|f| self.resolve(f))
+    }
+
+    /// The as-built overlay path, resolved against the spec's directory.
+    pub fn asbuilt_path(&self) -> Option<PathBuf> {
+        self.asbuilt.as_ref().map(|f| self.resolve(f))
     }
 
     fn resolve(&self, p: &Path) -> PathBuf {
