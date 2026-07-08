@@ -3,6 +3,11 @@
 //! A compiled [`CompiledEntry`] pre-compiles all regex patterns from a
 //! [`ModelEntry`] so matching is fast at runtime. The [`score`] function
 //! assigns a specificity score so more-specific rules win over catch-alls.
+//! The specificity score orders entries only *within* a resolution layer;
+//! the layer itself wins first (see `crate::SourceLayer`).
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-models/schema.md (this
+//! module and the schema are one story: what an entry is and how it wins).
 
 use regex::Regex;
 
