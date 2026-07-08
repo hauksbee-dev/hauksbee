@@ -110,6 +110,16 @@ pub struct Workspace {
     /// a non-convergence caused by `ln(-2)` names the device instead of
     /// reading as generic Newton failure. Never set on a converged solve.
     behavioral_fault: Option<String>,
+    /// Device-evaluation bypass caches (dev-plan 03 §6), built lazily on the
+    /// first bypass-armed solve (`Workspace::new` does not see the options).
+    /// `None` on every run with `NewtonBypass::Off` — the default path never
+    /// allocates or consults it, which is the bit-identical-when-off contract.
+    bypass: Option<Box<crate::bypass::BypassState>>,
+    /// Transient-driver hold: set for the trials that follow an event-resolved
+    /// accept (mirroring the extrapolation-seed skip), because the plan's
+    /// SPICE discipline forbids bypass on the step immediately after an event.
+    /// Only read when bypass is armed; inert (a bool store) otherwise.
+    bypass_hold: bool,
     /// SPDT leg sibling map (device id -> the device id of its complementary
     /// throw), recovered once at construction. Two `VSwitch` legs are siblings
     /// when they share the common node `a` and their names differ only in the
@@ -139,6 +149,20 @@ impl Workspace {
     /// Whether the per-step transient event-freeze retry is armed.
     pub fn tran_event(&self) -> bool {
         self.tran_event
+    }
+
+    /// Hold device-evaluation bypass for the next solves (the transient driver
+    /// sets this for the trials after an event-resolved accept; see the
+    /// `bypass_hold` field). A no-op unless `NewtonBypass::On` is armed.
+    pub fn set_bypass_hold(&mut self, hold: bool) {
+        self.bypass_hold = hold;
+    }
+
+    /// `(evaluations, skips)` of the device-evaluation bypass since this
+    /// workspace was built — `(0, 0)` when bypass never armed. Observability
+    /// for tests and gates (the census carries the per-march view).
+    pub fn bypass_counters(&self) -> (u64, u64) {
+        self.bypass.as_ref().map_or((0, 0), |b| b.counters())
     }
 
     /// Arm/disarm the per-step transient Armijo line-search globalization. Set by
@@ -303,6 +327,8 @@ impl Workspace {
             tran_event: false,
             tran_line_search: false,
             behavioral_fault: None,
+            bypass: None,
+            bypass_hold: false,
             spdt_sibling,
         }
     }
@@ -366,6 +392,35 @@ pub fn newton_solve(
     }
     const ARMIJO_C: f64 = 1e-4;
     const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
+    // Device-evaluation bypass (dev-plan 03 §6): an explicit opt-in, and even
+    // then only on the per-step transient Newton with self-deciding discrete
+    // states — never DC (reactive elements open/short and the staged ladder
+    // owns its own convergence story), never event-frozen inner solves (the
+    // discrete state is mid-resolution), never the trials right after an
+    // event-resolved accept (ws.bypass_hold, set by the transient driver),
+    // and never on a linear circuit (one exact solve, nothing to skip). The
+    // cache is invalidated here at solve entry (`begin_solve`), so nothing
+    // recorded in one step / retry / dt survives into another; SPICE's
+    // first-two-iterations rule is applied at the stamp site (`iters <= 2`
+    // forces evaluation). With `NewtonBypass::Off` (the default) this whole
+    // block is one enum compare: the reference path allocates nothing and
+    // stays bit-identical.
+    let bypass_armed = !dc
+        && opts.newton_bypass == crate::options::NewtonBypass::On
+        && !ws.linear
+        && !ws.bypass_hold
+        && ws.cmp_freeze.is_none()
+        && ws.switch_freeze.is_none()
+        && {
+            if ws.bypass.is_none() {
+                ws.bypass = Some(Box::new(crate::bypass::BypassState::build(
+                    circuit, &ws.layout,
+                )));
+            }
+            let st = ws.bypass.as_mut().expect("just built");
+            st.begin_solve();
+            st.has_candidates()
+        };
     // Anchor for pn-junction voltage limiting: the linearization point of the
     // PREVIOUS Newton iteration. Seeded to the starting guess so the first
     // iteration's anchor equals its own linearization point (pnjlim then sees
@@ -442,8 +497,24 @@ pub fn newton_solve(
             // walk bit-identical. `stamp_all_planned` itself falls back to the
             // interpreted walk on contexts the plan does not model (DC solves,
             // staged regularizers, event-frozen states).
+            // Bypass routing: when armed (see the eligibility block above),
+            // the bypass-aware walk replaces the assembly for THIS solve; it
+            // takes precedence over `Planned` (the two optimize the same
+            // pass, and bypass already writes fresh evaluations through
+            // resolved slots). The line-search residual evals below keep the
+            // plain `stamp_all` regardless: the Armijo norms sit on the
+            // cancellation noise floor (the 7A lesson), so the residual the
+            // search compares stays order-exact.
             crate::census::timed(crate::census::Phase::Stamp, || {
-                if opts.assembly == crate::options::AssemblyMode::Planned {
+                if bypass_armed {
+                    crate::bypass::stamp_all_bypass(
+                        &ctx,
+                        ws.bypass.as_mut().expect("bypass_armed implies state"),
+                        &mut ws.matrix,
+                        &mut ws.rhs,
+                        iters <= 2,
+                    )
+                } else if opts.assembly == crate::options::AssemblyMode::Planned {
                     crate::plan::stamp_all_planned(&ctx, &ws.plan, &mut ws.matrix, &mut ws.rhs)
                 } else {
                     stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs)
