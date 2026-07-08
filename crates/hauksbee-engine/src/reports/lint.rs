@@ -1,6 +1,9 @@
-//! `--lint` (connectivity + strap-pin + resource-conflict + device-decode) and
-//! `--resources` (the MCU internal resource-conflict subset). Both render through
-//! the netlint renderers.
+//! The `--lint` report (connectivity, strap-pin, resource-conflict and
+//! device-decode checks) and the `--resources` subset (the MCU-internal
+//! resource-conflict checks). It renders through the netlint renderers, surfaces
+//! any pin-role guesses the binder inferred rather than silently guessing, and
+//! under `--strict` exits non-zero on a high/medium finding. CLI glue over the
+//! engine's lint checks.
 
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;

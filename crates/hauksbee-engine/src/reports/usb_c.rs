@@ -1,6 +1,8 @@
-//! `--usb-c`: the USB-C CC attach classifier (the RPi-4 shared-CC-pulldown
-//! re-derivation) and its compliance report. Only meaningful on a board with a
-//! USB-C receptacle carrying CC nets.
+//! The `--usb-c` report: the USB-C CC-attach classifier (the RPi-4
+//! shared-CC-pulldown re-derivation) and its compliance verdict, rendered in the
+//! requested output mode. Only meaningful on a board carrying a USB-C receptacle
+//! with CC nets; otherwise it reports "no receptacle" cleanly. Under `--strict` a
+//! serious finding exits non-zero. CLI glue over the engine's `usb_c_report`.
 
 use hauksbee_extract::ExtractedBoard;
 

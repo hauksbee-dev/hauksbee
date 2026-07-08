@@ -1,5 +1,9 @@
-//! Output formats: a human-readable terminal report, JUnit XML for any CI
-//! system to ingest, and GitHub Actions workflow-command annotations.
+//! Rendering the outcome of a CI run into the formats a pipeline consumes: a
+//! human-readable terminal report, JUnit XML for any CI system to ingest, and
+//! GitHub Actions workflow-command annotations. [`CiResult`] also owns the process
+//! exit code and the honest ensemble-coverage wording, so a green run never
+//! over-claims worst-case proof and a diverged co-sim refuses rather than
+//! reporting a fake verdict.
 
 use std::time::Duration;
 
