@@ -1,5 +1,8 @@
-//! Spec errors with human-friendly messages, including "did you mean ...?"
-//! suggestions for unknown net names.
+//! Spec-loading and validation errors, plus the "did you mean ...?" net-name
+//! suggester. [`SpecError`] carries the IO / TOML / invalid / unknown-net cases a
+//! spec can fail on, and [`near_matches`] ranks known net names by edit distance
+//! so a typo'd net reference points the user at the real name instead of failing
+//! blankly.
 
 use std::fmt;
 
