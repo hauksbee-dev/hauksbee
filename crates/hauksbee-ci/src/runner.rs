@@ -128,6 +128,11 @@ pub struct RunOutcome {
     /// in a row at any point (the strict/CI hard-refusal condition). Drives exit 3
     /// on its own, even if no single assertion's window happened to overlap.
     pub analog_abort: bool,
+    /// The tolerance-ensemble values this member ran with (empty when the spec
+    /// declares no tolerances). This is the actionable failure artifact: a
+    /// failing seed's report names these exact values, and `--seed N`
+    /// reproduces them byte-identically.
+    pub sampled_values: Vec<crate::tolerance::SampledValue>,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -143,6 +148,14 @@ pub struct AcOutcome {
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
 pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
+    run_spec_seeded(spec, None)
+}
+
+/// Run the spec, optionally restricted to one ensemble seed (`--seed N`, the
+/// failing-seed isolation path). Tolerance sampling and net fuzz are both
+/// keyed by the absolute seed number, so the isolated member reproduces the
+/// full run's values exactly.
+pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOutcome>, SpecError> {
     // Read + extract the board once; clone per seed (binding mutates nothing on
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
@@ -168,19 +181,63 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap());
     thresholds.dedup();
 
-    // Small-signal AC analysis is seed-independent (it linearises about the DC
-    // operating point), so compute it once and share it across seeds.
-    let ac = if spec.ac.is_some() {
-        Some(compute_ac(spec, &base)?)
+    // Resolve the tolerance ensemble (if any) and lay out one plan per member.
+    // With no tolerances this degenerates to the plain fuzz seed list.
+    let tols = crate::tolerance::resolve(spec, &base)?;
+    let plans: Vec<crate::tolerance::SeedPlan> = if tols.is_empty() {
+        let seeds = spec.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1).max(1);
+        (0..seeds)
+            .map(|seed| crate::tolerance::SeedPlan {
+                seed,
+                values: Vec::new(),
+            })
+            .collect()
+    } else {
+        match spec.ensemble_mode()? {
+            crate::tolerance::Mode::MonteCarlo => crate::tolerance::build_plans(
+                crate::tolerance::Mode::MonteCarlo,
+                spec.ensemble_seed_count(),
+                &tols,
+            )?,
+            crate::tolerance::Mode::Corners => {
+                crate::tolerance::build_plans(crate::tolerance::Mode::Corners, 0, &tols)?
+            }
+        }
+    };
+
+    // Failing-seed isolation: keep only the requested member.
+    let total = plans.len();
+    let plans: Vec<crate::tolerance::SeedPlan> = match only_seed {
+        Some(k) => {
+            let sel: Vec<_> = plans.into_iter().filter(|p| p.seed == k).collect();
+            if sel.is_empty() {
+                return Err(SpecError::Invalid(format!(
+                    "--seed {k} is outside this spec's ensemble (members are 0..{total})"
+                )));
+            }
+            sel
+        }
+        None => plans,
+    };
+
+    // Small-signal AC analysis linearises about the DC operating point. With no
+    // tolerances that point is seed-independent, so compute the sweep once and
+    // share it. Toleranced values move the bias point, so each member gets its
+    // own sweep — sharing one would silently pin the AC results to nominal.
+    let shared_ac = if spec.ac.is_some() && tols.is_empty() {
+        Some(compute_ac(spec, &base, &[])?)
     } else {
         None
     };
 
-    let seeds = spec.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1).max(1);
-    let mut outcomes = Vec::with_capacity(seeds as usize);
-    for seed in 0..seeds {
-        let mut outcome = run_one(spec, &base, &thresholds, seed)?;
-        outcome.ac = ac.clone();
+    let mut outcomes = Vec::with_capacity(plans.len());
+    for plan in &plans {
+        let mut outcome = run_one(spec, &base, &thresholds, plan)?;
+        outcome.ac = match &shared_ac {
+            Some(ac) => Some(ac.clone()),
+            None if spec.ac.is_some() => Some(compute_ac(spec, &base, &plan.values)?),
+            None => None,
+        };
         outcomes.push(outcome);
     }
     Ok(outcomes)
@@ -190,11 +247,16 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
 /// supplies / net-drives so the DC operating point matches the run, then run the
 /// AC analysis and collect Bode tables and loop margins for the nets the AC
 /// assertions reference.
-fn compute_ac(spec: &Spec, base: &ExtractedBoard) -> Result<AcOutcome, SpecError> {
+fn compute_ac(
+    spec: &Spec,
+    base: &ExtractedBoard,
+    sampled: &[crate::tolerance::SampledValue],
+) -> Result<AcOutcome, SpecError> {
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
     let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
-    let board = apply_overrides(spec, base)?;
+    let mut board = apply_overrides(spec, base)?;
+    apply_sampled_values(&mut board, sampled);
     let lib = ModelLibrary::builtin();
     let mut bound = bind_board(&board, &lib);
 
@@ -484,13 +546,32 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
     Ok(board)
 }
 
+/// Write one ensemble member's sampled tolerance values onto the board (the
+/// same pre-binding seam `apply_overrides` uses). Every reference was resolved
+/// against the board in `tolerance::resolve`, so lookups here cannot miss.
+/// Rust's `f64` Display never uses exponent notation, so the written value
+/// round-trips through the ordinary component-value parser.
+fn apply_sampled_values(board: &mut ExtractedBoard, sampled: &[crate::tolerance::SampledValue]) {
+    for sv in sampled {
+        if let Some(comp) = board
+            .components
+            .iter_mut()
+            .find(|c| c.reference == sv.reference)
+        {
+            comp.value = format!("{}", sv.si);
+        }
+    }
+}
+
 fn run_one(
     spec: &Spec,
     base: &ExtractedBoard,
     thresholds: &[f64],
-    seed: u32,
+    plan: &crate::tolerance::SeedPlan,
 ) -> Result<RunOutcome, SpecError> {
-    let board = apply_overrides(spec, base)?;
+    let seed = plan.seed;
+    let mut board = apply_overrides(spec, base)?;
+    apply_sampled_values(&mut board, &plan.values);
     let lib = ModelLibrary::builtin();
     let mut bound = bind_board(&board, &lib);
 
@@ -813,6 +894,7 @@ fn run_one(
         analog_valid,
         failed_windows,
         analog_abort,
+        sampled_values: plan.values.clone(),
     })
 }
 

@@ -19,6 +19,39 @@ pub struct CiResult {
     /// window overlapped a failed span (e.g. a spec with only a UART assertion
     /// over a run whose analog side collapsed).
     pub analog_abort: bool,
+    /// Present when the run was a component-tolerance ensemble: what kind of
+    /// coverage the members provide. Drives the honest headline wording
+    /// (sampled coverage vs monotonic-only bounds), so a green ensemble can
+    /// never read as a worst-case proof.
+    pub coverage: Option<EnsembleCoverage>,
+}
+
+/// What a tolerance-ensemble run covered, for the report headline.
+#[derive(Debug, Clone)]
+pub enum EnsembleCoverage {
+    /// Random sampling: statistical evidence over the tolerance space.
+    MonteCarlo { seeds: u32, components: usize },
+    /// Deterministic all-min/all-max enumeration.
+    Corners { corners: u32, components: usize },
+}
+
+impl EnsembleCoverage {
+    /// The one-line coverage claim, worded so it cannot over-claim: Monte-Carlo
+    /// is sampled coverage (never proof); corners bound only monotonic
+    /// responses.
+    pub fn describe(&self) -> String {
+        match self {
+            EnsembleCoverage::MonteCarlo { seeds, components } => format!(
+                "tolerance ensemble: {seeds} sampled seed(s) over {components} toleranced \
+                 component(s) — statistical coverage, not worst-case proof"
+            ),
+            EnsembleCoverage::Corners { corners, components } => format!(
+                "tolerance corners: {corners} deterministic min/max corner(s) over \
+                 {components} component(s) — bounds the worst case only where the \
+                 response is monotonic in each value"
+            ),
+        }
+    }
 }
 
 impl CiResult {
@@ -62,9 +95,13 @@ impl CiResult {
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
-            "hauksbee-ci: {}\n  board: {}\n  seeds: {}\n\n",
+            "hauksbee-ci: {}\n  board: {}\n  seeds: {}\n",
             self.spec_name, self.board, self.seeds
         ));
+        if let Some(cov) = &self.coverage {
+            out.push_str(&format!("  {}\n", cov.describe()));
+        }
+        out.push('\n');
         for r in &self.results {
             let mark = if r.invalid {
                 "INVALID"

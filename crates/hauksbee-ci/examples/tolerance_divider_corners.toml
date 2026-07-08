@@ -1,0 +1,40 @@
+# Corner-mode demo on the same 10k/10k divider: instead of random sampling,
+# enumerate every all-min/all-max combination of the toleranced components
+# (2^2 = 4 corners). The divider is monotonic in each resistor, so its true
+# worst case IS a corner: VOUT spans exactly [2.25, 2.75] V
+# (5 * 9k/(11k+9k) .. 5 * 11k/(9k+11k)).
+#
+# Two assertions show both verdicts at once:
+#   - the wide [2.2, 2.8] window PASSES on all 4 corners, and the report words
+#     the claim honestly (bounds the worst case only for monotonic responses);
+#   - the tight [2.4, 2.6] window FAILS, naming the corner and its min/max
+#     component values.
+name = "divider tolerance corners"
+board = "boards/tolerance_divider.kicad_pcb"
+duration_ms = 1
+
+[[supply]]
+net = "+5V"
+kind = "ideal"
+volts = 5.0
+
+[[tolerance]]
+ref = "R*"
+percent = 10.0
+
+[ensemble]
+mode = "corners"          # deterministic min/max enumeration; `seeds` ignored
+
+[[assert]]
+kind = "voltage"
+name = "VOUT within the designed [2.2, 2.8] V envelope on every corner"
+net = "VOUT"
+min = 2.2
+max = 2.8
+
+[[assert]]
+kind = "voltage"
+name = "VOUT within the tight [2.4, 2.6] V window on every corner"
+net = "VOUT"
+min = 2.4
+max = 2.6

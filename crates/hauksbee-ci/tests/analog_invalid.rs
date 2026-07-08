@@ -79,6 +79,7 @@ fn outcome_with(
         analog_valid,
         failed_windows,
         analog_abort,
+        sampled_values: Vec::new(),
     }
 }
 
@@ -90,6 +91,7 @@ fn ci_result(results: Vec<hauksbee_ci::assertions::AssertResult>, analog_abort: 
         seeds: 1,
         elapsed: Duration::from_secs(0),
         analog_abort,
+        coverage: None,
     }
 }
 
