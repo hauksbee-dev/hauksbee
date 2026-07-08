@@ -1,11 +1,12 @@
 # Add an MCU variant: an STM32 sibling via `.soc.toml`, no recompile
 
 **Goal.** Make hauksbee co-simulate firmware for an MCU part it doesn't ship,
-by writing one SoC descriptor file — TOML, validated fail-loud, resolved from
-a user directory at runtime. **No recompile is the whole point.** The worked
-example is an STM32F103 sibling on the Renode backend; the shipped descriptor
-we start from is `crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml`, and the
-schema/loader is `crates/hauksbee-mcu/src/soc.rs`.
+by writing two small TOML files — a SoC descriptor (validated fail-loud,
+resolved from a user directory at runtime) and a `[[models]]` routing entry
+that maps your board's part value to it. **No recompile is the whole point.**
+The worked example is an STM32F103 sibling on the Renode backend; the shipped
+descriptor we start from is `crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml`,
+and the schema/loader is `crates/hauksbee-mcu/src/soc.rs`.
 
 **What you need:** the part's reference manual (GPIO register offsets), a
 Renode platform (`.repl`) that models the part, and the part's peripheral
@@ -13,19 +14,33 @@ names in that platform.
 
 ## How resolution works
 
-A co-sim names its MCU as a `backend:part` spec, e.g. `renode:stm32f103`.
-`SocConfig::resolve` (in `soc.rs`) searches, highest priority first:
+At co-sim time an MCU is named by a `backend:part` spec, e.g.
+`renode:stm32f103` — the backend string the binder attached to your board's
+MCU (Step 4 below is where that string comes from). The scheduler's backend
+instantiation hands the spec to `SocConfig::resolve` (in `soc.rs`), which
+searches, highest priority first:
 
 1. `$HAUKSBEE_MCU_DIR/<part>.soc.toml` — explicit override directory,
 2. `~/.config/hauksbee/mcu/<part>.soc.toml` — your standing descriptor dir,
 3. the embedded built-ins (shipped via `include_str!`, so the binary is
    self-contained while the db file stays the single source of truth).
+   `hauksbee models list --builtin` prints them.
 
-Drop `mypart.soc.toml` in (1) or (2) and resolve `renode:mypart` — that's the
-entire installation procedure. The `part` half of the spec is a *filename*;
-the `backend` half is validated against what the file declares, so a
-`backend = "qemu"` file handed to a Renode context fails with a named
-`BackendMismatch`, never a confusing schema error.
+Drop `mypart.soc.toml` in (1) or (2) and every co-sim that names
+`renode:mypart` loads it — that's the entire installation procedure. Two
+properties are guaranteed:
+
+- **Override beats builtin.** A `stm32f103.soc.toml` in (1) or (2) wins over
+  the shipped F103 descriptor — same layering doctrine as the model library.
+- **Fail loud, never skip.** If a descriptor file *exists* for the requested
+  part, it is parsed and any validation error aborts the run naming the file
+  and the failing field. An invalid override is never silently skipped in
+  favour of a lower-priority descriptor.
+
+The `part` half of the spec is a *filename*; the `backend` half is validated
+against what the file declares, so a `backend = "qemu"` file resolved under a
+`renode:` spec fails with a named `BackendMismatch`, never a confusing schema
+error.
 
 ## Step 1 — copy the nearest shipped descriptor
 
@@ -109,48 +124,115 @@ verbatim). Copy a shipped file and preserve each field's existing shape rather
 than normalizing them to look consistent — they are inconsistent because the
 backend is.
 
-## Step 3 — install and resolve
+## Step 3 — install the descriptor
 
 ```
 mkdir -p ~/.config/hauksbee/mcu
 cp my_dir/stm32f107.soc.toml ~/.config/hauksbee/mcu/
 ```
 
-Any co-sim (CI spec, `hauksbee run`) that names `renode:stm32f107` now loads
-your descriptor. Validation happens at load with named errors: unknown
-backend, empty `platform_repl`, duplicate or zero-width port letters,
-duplicate controllers, unknown `expected_e_machine`, ambiguous ADC injection.
-The schema is `deny_unknown_fields`, so a typo'd field name is rejected
-instead of vanishing — if you fatfinger `od_offset`, you find out immediately.
+The spec `renode:stm32f107` now resolves to your descriptor. Validation
+happens at load with named errors: unknown backend, empty `platform_repl`,
+duplicate or zero-width port letters, duplicate controllers, unknown
+`expected_e_machine`, ambiguous ADC injection. The schema is
+`deny_unknown_fields`, so a typo'd field name is rejected instead of
+vanishing — if you fatfinger `od_offset`, you find out immediately, with the
+file path and field named in the error.
 
-## Step 4 — the test that proves the mechanism
+## Step 4 — route your board's part to the descriptor
 
-The override path itself is pinned by
-`resolve_from_override_dir_adds_a_part_as_data` in
-`crates/hauksbee-mcu/tests/soc_descriptors.rs`: it writes a descriptor for a
-part no built-in knows into a temp `$HAUKSBEE_MCU_DIR`, resolves it with no
-recompile, and asserts the override dir also *wins* over a built-in of the
-same name. The same file proves the shipped descriptors reproduce the deleted
-Rust constructors field-for-field and that every validation failure is named.
+The descriptor answers "what is `renode:stm32f107`?". A second, equally
+necessary file answers "which components ARE a `renode:stm32f107`?" — a
+`[[models]] kind = "mcu"` routing entry in the model library, matching your
+board's part value and carrying the backend string plus the pin-role map (the
+full recipe with a second RISC-V template is in
+[docs/MCU.md](../MCU.md#adding-a-genuinely-new-mcu-variant-the-recipe-pattern)):
+
+```toml
+# ~/.config/hauksbee/models/stm32f107.toml  (or a dir given by --models-dir)
+[[models]]
+id = "stm32f107"
+kind = "mcu"
+
+[models.match]
+value_re = "(?i)^STM32F107"
+
+[models.params]
+backend = "renode:stm32f107"     # <- the spec Step 3's descriptor resolves
+
+[models.pins]
+# pin-number -> role map; copy the nearest builtin entry in
+# crates/hauksbee-models/db/mcu.toml and adjust (roles like "pa5", "pc13",
+# "pb6_i2c1_scl" are what the binder's gpio_of_role parses).
+"1" = "pc13"
+# ...
+```
+
+How each entry point picks it up:
+
+- **`hauksbee run`** loads `~/.hauksbee/models`, `~/.config/hauksbee/models`,
+  and any `--models-dir DIR` (highest priority). The board's part value
+  matches `value_re`, the entry's `backend` string reaches the scheduler, and
+  the scheduler resolves the descriptor.
+- **`hauksbee-ci run`** uses the same layered library and also takes
+  `--models-dir` — check the routing entry into your hardware repo and pass
+  it in CI. The spec file's top-level `mcu` field is an **informational note
+  only**; nothing reads it. The MCU comes from the board via the routing
+  entry, exactly as in `hauksbee run`.
+- Without a matching entry, known families fall back to a built-in router
+  (e.g. any `STM32F1xx` value binds `renode:stm32f103`) — fine for F103
+  siblings that share its layout, but it will never name YOUR part; a new
+  part needs the routing entry.
+
+`hauksbee models resolve <board> [--models-dir DIR]` shows, per component,
+which entry won and from which layer — the debugging surface when the match
+doesn't take.
+
+## Step 5 — the proof
+
+Mechanism tests (no emulator needed):
 
 ```
 cargo test -p hauksbee-mcu --test soc_descriptors
 ```
 
-Green looks like:
+pins the resolver — `resolve_from_override_dir_adds_a_part_as_data` (a new
+part purely as data), `override_dir_is_fail_loud_and_beats_builtin` (an
+invalid override aborts naming the file; a valid one wins over the builtin) —
+plus descriptor/constructor equivalence and every named validation error.
+`cargo test -p hauksbee-engine --lib soc_wiring` pins that the scheduler's
+backend instantiation actually consults the override dirs (the product path,
+not just the library function).
+
+The end-to-end proof is a real boot. This transcript is an `stm32f101`
+descriptor (a copy of the F103 file — the F101 shares the F1 GPIO layout)
+plus the routing entry above adjusted to F101, running the bundled blinky
+firmware on an F101 board (Renode must be installed; `hauksbee doctor` checks
+backend availability):
 
 ```
-test resolve_from_override_dir_adds_a_part_as_data ... ok
-test renode_descriptors_equal_constructors ... ok
-...
-test result: ok. 19 passed; 0 failed
+$ HAUKSBEE_MCU_DIR=./mcu hauksbee run boards/stm32f101_demo.kicad_pcb \
+    --firmware testdata/firmware/stm32_blinky/blinky.elf \
+    --headless --seconds 1 --models-dir ./models
+
+simulated 1.000s over 5 nets
+
+most active nets:
+┌────────────────────────────┬──────────┬──────────┬──────────┐
+│ Net                        │ min (V)  │ max (V)  │ toggles  │
+├────────────────────────────┼──────────┼──────────┼──────────┤
+│ PC13_LED                   │    0.000 │    3.265 │        6 │
+│ ...                        │          │          │          │
+└────────────────────────────┴──────────┴──────────┴──────────┘
+
+UART output (18 bytes):
+hello from stm32
 ```
 
-For *your* descriptor, the end-to-end proof is a co-sim smoke run: point a CI
-spec's MCU at `renode:<yourpart>` with a firmware blink ELF and assert a GPIO
-toggle — the descriptor loading, platform resolving, and port map are all on
-that path. (Renode must be installed; `hauksbee doctor` checks backend
-availability.)
+The toggling PC13 and the UART banner are the descriptor's port map and
+`uart` field doing real work. The same board + firmware in a hauksbee-ci spec
+passes with `hauksbee-ci run spec.toml --models-dir ./models` (plus
+`HAUKSBEE_MCU_DIR`, or the descriptor installed in `~/.config/hauksbee/mcu`).
 
 ## The honest boundary
 
