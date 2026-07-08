@@ -76,7 +76,7 @@ fn unknown_net_lists_near_matches() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p }).unwrap_err();
+    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not found"), "got: {msg}");
     assert!(
@@ -96,7 +96,7 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p }).unwrap_err();
+    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("unknown component"), "got: {msg}");
     assert!(
@@ -119,6 +119,7 @@ fn after_ms_on_toggle_is_rejected() {
 fn junit_xml_is_well_formed_and_escaped() {
     let result = run(&RunConfig {
         spec: example("tarski_brownout_repaired.toml"),
+        ..Default::default()
     })
     .unwrap();
     let xml = result.render_junit();
@@ -135,6 +136,7 @@ fn junit_xml_is_well_formed_and_escaped() {
 fn github_annotations_emit_error_on_failure() {
     let result = run(&RunConfig {
         spec: example("tarski_brownout.toml"),
+        ..Default::default()
     })
     .unwrap();
     let ann = result.render_github_annotations();
@@ -152,6 +154,7 @@ fn demo_firmware_blink_uart_and_rail_all_pass() {
     // + no faults. Slower (1 s of simulated time) but exercises the MCU.
     let result = run(&RunConfig {
         spec: example("blinky.toml"),
+        ..Default::default()
     })
     .expect("blinky spec runs");
     assert!(
@@ -174,6 +177,6 @@ fn boot_coverage_requires_net_min_and_deadline() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p }).unwrap_err();
+    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
     assert!(err.to_string().contains("deadline_ms"), "got: {err}");
 }

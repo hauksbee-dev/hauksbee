@@ -1,0 +1,538 @@
+//! Component-tolerance ensembles: Monte-Carlo sampling and deterministic
+//! corner enumeration over the spec's `[[tolerance]]` rules.
+//!
+//! Real analog circuits are built from ±1% / ±5% / ±10% parts. A board that
+//! only meets its assertions at *nominal* component values is a latent defect:
+//! some fraction of assembled units will land outside the window. This module
+//! turns that into a CI property: the same assertion set is replayed across an
+//! *ensemble* of component-value samples, and passes only if it holds on every
+//! member.
+//!
+//! Two honesty rules govern everything here:
+//!
+//! 1. **Sampled coverage is not proof.** A Monte-Carlo ensemble that passes
+//!    24/24 seeds is statistical evidence, not a worst-case bound. The report
+//!    wording says so. Corner mode (`mode = "corners"`) enumerates every
+//!    all-min/all-max combination deterministically, which bounds the worst
+//!    case *only for monotonic responses* — also stated in the report.
+//! 2. **Reproducibility is doctrine.** Every sampled value is a pure function
+//!    of `(spec, seed, component reference)` — nothing depends on iteration
+//!    order or on how many other components are toleranced. A failing seed can
+//!    therefore be re-run in isolation (`hauksbee-ci run spec.toml --seed N`)
+//!    and produces byte-identical values. The tolerance stream is
+//!    domain-separated (`"tol:" + ref`) from the net-fuzz stream, so adding a
+//!    tolerance never changes which fuzz levels seed N straps.
+//!
+//! Seed 0 is always the nominal baseline (all components at nominal, matching
+//! fuzz's all-low seed 0), so "nominal passes but the ensemble fails" is
+//! visible inside a single run.
+
+use crate::error::SpecError;
+use crate::spec::Spec;
+use hauksbee_extract::ExtractedBoard;
+
+/// Full-factorial corner enumeration is capped at 2^CORNER_CAP runs. Above
+/// this many toleranced components, corner mode refuses and points at
+/// Monte-Carlo instead — silently truncating the corner set would fake the
+/// bounded claim the mode exists to make.
+pub const CORNER_CAP: usize = 10;
+
+/// How a component's per-seed value deviation is distributed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Distribution {
+    /// Uniform over [-tol, +tol]. The default: it assumes nothing about the
+    /// vendor's binning and stresses the tolerance edges hardest.
+    Uniform,
+    /// Gaussian with sigma = tol/3, truncated (by rejection) at ±tol — the
+    /// standard EDA convention: the datasheet tolerance is treated as a 3-sigma
+    /// bound, and no sample may exceed it (a part outside its marked tolerance
+    /// would have been binned out at the factory).
+    Gaussian,
+}
+
+impl Distribution {
+    pub fn parse(s: &str) -> Result<Self, SpecError> {
+        match s {
+            "uniform" => Ok(Distribution::Uniform),
+            "gaussian" => Ok(Distribution::Gaussian),
+            other => Err(SpecError::Invalid(format!(
+                "unknown tolerance distribution '{other}' (expected uniform|gaussian)"
+            ))),
+        }
+    }
+}
+
+/// One component with a resolved tolerance: the board reference, the parsed
+/// nominal value (SI units), and the spread.
+#[derive(Debug, Clone)]
+pub struct ResolvedTolerance {
+    pub reference: String,
+    /// Nominal value in base SI units (Ω, F, H, ...), parsed from the
+    /// `[[override]]` value (if the tolerance came from one) or the board's
+    /// own component value.
+    pub nominal_si: f64,
+    /// Tolerance as a percentage of nominal (10.0 = ±10%).
+    pub percent: f64,
+    pub distribution: Distribution,
+}
+
+/// Which extreme a component sits at in a corner-mode run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Corner {
+    Min,
+    Max,
+}
+
+/// One component's concrete value for one ensemble member.
+#[derive(Debug, Clone)]
+pub struct SampledValue {
+    pub reference: String,
+    /// The sampled value in SI units — this exact number is written into the
+    /// board before binding.
+    pub si: f64,
+    pub nominal_si: f64,
+    /// `Some` in corner mode (which extreme), `None` for Monte-Carlo samples.
+    pub corner: Option<Corner>,
+}
+
+impl SampledValue {
+    /// Human form for reports: `R3=10.9k` / `C1=18.2n(min)`.
+    pub fn describe(&self) -> String {
+        let tag = match self.corner {
+            Some(Corner::Min) => "(min)",
+            Some(Corner::Max) => "(max)",
+            None => "",
+        };
+        format!("{}={}{tag}", self.reference, format_engineering(self.si))
+    }
+}
+
+/// One ensemble member: the seed index and every toleranced component's value
+/// for that member. `values` is empty when the spec has no tolerances (the
+/// plain fuzz/single-run path).
+#[derive(Debug, Clone)]
+pub struct SeedPlan {
+    pub seed: u32,
+    pub values: Vec<SampledValue>,
+}
+
+/// The ensemble execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    MonteCarlo,
+    Corners,
+}
+
+impl Mode {
+    pub fn parse(s: &str) -> Result<Self, SpecError> {
+        match s {
+            "monte-carlo" => Ok(Mode::MonteCarlo),
+            "corners" => Ok(Mode::Corners),
+            other => Err(SpecError::Invalid(format!(
+                "unknown [ensemble] mode '{other}' (expected monte-carlo|corners)"
+            ))),
+        }
+    }
+}
+
+/// Resolve the spec's tolerance declarations against the board: expand ref
+/// patterns, pick each component's nominal, and validate that every rule
+/// matches something and every nominal parses.
+///
+/// Rules apply in order and the **last matching rule wins** per component
+/// (so a broad `ref = "R*"` can be followed by a tighter `ref = "R7"`).
+/// `[[override]]` entries carrying a `tolerance` are applied after all
+/// `[[tolerance]]` rules, with the override's `value` as the nominal.
+/// The result is sorted by reference so corner bit-ordering and reports are
+/// deterministic regardless of rule order.
+pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolerance>, SpecError> {
+    use std::collections::BTreeMap;
+
+    // reference -> (nominal source, percent, distribution). BTreeMap gives the
+    // sorted-by-reference output directly.
+    let mut by_ref: BTreeMap<String, ResolvedTolerance> = BTreeMap::new();
+
+    // The value each component will have *after* overrides are applied — an
+    // override without a tolerance still moves the nominal the tolerance rule
+    // spreads around.
+    let overridden_value = |reference: &str| -> Option<&str> {
+        spec.overrides
+            .iter()
+            .rev()
+            .find(|o| o.reference == reference)
+            .map(|o| o.value.as_str())
+    };
+
+    for rule in &spec.tolerances {
+        let dist = Distribution::parse(rule.distribution.as_deref().unwrap_or("uniform"))?;
+        let mut matched = false;
+        for comp in &board.components {
+            if !glob_match(&rule.reference, &comp.reference) {
+                continue;
+            }
+            matched = true;
+            let value_str = overridden_value(&comp.reference).unwrap_or(&comp.value);
+            let nominal = parse_nominal(&comp.reference, value_str)?;
+            by_ref.insert(
+                comp.reference.clone(),
+                ResolvedTolerance {
+                    reference: comp.reference.clone(),
+                    nominal_si: nominal,
+                    percent: rule.percent,
+                    distribution: dist,
+                },
+            );
+        }
+        if !matched {
+            let refs: Vec<String> = board
+                .components
+                .iter()
+                .map(|c| c.reference.clone())
+                .collect();
+            let near = crate::error::near_matches(&rule.reference, &refs, 5);
+            let hint = if near.is_empty() {
+                String::new()
+            } else {
+                format!(" — did you mean: {}?", near.join(", "))
+            };
+            return Err(SpecError::Invalid(format!(
+                "[[tolerance]] ref '{}' matches no component on the board{hint}",
+                rule.reference
+            )));
+        }
+    }
+
+    // Overrides with a tolerance: nominal is the override's own value. Applied
+    // last, so they win over any [[tolerance]] pattern covering the same ref.
+    for ov in &spec.overrides {
+        let Some(percent) = ov.tolerance else { continue };
+        let dist = Distribution::parse(ov.distribution.as_deref().unwrap_or("uniform"))?;
+        let nominal = parse_nominal(&ov.reference, &ov.value)?;
+        by_ref.insert(
+            ov.reference.clone(),
+            ResolvedTolerance {
+                reference: ov.reference.clone(),
+                nominal_si: nominal,
+                percent,
+                distribution: dist,
+            },
+        );
+    }
+
+    Ok(by_ref.into_values().collect())
+}
+
+fn parse_nominal(reference: &str, value: &str) -> Result<f64, SpecError> {
+    match hauksbee_models::value::parse_value(value) {
+        Some(p) if p.si.is_finite() && p.si > 0.0 => Ok(p.si),
+        _ => Err(SpecError::Invalid(format!(
+            "tolerance on '{reference}': its value '{value}' does not parse as a \
+             positive component value, so there is no nominal to spread around \
+             (set an [[override]] with a numeric value, or fix the board value)"
+        ))),
+    }
+}
+
+/// Minimal glob: `*` matches any (possibly empty) run of characters; every
+/// other character matches itself. Enough for `R*` / `R1?`-free use — we
+/// deliberately support only `*` to keep the matching teachable.
+pub fn glob_match(pattern: &str, s: &str) -> bool {
+    fn inner(p: &[u8], s: &[u8]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((b'*', rest)) => (0..=s.len()).any(|i| inner(rest, &s[i..])),
+            Some((c, rest)) => s.split_first().is_some_and(|(sc, sr)| sc == c && inner(rest, sr)),
+        }
+    }
+    inner(pattern.as_bytes(), s.as_bytes())
+}
+
+/// Build the ensemble plan: one [`SeedPlan`] per run.
+///
+/// Monte-Carlo: `seed_count` members; seed 0 is the nominal baseline, every
+/// other seed samples each component independently from its distribution.
+/// Corners: `2^n` members (n = toleranced component count, capped at
+/// [`CORNER_CAP`]); member k puts component i (in sorted-reference order) at
+/// its min when bit i of k is 0 and its max when bit i is 1, so member 0 is
+/// all-min and member 2^n - 1 is all-max.
+pub fn build_plans(
+    mode: Mode,
+    seed_count: u32,
+    tolerances: &[ResolvedTolerance],
+) -> Result<Vec<SeedPlan>, SpecError> {
+    match mode {
+        Mode::MonteCarlo => Ok((0..seed_count)
+            .map(|seed| SeedPlan {
+                seed,
+                values: tolerances.iter().map(|t| sample(seed, t)).collect(),
+            })
+            .collect()),
+        Mode::Corners => {
+            let n = tolerances.len();
+            if n == 0 {
+                return Err(SpecError::Invalid(
+                    "[ensemble] mode = \"corners\" needs at least one [[tolerance]]".into(),
+                ));
+            }
+            if n > CORNER_CAP {
+                return Err(SpecError::Invalid(format!(
+                    "corner mode enumerates 2^n combinations and {n} toleranced \
+                     components would be {} runs (cap is 2^{CORNER_CAP} = {}); \
+                     use mode = \"monte-carlo\" above {CORNER_CAP} components",
+                    (1u64) << n,
+                    1u64 << CORNER_CAP,
+                )));
+            }
+            let count = 1u32 << n;
+            Ok((0..count)
+                .map(|k| SeedPlan {
+                    seed: k,
+                    values: tolerances
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let corner = if (k >> i) & 1 == 0 { Corner::Min } else { Corner::Max };
+                            let tol = t.percent / 100.0;
+                            let si = match corner {
+                                Corner::Min => t.nominal_si * (1.0 - tol),
+                                Corner::Max => t.nominal_si * (1.0 + tol),
+                            };
+                            SampledValue {
+                                reference: t.reference.clone(),
+                                si,
+                                nominal_si: t.nominal_si,
+                                corner: Some(corner),
+                            }
+                        })
+                        .collect(),
+                })
+                .collect())
+        }
+    }
+}
+
+/// Sample one component's value for one seed. Pure in `(seed, reference,
+/// rule)`: the PRNG stream is seeded from a domain-separated hash of the seed
+/// and the reference, so the value does not depend on what other components
+/// are toleranced or on evaluation order — that is what makes `--seed N`
+/// re-runs byte-identical.
+pub fn sample(seed: u32, t: &ResolvedTolerance) -> SampledValue {
+    let tol = t.percent / 100.0;
+    let frac = if seed == 0 {
+        0.0 // seed 0 is the nominal baseline, mirroring fuzz's all-low seed 0.
+    } else {
+        let mut rng = SplitMix::for_component(seed, &t.reference);
+        match t.distribution {
+            // Uniform over [-1, 1).
+            Distribution::Uniform => 2.0 * rng.next_f64() - 1.0,
+            // Truncated gaussian: sigma = tol/3 => unit-sigma normal truncated
+            // at |z| <= 3, by rejection (deterministic: the stream is private
+            // to this (seed, ref) pair, so extra draws perturb nothing else).
+            Distribution::Gaussian => {
+                loop {
+                    let z = rng.next_gaussian();
+                    if z.abs() <= 3.0 {
+                        break z / 3.0;
+                    }
+                }
+            }
+        }
+    };
+    SampledValue {
+        reference: t.reference.clone(),
+        si: t.nominal_si * (1.0 + frac * tol),
+        nominal_si: t.nominal_si,
+        corner: None,
+    }
+}
+
+/// A splitmix64 PRNG — tiny, solid, and stateless to seed. The same family the
+/// fuzz path's `hash2` uses, kept separate and domain-tagged (`"tol:"`) so the
+/// two streams can never collide.
+struct SplitMix(u64);
+
+impl SplitMix {
+    fn for_component(seed: u32, reference: &str) -> Self {
+        // Fold the domain tag + reference bytes into the state, then mix.
+        let mut x = (seed as u64)
+            .wrapping_mul(0x9E3779B97F4A7C15)
+            .wrapping_add(0xD1B54A32D192ED03);
+        for b in "tol:".bytes().chain(reference.bytes()) {
+            x ^= b as u64;
+            x = x.wrapping_mul(0xFF51AFD7ED558CCD);
+            x ^= x >> 33;
+        }
+        SplitMix(x)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform in [0, 1) with 53 bits of precision.
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// Standard normal via Box–Muller.
+    fn next_gaussian(&mut self) -> f64 {
+        // u1 in (0, 1] so ln never sees 0.
+        let u1 = 1.0 - self.next_f64();
+        let u2 = self.next_f64();
+        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+    }
+}
+
+/// Format an SI value in engineering notation for reports: 10900 -> "10.9k",
+/// 1.82e-8 -> "18.2n". Three significant digits; trailing zeros trimmed.
+pub fn format_engineering(v: f64) -> String {
+    if v == 0.0 || !v.is_finite() {
+        return format!("{v}");
+    }
+    const SUFFIX: &[(f64, &str)] = &[
+        (1e9, "G"),
+        (1e6, "M"),
+        (1e3, "k"),
+        (1.0, ""),
+        (1e-3, "m"),
+        (1e-6, "u"),
+        (1e-9, "n"),
+        (1e-12, "p"),
+    ];
+    let mag = v.abs();
+    let (scale, suffix) = SUFFIX
+        .iter()
+        .find(|(s, _)| mag >= *s)
+        .copied()
+        .unwrap_or((1e-12, "p"));
+    let scaled = v / scale;
+    // Three significant digits on the scaled mantissa (which is in [1, 1000)).
+    let digits = if scaled.abs() >= 100.0 {
+        0
+    } else if scaled.abs() >= 10.0 {
+        1
+    } else {
+        2
+    };
+    let s = format!("{scaled:.digits$}");
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    };
+    format!("{s}{suffix}")
+}
+
+/// One-line description of a plan's sampled set: `R1=10.9k, R2=9.4k`.
+pub fn describe_values(values: &[SampledValue]) -> String {
+    values
+        .iter()
+        .map(SampledValue::describe)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(reference: &str, nominal: f64, percent: f64, dist: Distribution) -> ResolvedTolerance {
+        ResolvedTolerance {
+            reference: reference.into(),
+            nominal_si: nominal,
+            percent,
+            distribution: dist,
+        }
+    }
+
+    #[test]
+    fn seed_zero_is_nominal() {
+        let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
+        assert_eq!(sample(0, &t).si, 10_000.0);
+        let g = rule("R1", 10_000.0, 10.0, Distribution::Gaussian);
+        assert_eq!(sample(0, &g).si, 10_000.0);
+    }
+
+    #[test]
+    fn samples_are_deterministic_and_order_independent() {
+        let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
+        let a = sample(7, &t).si;
+        let b = sample(7, &t).si;
+        assert_eq!(a.to_bits(), b.to_bits(), "same (seed, ref) => same value");
+        // A different reference gets a different stream.
+        let u = rule("R2", 10_000.0, 10.0, Distribution::Uniform);
+        assert_ne!(sample(7, &t).si.to_bits(), sample(7, &u).si.to_bits());
+    }
+
+    #[test]
+    fn uniform_samples_stay_inside_the_tolerance_band() {
+        let t = rule("R1", 10_000.0, 10.0, Distribution::Uniform);
+        for seed in 1..500 {
+            let v = sample(seed, &t).si;
+            assert!((9_000.0..=11_000.0).contains(&v), "seed {seed}: {v}");
+        }
+    }
+
+    #[test]
+    fn gaussian_samples_are_truncated_at_the_tolerance_bound() {
+        let t = rule("C1", 1e-7, 20.0, Distribution::Gaussian);
+        let mut spread = 0.0f64;
+        for seed in 1..2000 {
+            let v = sample(seed, &t).si;
+            assert!(v >= 0.8e-7 - 1e-20 && v <= 1.2e-7 + 1e-20, "seed {seed}: {v}");
+            spread = spread.max((v - 1e-7).abs());
+        }
+        // The distribution actually spreads (not all-nominal).
+        assert!(spread > 0.05e-7, "gaussian never moved: max spread {spread}");
+    }
+
+    #[test]
+    fn corner_plans_enumerate_all_min_max_combinations() {
+        let ts = vec![
+            rule("R1", 10_000.0, 10.0, Distribution::Uniform),
+            rule("R2", 10_000.0, 10.0, Distribution::Uniform),
+        ];
+        let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
+        assert_eq!(plans.len(), 4);
+        // Member 0 = all-min; member 3 = all-max.
+        assert!(plans[0].values.iter().all(|v| v.si == 9_000.0));
+        assert!(plans[3].values.iter().all(|v| v.si == 11_000.0));
+        // Member 1: bit0 set => R1 at max, R2 at min.
+        assert_eq!(plans[1].values[0].si, 11_000.0);
+        assert_eq!(plans[1].values[1].si, 9_000.0);
+    }
+
+    #[test]
+    fn corner_cap_refuses_and_names_monte_carlo() {
+        let ts: Vec<ResolvedTolerance> = (0..CORNER_CAP + 1)
+            .map(|i| rule(&format!("R{i}"), 1_000.0, 5.0, Distribution::Uniform))
+            .collect();
+        let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("monte-carlo"), "refusal points at monte-carlo: {msg}");
+    }
+
+    #[test]
+    fn glob_match_supports_star_only() {
+        assert!(glob_match("R*", "R17"));
+        assert!(glob_match("R*", "R"));
+        assert!(!glob_match("R*", "C3"));
+        assert!(glob_match("R_Shunt*", "R_Shunt15301"));
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("R1", "R1"));
+        assert!(!glob_match("R1", "R12"));
+    }
+
+    #[test]
+    fn engineering_format_reads_naturally() {
+        assert_eq!(format_engineering(10_900.0), "10.9k");
+        assert_eq!(format_engineering(1.82e-8), "18.2n");
+        assert_eq!(format_engineering(0.05), "50m");
+        assert_eq!(format_engineering(5.0), "5");
+        assert_eq!(format_engineering(2_250_000.0), "2.25M");
+    }
+}

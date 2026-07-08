@@ -20,21 +20,43 @@ pub struct AssertResult {
     pub invalid: bool,
     /// One-line detail (the measured value, the offending seed, etc).
     pub detail: String,
-    /// If it failed, the seed index that failed (for fuzzed runs).
+    /// If it failed, the first seed index that failed (for fuzzed runs).
     pub failing_seed: Option<u32>,
+    /// Every ensemble member this assertion failed on (empty on a pass). For a
+    /// tolerance ensemble this is the per-seed failure list the report and
+    /// JUnit surface, together with the pass-rate.
+    pub failing_seeds: Vec<u32>,
+    /// How many ensemble members were evaluated.
+    pub seeds_total: u32,
 }
 
 /// Evaluate every assertion in the spec; returns one result per assertion.
 pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
+    // Ensemble flavor drives the honest wording: None = plain fuzz/single run,
+    // Some(mode) = tolerance ensemble (sampled coverage vs bounded corners).
+    let mode = if spec.has_tolerances() {
+        spec.ensemble_mode().ok()
+    } else {
+        None
+    };
     spec.asserts
         .iter()
-        .map(|a| evaluate_one(a, outcomes))
+        .map(|a| evaluate_one(a, outcomes, mode))
         .collect()
 }
 
-fn evaluate_one(a: &Assertion, outcomes: &[RunOutcome]) -> AssertResult {
+fn evaluate_one(
+    a: &Assertion,
+    outcomes: &[RunOutcome],
+    mode: Option<crate::tolerance::Mode>,
+) -> AssertResult {
     let label = a.label();
     let kind = a.kind.clone();
+    // In corner mode a member index is a corner number, not a random seed.
+    let member = match mode {
+        Some(crate::tolerance::Mode::Corners) => "corner",
+        _ => "seed",
+    };
 
     // Analog-validity gate (05 §3b, "refuse rather than fake"): if this assertion
     // reads the analog transient operating point AND its evaluation window
@@ -72,43 +94,91 @@ fn evaluate_one(a: &Assertion, outcomes: &[RunOutcome]) -> AssertResult {
                         we * 1e3,
                     ),
                     failing_seed: Some(out.seed),
+                    failing_seeds: vec![out.seed],
+                    seeds_total: outcomes.len() as u32,
                 };
             }
         }
     }
 
-    // Evaluate per seed; the first failing seed determines the result.
+    // Evaluate every ensemble member, so the result carries the pass-rate and
+    // the full failing-seed list, not just the first red.
     let mut last_detail = String::new();
+    let mut failures: Vec<(&RunOutcome, String)> = Vec::new();
     for out in outcomes {
         let (ok, detail) = check_seed(a, out);
-        last_detail = detail.clone();
-        if !ok {
-            return AssertResult {
-                label,
-                kind,
-                passed: false,
-                invalid: false,
-                detail: if outcomes.len() > 1 {
-                    format!("seed {}: {detail}", out.seed)
-                } else {
-                    detail
-                },
-                failing_seed: Some(out.seed),
-            };
+        if ok {
+            last_detail = detail;
+        } else {
+            failures.push((out, detail));
         }
     }
 
+    if let Some((first, first_detail)) = failures.first() {
+        // Lead with the first failing member's measurement, then the exact
+        // sampled component values it ran with (the actionable artifact), then
+        // the ensemble pass-rate.
+        let mut detail = if outcomes.len() > 1 {
+            format!("{member} {}: {first_detail}", first.seed)
+        } else {
+            first_detail.clone()
+        };
+        if !first.sampled_values.is_empty() {
+            detail.push_str(&format!(
+                " [{}]",
+                crate::tolerance::describe_values(&first.sampled_values)
+            ));
+        }
+        if outcomes.len() > 1 {
+            let failing: Vec<String> = failures
+                .iter()
+                .take(8)
+                .map(|(o, _)| o.seed.to_string())
+                .collect();
+            let more = if failures.len() > 8 { ", …" } else { "" };
+            detail.push_str(&format!(
+                "; passed {}/{} {member}s (failing: {}{more})",
+                outcomes.len() - failures.len(),
+                outcomes.len(),
+                failing.join(", "),
+            ));
+        }
+        return AssertResult {
+            label,
+            kind,
+            passed: false,
+            invalid: false,
+            detail,
+            failing_seed: Some(failures[0].0.seed),
+            failing_seeds: failures.iter().map(|(o, _)| o.seed).collect(),
+            seeds_total: outcomes.len() as u32,
+        };
+    }
+
+    // All members green. State exactly what that means: plain fuzz keeps its
+    // wording; a tolerance ensemble claims sampled coverage (never proof), and
+    // corners claim boundedness only for monotonic responses.
+    let detail = match (outcomes.len(), mode) {
+        (1, _) => last_detail,
+        (n, None) => format!("{last_detail} (held across {n} seeds)"),
+        (n, Some(crate::tolerance::Mode::MonteCarlo)) => format!(
+            "{last_detail} (passed {n}/{n} sampled tolerance seeds — statistical \
+             coverage, not worst-case proof)"
+        ),
+        (n, Some(crate::tolerance::Mode::Corners)) => format!(
+            "{last_detail} (held on all {n} min/max tolerance corners — bounds the \
+             worst case only where the response is monotonic in each value)"
+        ),
+    };
     AssertResult {
         label,
         kind,
         passed: true,
         invalid: false,
-        detail: if outcomes.len() > 1 {
-            format!("{} (held across {} seeds)", last_detail, outcomes.len())
-        } else {
-            last_detail
-        },
+        detail,
         failing_seed: None,
+        failing_seeds: Vec::new(),
+        seeds_total: outcomes.len() as u32,
     }
 }
 
