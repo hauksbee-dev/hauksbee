@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WebReport, WebSection, WebFinding, WebComponent, WebCosimSection } from '../types/report'
+import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -28,6 +28,46 @@ const LEVEL_TEXT: Record<string, string> = {
   serious: '#fca5a5',
   warning: '#fde047',
   note: '#94a3b8',
+}
+
+// Copy-to-clipboard button (persona-panel fix #8): the "bring it to life" path
+// was a bare, un-actionable CLI string. A one-click copy is the minimum real
+// affordance short of an in-page launch (which stays out of scope).
+function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Fallback for insecure contexts / older browsers.
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch { /* nothing more to try */ }
+      document.body.removeChild(ta)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }, [text])
+  return (
+    <button
+      type="button"
+      data-testid="copy-cli"
+      onClick={copy}
+      className="ml-2 rounded px-2 py-0.5 text-[11px] font-semibold cursor-pointer transition-all hover:opacity-80"
+      style={{
+        background: copied ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.12)',
+        border: `1px solid ${copied ? '#166534' : '#1d4ed8'}`,
+        color: copied ? '#86efac' : '#bfdbfe',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {copied ? '✓ Copied' : label}
+    </button>
+  )
 }
 
 export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRunIt }: LandingProps) {
@@ -202,6 +242,7 @@ function ReportView({ report: r, boardLabel, canRunLive, onRunIt }: {
 
   const bindOpen = !!(r.bind?.active_path_unresolved?.length)
   const hasHeadsUp = (r.sections || []).some(s => s.heads_up?.length)
+  const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
   let verdictBorder = '#14532d', verdictBg = '#08130c'
   if (r.serious > 0) { verdictBorder = '#7f1d1d'; verdictBg = '#160b0b' }
   else if (r.total > 0 || bindOpen || hasHeadsUp) { verdictBorder = '#713f12'; verdictBg = '#141004' }
@@ -241,10 +282,13 @@ function ReportView({ report: r, boardLabel, canRunLive, onRunIt }: {
           className="mt-3 rounded-lg px-4 py-3 text-xs"
           style={{ border: '1px solid #1e293b', background: '#0a0f1e', color: '#64748b' }}
         >
-          To bring this board to life (live scope, 2D/3D view, transport controls) run:{' '}
-          <code style={{ color: '#94a3b8', background: '#0f172a', padding: '1px 5px', borderRadius: 4 }}>
-            hauksbee run {boardLabel ?? r.file_name} --serve
-          </code>
+          <div>To bring this board to life (live scope, 2D/3D view, transport controls) run:</div>
+          <div className="mt-1.5 flex items-center flex-wrap">
+            <code style={{ color: '#94a3b8', background: '#0f172a', padding: '2px 6px', borderRadius: 4 }}>
+              {runCommand}
+            </code>
+            <CopyButton text={runCommand} />
+          </div>
         </div>
       )}
 
@@ -295,25 +339,109 @@ function ReportView({ report: r, boardLabel, canRunLive, onRunIt }: {
   )
 }
 
+/** A run of findings that share level + why + fix (same-shaped): the DRC
+ *  clearance case where 128 warnings differ only in which net-pair/location. */
+interface FindingGroup {
+  level: string
+  why: string
+  fix: string
+  whats: string[]
+}
+
+/** Collapse same-shaped findings so the shared explanation is shown ONCE
+ *  (persona-panel fix #6). Order-independent: any findings with identical
+ *  level/why/fix merge, no matter where they sit in the list. Nothing is hidden
+ *  — every individual `what` is still listed, just under one explanation. */
+function groupFindings(findings: WebFinding[]): FindingGroup[] {
+  const groups: FindingGroup[] = []
+  for (const f of findings) {
+    const g = groups.find(x => x.level === f.level && x.why === f.why && x.fix === f.fix)
+    if (g) g.whats.push(f.what)
+    else groups.push({ level: f.level, why: f.why, fix: f.fix, whats: [f.what] })
+  }
+  return groups
+}
+
 function SectionBlock({ section: s }: { section: WebSection }) {
+  const groups = groupFindings(s.findings)
   return (
     <section className="mt-7">
       <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ color: '#64748b' }}>
         {s.title}
       </h2>
       <div className="text-sm mb-2" style={{ color: '#94a3b8' }}>{s.verdict}</div>
-      {s.findings.map((f, i) => <FindingCard key={i} finding={f} />)}
-      {(s.heads_up || []).map((h, i) => (
-        <div
-          key={i}
-          className="rounded-lg px-4 py-2.5 mb-2"
-          style={{ border: '1px solid #1e3a5f', borderLeft: '4px solid #3b82f6', background: '#081120' }}
-        >
-          <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: '#93c5fd' }}>Heads up</span>
-          <div className="text-sm mt-0.5" style={{ color: '#cbd5e1' }}>{h}</div>
-        </div>
-      ))}
+      {groups.map((g, i) =>
+        g.whats.length === 1
+          ? <FindingCard key={i} finding={{ level: g.level, what: g.whats[0], why: g.why, fix: g.fix }} />
+          : <GroupedFindingCard key={i} group={g} />
+      )}
+      {(s.heads_up || []).map((h, i) => <HeadsUpCard key={i} note={h} />)}
     </section>
+  )
+}
+
+// A heads-up note with the finding's what / why / what-to-do gloss. `why`/`fix`
+// render only when present (self-contained notes carry just `what`).
+function HeadsUpCard({ note: h }: { note: WebHeadsUp }) {
+  return (
+    <div
+      className="rounded-lg px-4 py-2.5 mb-2"
+      style={{ border: '1px solid #1e3a5f', borderLeft: '4px solid #3b82f6', background: '#081120' }}
+    >
+      <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: '#93c5fd' }}>Heads up</span>
+      <div className="text-sm mt-0.5" style={{ color: '#cbd5e1' }}>{h.what}</div>
+      {h.why && (
+        <div className="text-sm mt-1" style={{ color: '#cbd5e1' }}>
+          <b style={{ color: '#93c5fd', fontWeight: 600 }}>Why it matters:</b> {h.why}
+        </div>
+      )}
+      {h.fix && (
+        <div className="text-sm mt-0.5" style={{ color: '#cbd5e1' }}>
+          <b style={{ color: '#93c5fd', fontWeight: 600 }}>What to do:</b> {h.fix}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// A collapsed group of same-shaped findings: the shared level + explanation are
+// shown once, and the individual items live inside an expandable list so a long
+// run (e.g. 128 clearance warnings) never walls the page, yet hides nothing.
+function GroupedFindingCard({ group: g }: { group: FindingGroup }) {
+  const accent = LEVEL_COLORS[g.level] ?? '#475569'
+  const tagColor = LEVEL_TEXT[g.level] ?? '#94a3b8'
+  const n = g.whats.length
+  return (
+    <div
+      data-testid="grouped-finding"
+      className="rounded-lg px-4 py-3 mb-2"
+      style={{ border: '1px solid #1e293b', borderLeft: `4px solid ${accent}`, background: '#0a0f1e' }}
+    >
+      <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: tagColor }}>
+        {g.level} · {n} similar
+      </span>
+      <div className="font-semibold text-sm mt-1 mb-1.5">
+        {n} similar findings — same cause, listed once below.
+      </div>
+      <details className="mb-1.5">
+        <summary className="text-sm cursor-pointer" style={{ color: '#94a3b8' }}>
+          Show all {n}
+        </summary>
+        <ul className="mt-1.5 pl-4 text-sm" style={{ color: '#cbd5e1', listStyleType: 'disc' }}>
+          {g.whats.map((w, i) => <li key={i} className="my-0.5">{w}</li>)}
+        </ul>
+      </details>
+      {g.why && (
+        <div className="text-sm my-0.5">
+          <b style={{ color: '#94a3b8', fontWeight: 600 }}>Why it matters:</b> {g.why}
+        </div>
+      )}
+      {g.fix && (
+        <div className="text-sm my-0.5">
+          <b style={{ color: '#94a3b8', fontWeight: 600 }}>What to do:</b> {g.fix}
+        </div>
+      )}
+    </div>
   )
 }
 
