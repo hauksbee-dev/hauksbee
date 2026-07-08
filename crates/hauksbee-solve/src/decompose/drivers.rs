@@ -1,6 +1,6 @@
 //! The driver pass: which upstream groups are absorbed instead of torn.
 //!
-//! The bug that forced this pass into existence (`research/tarski-saga.md`
+//! The bug that forced this pass into existence (`docs/learn/tarski-saga.md`
 //! §1c, STEP 1): the first exact tear correctly excluded switch-control nets
 //! from conduction reachability, and thereby also excluded the little
 //! Thevenin drivers (`Vdrv` behind `Rdrv`) that *held* those nets at their
