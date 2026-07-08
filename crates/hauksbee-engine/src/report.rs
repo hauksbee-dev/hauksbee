@@ -1,5 +1,8 @@
-//! The bind report: one row per component describing what it resolved to and
-//! what it became in the simulation (or why it was skipped).
+//! The bind report: one row per board component recording what model it resolved
+//! to and what it became in the simulation — an analog or behavioral device, a
+//! digital or MCU block, a power rail, a deliberately-skipped part, or an
+//! unresolved open circuit. [`BindOutcome`] is that per-component verdict; the
+//! surrounding report aggregates them for the CLI and the resolve-rate stats.
 
 use hauksbee_models::Confidence;
 

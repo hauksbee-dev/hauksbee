@@ -1,5 +1,7 @@
-//! `--drc`: geometric copper short / clearance report. Also the `kicad-cli`
-//! oracle cross-check, which is DRC-only.
+//! The `--drc` report: geometric copper-short and clearance detection over the
+//! extracted board, rendered in the requested output mode. It also carries the
+//! `kicad-cli` oracle cross-check (DRC-only) and, under `--strict`, exits non-zero
+//! on a true short. Pure CLI glue over the extractor's DRC and the binder.
 
 use std::path::Path;
 
