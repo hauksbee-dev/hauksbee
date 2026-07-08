@@ -80,6 +80,7 @@ fn outcome_with(
         failed_windows,
         analog_abort,
         sampled_values: Vec::new(),
+        net_series: HashMap::new(),
     }
 }
 

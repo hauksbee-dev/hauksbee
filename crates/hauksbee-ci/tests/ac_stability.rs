@@ -154,6 +154,7 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
         failed_windows: Vec::new(),
         analog_abort: false,
         sampled_values: Vec::new(),
+        net_series: std::collections::HashMap::new(),
     }
 }
 
@@ -262,6 +263,7 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         failed_windows: Vec::new(),
         analog_abort: false,
         sampled_values: Vec::new(),
+        net_series: std::collections::HashMap::new(),
     };
 
     // At fc=1000 Hz the gain is -3.01 dB, so "max <= -2.9 at 1000 Hz" passes and

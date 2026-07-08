@@ -1,0 +1,50 @@
+# SYNTHETIC seed trace: the avr-blinky LED net, "scope CSV" flavor.
+#
+# This is NOT a hardware capture. It was constructed by gen_synthetic.py (one
+# directory up) from the demo firmware's documented 100 ms toggle plus
+# datasheet-typical artifacts (4.70 V high under LED load — ATmega328P VOH is
+# >= 4.2 V at 20 mA / 5 V VCC — plus edge jitter and noise).
+# It exists to prove the hwtrace pipeline end-to-end; replace it with a real
+# scope export — and flip `provenance` — for this trace to validate anything
+# about the simulator. See docs/extending/add-a-hardware-trace.md.
+
+[trace]
+board = "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+scenario = "demo firmware blinking D13 every 100 ms, USB 5v0.5a supply"
+provenance = "synthetic"
+instrument = "constructed by gen_synthetic.py from firmware timing + datasheet-typical levels"
+date = "2026-07-08"
+notes = "5 kSa/s, 1 s window; high 4.90 V, low 0.04 V, ±0.5 ms edge jitter, 12 mV noise"
+
+[[channel]]
+net = "D13"
+file = "d13.csv"
+probe = "synthetic; models a 10x passive probe at the LED net"
+
+# The tolerances are the trace's error bars: MCU RC-clock tolerance (±10% on
+# an ATmega328P internal oscillator) dominates timing; probe loading + rail
+# drift dominate levels. They are NOT tuned to the sim — they state what a
+# real capture of this board could legitimately vary by.
+[[channel.feature]]
+kind = "period"        # 200 ms nominal
+reltol = 0.10
+
+[[channel.feature]]
+kind = "duty"          # 0.50 nominal
+abstol = 0.06
+
+[[channel.feature]]
+kind = "pulse_width"   # 100 ms nominal
+reltol = 0.12
+
+[[channel.feature]]
+kind = "max"           # logic-high level at the pin
+abstol = 0.30
+
+[[channel.feature]]
+kind = "min"           # logic-low level
+abstol = 0.20
+
+[[channel.feature]]
+kind = "edge_count"    # ~10 toggles over the 1 s window
+abstol = 2

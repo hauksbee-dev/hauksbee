@@ -1,0 +1,35 @@
+# SYNTHETIC seed trace: the avr-blinky LED net, logic-analyzer VCD flavor.
+#
+# NOT a hardware capture — constructed by gen_synthetic.py (one directory up);
+# same scenario as led-blink-scope but exported the way a logic analyzer
+# would: digital value changes in a VCD. A VCD records bits, not volts, so
+# only the timing features are allowed on it (the loader enforces this).
+
+[trace]
+board = "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+scenario = "demo firmware blinking D13 every 100 ms, USB 5v0.5a supply"
+provenance = "synthetic"
+instrument = "constructed by gen_synthetic.py from firmware timing (logic-analyzer VCD flavor)"
+date = "2026-07-08"
+notes = "1 us timescale, 1 s window, ±0.5 ms edge jitter"
+
+[[channel]]
+net = "D13"
+file = "d13.vcd"
+signal = "D13"
+
+[[channel.feature]]
+kind = "period"
+reltol = 0.10
+
+[[channel.feature]]
+kind = "duty"
+abstol = 0.06
+
+[[channel.feature]]
+kind = "pulse_width"
+reltol = 0.12
+
+[[channel.feature]]
+kind = "edge_count"
+abstol = 2
