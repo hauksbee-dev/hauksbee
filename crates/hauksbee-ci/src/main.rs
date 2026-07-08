@@ -97,6 +97,19 @@ fn main() -> ExitCode {
         Err(e) => {
             // Spec / board errors: surface as a GitHub error too, then exit 2.
             eprintln!("hauksbee-ci: {e}");
+            // Emit JUnit even on this error path when --junit was requested: a CI
+            // that only reads the Checks/JUnit tab would otherwise see nothing at
+            // all for an exit-2 (a desynced spec, a missing board). Write a
+            // single errored testcase carrying the message.
+            if let Some(path) = &args.junit {
+                let xml = hauksbee_ci::report::render_junit_error(&e.to_string());
+                if let Err(werr) = std::fs::write(path, xml) {
+                    eprintln!(
+                        "hauksbee-ci: could not write JUnit XML to {}: {werr}",
+                        path.display()
+                    );
+                }
+            }
             if std::env::var_os("GITHUB_ACTIONS").is_some() {
                 // Percent first, then control chars (else the %0A/%0D we insert
                 // get their own % re-encoded to %25, garbling the annotation).
@@ -143,6 +156,17 @@ fn cmd_init(args: InitArgs) -> ExitCode {
         Ok(path) => {
             println!("wrote starter spec to {}", path.display());
             println!("edit it, then run:  hauksbee-ci run {}", path.display());
+            // Where the documented pre-commit hook looks. init deliberately
+            // writes the spec beside its board (so the relative `board = "..."`
+            // stays valid); the hook searches `ci/` and the repo root by default
+            // (HAUKSBEE_CI_SPECS, colon-separated). Say so, rather than silently
+            // relocating the file, so a scaffolded spec is actually discovered.
+            println!(
+                "\nto have the pre-commit hook run this automatically, put the spec where it\n\
+                 searches — `ci/` or the repo root by default (override with HAUKSBEE_CI_SPECS,\n\
+                 colon-separated). Either move it into `ci/` (and fix the `board = \"...\"` path\n\
+                 to stay relative to it), or add its directory to HAUKSBEE_CI_SPECS."
+            );
             ExitCode::from(0)
         }
         Err(e) => {

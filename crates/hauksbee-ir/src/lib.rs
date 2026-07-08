@@ -12,6 +12,7 @@
 //! digital islands. Nothing here commits to a solution method.
 
 mod bexpr;
+pub mod debug;
 mod models;
 mod source;
 mod spice;

@@ -260,9 +260,31 @@ fn compute_ac(spec: &Spec, base: &ExtractedBoard) -> Result<AcOutcome, SpecError
 /// `.brd`, IPC-D-356) carries full connectivity in one file and is sniffed from
 /// its content as before.
 pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
-    let is_sch = board_path
-        .extension()
-        .and_then(|e| e.to_str())
+    let ext = board_path.extension().and_then(|e| e.to_str());
+
+    // Board-as-Code (`.board`) is a source format, not an extractable board:
+    // the extractor only knows the compiled layout/netlist formats, so it would
+    // otherwise fail with a cryptic "unrecognized board format" list that never
+    // mentions `.board`. Both `hauksbee-ci run` and `hauksbee-ci init` reach
+    // here, so catching it at this one seam gives both the exact recompile
+    // command (in-process from-code recompilation is a place+route step owned by
+    // the `hauksbee` binary, so we point at it rather than duplicating it).
+    if ext.map(|e| e.eq_ignore_ascii_case("board")).unwrap_or(false) {
+        let stem = board_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("board");
+        return Err(SpecError::Invalid(format!(
+            "'{}' is a Board-as-Code source file, which hauksbee-ci cannot load \
+             directly. Compile it to a layout first, then point the spec/init at \
+             that:\n    hauksbee from-code {} --out {stem}.kicad_pcb --route\n    \
+             hauksbee-ci init {stem}.kicad_pcb",
+            board_path.display(),
+            board_path.display(),
+        )));
+    }
+
+    let is_sch = ext
         .map(|e| e.eq_ignore_ascii_case("kicad_sch"))
         .unwrap_or(false);
 

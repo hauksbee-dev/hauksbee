@@ -57,19 +57,38 @@ fn init_generates_a_spec_the_loader_accepts() {
     // the feature). Structural validation runs here too, so a bad scaffold fails.
     let spec = Spec::load(&spec_path).expect("generated spec parses through Spec::load");
 
-    // The scaffold reflects what the board actually is: the detected MCU, the
-    // detected +5V supply leg, and the two enabled assertions.
+    // The scaffold reflects what the board actually is: the detected MCU and the
+    // detected +5V supply leg.
     assert_eq!(spec.mcu.as_deref(), Some("atmega328p"), "detected MCU is filled in");
     assert!(
         spec.supplies.iter().any(|s| s.net == "+5V"),
         "the +5V supply leg the binder detected is scaffolded"
     );
+    // The starter must run GREEN out of the box: only `no_faults` is live.
+    // boot-coverage is scaffolded COMMENTED-OUT on every backend (even the AVR
+    // in-process one), because it asserts on firmware behaviour and `firmware =`
+    // is itself commented in the starter — left live it goes RED on the first run
+    // (the exact false-red the persona panel hit). The rail voltage asserts also
+    // stay commented. So exactly one assertion loads.
     let kinds: Vec<&str> = spec.asserts.iter().map(|a| a.kind.as_str()).collect();
     assert!(kinds.contains(&"no_faults"), "a no_faults assertion is enabled");
-    assert!(kinds.contains(&"boot-coverage"), "a boot-coverage assertion is enabled");
-    // Exactly the two enabled assertions parse; the rail voltage asserts stay
-    // commented out (they must not count toward the loaded spec).
-    assert_eq!(spec.asserts.len(), 2, "only the two enabled assertions are live");
+    assert!(
+        !kinds.contains(&"boot-coverage"),
+        "boot-coverage is scaffolded commented-out so the starter is GREEN out of the box"
+    );
+    assert_eq!(spec.asserts.len(), 1, "only the no_faults assertion is live");
+
+    // The rendered text still carries a (commented) boot-coverage block so the
+    // user can opt in after wiring firmware.
+    let text = hauksbee_ci::init::render_spec(&board).expect("render scaffolds a spec");
+    assert!(
+        text.contains("# kind = \"boot-coverage\""),
+        "a commented boot-coverage block is present to opt into, got:\n{text}"
+    );
+    assert!(
+        !text.contains("\nkind = \"boot-coverage\""),
+        "boot-coverage must not be a live assertion in the starter, got:\n{text}"
+    );
 }
 
 #[test]
