@@ -1,5 +1,8 @@
-//! Board-as-Code commands: `to-code` (decompile), `from-code` (recompile +
-//! optional route), and `check-code` (recompile + stress co-sim).
+//! The Board-as-Code subcommands: `to-code` decompiles any text board into the
+//! editable `.board` source, `from-code` recompiles that source back to a KiCad
+//! PCB (with optional placement / routing), and `check-code` recompiles then runs
+//! the stress co-sim. This is the CLI glue over the `boardcode` module; the
+//! round-trip logic itself lives there.
 
 use std::path::Path;
 

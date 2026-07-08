@@ -1,7 +1,8 @@
-//! Physical-range validation for model parameters.
-//!
-//! Used by the extraction pipeline to reject LLM-generated model entries
-//! that have out-of-range parameters before they are saved to the user DB.
+//! Physical-range validation for model parameters. Used by the extraction
+//! pipeline to reject LLM-generated model entries whose parameters are missing or
+//! out of physical bounds before they are saved to the user database, so a
+//! hallucinated part value cannot silently enter the model library. [`validate`]
+//! collects every violation at once rather than stopping at the first.
 
 use crate::schema::{ComponentKind, ModelEntry};
 use thiserror::Error;

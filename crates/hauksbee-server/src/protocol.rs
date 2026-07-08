@@ -1,5 +1,9 @@
-//! The wire protocol between engine and frontend: tagged JSON, evolved from
-//! the Tarski emulator's protocol with generalized board/solver controls.
+//! The wire protocol between the simulation engine and the web frontend: tagged
+//! JSON messages in both directions, evolved from the Tarski emulator's protocol
+//! with generalized board and solver controls. [`ServerMessage`] is the
+//! engine→client stream (board info, sim frames, probe data, status, errors); the
+//! client→engine [`ClientMessage`] carries the play / pause / step and control
+//! commands.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

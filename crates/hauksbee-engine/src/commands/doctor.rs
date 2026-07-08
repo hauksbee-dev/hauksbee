@@ -1,5 +1,8 @@
-//! `hauksbee doctor [--backends] [--json]`: report co-sim backend availability
-//! using the engine's own discovery, so scripts/doctor.sh can never drift.
+//! The `hauksbee doctor [--backends] [--json]` subcommand: probe co-sim backend
+//! availability (AVR, QEMU, Renode) and print one machine-readable line per
+//! backend. It calls the engine's OWN backend resolvers rather than
+//! re-implementing discovery, so what `doctor` reports can never drift from what a
+//! real co-sim would actually accept.
 
 /// `hauksbee doctor --backends`: report co-sim backend availability using the
 /// engine's OWN discovery, so `scripts/doctor.sh` can never drift from what a

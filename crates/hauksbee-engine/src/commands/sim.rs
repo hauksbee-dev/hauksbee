@@ -1,4 +1,7 @@
-//! `hauksbee sim <deck.cir>`: load a SPICE deck, run `.op`/`.tran`, write CSV.
+//! The `hauksbee sim <deck.cir>` subcommand: load a SPICE `.cir` deck, run the
+//! requested analysis (`.op` / `.tran` / `.ac` / `.dc`), and write the results as
+//! CSV, an ngspice ASCII rawfile, or both. A malformed deck exits 2; a well-formed
+//! deck the solver cannot honestly answer exits 3 rather than faking a result.
 
 use crate::result::EXIT_INVALID_FOR_ANALYSIS;
 
