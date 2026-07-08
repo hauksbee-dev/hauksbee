@@ -80,6 +80,7 @@ fn gate_driven_promptly_passes() {
     ensure_firmware("a");
     let result = run(&RunConfig {
         spec: example("boot_gate_pass.toml"),
+        ..Default::default()
     })
     .expect("PASS spec runs");
     assert!(
@@ -109,6 +110,7 @@ fn gate_left_floating_fails_naming_the_net() {
     ensure_firmware("b");
     let result = run(&RunConfig {
         spec: example("boot_gate_fail.toml"),
+        ..Default::default()
     })
     .expect("FAIL spec runs");
     assert!(
@@ -192,6 +194,7 @@ fn watchy_v15_display_res_driven_passes() {
     let t0 = std::time::Instant::now();
     let result = run(&RunConfig {
         spec: example("watchy_v15_display_res.toml"),
+        ..Default::default()
     })
     .expect("Watchy PASS spec runs");
     let wall = t0.elapsed();
@@ -239,6 +242,7 @@ fn watchy_v15_display_res_undriven_fails() {
     }
     let result = run(&RunConfig {
         spec: example("watchy_v15_display_res_undriven.toml"),
+        ..Default::default()
     })
     .expect("Watchy FAIL spec runs");
     let bc = result

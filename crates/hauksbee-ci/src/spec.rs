@@ -133,6 +133,14 @@ pub struct Spec {
     /// resistor value for the documented repair).
     #[serde(default, rename = "override")]
     pub overrides: Vec<Override>,
+    /// Component-tolerance rules: sampled per ensemble seed so assertions must
+    /// hold across the tolerance ensemble, not just at nominal values.
+    #[serde(default, rename = "tolerance")]
+    pub tolerances: Vec<ToleranceRule>,
+    /// Tolerance-ensemble execution config (seed count, monte-carlo vs
+    /// corners). Only meaningful when tolerances are declared.
+    #[serde(default)]
+    pub ensemble: Option<EnsembleSpec>,
     /// Initial-state fuzzing: run the sim under several random register/
     /// undefined-state seeds. An assertion must hold across *all* seeds.
     #[serde(default)]
@@ -481,13 +489,92 @@ impl SensorAttach {
     }
 }
 
-/// A component value override applied before binding.
+/// A component value override applied before binding. With a `tolerance`, the
+/// `value` becomes the *nominal* and the component is sampled around it as part
+/// of the tolerance ensemble (see [`ToleranceRule`]).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
     #[serde(rename = "ref")]
     pub reference: String,
     pub value: String,
+    /// Optional tolerance, as a percentage of `value` (10.0 = ±10%). Present =
+    /// this component joins the tolerance ensemble with `value` as nominal.
+    #[serde(default)]
+    pub tolerance: Option<f64>,
+    /// Sampling distribution: `"uniform"` (default) or `"gaussian"` (sigma =
+    /// tolerance/3, truncated at the tolerance bound). Only meaningful with
+    /// `tolerance`.
+    #[serde(default)]
+    pub distribution: Option<String>,
+}
+
+/// A component-tolerance rule: every component whose reference matches `ref`
+/// (a literal reference, or a pattern where `*` matches any run of characters)
+/// is sampled within ±`percent` of its value on every ensemble seed.
+///
+/// ```toml
+/// [[tolerance]]
+/// ref = "R*"                 # every resistor
+/// percent = 10.0             # ±10%
+/// distribution = "gaussian"  # optional; default "uniform"
+/// ```
+///
+/// Rules apply in order and the last matching rule wins per component, so a
+/// broad pattern can be followed by a tighter per-part rule. The nominal is
+/// the component's board value (after any `[[override]]`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToleranceRule {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// Tolerance as a percentage of nominal (10.0 = ±10%).
+    pub percent: f64,
+    /// `"uniform"` (default) or `"gaussian"` (sigma = percent/3, truncated at
+    /// the bound — the standard EDA 3-sigma convention).
+    #[serde(default)]
+    pub distribution: Option<String>,
+}
+
+/// Tolerance-ensemble execution configuration.
+///
+/// ```toml
+/// [ensemble]
+/// seeds = 24                 # Monte-Carlo sample count (default 16)
+/// mode  = "monte-carlo"      # "monte-carlo" (default) | "corners"
+/// ```
+///
+/// `monte-carlo` runs `seeds` members, each sampling every toleranced
+/// component from its distribution (seed 0 is the nominal baseline). A pass is
+/// **sampled coverage, not worst-case proof**. `corners` deterministically
+/// enumerates every all-min/all-max combination (2^n runs, n ≤ 10), which
+/// bounds the worst case only for monotonic responses. In corner mode `seeds`
+/// is ignored and `[fuzz]` must be absent (the two ensembles do not compose).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnsembleSpec {
+    /// Monte-Carlo member count. Ignored in corner mode.
+    #[serde(default = "default_ensemble_seeds")]
+    pub seeds: u32,
+    /// `"monte-carlo"` (default) or `"corners"`.
+    #[serde(default = "default_ensemble_mode")]
+    pub mode: String,
+}
+
+fn default_ensemble_seeds() -> u32 {
+    16
+}
+fn default_ensemble_mode() -> String {
+    "monte-carlo".to_string()
+}
+
+impl Default for EnsembleSpec {
+    fn default() -> Self {
+        EnsembleSpec {
+            seeds: default_ensemble_seeds(),
+            mode: default_ensemble_mode(),
+        }
+    }
 }
 
 /// Initial-state fuzzing configuration.
@@ -698,7 +785,91 @@ impl Spec {
                 return Err(SpecError::Invalid("[fuzz] seeds must be >= 1".into()));
             }
         }
+        // Tolerance-ensemble structural checks (board-independent; pattern
+        // matching against real components happens in the runner).
+        for t in &self.tolerances {
+            if !(t.percent > 0.0 && t.percent.is_finite()) {
+                return Err(SpecError::Invalid(format!(
+                    "[[tolerance]] on '{}': percent must be a positive number, got {}",
+                    t.reference, t.percent
+                )));
+            }
+            if let Some(d) = &t.distribution {
+                crate::tolerance::Distribution::parse(d)?;
+            }
+        }
+        for ov in &self.overrides {
+            if let Some(p) = ov.tolerance {
+                if !(p > 0.0 && p.is_finite()) {
+                    return Err(SpecError::Invalid(format!(
+                        "override on '{}': tolerance must be a positive percentage, got {p}",
+                        ov.reference
+                    )));
+                }
+            }
+            if ov.distribution.is_some() && ov.tolerance.is_none() {
+                return Err(SpecError::Invalid(format!(
+                    "override on '{}': `distribution` is only meaningful with `tolerance`",
+                    ov.reference
+                )));
+            }
+            if let Some(d) = &ov.distribution {
+                crate::tolerance::Distribution::parse(d)?;
+            }
+        }
+        if let Some(e) = &self.ensemble {
+            let mode = crate::tolerance::Mode::parse(&e.mode)?;
+            if e.seeds == 0 {
+                return Err(SpecError::Invalid("[ensemble] seeds must be >= 1".into()));
+            }
+            if !self.has_tolerances() {
+                return Err(SpecError::Invalid(
+                    "[ensemble] without any [[tolerance]] rules (or an override with a \
+                     `tolerance`) has nothing to sample"
+                        .into(),
+                ));
+            }
+            if mode == crate::tolerance::Mode::Corners && self.fuzz.is_some() {
+                return Err(SpecError::Invalid(
+                    "[ensemble] mode = \"corners\" does not compose with [fuzz] (the corner \
+                     index enumerates min/max combinations, not fuzz seeds); use \
+                     mode = \"monte-carlo\" to run tolerances and net fuzz together"
+                        .into(),
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// Does this spec declare any component tolerance (a `[[tolerance]]` rule
+    /// or an `[[override]]` carrying a `tolerance`)?
+    pub fn has_tolerances(&self) -> bool {
+        !self.tolerances.is_empty() || self.overrides.iter().any(|o| o.tolerance.is_some())
+    }
+
+    /// The ensemble mode in effect (defaults to Monte-Carlo when tolerances
+    /// exist without an explicit `[ensemble]` block).
+    pub fn ensemble_mode(&self) -> Result<crate::tolerance::Mode, SpecError> {
+        match &self.ensemble {
+            Some(e) => crate::tolerance::Mode::parse(&e.mode),
+            None => Ok(crate::tolerance::Mode::MonteCarlo),
+        }
+    }
+
+    /// Total ensemble seed count for a Monte-Carlo run: one shared seed stream
+    /// drives both net fuzz and tolerance sampling, so the count is the larger
+    /// of `[fuzz] seeds` and `[ensemble] seeds` (each seed does both).
+    pub fn ensemble_seed_count(&self) -> u32 {
+        let fuzz = self.fuzz.as_ref().map(|f| f.seeds).unwrap_or(1);
+        let tol = if self.has_tolerances() {
+            self.ensemble
+                .as_ref()
+                .map(|e| e.seeds)
+                .unwrap_or_else(|| EnsembleSpec::default().seeds)
+        } else {
+            1
+        };
+        fuzz.max(tol).max(1)
     }
 
     /// Every net name the spec references, for board-aware validation.

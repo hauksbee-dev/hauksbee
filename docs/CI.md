@@ -171,6 +171,86 @@ levels = [0.0, 5.0]               # the two states each is strapped between
 Seed 0 is always the all-low baseline; the rest are spread deterministically, so
 a run is reproducible.
 
+### Component tolerances: `[[tolerance]]` + `[ensemble]`
+
+A board that only meets its assertions at *nominal* component values is a
+latent defect: real parts are ±1% / ±5% / ±10%, and some fraction of assembled
+units will land outside the window. Declare the tolerances and hauksbee-ci
+replays the whole assertion set across an **ensemble** of sampled builds — on
+every commit.
+
+```toml
+[[tolerance]]
+ref = "R*"                 # a literal ref, or a pattern (* matches any run)
+percent = 10.0             # ±10% of the component's value
+distribution = "gaussian"  # optional; default "uniform"
+
+[ensemble]
+seeds = 24                 # Monte-Carlo member count (default 16)
+mode = "monte-carlo"       # "monte-carlo" (default) | "corners"
+```
+
+Rules apply in order and the **last matching rule wins** per component, so a
+broad `ref = "R*"` can be followed by a tighter `ref = "R7"`. The nominal is
+the component's board value (after any `[[override]]`). An override can also
+declare its own spread — the `value` becomes the nominal:
+
+```toml
+[[override]]
+ref = "R_Shunt15301"
+value = "0.05"
+tolerance = 1.0            # the repaired shunt is a ±1% part
+```
+
+Distributions: `"uniform"` samples the full ±tolerance band (assumes nothing
+about vendor binning, stresses the edges hardest — the default); `"gaussian"`
+uses the standard EDA convention, sigma = tolerance/3 truncated at the
+tolerance bound (a part outside its marked tolerance would have been binned
+out at the factory).
+
+**What a green ensemble means — and does not.** Monte-Carlo is *sampled
+coverage*: "passed 24/24 sampled tolerance seeds" is statistical evidence over
+the tolerance space, **never a worst-case proof**, and the report words it
+exactly that way. An assertion passes only if it holds on **every** member.
+
+**Corner mode** (`mode = "corners"`) is the deterministic complement: instead
+of random samples it enumerates every all-min/all-max combination of the
+toleranced components (2^n runs). For a response that is *monotonic* in each
+component value — dividers, ladders, most DC bias networks — the true worst
+case is a corner, so a green corner run bounds it. For non-monotonic responses
+(filters peaking mid-band, matched pairs) the interior can be worse than any
+corner, so the report claims boundedness **only for monotonic responses**.
+Full enumeration is capped at 2^10 = 1024 components' corners; above 10
+toleranced components corner mode refuses and points at Monte-Carlo. Corner
+mode does not compose with `[fuzz]` (the corner index enumerates min/max
+combinations, not fuzz seeds) — Monte-Carlo does.
+
+**Reproducibility is doctrine.** Every sampled value is a pure function of
+(spec, seed, component reference): seed 0 is always the nominal baseline, the
+tolerance stream is domain-separated from the net-fuzz stream (adding a
+tolerance never changes which fuzz levels seed N straps), and when `[fuzz]`
+and `[ensemble]` are both present one shared seed stream drives both (the
+member count is the larger of the two `seeds`). A failure names the seed and
+the exact sampled values:
+
+```
+[FAIL] VOUT stays in [2.4, 2.6] V across the tolerance ensemble
+      seed 8: VOUT: min=2.695V ... [R1=9.17k, R2=10.7k]; passed 19/24 seeds (failing: 8, 10, 16, 18, 19)
+```
+
+Re-run that one build in isolation — it reproduces byte-identically:
+
+```bash
+hauksbee-ci run ci/divider.toml --seed 8
+```
+
+A runnable two-sided demo ships in the examples: the same 10k/10k divider
+passes at nominal and fails across the ±10% ensemble
+(`crates/hauksbee-ci/examples/tolerance_divider.toml`), and its corner variant
+lands exactly on the hand-computable [2.25, 2.75] V envelope
+(`tolerance_divider_corners.toml`). Both are pinned as integration tests
+against that analytic envelope (`crates/hauksbee-ci/tests/tolerance.rs`).
+
 ### Assertions: `[[assert]]`
 
 At least one is required (a check with no assertions passes vacuously, so the
@@ -552,6 +632,13 @@ only handles the spec path and the binary does the rest.
   numeric ceiling.
 - Fuzzing perturbs the named nets' initial logic levels (the undefined power-up
   bits); it does not yet randomize internal MCU RAM.
+- Tolerance-ensemble members run serially. Each member is an independent
+  bind+solve, so a parallel runner is a natural follow-up, but the co-sim
+  backend's thread-safety is unproven and a racy runner would be worse than a
+  slow one.
+- Tolerance sampling lives in the CI spec layer. Deck-level `{mc(nominal,
+  tol)}` / `{gauss(nominal, tol, sigma)}` parameter functions for
+  `hauksbee sim` SPICE decks are a planned follow-up, not yet implemented.
 - Schematic-stage CI loads the hierarchy root and recurses its sub-sheets. The
   "you pointed at a sub-sheet" guard is best-effort: it detects a sub-sheet
   referenced from the same or parent directory (the layouts real projects use).
