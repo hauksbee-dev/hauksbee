@@ -1,6 +1,8 @@
-//! ratatui rendering of the four-pane + footer layout. This module is the only
-//! place that touches ratatui widgets; the state it reads is the pure
-//! [`AppState`] from [`super::state`].
+//! ratatui rendering of the TUI's four-pane + footer layout. This module is the
+//! only place that touches ratatui widgets: it reads the pure [`AppState`] from
+//! [`super::state`] and draws it, keeping rendering isolated from state so the
+//! state stays testable without a terminal. Focus and selection also carry ASCII
+//! markers so they read in colour-stripped captures.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};

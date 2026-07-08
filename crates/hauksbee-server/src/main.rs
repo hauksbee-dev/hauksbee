@@ -1,3 +1,10 @@
+//! The `hauksbee-server` demo binary. It exists only to run the synthetic
+//! simavr-backed AVR demo engine (`McuDemoEngine`); real board co-simulation
+//! (extract → bind → solve + MCU + digital) lives behind the `hauksbee` binary in
+//! `hauksbee-engine`. Built without the `avr` feature (the GPL-free release shape)
+//! it compiles to a stub that explains where to go instead of linking GPL
+//! libsimavr.
+
 // The demo binary is AVR-only: it exists to run the synthetic McuDemoEngine
 // (a simavr-backed atmega328p). Without the `avr` feature (the MIT-clean
 // release shape) there is nothing for it to demo, so it compiles to a stub
