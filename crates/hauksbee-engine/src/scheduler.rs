@@ -2254,6 +2254,11 @@ pub struct StepResult {
 /// a host without the emulator installed, is a clear error rather than a silent
 /// AVR fallback (that would run the wrong firmware against the circuit).
 ///
+/// `renode:<part>` / `qemu:<part>` configs come from the SoC-descriptor
+/// resolution path (`SocConfig::resolve`): `$HAUKSBEE_MCU_DIR` →
+/// `~/.config/hauksbee/mcu` → the embedded builtin, so a user descriptor can
+/// add a new part — or override a builtin — purely as data (06 §6.4).
+///
 /// For the QEMU backend the firmware path is the merged flash image, which QEMU
 /// boots from at spawn; there is no separate load step (the trait's
 /// `load_firmware` is a no-op for QEMU).
@@ -2294,13 +2299,8 @@ fn instantiate_qemu(
     part: &str,
     firmware: Option<&std::path::Path>,
 ) -> anyhow::Result<Box<dyn Mcu + Send>> {
-    use hauksbee_mcu::{QemuBackend, QemuConfig};
-    let config = match part {
-        "esp32" => QemuConfig::esp32(),
-        "esp32s3" => QemuConfig::esp32s3(),
-        "esp32c3" => QemuConfig::esp32c3(),
-        other => anyhow::bail!("unknown qemu backend part '{other}'"),
-    };
+    use hauksbee_mcu::QemuBackend;
+    let config = resolve_qemu_config(part)?;
     let flash = firmware.ok_or_else(|| {
         anyhow::anyhow!(
             "the qemu:{part} backend needs a merged flash image as the firmware \
@@ -2308,6 +2308,29 @@ fn instantiate_qemu(
         )
     })?;
     Ok(Box::new(QemuBackend::new(config, flash)?))
+}
+
+/// Resolve a `qemu:<part>` token to a `QemuConfig` through the descriptor
+/// path, symmetric with [`resolve_renode_config`]: override dirs beat the
+/// embedded builtin, an invalid override fails loudly with its named
+/// validation error, and an unknown part's error enumerates the dirs
+/// searched. The QEMU backend never had alias tokens, so there is no
+/// canonical-part fallback.
+#[cfg(feature = "qemu")]
+fn resolve_qemu_config(part: &str) -> anyhow::Result<hauksbee_mcu::QemuConfig> {
+    use hauksbee_mcu::SocConfig;
+    let spec = format!("qemu:{part}");
+    let resolved = SocConfig::resolve(&spec)
+        .map_err(|e| anyhow::anyhow!("resolving MCU descriptor for '{spec}': {e}"))?;
+    match resolved {
+        SocConfig::Qemu(config) => Ok(config),
+        // Unreachable: resolve() validates the declared backend against the
+        // spec's `qemu:` half. Kept as a loud backstop.
+        #[cfg(feature = "renode")]
+        SocConfig::Renode(_) => anyhow::bail!(
+            "descriptor for '{spec}' declares backend \"renode\" but was requested as qemu"
+        ),
+    }
 }
 
 #[cfg(not(feature = "qemu"))]
@@ -2430,16 +2453,66 @@ fn family_stem(modelled_norm: &str) -> &str {
 /// Build a Renode-backed core for a `renode:<part>` backend string.
 #[cfg(feature = "renode")]
 fn instantiate_renode(part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
-    use hauksbee_mcu::{RenodeBackend, RenodeConfig};
-    let config = match part {
-        "stm32f103" => RenodeConfig::stm32f103(),
-        "stm32f4_discovery" | "stm32f4" => RenodeConfig::stm32f4_discovery(),
-        "nrf52840" | "nrf52" => RenodeConfig::nrf52840(),
-        "sifive_fe310" | "fe310" => RenodeConfig::sifive_fe310(),
-        "rp2040" | "pico" => RenodeConfig::rp2040(),
-        other => anyhow::bail!("unknown renode backend part '{other}'"),
-    };
+    use hauksbee_mcu::RenodeBackend;
+    let config = resolve_renode_config(part)?;
     Ok(Box::new(RenodeBackend::new(config)?))
+}
+
+/// The canonical descriptor part for a legacy alias token, if `part` is one.
+///
+/// The pre-descriptor scheduler accepted these shorthand backend strings; the
+/// descriptor files are named after the canonical parts, so an alias falls
+/// back to its canonical descriptor when no `<alias>.soc.toml` exists. The
+/// alias is still tried verbatim FIRST so an override dir can shadow it too.
+#[cfg(feature = "renode")]
+fn renode_part_alias(part: &str) -> Option<&'static str> {
+    match part {
+        "stm32f4" => Some("stm32f4_discovery"),
+        "nrf52" => Some("nrf52840"),
+        "fe310" => Some("sifive_fe310"),
+        "pico" => Some("rp2040"),
+        _ => None,
+    }
+}
+
+/// Resolve a `renode:<part>` token to a `RenodeConfig` through the descriptor
+/// path ([`hauksbee_mcu::SocConfig::resolve`]): `$HAUKSBEE_MCU_DIR` →
+/// `~/.config/hauksbee/mcu` → the embedded builtin. This is the product-path
+/// half of "add a Renode MCU purely as data" (06 §6.4): an override-dir
+/// descriptor WINS over the embedded builtin of the same name, and an INVALID
+/// override descriptor for the requested part fails loudly with its named
+/// validation error — it is never silently skipped in favour of the builtin.
+///
+/// Only a genuine not-found on a legacy alias token (`stm32f4`, `nrf52`,
+/// `fe310`, `pico`) falls back to the canonical part's descriptor.
+#[cfg(feature = "renode")]
+fn resolve_renode_config(part: &str) -> anyhow::Result<hauksbee_mcu::RenodeConfig> {
+    use hauksbee_mcu::{SocConfig, SocError};
+    let spec = format!("renode:{part}");
+    let resolved = match SocConfig::resolve(&spec) {
+        Ok(cfg) => cfg,
+        // Not found under the alias name anywhere: try the canonical part.
+        // Any OTHER error (an unreadable or invalid descriptor that DOES
+        // exist for the alias) propagates — fail loud, never skip.
+        Err(SocError::NotFound { .. }) if renode_part_alias(part).is_some() => {
+            let canon = renode_part_alias(part).expect("guard checked");
+            SocConfig::resolve(&format!("renode:{canon}")).map_err(|e| {
+                anyhow::anyhow!(
+                    "resolving MCU descriptor for '{spec}' (alias of 'renode:{canon}'): {e}"
+                )
+            })?
+        }
+        Err(e) => anyhow::bail!("resolving MCU descriptor for '{spec}': {e}"),
+    };
+    match resolved {
+        SocConfig::Renode(config) => Ok(config),
+        // Unreachable: resolve() validates the descriptor's declared backend
+        // against the spec's `renode:` half. Kept as a loud backstop.
+        #[cfg(feature = "qemu")]
+        SocConfig::Qemu(_) => anyhow::bail!(
+            "descriptor for '{spec}' declares backend \"qemu\" but was requested as renode"
+        ),
+    }
 }
 
 #[cfg(not(feature = "renode"))]
@@ -2898,5 +2971,77 @@ mod tests {
             }
             _ => panic!("driver vsource missing"),
         }
+    }
+}
+
+/// The product-path wiring the fresh-context critic proved missing: backend
+/// instantiation for `renode:<part>` consults the SoC-descriptor override
+/// dirs through `SocConfig::resolve` — override beats builtin, an invalid
+/// override for the requested part fails loudly, aliases fall back to their
+/// canonical descriptors, and an unknown part's error enumerates the dirs
+/// searched. One test fn: it mutates HAUKSBEE_MCU_DIR, which must not be
+/// visible to a concurrently running test.
+#[cfg(all(test, feature = "renode"))]
+mod soc_wiring_tests {
+    use super::resolve_renode_config;
+
+    #[test]
+    fn renode_instantiation_resolves_through_override_dirs() {
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee-engine-socwire-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A brand-new part, purely as data (an F101 sibling of the F103).
+        let f101 = include_str!("../../hauksbee-mcu/db/mcu/stm32f103.soc.toml")
+            .replace(
+                "mcu_label = \"STM32F103 (ARM Cortex-M3)\"",
+                "mcu_label = \"STM32F101 (ARM Cortex-M3)\"",
+            );
+        std::fs::write(dir.join("stm32f101.soc.toml"), &f101).unwrap();
+
+        // An INVALID override for the BUILTIN part sifive_fe310 (typo'd
+        // field). rp2040 is left unshadowed so the `pico` alias below
+        // exercises the clean canonical-descriptor fallback.
+        let broken = include_str!("../../hauksbee-mcu/db/mcu/sifive_fe310.soc.toml")
+            .replace("platform_repl =", "platform_rep =");
+        std::fs::write(dir.join("sifive_fe310.soc.toml"), &broken).unwrap();
+
+        // SAFETY (edition 2021): set_var is safe; no other test in this binary
+        // reads HAUKSBEE_MCU_DIR or resolves these parts.
+        std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
+        let new_part = resolve_renode_config("stm32f101");
+        let invalid_override = resolve_renode_config("sifive_fe310");
+        let alias = resolve_renode_config("pico");
+        let missing = resolve_renode_config("stm32f199");
+        std::env::remove_var("HAUKSBEE_MCU_DIR");
+        std::fs::remove_dir_all(&dir).ok();
+
+        // The new part came from the override dir.
+        assert_eq!(
+            new_part.expect("new part resolves").mcu_label,
+            "STM32F101 (ARM Cortex-M3)"
+        );
+
+        // The invalid override for a builtin name FAILS LOUDLY (never falls
+        // back to the embedded fe310), naming the file and the typo'd field.
+        let err = invalid_override.expect_err("invalid override must fail").to_string();
+        assert!(err.contains("sifive_fe310.soc.toml"), "err: {err}");
+        assert!(err.contains("platform_rep"), "err: {err}");
+
+        // The legacy alias reaches its canonical descriptor... but only after
+        // trying `pico` verbatim, which the override dir did not shadow.
+        assert_eq!(alias.expect("alias resolves").machine, "rp2040");
+
+        // Unknown part with no descriptor anywhere: the error enumerates the
+        // dirs searched.
+        let err = missing.expect_err("unknown part must fail").to_string();
+        assert!(err.contains("no SoC descriptor found"), "err: {err}");
+        assert!(err.contains("renode:stm32f199"), "err: {err}");
     }
 }

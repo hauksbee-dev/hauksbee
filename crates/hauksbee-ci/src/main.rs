@@ -79,6 +79,14 @@ struct RunArgs {
     /// the isolated run reproduces the full run's values exactly.
     #[arg(long, value_name = "N")]
     seed: Option<u32>,
+
+    /// Extra model directory, layered above the builtin db, installed packs,
+    /// and the user model dirs (`~/.hauksbee/models`, `~/.config/hauksbee/models`)
+    /// — the same layer order as `hauksbee run --models-dir`. Lets a spec's
+    /// board bind custom parts checked into the hardware repo, including
+    /// `[[models]] kind = "mcu"` routing entries for user SoC descriptors.
+    #[arg(long, value_name = "DIR")]
+    models_dir: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -98,6 +106,7 @@ fn main() -> ExitCode {
     let cfg = RunConfig {
         spec: args.spec.clone(),
         seed: args.seed,
+        models_dir: args.models_dir.clone(),
     };
     let result = match run(&cfg) {
         Ok(r) => r,

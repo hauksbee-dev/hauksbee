@@ -142,6 +142,18 @@ pub enum SocError {
         #[source]
         source: std::io::Error,
     },
+
+    /// An override-dir descriptor file existed for the requested part but
+    /// failed to load — carries the path so the failing FILE is named, and the
+    /// inner named validation error so the failing FIELD/CHECK is too. This is
+    /// deliberately fatal for the resolution (fail loud): an invalid override
+    /// is never silently skipped in favour of a lower-priority descriptor.
+    #[error("invalid SoC descriptor {path}: {source}")]
+    InvalidDescriptor {
+        path: String,
+        #[source]
+        source: Box<SocError>,
+    },
 }
 
 /// The emulator backend a descriptor targets.
@@ -158,6 +170,14 @@ impl Backend {
             "renode" => Ok(Backend::Renode),
             "qemu" => Ok(Backend::Qemu),
             other => Err(SocError::UnknownBackend(other.to_string())),
+        }
+    }
+
+    /// The canonical token for this backend (the `backend:` half of a spec).
+    pub fn name(self) -> &'static str {
+        match self {
+            Backend::Renode => "renode",
+            Backend::Qemu => "qemu",
         }
     }
 }
@@ -553,22 +573,54 @@ impl SocConfig {
     /// A file found by (1) or (2) still declares its own `backend`, and the
     /// resulting config is dispatched by that declared backend — so the `part`
     /// half of the spec is a filename, and the `backend` half is validated
-    /// against the descriptor. This is the "add a Renode MCU purely as data"
+    /// against the descriptor: a `renode:mypart` spec that resolves to a
+    /// `backend = "qemu"` file is a [`SocError::BackendMismatch`], never a
+    /// silent backend swap. This is the "add a Renode MCU purely as data"
     /// path (06 §6.4): drop `mypart.soc.toml` in the override dir and resolve
     /// `renode:mypart`.
+    ///
+    /// Fail-loud contract: a descriptor file that EXISTS for the requested
+    /// part is always parsed, and any validation error it carries propagates.
+    /// An invalid override for a builtin name (say a typo'd field in a user
+    /// `stm32f103.soc.toml`) therefore fails the resolution rather than being
+    /// silently skipped in favour of the builtin.
     pub fn resolve(spec: &str) -> Result<SocConfig, SocError> {
-        let (_backend_tok, part) = spec
+        let (backend_tok, part) = spec
             .split_once(':')
             .ok_or_else(|| SocError::BadSpec(spec.to_string()))?;
         if part.is_empty() {
             return Err(SocError::BadSpec(spec.to_string()));
         }
+        // The spec's backend half must itself be a known backend; validate it
+        // up front so "reonde:stm32f103" is an UnknownBackend, not a NotFound.
+        let expected = Backend::parse(backend_tok)?;
 
         // (1)+(2): override directories, highest priority first.
         for dir in override_dirs() {
             let path = dir.join(format!("{part}.soc.toml"));
             match std::fs::read_to_string(&path) {
-                Ok(src) => return Self::from_soc_toml(&src),
+                Ok(src) => {
+                    // Check the DECLARED backend against the spec's token
+                    // before the full parse: peek_backend is feature-independent,
+                    // so a mismatched descriptor reports BackendMismatch even in
+                    // a build where the declared backend's feature is disabled
+                    // (from_soc_toml would say BackendDisabled — misleading for
+                    // an invalid renode override that typo'd `backend = "qemu"`).
+                    return peek_backend(&src)
+                        .and_then(|declared| {
+                            if declared != expected {
+                                return Err(SocError::BackendMismatch {
+                                    expected: expected.name().to_string(),
+                                    found: declared.name().to_string(),
+                                });
+                            }
+                            Self::from_soc_toml(&src)
+                        })
+                        .map_err(|source| SocError::InvalidDescriptor {
+                            path: path.display().to_string(),
+                            source: Box::new(source),
+                        })
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(source) => {
                     return Err(SocError::Io {
@@ -581,6 +633,8 @@ impl SocConfig {
 
         // (3): embedded built-in.
         if let Some((_, src)) = EMBEDDED.iter().find(|(k, _)| *k == spec) {
+            // The embedded key IS the full `backend:part` spec, so the declared
+            // backend matches `expected` by construction; no re-check needed.
             return Self::from_soc_toml(src);
         }
 
@@ -602,6 +656,20 @@ impl SocConfig {
     /// The `backend:part` specs of every embedded built-in descriptor.
     pub fn builtin_specs() -> Vec<&'static str> {
         EMBEDDED.iter().map(|(k, _)| *k).collect()
+    }
+
+    /// The backend this resolved descriptor targets.
+    pub fn backend(&self) -> Backend {
+        match self {
+            #[cfg(feature = "renode")]
+            SocConfig::Renode(_) => Backend::Renode,
+            #[cfg(feature = "qemu")]
+            SocConfig::Qemu(_) => Backend::Qemu,
+            // A build with no backend feature has no variants, but `&Self` is
+            // still considered inhabited, so the match needs an arm to compile.
+            #[cfg(not(any(feature = "renode", feature = "qemu")))]
+            _ => unreachable!("SocConfig cannot be constructed without a backend feature"),
+        }
     }
 }
 

@@ -120,7 +120,20 @@ expr     = "adc_hum"
 Available encodings (`Encoding` in `sensor_spec.rs`): `u8`, `u16_be`,
 `u16_le`, `i16_be`, `i16_le`, `q7.1_be` (the LM75A packing), `u20_be_xlsb`
 (the Bosch 20-bit MSB/LSB/XLSB frame — added *for* the BME280), and `raw`
-(const-only). `scale`/`offset` apply a linear pre-scale before encoding. If
+(const-only). `scale`/`offset` apply a linear pre-scale before encoding —
+`encoded_value = expr * scale + offset` — e.g. a register that stores
+temperature as `T * 100 + 4000` (the SHT31-style offset-centigrade packing):
+
+```toml
+[[sensor.register]]
+addr     = 0x00
+encoding = "u16_be"
+expr     = "temp_c"
+scale    = 100.0
+offset   = 4000.0
+```
+
+If
 your part needs a packing none of these produce, that is a small Rust addition
 to `Encoding` — the `u20_be_xlsb` doc comment is the template for justifying
 one.
@@ -191,6 +204,12 @@ For your own sensor, write the same shape: cite the datasheet section next to
 every constant, and make the assertion a number printed *in the datasheet*,
 not a number your model produced once. A fixture that asserts the model
 against itself proves nothing.
+
+One honest caveat: this closing proof pattern is a Rust test, so it needs a
+hauksbee **checkout** to run in. The data-only promise holds for *using* the
+part — writing the spec, `hauksbee models lint`, `models resolve`, and the
+co-sim attaching it at runtime need no checkout — but pinning it with a
+datasheet-anchored test the way the shipped parts are pinned does.
 
 ## Step 7 — use it in a co-sim
 

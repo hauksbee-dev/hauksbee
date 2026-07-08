@@ -161,7 +161,24 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
 /// failing-seed isolation path). Tolerance sampling and net fuzz are both
 /// keyed by the absolute seed number, so the isolated member reproduces the
 /// full run's values exactly.
+///
+/// The model library is the same layered one `hauksbee run` uses (builtin →
+/// packs → `~/.hauksbee/models` → `~/.config/hauksbee/models`), so a
+/// `[[models]]` routing entry in a user model dir binds in CI exactly as it
+/// does interactively. For an explicit extra layer (the `--models-dir` flag)
+/// use [`run_spec_with_lib`].
 pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOutcome>, SpecError> {
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
+    run_spec_with_lib(spec, only_seed, &lib)
+}
+
+/// [`run_spec_seeded`] against an explicit, already-built model library (how
+/// the CLI threads `--models-dir` through).
+pub fn run_spec_with_lib(
+    spec: &Spec,
+    only_seed: Option<u32>,
+    lib: &ModelLibrary,
+) -> Result<Vec<RunOutcome>, SpecError> {
     // Read + extract the board once; clone per seed (binding mutates nothing on
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
@@ -231,17 +248,17 @@ pub fn run_spec_seeded(spec: &Spec, only_seed: Option<u32>) -> Result<Vec<RunOut
     // share it. Toleranced values move the bias point, so each member gets its
     // own sweep — sharing one would silently pin the AC results to nominal.
     let shared_ac = if spec.ac.is_some() && tols.is_empty() {
-        Some(compute_ac(spec, &base, &[])?)
+        Some(compute_ac(spec, &base, &[], lib)?)
     } else {
         None
     };
 
     let mut outcomes = Vec::with_capacity(plans.len());
     for plan in &plans {
-        let mut outcome = run_one(spec, &base, &thresholds, plan)?;
+        let mut outcome = run_one(spec, &base, &thresholds, plan, lib)?;
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
-            None if spec.ac.is_some() => Some(compute_ac(spec, &base, &plan.values)?),
+            None if spec.ac.is_some() => Some(compute_ac(spec, &base, &plan.values, lib)?),
             None => None,
         };
         outcomes.push(outcome);
@@ -257,14 +274,14 @@ fn compute_ac(
     spec: &Spec,
     base: &ExtractedBoard,
     sampled: &[crate::tolerance::SampledValue],
+    lib: &ModelLibrary,
 ) -> Result<AcOutcome, SpecError> {
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
     let cfg = spec.ac.as_ref().expect("compute_ac called without [ac]");
     let mut board = apply_overrides(spec, base)?;
     apply_sampled_values(&mut board, sampled);
-    let lib = ModelLibrary::builtin();
-    let mut bound = bind_board(&board, &lib);
+    let mut bound = bind_board(&board, lib);
 
     // Bias the operating point exactly as the transient run would: rail
     // suppression, supplies, and net drives all shift the DC bias the
@@ -574,12 +591,12 @@ fn run_one(
     base: &ExtractedBoard,
     thresholds: &[f64],
     plan: &crate::tolerance::SeedPlan,
+    lib: &ModelLibrary,
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base)?;
     apply_sampled_values(&mut board, &plan.values);
-    let lib = ModelLibrary::builtin();
-    let mut bound = bind_board(&board, &lib);
+    let mut bound = bind_board(&board, lib);
 
     // The as-built overlay comes first: it is BOARD state (the physical rework
     // record — cuts, jumpers, fitted values), so it lands before any harness
