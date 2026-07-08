@@ -4,6 +4,8 @@
 //! directly. Temperature-dependent quantities (junction saturation current,
 //! thermal voltage, built-in potentials) are computed from the circuit's
 //! global temperature via the helpers here, keeping that physics in one place.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/models.md.
 
 use serde::{Deserialize, Serialize};
 
