@@ -1,4 +1,5 @@
 //! hauksbee-engine: the integration heart.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/README.md.
 //!
 //! This crate turns an [`ExtractedBoard`](hauksbee_extract::ExtractedBoard)
 //! plus a [`ModelLibrary`](hauksbee_models::ModelLibrary) into a *live*

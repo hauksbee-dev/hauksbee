@@ -1,4 +1,6 @@
 //! Controllable Thevenin pin drivers.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/digital.md
+//! (the digital-domain essay covers this module too).
 //!
 //! A digital IC output or an MCU GPIO pin drives an analog net not by clamping
 //! it, but through a Thevenin equivalent: an ideal voltage source behind an

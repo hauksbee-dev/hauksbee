@@ -1,5 +1,6 @@
 //! I2C slave framework and two concrete devices: a 24Cxx EEPROM and an LM75
 //! temperature sensor with its real datasheet register map.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! ## How it plugs into the co-sim
 //!

@@ -1,5 +1,6 @@
 //! Peripherals: things you attach to a board that act as inputs, outputs, and
 //! interactive controls during a co-simulation.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! A peripheral is anything that is *not* a part on the board model but that
 //! the firmware or the analog circuit interacts with at runtime: a pushbutton

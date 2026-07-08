@@ -1,4 +1,5 @@
 //! Event-driven behavioral digital components.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/digital.md.
 //!
 //! These are NOT solved in MNA. Each step the scheduler:
 //!   1. samples the input net voltages and converts them to logic levels with
