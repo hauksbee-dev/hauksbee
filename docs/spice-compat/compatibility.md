@@ -136,6 +136,12 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
   - **Analog accuracy (gain, subthreshold slope, short-channel effects) is a known gap.**
     Use a switch, load switch, or synchronous rectifier deck; do not expect an amplifier
     small-signal match.
+  - **A weakly-driven device reads as high `Rds(on)`, and that is physics, not a bug.**
+    `Rds(on)` in the square law is set by the gate *over*drive `Vgs − Vth`; a hand-rolled
+    LEVEL-1 model whose `KP`/`W`/`L` is small, or a gate barely above `Vth`, is genuinely
+    resistive and the operating point will show a large drain-source drop. If a switch you
+    expect to be "on" sits at several ohms, raise the overdrive (`KP`, `W/L`, or `Vgs`) or
+    supply a datasheet `Rds(on)` — the solver is reporting the model you gave it.
 - **Coupled inductors `K` model lossless linear mutual coupling only.** `k=1` (a perfect
   transformer) is legal and solved without inverting the singular L-matrix. **Saturating
   cores are unsupported** — no core (BH) model card parses. Transformer/flyback decks are
