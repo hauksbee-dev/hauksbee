@@ -32,6 +32,8 @@
 //! Geometry is read from the same `.kicad_pcb` s-expression the DRC parses,
 //! reusing nothing private to `drc.rs` (this module re-derives only the narrow
 //! slice it needs, exactly as `trace_current.rs` does).
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/si.md.
 
 use std::collections::HashMap;
 
