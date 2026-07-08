@@ -1,4 +1,5 @@
 //! Trace-ampacity check wired into `--si`.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! The physics (IPC-2221 width -> current, the Poured-net exemption, the
 //! "never invent a current" rule) all live in
