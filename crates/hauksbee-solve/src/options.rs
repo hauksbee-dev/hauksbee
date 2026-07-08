@@ -164,16 +164,17 @@ pub struct DeviceEffects {
     pub early_effect: bool,
     /// Charge storage: junction (depletion) & diffusion capacitances. Off =>
     /// DC behaviour even in transient (fast, but loses switching dynamics).
-    /// Honored for DIODES (cjo/vj/m/tt, dev-plan 04 §3.1: charge-based
-    /// companion, LTE participation, jwC in AC); the BJT's cje/cjc/tf/tr are
-    /// parsed but not stamped until §3.2 lands — a BJT model carrying them
-    /// logs once instead of silently ignoring them (§3.4). A model without
-    /// charge fields stamps identically whatever this toggle says.
+    /// Honored for DIODES (cjo/vj/m/tt, dev-plan 04 §3.1), BJTs (cje/cjc/tf/tr,
+    /// §3.2: two charge banks) and MOSFETs (gate charges + body-diode depletion,
+    /// §3.3) — all charge-based companions with LTE participation and jwC in AC.
+    /// A model without charge fields stamps identically whatever this toggle
+    /// says.
     pub junction_caps: bool,
-    /// Ohmic series resistances (diode RS, BJT RB/RE/RC). Off => ideal
-    /// contacts. NOT stamped yet for either device (dev-plan 04 §3.2 inserts
-    /// the internal series nodes); a model carrying a nonzero series
-    /// resistance logs once instead of silently ignoring it (§3.4).
+    /// Ohmic series resistances. Honored for BJTs (RB/RE/RC via layout-private
+    /// internal nodes, dev-plan 04 §3.2). The diode's RS is NOT stamped yet —
+    /// a diode model carrying a nonzero RS logs once (under HAUKSBEE_DEBUG)
+    /// instead of silently ignoring it (§3.4); it can ride the same
+    /// internal-node machinery in a follow-up.
     pub series_resistance: bool,
     /// Temperature dependence of saturation currents and thermal voltage.
     /// Off => everything evaluated at TNOM regardless of `temperature_c`.
