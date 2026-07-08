@@ -578,6 +578,21 @@ impl AvrMcu {
         unsafe {
             ffi::avr_init(avr);
             (*avr).frequency = frequency as u32;
+            // Route simavr's own logging through hauksbee's debug channel. By
+            // default simavr writes AVR_LOG lines straight to fd 2 — including
+            // `avr_sadly_crashed`'s crash dump, which the persona panel saw leak
+            // into user-facing CI output when a boot assert ran without firmware.
+            // AVR_LOG is gated on `avr->log`, so setting it to LOG_NONE (0)
+            // silences the emulator's internal chatter unless the same
+            // `HAUKSBEE_DEBUG` switch that opens the solver's debug channel is set
+            // (any non-empty value), in which case simavr's default verbosity is
+            // left untouched for whoever is debugging the co-sim.
+            let debug_on = std::env::var_os("HAUKSBEE_DEBUG")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+            if !debug_on {
+                (*avr).set_log(0);
+            }
             // simavr defaults the rails to 3.3V; standard Arduino-class
             // parts run at 5V and the ADC full scale follows AVcc. The
             // co-sim layer can override via set_rails().

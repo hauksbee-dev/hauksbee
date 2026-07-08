@@ -1457,9 +1457,15 @@ pub(crate) mod effect_log {
     pub static DIODE_SERIES_R: AtomicBool = AtomicBool::new(false);
 
     /// Log `msg` the first time this flag fires; a no-op afterwards.
+    ///
+    /// This is an engine-internal dev note (it references a dev-plan section and
+    /// an unimplemented effect), so it goes through the `HAUKSBEE_DEBUG`-gated
+    /// debug channel rather than straight to stderr: on a user's CI run it was
+    /// leaking `[effects] ... (dev-plan 04 §3.2)` into the output. The flag still
+    /// flips exactly once (tests read it), the print is just now channel-gated.
     pub fn log_once(flag: &AtomicBool, msg: &str) {
         if !flag.swap(true, Ordering::Relaxed) {
-            eprintln!("[effects] {msg}");
+            hauksbee_ir::debug::note("effects", msg);
         }
     }
 }
