@@ -1,4 +1,5 @@
 //! Hardware-trace comparison: the T6 oracle tier (validation plan §T6).
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ci/hwtrace.md.
 //!
 //! A *hardware trace* is a captured waveform from a physical board — an
 //! oscilloscope CSV export or a logic-analyzer VCD — checked into
