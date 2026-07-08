@@ -81,6 +81,8 @@
 //! `gpio_set_level` writes still happen in the firmware; the mailbox is only the
 //! observation path the emulator's gpio model lacks. See the limitations section
 //! in docs/MCU.md.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 mod gdb;
 mod process;
