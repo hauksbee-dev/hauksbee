@@ -1,4 +1,5 @@
 //! Output sinks: a VCD logger that records digital transitions on chosen nets.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! The [`VcdSink`] samples a set of nets after every analog solve, decides each
 //! one's logic level with thresholds + hysteresis, and records a timestamped

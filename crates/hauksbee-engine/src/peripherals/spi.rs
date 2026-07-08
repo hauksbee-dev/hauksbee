@@ -1,5 +1,6 @@
 //! SPI slave framework and two concrete devices: a 25xx SPI EEPROM and an
 //! MCP3008 8-channel ADC.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/peripherals.md.
 //!
 //! ## How it plugs into the co-sim
 //!
