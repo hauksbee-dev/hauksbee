@@ -207,10 +207,19 @@ enum ModelsCommand {
     Add(ModelsAddArgs),
     /// Uninstall a model pack by name.
     Remove(ModelsRemoveArgs),
-    /// List installed model packs.
-    List,
+    /// List installed model packs (and, with --builtin, the embedded MCU SoC descriptors).
+    List(ModelsListArgs),
     /// Show, per board component, which model entry won and from which layer.
     Resolve(ModelsResolveArgs),
+}
+
+#[derive(Parser)]
+struct ModelsListArgs {
+    /// Also list the embedded MCU SoC descriptors (the `backend:part` specs a
+    /// board's `renode:<part>` / `qemu:<part>` backend string resolves to when
+    /// no override-dir descriptor shadows them).
+    #[arg(long)]
+    builtin: bool,
 }
 
 #[derive(Parser)]
@@ -590,7 +599,7 @@ fn main() -> anyhow::Result<()> {
             ModelsCommand::Lint(args) => hauksbee_engine::commands::models::lint(&args.file),
             ModelsCommand::Add(args) => hauksbee_engine::commands::models::add(&args.source),
             ModelsCommand::Remove(args) => hauksbee_engine::commands::models::remove(&args.name),
-            ModelsCommand::List => hauksbee_engine::commands::models::list(),
+            ModelsCommand::List(args) => hauksbee_engine::commands::models::list(args.builtin),
             ModelsCommand::Resolve(args) => hauksbee_engine::commands::models::resolve(
                 &args.board,
                 args.models_dir.as_deref(),
