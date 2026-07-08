@@ -188,17 +188,49 @@ default-on switch. Intentionally not changed.
 
 These are genuine open limitations the code carries today. Each is the
 responsibility of the doc that owns the surface, and is listed here only so this
-triage page is a complete index of what is *not* yet closed:
+triage page is a complete index of what is *not* yet closed.
 
-- **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs): the QEMU backend
-  does not intercept I2C, so an I2C DAC on the bus is not answered. See
-  `docs/record/TARSKI_RESULTS.md` and `docs/record/TEST_CAMPAIGN.md`.
+**Reconciled 2026-07-08 (trunk `7c3b8c8`):** two entries in this list had been
+closed by the W4 co-sim-fidelity tests without this index being updated. They
+are moved to the closed block below, each verified by re-running its closing
+test against the current trunk. The still-open entries follow.
+
+Closed since recorded (verified by re-run, 2026-07-08):
+
+- **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs) — **CLOSED**. The
+  MCP4728 IS an I2C slave now: a spec-driven `RegisterMapSensor`
+  (`docs/hunts/specs/mcp4728.toml`), three instances auto-attached at
+  0x60/0x61/0x62 with VOUT PinDrivers into the analog solve. Covered by
+  `crates/hauksbee-engine/tests/mcp4728_cosim.rs`
+  (`programmed_dac_drives_vout_net_in_solve`: the firmware's exact Fast-Write
+  bytes drive the solved V_SET1 net to `code × 0.001 V`;
+  `dacs_answer_independently_on_the_bus`) and, firmware side,
+  `tarski_firmware_cosim.rs::host_programs_dacs_over_serial` (LOAD_DAC ACKs,
+  all 12 codes latch). The QEMU-ESP32 I2C-interception limitation recorded in
+  the original wording is a separate, still-open item (see the deferred
+  section above); the Tarski DACs sit on the AVR/simavr path, which
+  intercepts I2C fully. Dated closure notes in
+  `docs/record/TARSKI_RESULTS.md` §5.3 and `docs/record/TEST_CAMPAIGN.md`.
+- **Bit-banged SPI at sub-chunk timing collapses in full co-sim** — **CLOSED**.
+  The scheduler resolves ordered pin edges within a chunk; firmware-driven
+  bit-banged buses work end-to-end. Covered by
+  `crates/hauksbee-engine/tests/bitbang_spi_cosim.rs`
+  (`firmware_reads_spi_sensor_over_bitbanged_gpios`: sub-chunk SCLK edges
+  clock a register-exact WHO_AM_I + burst read, twice, proving CS re-framing),
+  `soft_i2c_cosim.rs` (`firmware_reads_i2c_sensor_over_bitbanged_gpios`), and
+  `cosim_spi_cs_frames_transactions.rs` (chunk-boundary framing). The 595
+  chain no longer needs the PATH B side-step:
+  `tarski_firmware_cosim.rs::host_loads_synapse_weights_over_serial` and
+  `host_reads_known_output_word_over_serial` run the firmware's own bit-bang
+  loops against the bound chain. Dated closure notes in
+  `docs/record/TARSKI_RESULTS.md` §5.1 and `docs/record/TEST_CAMPAIGN.md`.
+
+Still open (re-checked 2026-07-08):
+
 - **nRF5340 has no co-sim backend**: the Renode 1.16.1 portable build ships no
   nRF5340 platform, so the ZSWatch-class DISPLAY-EN fault stays a static miss.
-  See `docs/MCU.md` and `docs/record/KNOWN_FAULTS_VALIDATION.md`.
-- **Bit-banged SPI at sub-chunk timing collapses in full co-sim**: the 595 chain
-  is covered by the model-level (PATH B) verification instead. See
-  `docs/record/TEST_CAMPAIGN.md`.
+  Re-checked against `docs/MCU.md` (nRF5340 section) 2026-07-08: still true.
+  See `docs/record/KNOWN_FAULTS_VALIDATION.md`.
 - **PCB-only extraction has no pinfunctions**: multi-unit packages fall back to
   db pin maps when only a layout (no schematic netlist) is available; schematic
   netlists are authoritative when present. See `docs/record/TEST_CAMPAIGN.md` and
