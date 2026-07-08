@@ -1,5 +1,8 @@
-//! Websocket server streaming live simulation frames to the frontend and
-//! routing user controls back to the engine.
+//! The hauksbee web server: a WebSocket that streams live simulation frames to
+//! the frontend and routes user controls back to the engine, plus the HTTP router
+//! that serves the React bundle, the analysis API, and (when a board is preloaded)
+//! that board's own file for the geometry viewer. [`Server`] owns the sim loop;
+//! the free functions assemble the drop-zone and unified app routers.
 
 pub mod engine;
 pub mod frontdoor;
