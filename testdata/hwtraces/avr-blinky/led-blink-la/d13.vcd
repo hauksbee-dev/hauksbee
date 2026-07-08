@@ -1,0 +1,29 @@
+$comment synthetic logic-analyzer export - see gen_synthetic.py $end
+$timescale 1us $end
+$scope module capture $end
+$var wire 1 ! D13 $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+#3331
+1!
+#103484
+0!
+#202552
+1!
+#302796
+0!
+#402616
+1!
+#502900
+0!
+#603304
+1!
+#702748
+0!
+#802555
+1!
+#902844
+0!
+#1000000

@@ -1,0 +1,18 @@
+# The CI spec that replays the led-blink-scope capture scenario in simulation:
+# same board, same firmware, same supply as the (synthetic) capture session,
+# with the hwtrace assertion pointing at the trace beside this file.
+
+name = "avr-blinky vs hardware trace (scope CSV)"
+board = "../../../../crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+firmware = "../../../firmware/demo/demo.hex"
+mcu = "atmega328p"
+duration_ms = 1000            # match the capture window (edge_count needs it)
+
+[[supply]]
+net = "+5V"
+kind = "usb"
+usb = "5v0.5a"
+
+[[assert]]
+kind = "hwtrace"
+trace = "trace.toml"
