@@ -232,7 +232,32 @@ pub async fn serve_frontdoor(
     analyze: FirmwareAnalyzer,
     startup_json: String,
 ) -> anyhow::Result<()> {
+    let (listener, _bound) = bind_frontdoor(addr).await?;
+    serve_frontdoor_on(listener, static_dir, analyze, startup_json).await
+}
+
+/// Bind the front-door address (applying the busy-port fallback) and return the
+/// listener together with the address that was *actually* bound. The requested
+/// port and the bound port differ whenever the requested one was in use, so a
+/// caller must print a URL from this returned address — not from the requested
+/// `addr` — or it advertises a stale port.
+pub async fn bind_frontdoor(
+    addr: &str,
+) -> anyhow::Result<(tokio::net::TcpListener, std::net::SocketAddr)> {
     let listener = bind_with_fallback(addr).await?;
+    let bound = listener.local_addr()?;
+    Ok((listener, bound))
+}
+
+/// Serve the drop-zone front door on a listener already produced by
+/// [`bind_frontdoor`], so the caller can print the real bound URL before the
+/// server takes over the thread.
+pub async fn serve_frontdoor_on(
+    listener: tokio::net::TcpListener,
+    static_dir: Option<&Path>,
+    analyze: FirmwareAnalyzer,
+    startup_json: String,
+) -> anyhow::Result<()> {
     let router = unified_router(None, static_dir, None, Some(analyze), startup_json);
     axum::serve(listener, router).await?;
     Ok(())

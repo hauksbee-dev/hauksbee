@@ -17,7 +17,7 @@ use hauksbee_models::ModelLibrary;
 use crate::binder::bind_board;
 use crate::engine::HauksbeeEngine;
 use crate::plain::{
-    plain_drc_structured, plain_netlint, plain_si, PlainFinding, PlainLevel, PlainReport,
+    plain_drc_structured, plain_netlint, plain_si, HeadsUp, PlainFinding, PlainLevel, PlainReport,
 };
 use crate::result::{BindSummary, JsonNote, JsonNoteKind};
 
@@ -29,6 +29,26 @@ pub struct WebFinding {
     pub what: String,
     pub why: String,
     pub fix: String,
+}
+
+/// A heads-up note in the shape the browser renders. Carries the same
+/// what / why / what-to-do gloss a finding does (persona-panel fix: a bare
+/// "Zdiff 173 vs 90" jargon line got the finding treatment). `why` / `fix` are
+/// omitted from the JSON when empty (a self-contained note), so the browser
+/// renders only the lines that exist.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebHeadsUp {
+    pub what: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fix: String,
+}
+
+impl From<&HeadsUp> for WebHeadsUp {
+    fn from(h: &HeadsUp) -> Self {
+        WebHeadsUp { what: h.what.clone(), why: h.why.clone(), fix: h.fix.clone() }
+    }
 }
 
 impl From<&PlainFinding> for WebFinding {
@@ -60,7 +80,7 @@ pub struct WebSection {
     /// "Looks healthy" verdict that hides the only actionable observation is the
     /// exact false-comfort breach the plain/text/json surfaces already avoid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub heads_up: Vec<String>,
+    pub heads_up: Vec<WebHeadsUp>,
 }
 
 impl WebSection {
@@ -69,7 +89,7 @@ impl WebSection {
             title: title.to_string(),
             verdict: p.verdict(),
             findings: p.findings.iter().map(WebFinding::from).collect(),
-            heads_up: p.heads_up.clone(),
+            heads_up: p.heads_up.iter().map(WebHeadsUp::from).collect(),
         }
     }
 }
@@ -728,11 +748,17 @@ mod tests {
         // the exact note that used to vanish on the web while showing on --plain.
         let mut p = PlainReport::default();
         p.subject = "signal-integrity".to_string();
-        p.heads_up
-            .push("USB trace impedance is 171 ohm, +71% from target (90 ohm).".to_string());
+        p.heads_up.push(HeadsUp::glossed(
+            "USB trace impedance is 171 ohm, +71% from target (90 ohm).",
+            "reflections can make the link marginal",
+            "match trace width and spacing to the stackup",
+        ));
         let sect = WebSection::from_plain("Signal integrity", &p);
         assert!(sect.findings.is_empty(), "no findings, only a heads-up note");
         assert_eq!(sect.heads_up.len(), 1, "the heads-up note must survive");
+        // The three-part gloss survives into the web shape.
+        assert!(!sect.heads_up[0].why.is_empty(), "why must survive");
+        assert!(!sect.heads_up[0].fix.is_empty(), "fix must survive");
         // And it serializes into the JSON payload the browser reads.
         let json = serde_json::to_string(&sect).unwrap();
         assert!(
