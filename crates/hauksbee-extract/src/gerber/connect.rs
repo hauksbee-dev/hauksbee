@@ -22,6 +22,8 @@
 //! name) and assign each to that component as a pad, tagged with the net of the
 //! copper it sits on. Flashes claimed by no component are reported as
 //! `unassigned` (honest accounting, surfaced in the docs/accuracy numbers).
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
 use std::collections::HashMap;
 

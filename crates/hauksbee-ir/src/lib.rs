@@ -10,6 +10,9 @@
 //! ([`Device::is_event_driven`]), which is exactly the information the later
 //! partitioning pass needs to split a circuit into linear / nonlinear /
 //! digital islands. Nothing here commits to a solution method.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/README.md (the crate
+//! tour) and docs/how-and-why/hauksbee-ir/lib.md (this module's deep-dive).
 
 mod bexpr;
 pub mod debug;

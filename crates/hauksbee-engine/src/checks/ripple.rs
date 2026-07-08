@@ -1,4 +1,5 @@
 //! Input-capacitor ripple-current check for switching converters.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! A buck converter chops its input current between 0 and `I_out` at the duty
 //! cycle `D = Vout/Vin`. The input bulk capacitor has to supply the AC part of

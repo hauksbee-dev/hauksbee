@@ -24,6 +24,8 @@
 //! solver, from one extracted from a layout, minus copper geometry. Net names
 //! follow KiCad's conventions: a named net keeps its label name; an unnamed
 //! net is `Net-(R1-Pad1)` after its lowest-sorted member pin.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/schematic.md.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
