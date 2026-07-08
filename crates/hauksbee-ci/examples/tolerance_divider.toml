@@ -1,0 +1,35 @@
+# Component-tolerance ensemble demo: a 10k/10k divider off +5V whose midpoint
+# must sit in [2.4, 2.6] V. At NOMINAL values VOUT is exactly 2.5 V and the
+# assertion passes (seed 0 is always the nominal baseline). With every resistor
+# at ±10% — real E24 parts — some sampled builds push VOUT outside the window,
+# so the ensemble goes RED and the report names the failing seed and the exact
+# sampled values (e.g. "R1=10.9k, R2=9.1k").
+#
+# Re-run a failing seed in isolation with:
+#   hauksbee-ci run tolerance_divider.toml --seed <N>
+# The sampled values reproduce byte-identically (sampling is keyed by the
+# absolute seed number).
+name = "divider tolerance ensemble (nominal passes, ensemble fails)"
+board = "boards/tolerance_divider.kicad_pcb"
+duration_ms = 1
+
+[[supply]]
+net = "+5V"
+kind = "ideal"
+volts = 5.0
+
+[[tolerance]]
+ref = "R*"                # every resistor on the board
+percent = 10.0            # ±10%
+# distribution = "uniform" is the default; "gaussian" = sigma-of-tol/3,
+# truncated at the ±10% bound.
+
+[ensemble]
+seeds = 24                # 24 sampled members; statistical coverage, not proof
+
+[[assert]]
+kind = "voltage"
+name = "VOUT stays in [2.4, 2.6] V across the tolerance ensemble"
+net = "VOUT"
+min = 2.4
+max = 2.6

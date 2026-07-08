@@ -28,6 +28,7 @@ pub mod report;
 pub mod runner;
 pub mod scenarios;
 pub mod spec;
+pub mod tolerance;
 
 pub use error::SpecError;
 pub use init::init;
@@ -39,17 +40,43 @@ pub use spec::Spec;
 pub struct RunConfig {
     /// Path to the TOML spec file.
     pub spec: PathBuf,
+    /// Run only this one ensemble seed (fuzz + tolerance), for re-running a
+    /// reported failing seed in isolation. Sampling is keyed by the absolute
+    /// seed number, so the isolated run reproduces the full run's values
+    /// exactly. `None` = run the whole ensemble.
+    pub seed: Option<u32>,
 }
 
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
     let spec = Spec::load(&cfg.spec)?;
-    let outcomes = runner::run_spec(&spec)?;
+    let outcomes = runner::run_spec_seeded(&spec, cfg.seed)?;
     let results = assertions::evaluate(&spec, &outcomes);
     // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
     // if no assertion's window happened to overlap the failed span (05 §3b).
     let analog_abort = outcomes.iter().any(|o| o.analog_abort);
+    // Coverage banner data for a tolerance ensemble: how many members ran and
+    // how many components were sampled (from any outcome; the set is fixed).
+    let coverage = if spec.has_tolerances() {
+        let components = outcomes
+            .first()
+            .map(|o| o.sampled_values.len())
+            .unwrap_or(0);
+        let members = outcomes.len() as u32;
+        Some(match spec.ensemble_mode()? {
+            tolerance::Mode::MonteCarlo => report::EnsembleCoverage::MonteCarlo {
+                seeds: members,
+                components,
+            },
+            tolerance::Mode::Corners => report::EnsembleCoverage::Corners {
+                corners: members,
+                components,
+            },
+        })
+    } else {
+        None
+    };
     Ok(CiResult {
         spec_name: spec.name.clone(),
         board: spec.board.display().to_string(),
@@ -57,5 +84,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         seeds: outcomes.len() as u32,
         elapsed: started.elapsed(),
         analog_abort,
+        coverage,
     })
 }

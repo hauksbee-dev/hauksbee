@@ -29,7 +29,7 @@ fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
     std::fs::write(&p, body).unwrap();
-    run(&RunConfig { spec: p }).expect("spec runs")
+    run(&RunConfig { spec: p, ..Default::default() }).expect("spec runs")
 }
 
 #[test]
