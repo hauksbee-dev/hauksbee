@@ -13,6 +13,8 @@
 //! A hand-rolled brace-balanced reader frames one JSON object at a time and a
 //! tiny extractor pulls the fields we care about. This keeps the crate's
 //! dependency surface identical to the Renode backend (pure std).
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
