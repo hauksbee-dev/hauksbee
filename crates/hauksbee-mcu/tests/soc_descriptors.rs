@@ -16,6 +16,11 @@
 
 use hauksbee_mcu::{QemuConfig, RenodeConfig, SocConfig, SocError};
 
+/// Serializes the tests that mutate `HAUKSBEE_MCU_DIR`: the test harness runs
+/// tests on parallel threads sharing one process environment, so two tests
+/// setting/removing the variable would clobber each other mid-resolve.
+static MCU_DIR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // The embedded descriptor sources, via the same include_str! the crate uses.
 const STM32F103: &str = include_str!("../db/mcu/stm32f103.soc.toml");
 const STM32F4: &str = include_str!("../db/mcu/stm32f4_discovery.soc.toml");
@@ -365,9 +370,11 @@ width = 16
 "#;
     std::fs::write(dir.join("stm32f072.soc.toml"), new_part).unwrap();
 
-    // SAFETY (edition 2021): set_var is safe. This test is the only one touching
-    // HAUKSBEE_MCU_DIR and resolves a part no other test uses, so a concurrent
-    // resolve of a different part is unaffected (it just won't find its file here).
+    // SAFETY (edition 2021): set_var is safe. The lock serializes this with
+    // the other test mutating HAUKSBEE_MCU_DIR; the part resolved here is used
+    // by no other test, so a concurrent resolve of a different part is
+    // unaffected (it just won't find its file here).
+    let _env = MCU_DIR_ENV.lock().unwrap();
     std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
     let resolved = SocConfig::resolve("renode:stm32f072");
     std::env::remove_var("HAUKSBEE_MCU_DIR");
@@ -380,5 +387,109 @@ width = 16
             assert_eq!(c.ports[0].odr_offset, 0x14);
         }
         other => panic!("expected Renode, got {other:?}"),
+    }
+}
+
+/// The spec's `backend:` half is validated: an unknown backend token is a
+/// named error up front (not a NotFound), and the embedded lookup is keyed by
+/// the FULL spec, so a builtin part named under the wrong backend is NotFound
+/// rather than a silent backend swap. (An override-dir file whose declared
+/// backend disagrees with the spec is a BackendMismatch — see
+/// `override_dir_is_fail_loud_and_beats_builtin`.)
+#[test]
+fn resolve_validates_the_spec_backend_token() {
+    assert!(matches!(
+        SocConfig::resolve("reonde:rp2040").unwrap_err(),
+        SocError::UnknownBackend(_)
+    ));
+    assert!(matches!(
+        SocConfig::resolve("qemu:rp2040").unwrap_err(),
+        SocError::NotFound { .. }
+    ));
+}
+
+/// The fail-loud contract on the override dirs (the fresh-context critic's
+/// decisive probe): an INVALID override descriptor for a part about to be
+/// used — including a BUILTIN part name — fails the resolution with the file
+/// path and the named inner error. It is never silently skipped in favour of
+/// the embedded builtin. And a VALID override for a builtin name WINS over
+/// the builtin (the repo's layering doctrine).
+#[test]
+fn override_dir_is_fail_loud_and_beats_builtin() {
+    let dir = std::env::temp_dir().join(format!(
+        "hauksbee-mcu-shadow-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // (a) Invalid override for the BUILTIN part nrf52840: a typo'd field the
+    // deny_unknown_fields schema must reject. (nrf52840 is used because no
+    // other test in this binary resolves it while the env var is set.)
+    let invalid = NRF52840.replace("platform_repl =", "platform_rep =");
+    assert_ne!(invalid, NRF52840, "typo replacement must have applied");
+    std::fs::write(dir.join("nrf52840.soc.toml"), &invalid).unwrap();
+
+    // (b) A qemu-declared descriptor under a name resolved as renode: the
+    // backend-token check also fails loud, wrapped with the file path.
+    std::fs::write(dir.join("misdeclared_part.soc.toml"), ESP32C3).unwrap();
+
+    // SAFETY (edition 2021): set_var is safe. The lock serializes this with
+    // the other test mutating HAUKSBEE_MCU_DIR; the parts touched here are
+    // resolved by no other test in this binary.
+    let _env = MCU_DIR_ENV.lock().unwrap();
+    std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
+    let invalid_res = SocConfig::resolve("renode:nrf52840");
+    let mismatch_res = SocConfig::resolve("renode:misdeclared_part");
+
+    // (c) Valid override for the builtin name WINS: a marker label proves the
+    // override file, not the embedded builtin, was loaded.
+    let valid = NRF52840.replace(
+        "mcu_label = \"nRF52840 (ARM Cortex-M4)\"",
+        "mcu_label = \"nRF52840 (OVERRIDE-DIR COPY)\"",
+    );
+    let marker_applied = valid != *NRF52840;
+    std::fs::write(dir.join("nrf52840.soc.toml"), &valid).unwrap();
+    let valid_res = SocConfig::resolve("renode:nrf52840");
+
+    std::env::remove_var("HAUKSBEE_MCU_DIR");
+    std::fs::remove_dir_all(&dir).ok();
+
+    // (a) asserts: named error carrying the path and the typo'd field.
+    let err = invalid_res.unwrap_err();
+    match &err {
+        SocError::InvalidDescriptor { path, source } => {
+            assert!(path.contains("nrf52840.soc.toml"), "path: {path}");
+            assert!(matches!(**source, SocError::Parse(_)), "source: {source}");
+            assert!(err.to_string().contains("platform_rep"), "err: {err}");
+        }
+        other => panic!("expected InvalidDescriptor, got {other:?}"),
+    }
+
+    // (b) asserts: the mismatch is loud and names the file.
+    match invalid_backend_of(mismatch_res.unwrap_err()) {
+        SocError::BackendMismatch { expected, found } => {
+            assert_eq!(expected, "renode");
+            assert_eq!(found, "qemu");
+        }
+        other => panic!("expected BackendMismatch, got {other:?}"),
+    }
+
+    // (c) asserts: the override's marker label came through.
+    assert!(marker_applied, "marker replacement must have applied");
+    match valid_res.unwrap() {
+        SocConfig::Renode(c) => assert_eq!(c.mcu_label, "nRF52840 (OVERRIDE-DIR COPY)"),
+        other => panic!("expected Renode, got {other:?}"),
+    }
+}
+
+/// Unwrap an InvalidDescriptor to its inner error, for variant assertions.
+fn invalid_backend_of(err: SocError) -> SocError {
+    match err {
+        SocError::InvalidDescriptor { source, .. } => *source,
+        other => other,
     }
 }
