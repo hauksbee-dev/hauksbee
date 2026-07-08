@@ -686,6 +686,12 @@ pub struct Assertion {
     #[serde(default)]
     pub expect_trip: Option<bool>,
 
+    // hwtrace: path to a `trace.toml` (relative to the spec file) describing a
+    // captured hardware trace whose per-channel features the simulated run must
+    // reproduce within the trace's stated tolerances (T6; see `hwtrace.rs`).
+    #[serde(default)]
+    pub trace: Option<String>,
+
     // boot-coverage: a control net (gate / enable / reset / CS) that must reach
     // and hold a defined level (`min`, in volts) within `deadline_ms` of reset,
     // with no stress fault raised during the boot window before it does. On a
@@ -1089,6 +1095,15 @@ impl Assertion {
                     )));
                 }
             }
+            "hwtrace" => {
+                if self.trace.is_none() {
+                    return Err(SpecError::Invalid(
+                        "hwtrace assertion needs a `trace` (path to the trace.toml, relative \
+                         to the spec file)"
+                            .into(),
+                    ));
+                }
+            }
             "boot-coverage" => {
                 if self.net.is_none() {
                     return Err(SpecError::Invalid(
@@ -1110,7 +1125,7 @@ impl Assertion {
             }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage|phase_margin|ac_gain)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage|phase_margin|ac_gain|hwtrace)"
                 )));
             }
         }
@@ -1215,6 +1230,12 @@ impl Assertion {
                     "does NOT trip"
                 };
                 format!("{net} protection {want}")
+            }
+            "hwtrace" => {
+                format!(
+                    "hardware trace {}",
+                    self.trace.clone().unwrap_or_default()
+                )
             }
             "boot-coverage" => {
                 let net = self.net.clone().unwrap_or_default();

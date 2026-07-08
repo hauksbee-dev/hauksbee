@@ -133,6 +133,12 @@ pub struct RunOutcome {
     /// failing seed's report names these exact values, and `--seed N`
     /// reproduces them byte-identically.
     pub sampled_values: Vec<crate::tolerance::SampledValue>,
+    /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
+    /// probes, sampled at the frame cadence (held-stale frames excluded, like
+    /// every other analog aggregate). Empty when the spec has no hwtrace
+    /// assertions — recording every net's series unconditionally would cost
+    /// memory on long runs for nothing.
+    pub net_series: HashMap<String, Vec<(f64, f64)>>,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -717,6 +723,13 @@ fn run_one(
     let mut first_reach_ms: HashMap<(String, u64), f64> = HashMap::new();
     let mut first_fault_ms: Option<f64> = None;
 
+    // Hardware-trace watch list: the nets any `hwtrace` assertion's trace.toml
+    // probes. Loading the traces here (fail-loud, before the sim spends its
+    // minutes) also validates them, so a malformed trace aborts the run with a
+    // named error instead of failing every feature at evaluation time.
+    let hwtrace_nets = crate::hwtrace::assert_nets(spec)?;
+    let mut net_series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
+
     while t < total_s - 1e-12 {
         let frame = engine.step(frame_dt);
         let t_ms = frame.t * 1000.0;
@@ -782,6 +795,14 @@ fn run_one(
                     }
                 }
             }
+            // Hardware-trace waveforms: record the probed nets' voltages at the
+            // frame cadence, for feature extraction against the captured trace.
+            for net in &hwtrace_nets {
+                if let Some(&v) = frame.net_voltages.get(net) {
+                    net_series.entry(net.clone()).or_default().push((frame.t, v));
+                }
+            }
+
             // Peak current for monitored components.
             update_peak_currents(&engine, &net_node, &mut peak_current);
 
@@ -895,6 +916,7 @@ fn run_one(
         failed_windows,
         analog_abort,
         sampled_values: plan.values.clone(),
+        net_series,
     })
 }
 
