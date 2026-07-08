@@ -28,6 +28,7 @@ fn ci_button_press_drives_a_net() {
     // toggle exactly twice from the timed press/release.
     let cfg = RunConfig {
         spec: testdata("ci/button_press.toml"),
+        ..Default::default()
     };
     let result = run(&cfg).expect("run button_press spec");
     assert!(
@@ -118,7 +119,7 @@ max = 25
     );
     let spec_path = write_tmp("vcd_sink.toml", &spec);
 
-    let cfg = RunConfig { spec: spec_path };
+    let cfg = RunConfig { spec: spec_path, ..Default::default() };
     let result = run(&cfg).expect("run vcd spec");
     assert!(
         result.passed(),

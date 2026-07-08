@@ -73,6 +73,12 @@ struct RunArgs {
     /// Suppress the per-assertion human report (exit code still reflects pass/fail).
     #[arg(long)]
     quiet: bool,
+
+    /// Re-run one ensemble member in isolation (a failing fuzz/tolerance seed,
+    /// or a corner index). Sampling is keyed by the absolute seed number, so
+    /// the isolated run reproduces the full run's values exactly.
+    #[arg(long, value_name = "N")]
+    seed: Option<u32>,
 }
 
 #[derive(Parser)]
@@ -91,6 +97,7 @@ fn main() -> ExitCode {
 
     let cfg = RunConfig {
         spec: args.spec.clone(),
+        seed: args.seed,
     };
     let result = match run(&cfg) {
         Ok(r) => r,
