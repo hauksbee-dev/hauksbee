@@ -14,7 +14,7 @@
 //! The vocabulary (each an array-of-tables):
 //!
 //! - `[[replace]]` — a component value swap or retune: `ref` names the device
-//!!   (substring match on the bound device name), `set` carries the fitted
+//!   (substring match on the bound device name), `set` carries the fitted
 //!   values (`ohms`, `farads`, `von`, `voff`), optional `was` records the
 //!   removed part's value and doubles as a match refinement (±1 % relative),
 //!   so a rework note like "removed the 10 pF, fitted 5.8 nF" is executable.

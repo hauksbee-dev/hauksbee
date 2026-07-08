@@ -581,6 +581,17 @@ fn run_one(
     let lib = ModelLibrary::builtin();
     let mut bound = bind_board(&board, &lib);
 
+    // The as-built overlay comes first: it is BOARD state (the physical rework
+    // record — cuts, jumpers, fitted values), so it lands before any harness
+    // attachment, at the same post-bind seam the engine CLI's --asbuilt uses.
+    if let Some(asbuilt_path) = spec.asbuilt_path() {
+        let overlay = hauksbee_engine::asbuilt::AsBuiltOverlay::load(&asbuilt_path)
+            .map_err(|e| SpecError::Invalid(e.to_string()))?;
+        overlay
+            .apply(&mut bound)
+            .map_err(|e| SpecError::Invalid(e.to_string()))?;
+    }
+
     // 0. Apply opt-in capacitor parasitics (ESR/ESL) before anything else, so the
     //    decoupling is honest for the whole run. Off by default.
     apply_decoupling(spec, &board, &mut bound)?;
