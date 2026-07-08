@@ -11,12 +11,20 @@ export interface WebFinding {
   fix: string
 }
 
+/** An actionable heads-up note, glossed with the same what/why/what-to-do shape
+ *  a finding gets. `why` / `fix` are omitted when the note is self-contained. */
+export interface WebHeadsUp {
+  what: string
+  why?: string
+  fix?: string
+}
+
 export interface WebSection {
   title: string
   verdict: string
   findings: WebFinding[]
   /** Actionable info-level notes; may be omitted when empty. */
-  heads_up?: string[]
+  heads_up?: WebHeadsUp[]
 }
 
 export interface BindSummaryWeb {

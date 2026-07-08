@@ -429,32 +429,64 @@ Board: `testdata/boards/esp32c3_devkit_demo.kicad_pcb`; firmware: the same
 esp32c3 build`, merged to `flash_c3.bin`). Backend `qemu:esp32c3` uses
 `qemu-system-riscv32 -machine esp32c3`. Proven identically to the ESP32 above.
 
-### nRF52840 (recipe, same path)
+### nRF52840 (works out of the box)
 
-Model entry (add to `db/mcu.toml`):
+The nRF52840 ships **built in** — no `db/mcu.toml` edit, no `--models-dir`. Any
+component whose value matches `nRF52840` binds to the `renode:nrf52840` backend
+directly (`hauksbee models resolve <board>` prints `nrf52840  builtin(0)  mcu`).
 
-```toml
-[[models]]
-id = "nrf52840"
-kind = "mcu"
-[models.match]
-value_re = "(?i)^nRF52840"
-[models.params]
-backend = "renode:nrf52840"
-[models.pins]
-# nRF GPIO is two 32-bit ports; roles "p0<bit>" and "p1<bit>".
-"1" = "p013"   # e.g. an LED on P0.13 (nRF52840-DK LED1)
-"2" = "vdd"
-"3" = "vss"
-"4" = "p006"   # UART TXD on the DK
-"5" = "p008"   # UART RXD on the DK
+A committed board + firmware pair runs end to end today:
+
 ```
+hauksbee run testdata/firmware/renode_demos/nrf52840-zephyr_shell.board \
+  --firmware testdata/firmware/renode_demos/nrf52840-zephyr_shell.elf \
+  --headless --seconds 2
+```
+
+This boots the bundled Zephyr shell to the `uart:~$` prompt through Renode. The
+board is a minimal nRF52840-DK-style skeleton: the SoC on a 3V3 rail, P0.13
+driving LED1 through a 330R resistor, and P0.06/P0.08 broken out as the UART. The
+LED stays dark — the shell firmware never toggles P0.13, so 0 V is the correct,
+predicted result, not a miss.
 
 Backend: `RenodeConfig::nrf52840()` (ports gpio0/gpio1, OUT register at 0x504,
 uart0). Firmware: any nRF52840 ELF (e.g. a Zephyr blinky). Renode ships
 `platforms/cpus/nrf52840.repl` and `platforms/boards/nrf52840dk_nrf52840.repl`.
+The built-in pin map wires pad 3 -> P0.13 (LED), pads 5/6 -> P0.06/P0.08 (UART);
+a board that pins the parts differently just needs its own `[models.pins]` in a
+`--models-dir` override (the recipe pattern below).
 
-### SiFive FE310 / HiFive1 (RISC-V, recipe, same path)
+### Adding a genuinely new MCU variant (the recipe pattern)
+
+The parts above ship built in. For a part hauksbee does *not* yet know, the same
+path applies: add a `[[models]]` entry mapping the value regex to a
+`renode:<part>` / `qemu:<part>` backend and its pin roles. The nRF52840 entry in
+`crates/hauksbee-models/db/mcu.toml` is a worked template, and
+`docs/extending/add-an-mcu-variant.md` walks the whole process (backend
+descriptor, pin roles, validation). Example skeleton for a hypothetical new part:
+
+```toml
+[[models]]
+id = "mynewpart"
+kind = "mcu"
+[models.match]
+value_re = "(?i)^MYNEWPART"
+[models.params]
+backend = "renode:mynewpart"
+[models.pins]
+# nRF-style GPIO is two 32-bit ports; roles "p0<bit>" and "p1<bit>".
+"1" = "vss"
+"2" = "vdd"
+"3" = "p013"   # e.g. an LED on P0.13
+"4" = "p006"   # UART TXD
+"5" = "p008"   # UART RXD
+```
+
+### SiFive FE310 / HiFive1 (RISC-V, built in)
+
+The FE310 also ships built in (`renode:sifive_fe310`); any value matching
+`FE310`/`HiFive1` binds with no config. The built-in entry is shown here as the
+reference pin map (and as a second worked template for the recipe pattern above):
 
 ```toml
 [[models]]

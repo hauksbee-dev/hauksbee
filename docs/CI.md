@@ -413,15 +413,27 @@ assertion, two firmwares, opposite verdicts. Pinned as an integration test,
 
 ### Backend reach (stated honestly)
 
-This proof uses the **AVR (simavr)** backend, one of hauksbee's two co-sim
-backends; the mechanism is backend-agnostic, so it is ready for the **STM32
-(Renode)** backend as well. The corpus boards that carry the *real* misses are
-**not yet co-simmable**: Watchy is ESP32 and ZSWatch is nRF52, and neither has a
-turnkey backend (ESP32 is not modelled in Renode; see `docs/MCU.md`). So the
-boards' own MCUs cannot run this check today - the mechanism is recorded as
-ready-for-backends, and `docs/record/KNOWN_FAULTS_VALIDATION.md` keeps those rows as
-honest misses with a "decidable with firmware co-sim where the backend exists"
-note, **not** a flipped verdict.
+This proof uses the **AVR (simavr)** backend, one of hauksbee's **three** co-sim
+backends; the mechanism is backend-agnostic and now runs on all three. Besides
+AVR, the **Renode** backend co-sims STM32, **nRF52**, and SiFive RISC-V, and the
+**QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see `docs/MCU.md` for the
+full matrix). nRF52 is turnkey today: `hauksbee run` boots the bundled
+`testdata/firmware/renode_demos/nrf52840-zephyr_shell.board` +
+`nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through Renode.
+
+So the corpus boards' MCUs are no longer blocked on a *missing* backend: ZSWatch
+is nRF52 (Renode) and Watchy is ESP32 (QEMU), and both architectures co-sim.
+What each still needs to run *this* boot-coverage check is its own firmware
+image built for the target; `docs/record/KNOWN_FAULTS_VALIDATION.md` tracks those
+rows with that note.
+
+Honest per-backend caveat for boot-coverage: GPIO-drive detection reads the
+port's output register once per co-sim chunk. On AVR (cycle-accurate simavr) and
+Renode (STM32/nRF52 ODR poll) that read is direct; on the ESP32 QEMU model,
+which does not expose GPIO output read-back, the firmware must mirror its output
+word to the RAM mailbox the backend reads (the bundled ESP32 demo does). Edges
+faster than the chunk alias on the poll bridge either way, so match the firmware
+switching rate to the chunk size (see `docs/MCU.md` limitations).
 
 ## Schematic-stage CI
 
@@ -545,8 +557,14 @@ only handles the spec path and the binary does the rest.
 
 ## Limitations
 
-- The MCU co-sim currently targets AVR (ATmega328P via simavr); other cores fall
-  back to that backend.
+- The MCU co-sim runs on three backends, each co-simming its own cores (no
+  silent fall-back to AVR): **AVR** (ATmega/ATtiny via simavr), **Renode**
+  (STM32, nRF52, SiFive RISC-V), and **QEMU** (ESP32/-S3/-C3). Renode and QEMU
+  are external emulators located at run time; if the emulator is not installed,
+  instantiation fails with a clear install message rather than degrading to a
+  different core. `hauksbee doctor --backends` reports which backends this build
+  can actually locate. GPIO edges are sampled once per co-sim chunk, so signals
+  faster than the chunk alias (see `docs/MCU.md`).
 - `max_current` peak tracking covers resistors and diodes directly; other
   component kinds are covered by the `no_faults` stress monitor rather than a
   numeric ceiling.

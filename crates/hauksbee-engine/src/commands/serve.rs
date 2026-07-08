@@ -33,9 +33,14 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         let static_dir =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist");
         let dir = static_dir.exists().then(|| static_dir.clone());
+
+        // Bind FIRST, then print. The requested port may be busy, in which case
+        // the bind falls back to another port; printing `addr` before binding
+        // advertised a URL the server was not actually listening on.
+        let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
         if dir.is_some() {
             println!("\n  hauksbee is live. Open this in your browser:\n");
-            println!("      http://{addr}\n");
+            println!("      http://{bound}\n");
             println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / gerber zip) to get a");
             println!("  plain-language report. Optionally drop firmware (.elf / .hex) to run a");
             println!("  short co-sim. Nothing leaves your machine. Ctrl-C to stop.\n");
@@ -43,11 +48,11 @@ pub fn run(port: u16) -> anyhow::Result<()> {
             println!("\n  hauksbee serve needs the web app built once:\n");
             println!("      cd frontend && bun install && bun run build\n");
             println!("  then re-run `hauksbee serve`. The analysis API is live at");
-            println!("  http://{addr}/api/analyze meanwhile. Ctrl-C to stop.\n");
+            println!("  http://{bound}/api/analyze meanwhile. Ctrl-C to stop.\n");
         }
 
         // No board preloaded: the app lands on the drop zone.
         let startup_json = "{\"preloaded\":false}".to_string();
-        hauksbee_server::serve_frontdoor(&addr, dir.as_deref(), analyze, startup_json).await
+        hauksbee_server::serve_frontdoor_on(listener, dir.as_deref(), analyze, startup_json).await
     })
 }
