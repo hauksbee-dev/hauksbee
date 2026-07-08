@@ -40,7 +40,7 @@ min = 0.0
     )
     .expect("write spec");
 
-    let result = run(&RunConfig { spec: spec_path });
+    let result = run(&RunConfig { spec: spec_path, ..Default::default() });
     let err = result.expect_err("a missing firmware file must fail, not run");
     let SpecError::Io(msg) = &err else {
         panic!("expected an Io error naming the firmware path, got {err:?}");

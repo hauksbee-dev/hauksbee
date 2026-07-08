@@ -61,6 +61,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
 
     let result = run(&RunConfig {
         spec: example("lm75_thermostat.toml"),
+        ..Default::default()
     })
     .expect("lm75_thermostat spec should load and run");
 
@@ -107,6 +108,7 @@ fn sensor_attach_lm75_cold_flag_stays_low() {
 
     let result = run(&RunConfig {
         spec: example("lm75_thermostat_cold.toml"),
+        ..Default::default()
     })
     .expect("lm75_thermostat_cold spec should load and run");
 

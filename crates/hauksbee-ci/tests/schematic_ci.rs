@@ -71,6 +71,7 @@ fn schematic_example_spec_passes() {
     }
     let result = run(&RunConfig {
         spec: schematic_example(),
+        ..Default::default()
     })
     .expect("schematic spec runs");
     assert!(
@@ -96,8 +97,8 @@ fn schematic_and_pcb_agree() {
     let sch_spec = write_tmp("agree_sch.toml", &spec_body(&sch.display().to_string()));
     let pcb_spec = write_tmp("agree_pcb.toml", &spec_body(&pcb.display().to_string()));
 
-    let sch_res = run(&RunConfig { spec: sch_spec }).expect("schematic spec runs");
-    let pcb_res = run(&RunConfig { spec: pcb_spec }).expect("pcb spec runs");
+    let sch_res = run(&RunConfig { spec: sch_spec, ..Default::default() }).expect("schematic spec runs");
+    let pcb_res = run(&RunConfig { spec: pcb_spec, ..Default::default() }).expect("pcb spec runs");
 
     // Same number of assertions, same labels, same pass/fail on each.
     assert_eq!(
@@ -138,7 +139,7 @@ fn pointing_at_subsheet_is_a_clear_error() {
             sub.display()
         ),
     );
-    let err = run(&RunConfig { spec }).unwrap_err();
+    let err = run(&RunConfig { spec, ..Default::default() }).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("sub-sheet"), "should flag a sub-sheet: {msg}");
     assert!(
@@ -172,7 +173,7 @@ fn hierarchy_subsheet_components_are_loaded() {
     );
     // If the sub-sheet were dropped, this errors with "unknown component"; if it
     // is loaded, the assert is evaluable (and a 100 A ceiling trivially holds).
-    let res = run(&RunConfig { spec }).unwrap_or_else(|e| {
+    let res = run(&RunConfig { spec, ..Default::default() }).unwrap_or_else(|e| {
         panic!("sub-sheet ref {SUBSHEET_REF} not found, hierarchy not loaded: {e}")
     });
     assert!(
