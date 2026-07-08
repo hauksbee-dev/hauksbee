@@ -20,6 +20,7 @@
 //! (generalizing the Tarski-Emulator pattern), and [`engine::HauksbeeEngine`]
 //! exposes the whole thing behind `hauksbee-server`'s `Engine` trait.
 
+pub mod asbuilt;
 pub mod behavioral;
 pub mod binder;
 pub mod boardcode;
