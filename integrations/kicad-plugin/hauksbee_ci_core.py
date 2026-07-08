@@ -325,8 +325,10 @@ def format_report(run: CiRun) -> str:
     """A plain-text report for a dialog's text area."""
     lines = [run.summary(), ""]
     if run.error and not run.results:
-        lines.append(run.error)
-        return "\n".join(lines)
+        # `summary()` already reads "hauksbee-ci could not run: <error>", so do
+        # not append the raw error a second time (the wrapper-plus-raw double
+        # print the CI-owner persona flagged). The summary line carries it once.
+        return run.summary()
     for r in run.results:
         mark = "PASS" if r.passed else "FAIL"
         lines.append(f"[{mark}] {r.name}")
