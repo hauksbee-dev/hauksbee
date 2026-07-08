@@ -417,23 +417,23 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // (via PlainReport::verdict) instead of a bare "Looks healthy".
             let mut report = crate::plain_faults(&faults);
             for sub in engine.scheduler().substitutions() {
-                report
-                    .heads_up
-                    .push(format!("co-sim ran on a SUBSTITUTE chip — {}", sub.message()));
+                report.heads_up.push(crate::plain::HeadsUp::note(format!(
+                    "co-sim ran on a SUBSTITUTE chip — {}",
+                    sub.message()
+                )));
             }
             if zero_activity {
-                report.heads_up.push(
+                report.heads_up.push(crate::plain::HeadsUp::note(
                     "co-sim saw zero net toggles and no UART output — the firmware was not \
-                     exercised, so this result cannot vouch for firmware behaviour"
-                        .to_string(),
-                );
+                     exercised, so this result cannot vouch for firmware behaviour",
+                ));
             }
             if !analog_valid {
-                report.heads_up.push(format!(
+                report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "co-sim analog solve failed to converge on {failed_chunk_count} chunk(s); \
                      those windows held stale voltages and cannot be trusted (analog_valid is \
                      false); rerun with --json to see the exact failed windows"
-                ));
+                )));
             }
             // Boot-safety heads-up: control nets the firmware switches ON and
             // holds from power-up, with no resistor setting a safe default. The
@@ -442,14 +442,14 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // relay / igniter that energises at reset because firmware drove its
             // gate high (or enabled a pull-up on it) before anything else ran.
             for net in held_high_boot_nets {
-                report.heads_up.push(format!(
+                report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "control net '{net}' switches a transistor/relay and is driven HIGH and held \
                      from the moment the board powers up, with no resistor setting a safe default \
                      level. If a HIGH on this net turns the load ON when it must stay OFF until \
                      the firmware deliberately enables it (a MOSFET, relay, motor driver, or \
                      igniter), it is energised at power-up — confirm the polarity and that this \
                      is intended."
-                ));
+                )));
             }
             println!();
             print!("{}", report.render());

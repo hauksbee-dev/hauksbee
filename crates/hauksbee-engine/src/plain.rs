@@ -57,6 +57,39 @@ pub struct PlainFinding {
     pub fix: String,
 }
 
+/// An actionable "heads up" note: worth knowing, not a failure. Carries the same
+/// what / why / what-to-do shape a finding does, so the web / TUI / CLI can all
+/// give a novice the translation instead of a bare jargon line (the persona-panel
+/// "Zdiff 173 vs 90 with no what-to-do" fix). `why` / `fix` may be empty for a
+/// note that is already a complete self-contained sentence (e.g. a co-sim
+/// caveat); renderers omit those lines when empty.
+#[derive(Debug, Clone, Default)]
+pub struct HeadsUp {
+    /// "What it is" — the observation, in everyday language.
+    pub what: String,
+    /// "Why it matters" — the consequence. May be empty.
+    pub why: String,
+    /// "What to do" — the concrete next step. May be empty.
+    pub fix: String,
+}
+
+impl HeadsUp {
+    /// A self-contained note with no separate why/what-to-do (already one
+    /// complete sentence).
+    pub fn note(what: impl Into<String>) -> Self {
+        HeadsUp { what: what.into(), why: String::new(), fix: String::new() }
+    }
+
+    /// A fully-glossed three-part note.
+    pub fn glossed(
+        what: impl Into<String>,
+        why: impl Into<String>,
+        fix: impl Into<String>,
+    ) -> Self {
+        HeadsUp { what: what.into(), why: why.into(), fix: fix.into() }
+    }
+}
+
 /// A whole report, translated: the headline verdict plus the ordered findings.
 #[derive(Debug, Clone, Default)]
 pub struct PlainReport {
@@ -68,8 +101,9 @@ pub struct PlainReport {
     /// NEVER silently dropped in `--plain` mode: the 171-ohm USB-impedance note
     /// the hobbyist persona lost is exactly this (Fix #3 / Theme A). A "Looks
     /// healthy" verdict that hides the only actionable observation is the breach
-    /// of trust we refuse to ship.
-    pub heads_up: Vec<String>,
+    /// of trust we refuse to ship. Each note carries a what / why / what-to-do
+    /// gloss so it translates the jargon rather than dumping it.
+    pub heads_up: Vec<HeadsUp>,
 }
 
 impl PlainReport {
@@ -154,7 +188,13 @@ impl PlainReport {
         if !self.heads_up.is_empty() {
             let _ = writeln!(s, "\nHeads up (worth knowing, not a failure):");
             for note in &self.heads_up {
-                let _ = writeln!(s, "  - {note}");
+                let _ = writeln!(s, "  - {}", note.what);
+                if !note.why.is_empty() {
+                    let _ = writeln!(s, "       Why it matters: {}", note.why);
+                }
+                if !note.fix.is_empty() {
+                    let _ = writeln!(s, "       What to do:     {}", note.fix);
+                }
             }
         }
         s
@@ -192,6 +232,17 @@ fn join_refs(refs: &[String]) -> String {
     }
 }
 
+/// Expand KiCad's copper-layer codes to plain language on first sight. A novice
+/// (persona-panel) has no idea `F.Cu` / `B.Cu` mean the front / back copper
+/// layer, so spell it out while keeping the code in parentheses for the expert.
+fn friendly_layer(layer: &str) -> String {
+    match layer {
+        "F.Cu" => "the front copper layer (F.Cu)".to_string(),
+        "B.Cu" => "the back copper layer (B.Cu)".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Pick a friendly noun for a copper item ("the wire", "the chip pad", ...).
 fn item_noun(kind: ItemKind) -> &'static str {
     match kind {
@@ -219,7 +270,7 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
         } else {
             &f.net_b_name
         };
-        let where_ = format!("near x={:.1} mm, y={:.1} mm on layer {}", f.x, f.y, f.layer);
+        let where_ = format!("near x={:.1} mm, y={:.1} mm on {}", f.x, f.y, friendly_layer(&f.layer));
         match f.kind {
             ViolationKind::Short => out.push(
                 PlainLevel::Serious,
@@ -264,8 +315,15 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     // severity (set once in DrcStructured::from_report). Surface the caveat as a
     // never-dropped heads-up so the verdict is "worth a look", not "N serious".
     if let Some(w) = &st.version_warning {
-        out.heads_up.push(format!(
-            "The copper short results below are UNRELIABLE: {w}"
+        out.heads_up.push(HeadsUp::glossed(
+            format!("The copper-short results below may be unreliable on this file: {w}"),
+            "This board was saved by a newer KiCad than hauksbee's copper reader was \
+             validated against, so its zone/fill format can be misread — a filled ground \
+             pour can look like it shorts every net it surrounds, producing shorts that \
+             are not really there (false alarms), or hiding a real one.",
+            "Treat any short below as \"check, don't panic\": open the board in KiCad and \
+             run its own DRC (Inspect -> Design Rules Checker) to confirm. If KiCad reports \
+             no short at that spot, it is a false alarm from the format gap.",
         ));
     }
 
@@ -274,8 +332,8 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         let a = if sh.net_a.is_empty() { "an unnamed net" } else { &sh.net_a };
         let b = if sh.net_b.is_empty() { "an unnamed net" } else { &sh.net_b };
         let where_ = format!(
-            "near x={:.1} mm, y={:.1} mm on layer {}",
-            sh.loc_mm[0], sh.loc_mm[1], sh.layer
+            "near x={:.1} mm, y={:.1} mm on {}",
+            sh.loc_mm[0], sh.loc_mm[1], friendly_layer(&sh.layer)
         );
         // Read the per-short severity (the single source); a downgraded short is
         // a Note, a real one is Serious.
@@ -306,12 +364,12 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         let what = if g.below_count == g.count {
             format!(
                 "\"{a}\" and \"{b}\" are very close but not quite touching at {places} on {} (tightest {:.3} mm, below your {:.3} mm rule).",
-                g.layer, g.min_gap_mm, g.rule_mm
+                friendly_layer(&g.layer), g.min_gap_mm, g.rule_mm
             )
         } else {
             format!(
                 "\"{a}\" and \"{b}\" are close at {places} on {}: {} below your {:.3} mm rule (tightest {:.3} mm), the rest exactly at the limit.",
-                g.layer, g.below_count, g.rule_mm, g.min_gap_mm,
+                friendly_layer(&g.layer), g.below_count, g.rule_mm, g.min_gap_mm,
             )
         };
         out.push(
@@ -335,7 +393,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             PlainLevel::Warning,
             format!(
                 "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly your {:.3} mm rule).",
-                g.layer, g.min_gap_mm, g.rule_mm
+                friendly_layer(&g.layer), g.min_gap_mm, g.rule_mm
             ),
             "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation — but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string(),
             "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is — just be aware there is no slack.".to_string(),
@@ -487,30 +545,46 @@ fn info_only(report: &SiReport) -> impl Iterator<Item = &SiFinding> {
         .filter(|f| f.severity == SiSeverity::Info)
 }
 
-/// A plain one-liner for an actionable info note, or `None` if the note is a
-/// pure observation that should not nag the user. The honest rule: a note is
+/// A fully-glossed actionable info note, or `None` if the note is a pure
+/// observation that should not nag the user. The honest rule: a note is
 /// actionable iff it expresses a deviation from a target (its message says
 /// "from target") and is not a within-tolerance "ok".
-fn actionable_info_note(f: &SiFinding) -> Option<String> {
+///
+/// The controlled-impedance note gets the same what / why / what-to-do treatment
+/// a finding does (persona-panel fix): a novice saw a bare "Zdiff ~ 173 ohm
+/// [target 90]" with no idea what to do. We keep the honest number and add the
+/// translation.
+fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
     let m = &f.message;
     let off_target = m.contains("from target") && !m.contains("within");
     if !off_target {
         return None;
     }
     let parts = join_refs(&f.refs);
+    let affected = if parts == "the part" {
+        String::from("the trace pair noted above")
+    } else {
+        parts
+    };
     Some(match f.check {
-        SiCheck::ControlledImpedance => format!(
-            "Controlled-impedance estimate is off target ({}). {}. This is informational \
-             (the board did not formally declare a controlled-impedance stackup), but if \
-             this is a USB / high-speed link, check the trace width and spacing.",
-            short_msg(m),
-            if parts == "the part" {
-                String::from("Affected trace pair noted above")
-            } else {
-                format!("Affected: {parts}")
-            }
+        SiCheck::ControlledImpedance => HeadsUp::glossed(
+            format!(
+                "A high-speed trace pair ({affected}) is off its impedance target ({}).",
+                short_msg(m)
+            ),
+            "Fast links like USB (90 ohm differential) or Ethernet need their traces to \
+             present a specific impedance so the signal does not reflect off the wire and \
+             smear. This is a computed estimate, flagged only because the board did not \
+             formally declare a controlled-impedance stackup — it is informational, not a \
+             confirmed failure, but a value well off target on a real high-speed net can \
+             make the link marginal or fail to enumerate.",
+            "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. \
+             If it is: adjust the trace width and pair spacing for your actual layer \
+             stackup so the estimate lands near the target (the formulas are in \
+             docs/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup \
+             to spec.",
         ),
-        _ => format!("{} ({}).", short_msg(m), parts),
+        _ => HeadsUp::note(format!("{} ({affected}).", short_msg(m))),
     })
 }
 
