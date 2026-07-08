@@ -83,12 +83,20 @@ unknown `expected_e_machine`, ambiguous ADC inject, and (via
 
 **Add an MCU variant (purely as data, no recompile).** Copy the closest
 `db/mcu/<part>.soc.toml`, edit the fields (platform `.repl`, ODR offsets, UART,
-ISA), drop it in `$HAUKSBEE_MCU_DIR` or `~/.config/hauksbee/mcu/`, and resolve it
-with `SocConfig::resolve("renode:<yourpart>")` (an override directory wins over a
-built-in of the same name). That is the 06 §6.4 acceptance bar — a new Renode MCU
-added without touching hauksbee's source. The equivalence and validation tests
-live in `crates/hauksbee-mcu/tests/soc_descriptors.rs`; the full worked
-walkthrough (`docs/extending/add-an-mcu-variant.md`) is a later W5 item.
+ISA), drop it in `$HAUKSBEE_MCU_DIR` or `~/.config/hauksbee/mcu/`, and add a
+`[[models]] kind = "mcu"` routing entry naming `renode:<yourpart>` (the recipe
+pattern below). The scheduler's backend instantiation resolves every
+`renode:<part>` / `qemu:<part>` string through `SocConfig::resolve`, so the
+override directories are the product path, not just a library function: an
+override directory wins over a built-in of the same name, and an *invalid*
+override for a part in use aborts the run naming the file and field — never a
+silent fallback to the built-in. That is the 06 §6.4 acceptance bar — a new
+Renode MCU added without touching hauksbee's source. The equivalence and
+validation tests live in `crates/hauksbee-mcu/tests/soc_descriptors.rs`, the
+product-path wiring test in `hauksbee-engine`'s `soc_wiring_tests`;
+`docs/extending/add-an-mcu-variant.md` is the full worked walkthrough, with a
+real boot transcript. `hauksbee models list --builtin` enumerates the shipped
+descriptors.
 
 **What honestly stays Rust.** A descriptor only *configures* one of the three
 existing backends. A wholly new emulator backend is a new `Mcu` trait

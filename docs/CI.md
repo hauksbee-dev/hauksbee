@@ -82,6 +82,28 @@ echo $?   # 1: the rail collapses on a fuzzed power-up state
 echo $?   # 0
 ```
 
+### Custom parts: the model library and `--models-dir`
+
+`hauksbee-ci run` binds the board against the same layered model library as
+`hauksbee run`: the builtin db, then installed packs, then the user model dirs
+(`~/.hauksbee/models`, `~/.config/hauksbee/models`), then `--models-dir DIR`
+(highest priority). A custom `[[models]]` entry — including a
+`kind = "mcu"` routing entry that maps a part value to a `renode:<part>` /
+`qemu:<part>` backend and its SoC descriptor — therefore binds in CI exactly
+as it does interactively:
+
+```bash
+hauksbee-ci run ci/board.toml --models-dir hardware/models
+```
+
+MCU SoC descriptors themselves resolve from `$HAUKSBEE_MCU_DIR` /
+`~/.config/hauksbee/mcu` before the built-ins, in CI and interactive runs
+alike (see `docs/extending/add-an-mcu-variant.md` for the full two-file
+recipe). `hauksbee-ci init`'s scaffold uses the same layered library, so the
+detected MCU matches what a run would bind. Note the spec's top-level `mcu`
+key does NOT select the MCU — it is an informational note; the board's part
+value plus the routing entries decide.
+
 ## Spec format
 
 A spec is TOML, designed to be pleasant to hand-write. Unknown keys, unknown
@@ -95,7 +117,7 @@ name lists its near-matches ("did you mean `ANALOG_VDD`?").
 | `name`          | string   | `"hauksbee-ci"`| Label shown in reports.                                       |
 | `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356. |
 | `firmware`      | path     | none          | Firmware ELF/hex to boot on the detected MCU.                 |
-| `mcu`           | string   | none          | MCU-kind hint (informational; the binder auto-detects).       |
+| `mcu`           | string   | none          | Informational note only — nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. |
 | `duration_ms`   | float    | `100`         | Simulated time to run.                                        |
 | `frame_ms`      | float    | `1`           | Sampling cadence (how often nets are read).                   |
 | `suppress_rail` | [string] | `[]`          | Nets whose auto-rail is removed (fed only through the board). |
