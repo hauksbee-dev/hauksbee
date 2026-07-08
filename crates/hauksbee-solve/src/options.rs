@@ -68,6 +68,31 @@ pub enum AssemblyMode {
     Planned,
 }
 
+/// The classic SPICE device-evaluation bypass (dev-plan 03 §6): reuse a
+/// quiescent nonlinear device's previous linearization (its recorded matrix +
+/// RHS stamp) when none of the unknowns it reads moved more than
+/// `0.1·(reltol·max(|v|,|v_last|) + vntol)` since its last evaluation.
+///
+/// `Off` (the default) is the reference: no cache exists, no movement test
+/// runs, and every solve path is bit-for-bit the classic assembly. `On` is an
+/// explicit opt-in speed knob whose accepted steps must match the no-bypass
+/// reference to solver tolerance (reltol), never bit-for-bit — the iterate
+/// PATH may change, the answer may not (§6.2's gate). The bypass machinery
+/// carries SPICE's safety discipline internally: never on the first two
+/// iterations of a solve, never on DC / event-frozen solves or the trials
+/// immediately after an event-resolved step, cache invalidated across steps
+/// (the charge-companion history moves per step). See `bypass.rs` for the
+/// cache design and the excluded device classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum NewtonBypass {
+    /// No bypass (the bit-for-bit reference path).
+    #[default]
+    Off,
+    /// Skip re-evaluating quiescent nonlinear devices within a step's Newton
+    /// iteration sequence.
+    On,
+}
+
 /// Whether the partitioned engine may execute its per-sweep island work on a
 /// rayon thread pool (dev-plan 03 §3.4).
 ///
@@ -414,6 +439,11 @@ pub struct SolverOptions {
     /// How Newton assembles the linearized system; see [`AssemblyMode`].
     #[serde(default)]
     pub assembly: AssemblyMode,
+    /// The classic SPICE device-evaluation bypass; see [`NewtonBypass`].
+    /// Off by default (dev-plan 03 §6.2: promoted only after its gates pass);
+    /// `On` is a per-run opt-in, never flipped by any internal path.
+    #[serde(default)]
+    pub newton_bypass: NewtonBypass,
     /// Whether the partitioned sweep may run islands on a thread pool; see
     /// [`ParallelPolicy`]. Never changes results (the sweep is order-free by
     /// construction), only wall time.
@@ -469,6 +499,7 @@ impl Default for SolverOptions {
             dc_init: DcInit::Solve,
             partitioning: Partitioning::Auto,
             assembly: AssemblyMode::Interpreted,
+            newton_bypass: NewtonBypass::Off,
             parallel: ParallelPolicy::Auto,
             granularity: 1.0,
             ladder: RobustnessLadder::none(),
