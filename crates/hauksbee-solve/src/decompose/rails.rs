@@ -1,7 +1,7 @@
 //! Stiff-rail detection: where a balance tear fragments a fused core.
 //!
 //! The shape this hunts is the one that defeated the Tarski monolith
-//! (`docs/dev-plans/research/tarski-saga.md` §1a): a supply rail fed through
+//! (`docs/learn/tarski-saga.md` §1a): a supply rail fed through
 //! one series impedance, loaded by many nonlinear blocks. Every block couples
 //! to every other only through the scalar rail voltage, so the system is
 //! bordered-block-diagonal and tears *exactly* into per-block solves plus one
