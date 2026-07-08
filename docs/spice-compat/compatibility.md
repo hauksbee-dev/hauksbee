@@ -23,10 +23,12 @@ Two mechanisms back that up:
    `UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test compat_drift`.
 
 Refusals are always line-numbered `SpiceError`s (`Syntax`, `UnknownElement`,
-`MissingModel`, `BadNumber`) carrying the offending text. There is no silent misparse
-of a *recognized* card: a card the loader understands is either honored or refused with
-a reason. (The one honesty gap — a class of *directives* that is silently ignored
-rather than refused — is called out in §4.)
+`MissingModel`, `BadNumber`, `Unsupported`) carrying the offending text. There is no
+silent misparse of a *recognized* card, and no silent drop of an *unrecognized*
+directive: a card or directive the loader understands is either honored or refused
+with a reason, and any dot-directive it does not recognize is refused too (only a
+short allowlist of directives that change nothing when ignored — `.end`, `.op`,
+`.title`, `.width`, `.save` — is accepted as a no-op; see §4).
 
 ---
 
@@ -50,7 +52,7 @@ title and is ignored.
 | `L` inductor | `Lxxx a b value [ic=]` — inductor, optional initial current. |
 | `V` voltage source | `Vxxx p n <dc|sin|pulse|pwl> [AC mag phase]` — independent voltage source. |
 | `I` current source | `Ixxx p n <dc|sin|pulse|pwl> [AC mag phase]` — independent current source. |
-| `D` diode | `Dxxx a k model` — Shockley diode with junction cap / transit time / breakdown from its `.model` (defaults if the model is missing). |
+| `D` diode | `Dxxx a k model` — Shockley diode with junction cap / transit time / breakdown from its `.model` (the model is required and must be a diode model). |
 | `Q` BJT | `Qxxx c b e model` — Gummel-Poon BJT with charge storage (cje/cjc/tf/tr) and series rb/re/rc. |
 | `M` MOSFET | `Mxxx d g s b model [L= W=]` — LEVEL-1 MOSFET (see caveats) with gate charge and body diode. |
 | `S` voltage switch | `Sxxx a b nc+ nc- model` — voltage-controlled switch (`.model SW/VSWITCH`, defaults if absent). |
@@ -142,11 +144,12 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
 - **BJT charge storage uses SPICE-default junction grading.** `cje/cjc/tf/tr` and series
   `rb/re/rc` are honored, but per-junction `VJE/VJC`/`MJE/MJC` overrides are not parsed —
   the values default to `0.75`/`0.33` (what an ngspice card without them also gets).
-- **Diode model is optional and defaults silently.** A `Dxxx a k model` whose model is
-  undefined — or whose `.model` is not a diode — falls back to the built-in default diode
-  parameters rather than erroring. This avoids a diode silently inheriting BJT params, but
-  it also means a typo'd model name is not caught. (`Q`/`M` do error on a missing model;
-  see §3 and the follow-up note in §4.)
+- **Diode model must resolve, like `Q`/`M`.** A `Dxxx a k model` whose named `.model` is
+  undefined is refused (`references undefined .model`), and one whose `.model` is not a
+  diode (e.g. an `NPN`) is refused (`not a diode model`) rather than silently inheriting
+  foreign parameters. The model token is required — there is no bare `Dxxx a k` default-
+  diode form — so a typo'd model name is caught, not silently defaulted. (This closes the
+  loader inconsistency where the diode used to default while `Q`/`M` erred; see §3.)
 - **Behavioral `B` sources use a fixed expression subset.** `V={expr}`/`I={expr}` over
   `v(node)`, `v(a,b)`, `i(vsource)`, `time`, and `.param` values, with the function set
   `ln log10 log2 exp pow sqrt cbrt abs sin cos tan asin acos atan atan2 sinh cosh tanh
@@ -198,9 +201,19 @@ asserted by the drift test.
 | `.dc` on a non-source | `.dc` can only sweep an independent V or I source. | `can only sweep an independent V or I source` |
 | degenerate VCVS | A VCVS shorting its own output port (or unity self-sense) is singular and refuses by name. | `shorts its own output port` |
 | undefined subckt | An `X` call to a subcircuit that was never defined refuses with the name. | `undefined subckt` |
-| missing BJT/MOS `.model` | A `Q`/`M` referencing an undefined model is refused (unlike a diode, which defaults). | `references undefined .model` |
+| missing BJT/MOS `.model` | A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way — see below). | `references undefined .model` |
 | unknown `.ac` sweep type | `.ac` accepts only `dec`, `oct`, or `lin`. | `unknown `.ac` sweep type` |
 | `.param` dependency cycle | Parameters that reference each other circularly are refused. | `dependency cycle` |
+| `D` undefined `.model` | A diode naming a model that does not exist is refused (no longer silently defaulted). | `references undefined .model` |
+| `D` non-diode `.model` | A diode naming a `.model` that is not a diode (e.g. an NPN) is refused rather than inheriting foreign params. | `not a diode model` |
+| `.tf` | Small-signal transfer-function analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.tf`` |
+| `.noise` | Noise analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.noise`` |
+| `.disto` | Distortion analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.disto`` |
+| `.pz` | Pole-zero analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.pz`` |
+| `.sens` | Sensitivity analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.sens`` |
+| `.four` | Fourier analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.four`` |
+| `.meas` | Measurement statements are not implemented; refused rather than silently ignored. | `unsupported directive `.meas`` |
+| unknown `.`-directive | Any dot-directive the loader does not recognize refuses rather than silently dropping (never fall through to a wrong parse). | `unrecognized directive` |
 <!-- END GENERATED: refused -->
 
 Also refused as `unknown element type` (the loader has no card for them): any element
@@ -234,13 +247,16 @@ Things a user migrating a deck must know, beyond the per-card caveats above:
 - **`body_is` (MOSFET body diode) defaults to 0, not ngspice's `1e-14`.** A deck that wants
   reverse body conduction must state `IS=` on the MOS model card. This is forced by the
   bit-identity bar against pre-existing decks.
-- **Unsupported *analysis directives* are silently ignored, not refused.** `.tf`, `.noise`,
-  `.disto`, `.pz`, `.sens`, `.four`, and `.meas` (and any other unrecognized `.`-directive)
-  are currently dropped without error — the loader refuses unsupported *cards* loudly but
-  not these directives. This is the one place the "no silent no-op" promise is not yet met;
-  it is tracked as a follow-up (add `SpiceError::Unsupported` for the enumerated analysis
-  directives). Until then, a deck relying on `.four`/`.meas` output will run its base
-  analysis and produce nothing for the unsupported directive.
+- **Unsupported *analysis directives* refuse loudly.** `.tf`, `.noise`, `.disto`, `.pz`,
+  `.sens`, `.four`, and `.meas` each refuse with `SpiceError::Unsupported` and a per-card
+  reason (`unsupported directive `.meas`: measurement statements are not implemented; …`)
+  rather than being silently dropped — a deck that asked for one of these analyses will not
+  quietly produce nothing. Any *other* unrecognized dot-directive is refused the same way
+  (`unrecognized directive`), so nothing falls through to a silent no-op. The only
+  directives accepted-and-ignored are the ones whose omission cannot change a computed
+  value: `.end` (deck terminator), `.op` (the default DC operating point), `.title` (deck
+  name), and `.width` / `.save` (output formatting/selection — hauksbee retains every
+  node). This closes the last "no silent no-op" gap the statement previously tracked.
 
 ---
 
