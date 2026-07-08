@@ -58,6 +58,7 @@ is `docs/START_HERE.md`, and the repo-root `README.md` leads with it.
 |---|---|---|---|
 | `docs/dev-plans/` | Design plans 00-09, perf notes, `research/` (dossiers, maps, the saga) | RECORD (already scoped) | stay |
 | `docs/how-and-why/` | Code companion explanations (per-crate how-and-why) | USER (already scoped) | stay |
+| `docs/spice-compat/` | SPICE compatibility statement (`compatibility.md`, the enforced supported/refused card list) + ngspice cross-check results (`results.md`) | USER (already scoped) | stay |
 | `docs/hunts/` | Bug-hunt working directory: per-board narratives, briefs, results, report assets | RECORD (already scoped) | stay |
 | `docs/assets/*` | Images embedded by docs | n/a | stay |
 
