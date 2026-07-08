@@ -183,17 +183,26 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s, "# boot-coverage: a control net (a gate / enable / reset / chip-select) the");
     let _ = writeln!(s, "# firmware must actively drive to a defined level within a deadline of reset,");
     let _ = writeln!(s, "# with no stress fault during the boot window before it does.");
-    // Comment prefix: empty when the backend can satisfy it, "# " otherwise.
-    let cc = if boot_coverage_supported { "" } else { "# " };
+    // Always scaffold boot-coverage COMMENTED-OUT: it asserts on what the
+    // *firmware* does, and `firmware = ...` is itself commented above, so the
+    // starter spec has no image to boot. Left live it would go RED out of the
+    // box on every board (the control net is never driven / the MCU never runs),
+    // which is exactly the false-red first-run the persona panel hit. So the
+    // starter is GREEN on `no_faults` alone; the user opts into boot-coverage
+    // deliberately, after wiring up their firmware. The `cc` prefix stays a
+    // variable so the two `[[assert]]` blocks below read the same as the other
+    // assertion sections.
+    let cc = "# ";
+    let _ = writeln!(s, "# NOTE: left commented-out. It boots your firmware and checks the control net,");
+    let _ = writeln!(s, "#   so it only means something once `firmware = ...` above points at a real");
+    let _ = writeln!(s, "#   ELF/hex. Uncomment both the firmware line and this block together.");
     if !boot_coverage_supported {
         let backend = mcu_backend.as_deref().unwrap_or("");
-        let _ = writeln!(s, "# NOTE: left commented-out for this board. Its MCU runs on the `{backend}`");
-        let _ = writeln!(s, "#   backend, which co-sims GPIO and UART but models ADC and I2C/SPI");
-        let _ = writeln!(s, "#   peripheral-slave coupling as no-ops (docs/MCU.md), and cannot report pin");
-        let _ = writeln!(s, "#   drive direction, so it cannot distinguish a held-LOW pin from an undriven");
-        let _ = writeln!(s, "#   one. Uncomment only if your control net is driven by plain GPIO to a");
-        let _ = writeln!(s, "#   defined HIGH level; a net driven LOW or via a peripheral bus would report");
-        let _ = writeln!(s, "#   a misleading result on this backend. AVR boards model the full stack.");
+        let _ = writeln!(s, "#   Also note this board's MCU runs on the `{backend}` backend, which co-sims");
+        let _ = writeln!(s, "#   GPIO and UART but models ADC and I2C/SPI peripheral-slave coupling as");
+        let _ = writeln!(s, "#   no-ops (docs/MCU.md) and cannot report pin drive direction, so it cannot");
+        let _ = writeln!(s, "#   distinguish a held-LOW pin from an undriven one. On it, watch only a net");
+        let _ = writeln!(s, "#   driven by plain GPIO to a defined HIGH level. AVR boards model the full stack.");
     }
     let _ = writeln!(s, "{cc}[[assert]]");
     let _ = writeln!(s, "{cc}kind = \"boot-coverage\"");
