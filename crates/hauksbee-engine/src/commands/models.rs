@@ -186,8 +186,23 @@ pub fn remove(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `hauksbee models list`: the installed packs, from `packs.toml`.
-pub fn list() -> anyhow::Result<()> {
+/// `hauksbee models list`: the installed packs, from `packs.toml`. With
+/// `--builtin`, first the embedded MCU SoC descriptors — the `backend:part`
+/// specs a board's `renode:<part>` / `qemu:<part>` backend string resolves to
+/// when no override-dir descriptor shadows them.
+pub fn list(builtin: bool) -> anyhow::Result<()> {
+    if builtin {
+        println!("built-in MCU SoC descriptors (backend:part):");
+        for spec in hauksbee_mcu::SocConfig::builtin_specs() {
+            println!("  {spec}");
+        }
+        println!(
+            "  (a <part>.soc.toml in $HAUKSBEE_MCU_DIR or ~/.config/hauksbee/mcu\n   \
+             overrides the built-in of the same part; for the full model db as\n   \
+             it applies to a board, use `hauksbee models resolve <board>`)"
+        );
+        println!();
+    }
     let store = default_store()?;
     let records = store.list()?;
     if records.is_empty() {
