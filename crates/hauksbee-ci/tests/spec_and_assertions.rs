@@ -29,6 +29,18 @@ fn empty_assertions_is_rejected() {
 }
 
 #[test]
+fn asbuilt_field_parses_and_resolves_beside_the_spec() {
+    let p = write_tmp(
+        "asbuilt.toml",
+        "board = \"b.kicad_pcb\"\nasbuilt = \"b.asbuilt.toml\"\nduration_ms = 1\n\
+         [[assert]]\nkind = \"voltage\"\nnet = \"X\"\nmin = 0.0\nmax = 5.0\n",
+    );
+    let spec = Spec::load(&p).unwrap();
+    let resolved = spec.asbuilt_path().expect("asbuilt path");
+    assert!(resolved.ends_with("hauksbee_ci_tests/b.asbuilt.toml"), "got: {resolved:?}");
+}
+
+#[test]
 fn unknown_assertion_kind_is_rejected() {
     let p = write_tmp(
         "badkind.toml",

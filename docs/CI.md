@@ -147,6 +147,24 @@ ref = "R_Shunt15301"
 value = "0.05"            # the documented milliohm sense shunt
 ```
 
+### The as-built overlay: `asbuilt`
+
+`[[override]]` swaps a component's *value string* before binding. Some boards
+differ from their design files more radically: traces cut with a knife, pins
+lifted, jumper wires soldered, parts replaced — the physical rework record.
+That delta lives in a declarative `.asbuilt.toml` overlay (the format is
+documented in `docs/how-and-why/hauksbee-engine/asbuilt.md`), and a spec can
+reference one; it is applied to the bound board before every run, ahead of any
+harness attachment:
+
+```toml
+asbuilt = "board.asbuilt.toml"   # relative to the spec file, like `board`
+```
+
+The overlay is fail-loud: an entry that matches nothing (or a different number
+of devices/terminals than it declares) aborts the run with a line-numbered
+error and a did-you-mean suggestion. The engine CLI accepts the same overlay with `hauksbee run board --asbuilt board.asbuilt.toml`.
+
 ### Initial-state fuzzing: `[fuzz]`
 
 Real boards power up with undefined register and latch states. Fuzzing runs the

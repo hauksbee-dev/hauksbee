@@ -258,6 +258,12 @@ struct RunArgs {
     #[arg(long, value_name = "HEX")]
     firmware: Option<PathBuf>,
 
+    /// As-built overlay (.asbuilt.toml): the declarative physical delta between
+    /// the design files and the real reworked board (cut traces, jumper wires,
+    /// lifted pins, fitted component values), applied before simulating.
+    #[arg(long, value_name = "FILE")]
+    asbuilt: Option<PathBuf>,
+
     /// Seconds of simulated time to run under --headless.
     #[arg(long, default_value_t = 1.0, value_name = "N")]
     seconds: f64,
@@ -621,6 +627,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
     hauksbee_engine::commands::run::RunConfig {
         board: a.board,
         firmware: a.firmware,
+        asbuilt: a.asbuilt,
         seconds: a.seconds,
         headless: a.headless,
         report: a.report,
