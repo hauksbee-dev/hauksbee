@@ -5,6 +5,9 @@
 //! expressed as a conductance). [`Layout`] assigns each unknown a row/column in
 //! the system matrix once; the index is stable for the whole run so the sparse
 //! pattern stays frozen.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/system.md
 
 use hauksbee_ir::{BOutput, Circuit, Device, DeviceId};
 
