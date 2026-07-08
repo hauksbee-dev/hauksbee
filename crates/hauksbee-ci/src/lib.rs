@@ -23,6 +23,7 @@ use std::time::Instant;
 
 pub mod assertions;
 pub mod error;
+pub mod hwtrace;
 pub mod init;
 pub mod report;
 pub mod runner;

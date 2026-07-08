@@ -41,8 +41,143 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
     };
     spec.asserts
         .iter()
-        .map(|a| evaluate_one(a, outcomes, mode))
+        .flat_map(|a| {
+            if a.kind == "hwtrace" {
+                // One hwtrace assertion expands to one result per (channel,
+                // feature), so the report shows the per-feature table an EE
+                // can argue with, not a single opaque pass/fail.
+                evaluate_hwtrace(spec, a, outcomes)
+            } else {
+                vec![evaluate_one(a, outcomes, mode)]
+            }
+        })
         .collect()
+}
+
+/// Evaluate one `hwtrace` assertion: load the trace, extract each declared
+/// feature from the captured waveform and from every seed's simulated
+/// waveform, and emit one [`AssertResult`] per (channel, feature) with both
+/// values in the detail line. A feature passes only if it holds on every seed
+/// (same all-seeds rule as every other assertion kind).
+fn evaluate_hwtrace(spec: &Spec, a: &Assertion, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
+    use crate::hwtrace;
+
+    let hard_fail = |label: String, detail: String| AssertResult {
+        label,
+        kind: "hwtrace".to_string(),
+        passed: false,
+        invalid: false,
+        detail,
+        failing_seed: None,
+        failing_seeds: Vec::new(),
+        seeds_total: outcomes.len() as u32,
+    };
+
+    let path = match hwtrace::trace_path(spec, a) {
+        Ok(p) => p,
+        Err(e) => return vec![hard_fail(a.label(), e.to_string())],
+    };
+    let trace = match hwtrace::Trace::load(&path) {
+        Ok(t) => t,
+        Err(e) => return vec![hard_fail(a.label(), e.to_string())],
+    };
+
+    // The provenance banner: a synthetic trace must announce itself in the
+    // report so a green run can never be mistaken for hardware validation.
+    let provenance = if trace.trace.provenance == "synthetic" {
+        " [SYNTHETIC trace — validates the harness, not the hardware]"
+    } else {
+        ""
+    };
+
+    // The analog-validity gate (05 §3b): the simulated waveforms are per-frame
+    // analog samples over the whole run, so any failed-solve window inside the
+    // run makes every feature INVALID rather than pass/fail.
+    let stale = outcomes.iter().find(|o| !o.failed_windows.is_empty());
+
+    let mut results = Vec::new();
+    for ch in &trace.channels {
+        let captured = match trace.load_channel(ch) {
+            Ok(s) => s,
+            Err(e) => {
+                results.push(hard_fail(
+                    format!("hwtrace {}", ch.net),
+                    e.to_string(),
+                ));
+                continue;
+            }
+        };
+        for f in &ch.features {
+            let label = format!("hwtrace {} {}", ch.net, f.kind);
+            if let Some(out) = stale {
+                let (fs, fe) = out.failed_windows[0];
+                results.push(AssertResult {
+                    label,
+                    kind: "hwtrace".to_string(),
+                    passed: false,
+                    invalid: true,
+                    detail: format!(
+                        "INVALID: the analog solve failed within {:.2}-{:.2} ms of the run; \
+                         the simulated waveform contains held-stale samples, so no feature \
+                         comparison against the capture can be trusted (05 §3b).",
+                        fs * 1e3,
+                        fe * 1e3
+                    ),
+                    failing_seed: Some(out.seed),
+                    failing_seeds: vec![out.seed],
+                    seeds_total: outcomes.len() as u32,
+                });
+                continue;
+            }
+
+            // Per-seed comparison; the feature must hold on every seed.
+            let mut last_detail = String::new();
+            let mut failures: Vec<(u32, String)> = Vec::new();
+            for out in outcomes {
+                let Some(sim) = out.net_series.get(&ch.net) else {
+                    failures.push((
+                        out.seed,
+                        format!(
+                            "net '{}' was never sampled by the run — check the net name in \
+                             the trace against the board",
+                            ch.net
+                        ),
+                    ));
+                    continue;
+                };
+                let r = hwtrace::compare(&ch.net, f, &captured, sim);
+                if r.pass {
+                    last_detail = r.detail;
+                } else {
+                    failures.push((out.seed, r.detail));
+                }
+            }
+
+            let (passed, mut detail, failing_seeds) = match failures.first() {
+                None => (true, last_detail, Vec::new()),
+                Some((seed, d)) => {
+                    let d = if outcomes.len() > 1 {
+                        format!("seed {seed}: {d}")
+                    } else {
+                        d.clone()
+                    };
+                    (false, d, failures.iter().map(|(s, _)| *s).collect())
+                }
+            };
+            detail.push_str(provenance);
+            results.push(AssertResult {
+                label,
+                kind: "hwtrace".to_string(),
+                passed,
+                invalid: false,
+                detail,
+                failing_seed: failing_seeds.first().copied(),
+                failing_seeds,
+                seeds_total: outcomes.len() as u32,
+            });
+        }
+    }
+    results
 }
 
 fn evaluate_one(
