@@ -1,0 +1,18 @@
+# The CI spec that replays the led-blink-la capture scenario in simulation:
+# identical run to led-blink-scope, compared against the VCD flavor of the
+# capture (timing features only — a logic analyzer records bits, not volts).
+
+name = "avr-blinky vs hardware trace (logic-analyzer VCD)"
+board = "../../../../crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+firmware = "../../../firmware/demo/demo.hex"
+mcu = "atmega328p"
+duration_ms = 1000
+
+[[supply]]
+net = "+5V"
+kind = "usb"
+usb = "5v0.5a"
+
+[[assert]]
+kind = "hwtrace"
+trace = "trace.toml"
