@@ -172,7 +172,7 @@ Hauksbee was built for one board no simulation tool could honestly check: Tarski
 
 The name is for [Francis Hauksbee](https://en.wikipedia.org/wiki/Francis_Hauksbee), who built the first machine to make the electrostatic spark on demand. Bringing a dead board to life is roughly the same trick.
 
-See the website at [hauksbee.dev](https://hauksbee.dev). Honest limitations are catalogued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+See the website at [hauksbee.dev](https://hauksbee.dev). Honest limitations are catalogued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). Exactly which SPICE cards `hauksbee sim` accepts or refuses — enforced against the loader so it cannot drift — is the [SPICE compatibility statement](docs/spice-compat/compatibility.md).
 
 ---
 

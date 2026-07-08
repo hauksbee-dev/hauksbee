@@ -98,7 +98,9 @@ enum Command {
     /// Honesty: an analysis the front-end cannot yet feed (`--ac`, `--dc`) and
     /// an output format not yet built (`--format raw|both`) REFUSE with a clear
     /// message and a non-zero exit — never a silent no-op or a wrong number. A
-    /// malformed deck prints the loader's line-numbered error and exits 2.
+    /// malformed deck prints the loader's line-numbered error and exits 2. The
+    /// exact supported/refused card list is the compatibility statement,
+    /// `docs/spice-compat/compatibility.md`.
     ///
     /// Example:
     ///   hauksbee sim rc.cir --out rc.csv
