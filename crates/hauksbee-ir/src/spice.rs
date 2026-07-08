@@ -243,6 +243,17 @@ pub enum SpiceError {
         tok: String,
         text: String,
     },
+    /// A directive the loader RECOGNIZES as a directive but does not implement
+    /// (an unsupported analysis like `.tf`/`.meas`) or does not recognize at all
+    /// (an unknown `.`-card). Refused loudly rather than silently dropped
+    /// (dev-plan 04 §4.3, "never fall through to a wrong parse / silent no-op").
+    #[error("line {line}: unsupported directive `{card}`: {reason}: `{text}`")]
+    Unsupported {
+        line: usize,
+        card: String,
+        text: String,
+        reason: String,
+    },
 }
 
 impl SpiceLoader {
@@ -550,13 +561,70 @@ fn collect_line(
             directives.saw_plot = true;
         }
         directives.prints.push(parse_print(lineno, raw, is_plot)?);
-    } else if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with('.') {
-        // Other directives (`.end`, `.width`, ...) are consumed elsewhere or out
-        // of scope for this step; skip them here.
+    } else if trimmed.is_empty() || trimmed.starts_with('*') {
+        // Blank line or comment: nothing to do.
+    } else if trimmed.starts_with('.') {
+        // A dot-directive no earlier arm consumed. Honesty doctrine (dev-plan 04
+        // §4.3): never fall through to a silent no-op. Either it is a benign
+        // directive that changes nothing when ignored, or it refuses loudly.
+        classify_unhandled_directive(lineno, trimmed, raw)?;
     } else {
         col.top_elems.push(pl.clone());
     }
     Ok(())
+}
+
+/// Classify a top-level dot-directive that no arm of [`collect_line`] consumed
+/// (`.include`/`.lib`/`.endl` are already expanded in pass 0 and never reach
+/// here). Dev-plan 04 §4.3 forbids silently dropping a recognized-but-
+/// unimplemented directive; this splits the residue three ways:
+///
+/// * a short, explicit ALLOWLIST of directives whose omission cannot change any
+///   value the solver computes — accepted as a genuine no-op;
+/// * the ENUMERATED unsupported analyses (`.tf`/`.noise`/`.disto`/`.pz`/`.sens`/
+///   `.four`/`.meas`) — each refuses with its own reason;
+/// * everything else — an unknown `.`-card, refused generically rather than
+///   silently ignored (this also catches a `.control` block, refused at its
+///   `.control` line before the body is misread as elements).
+fn classify_unhandled_directive(line: usize, trimmed: &str, raw: &str) -> Result<(), SpiceError> {
+    let card = first_token(trimmed).to_ascii_lowercase();
+    // Benign no-ops. `.op` is the DC operating point already run by default when
+    // no analysis card is present; `.end` is the deck terminator; `.title` names
+    // the deck (the title convention already ignores the first line); `.width`
+    // and `.save` affect only output formatting/selection (hauksbee retains
+    // every node, so dropping them changes nothing).
+    const BENIGN: &[&str] = &[".end", ".op", ".title", ".width", ".save"];
+    if BENIGN.contains(&card.as_str()) {
+        return Ok(());
+    }
+    // Enumerated unsupported analyses (dev-plan 04 §4.3): a per-card reason so
+    // the user learns exactly which analysis is missing.
+    let analysis_reason = match card.as_str() {
+        ".tf" => Some("small-signal transfer-function analysis is not implemented"),
+        ".noise" => Some("noise analysis is not implemented"),
+        ".disto" => Some("distortion analysis is not implemented"),
+        ".pz" => Some("pole-zero analysis is not implemented"),
+        ".sens" => Some("sensitivity analysis is not implemented"),
+        ".four" => Some("Fourier analysis is not implemented"),
+        ".meas" | ".measure" => Some("measurement statements are not implemented"),
+        _ => None,
+    };
+    if let Some(reason) = analysis_reason {
+        return Err(SpiceError::Unsupported {
+            line,
+            card,
+            text: raw.into(),
+            reason: format!("{reason}; see docs/spice-compat/compatibility.md"),
+        });
+    }
+    Err(SpiceError::Unsupported {
+        line,
+        card,
+        text: raw.into(),
+        reason: "unrecognized directive; hauksbee refuses unknown `.`-cards rather than \
+                 silently ignoring them (see docs/spice-compat/compatibility.md)"
+            .into(),
+    })
 }
 
 // --- element-name references (§2.2) ------------------------------------------
@@ -1543,6 +1611,12 @@ fn with_provenance(err: SpiceError, prov: &str) -> SpiceError {
             line,
             tok,
             text: format!("{text}{prov}"),
+        },
+        SpiceError::Unsupported { line, card, text, reason } => SpiceError::Unsupported {
+            line,
+            card,
+            text: format!("{text}{prov}"),
+            reason,
         },
     }
 }
@@ -2638,19 +2712,37 @@ fn parse_diode(
     let a = circuit.node(&toks[1]);
     let k = circuit.node(&toks[2]);
     let model_name = &toks[3];
-    // Only bind a card whose type is actually a diode; otherwise fall back to
-    // defaults so a mistyped reference doesn't silently inherit BJT params.
+    // Resolve the model the way Q/M do (dev-plan 04 §4.3, "never fall through to
+    // a wrong parse"): a NAMED model that does not exist refuses with
+    // `MissingModel`, and one that exists but is not a diode `.model` refuses
+    // rather than silently inheriting a BJT/MOS card's parameters. There is no
+    // bare `Dxxx a k` no-model form in this loader — the model token is required
+    // by the arity check above — so every diode names a model that must resolve.
     let card = models
         .get(&model_name.to_ascii_lowercase())
-        .filter(|c| c.kind == "d");
-    let model = diode_from_card(card);
+        .ok_or_else(|| SpiceError::MissingModel {
+            line,
+            model: model_name.clone(),
+            text: raw.into(),
+        })?;
+    if card.kind != "d" {
+        return Err(SpiceError::Syntax {
+            line,
+            msg: format!(
+                "`.model {}` is a `{}` model, not a diode model",
+                model_name,
+                card.type_word.as_deref().unwrap_or(card.kind.as_str())
+            ),
+            text: raw.into(),
+        });
+    }
+    let model = diode_from_card(Some(card));
     circuit.add(Device::Diode {
         name: toks[0].clone(),
         a,
         k,
         model,
     });
-    let _ = (line, raw);
     Ok(())
 }
 
