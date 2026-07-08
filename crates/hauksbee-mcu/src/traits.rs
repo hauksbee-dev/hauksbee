@@ -140,7 +140,7 @@ pub trait Mcu {
     /// The cycle stamp is what lets the co-sim replay a sub-µs `shiftOut` SCLK
     /// burst in the exact order (and multiplicity) the firmware produced it,
     /// rather than collapsing the whole chunk to a resting level (numerical lore
-    /// #8, `docs/dev-plans/research/tarski-saga.md` §5). On push backends
+    /// #8, `docs/learn/tarski-saga.md` §5). On push backends
     /// (simavr) the stamp is exact: the C IRQ fires synchronously on every edge,
     /// so the cycle read inside the hook is the true edge time. On poll backends
     /// (Renode/QEMU) it is the poll boundary's virtual time and coarse; see
