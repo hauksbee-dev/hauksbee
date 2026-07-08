@@ -15,6 +15,9 @@
 //! work is proportional to the arithmetic actually performed, so a tridiagonal
 //! ladder factorizes in O(n), not O(n^3), while a voltage source's zero pivot
 //! is handled by a row swap rather than failing.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/sparse.md
 
 /// A matrix being assembled in coordinate form, accumulating stamps.
 #[derive(Debug, Clone, Default)]
