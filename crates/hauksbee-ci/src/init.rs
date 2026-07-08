@@ -45,7 +45,9 @@ fn board_stem(board: &Path) -> String {
 /// it can be exercised without touching disk.
 pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let extracted = runner::load_board(board)?;
-    let lib = ModelLibrary::builtin();
+    // Same layered library as a run (builtin → packs → user model dirs), so
+    // the scaffold detects the MCU/supplies a run would actually bind.
+    let lib = ModelLibrary::builtin_with_user_dirs(&[]);
     let bound = bind_board(&extracted, &lib);
 
     // The board's own detected supplies: the binder stamps one supply leg per
@@ -142,7 +144,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         None => {
             let _ = writeln!(
                 s,
-                "# mcu = \"atmega328p\"          # no MCU detected; set the kind if the board has one"
+                "# mcu = \"atmega328p\"          # no MCU detected (informational note only; the binder detects the MCU from the board)"
             );
         }
     }

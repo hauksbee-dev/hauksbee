@@ -6,7 +6,7 @@
 //! name = "power-up sanity"
 //! board = "hardware/board.kicad_pcb"        # .kicad_pcb / .kicad_sch / .net / .brd / .d356
 //! firmware = "firmware/build/app.elf"        # optional ELF/hex
-//! mcu = "atmega328p"                          # optional MCU kind hint
+//! mcu = "atmega328p"                          # informational note only; the binder detects the MCU from the board
 //! duration_ms = 200                           # simulated time
 //!
 //! [[supply]]                                  # 0+ power-supply legs
@@ -100,7 +100,13 @@ pub struct Spec {
     /// Optional firmware ELF/hex, relative to the spec file's directory.
     #[serde(default)]
     pub firmware: Option<PathBuf>,
-    /// Optional MCU-kind hint (informational; the binder detects the MCU).
+    /// Optional MCU-kind note. Purely informational — nothing reads it: the
+    /// binder detects the MCU from the BOARD's part value via the model
+    /// library's `[[models]] kind = "mcu"` routing entries (builtin, user
+    /// model dirs, or `--models-dir`), and the resulting `backend:part`
+    /// string selects the emulator + SoC descriptor. To run a spec against a
+    /// different MCU, change the board or add a routing entry; this field
+    /// cannot force a backend.
     #[serde(default)]
     pub mcu: Option<String>,
     /// Simulated duration in milliseconds.
