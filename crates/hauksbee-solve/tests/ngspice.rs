@@ -744,6 +744,15 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
 #[test]
 fn ngspice_corpus() {
     let Some(bin) = find_ngspice() else {
+        // A CI runner that REQUIRES the differential corpus (rather than
+        // tolerating the skip on contributor machines without ngspice) sets
+        // HAUKSBEE_REQUIRE_NGSPICE=1 so a missing oracle is a hard failure,
+        // never a silently-green gate with zero coverage.
+        if std::env::var_os("HAUKSBEE_REQUIRE_NGSPICE").is_some() {
+            panic!(
+                "HAUKSBEE_REQUIRE_NGSPICE is set but ngspice was not found                  ($NGSPICE / PATH / known locations) — the SPICE differential                  gate cannot run"
+            );
+        }
         eprintln!("ngspice not found ($NGSPICE / PATH / known locations); skipping corpus.");
         return;
     };
