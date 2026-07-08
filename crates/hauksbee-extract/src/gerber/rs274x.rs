@@ -24,6 +24,8 @@
 //!     as one dark fill minus a clear gap is read as still-connected). KiCad's
 //!     fills are emitted as separate dark regions, so this is rarely wrong in
 //!     practice.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
 use std::io::BufReader;
 

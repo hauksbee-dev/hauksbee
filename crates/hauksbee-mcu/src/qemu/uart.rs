@@ -6,6 +6,8 @@
 //! are delivered to the firmware's UART receiver. This is the same bridge shape
 //! the Renode backend uses, so the scheduler's UART handling is identical across
 //! backends.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 use anyhow::{Context, Result};
 use std::io::{Read, Write};

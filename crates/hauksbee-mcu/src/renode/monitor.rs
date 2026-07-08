@@ -7,6 +7,8 @@
 //!
 //! Launching with `-p` (plain) strips ANSI colour codes, which keeps parsing
 //! simple. We still tolerate stray escape sequences defensively.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};

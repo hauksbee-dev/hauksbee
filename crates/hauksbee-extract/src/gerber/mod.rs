@@ -26,6 +26,8 @@
 //!   P&P `Val`/`Package` field rather than an enriched MPN.
 //! - **No drill**: single-layer boards are fine; multi-layer boards lose
 //!   layer-to-layer stitching (each layer's copper becomes separate nets).
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
 pub mod connect;
 pub mod excellon;

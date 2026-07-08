@@ -2,7 +2,11 @@
 //!
 //! [`AvrMcu`] wraps a `simavr` `avr_t` instance and exposes the generic
 //! [`Mcu`] trait.  All Tarski-specific logic lives in higher layers; this
-//! module only deals in plain IRQ hooks and byte streams.
+//! module only deals in plain IRQ hooks and byte streams. It is the only
+//! cycle-exact backend: simavr's C hooks fire synchronously inside `avr_run`,
+//! so every reported edge carries its true `avr->cycle` stamp.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/avr.md.
 
 use crate::ffi;
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};

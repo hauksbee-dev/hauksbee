@@ -23,6 +23,8 @@
 //! amount and blocks until it elapses. With `SetGlobalAdvanceImmediately true`
 //! Renode runs as fast as the host allows rather than pacing to wall-clock,
 //! which is what we want when the analog solver, not wall time, sets the pace.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 
 mod monitor;
 mod process;
