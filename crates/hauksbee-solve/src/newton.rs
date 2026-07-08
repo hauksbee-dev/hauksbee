@@ -5,6 +5,9 @@
 //! solves it with the reusable factorization, and checks convergence. The DC
 //! operating point reuses this with reactive elements opened/shorted, plus
 //! gmin-stepping and source-stepping homotopy when the cold-start Newton stalls.
+//!
+//! Long-form how-and-why (motivation, theory, rejected alternatives, the
+//! buried bodies): docs/how-and-why/hauksbee-solve/newton.md
 
 use crate::options::{SolverOptions, Strategy};
 use crate::plan::StampPlan;

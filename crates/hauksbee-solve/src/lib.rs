@@ -11,6 +11,9 @@
 //! frozen pattern + reusable factorization so an island solver can reuse the
 //! same machinery per partition. State-space / compilation come later.
 //!
+//! Long-form how-and-why (the crate tour, module map, and reading order):
+//! docs/how-and-why/hauksbee-solve/README.md
+//!
 //! ```
 //! use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 //! use hauksbee_solve::{SolverOptions, Transient};
