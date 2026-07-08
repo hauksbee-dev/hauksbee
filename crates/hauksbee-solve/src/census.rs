@@ -90,6 +90,11 @@ thread_local! {
     /// and the total oscillating-node count across them.
     static NEWTON_OSC_ITERS: Cell<u64> = const { Cell::new(0) };
     static NEWTON_OSC_NODES: Cell<u64> = const { Cell::new(0) };
+    /// Device-evaluation bypass (dev-plan 03 §6): model evaluations performed
+    /// vs skipped across every bypass-armed assembly, so the skip rate the
+    /// §6.2 gate wants is measured, not guessed. Zero on unarmed runs.
+    static BYPASS_EVALS: Cell<u64> = const { Cell::new(0) };
+    static BYPASS_SKIPS: Cell<u64> = const { Cell::new(0) };
     /// Initial-iterate shadow (mechanism (a), better trial seeds): for each
     /// converged bare trial, the node-block distance from the ACTUAL start
     /// point (previous accepted x) to the root vs the distance from a linear
@@ -259,6 +264,24 @@ pub(crate) fn ls_alpha(alpha: f64, armijo_ok: bool) {
     }
 }
 
+/// Record one bypass-armed assembly's device-evaluation split (fresh
+/// evaluations vs cache replays). Pure readout behind the cached bool.
+pub(crate) fn bypass_assembly(evals: u64, skips: u64) {
+    if !enabled() {
+        return;
+    }
+    BYPASS_EVALS.with(|c| c.set(c.get() + evals));
+    BYPASS_SKIPS.with(|c| c.set(c.get() + skips));
+}
+
+/// Drain the bypass counters (evals, skips).
+fn take_bypass() -> (u64, u64) {
+    (
+        BYPASS_EVALS.with(|c| c.replace(0)),
+        BYPASS_SKIPS.with(|c| c.replace(0)),
+    )
+}
+
 /// Run one linear-algebra phase, accumulating its wall time when the census is
 /// on. When off this is the plain call behind one predictable branch, so the
 /// hot Newton loop keeps its cost (and its arithmetic, hence bit-exactness).
@@ -390,6 +413,7 @@ impl StepCensus {
         // the Drop report brackets exactly this march.
         let _ = take_phases();
         let _ = take_newton_attrib();
+        let _ = take_bypass();
         Some(StepCensus {
             started: Instant::now(),
             tstop,
@@ -589,6 +613,15 @@ impl Drop for StepCensus {
                 gated,
                 osc_iters,
                 osc_nodes,
+            );
+        }
+        let (byp_evals, byp_skips) = take_bypass();
+        if byp_evals + byp_skips > 0 {
+            eprintln!(
+                "[step-census]   device-eval bypass: evaluated={} skipped={} (skip rate {:.1}%)",
+                byp_evals,
+                byp_skips,
+                100.0 * byp_skips as f64 / (byp_evals + byp_skips) as f64,
             );
         }
         if pred.iter().any(|&c| c > 0) {
