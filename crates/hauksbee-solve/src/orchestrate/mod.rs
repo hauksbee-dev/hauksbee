@@ -8,7 +8,7 @@
 //!
 //! The split is deliberate and load-bearing. The original `tarski_decomp`
 //! fused deciding and executing into one 781-line function, and the saga
-//! (`docs/dev-plans/research/tarski-saga.md`) records what that cost: every
+//! (`docs/learn/tarski-saga.md`) records what that cost: every
 //! decision was invisible (no way to ask "what did it tear and why" without
 //! reading a debugger), and every executor bug looked like a decision bug
 //! (and vice versa; the STEP-1 dead-membrane hunt burned days deciding which

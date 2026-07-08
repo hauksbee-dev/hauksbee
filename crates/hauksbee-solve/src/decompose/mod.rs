@@ -12,7 +12,7 @@
 //!
 //! This module family makes the circuit itself say where it tears, replacing
 //! the board-specific `tarski_decomp` implementation whose net-name lists and
-//! tuned constants proved the concept (`docs/dev-plans/research/tarski-saga.md`
+//! tuned constants proved the concept (`docs/learn/tarski-saga.md`
 //! is the full story; `docs/dev-plans/02-tearing-architecture.md` is the
 //! design this implements).
 //!

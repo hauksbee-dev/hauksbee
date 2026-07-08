@@ -4,7 +4,7 @@
 //! The failure this pins: the LTE estimator is a second difference over
 //! accepted steps, so a sub-step stimulus arriving after a long quiet stretch
 //! (during which dt grew) produces no curvature signal and is silently
-//! aliased away. Lore #8 (`docs/dev-plans/research/tarski-saga.md` section 5)
+//! aliased away. Lore #8 (`docs/learn/tarski-saga.md` section 5)
 //! is the co-sim face of the same failure; this is the analog face, and the
 //! PWL edge drive of `docs/dev-plans/05-cosim-fidelity.md` section 1.3 relies
 //! on it being fixed.
