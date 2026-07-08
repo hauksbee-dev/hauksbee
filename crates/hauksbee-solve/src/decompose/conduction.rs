@@ -2,7 +2,7 @@
 //!
 //! The single most important primitive of the tearing engine, generalized from
 //! the hand-written `conduction_terminals` that made the Tarski feedforward
-//! decomposition exact (`docs/dev-plans/research/tarski-saga.md` §2b).
+//! decomposition exact (`docs/learn/tarski-saga.md` §2b).
 //!
 //! ## Why two kinds of terminal
 //!

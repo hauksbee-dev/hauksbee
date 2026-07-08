@@ -109,7 +109,7 @@ outputs = ["q", "qb"]
 /// cycle counter at the instant of the edge alongside the pin and its new level,
 /// so a sub-µs `shiftOut` SCLK burst replays in true order and multiplicity
 /// instead of collapsing to a resting level (numerical lore #8,
-/// `docs/dev-plans/research/tarski-saga.md` §5). Within a chunk the log preserves
+/// `docs/learn/tarski-saga.md` §5). Within a chunk the log preserves
 /// order and multiplicity; `cycle` is exact on push backends (simavr) and the
 /// coarse poll-slice time on poll backends (Renode/QEMU), flagged by
 /// `Mcu::cycle_exact`.
