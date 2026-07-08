@@ -400,6 +400,14 @@ impl Transient {
                     }
                 }
             }
+            // Bypass hold (dev-plan 03 §6 discipline): the trials that follow
+            // an event-resolved accept must not bypass — the accepted pair
+            // straddles the discontinuity the event loop just resolved, the
+            // same reason the extrapolation seed is skipped there. Mirrors
+            // `pred_skip_once`'s lifetime (true from an event-resolved accept
+            // until the next ordinary accept). A bool store, read only when
+            // `NewtonBypass::On` is armed; inert on every default run.
+            ws.set_bypass_hold(pred_skip_once);
             let coeffs = IntegCoeffs::for_step(opts.integration, h, first_step);
             let r = newton_solve(
                 &mut ws,
