@@ -149,9 +149,9 @@ those boards' layouts; only their legacy schematics are out of scope.
   register-read backend path *without* a patched QEMU to validate it against
   would violate the no-unvalidatable-fixes rule, so it stays deferred — now with
   an exact, actionable spec rather than an open question. (The orthogonal
-  discovery-path bug the spike surfaced — the loader still probing the
-  pre-rename `~/.hauksbee-qemu-esp` — *was* fixed in `a8d7b35`: it now probes
-  `~/.galvani-qemu-esp` first, legacy path as fallback.)
+  discovery-path bug the spike surfaced is fixed: the loader now probes the
+  current `~/.hauksbee-qemu-esp` first, with the legacy `~/.galvani-qemu-esp`
+  kept as a fallback so existing installs keep resolving.)
 
 ### Eagle copper-pour fidelity in DRC
 

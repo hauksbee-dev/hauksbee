@@ -28,7 +28,7 @@ and renders their results as native diagnostics.
 ## Requirements
 
 The binaries are **not** bundled. Build them from the
-[galvani](https://github.com/tarski/galvani) repo:
+[hauksbee](https://github.com/ETM-Code/hauksbee) repo:
 
 ```sh
 cargo build --release -p hauksbee-engine -p hauksbee-ci

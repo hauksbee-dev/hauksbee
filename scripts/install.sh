@@ -50,6 +50,24 @@ SRC="$(hauksbee_target_bin)"
 have "$CARGO" || die "cargo not found. Install Rust from https://rustup.rs, then re-run."
 
 if [ "$DO_BUILD" -eq 1 ]; then
+  # Build the web front door bundle first. `hauksbee serve` serves
+  # frontend/dist/, which is gitignored (a build artifact), so a fresh `git
+  # pull` + install would otherwise keep serving a stale bundle — the classic
+  # "I rebuilt but the page is old" trap. Rebuild it here so an install always
+  # ships the current UI. Skipped (with a warning) only if no JS toolchain is
+  # present; `serve` then falls back to any existing dist/ or the bundled note.
+  if have bun; then
+    log "Building web front door (frontend/dist via bun)"
+    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --silent && bun run build )
+  elif have npm; then
+    log "Building web front door (frontend/dist via npm)"
+    ( cd "$HAUKSBEE_ROOT/frontend" && npm install --silent && npm run build )
+  else
+    warn "No bun/npm found; skipping the frontend build."
+    warn "\`hauksbee serve\` will use the existing frontend/dist/ if present."
+    warn "Install bun (https://bun.sh) and re-run to refresh the web UI."
+  fi
+
   log "Building hauksbee + hauksbee-ci (release)"
   ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci )
 else

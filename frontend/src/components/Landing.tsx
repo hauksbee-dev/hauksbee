@@ -97,9 +97,17 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           body: await board.arrayBuffer(),
         })
       }
+      if (!res.ok) {
+        // A non-2xx from the server (e.g. the body-size limit, or a panic) is a
+        // plaintext or JSON message, NOT a WebReport. Read it as text and show
+        // it verbatim rather than letting res.json() throw a cryptic
+        // "Unexpected token" SyntaxError from parsing the error page.
+        const detail = (await res.text()).trim() || `${res.status} ${res.statusText}`
+        throw new Error(detail)
+      }
       setReport(await res.json() as WebReport)
     } catch (e) {
-      setUploadError(`Analysis failed: ${String(e)}`)
+      setUploadError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setBusy(null)
     }
