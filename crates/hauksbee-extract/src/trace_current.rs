@@ -449,7 +449,11 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                 } else {
                     "-".to_string()
                 },
-                format!("20C {:.2} A", r.capacity_20c_a),
+                if r.capacity_20c_a.is_finite() {
+                    format!("20C {:.2} A", r.capacity_20c_a)
+                } else {
+                    "-".to_string()
+                },
             ),
             CopperKind::Poured => (
                 r.min_width_mm
@@ -521,6 +525,28 @@ mod tests {
         assert!(int < ext, "internal {int} should be below external {ext}");
         // k ratio is 0.024/0.048 = 0.5 exactly.
         assert!((int / ext - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nonfinite_20c_capacity_renders_as_dash() {
+        // Bug-hunt #11: a Traces net whose width could not be measured carries a
+        // NaN capacity (the 10C column already guards this). The 20C column must
+        // fall back to "-" too, never emit a nonsensical "20C NaN A".
+        let row = TraceCapacityRow {
+            net_id: 1,
+            net: "MOTOR".to_string(),
+            kind: CopperKind::Traces,
+            min_width_mm: None,
+            segment_count: 3,
+            zone_count: 0,
+            capacity_10c_a: f64::NAN,
+            capacity_20c_a: f64::NAN,
+        };
+        let out = render_trace_capacity_report(&[row]);
+        assert!(
+            !out.contains("NaN"),
+            "report leaked a NaN into the table:\n{out}"
+        );
     }
 
     fn pcb(body: &str) -> Vec<NetCopper> {

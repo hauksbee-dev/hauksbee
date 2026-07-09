@@ -126,16 +126,38 @@ impl GdbStub {
         self.read_packet()
     }
 
-    /// Read a `$payload#cc` packet from the stream, ack it, and return payload.
+    /// Read a `$payload#cc` packet from the stream, verify its checksum, ack it,
+    /// and return the payload. A packet whose checksum does not match is NAK'd
+    /// (`-`) so the stub retransmits, up to [`MAX_NAKS`] times — never trusted as
+    /// data, which for a memory-read response would feed a corrupt GPIO/mailbox
+    /// word straight into the analog solve.
     fn read_packet(&mut self) -> Result<String> {
         let deadline = Instant::now() + self.timeout;
         let mut buf: Vec<u8> = Vec::new();
+        let mut naks = 0u32;
         loop {
-            if let Some(p) = try_extract_packet(&buf) {
-                // Acknowledge receipt.
-                let _ = self.stream.write_all(b"+");
-                self.stream.flush().ok();
-                return Ok(p);
+            match scan_packet(&buf) {
+                Scan::Ok(p, _consumed) => {
+                    // Acknowledge receipt.
+                    let _ = self.stream.write_all(b"+");
+                    self.stream.flush().ok();
+                    return Ok(p);
+                }
+                Scan::BadChecksum(consumed) => {
+                    naks += 1;
+                    if naks > MAX_NAKS {
+                        bail!(
+                            "gdbstub sent {naks} packet(s) with bad checksums; giving up"
+                        );
+                    }
+                    // Request a retransmission and drain the corrupt packet so the
+                    // retransmitted copy is scanned fresh rather than re-rejected.
+                    let _ = self.stream.write_all(b"-");
+                    self.stream.flush().ok();
+                    buf.drain(..consumed);
+                    continue;
+                }
+                Scan::NeedMore => {}
             }
             if Instant::now() >= deadline {
                 bail!(
@@ -165,18 +187,51 @@ fn encode_packet(payload: &str) -> String {
     format!("${payload}#{sum:02x}")
 }
 
-/// Extract the first complete `$...#cc` packet payload from `buf`, ignoring any
-/// leading `+`/`-` acks. Returns `None` if no complete packet is present yet.
-fn try_extract_packet(buf: &[u8]) -> Option<String> {
-    let dollar = buf.iter().position(|&b| b == b'$')?;
-    let hash_rel = buf[dollar..].iter().position(|&b| b == b'#')?;
+/// Bounded number of checksum-failure retransmission requests before giving up.
+/// Real gdbstubs over TCP never trip this; it exists so a persistently corrupt
+/// or non-conforming peer fails loudly instead of hanging or being trusted.
+const MAX_NAKS: u32 = 8;
+
+/// Result of scanning `buf` for the next RSP packet.
+enum Scan {
+    /// No complete `$...#cc` packet yet — read more bytes.
+    NeedMore,
+    /// A verified packet: its payload, and the number of leading bytes of `buf`
+    /// it consumed (through the two checksum digits).
+    Ok(String, usize),
+    /// A complete packet whose checksum did not match: the consumed length, so
+    /// the caller can drain it and NAK for a retransmission.
+    BadChecksum(usize),
+}
+
+/// Scan `buf` for the first complete `$...#cc` packet, ignoring any leading
+/// `+`/`-` acks, and VERIFY its RSP checksum (the low byte of the sum of the
+/// payload bytes, two hex digits after `#`). A corrupt or non-hex checksum is
+/// reported as [`Scan::BadChecksum`] rather than being silently trusted — the
+/// receive side must be as strict as [`encode_packet`] is on the send side.
+fn scan_packet(buf: &[u8]) -> Scan {
+    let Some(dollar) = buf.iter().position(|&b| b == b'$') else {
+        return Scan::NeedMore;
+    };
+    let Some(hash_rel) = buf[dollar..].iter().position(|&b| b == b'#') else {
+        return Scan::NeedMore;
+    };
     let hash = dollar + hash_rel;
     // Need two checksum hex digits after '#'.
     if buf.len() < hash + 3 {
-        return None;
+        return Scan::NeedMore;
     }
+    let consumed = hash + 3;
     let payload = &buf[dollar + 1..hash];
-    Some(String::from_utf8_lossy(payload).into_owned())
+    let want = match (hex_val(buf[hash + 1]), hex_val(buf[hash + 2])) {
+        (Some(hi), Some(lo)) => (hi << 4) | lo,
+        _ => return Scan::BadChecksum(consumed),
+    };
+    let got = payload.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+    if got != want {
+        return Scan::BadChecksum(consumed);
+    }
+    Scan::Ok(String::from_utf8_lossy(payload).into_owned(), consumed)
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -200,14 +255,26 @@ mod tests {
 
     #[test]
     fn extracts_packet_with_leading_ack() {
+        // "OK" checksums to 0x9a (0x4f + 0x4b); a leading '+' ack is skipped.
         let buf = b"+$OK#9a";
-        assert_eq!(try_extract_packet(buf).as_deref(), Some("OK"));
+        assert!(matches!(scan_packet(buf), Scan::Ok(ref p, _) if p == "OK"));
     }
 
     #[test]
-    fn incomplete_packet_is_none() {
-        assert!(try_extract_packet(b"$OK#9").is_none());
-        assert!(try_extract_packet(b"$OK").is_none());
+    fn incomplete_packet_needs_more() {
+        assert!(matches!(scan_packet(b"$OK#9"), Scan::NeedMore));
+        assert!(matches!(scan_packet(b"$OK"), Scan::NeedMore));
+    }
+
+    #[test]
+    fn bad_checksum_is_rejected_not_trusted() {
+        // Bug-hunt #9: the correct checksum for "OK" is 9a; anything else — a
+        // flipped byte or a non-hex digit — must be reported as BadChecksum so
+        // read_packet NAKs and retries instead of returning corrupt data.
+        assert!(matches!(scan_packet(b"$OK#00"), Scan::BadChecksum(_)));
+        assert!(matches!(scan_packet(b"$OK#zz"), Scan::BadChecksum(_)));
+        // A single flipped payload byte also fails the check.
+        assert!(matches!(scan_packet(b"$OL#9a"), Scan::BadChecksum(_)));
     }
 
     #[test]

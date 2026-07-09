@@ -87,6 +87,37 @@ fn assert_short(report: &hauksbee_extract::DrcReport, a: &str, b: &str) {
     );
 }
 
+/// Bug-hunt #8: an <element> with no `package` attribute is schema-invalid and
+/// lands with zero pins (its own pad connectivity lost), but extraction must not
+/// crash and the nets it touched must survive. Guards the missing-package path
+/// that now also emits a diagnostic.
+#[test]
+fn element_missing_package_still_extracts_and_keeps_nets() {
+    let packages = r#"
+<package name="P">
+  <smd name="1" x="0" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>
+"#;
+    // U1 has a package; U2 omits the attribute entirely.
+    let elements = r#"
+<element name="U1" library="lib" package="P" value="" x="0" y="0"/>
+<element name="U2" library="lib" value="" x="5" y="0"/>
+"#;
+    let signals = r#"
+<signal name="NET1">
+  <contactref element="U1" pad="1"/>
+  <contactref element="U2" pad="1"/>
+</signal>
+"#;
+    let text = board(packages, elements, signals, default_rules());
+    let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
+    assert!(
+        brd.nets.iter().any(|n| n.name == "NET1"),
+        "the net survives even though U2 has no package: {:?}",
+        brd.nets.iter().map(|n| &n.name).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn dispatch_recognises_eagle() {
     // A board with two crossing wires on different nets dispatches to the Eagle

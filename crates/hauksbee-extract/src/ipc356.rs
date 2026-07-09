@@ -18,6 +18,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut comps: HashMap<String, Vec<Pin>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut saw_record = false;
+    let mut truncated = 0usize;
 
     for line in text.lines() {
         if line.len() < 3 {
@@ -34,6 +35,16 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             continue;
         }
         saw_record = true;
+        // A 317/327/367 marks a real test record whose fixed columns run past
+        // column 32 (net, ref-des, pin, then coordinates). A line too short for
+        // them is truncated — NOT a legitimate blank-ref via record, which keeps
+        // full width with spaces. Count it and skip, so a truncated export is
+        // surfaced rather than silently discarded down the via path below (which
+        // would otherwise be indistinguishable from an intentional blank ref).
+        if line.len() < 32 {
+            truncated += 1;
+            continue;
+        }
         // Columns (1-based, per IPC-D-356): 4-17 net name, 21-26 ref des,
         // 27 '-', 28-31 pin number. Coordinates follow after column 32.
         let get =
@@ -74,6 +85,13 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         });
     }
 
+    if truncated > 0 {
+        eprintln!(
+            "hauksbee: skipped {truncated} truncated IPC-D-356 test record(s) \
+             (lines too short to contain their columns); the netlist may be incomplete"
+        );
+    }
+
     let components = order
         .into_iter()
         .map(|reference| Component {
@@ -108,4 +126,40 @@ fn parse_xy(line: &str) -> Option<(f64, f64)> {
         .unwrap_or(after_y.len());
     let y: f64 = after_y[..end].trim().parse().ok()?;
     Some((x, y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a full-width IPC-D-356 `317` test record with fields at their fixed
+    /// columns: net (4-17), ref-des (21-26), pin (28-31). Always >= 32 chars.
+    fn record(net: &str, refdes: &str, pin: &str) -> String {
+        let mut s = vec![b' '; 40];
+        s[0..3].copy_from_slice(b"317");
+        for (i, b) in net.bytes().take(14).enumerate() {
+            s[3 + i] = b;
+        }
+        for (i, b) in refdes.bytes().take(6).enumerate() {
+            s[20 + i] = b;
+        }
+        s[26] = b'-';
+        for (i, b) in pin.bytes().take(4).enumerate() {
+            s[27 + i] = b;
+        }
+        String::from_utf8(s).unwrap()
+    }
+
+    #[test]
+    fn truncated_record_is_skipped_full_record_parses() {
+        // Bug-hunt #7: a truncated 317 line (too short to hold its ref-des
+        // columns) must be dropped as truncated — NOT silently treated as a
+        // blank-ref via record — while a full record still parses.
+        let full = record("GND", "R1", "1");
+        let truncated = "317GND"; // 6 chars: a truncated data record
+        let text = format!("{full}\n{truncated}\n");
+        let board = extract(&text).unwrap();
+        assert_eq!(board.components.len(), 1, "only the full record is a part");
+        assert_eq!(board.components[0].reference, "R1");
+    }
 }

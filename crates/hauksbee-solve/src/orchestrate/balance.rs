@@ -190,6 +190,29 @@ pub fn settle_rails<L: RailLoads>(
     })
 }
 
+/// Enforce the caller contract on a [`BalanceReport`]: `settle_rails` returns
+/// `Ok` even when it exhausts its pass budget without converging (it reports the
+/// fact rather than erroring), so a caller that can escalate MUST refuse a
+/// non-converged balance rather than stream a silently-unbalanced rail — or the
+/// torn path quietly violates the 1e-6 torn-vs-monolithic exactness gate. This
+/// turns that non-convergence into the same `Err(String)` channel a per-island
+/// Newton failure travels, which the staged orchestrator escalates by
+/// re-solving the group fused on the monolithic engine.
+pub fn ensure_balanced(report: &BalanceReport) -> Result<(), String> {
+    if report.converged {
+        return Ok(());
+    }
+    let worst = report
+        .final_residuals
+        .iter()
+        .fold(0.0f64, |m, r| m.max(r.abs()));
+    Err(format!(
+        "rail balance did not converge after {} passes (worst KCL residual \
+         {worst:.3e} A); refusing to stream an unbalanced rail",
+        report.outer_passes
+    ))
+}
+
 /// One scalar-Newton update on rail `i`. Returns the residual current found
 /// BEFORE the update, so the outer loop tests convergence on the actual
 /// balance error rather than on the step size.
@@ -580,5 +603,37 @@ mod tests {
         assert!(!rep.converged);
         assert_eq!(rep.outer_passes, 5);
         assert!(rep.final_residuals[0].abs() > 1e-6, "{rep:?}");
+    }
+
+    #[test]
+    fn ensure_balanced_refuses_a_nonconverged_report() {
+        // Bug-hunt #1: the caller contract. A non-converged BalanceReport (the
+        // Ok-but-unconverged path above) must become an Err naming the residual,
+        // so the torn engine escalates instead of streaming an unbalanced rail.
+        // The producer and the enforcer are tested together here so a future
+        // refactor that discards the report again fails this test.
+        let ch = channels(1, 1e3);
+        let policy = BalancePolicy {
+            max_outer: 5,
+            ..BalancePolicy::default()
+        };
+        let rep = settle_rails(&mut FlatLoads, &ch, GMIN, VNTOL, ABSTOL, &policy).unwrap();
+        assert!(!rep.converged, "scaffold must produce a non-converged report");
+        let err = ensure_balanced(&rep)
+            .expect_err("a non-converged balance must be refused, not accepted");
+        assert!(
+            err.contains("rail balance did not converge"),
+            "unexpected refusal message: {err}"
+        );
+    }
+
+    #[test]
+    fn ensure_balanced_accepts_a_converged_report() {
+        let ok = BalanceReport {
+            outer_passes: 3,
+            final_residuals: vec![1e-15, 2e-16],
+            converged: true,
+        };
+        assert!(ensure_balanced(&ok).is_ok());
     }
 }
