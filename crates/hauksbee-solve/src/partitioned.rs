@@ -63,7 +63,9 @@ use rayon::prelude::*;
 use crate::linear::LinearIsland;
 use crate::newton::{dc_operating_point, newton_solve, Workspace};
 use crate::options::{Integration, ParallelPolicy, SolverOptions, StepControl};
-use crate::orchestrate::balance::{settle_rails, BalancePolicy, RailChannel, RailLoads};
+use crate::orchestrate::balance::{
+    ensure_balanced, settle_rails, BalancePolicy, RailChannel, RailLoads,
+};
 use crate::partition::{Island, Partition};
 use crate::stamp::IntegCoeffs;
 use crate::system::ReactiveState;
@@ -632,7 +634,7 @@ impl PartitionedTransient {
             h,
             tnext,
         };
-        settle_rails(
+        let report = settle_rails(
             &mut loads,
             &channels,
             self.opts.gmin,
@@ -640,6 +642,13 @@ impl PartitionedTransient {
             self.opts.abstol,
             &BalancePolicy::default(),
         )?;
+        // settle_rails returns Ok even when it exhausts its pass budget without
+        // converging. A caller that can escalate MUST refuse a non-converged
+        // balance rather than stream a silently-unbalanced rail; ensure_balanced
+        // routes that into the same Err channel as a per-island Newton failure
+        // and relax_step's coupling refusal, which staged::solve_group escalates
+        // by re-solving the group fused on the monolithic engine.
+        ensure_balanced(&report)?;
         Ok(())
     }
 

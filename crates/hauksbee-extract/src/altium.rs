@@ -207,7 +207,7 @@ impl<'a> StreamReader<'a> {
         }
         let raw = &self.buf[self.pos..self.pos + len];
         self.pos += len;
-        let s = String::from_utf8_lossy(raw);
+        let s = decode_altium_str(raw);
         let s = s.trim_end_matches('\u{0}');
         Some(parse_properties(s))
     }
@@ -299,6 +299,58 @@ pub(crate) struct PadRecord {
     pub y_mm: f64,
 }
 
+/// Decode an Altium Properties/text byte string. Altium stores these in the
+/// native Windows codepage (Windows-1252), though modern exports may be UTF-8.
+/// Prefer a valid UTF-8 reading (exact for ASCII and modern files); otherwise
+/// fall back to Windows-1252 so a byte like `0xE4` ('ä') decodes to the right
+/// character instead of the U+FFFD `from_utf8_lossy` would emit — which silently
+/// corrupts internationally-authored footprint/net/component names.
+fn decode_altium_str(raw: &[u8]) -> String {
+    match std::str::from_utf8(raw) {
+        Ok(s) => s.to_string(),
+        Err(_) => raw.iter().map(|&b| cp1252_char(b)).collect(),
+    }
+}
+
+/// Map one Windows-1252 byte to its Unicode scalar. Bytes `0x00–0x7F` and
+/// `0xA0–0xFF` coincide with Latin-1 (byte value == code point); `0x80–0x9F`
+/// carry the CP1252-specific punctuation (smart quotes, dashes, €, …). The five
+/// undefined slots map to U+FFFD.
+fn cp1252_char(b: u8) -> char {
+    match b {
+        0x80 => '\u{20AC}',
+        0x82 => '\u{201A}',
+        0x83 => '\u{0192}',
+        0x84 => '\u{201E}',
+        0x85 => '\u{2026}',
+        0x86 => '\u{2020}',
+        0x87 => '\u{2021}',
+        0x88 => '\u{02C6}',
+        0x89 => '\u{2030}',
+        0x8A => '\u{0160}',
+        0x8B => '\u{2039}',
+        0x8C => '\u{0152}',
+        0x8E => '\u{017D}',
+        0x91 => '\u{2018}',
+        0x92 => '\u{2019}',
+        0x93 => '\u{201C}',
+        0x94 => '\u{201D}',
+        0x95 => '\u{2022}',
+        0x96 => '\u{2013}',
+        0x97 => '\u{2014}',
+        0x98 => '\u{02DC}',
+        0x99 => '\u{2122}',
+        0x9A => '\u{0161}',
+        0x9B => '\u{203A}',
+        0x9C => '\u{0153}',
+        0x9E => '\u{017E}',
+        0x9F => '\u{0178}',
+        0x81 | 0x8D | 0x8F | 0x90 | 0x9D => '\u{FFFD}',
+        // 0x00–0x7F and 0xA0–0xFF: Latin-1, where the byte IS the code point.
+        _ => b as char,
+    }
+}
+
 /// Parse every record in a `Pads6/Data` stream into [`PadRecord`]s. The PADS6
 /// layout is the hardest in the format: six sub-records, with the geometry in
 /// sub-record 5 (variable length, branched on its declared size). Ported from
@@ -320,7 +372,7 @@ pub(crate) fn parse_pads(buf: &[u8]) -> Vec<PadRecord> {
             let nlen = r.u8_at(s1) as usize;
             let from = s1 + 1;
             let to = (from + nlen).min(e1);
-            String::from_utf8_lossy(&buf[from..to]).into_owned()
+            decode_altium_str(&buf[from..to])
         } else {
             String::new()
         };
@@ -333,6 +385,15 @@ pub(crate) fn parse_pads(buf: &[u8]) -> Vec<PadRecord> {
         let Some((s5, e5)) = r.enter_subrecord() else {
             break;
         };
+        // The geometry fields run through offset s5+20 (the Y coordinate's last
+        // byte). enter_subrecord clamps a declared length that overruns the
+        // buffer, so a truncated stream yields e5 < s5+21; the field readers
+        // below would then silently return 0 and place the pad at the origin.
+        // Stop rather than misread — the same discipline as the record-marker
+        // check above (a phantom pad at (0,0) is worse than a short pad list).
+        if e5 - s5 < 21 {
+            break;
+        }
         let layer = r.u8_at(s5);
         let net = r.u16_at(s5 + 3);
         let component = r.u16_at(s5 + 7);
@@ -490,7 +551,7 @@ fn parse_comment_texts(buf: &[u8]) -> HashMap<u16, String> {
             let tlen = r.u8_at(s2) as usize;
             let from = s2 + 1;
             let to = (from + tlen).min(e2);
-            let txt = String::from_utf8_lossy(&buf[from..to]).into_owned();
+            let txt = decode_altium_str(&buf[from..to]);
             // Altium stores special tokens (".Designator", ".Comment") as the
             // inline text when the displayed string is bound to a field rather
             // than a literal; the real value then lives in WideStrings6, which we
@@ -633,4 +694,66 @@ pub fn looks_like_pcbdoc(bytes: &[u8]) -> bool {
         return false;
     }
     PcbDoc::open(bytes).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Assemble a minimal single-record `Pads6/Data` stream: a PAD marker, a
+    /// name sub-record ("P1"), three skipped sub-records, then a geometry
+    /// sub-record that *declares* `geom_len` bytes but only supplies `geom_have`
+    /// of them. `enter_subrecord` clamps the declared length to the buffer, so
+    /// `geom_have < geom_len` models a truncated stream.
+    fn pads_stream(geom_len: u32, geom_have: usize) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.push(2u8); // record type: PAD
+        // sub-record 1 (name): len=3, payload = [nlen=2, 'P','1'].
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&[2, b'P', b'1']);
+        // sub-records 2,3,4: empty (len=0), skipped.
+        for _ in 0..3 {
+            b.extend_from_slice(&0u32.to_le_bytes());
+        }
+        // sub-record 5 (geometry): declared length then the supplied bytes.
+        b.extend_from_slice(&geom_len.to_le_bytes());
+        b.extend(std::iter::repeat(0u8).take(geom_have));
+        b
+    }
+
+    #[test]
+    fn truncated_pad_geometry_is_dropped_not_zeroed() {
+        // Bug-hunt #4: a geometry sub-record shorter than the 21 bytes the fields
+        // span used to be read as zeros, placing a phantom pad at the origin.
+        // With the guard, the truncated record is dropped entirely.
+        let buf = pads_stream(50, 10);
+        assert!(
+            parse_pads(&buf).is_empty(),
+            "a truncated pad record must be dropped, not emitted at (0,0)"
+        );
+    }
+
+    #[test]
+    fn full_pad_geometry_is_parsed() {
+        // Control: the SAME shape with enough geometry bytes yields one pad, so
+        // the truncation guard is what drops the record above — not a malformed
+        // fixture.
+        let buf = pads_stream(21, 21);
+        let pads = parse_pads(&buf);
+        assert_eq!(pads.len(), 1, "a full-length pad record must parse");
+        assert_eq!(pads[0].name, "P1");
+    }
+
+    #[test]
+    fn cp1252_decode_recovers_non_ascii() {
+        // Bug-hunt #5: a Windows-1252 'ä' (0xE4) must decode to 'ä', not the
+        // U+FFFD that from_utf8_lossy produced.
+        assert_eq!(decode_altium_str(&[b'R', 0xE4]), "Rä");
+        // The CP1252-specific range (0x80-0x9F): 0x92 is a right single quote.
+        assert_eq!(decode_altium_str(&[0x92]), "\u{2019}");
+        // Valid UTF-8 is preserved exactly (modern exports).
+        assert_eq!(decode_altium_str("Nét".as_bytes()), "Nét");
+        // Plain ASCII is unchanged.
+        assert_eq!(decode_altium_str(b"GND"), "GND");
+    }
 }
