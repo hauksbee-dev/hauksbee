@@ -114,8 +114,8 @@ _find_qemu_fork() {
   [ -n "${HAUKSBEE_QEMU_DIR:-}" ] && candidates+=("${HAUKSBEE_QEMU_DIR}/$name")
   if [ -n "$home" ]; then
     # 3. conventional unpacked location (current + legacy pre-rename name).
-    candidates+=("$home/.galvani-qemu-esp/qemu/bin/$name")
     candidates+=("$home/.hauksbee-qemu-esp/qemu/bin/$name")
+    candidates+=("$home/.galvani-qemu-esp/qemu/bin/$name")
     # 4. esp-idf idf_tools install: ~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>.
     for d in "$home"/.espressif/tools/qemu-*/*/qemu/bin/"$name"; do
       [ -f "$d" ] && candidates+=("$d")
@@ -158,12 +158,12 @@ shell_mirror_probe() {
   if p="$(_find_qemu_fork xtensa)"; then
     printf 'qemu-xtensa%sok%s%s\n' "$TAB" "$TAB" "$p"
   else
-    printf 'qemu-xtensa%sabsent%sEspressif qemu-system-xtensa fork not found (set HAUKSBEE_QEMU_XTENSA, or unpack the fork to ~/.galvani-qemu-esp/qemu)\n' "$TAB" "$TAB"
+    printf 'qemu-xtensa%sabsent%sEspressif qemu-system-xtensa fork not found (set HAUKSBEE_QEMU_XTENSA, or unpack the fork to ~/.hauksbee-qemu-esp/qemu)\n' "$TAB" "$TAB"
   fi
   if p="$(_find_qemu_fork riscv32)"; then
     printf 'qemu-riscv32%sok%s%s\n' "$TAB" "$TAB" "$p"
   else
-    printf 'qemu-riscv32%sabsent%sEspressif qemu-system-riscv32 fork not found (set HAUKSBEE_QEMU_RISCV32, or unpack the fork to ~/.galvani-qemu-esp/qemu)\n' "$TAB" "$TAB"
+    printf 'qemu-riscv32%sabsent%sEspressif qemu-system-riscv32 fork not found (set HAUKSBEE_QEMU_RISCV32, or unpack the fork to ~/.hauksbee-qemu-esp/qemu)\n' "$TAB" "$TAB"
   fi
   if p="$(_find_renode)"; then
     printf 'renode%sok%s%s\n' "$TAB" "$TAB" "$p"

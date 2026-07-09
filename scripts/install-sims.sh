@@ -255,8 +255,8 @@ find_qemu_bin() {
   fi
 
   # 3. Conventional unpacked location (current name first, legacy as fallback).
-  candidates+=("$HOME/.galvani-qemu-esp/qemu/bin/$name")
   candidates+=("$HOME/.hauksbee-qemu-esp/qemu/bin/$name")
+  candidates+=("$HOME/.galvani-qemu-esp/qemu/bin/$name")
 
   # 4. esp-idf idf_tools install: glob ~/.espressif/tools/qemu-*/<ver>/qemu/bin/
   if [ -d "$HOME/.espressif/tools" ]; then
@@ -378,7 +378,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
         info "  Discovery order:"
         info "    1. \$$envvar env var"
         info "    2. \$HAUKSBEE_QEMU_DIR/bin/$name"
-        info "    3. ~/.galvani-qemu-esp/qemu/bin/$name (legacy: ~/.hauksbee-qemu-esp/...)"
+        info "    3. ~/.hauksbee-qemu-esp/qemu/bin/$name (legacy: ~/.galvani-qemu-esp/...)"
         info "    4. ~/.espressif/tools/qemu-*/<ver>/qemu/bin/$name  (idf_tools)"
         info "    5. \`$name\` on PATH (Espressif fork only; mainline rejected)"
         info "  Run: scripts/install-sims.sh --qemu-only"

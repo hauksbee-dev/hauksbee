@@ -13,7 +13,7 @@
 /// re-implemented search logic. `find_qemu` runs the Espressif-fork check
 /// (`is_esp_fork`), so a Homebrew mainline `qemu-system-xtensa` on PATH is
 /// reported `absent` here just as the co-sim rejects it, and a fork under
-/// `~/.galvani-qemu-esp` or a Renode under `~/renode-portable` is reported
+/// `~/.hauksbee-qemu-esp` or a Renode under `~/renode-portable` is reported
 /// present with its resolved path.
 ///
 /// stdout: one line per backend, `NAME<TAB>STATUS<TAB>DETAIL`, STATUS a single

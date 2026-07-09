@@ -40,8 +40,11 @@ export default function App() {
           setView({ kind: 'landing', report: null, boardName: null, canRunLive: false })
         }
       } catch {
-        // No startup endpoint: a bare sim server (demo binary / old deployments).
-        if (alive) setView({ kind: 'sim' })
+        // No startup endpoint (a stale/odd deployment). Degrade to the
+        // drop-a-board Landing — never the live-sim view, which would sit
+        // "offline" with no way to load a board. The Landing's own upload
+        // path (/api/analyze) is the recovery affordance.
+        if (alive) setView({ kind: 'landing', report: null, boardName: null, canRunLive: false })
       }
     })()
     return () => { alive = false }

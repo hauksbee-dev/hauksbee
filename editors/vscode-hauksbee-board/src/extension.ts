@@ -12,7 +12,7 @@ import { mapCiJUnit, mapEngineCheck, singleError, MappedRun, Sev } from "./mappi
 
 const BOARD_EXTS = [".board", ".kicad_pcb", ".kicad_sch", ".net", ".brd", ".d356"];
 const INSTALL_HINT =
-  "Install it with `cargo build --release` in the galvani repo and set the " +
+  "Install it with `cargo build --release` in the hauksbee repo and set the " +
   "setting to `target/release/<binary>`, or put the binary on PATH.";
 
 let diagnostics: vscode.DiagnosticCollection;
