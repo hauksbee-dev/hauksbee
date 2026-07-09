@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/tarski/galvani/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json",
+  "$id": "https://github.com/ETM-Code/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json",
   "title": "hauksbee-ci spec",
   "description": "A hauksbee-ci TOML spec: one headless board+firmware co-simulation and the assertions that must hold for the build to pass. Hand-written from crates/hauksbee-ci/src/spec.rs and scenarios.rs (schemars is not a workspace dependency); the Rust structs use serde deny_unknown_fields, mirrored here as additionalProperties:false. Keep in sync with spec.rs.",
   "type": "object",
