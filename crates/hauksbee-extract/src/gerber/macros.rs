@@ -280,7 +280,16 @@ impl Parser<'_> {
                 }
                 Tok::Div => {
                     self.i += 1;
-                    v /= self.factor()?;
+                    let d = self.factor()?;
+                    if d == 0.0 {
+                        // A zero divisor (e.g. `$1/0`) would make Inf/NaN and
+                        // silently poison the diameter/coordinate math downstream
+                        // (convex_hull produces a degenerate pad). Refuse instead:
+                        // returning None routes to the module's documented
+                        // "can't evaluate the expression -> disc fallback".
+                        return None;
+                    }
+                    v /= d;
                 }
                 _ => break,
             }
@@ -372,6 +381,19 @@ mod tests {
         assert_eq!(eval_expr("1.0-0.5", &vars), Some(0.5));
         assert_eq!(eval_expr("(1+1)x2", &vars), Some(4.0));
         assert_eq!(eval_expr("$9", &vars), None); // undefined var
+    }
+
+    #[test]
+    fn division_by_zero_refuses() {
+        // Bug-hunt #6: a zero divisor must yield None (routing to the disc
+        // fallback), not the Inf/NaN that silently poisoned the pad geometry.
+        let mut vars = HashMap::new();
+        vars.insert(1u32, 5.0);
+        assert_eq!(eval_expr("$1/0", &vars), None);
+        assert_eq!(eval_expr("1.0/0.0", &vars), None);
+        assert_eq!(eval_expr("($1-5.0)/0", &vars), None);
+        // Ordinary division is unaffected.
+        assert_eq!(eval_expr("1.0/2.0", &vars), Some(0.5));
     }
 
     #[test]

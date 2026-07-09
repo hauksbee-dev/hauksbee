@@ -296,6 +296,16 @@ impl LinearIsland {
         for &id in &island.devices {
             match &circuit.devices[id.0 as usize] {
                 Device::Capacitor { a, b, farads, .. } => {
+                    // A non-positive capacitance would divide the A/B rows below
+                    // (`w[..] / *c`) by zero/negative, poisoning the discretized
+                    // matrices with Inf/NaN and — because this fast path skips
+                    // Newton's per-iterate finite check — streaming a silently
+                    // wrong waveform. Refuse; the MNA sub-solve stamps c<=0 as an
+                    // open (geq = 0) exactly, the same honest-answer discipline
+                    // as the E/G/coupled refusals below.
+                    if *farads <= 0.0 {
+                        return None;
+                    }
                     states.push((
                         id,
                         StateKind::Cap {
@@ -306,6 +316,13 @@ impl LinearIsland {
                     ));
                 }
                 Device::Inductor { a, b, henries, .. } => {
+                    // Symmetric to the capacitor above: a non-positive inductance
+                    // divides the `vl / *l` rows by zero. The MNA path stamps an
+                    // l<=0 inductor as an ideal-short branch exactly, so refuse
+                    // and defer to it rather than fabricate Inf/NaN dynamics.
+                    if *henries <= 0.0 {
+                        return None;
+                    }
                     states.push((
                         id,
                         StateKind::Ind {
@@ -990,6 +1007,85 @@ mod tests {
             let want = 1.0 - (-t / tau).exp();
             assert!((x[0] - want).abs() < 1e-4, "t={t} got {} want {want}", x[0]);
         }
+    }
+
+    #[test]
+    fn zero_farad_cap_refuses_linearization() {
+        // Bug-hunt #3: a capacitor with farads == 0 would divide the A/B state
+        // rows by zero (`w[..] / *c`), poisoning the matrix-exponential fast
+        // path with Inf/NaN with no Newton finite-check to catch it. compile
+        // must REFUSE (return None) so the island falls back to the MNA path,
+        // which stamps a 0 F cap as an open exactly.
+        let mut c = Circuit::new();
+        let vin = c.node("in");
+        let out = c.node("out");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a: vin,
+            b: out,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "C".into(),
+            a: out,
+            b: NodeId::GROUND,
+            farads: 0.0,
+            ic: Some(0.0),
+        });
+        let part = crate::partition::Partition::analyze(&c);
+        assert!(
+            LinearIsland::compile(&c, &part.islands[0], 0.0).is_none(),
+            "compile must refuse a zero-farad cap island rather than divide by zero"
+        );
+    }
+
+    #[test]
+    fn zero_henry_inductor_refuses_linearization() {
+        // Bug-hunt #3, symmetric: a 0 H inductor would divide the `vl / *l`
+        // rows by zero. Refuse so the MNA path (ideal-short stamp) handles it.
+        let mut c = Circuit::new();
+        let vin = c.node("in");
+        let mid = c.node("mid");
+        let out = c.node("out");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a: vin,
+            b: mid,
+            ohms: 50.0,
+            tc1: None,
+        });
+        c.add(Device::Inductor {
+            name: "L".into(),
+            a: mid,
+            b: out,
+            henries: 0.0,
+            ic: Some(0.0),
+        });
+        c.add(Device::Capacitor {
+            name: "C".into(),
+            a: out,
+            b: NodeId::GROUND,
+            farads: 1e-7,
+            ic: Some(0.0),
+        });
+        let part = crate::partition::Partition::analyze(&c);
+        assert!(
+            LinearIsland::compile(&c, &part.islands[0], 0.0).is_none(),
+            "compile must refuse a zero-henry inductor island rather than divide by zero"
+        );
     }
 
     #[test]

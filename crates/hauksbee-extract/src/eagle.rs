@@ -137,6 +137,19 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         }
     }
 
+    // `package` is required on an Eagle <element>; when it is absent the lookup
+    // below misses and the part lands with zero pins (its own connectivity
+    // silently lost, though the nets it touched survive via <contactref>). Only
+    // reachable with schema-invalid XML, so surface it rather than fail — a
+    // silent zero-pin component is the confusing symptom.
+    let missing_pkg = elements.iter().filter(|e| e.package.is_empty()).count();
+    if missing_pkg > 0 {
+        eprintln!(
+            "hauksbee: {missing_pkg} Eagle element(s) have no `package` attribute \
+             (schema-invalid); their pins could not be placed"
+        );
+    }
+
     let components = elements
         .into_iter()
         .map(|el| {

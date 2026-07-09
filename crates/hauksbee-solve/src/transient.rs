@@ -363,10 +363,18 @@ impl Transient {
             if steps_taken > max_steps {
                 return Err(format!("exceeded step budget at t={t}"));
             }
-            let mut h = dt.min(tstop - t);
+            // Floor against LTE-rejection thrash FIRST, then clamp to the time
+            // remaining to tstop. Order matters: clamping to (tstop - t) first
+            // and flooring second would push the final partial step — when the
+            // remaining time is below dt_min — back up past tstop, overshooting
+            // the requested stop by up to dt_min. The exact landing on tstop
+            // wins over the floor: dt_min is a thrash guard, not a sampling
+            // contract (same rationale as the breakpoint landing below).
+            let mut h = dt;
             if h < dt_min {
                 h = dt_min;
             }
+            h = h.min(tstop - t);
             // Never stride across a source corner: shorten the trial step to
             // land EXACTLY on the next breakpoint. dt itself is not reduced,
             // so after the corner the controller resumes at its own rhythm.

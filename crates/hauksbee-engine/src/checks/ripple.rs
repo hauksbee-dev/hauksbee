@@ -212,6 +212,26 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
             continue;
         };
 
+        // A non-positive rating (a malformed or zero model-DB ratings entry;
+        // ratings are not range-validated in hauksbee-models) would divide below
+        // into Inf/NaN and print a nonsensical "~infx overstress". Treat it as an
+        // unusable rating: note it and move on, never divide by it. `!(x > 0.0)`
+        // also rejects NaN.
+        if !(rating_a > 0.0) {
+            report.findings.push(SiFinding {
+                check: SiCheck::InputCapRipple,
+                severity: SiSeverity::Info,
+                message: format!(
+                    "input-cap ripple: buck stage on '{}' has input bulk cap {} ({}) whose \
+                     ripple rating is {:.2} A_rms, not a usable positive value - not flagged.",
+                    stage.input_rail.1, cap.reference, cap.value, rating_a,
+                ),
+                refs: vec![cap.reference.clone()],
+                nets: vec![stage.input_rail.1.clone()],
+            });
+            continue;
+        }
+
         // Worst-case ripple is at D = 0.5 (the sqrt(D-D^2) peak): 0.5 * I_out.
         let i_rms = buck_input_cap_ripple_rms(i_out_a, 0.5);
         let ratio = i_rms / rating_a;
@@ -300,6 +320,22 @@ mod tests {
         // is the large one so the check is aimed at the right cap.
         let input_pulse = buck_input_cap_ripple_rms(10.0, 0.5); // 5.0 A
         assert!(input_pulse >= 4.0, "input cap carries the large pulsed ripple");
+    }
+
+    #[test]
+    fn nonpositive_ripple_rating_is_guarded_against_infx() {
+        // Bug-hunt #10: a zero/negative/NaN ripple rating (a malformed model-DB
+        // ratings entry) must be treated as unusable, never divided into the
+        // overstress ratio — which for a zero rating printed "~infx overstress".
+        // This pins the exact `!(rating_a > 0.0)` predicate the check applies.
+        for bad in [0.0f64, -1.0, f64::NAN] {
+            assert!(!(bad > 0.0), "rating {bad} must be rejected as unusable");
+        }
+        // The division the guard prevents, for a zero rating, is the Inf that
+        // formatted as "~infx"; a real positive rating stays finite and sane.
+        let i_rms = buck_input_cap_ripple_rms(10.0, 0.5); // 5.0 A_rms
+        assert!(!(i_rms / 0.0).is_finite(), "zero rating divides to a non-finite ratio");
+        assert!((i_rms / 3.0).is_finite(), "a real rating yields a finite ratio");
     }
 
     #[test]
