@@ -151,6 +151,67 @@ fn recognized_family_without_platform_and_non_mcu_parts_stay_unresolved() {
     ));
 }
 
+// Regression: the builtin esp32s3 DB entry matches value "ESP32-S3" (Watchy
+// v3's MCU), so the family-router fallback never runs for it. The bind must
+// still land on the QEMU Xtensa backend — the old silent
+// `.unwrap_or("simavr:atmega328p")` default sent an ESP32-S3 into the AVR
+// path (wrong ISA, and the GPL-gated `avr` feature the MIT-clean build
+// excludes).
+#[test]
+fn esp32s3_db_model_binds_qemu_backend_not_avr() {
+    let board = board_with(component(
+        "U1",
+        "ESP32-S3",
+        "RF_Module:ESP32-S3-WROOM-1",
+        vec![
+            pin("27", Some(4), "GPIO0"),
+            pin("2", Some(5), "3V3"),
+            pin("1", Some(6), "GND"),
+        ],
+    ));
+
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+
+    assert_eq!(bound.mcus.len(), 1);
+    let mcu = &bound.mcus[0];
+    assert_eq!(
+        mcu.backend, "qemu:esp32s3",
+        "ESP32-S3 must co-sim through the Espressif-QEMU Xtensa backend, \
+         never fall back to a simavr AVR core"
+    );
+    assert!(matches!(
+        bound.report.rows[0].outcome,
+        BindOutcome::Mcu { ref backend } if backend == "qemu:esp32s3"
+    ));
+}
+
+// Regression: a DB-resolved MCU entry with no `backend` param for a family
+// the router knows has NO co-sim platform (ESP32-S2) must not silently
+// default to `simavr:atmega328p`. The binding stays (straps lint etc. still
+// work) but the backend must be an explicit no-platform token the scheduler
+// refuses loudly, not a wrong-ISA AVR core.
+#[test]
+fn esp32s2_db_model_does_not_default_to_avr_backend() {
+    // "ESP32-S2-WROOM" matches the builtin esp32s2 DB entry's value_re, so
+    // (unlike the -MINI- variant in the unresolved test above) the model DB
+    // resolves it and the family-router fallback never runs.
+    let board = board_with(component(
+        "U2",
+        "ESP32-S2-WROOM",
+        "RF_Module:ESP32-S2-WROOM",
+        vec![pin("27", Some(4), "GPIO0")],
+    ));
+
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+
+    assert_eq!(bound.mcus.len(), 1);
+    assert!(
+        !bound.mcus[0].backend.starts_with("simavr"),
+        "ESP32-S2 (no co-sim platform) must never inherit the AVR backend; got {:?}",
+        bound.mcus[0].backend
+    );
+}
+
 #[test]
 fn bare_pcb_routes_backend_but_does_not_guess_pin_numbers_as_gpio_roles() {
     let board = board_with(component(

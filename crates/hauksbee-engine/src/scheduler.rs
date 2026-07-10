@@ -2283,8 +2283,27 @@ fn instantiate_mcu(
         instantiate_renode(part)?
     } else if let Some(part) = backend.strip_prefix("qemu:") {
         instantiate_qemu(part, firmware)?
-    } else {
+    } else if let Some(family) = backend.strip_prefix("none:") {
+        // The binder recognized the MCU family but knows no emulator models
+        // it (e.g. ESP32-S2). Refuse rather than run the firmware on a
+        // wrong-ISA core: everything the co-sim would report about the
+        // circuit would be fiction.
+        anyhow::bail!(
+            "this board's MCU was recognized as {family}, which has no co-sim \
+             platform (no supported emulator models it); firmware cannot run. \
+             Firmware-less analyses (lint, report, DRC) still work. To force a \
+             backend, override the part with a --models-dir entry that sets \
+             `backend` explicitly."
+        )
+    } else if backend.starts_with("simavr:") {
         instantiate_avr(backend)?
+    } else {
+        // ALLOWLIST, mirroring backend_is_external: an unknown backend token
+        // must fail loud, never drift into the AVR path (wrong ISA).
+        anyhow::bail!(
+            "unknown MCU backend '{backend}': expected 'simavr:<part>', \
+             'renode:<part>', or 'qemu:<part>'"
+        )
     };
     if let Some(fw) = firmware {
         core.load_firmware(fw)?;
@@ -2726,6 +2745,7 @@ mod tests {
     /// A Nano module driving net CLK from A2 (PC2), with CLK feeding an RC
     /// integrator (10k into 100 nF, tau = 1 ms): the load whose response
     /// depends on the WHOLE pulse train, not the final level.
+    #[cfg(feature = "avr")]
     const RC_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
@@ -2758,6 +2778,7 @@ mod tests {
 )
 "#;
 
+    #[cfg(feature = "avr")]
     fn rc_scheduler() -> Scheduler {
         let board = hauksbee_extract::ExtractedBoard::from_auto(RC_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
@@ -2780,6 +2801,7 @@ mod tests {
     /// the exact shape shiftOut(MSBFIRST, 0xA6) emits; the assertion reads the
     /// latched byte back from the SOLVED node voltages of the output nets,
     /// which is what the old latest-level collapse could never produce.
+    #[cfg(feature = "avr")]
     const CHAIN_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
@@ -2829,6 +2851,11 @@ mod tests {
 )
 "#;
 
+    // The Nano board binds `simavr:atmega328p`, whose in-process core is
+    // always instantiated (even with no firmware) — so this test needs the
+    // GPL-gated `avr` feature and cannot run on the MIT-clean renode/qemu
+    // build.
+    #[cfg(feature = "avr")]
     #[test]
     fn cosim_bitbang_595_latches_through_bound_nets() {
         let board = hauksbee_extract::ExtractedBoard::from_auto(CHAIN_BOARD).expect("board");
@@ -2911,6 +2938,11 @@ mod tests {
     /// empty; the PWL drive integrates every pulse and pumps it to roughly
     /// the 50%-duty average. This is the analog half of the fidelity ceiling
     /// fix (the digital half is the cycle-ordered replay).
+    ///
+    /// `rc_scheduler` binds an `simavr:atmega328p` Nano, whose in-process
+    /// core is always instantiated — so this test needs the GPL-gated `avr`
+    /// feature and cannot run on the MIT-clean renode/qemu build.
+    #[cfg(feature = "avr")]
     #[test]
     fn pwl_drive_integrates_a_pulse_train_the_dc_path_collapses() {
         let chunk = 100e-6;
