@@ -20,6 +20,7 @@ use protocol::{ClientMessage, ServerMessage, Status};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
+use tower_http::compression::CompressionLayer;
 
 const FRAME_RATE_HZ: f64 = 30.0;
 
@@ -83,7 +84,11 @@ impl Server {
         if let Some(dir) = static_dir {
             router = router.fallback_service(tower_http::services::ServeDir::new(dir));
         }
-        router
+        // Gzip responses on the fly. The frontend's .glb board models are ~14 MB
+        // uncompressed but ~1.9 MB gzipped, and every browser sends
+        // `Accept-Encoding: gzip`; the WebSocket upgrade (a bodyless 101) passes
+        // through untouched.
+        router.layer(CompressionLayer::new())
     }
 
     pub async fn serve(
@@ -221,7 +226,9 @@ fn unified_router(
     if let Some(dir) = static_dir {
         router = router.fallback_service(tower_http::services::ServeDir::new(dir));
     }
-    router
+    // Gzip on the fly: the frontend's .glb board models are ~14 MB uncompressed,
+    // ~1.9 MB gzipped. The `/ws` upgrade (a bodyless 101) passes through.
+    router.layer(CompressionLayer::new())
 }
 
 /// Serve the drop-zone-only front door (no preloaded board, no live engine):
