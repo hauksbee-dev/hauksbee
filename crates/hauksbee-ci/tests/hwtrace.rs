@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use hauksbee_ci::{run, RunConfig};
 
+#[cfg(feature = "avr")]
 fn hwtraces_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -26,6 +27,7 @@ fn hwtraces_dir() -> PathBuf {
 }
 
 /// Every scenario spec under `testdata/hwtraces/<board>/<scenario>/spec.toml`.
+#[cfg(feature = "avr")]
 fn corpus_specs() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for board in std::fs::read_dir(hwtraces_dir()).expect("read hwtraces dir") {
@@ -44,6 +46,10 @@ fn corpus_specs() -> Vec<PathBuf> {
     out
 }
 
+// Replays AVR .hex firmware (the demo/blinky corpus is ATmega-based), so it
+// needs the GPL-gated `avr` feature; the MIT-clean renode/qemu build refuses
+// AVR firmware by design.
+#[cfg(feature = "avr")]
 #[test]
 fn hwtrace_corpus() {
     let specs = corpus_specs();
@@ -84,6 +90,10 @@ fn hwtrace_corpus() {
 /// feature and both values. We reuse the real seed scenario (board, firmware,
 /// supply) but swap in a capture whose period is 300 ms where the firmware
 /// toggles at 200 ms — the failure the harness exists to catch.
+// Replays AVR .hex firmware (the demo/blinky corpus is ATmega-based), so it
+// needs the GPL-gated `avr` feature; the MIT-clean renode/qemu build refuses
+// AVR firmware by design.
+#[cfg(feature = "avr")]
 #[test]
 fn hwtrace_deliberate_mismatch_names_feature_and_values() {
     let dir = std::env::temp_dir().join(format!("hauksbee_hwtrace_mismatch_{}", std::process::id()));

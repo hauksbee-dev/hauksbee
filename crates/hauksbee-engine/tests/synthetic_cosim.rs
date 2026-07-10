@@ -10,9 +10,11 @@
 mod common;
 
 use hauksbee_engine::binder::bind_board;
+#[cfg(feature = "avr")]
 use hauksbee_engine::HauksbeeEngine;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
+#[cfg(feature = "avr")]
 use hauksbee_server::engine::Engine;
 
 #[test]
@@ -55,6 +57,10 @@ fn synthetic_board_binds() {
     assert!(unresolved.is_empty(), "all parts resolve: {unresolved:?}");
 }
 
+// Boots the AVR demo firmware on the synthetic Nano board, so it needs the
+// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// firmware by design). `synthetic_board_binds` above stays feature-free.
+#[cfg(feature = "avr")]
 #[test]
 fn synthetic_cosim_runs() {
     let firmware = common::demo_firmware();
