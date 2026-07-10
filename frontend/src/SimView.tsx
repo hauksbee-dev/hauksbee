@@ -173,7 +173,7 @@ export default function SimView() {
               borderLeft: '1px solid #1e293b',
               background: '#0a0f1e',
               // Inner top border accent gives the panel a grounded top edge
-              boxShadow: 'inset 0 1px 0 rgba(59,130,246,0.12)',
+              boxShadow: 'inset 0 1px 0 rgba(224,138,78,0.12)',
             }}
           >
             {/* Tab bar */}
@@ -187,11 +187,11 @@ export default function SimView() {
                   onClick={() => setSidebarTab(id)}
                   className="px-3 py-2 text-[10px] font-bold tracking-wider whitespace-nowrap transition-all relative"
                   style={{
-                    color: sidebarTab === id ? '#bfdbfe' : '#475569',
-                    borderBottom: sidebarTab === id ? '2px solid #3b82f6' : '2px solid transparent',
-                    background: sidebarTab === id ? 'rgba(59,130,246,0.08)' : 'transparent',
-                    boxShadow: sidebarTab === id ? 'inset 0 -1px 0 rgba(59,130,246,0.4), 0 0 6px rgba(59,130,246,0.08)' : 'none',
-                    textShadow: sidebarTab === id ? '0 0 8px rgba(59,130,246,0.5)' : 'none',
+                    color: sidebarTab === id ? '#ffb072' : '#475569',
+                    borderBottom: sidebarTab === id ? '2px solid #e08a4e' : '2px solid transparent',
+                    background: sidebarTab === id ? 'rgba(224,138,78,0.08)' : 'transparent',
+                    boxShadow: sidebarTab === id ? 'inset 0 -1px 0 rgba(224,138,78,0.4), 0 0 6px rgba(224,138,78,0.08)' : 'none',
+                    textShadow: sidebarTab === id ? '0 0 8px rgba(224,138,78,0.4)' : 'none',
                   }}
                 >
                   {label}
@@ -395,7 +395,7 @@ export default function SimView() {
           <>
             <span style={{ color: '#1e293b' }}>|</span>
             <span className="overflow-hidden" style={{ color: '#334155', maxWidth: 160, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-              probes: <span style={{ color: '#3b82f6' }}>{probes.join(', ')}</span>
+              probes: <span style={{ color: '#e08a4e' }}>{probes.join(', ')}</span>
             </span>
           </>
         )}

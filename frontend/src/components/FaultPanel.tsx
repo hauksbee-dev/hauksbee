@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { BoltIcon } from './Icons'
 import type { SimFrame } from '../types/protocol'
 
 interface Fault {
@@ -114,7 +115,7 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
-                      <span style={{ color: '#f87171', fontSize: 10 }}>⚡</span>
+                      <span style={{ color: '#f87171', display: 'inline-flex' }}><BoltIcon size={11} /></span>
                       <span
                         className="text-[10px] font-mono font-bold"
                         style={{ color: '#fca5a5', fontFamily: "'JetBrains Mono', monospace" }}
@@ -162,7 +163,7 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
               gap: 8,
             }}
           >
-            <span style={{ color: '#f87171', fontSize: 14 }}>⚡</span>
+            <span style={{ color: '#f87171', display: 'inline-flex' }}><BoltIcon size={14} /></span>
             <span>FAULT: <strong style={{ color: '#fca5a5' }}>{t.ref}</strong> — {t.kind}</span>
           </div>
         ))}
