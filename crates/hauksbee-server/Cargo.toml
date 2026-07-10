@@ -24,4 +24,4 @@ hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features =
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.52.3", features = ["full"] }
-tower-http = { version = "0.6.11", features = ["fs"] }
+tower-http = { version = "0.6.11", features = ["fs", "compression-gzip"] }
