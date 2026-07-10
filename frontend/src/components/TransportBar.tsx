@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { BoardInfoMsg, StatusMsg, ClientMessage } from '../types/protocol'
+import { PlayIcon, PauseIcon, StepIcon, ResetIcon } from './Icons'
 
 interface TransportBarProps {
   connected: boolean
@@ -48,15 +49,15 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
         height: 44,
       }}
     >
-      {/* Logo — electric-blue wordmark with glow */}
+      {/* Logo — copper wordmark with glow (the one bold accent) */}
       <div
         className="font-bold tracking-widest select-none"
         style={{
           fontSize: 13,
-          color: '#60a5fa',
+          color: '#e08a4e',
           letterSpacing: '0.25em',
           fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          textShadow: '0 0 8px rgba(96,165,250,0.8), 0 0 20px rgba(59,130,246,0.4)',
+          textShadow: '0 0 8px rgba(224,138,78,0.7), 0 0 20px rgba(224,138,78,0.3)',
         }}
       >
         HAUKSBEE
@@ -82,13 +83,14 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
           title={running ? 'Pause (Space)' : 'Play (Space)'}
           className="flex items-center justify-center w-8 h-7 rounded text-xs font-bold transition-all"
           style={{
-            background: running ? 'rgba(59,130,246,0.2)' : 'rgba(34,197,94,0.15)',
-            border: running ? '1px solid rgba(59,130,246,0.4)' : '1px solid rgba(34,197,94,0.3)',
-            color: running ? '#60a5fa' : '#4ade80',
-            boxShadow: running ? '0 0 8px rgba(59,130,246,0.2)' : '0 0 8px rgba(34,197,94,0.15)',
+            // running → live green; ready-to-play → copper (the action accent)
+            background: running ? 'rgba(87,224,160,0.15)' : 'rgba(224,138,78,0.15)',
+            border: running ? '1px solid rgba(87,224,160,0.35)' : '1px solid rgba(224,138,78,0.35)',
+            color: running ? '#57e0a0' : '#ffb072',
+            boxShadow: running ? '0 0 8px rgba(87,224,160,0.18)' : '0 0 8px rgba(224,138,78,0.18)',
           }}
         >
-          {running ? '⏸' : '▶'}
+          {running ? <PauseIcon size={13} /> : <PlayIcon size={13} />}
         </button>
 
         {/* Step */}
@@ -102,7 +104,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
             color: '#64748b',
           }}
         >
-          ⏭
+          <StepIcon size={13} />
         </button>
 
         {/* Reset */}
@@ -116,7 +118,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
             color: '#64748b',
           }}
         >
-          ↺
+          <ResetIcon size={13} />
         </button>
       </div>
 
@@ -133,7 +135,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
           value={speedInput}
           onChange={handleSpeedChange}
           className="w-16 h-1 rounded appearance-none cursor-pointer"
-          style={{ accentColor: '#3b82f6' }}
+          style={{ accentColor: '#e08a4e' }}
         />
         <span
           className="text-[11px] font-mono w-8 text-right"

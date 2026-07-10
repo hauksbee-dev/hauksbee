@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
+import { CheckIcon, PlayIcon, BoardTargetIcon } from './Icons'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -59,14 +60,65 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
       onClick={copy}
       className="ml-2 rounded px-2 py-0.5 text-[11px] font-semibold cursor-pointer transition-all hover:opacity-80"
       style={{
-        background: copied ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.12)',
-        border: `1px solid ${copied ? '#166534' : '#1d4ed8'}`,
-        color: copied ? '#86efac' : '#bfdbfe',
+        background: copied ? 'rgba(87,224,160,0.14)' : 'rgba(224,138,78,0.12)',
+        border: `1px solid ${copied ? '#2f7d5b' : 'var(--copper-deep)'}`,
+        color: copied ? 'var(--live)' : 'var(--copper-hi)',
         whiteSpace: 'nowrap',
       }}
     >
-      {copied ? '✓ Copied' : label}
+      {copied ? (
+        <span className="inline-flex items-center gap-1"><CheckIcon size={11} /> Copied</span>
+      ) : label}
     </button>
+  )
+}
+
+// The signature: a copper trace with pad nodes and a signal pulse that runs
+// along it on load — the page's one orchestrated moment, evoking "the circuit
+// the copper actually implements". Quiet everywhere else (Chanel's rule).
+function TraceSignature() {
+  return (
+    <svg
+      viewBox="0 0 640 40"
+      preserveAspectRatio="none"
+      width="100%"
+      height="40"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      {/* the trace itself (dim copper) */}
+      <path
+        d="M0 20 H150 L172 8 H360 L382 32 H520 L542 20 H640"
+        fill="none"
+        stroke="var(--copper-deep)"
+        strokeWidth="2"
+        opacity="0.5"
+      />
+      {/* the traveling pulse (bright copper) */}
+      <path
+        className="trace-pulse"
+        d="M0 20 H150 L172 8 H360 L382 32 H520 L542 20 H640"
+        fill="none"
+        stroke="var(--copper-hi)"
+        strokeWidth="2.5"
+        strokeDasharray="60 640"
+        style={{ animation: 'traceflow 4.2s cubic-bezier(0.4,0,0.2,1) infinite' }}
+      />
+      {/* pad nodes */}
+      {[150, 360, 520].map((cx, i) => (
+        <rect
+          key={cx}
+          className="trace-pad"
+          x={cx - 4}
+          y={i === 1 ? 4 : 16}
+          width="8"
+          height="8"
+          rx="1.5"
+          fill="var(--copper-deep)"
+          style={{ animation: `padglow 4.2s ease-in-out ${i * 0.5}s infinite` }}
+        />
+      ))}
+    </svg>
   )
 }
 
@@ -126,19 +178,56 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   return (
     <div
       className="min-h-screen overflow-y-auto"
-      style={{ background: '#020617', color: '#e2e8f0', fontFamily: 'system-ui, sans-serif' }}
+      style={{
+        background:
+          'radial-gradient(120% 80% at 50% -10%, #0e1622 0%, var(--void) 60%)',
+        color: 'var(--silk)',
+      }}
     >
-      <div className="max-w-3xl mx-auto px-6 pt-10 pb-16">
-        {/* Header */}
-        <h1 className="text-xl font-bold tracking-wide" style={{ color: '#e2e8f0' }}>
-          hauksbee — check your board
-        </h1>
-        <div className="text-sm mt-1" style={{ color: '#94a3b8' }}>
-          Drop a PCB file and get a plain-language report: what is wrong, why it matters, and how
-          to fix it. <span style={{ color: '#bfdbfe' }}>Nothing leaves your machine.</span>
+      <div className="max-w-3xl mx-auto px-6 pt-12 pb-20">
+        {/* Wordmark + eyebrow */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span
+              style={{
+                width: 9, height: 9, borderRadius: 2, background: 'var(--copper)',
+                boxShadow: '0 0 10px var(--copper-hi)', display: 'inline-block',
+              }}
+            />
+            <span className="text-sm font-semibold tracking-[0.28em]" style={{ color: 'var(--silk)' }}>
+              HAUKSBEE
+            </span>
+          </div>
+          <span
+            className="text-[10px] font-semibold tracking-[0.22em] px-2.5 py-1 rounded"
+            style={{ color: 'var(--copper)', border: '1px solid var(--rule)', background: 'rgba(224,138,78,0.05)' }}
+          >
+            CI FOR HARDWARE
+          </span>
         </div>
 
-        {/* Board drop zone */}
+        {/* Thesis (hero) */}
+        <h1
+          className="mt-9 text-[1.9rem] leading-[1.18] font-bold"
+          style={{ color: 'var(--silk)', letterSpacing: '-0.01em' }}
+        >
+          Point it at a real board.<br />
+          <span style={{ color: 'var(--copper)' }}>It works out the circuit the copper implements</span>
+          <span style={{ color: 'var(--silk-dim)' }}> — then runs it.</span>
+        </h1>
+        <p className="mt-4 text-sm leading-relaxed max-w-xl" style={{ color: 'var(--silk-dim)' }}>
+          Not a design-rule check, not schematic SPICE. Hauksbee extracts the as-built
+          circuit from the PCB, co-simulates the firmware on an emulated MCU, and checks
+          the board the way a test suite checks a function.
+          <span style={{ color: 'var(--copper-hi)' }}> Nothing leaves this machine.</span>
+        </p>
+
+        {/* Signature trace */}
+        <div className="mt-7 -mb-1">
+          <TraceSignature />
+        </div>
+
+        {/* The board-input "slot" — an instrument affordance, not a dashed box. */}
         <label
           data-testid="drop-zone"
           htmlFor="board-file"
@@ -152,27 +241,34 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             const f = e.dataTransfer.files[0]
             if (f) handleBoard(f)
           }}
-          className="block mt-6 rounded-xl text-center cursor-pointer transition-all px-5 py-10"
-          style={{
-            border: `2px dashed ${dragOver ? '#3b82f6' : '#1e293b'}`,
-            background: dragOver ? '#0d1526' : '#0a0f1e',
-          }}
+          className="slot block cursor-pointer transition-all px-6 py-9"
+          data-active={dragOver ? 'true' : 'false'}
         >
-          <strong style={{ color: '#cbd5e1' }}>Click to choose a board file, or drop one here</strong>
-          <div className="text-xs mt-1.5" style={{ color: '#475569' }}>
-            KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC .d356, or a gerber .zip
+          <div className="flex items-center gap-4">
+            <span style={{ color: dragOver ? 'var(--copper-hi)' : 'var(--copper)', display: 'inline-flex', flexShrink: 0 }}>
+              <BoardTargetIcon size={30} />
+            </span>
+            <div>
+              <div className="text-sm font-semibold" style={{ color: 'var(--silk)' }}>
+                Load a board — drop it here, or click to choose
+              </div>
+              <div className="text-xs mt-1" style={{ color: 'var(--silk-faint)' }}>
+                KiCad <code>.kicad_pcb</code> / <code>.kicad_sch</code> · Eagle <code>.brd</code> ·
+                Altium <code>.PcbDoc</code> · IPC <code>.d356</code> · a gerber <code>.zip</code>
+              </div>
+            </div>
           </div>
         </label>
         <input
           ref={boardInputRef}
           id="board-file"
           type="file"
-          accept=".kicad_pcb,.kicad_sch,.brd,.d356,.zip,.txt"
+          accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt"
           className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) handleBoard(f) }}
         />
 
-        {/* Firmware picker */}
+        {/* Firmware — a secondary jack on the same instrument. */}
         <label
           data-testid="firmware-zone"
           htmlFor="firmware-file"
@@ -184,19 +280,16 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             const f = e.dataTransfer.files[0]
             if (f) handleFirmware(f)
           }}
-          className="block mt-3 rounded-xl text-center cursor-pointer transition-all px-5 py-4 text-sm"
-          style={{
-            border: firmwareFile ? '2px solid #14532d' : '2px dashed #1e293b',
-            background: firmwareFile ? '#08130c' : '#0a0f1e',
-          }}
+          className="slot slot-sub block mt-3 cursor-pointer transition-all px-6 py-4 text-sm"
+          data-active={firmwareFile ? 'true' : 'false'}
         >
-          <strong style={{ color: '#cbd5e1' }}>
-            {firmwareFile ? `Firmware: ${firmwareFile.name} (click to change)` : 'Optional: drop firmware (.elf / .hex) to run a co-sim'}
-          </strong>
-          <div className="text-[11px] mt-1" style={{ color: '#475569' }}>
-            Runs the firmware on the board's microcontroller for a fraction of a second and
-            reports any electrical stress. In-process MCUs only.
-          </div>
+          <span style={{ color: firmwareFile ? 'var(--live)' : 'var(--silk-dim)' }}>
+            {firmwareFile ? (
+              <><CheckIcon size={12} style={{ display: 'inline', verticalAlign: '-1px' }} /> Firmware: <strong>{firmwareFile.name}</strong> — click to change</>
+            ) : (
+              <>+ optional firmware (<code>.elf</code> / <code>.hex</code>) — co-simulate it on the board&rsquo;s MCU</>
+            )}
+          </span>
         </label>
         <input
           ref={fwInputRef}
@@ -208,7 +301,11 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
         />
 
         {/* Progress / error */}
-        {busy && <div className="mt-5 text-sm" style={{ color: '#94a3b8' }}>{busy}</div>}
+        {busy && (
+          <div className="mt-5 text-sm flex items-center gap-2" style={{ color: 'var(--copper-hi)' }}>
+            <span className="slot-spin" /> {busy}
+          </div>
+        )}
         {uploadError && <div className="mt-5 text-sm" style={{ color: '#fca5a5' }}>{uploadError}</div>}
 
         {/* Report */}
@@ -221,9 +318,25 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           />
         )}
 
-        <div className="mt-10 text-xs" style={{ color: '#334155' }}>
-          Runs locally via <code style={{ background: '#0f172a', padding: '1px 5px', borderRadius: 4 }}>hauksbee serve</code>.
-          Same checks as the command line.
+        {/* What it checks — differentiators first (not DRC/SPICE). */}
+        {!report && (
+          <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              ['The as-built circuit', 'Reconstructed from the copper the board actually ships — not the schematic you drew.'],
+              ['Firmware co-simulation', 'Your firmware on an emulated MCU, coupled to the live analog solve.'],
+              ['Checks a test suite can’t', 'Rails, faults, shorts, USB-C, signal integrity, thermal, loop stability.'],
+            ].map(([h, b]) => (
+              <div key={h} className="rounded-lg p-4" style={{ background: 'var(--void-2)', border: '1px solid var(--rule)' }}>
+                <div className="text-[11px] font-semibold tracking-wide mb-1.5" style={{ color: 'var(--copper)' }}>{h}</div>
+                <div className="text-xs leading-relaxed" style={{ color: 'var(--silk-dim)' }}>{b}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-10 text-xs" style={{ color: 'var(--silk-faint)' }}>
+          Running locally via <code>hauksbee serve</code>. The same engine as
+          <code> hauksbee run</code> on the command line and <code>hauksbee-ci</code> in a pipeline.
         </div>
       </div>
     </div>
@@ -274,15 +387,15 @@ function ReportView({ report: r, boardLabel, canRunLive, onRunIt }: {
         <button
           data-testid="run-it"
           onClick={onRunIt}
-          className="mt-3 w-full rounded-lg px-4 py-3 text-sm font-bold tracking-wide cursor-pointer transition-all hover:opacity-90"
+          className="mt-3 w-full rounded-lg px-4 py-3 text-sm font-bold tracking-wide cursor-pointer transition-all hover:opacity-90 flex items-center justify-center gap-2"
           style={{
-            background: 'rgba(59,130,246,0.12)',
-            border: '1px solid #1d4ed8',
-            color: '#bfdbfe',
-            boxShadow: '0 0 12px rgba(59,130,246,0.15)',
+            background: 'rgba(224,138,78,0.12)',
+            border: '1px solid var(--copper-deep)',
+            color: 'var(--copper-hi)',
+            boxShadow: '0 0 14px rgba(224,138,78,0.18)',
           }}
         >
-          ▶ Run it — open the live simulation (scope, board view, transport)
+          <PlayIcon size={13} /> Drive it live — the board, a scope, and firmware in real time
         </button>
       ) : (
         <div
@@ -394,18 +507,18 @@ function HeadsUpCard({ note: h }: { note: WebHeadsUp }) {
   return (
     <div
       className="rounded-lg px-4 py-2.5 mb-2"
-      style={{ border: '1px solid #1e3a5f', borderLeft: '4px solid #3b82f6', background: '#081120' }}
+      style={{ border: '1px solid var(--rule)', borderLeft: '4px solid var(--copper)', background: 'var(--void-2)' }}
     >
-      <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: '#93c5fd' }}>Heads up</span>
+      <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--copper)' }}>Heads up</span>
       <div className="text-sm mt-0.5" style={{ color: '#cbd5e1' }}>{h.what}</div>
       {h.why && (
         <div className="text-sm mt-1" style={{ color: '#cbd5e1' }}>
-          <b style={{ color: '#93c5fd', fontWeight: 600 }}>Why it matters:</b> {h.why}
+          <b style={{ color: 'var(--copper-hi)', fontWeight: 600 }}>Why it matters:</b> {h.why}
         </div>
       )}
       {h.fix && (
         <div className="text-sm mt-0.5" style={{ color: '#cbd5e1' }}>
-          <b style={{ color: '#93c5fd', fontWeight: 600 }}>What to do:</b> {h.fix}
+          <b style={{ color: 'var(--copper-hi)', fontWeight: 600 }}>What to do:</b> {h.fix}
         </div>
       )}
     </div>
