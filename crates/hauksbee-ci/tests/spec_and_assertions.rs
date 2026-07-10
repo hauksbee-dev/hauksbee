@@ -160,6 +160,10 @@ fn github_annotations_emit_error_on_failure() {
     assert!(!ann.lines().any(|l| l.contains(" %") && !l.contains("%25")));
 }
 
+// Boots the AVR demo .hex on the blinky ATmega board, so it needs the
+// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// firmware by design).
+#[cfg(feature = "avr")]
 #[test]
 fn demo_firmware_blink_uart_and_rail_all_pass() {
     // The full co-sim path: boot the demo firmware, assert rail + UART + blink
