@@ -139,7 +139,9 @@ pub fn is_available(arch: QemuArch) -> bool {
 /// Verify a candidate `qemu-system-*` is the Espressif fork by checking its
 /// machine list advertises an `esp32`-family machine. This is what keeps a
 /// Homebrew mainline binary on `PATH` from being mistaken for the fork.
-fn is_esp_fork(bin: &std::path::Path) -> bool {
+/// `pub(crate)` so the installer (`qemu::install`) accepts a freshly unpacked
+/// binary through the exact same check discovery uses.
+pub(crate) fn is_esp_fork(bin: &std::path::Path) -> bool {
     let out = Command::new(bin)
         .arg("-machine")
         .arg("help")

@@ -42,3 +42,6 @@ pkg-config = "0.3"
 # are a lossless data carrier, i.e. W5's future file load reconstructs the exact
 # config a constructor produces.
 serde_json = { workspace = true }
+# The esp-qemu installer's acceptance-boundary tests build fake release
+# archives in scratch dirs.
+tempfile = { workspace = true }

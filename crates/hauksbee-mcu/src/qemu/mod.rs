@@ -85,6 +85,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
 mod gdb;
+pub mod install;
 mod process;
 mod qmp;
 mod uart;
