@@ -357,6 +357,10 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 /// (boot_gate + variant A) is named in `--headless --json` as a
 /// `boot_control_net` note, advisory-only by default (exit 0), and escalated to
 /// exit 2 under `--strict-boot`. Uses committed fixtures.
+// Boots AVR .hex firmware on an ATmega board through the compiled binary,
+// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// refuses AVR firmware by design).
+#[cfg(feature = "avr")]
 #[test]
 fn boot_advisory_emits_note_and_strict_boot_gates() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
@@ -392,6 +396,10 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
 
 /// A clean board whose firmware only toggles a signal (no switch-driving net
 /// held high) raises NO boot advisory and is not gated by --strict-boot.
+// Boots AVR .hex firmware on an ATmega board through the compiled binary,
+// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// refuses AVR firmware by design).
+#[cfg(feature = "avr")]
 #[test]
 fn clean_firmware_raises_no_boot_advisory() {
     let b = board("../hauksbee-ci/examples/boards/blinky.kicad_pcb");
@@ -419,6 +427,10 @@ fn clean_firmware_raises_no_boot_advisory() {
 /// gate driven HIGH at boot (boot_gate + variant A) names that gate in the
 /// --plain panel and in --json `boot_gates`; variant B (gate never driven)
 /// reports it as floating. Reporting, not gating — exit stays 0 either way.
+// Boots AVR .hex firmware on an ATmega board through the compiled binary,
+// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// refuses AVR firmware by design).
+#[cfg(feature = "avr")]
 #[test]
 fn boot_state_panel_reports_gate_drive_state() {
     let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
@@ -463,6 +475,10 @@ fn boot_state_panel_reports_gate_drive_state() {
 /// driven HIGH and held but ALSO has a bias (pulldown) resistor must still
 /// report "driven HIGH" — earlier the panel reused the safety-filtered held-high
 /// set (which drops biased nets), inverting the label to LOW on ordinary boards.
+// Boots AVR .hex firmware on an ATmega board through the compiled binary,
+// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// refuses AVR firmware by design).
+#[cfg(feature = "avr")]
 #[test]
 fn boot_panel_reports_high_even_with_a_gate_pulldown() {
     let b = board("tests/fixtures/boot_gate_pulldown.kicad_pcb");
