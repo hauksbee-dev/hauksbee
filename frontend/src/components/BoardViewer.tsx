@@ -445,8 +445,8 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
           onClick={() => setViewMode('2d')}
           className="px-3 py-1 text-[10px] font-bold tracking-wider transition-all"
           style={{
-            background: viewMode === '2d' ? '#1e3a5f' : '#0a0f1e',
-            color: viewMode === '2d' ? '#93c5fd' : '#334155',
+            background: viewMode === '2d' ? 'rgba(224,138,78,0.14)' : '#0a0f1e',
+            color: viewMode === '2d' ? '#ffb072' : '#334155',
             borderRight: '1px solid #1e293b',
           }}
         >
@@ -460,8 +460,8 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
           title={!glbUrl ? 'No 3D model available for this board' : undefined}
           className="px-3 py-1 text-[10px] font-bold tracking-wider transition-all"
           style={{
-            background: viewMode === '3d' ? '#1e3a5f' : '#0a0f1e',
-            color: viewMode === '3d' ? '#93c5fd' : glbUrl ? '#334155' : '#1e293b',
+            background: viewMode === '3d' ? 'rgba(224,138,78,0.14)' : '#0a0f1e',
+            color: viewMode === '3d' ? '#ffb072' : glbUrl ? '#334155' : '#1e293b',
             cursor: glbUrl ? 'pointer' : 'not-allowed',
           }}
         >
@@ -473,7 +473,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin"
-              style={{ borderColor: '#3b82f6', borderTopColor: 'transparent' }} />
+              style={{ borderColor: '#e08a4e', borderTopColor: 'transparent' }} />
             <span className="text-sm" style={{ color: '#64748b' }}>Parsing board...</span>
           </div>
         </div>

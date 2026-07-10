@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
+import { CloseIcon, PlusIcon } from './Icons'
 
 const PROBE_COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899']
 const WINDOW_SECS = 3.0
@@ -250,8 +251,8 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                 >
                   {net}
                 </span>
-                <span className="text-[9px]" style={{ color: active ? color : '#334155' }}>
-                  {active ? '✕' : '+'}
+                <span style={{ color: active ? color : '#334155', display: 'inline-flex' }}>
+                  {active ? <CloseIcon size={10} /> : <PlusIcon size={10} />}
                 </span>
               </button>
             )

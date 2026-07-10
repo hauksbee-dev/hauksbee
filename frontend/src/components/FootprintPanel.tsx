@@ -1,3 +1,5 @@
+import { CloseIcon } from './Icons'
+
 interface FootprintInfo {
   ref: string
   value: string
@@ -30,9 +32,9 @@ export function FootprintPanel({ info, onClose }: FootprintPanelProps) {
         <button
           onClick={onClose}
           className="text-[10px] hover:opacity-70"
-          style={{ color: '#475569' }}
+          style={{ color: '#475569', display: 'inline-flex' }}
         >
-          ✕
+          <CloseIcon size={12} />
         </button>
       </div>
 

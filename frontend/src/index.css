@@ -20,6 +20,36 @@
   --copper-back: #4080c8;
   --pad-gold: #c8a040;
   --edge-yellow: #e8c040;
+
+  /* Brand signature: copper is what hauksbee reads off the board, so it is the
+     one bold accent. `live` green is functional (a running/pass state) only. */
+  --void: #060a10;
+  --void-2: #0a1019;
+  --void-3: #0e1622;
+  --copper: #e08a4e;
+  --copper-hi: #ffb072;
+  --copper-deep: #a65f34;
+  --live: #57e0a0;
+  --silk: #eef2f6;
+  --silk-dim: #8fa0b3;
+  --silk-faint: #566577;
+  --rule: #1b2735;
+}
+
+/* Landing signature: a signal pulse traveling along a copper trace. */
+@keyframes traceflow {
+  0%   { stroke-dashoffset: 220; opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes padglow {
+  0%, 100% { fill: var(--copper-deep); }
+  50%      { fill: var(--copper-hi); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trace-pulse { animation: none !important; opacity: 0.9 !important; stroke-dashoffset: 0 !important; }
+  .trace-pad { animation: none !important; }
 }
 
 * {
@@ -50,7 +80,7 @@ select option {
 /* Tab hover glow */
 .sidebar-tab-btn:hover {
   color: #64748b !important;
-  background: rgba(59,130,246,0.04) !important;
+  background: rgba(224,138,78,0.05) !important;
 }
 
 /* Running pulse animation */
@@ -58,6 +88,77 @@ select option {
   0%, 100% { opacity: 1; box-shadow: 0 0 4px #22c55e80; }
   50% { opacity: 0.7; box-shadow: 0 0 8px #22c55ecc; }
 }
+
+/* ── Landing "board input" slot ──────────────────────────────────────────────
+   A framed input with copper crop-mark corner brackets (top-left, bottom-right)
+   — a test-fixture / footprint motif, not a generic dashed drop box. Copper
+   ignites on hover and drag-over. */
+.slot {
+  position: relative;
+  margin-top: 1.5rem;
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--void-2), var(--void));
+  border: 1px solid var(--rule);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.slot::before, .slot::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: var(--copper);
+  border-style: solid;
+  opacity: 0.7;
+  transition: opacity 0.18s ease, border-color 0.18s ease;
+  pointer-events: none;
+}
+.slot::before { top: 7px; left: 7px; border-width: 1.5px 0 0 1.5px; }
+.slot::after  { bottom: 7px; right: 7px; border-width: 0 1.5px 1.5px 0; }
+.slot:hover {
+  border-color: var(--copper-deep);
+  background: linear-gradient(180deg, var(--void-3), var(--void-2));
+}
+.slot:hover::before, .slot:hover::after { opacity: 1; }
+.slot[data-active='true'] {
+  border-color: var(--copper);
+  box-shadow: 0 0 0 1px rgba(224,138,78,0.4), 0 0 28px rgba(224,138,78,0.16) inset;
+}
+.slot[data-active='true']::before, .slot[data-active='true']::after {
+  opacity: 1;
+  border-color: var(--copper-hi);
+}
+/* The firmware sub-slot: quieter, and its active state reads "live" green. */
+.slot-sub[data-active='true'] {
+  border-color: var(--live);
+  box-shadow: 0 0 0 1px rgba(87,224,160,0.3);
+}
+.slot-sub[data-active='true']::before, .slot-sub[data-active='true']::after {
+  border-color: var(--live);
+}
+
+/* Inline code chips on the Landing (mono file extensions / commands). */
+.max-w-3xl code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.92em;
+  color: var(--copper-hi);
+  background: rgba(224,138,78,0.07);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* Copper busy spinner (an arc that sweeps, like a probe settling). */
+.slot-spin {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--rule);
+  border-top-color: var(--copper-hi);
+  display: inline-block;
+  animation: slotspin 0.7s linear infinite;
+}
+@keyframes slotspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .slot-spin { animation: none; } }
 
 /* Fault toast slide-in */
 @keyframes slideInRight {
