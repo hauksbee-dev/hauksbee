@@ -126,7 +126,16 @@ frontend is a build artifact and is not checked in, so build it once:
 ```bash
 cd frontend && bun install && bun run build && cd ..
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb
+# ...or a real, open-source product board — the SQFMI Watchy (an ESP32-S3
+# e-paper smartwatch; hardware MIT-licensed, boards/watchy.LICENSE):
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb
 ```
+
+The Watchy is the "point it at a real board" case: hauksbee extracts the circuit
+its copper implements, binds 56 of 75 parts from the stock model library, and
+says plainly which active parts it does not recognise (the TP4054 charger, the
+BMA423 IMU, the e-paper panel) rather than guessing. Add `--report` for the
+static verdict, or drop the flag for the live 2D/3D viewer.
 
 It prints the URL to open (`http://127.0.0.1:3001` by default; change with
 `--port`). If you run it before building the frontend, hauksbee still starts the
@@ -191,8 +200,16 @@ are in the [board-as-code README](../examples/board-as-code/README.md).
 | [`blinky.toml`](../crates/hauksbee-ci/examples/blinky.toml) | Rail + UART + blink + no-faults assertions (the template spec) | **GREEN** |
 | [`olimex_wifi_burst_transient.toml`](../examples/ci-specs/olimex_wifi_burst_transient.toml) | Scenario/transient: a `rail_window` assertion riding an ESP32 WiFi burst | **GREEN** |
 | [`boot_gate_pass`](../crates/hauksbee-ci/examples/boot_gate_pass.toml) / [`fail`](../crates/hauksbee-ci/examples/boot_gate_fail.toml) | `boot-coverage`: does the firmware drive a Hi-Z gate in time? | PASS / FAIL |
-| [`watchy_v15_display_res`](../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) | `boot-coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | PASS / FAIL |
-| [`pic_programmer_schematic.toml`](../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | PASS |
+| [`watchy_v15_display_res`](../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot-coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | PASS / FAIL |
+| [`pic_programmer_schematic.toml`](../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | PASS |
+
+† These two specs run against boards in the developer board-corpus (the
+historical-revision Watchy v1.5 and KiCad's `pic_programmer` demo), which is not
+redistributed in this repo, and the Watchy one also needs the Espressif QEMU
+ESP32 backend. They document the [known-fault validation
+campaign](./record/KNOWN_FAULTS_VALIDATION.md); their integration tests skip
+cleanly when the corpus or backend is absent. To run a real board here with no
+extra setup, use `hauksbee run boards/watchy.kicad_pcb --report` above.
 
 More detail and the run-and-expected-verdict for each:
 [ci-specs README](../examples/ci-specs/README.md).
