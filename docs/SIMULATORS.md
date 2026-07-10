@@ -34,6 +34,26 @@ demand; tests skip cleanly when the binary is absent rather than failing.
 
 ## Quick install
 
+For the ESP32-family backend, hauksbee can fetch the Espressif QEMU fork
+itself — no shell script needed:
+
+```
+hauksbee install esp-qemu          # prompts; add --yes for CI
+```
+
+This downloads Espressif's **official** prebuilt `qemu-system-xtensa` and
+`qemu-system-riscv32` from
+[github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases),
+verifies each archive's sha256 against the release's checksum manifest,
+unpacks into `~/.hauksbee-qemu-esp/` (discovery slot 3 below), and accepts
+each binary only after the same esp32-machine check the co-sim applies.
+Nothing is bundled: the fork is a separate GPL-2.0 program hauksbee talks to
+over sockets. `hauksbee run --firmware` on an ESP32-family board offers the
+same install inline when it finds the emulator missing on an interactive
+terminal (declining keeps the loud install-guidance error).
+
+For everything at once (Renode + QEMU, optionally AVR):
+
 ```
 scripts/install-sims.sh
 ```
