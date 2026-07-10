@@ -267,7 +267,7 @@ Shipped named configs:
 | Config constructor | Machine | Architecture | Proven on this branch |
 |---|---|---|---|
 | `QemuConfig::esp32()` | `esp32` | Xtensa LX6 (dual-core, 240 MHz) | **Proven**: UART boot, GPIO toggle, solved LED current, stable across runs |
-| `QemuConfig::esp32s3()` | `esp32s3` | Xtensa LX7 (240 MHz) | Config shipped; not run (no S3 firmware built) |
+| `QemuConfig::esp32s3()` | `esp32s3` | Xtensa LX7 (240 MHz) | **Wiring proven**: binds `qemu:esp32s3`, machine boots (blank flash), QMP/gdbstub/UART connect, lockstep steps. App proof pending an S3 flash image (needs esp-idf's esp32s3 toolchain) |
 | `QemuConfig::esp32c3()` | `esp32c3` | RISC-V RV32IMC (160 MHz) | **Proven**: UART boot, GPIO toggle, solved LED current |
 
 GPIO observation goes through a RAM mailbox in RTC slow memory
