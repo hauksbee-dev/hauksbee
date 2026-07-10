@@ -178,6 +178,36 @@ enum Command {
     /// Example:
     ///   hauksbee watch my_board.kicad_pcb --plain
     Watch(WatchArgs),
+
+    /// Install an external co-sim dependency.
+    ///
+    /// `install esp-qemu` downloads Espressif's official prebuilt QEMU fork
+    /// (qemu-system-xtensa for ESP32/ESP32-S3, qemu-system-riscv32 for
+    /// ESP32-C3) from github.com/espressif/qemu releases into
+    /// `~/.hauksbee-qemu-esp/`, verifies the sha256 against the release's
+    /// checksum manifest, and accepts each binary only after the same
+    /// esp32-machine check the co-sim itself applies. Nothing is bundled:
+    /// the fork is a separate GPL program hauksbee talks to over sockets.
+    ///
+    /// Example:
+    ///   hauksbee install esp-qemu --yes
+    Install(InstallArgs),
+}
+
+#[derive(Parser)]
+struct InstallArgs {
+    #[command(subcommand)]
+    command: InstallCommand,
+}
+
+#[derive(Subcommand)]
+enum InstallCommand {
+    /// Fetch the Espressif QEMU fork (ESP32 / ESP32-S3 / ESP32-C3 co-sim).
+    EspQemu {
+        /// Skip the confirmation prompt (for CI / scripts).
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -614,6 +644,9 @@ fn main() -> anyhow::Result<()> {
         Command::Watch(args) => {
             hauksbee_engine::commands::watch::run(args.target, args.plain, args.once)
         }
+        Command::Install(args) => match args.command {
+            InstallCommand::EspQemu { yes } => hauksbee_engine::commands::install::esp_qemu(yes),
+        },
     };
     if let Err(e) = &result {
         if json {

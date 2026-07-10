@@ -277,6 +277,15 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     } else {
         bound.net_names.clone()
     };
+    // Pre-flight: firmware on a `qemu:` backend needs the Espressif QEMU fork.
+    // On an interactive terminal, offer to fetch it inline (official prebuilt,
+    // into ~/.hauksbee-qemu-esp) so the run continues; declined or
+    // non-interactive paths keep the loud install-guidance error the scheduler
+    // raises. CLI-layer on purpose: the library/server must never prompt.
+    if cfg.firmware.is_some() {
+        let backends: Vec<String> = bound.mcus.iter().map(|m| m.backend.clone()).collect();
+        crate::commands::install::offer_esp_qemu_install(&backends)?;
+    }
     let mut engine = HauksbeeEngine::from_bound(
         bound,
         cfg.firmware.as_deref(),
