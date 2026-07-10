@@ -1,7 +1,8 @@
-// A small line-icon set (1.5px stroke, 16px grid) replacing the emoji glyphs
-// that read as placeholder/AI-slop. Consistent instrument aesthetic: geometric,
-// monochrome, `currentColor` so each call site controls color. Pass `size` to
-// scale; every icon shares the same 16-unit viewBox so they align in a row.
+// Icon set — vetted geometry from Lucide (https://lucide.dev, ISC/MIT), inlined
+// rather than pulled as a runtime dependency so the bundle stays small and the
+// served UI is self-contained. Every icon is Lucide's 24×24 grid at a 2px
+// stroke, drawn on `currentColor` so each call site controls colour. Pass
+// `size` to scale.
 
 type IconProps = { size?: number; className?: string; style?: React.CSSProperties }
 
@@ -10,10 +11,10 @@ function svg(size: number, children: React.ReactNode, extra?: IconProps) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 16 16"
+      viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.5}
+      strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
       className={extra?.className}
@@ -25,40 +26,46 @@ function svg(size: number, children: React.ReactNode, extra?: IconProps) {
   )
 }
 
+// Transport glyphs read better filled at small sizes; they use Lucide's
+// vertices with a solid fill.
 export const PlayIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <path d="M4.5 3.2 L12.5 8 L4.5 12.8 Z" fill="currentColor" stroke="none" />, p)
+  svg(size, <polygon points="6 3 20 12 6 21 6 3" fill="currentColor" stroke="none" />, p)
 
 export const PauseIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><rect x="4.5" y="3.5" width="2.3" height="9" rx="0.5" fill="currentColor" stroke="none" /><rect x="9.2" y="3.5" width="2.3" height="9" rx="0.5" fill="currentColor" stroke="none" /></>, p)
+  svg(size, <><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor" stroke="none" /><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor" stroke="none" /></>, p)
 
-// Step-forward: play bar + tick.
+// Lucide `skip-forward`.
 export const StepIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="M4 3.5 L10 8 L4 12.5 Z" fill="currentColor" stroke="none" /><path d="M12 3.5 V12.5" /></>, p)
+  svg(size, <><polygon points="5 4 15 12 5 20 5 4" fill="currentColor" stroke="none" /><line x1="19" x2="19" y1="5" y2="19" /></>, p)
 
-// Reset / restart: a circular arrow.
+// Lucide `rotate-ccw`.
 export const ResetIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="M12.5 8 A4.5 4.5 0 1 1 10.8 4.5" /><path d="M12.6 2.2 V4.9 H9.9" /></>, p)
+  svg(size, <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></>, p)
 
+// Lucide `x`.
 export const CloseIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="M4 4 L12 12" /><path d="M12 4 L4 12" /></>, p)
+  svg(size, <><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>, p)
 
+// Lucide `plus`.
 export const PlusIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="M8 3.5 V12.5" /><path d="M3.5 8 H12.5" /></>, p)
+  svg(size, <><path d="M5 12h14" /><path d="M12 5v14" /></>, p)
 
+// Lucide `check`.
 export const CheckIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" />, p)
+  svg(size, <path d="M20 6 9 17l-5-5" />, p)
 
+// Lucide `arrow-left`.
 export const BackIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="M10 3.5 L5.5 8 L10 12.5" /><path d="M5.5 8 H12.5" opacity="0.55" /></>, p)
+  svg(size, <><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></>, p)
 
-// A lightning bolt for faults (replaces the ⚡ emoji).
+// Lucide `zap` — the fault glyph, filled.
 export const BoltIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <path d="M8.8 2 L4 9 H7.5 L6.8 14 L11.5 6.6 H8.2 Z" fill="currentColor" stroke="none" />, p)
+  svg(size, <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="currentColor" stroke="none" />, p)
 
-// A probe tip (oscilloscope probe) — for the scope-attach affordance.
+// Lucide `activity` — a waveform, for the scope-attach affordance.
 export const ProbeIcon = ({ size = 14, ...p }: IconProps) =>
-  svg(size, <><path d="M9.5 2.5 L13.5 6.5 L8 12 L4 12 L4 8 Z" /><path d="M2 14 L4.5 11.5" /></>, p)
+  svg(size, <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />, p)
 
-// A board-input target: concentric square + crosshair (the "load a board" slot).
+// Lucide `circuit-board` — the "load a board" slot marker.
 export const BoardTargetIcon = ({ size = 20, ...p }: IconProps) =>
-  svg(size, <><rect x="3" y="3" width="10" height="10" rx="1" /><circle cx="8" cy="8" r="2" /><path d="M8 1 V3 M8 13 V15 M1 8 H3 M13 8 H15" /></>, p)
+  svg(size, <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M11 9h4a2 2 0 0 0 2-2V3" /><circle cx="9" cy="9" r="2" /><path d="M7 21v-4a2 2 0 0 1 2-2h4" /><circle cx="15" cy="15" r="2" /></>, p)
