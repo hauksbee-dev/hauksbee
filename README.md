@@ -82,6 +82,69 @@ This fetches the latest release for your OS/arch, verifies the sha256 checksum, 
 
 ---
 
+## Firmware co-sim and CI specs
+
+Firmware co-sim boots your compiled image on an emulated MCU and runs it in
+lockstep with the analog solve of the as-built board — so a GPIO the firmware
+drives actually moves the copper it's wired to, and you assert on the result.
+There are two ways in.
+
+**One-off, from the command line** — point `run` at a board and a firmware image:
+
+```bash
+hauksbee run my_board.kicad_pcb --firmware build/app.elf            # TUI dashboard, live
+hauksbee run my_board.kicad_pcb --firmware build/app.hex --report --plain   # one-shot verdict
+```
+
+The MCU is detected from the board (an ESP32-S3 boots Espressif QEMU, an
+ATmega328P libsimavr, an STM32/nRF52 Renode); `.elf` and `.hex` are both
+accepted. If a needed emulator isn't installed, hauksbee tells you the one
+command to get it (`hauksbee install esp-qemu`, or `scripts/install-sims.sh`).
+
+**As a repeatable check** — a `.toml` spec captures the board, the firmware, how
+the board is powered, and the assertions that must hold, so a pipeline can gate
+on it. Scaffold one from a board with `hauksbee-ci init my_board.kicad_pcb`, then
+run it:
+
+```bash
+hauksbee-ci run ci/boot.toml                    # exit 0 = all assertions held
+hauksbee-ci run ci/boot.toml --junit out.xml    # emit JUnit XML for CI
+```
+
+A spec reads as board-as-code. This one boots real firmware and asserts that a
+MOSFET gate is actively driven within 20 ms of reset (the full example is
+[`crates/hauksbee-ci/examples/boot_gate_pass.toml`](crates/hauksbee-ci/examples/boot_gate_pass.toml)):
+
+```toml
+name = "boot-coverage: MOSFET gate driven promptly"
+board = "boards/boot_gate.kicad_pcb"      # .kicad_pcb / .kicad_sch / .brd / .d356
+firmware = "firmware/boot_gate.hex"       # optional; ELF or hex, relative to the spec
+mcu = "atmega328p"                        # usually auto-detected from the board
+duration_ms = 50
+
+[[supply]]                                # how the board is powered
+net = "+5V"
+kind = "ideal"
+volts = 5.0
+
+[[assert]]                               # 1+ assertions; all must hold
+kind = "boot-coverage"                    # the gate net must reach a logic high...
+net = "GATE_CTRL"
+min = 3.0
+deadline_ms = 20.0                        # ...within 20 ms of reset
+
+[[assert]]
+kind = "no_faults"                        # and nothing is over-stressed meanwhile
+```
+
+Assertions cover rails and forced net drives, timed peripheral events (button
+presses, sensor inputs), `voltage` / `toggle` / `boot-coverage` / `no_faults`,
+thermal limits, and tolerance/AC sweeps. More runnable specs and board-as-code
+examples are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the full spec schema is
+documented at the top of [`crates/hauksbee-ci/src/spec.rs`](crates/hauksbee-ci/src/spec.rs).
+
+---
+
 ## Simulators / firmware co-sim
 
 AVR (ATmega328P) co-simulation links libsimavr directly into the engine, so
