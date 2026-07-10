@@ -36,6 +36,7 @@ fn example(name: &str) -> PathBuf {
 /// The firmware hex files are committed, but rebuild them from source if a
 /// toolchain is present so the test tracks the .c, not a stale artifact. Absence
 /// of avr-gcc is fine - the committed hex is used.
+#[cfg(feature = "avr")]
 fn ensure_firmware(variant: &str) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/firmware")
@@ -65,6 +66,7 @@ fn ensure_firmware(variant: &str) {
     );
 }
 
+#[cfg(feature = "avr")]
 fn which_avr_gcc() -> bool {
     std::process::Command::new("avr-gcc")
         .arg("--version")
@@ -75,6 +77,11 @@ fn which_avr_gcc() -> bool {
 
 /// Variant A drives the gate promptly: the boot-coverage assertion PASSES, and
 /// so does the no_faults assertion (boot window clean).
+// Runs AVR .hex firmware on the ATmega boot_gate board, so it needs the
+// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// firmware by design). The Watchy QEMU rows below cover the external-backend
+// half of the mechanism.
+#[cfg(feature = "avr")]
 #[test]
 fn gate_driven_promptly_passes() {
     ensure_firmware("a");
@@ -105,6 +112,11 @@ fn gate_driven_promptly_passes() {
 /// Variant B never drives the gate: the boot-coverage assertion FAILS, naming
 /// the control net that was left Hi-Z. This is the discriminating half - the
 /// check has teeth only because this case goes RED.
+// Runs AVR .hex firmware on the ATmega boot_gate board, so it needs the
+// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// firmware by design). The Watchy QEMU rows below cover the external-backend
+// half of the mechanism.
+#[cfg(feature = "avr")]
 #[test]
 fn gate_left_floating_fails_naming_the_net() {
     ensure_firmware("b");
