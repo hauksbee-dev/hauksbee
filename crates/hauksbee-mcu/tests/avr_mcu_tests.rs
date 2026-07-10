@@ -5,6 +5,11 @@
 //!
 //! When the hex is absent (CI without the firmware repo), all tests skip gracefully.
 
+// The whole file drives the in-process simavr core, so it only exists on
+// builds with the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// excludes it).
+#![cfg(feature = "avr")]
+
 use hauksbee_mcu::{AvrMcu, Mcu, PinId};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

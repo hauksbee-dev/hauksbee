@@ -3,6 +3,11 @@
 //! on PB5, ADC readback — every co-sim coupling path with firmware we
 //! control end to end.
 
+// The whole file drives the in-process simavr core, so it only exists on
+// builds with the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// excludes it).
+#![cfg(feature = "avr")]
+
 use hauksbee_mcu::{AvrMcu, Mcu, PinId};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
