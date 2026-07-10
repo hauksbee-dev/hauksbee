@@ -295,3 +295,144 @@ fn esp32c3_full_cosim_through_solved_circuit() {
         "GPIO4 blink should toggle through the circuit on C3; got {transitions}"
     );
 }
+
+// ── ESP32-S3 (Xtensa LX7) backend wiring ────────────────────────────────────
+//
+// Regression for the ESP32-S3 co-sim gap: the builtin `esp32s3` model entry
+// carried no `backend` param, so a Watchy-v3-class board silently inherited
+// the binder's AVR default (`simavr:atmega328p`) — wrong ISA, and the
+// GPL-gated `avr` feature the MIT-clean build excludes. These tests pin the
+// whole chain: bind → `qemu:esp32s3` → SocConfig::resolve (esp32s3.soc.toml)
+// → QemuBackend spawning the Espressif fork's *esp32s3* machine.
+//
+// No S3 app firmware ships in testdata (building one needs esp-idf with the
+// esp32s3 Xtensa toolchain; see testdata/firmware/esp32_blinky/build.sh for
+// the equivalent classic-ESP32 recipe). The wiring is still provable without
+// it: the S3 ROM is baked into the Espressif QEMU binary, so booting a blank
+// 4 MB flash image brings the machine up (the ROM loops on "invalid header"),
+// and instantiation + the lockstep channels (QMP, gdbstub, UART socket) all
+// connect for real. What a real image would add is only the guest app.
+
+fn esp32s3_test_board() -> hauksbee_engine::binder::BoundBoard {
+    use hauksbee_engine::binder::bind_board;
+    use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
+    use hauksbee_models::ModelLibrary;
+
+    let board = ExtractedBoard {
+        name: "esp32s3-wiring-test".to_string(),
+        nets: vec![
+            Net { id: 1, name: "BOOT".to_string() },
+            Net { id: 2, name: "+3V3".to_string() },
+            Net { id: 3, name: "GND".to_string() },
+        ],
+        components: vec![Component {
+            reference: "U1".to_string(),
+            value: "ESP32-S3".to_string(),
+            lib_id: "RF_Module:ESP32-S3-WROOM-1".to_string(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![
+                Pin {
+                    number: "27".to_string(),
+                    net: Some(1),
+                    function: "GPIO0".to_string(),
+                    kind: String::new(),
+                    position: None,
+                },
+                Pin {
+                    number: "2".to_string(),
+                    net: Some(2),
+                    function: "3V3".to_string(),
+                    kind: String::new(),
+                    position: None,
+                },
+                Pin {
+                    number: "1".to_string(),
+                    net: Some(3),
+                    function: "GND".to_string(),
+                    kind: String::new(),
+                    position: None,
+                },
+            ],
+        }],
+    };
+    bind_board(&board, &ModelLibrary::builtin())
+}
+
+/// A blank 4 MB flash image: enough for the S3 ROM (in the QEMU binary) to
+/// boot and idle. Espressif QEMU requires a power-of-two flash size.
+fn blank_s3_flash(dir: &std::path::Path) -> PathBuf {
+    let p = dir.join("flash_s3_blank.bin");
+    std::fs::write(&p, vec![0xFFu8; 4 * 1024 * 1024]).expect("write blank flash");
+    p
+}
+
+/// The bind result and the instantiation path, with or without the emulator
+/// installed. Never the AVR path — that is the bug this file's header names.
+#[test]
+fn esp32s3_board_instantiates_qemu_backend_never_avr() {
+    use hauksbee_engine::scheduler::Scheduler;
+    use hauksbee_solve::SolverOptions;
+
+    let _guard = qemu_test_lock();
+
+    let bound = esp32s3_test_board();
+    assert_eq!(bound.mcus.len(), 1, "the S3 module must bind as an MCU");
+    assert_eq!(
+        bound.mcus[0].backend, "qemu:esp32s3",
+        "ESP32-S3 must route to the QEMU Xtensa backend"
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let flash = blank_s3_flash(dir.path());
+
+    match Scheduler::new(bound, Some(&flash), SolverOptions::default()) {
+        Ok(mut sched) => {
+            // The Espressif QEMU esp32s3 machine is up with QMP + UART
+            // connected; prove the lockstep loop turns over (the blank-flash
+            // guest just idles in the ROM).
+            assert!(
+                is_available(QemuArch::Xtensa),
+                "scheduler built a QEMU core but is_available says no emulator"
+            );
+            let r = sched.step(5e-3);
+            assert!(r.sim_time > 0.0, "lockstep did not advance sim time");
+        }
+        Err(e) => {
+            // Without the Espressif fork installed the ONLY acceptable failure
+            // is the loud install-guidance error from the QEMU locator (or the
+            // machine rejecting the image) — never a wrong-ISA AVR fallback and
+            // never the misleading "rebuild with --features avr" message.
+            let msg = format!("{e:#}").to_lowercase();
+            assert!(
+                !msg.contains("avr") && !msg.contains("atmega"),
+                "ESP32-S3 instantiation error leaked into the AVR path: {msg}"
+            );
+            assert!(
+                msg.contains("qemu"),
+                "expected QEMU install guidance in the error, got: {msg}"
+            );
+            assert!(
+                !is_available(QemuArch::Xtensa),
+                "QEMU is installed but S3 instantiation failed: {msg}"
+            );
+        }
+    }
+}
+
+/// Firmware-less runs must keep working without QEMU installed: the external
+/// backend sits out and the board solves as a passive circuit (this is what
+/// keeps lint/report green on ESP32-S3 boards on hosts with no emulator).
+#[test]
+fn esp32s3_board_without_firmware_needs_no_qemu() {
+    use hauksbee_engine::scheduler::Scheduler;
+    use hauksbee_solve::SolverOptions;
+
+    let bound = esp32s3_test_board();
+    let sched = Scheduler::new(bound, None, SolverOptions::default())
+        .expect("firmware-less S3 board must build a scheduler without QEMU");
+    drop(sched);
+}

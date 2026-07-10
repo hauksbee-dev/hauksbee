@@ -347,6 +347,15 @@ description = "Espressif ESP32-S3 (WROOM-1 module or bare, Watchy v3)"
 [models.match]
 value_re = "(?i)^ESP32[- ]?S3([- ]?WROOM.*)?$"
 
+[models.params]
+# hauksbee-mcu backend identifier: the QEMU backend boots the Espressif-QEMU
+# esp32s3 machine (Xtensa LX7) from the merged flash image and bridges GPIO
+# (via the RAM mailbox) / UART through QMP + gdbstub + the serial socket, same
+# as the classic ESP32 entries above. Descriptor: db/mcu/esp32s3.soc.toml in
+# hauksbee-mcu. With no firmware given the scheduler skips the MCU entirely,
+# so lint/report-only runs never need QEMU.
+backend = "qemu:esp32s3"
+
 [models.pins]
 # ESP32-S3 strap GPIOs (KiCad RF_Module:ESP32-S3-WROOM-1). On the S3 the
 # strapping pins are GPIO0, GPIO3, GPIO45, GPIO46. Pad map from the WROOM-1

@@ -826,6 +826,37 @@ fn route_mcu_family(comp: &Component) -> Option<McuFamilyRoute> {
         .find_map(|s| route_mcu_family_str(s))
 }
 
+/// The backend string for a component the model DB resolved as an MCU.
+///
+/// The model's explicit `backend` param always wins. When the entry carries
+/// none, the family router decides from the part's identity strings — a DB
+/// entry that exists for strap-lint data (esp32s3, esp32s2) must not silently
+/// inherit the AVR default: that sent an ESP32-S3 into simavr (wrong ISA, and
+/// the GPL-gated `avr` feature the MIT-clean build excludes) instead of
+/// `qemu:esp32s3`. A recognized family with no co-sim platform gets an
+/// explicit `none:<family>` token the scheduler refuses loudly at
+/// instantiation. Only a part NO family route recognizes keeps the historical
+/// `simavr:atmega328p` default (bare AVR-ish user entries).
+///
+/// This deliberately skips `looks_like_mcu_candidate`: the model DB already
+/// classified the part as an MCU, so the reference-prefix gate (meant to stop
+/// non-MCU parts reaching the router) would only mask the identity here.
+fn mcu_backend_string(comp: &Component, model: &ModelEntry) -> String {
+    if let Some(backend) = model.params.get_str("backend") {
+        return backend.to_string();
+    }
+    let route = mcu_identity_strings(comp)
+        .iter()
+        .find_map(|s| route_mcu_family_str(s));
+    match route {
+        Some(McuFamilyRoute::Backend { backend, .. }) => backend.to_string(),
+        Some(McuFamilyRoute::NoPlatform { family }) => {
+            format!("none:{}", family.to_ascii_lowercase())
+        }
+        None => "simavr:atmega328p".to_string(),
+    }
+}
+
 fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
     for token in family_tokens(s) {
         let compact = token.replace(['-', '_', ' '], "");
@@ -1257,11 +1288,7 @@ fn bind_component(
             )
         }
         Mcu => {
-            let backend = model
-                .params
-                .get_str("backend")
-                .unwrap_or("simavr:atmega328p")
-                .to_string();
+            let backend = mcu_backend_string(comp, model);
             let warning = bind_mcu(
                 comp,
                 model,
@@ -2191,11 +2218,7 @@ fn bind_mcu(
     _power_nets: &HashMap<String, f64>,
     mcus: &mut Vec<McuBinding>,
 ) -> Option<String> {
-    let backend = model
-        .params
-        .get_str("backend")
-        .unwrap_or("simavr:atmega328p")
-        .to_string();
+    let backend = mcu_backend_string(comp, model);
     let module = model.params.0.get("module").is_some();
     let derived_when_empty = if model.pins.is_empty() {
         Some(derive_mcu_pin_roles(comp))
@@ -2291,10 +2314,7 @@ fn log_mcu_auto_decision(
     model: &ModelEntry,
     derived_when_empty: Option<&DerivedMcuPins>,
 ) -> Option<String> {
-    let backend = model
-        .params
-        .get_str("backend")
-        .unwrap_or("simavr:atmega328p");
+    let backend = mcu_backend_string(comp, model);
     let auto_router = model.params.get_str("auto_bind") == Some("family_router");
     if auto_router {
         let family = model.params.get_str("auto_bind_family").unwrap_or("MCU");
