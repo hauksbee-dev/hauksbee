@@ -129,8 +129,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   const [dragOver, setDragOver] = useState(false)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
   const lastBoardFile = useRef<File | null>(null)
-  const boardInputRef = useRef<HTMLInputElement>(null)
-  const fwInputRef = useRef<HTMLInputElement>(null)
 
   const analyze = useCallback(async (board: File, firmware: File | null) => {
     setUploadError(null)
@@ -149,15 +147,26 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           body: await board.arrayBuffer(),
         })
       }
+      // Read the body ONCE as text, then parse defensively. The server always
+      // returns a WebReport JSON (even for a bad board: `{ok:false,...}`), but a
+      // stale build, a proxy, or a body-limit/panic can return plaintext ("413
+      // Payload Too Large", a "Failed to ..." message). Parsing that with
+      // res.json() throws a cryptic "Unexpected token 'F'" SyntaxError; reading
+      // text first lets us show the real message verbatim.
+      const text = await res.text()
       if (!res.ok) {
-        // A non-2xx from the server (e.g. the body-size limit, or a panic) is a
-        // plaintext or JSON message, NOT a WebReport. Read it as text and show
-        // it verbatim rather than letting res.json() throw a cryptic
-        // "Unexpected token" SyntaxError from parsing the error page.
-        const detail = (await res.text()).trim() || `${res.status} ${res.statusText}`
-        throw new Error(detail)
+        throw new Error(text.trim().slice(0, 400) || `${res.status} ${res.statusText}`)
       }
-      setReport(await res.json() as WebReport)
+      let parsed: WebReport
+      try {
+        parsed = JSON.parse(text) as WebReport
+      } catch {
+        throw new Error(
+          text.trim().slice(0, 400) ||
+            'the server returned an empty or non-JSON response',
+        )
+      }
+      setReport(parsed)
     } catch (e) {
       setUploadError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -165,15 +174,23 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
     }
   }, [])
 
-  const handleBoard = useCallback((f: File) => {
-    lastBoardFile.current = f
-    void analyze(f, firmwareFile)
-  }, [analyze, firmwareFile])
+  const looksLikeFirmware = (name: string) => /\.(elf|hex)$/i.test(name)
 
   const handleFirmware = useCallback((f: File) => {
     setFirmwareFile(f)
     if (lastBoardFile.current) void analyze(lastBoardFile.current, f)
   }, [analyze])
+
+  const handleBoard = useCallback((f: File) => {
+    // A firmware file in the board slot is a mis-drop, not a board: route it to
+    // the firmware jack instead of sending an ELF to the board extractor.
+    if (looksLikeFirmware(f.name) && !lastBoardFile.current) {
+      handleFirmware(f)
+      return
+    }
+    lastBoardFile.current = f
+    void analyze(f, firmwareFile)
+  }, [analyze, firmwareFile, handleFirmware])
 
   return (
     <div
@@ -231,7 +248,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
         <label
           data-testid="drop-zone"
           htmlFor="board-file"
-          onClick={() => boardInputRef.current?.click()}
           onDragEnter={e => { e.preventDefault(); setDragOver(true) }}
           onDragOver={e => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
@@ -260,7 +276,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           </div>
         </label>
         <input
-          ref={boardInputRef}
           id="board-file"
           type="file"
           accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt"
@@ -272,7 +287,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
         <label
           data-testid="firmware-zone"
           htmlFor="firmware-file"
-          onClick={() => fwInputRef.current?.click()}
           onDragEnter={e => e.preventDefault()}
           onDragOver={e => e.preventDefault()}
           onDrop={e => {
@@ -292,7 +306,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           </span>
         </label>
         <input
-          ref={fwInputRef}
           id="firmware-file"
           type="file"
           accept=".elf,.hex"
