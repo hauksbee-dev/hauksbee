@@ -16,10 +16,9 @@ use super::{lint_fails, OutputMode};
 /// Print the full `--lint` bundle in `mode`, surface any pin-role guesses, then
 /// (under `strict`) exit non-zero on a high/medium finding.
 pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode, strict: bool) -> anyhow::Result<()> {
-    let mut report = crate::checks::engine_lint(board, lib);
-    report
-        .findings
-        .extend(crate::checks::device_decode::device_decode_lint(board, lib).findings);
+    // device_decode is now inside engine_lint (so --check/--json/TUI/frontdoor
+    // get it too); no longer spliced here, which would double-count it.
+    let report = crate::checks::engine_lint(board, lib);
     match mode {
         OutputMode::Json => {
             let bound = bind_board(board, lib);

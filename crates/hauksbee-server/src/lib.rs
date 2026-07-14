@@ -428,7 +428,13 @@ async fn sim_loop(
                     ClientMessage::Play => running = true,
                     ClientMessage::Pause => running = false,
                     ClientMessage::Step { dt } => {
-                        let frame = engine.step(if dt > 0.0 { dt } else { frame_dt });
+                        // Clamp the client-supplied step like SetSpeed clamps
+                        // factor: an unbounded dt (e.g. `1e9`) is ~1e13 chunks
+                        // that the single sim_loop task runs synchronously,
+                        // wedging every client until restart. A manual step is
+                        // milliseconds; 1 s is already a generous ceiling.
+                        let step_dt = if dt > 0.0 { dt.min(1.0) } else { frame_dt };
+                        let frame = engine.step(step_dt);
                         sim_time = frame.t;
                         broadcast_msg(&ServerMessage::SimFrame(frame));
                     }

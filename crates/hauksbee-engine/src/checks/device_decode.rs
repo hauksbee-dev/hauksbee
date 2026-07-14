@@ -616,6 +616,27 @@ mod tests {
     }
 
     #[test]
+    fn device_decode_findings_flow_through_engine_lint() {
+        // Chokepoint fix: device_decode must run INSIDE engine_lint so
+        // --check/--json/TUI/frontdoor surface these faults, not only --lint.
+        let text = cypd_board("10k", "5k1");
+        let board = ExtractedBoard::from_kicad_pcb(&text).expect("parse synthetic board");
+        let lib = ModelLibrary::builtin();
+        assert!(
+            device_decode_lint(&board, &lib)
+                .of_check(LintCheck::DeviceDecode)
+                .next()
+                .is_some(),
+            "fixture should produce a device_decode finding"
+        );
+        let full = crate::checks::engine_lint(&board, &lib);
+        assert!(
+            full.of_check(LintCheck::DeviceDecode).next().is_some(),
+            "engine_lint must include device_decode findings via the chokepoint"
+        );
+    }
+
+    #[test]
     fn note1_override_fires_when_min_exceeds_max() {
         // VBUS_MIN = 10k pull-down -> 2185 mV -> 19V band.
         // VBUS_MAX: permanent 10k, switched leg R15 = 5.1k. Open detent -> 2185 mV
