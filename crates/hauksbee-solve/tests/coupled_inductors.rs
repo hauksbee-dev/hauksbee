@@ -241,7 +241,7 @@ fn linear_island_with_coupling_forces_mna() {
     let isl = &p.islands[0];
     assert!(isl.linear, "the coupled RL island is linear-classified");
     assert!(
-        LinearIsland::compile(&c, isl, 1e-12).is_none(),
+        LinearIsland::compile(&c, isl, 1e-12, 27.0).is_none(),
         "state-space reducer must refuse a coupled island (di/dt = L^-1 v \
          does not exist at k=1; MNA stamps L directly)"
     );
