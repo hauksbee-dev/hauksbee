@@ -17,7 +17,7 @@ interface Board3DViewerProps {
   board: ParsedBoard | null
   frame: SimFrame | null
   boardInfo?: BoardInfoMsg | null
-  faults?: { component: string; fault_kind: string; value: number; limit: number; t: number }[]
+  faults?: { component: string; kind: string; value: number; limit: number; t: number }[]
 }
 
 export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board3DViewerProps) {

@@ -88,7 +88,9 @@ impl Server {
         // uncompressed but ~1.9 MB gzipped, and every browser sends
         // `Accept-Encoding: gzip`; the WebSocket upgrade (a bodyless 101) passes
         // through untouched.
-        router.layer(CompressionLayer::new())
+        router
+            .layer(axum::middleware::map_response(no_cache_html))
+            .layer(CompressionLayer::new())
     }
 
     pub async fn serve(
@@ -178,6 +180,23 @@ impl Server {
         axum::serve(listener, router).await?;
         Ok(())
     }
+
+    /// Serve the unified app router on a listener already produced by
+    /// [`bind_frontdoor`], so the caller can print the *actually bound* URL
+    /// before the server takes over the thread (the requested port may have
+    /// been busy and replaced by a fallback).
+    pub async fn serve_app_on(
+        &self,
+        listener: tokio::net::TcpListener,
+        static_dir: Option<&Path>,
+        board_file: Option<(String, String)>,
+        analyze: FirmwareAnalyzer,
+        startup_json: String,
+    ) -> anyhow::Result<()> {
+        let router = self.app_router(static_dir, board_file, analyze, startup_json);
+        axum::serve(listener, router).await?;
+        Ok(())
+    }
 }
 
 /// Assemble the unified router from its optional parts. `shared` is present only
@@ -228,7 +247,31 @@ fn unified_router(
     }
     // Gzip on the fly: the frontend's .glb board models are ~14 MB uncompressed,
     // ~1.9 MB gzipped. The `/ws` upgrade (a bodyless 101) passes through.
-    router.layer(CompressionLayer::new())
+    router
+        .layer(axum::middleware::map_response(no_cache_html))
+        .layer(CompressionLayer::new())
+}
+
+/// Mark HTML responses `Cache-Control: no-cache` so a browser always
+/// revalidates `index.html` against the served `dist/`. Vite's hashed asset
+/// names make everything else safely cacheable, but the entry HTML is served
+/// under a stable name — a cached copy keeps pointing at old asset hashes and
+/// resurrects "already fixed" bugs after a rebuild. `no-cache` still allows a
+/// 304 when the file is unchanged (ServeDir handles conditional requests).
+async fn no_cache_html(mut res: axum::response::Response) -> axum::response::Response {
+    let is_html = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.starts_with("text/html"))
+        .unwrap_or(false);
+    if is_html {
+        res.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+    }
+    res
 }
 
 /// Serve the drop-zone-only front door (no preloaded board, no live engine):
@@ -354,6 +397,9 @@ async fn sim_loop(
 ) {
     let mut running = false;
     let mut speed = 1.0f64;
+    // Last simulation time seen from the engine, so the Status broadcast after
+    // a command reports the real clock instead of resetting the UI to 0.0.
+    let mut sim_time = 0.0f64;
     let frame_dt = 1.0 / FRAME_RATE_HZ;
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs_f64(frame_dt));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -369,10 +415,10 @@ async fn sim_loop(
             _ = ticker.tick() => {
                 if running {
                     let frame = engine.step(frame_dt * speed);
-                    let t = frame.t;
+                    sim_time = frame.t;
                     broadcast_msg(&ServerMessage::SimFrame(frame));
                     broadcast_msg(&ServerMessage::Status(Status {
-                        running, sim_time: t, options: engine.controls(),
+                        running, sim_time, options: engine.controls(),
                     }));
                 }
             }
@@ -383,11 +429,13 @@ async fn sim_loop(
                     ClientMessage::Pause => running = false,
                     ClientMessage::Step { dt } => {
                         let frame = engine.step(if dt > 0.0 { dt } else { frame_dt });
+                        sim_time = frame.t;
                         broadcast_msg(&ServerMessage::SimFrame(frame));
                     }
                     ClientMessage::Reset => {
                         engine.reset();
                         running = false;
+                        sim_time = 0.0;
                     }
                     ClientMessage::SetSpeed { factor } => {
                         speed = factor.clamp(0.001, 1000.0);
@@ -419,7 +467,7 @@ async fn sim_loop(
                 *shared.board_info_json.lock().await = info;
                 broadcast_msg(&ServerMessage::Status(Status {
                     running,
-                    sim_time: 0.0,
+                    sim_time,
                     options: engine.controls(),
                 }));
             }

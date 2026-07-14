@@ -8,15 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { BoltIcon } from './Icons'
-import type { SimFrame } from '../types/protocol'
-
-interface Fault {
-  component: string
-  fault_kind: string
-  value: number
-  limit: number
-  t: number
-}
+import type { SimFrame, SimFault } from '../types/protocol'
 
 interface FaultPanelProps {
   frame: SimFrame | null
@@ -25,10 +17,9 @@ interface FaultPanelProps {
   selectedFaultRef?: string | null
 }
 
-function useFaults(frame: SimFrame | null): Fault[] {
-  // Defensive: SimFrame.faults is an optional future field
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (frame as any)?.faults ?? []
+function useFaults(frame: SimFrame | null): SimFault[] {
+  // faults is omitted from the frame when empty
+  return frame?.faults ?? []
 }
 
 export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
@@ -43,7 +34,7 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
       if (!seenRefs.current.has(f.component)) {
         seenRefs.current.add(f.component)
         const id = ++toastId.current
-        setToasts(prev => [...prev, { ref: f.component, kind: f.fault_kind, id }])
+        setToasts(prev => [...prev, { ref: f.component, kind: f.kind, id }])
         setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
       }
     }
@@ -103,7 +94,7 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
               const isSelected = f.component === selectedFaultRef
               return (
                 <div
-                  key={`${f.component}-${f.fault_kind}`}
+                  key={`${f.component}-${f.kind}`}
                   onClick={() => onFaultComponentSelect?.(isSelected ? null : f.component)}
                   className="flex flex-col gap-0.5 px-3 py-2 cursor-pointer hover:opacity-90"
                   style={{
@@ -131,7 +122,7 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
                         border: '1px solid #dc2626',
                       }}
                     >
-                      {f.fault_kind}
+                      {f.kind}
                     </span>
                   </div>
                   <div className="text-[9px] mt-0.5" style={{ color: '#94a3b8' }}>
