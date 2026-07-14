@@ -148,3 +148,44 @@ fn tc1_resistor_matches_monolithic_in_linear_island() {
         "Auto vs Off diverge under tc1 derating at 100 C: worst rel err {worst:.3e}"
     );
 }
+
+/// Bug-hunt #5: when `tstop` is not an integer multiple of `dt`, the linear
+/// island's step loop truncates the FINAL step to `h = tstop - t < dt` — but
+/// the cached matrix exponential was built for the full `dt`, so the last
+/// sample (and a co-sim chunk's exit state) replayed a full-dt advance over
+/// the short interval (~9.5% relative error on this fixture, ~170x the
+/// engine's own tolerance). The cache must be rebuilt at the actual `h`.
+#[test]
+fn truncated_final_step_matches_monolithic() {
+    let c = rc_tc1(None);
+    // tau = 1 ms; dt = 0.05 tau keeps the two paths' interior integration
+    // mismatch (trapezoidal vs exact exponential) well under the tolerance,
+    // while a full-dt replay of the dt/4 final step is still ~20x over it.
+    let dt = 5e-5;
+    let tstop = 1.0125e-3; // 20 full steps + one truncated step of dt/4
+    let run = |partitioning: Partitioning| {
+        run_out(
+            &c,
+            SolverOptions {
+                step: StepControl::Fixed { dt },
+                partitioning,
+                ..SolverOptions::default()
+            },
+            tstop,
+        )
+    };
+    let (t_mono, mono) = run(Partitioning::Off);
+    let (t_auto, auto) = run(Partitioning::Auto);
+    let (tm, m) = (*t_mono.last().unwrap(), *mono.last().unwrap());
+    let (ta, a) = (*t_auto.last().unwrap(), *auto.last().unwrap());
+    assert!(
+        (tm - ta).abs() < dt * 1e-6,
+        "final sample times diverge: mono {tm:.6e} vs auto {ta:.6e}"
+    );
+    let rel = (m - a).abs() / m.abs().max(0.1);
+    assert!(
+        rel < 1e-3,
+        "final sample diverges on the truncated step: mono {m:.6} vs auto {a:.6} \
+         (rel err {rel:.3e})"
+    );
+}
