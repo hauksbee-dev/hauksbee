@@ -79,16 +79,22 @@ max_voltage_v = 16.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 78xx fixed linear regulators. One entry per voltage code: the value regex
+# matches ONLY that part's two-digit code (05/06/08/09/12/15/18/24), optionally
+# behind a manufacturer prefix (LM/L/MC/UA/KA/NJM/AN/SPX) and a current-class
+# letter (78L/78M/78S). A single unanchored "78xx" rule used to bind the whole
+# family — 7809/7812/7815 included — as +5V, silently simulating the wrong rail.
+# Source: ST L78xx datasheet DS0422, Table (typical). Dropout ~2 V, Iq ~6 mA.
+
 [[models]]
 id = "7805"
 kind = "vreg"
 description = "78xx / LM7805 linear regulator +5V, TO-220 / TO-92"
 
 [models.match]
-value_re = "(?i)^78[01][0-9]|^LM78[0-9]+|^7805"
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?05"
 
 [models.params]
-# Source: ST LM7805 datasheet, Table 4 (typical)
 vout      = 5.0
 dropout_v = 2.0     # typical (V)
 iq_a      = 6.0e-3
@@ -102,3 +108,178 @@ iq_a      = 6.0e-3
 max_current_a = 1.5
 max_voltage_v = 35.0
 max_power_w = 2.0  # TO-220 no heatsink
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7806"
+kind = "vreg"
+description = "78xx / LM7806 linear regulator +6V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?06"
+
+[models.params]
+vout      = 6.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7808"
+kind = "vreg"
+description = "78xx / LM7808 linear regulator +8V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?08"
+
+[models.params]
+vout      = 8.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7809"
+kind = "vreg"
+description = "78xx / LM7809 linear regulator +9V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?09"
+
+[models.params]
+vout      = 9.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7812"
+kind = "vreg"
+description = "78xx / LM7812 linear regulator +12V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?12"
+
+[models.params]
+vout      = 12.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7815"
+kind = "vreg"
+description = "78xx / LM7815 linear regulator +15V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?15"
+
+[models.params]
+vout      = 15.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7818"
+kind = "vreg"
+description = "78xx / LM7818 linear regulator +18V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?18"
+
+[models.params]
+vout      = 18.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7824"
+kind = "vreg"
+description = "78xx / LM7824 linear regulator +24V, TO-220 / TO-92"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?24"
+
+[models.params]
+vout      = 24.0
+dropout_v = 2.0
+iq_a      = 6.0e-3
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 40.0  # 24V part tolerates a higher abs-max input
+max_power_w = 2.0

@@ -27,10 +27,20 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Deepest list nesting `node` will descend before bailing out. `node` recurses
+/// once per open paren and each level costs a native stack frame, so an
+/// adversarial file of tens of thousands of consecutive `(` would overflow the
+/// stack and abort the process (uncatchable) instead of returning an `Err`.
+/// Real KiCad structural nesting is well under 100 levels; 1000 is generous
+/// headroom while staying far below any stack-overflow threshold.
+const MAX_DEPTH: usize = 1000;
+
 /// `src` is the buffer the spans borrow from; `bytes` is its byte view.
 struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// Current list-nesting depth inside `node` (0 at top level).
+    depth: usize,
 }
 
 pub fn parse(text: &str) -> Result<Document, ParseError> {
@@ -45,7 +55,7 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
     // escapes this function.
     let owned: &str = &src;
 
-    let mut p = Parser { bytes: owned.as_bytes(), pos: 0 };
+    let mut p = Parser { bytes: owned.as_bytes(), pos: 0, depth: 0 };
     let mut nodes = Vec::new();
     loop {
         let trivia_start = p.pos;
@@ -55,7 +65,15 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
             return Ok(Document { nodes, trailing, src: Some(src) });
         }
         let leading = span(owned, trivia_start, p.pos);
-        nodes.push(p.node(owned, leading)?);
+        let node = p.node(owned, leading)?;
+        // Every KiCad format is a single root list. A file with a second
+        // top-level list is malformed (e.g. two concatenated `(kicad_pcb ...)`
+        // blocks); accepting it would silently drop everything after the first
+        // via `Document::root`, reconstructing a truncated board with no error.
+        if matches!(node, Sexpr::List(_)) && nodes.iter().any(|n| matches!(n, Sexpr::List(_))) {
+            return Err(p.error("multiple top-level s-expressions; expected a single root list"));
+        }
+        nodes.push(node);
     }
 }
 
@@ -97,6 +115,10 @@ impl<'a> Parser<'a> {
         match self.byte(self.pos) {
             b'(' => {
                 self.pos += 1;
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return Err(self.error("s-expression nesting too deep"));
+                }
                 let mut children = Vec::new();
                 loop {
                     let trivia_start = self.pos;
@@ -107,6 +129,7 @@ impl<'a> Parser<'a> {
                     if self.byte(self.pos) == b')' {
                         let close_leading = span(owned, trivia_start, self.pos);
                         self.pos += 1;
+                        self.depth -= 1;
                         return Ok(Sexpr::List(List { leading, children, close_leading }));
                     }
                     let child_leading = span(owned, trivia_start, self.pos);
@@ -142,5 +165,41 @@ impl<'a> Parser<'a> {
                 Ok(Sexpr::Token(Token { leading, raw }))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deeply_nested_input_errors_instead_of_overflowing_the_stack() {
+        // ~50k consecutive open parens used to abort the process with a stack
+        // overflow (uncatchable). It must now return a catchable ParseError.
+        let mut src = String::from("(kicad_pcb ");
+        src.push_str(&"(".repeat(50_000));
+        let err = parse(&src).expect_err("deep nesting must be a recoverable error");
+        assert!(err.message.contains("too deep"), "unexpected message: {}", err.message);
+    }
+
+    #[test]
+    fn nesting_within_the_limit_still_parses() {
+        let src = format!("{}x{}", "(".repeat(100), ")".repeat(100));
+        assert!(parse(&src).is_ok(), "100-deep nesting is well-formed and must parse");
+    }
+
+    #[test]
+    fn multiple_top_level_lists_are_rejected() {
+        // Two concatenated root blocks (botched merge / append) previously kept
+        // only the first, silently dropping footprints B and C.
+        let src = r#"(kicad_pcb (footprint "A")) (kicad_pcb (footprint "B") (footprint "C"))"#;
+        let err = parse(src).expect_err("a second top-level list must be rejected");
+        assert!(err.message.contains("multiple top-level"), "unexpected message: {}", err.message);
+    }
+
+    #[test]
+    fn single_root_list_parses() {
+        let src = r#"(kicad_pcb (footprint "A"))"#;
+        assert!(parse(src).is_ok(), "a single root list is the normal, valid case");
     }
 }

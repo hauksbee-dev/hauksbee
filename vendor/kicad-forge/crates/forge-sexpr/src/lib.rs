@@ -94,8 +94,15 @@ impl Token {
     }
 
     /// Parse the token as a number (atoms and quoted numbers both work).
+    ///
+    /// Rust's `f64::from_str` accepts `"nan"`, `"inf"`, `"infinity"` (any case,
+    /// optionally signed) as valid floats. KiCad coordinates are never any of
+    /// those, and a non-finite value would propagate silently through geometry
+    /// (e.g. every DRC clearance comparison against NaN is false), so a
+    /// non-finite parse is treated as no value — callers' `unwrap_or` fallbacks
+    /// then behave as intended.
     pub fn as_f64(&self) -> Option<f64> {
-        self.value().parse().ok()
+        self.value().parse::<f64>().ok().filter(|v| v.is_finite())
     }
 
     pub fn as_i64(&self) -> Option<i64> {
@@ -282,6 +289,28 @@ pub fn quote(text: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_finite_floats_are_not_accepted_as_numbers() {
+        // "nan"/"inf" parse as valid f64 in std, but a coordinate is never one
+        // and NaN would silently defeat downstream geometry checks.
+        for token in ["nan", "NaN", "inf", "-inf", "infinity", "Infinity"] {
+            assert_eq!(Token::atom(token).as_f64(), None, "{token} must not parse as a number");
+        }
+    }
+
+    #[test]
+    fn ordinary_floats_still_parse() {
+        assert_eq!(Token::atom("1.5").as_f64(), Some(1.5));
+        assert_eq!(Token::atom("-2").as_f64(), Some(-2.0));
+        assert_eq!(Token::atom("0").as_f64(), Some(0.0));
+        assert_eq!(Token::atom("42").as_i64(), Some(42));
+    }
 }
 
 fn unescape(inner: &str) -> String {
