@@ -394,7 +394,11 @@ impl PartitionedTransient {
             // for the scalar balance. Pure linear islands off the rail keep the
             // fast closed-form path.
             if isl.linear && !touches_rail(isl) {
-                match LinearIsland::compile(circuit, isl, opts.gmin) {
+                // `model_temp()` (not raw `temperature_c`): the reducer bakes
+                // resistor values into A/B at compile time, and the effective
+                // temperature is what the monolithic stamp derates tc1
+                // resistors with — TNOM when the temperature effect is off.
+                match LinearIsland::compile(circuit, isl, opts.gmin, opts.model_temp()) {
                     Some(li) => {
                         let n = li.n_states();
                         let free: Vec<NodeId> = collect_free_nodes(isl, &li);
