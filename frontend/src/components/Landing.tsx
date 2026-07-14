@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
-import { CheckIcon, PlayIcon, BoardTargetIcon } from './Icons'
+import { CheckIcon, PlayIcon, PlusIcon, BoardTargetIcon } from './Icons'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -70,55 +70,6 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
         <span className="inline-flex items-center gap-1"><CheckIcon size={11} /> Copied</span>
       ) : label}
     </button>
-  )
-}
-
-// The signature: a copper trace with pad nodes and a signal pulse that runs
-// along it on load — the page's one orchestrated moment, evoking "the circuit
-// the copper actually implements". Quiet everywhere else (Chanel's rule).
-function TraceSignature() {
-  return (
-    <svg
-      viewBox="0 0 640 40"
-      preserveAspectRatio="none"
-      width="100%"
-      height="40"
-      aria-hidden="true"
-      style={{ display: 'block' }}
-    >
-      {/* the trace itself (dim copper) */}
-      <path
-        d="M0 20 H150 L172 8 H360 L382 32 H520 L542 20 H640"
-        fill="none"
-        stroke="var(--copper-deep)"
-        strokeWidth="2"
-        opacity="0.5"
-      />
-      {/* the traveling pulse (bright copper) */}
-      <path
-        className="trace-pulse"
-        d="M0 20 H150 L172 8 H360 L382 32 H520 L542 20 H640"
-        fill="none"
-        stroke="var(--copper-hi)"
-        strokeWidth="2.5"
-        strokeDasharray="60 640"
-        style={{ animation: 'traceflow 4.2s cubic-bezier(0.4,0,0.2,1) infinite' }}
-      />
-      {/* pad nodes */}
-      {[150, 360, 520].map((cx, i) => (
-        <rect
-          key={cx}
-          className="trace-pad"
-          x={cx - 4}
-          y={i === 1 ? 4 : 16}
-          width="8"
-          height="8"
-          rx="1.5"
-          fill="var(--copper-deep)"
-          style={{ animation: `padglow 4.2s ease-in-out ${i * 0.5}s infinite` }}
-        />
-      ))}
-    </svg>
   )
 }
 
@@ -194,132 +145,176 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
 
   return (
     <div
-      className="min-h-screen overflow-y-auto"
+      className="landing min-h-screen overflow-y-auto"
       style={{
-        background:
-          'radial-gradient(120% 80% at 50% -10%, #0e1622 0%, var(--void) 60%)',
+        background: 'radial-gradient(130% 90% at 50% -20%, #13151c 0%, var(--canvas) 55%)',
         color: 'var(--silk)',
+        fontFamily: 'var(--font-sans)',
       }}
     >
-      <div className="max-w-3xl mx-auto px-6 pt-12 pb-20">
-        {/* Wordmark + eyebrow */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <span
-              style={{
-                width: 9, height: 9, borderRadius: 2, background: 'var(--copper)',
-                boxShadow: '0 0 10px var(--copper-hi)', display: 'inline-block',
-              }}
-            />
-            <span className="text-sm font-semibold tracking-[0.28em]" style={{ color: 'var(--silk)' }}>
-              HAUKSBEE
-            </span>
-          </div>
+      {/* Top bar */}
+      <div className="w-full max-w-5xl mx-auto px-6 flex items-center justify-between" style={{ height: 64 }}>
+        <div className="flex items-center gap-2.5">
           <span
-            className="text-[10px] font-semibold tracking-[0.22em] px-2.5 py-1 rounded"
-            style={{ color: 'var(--copper)', border: '1px solid var(--rule)', background: 'rgba(224,138,78,0.05)' }}
+            style={{
+              width: 9, height: 9, borderRadius: 2, background: 'var(--copper)',
+              boxShadow: '0 0 12px var(--copper-hi)', display: 'inline-block',
+            }}
+          />
+          <span
+            className="text-[13px] font-semibold tracking-[0.28em]"
+            style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
           >
-            CI FOR HARDWARE
+            HAUKSBEE
           </span>
         </div>
-
-        {/* Thesis (hero) */}
-        <h1
-          className="mt-9 text-[1.9rem] leading-[1.18] font-bold"
-          style={{ color: 'var(--silk)', letterSpacing: '-0.01em' }}
-        >
-          Point it at a real board.<br />
-          <span style={{ color: 'var(--copper)' }}>It works out the circuit the copper implements</span>
-          <span style={{ color: 'var(--silk-dim)' }}> — then runs it.</span>
-        </h1>
-        <p className="mt-4 text-sm leading-relaxed max-w-xl" style={{ color: 'var(--silk-dim)' }}>
-          Not a design-rule check, not schematic SPICE. Hauksbee extracts the as-built
-          circuit from the PCB, co-simulates the firmware on an emulated MCU, and checks
-          the board the way a test suite checks a function.
-          <span style={{ color: 'var(--copper-hi)' }}> Nothing leaves this machine.</span>
-        </p>
-
-        {/* Signature trace */}
-        <div className="mt-7 -mb-1">
-          <TraceSignature />
-        </div>
-
-        {/* The board-input "slot" — an instrument affordance, not a dashed box. */}
-        <label
-          data-testid="drop-zone"
-          htmlFor="board-file"
-          onDragEnter={e => { e.preventDefault(); setDragOver(true) }}
-          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-          onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
-          onDrop={e => {
-            e.preventDefault()
-            setDragOver(false)
-            const f = e.dataTransfer.files[0]
-            if (f) handleBoard(f)
+        <span
+          className="text-[10px] font-semibold tracking-[0.22em] px-2.5 py-1 rounded-md"
+          style={{
+            color: 'var(--copper)', border: '1px solid var(--hairline)',
+            background: 'rgba(224,138,78,0.05)', fontFamily: 'var(--font-mono)',
           }}
-          className="slot block cursor-pointer transition-all px-6 py-9"
-          data-active={dragOver ? 'true' : 'false'}
         >
-          <div className="flex items-center gap-4">
-            <span style={{ color: dragOver ? 'var(--copper-hi)' : 'var(--copper)', display: 'inline-flex', flexShrink: 0 }}>
-              <BoardTargetIcon size={30} />
-            </span>
-            <div>
-              <div className="text-sm font-semibold" style={{ color: 'var(--silk)' }}>
-                Load a board — drop it here, or click to choose
+          CI FOR HARDWARE
+        </span>
+      </div>
+
+      <div className={`${report ? 'max-w-3xl' : 'max-w-xl'} mx-auto px-6 pb-24`} style={{ paddingTop: report ? '2rem' : 'clamp(2.5rem, 9vh, 6rem)' }}>
+        {/* Hero — a calm, centered thesis */}
+        {!report && (
+          <div className="text-center">
+            <h1
+              className="font-semibold"
+              style={{ color: 'var(--silk)', fontSize: 'clamp(1.9rem, 5vw, 2.6rem)', lineHeight: 1.1, letterSpacing: '-0.02em' }}
+            >
+              Point it at a real board.
+            </h1>
+            <p className="mt-4 text-[15px] leading-relaxed mx-auto" style={{ color: 'var(--silk-dim)', maxWidth: '30rem' }}>
+              Hauksbee reconstructs the circuit from the copper the board actually
+              ships, co-simulates your firmware on an emulated MCU, and checks it like a
+              test suite. Not a DRC. Not schematic SPICE.
+            </p>
+          </div>
+        )}
+
+        {/* The upload card — the single focal action */}
+        {!report && (
+          <div className="mt-9">
+            <label
+              data-testid="drop-zone"
+              htmlFor="board-file"
+              onDragEnter={e => { e.preventDefault(); setDragOver(true) }}
+              onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
+              onDrop={e => {
+                e.preventDefault()
+                setDragOver(false)
+                const f = e.dataTransfer.files[0]
+                if (f) handleBoard(f)
+              }}
+              className="drop-card block cursor-pointer px-8 py-11 text-center"
+              data-active={dragOver ? 'true' : 'false'}
+            >
+              {/* icon in a soft copper disc */}
+              <span
+                className="inline-flex items-center justify-center mx-auto"
+                style={{
+                  width: 56, height: 56, borderRadius: 14,
+                  background: 'rgba(224,138,78,0.10)',
+                  border: '1px solid rgba(224,138,78,0.28)',
+                  color: dragOver ? 'var(--copper-hi)' : 'var(--copper)',
+                }}
+              >
+                <BoardTargetIcon size={26} />
+              </span>
+
+              <div className="mt-5 text-[17px] font-semibold" style={{ color: 'var(--silk)' }}>
+                {dragOver ? 'Drop to analyze' : 'Drop a board to analyze it'}
               </div>
-              <div className="text-xs mt-1" style={{ color: 'var(--silk-faint)' }}>
-                KiCad <code>.kicad_pcb</code> / <code>.kicad_sch</code> · Eagle <code>.brd</code> ·
-                Altium <code>.PcbDoc</code> · IPC <code>.d356</code> · a gerber <code>.zip</code>
+              <div className="mt-1 text-[13px]" style={{ color: 'var(--silk-dim)' }}>
+                or click anywhere in this card to choose a file
               </div>
+
+              {/* primary action — visual only; the label handles activation */}
+              <span
+                className="inline-flex items-center gap-2 mt-6 px-5 py-2.5 rounded-lg text-sm font-semibold"
+                style={{
+                  background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))',
+                  color: '#2a1c0f',
+                  boxShadow: '0 6px 18px -6px rgba(224,138,78,0.5)',
+                }}
+              >
+                <BoardTargetIcon size={15} /> Choose a board
+              </span>
+
+              {/* accepted formats */}
+              <div className="mt-6 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+                KiCad <code>.kicad_pcb</code> <code>.kicad_sch</code> · Eagle <code>.brd</code> ·
+                Altium <code>.PcbDoc</code> · IPC <code>.d356</code> · gerber <code>.zip</code>
+              </div>
+            </label>
+            <input
+              id="board-file"
+              type="file"
+              accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleBoard(f) }}
+            />
+
+            {/* Firmware — a quiet secondary jack below the card */}
+            <label
+              data-testid="firmware-zone"
+              htmlFor="firmware-file"
+              onDragEnter={e => e.preventDefault()}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => {
+                e.preventDefault()
+                const f = e.dataTransfer.files[0]
+                if (f) handleFirmware(f)
+              }}
+              className="fw-row flex items-center gap-2.5 mt-3 px-4 py-3 cursor-pointer text-[13px]"
+              data-active={firmwareFile ? 'true' : 'false'}
+            >
+              <span style={{ color: firmwareFile ? 'var(--live)' : 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}>
+                {firmwareFile ? <CheckIcon size={15} /> : <PlusIcon size={15} />}
+              </span>
+              <span style={{ color: firmwareFile ? 'var(--live)' : 'var(--silk-dim)' }}>
+                {firmwareFile ? (
+                  <>Firmware: <strong>{firmwareFile.name}</strong> — click to change</>
+                ) : (
+                  <>Add firmware (<code>.elf</code> / <code>.hex</code>) to co-simulate it on the board&rsquo;s MCU</>
+                )}
+              </span>
+            </label>
+            <input
+              id="firmware-file"
+              type="file"
+              accept=".elf,.hex"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleFirmware(f) }}
+            />
+
+            {/* Privacy reassurance */}
+            <div className="mt-4 text-center text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+              Runs entirely on this machine — nothing is uploaded.
             </div>
           </div>
-        </label>
-        <input
-          id="board-file"
-          type="file"
-          accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt"
-          className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) handleBoard(f) }}
-        />
-
-        {/* Firmware — a secondary jack on the same instrument. */}
-        <label
-          data-testid="firmware-zone"
-          htmlFor="firmware-file"
-          onDragEnter={e => e.preventDefault()}
-          onDragOver={e => e.preventDefault()}
-          onDrop={e => {
-            e.preventDefault()
-            const f = e.dataTransfer.files[0]
-            if (f) handleFirmware(f)
-          }}
-          className="slot slot-sub block mt-3 cursor-pointer transition-all px-6 py-4 text-sm"
-          data-active={firmwareFile ? 'true' : 'false'}
-        >
-          <span style={{ color: firmwareFile ? 'var(--live)' : 'var(--silk-dim)' }}>
-            {firmwareFile ? (
-              <><CheckIcon size={12} style={{ display: 'inline', verticalAlign: '-1px' }} /> Firmware: <strong>{firmwareFile.name}</strong> — click to change</>
-            ) : (
-              <>+ optional firmware (<code>.elf</code> / <code>.hex</code>) — co-simulate it on the board&rsquo;s MCU</>
-            )}
-          </span>
-        </label>
-        <input
-          id="firmware-file"
-          type="file"
-          accept=".elf,.hex"
-          className="hidden"
-          onChange={e => { const f = e.target.files?.[0]; if (f) handleFirmware(f) }}
-        />
+        )}
 
         {/* Progress / error */}
         {busy && (
-          <div className="mt-5 text-sm flex items-center gap-2" style={{ color: 'var(--copper-hi)' }}>
+          <div className="mt-6 text-sm flex items-center justify-center gap-2" style={{ color: 'var(--copper-hi)' }}>
             <span className="slot-spin" /> {busy}
           </div>
         )}
-        {uploadError && <div className="mt-5 text-sm" style={{ color: '#fca5a5' }}>{uploadError}</div>}
+        {uploadError && (
+          <div
+            className="mt-6 rounded-lg px-4 py-3 text-sm text-center"
+            style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid #7f1d1d', color: '#fca5a5' }}
+          >
+            {uploadError}
+          </div>
+        )}
 
         {/* Report */}
         {report && (
@@ -331,25 +326,39 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           />
         )}
 
-        {/* What it checks — differentiators first (not DRC/SPICE). */}
+        {/* What it checks — a calm, secondary row (only before a report). */}
         {!report && (
-          <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {[
-              ['The as-built circuit', 'Reconstructed from the copper the board actually ships — not the schematic you drew.'],
-              ['Firmware co-simulation', 'Your firmware on an emulated MCU, coupled to the live analog solve.'],
-              ['Checks a test suite can’t', 'Rails, faults, shorts, USB-C, signal integrity, thermal, loop stability.'],
-            ].map(([h, b]) => (
-              <div key={h} className="rounded-lg p-4" style={{ background: 'var(--void-2)', border: '1px solid var(--rule)' }}>
-                <div className="text-[11px] font-semibold tracking-wide mb-1.5" style={{ color: 'var(--copper)' }}>{h}</div>
-                <div className="text-xs leading-relaxed" style={{ color: 'var(--silk-dim)' }}>{b}</div>
-              </div>
-            ))}
+          <div className="mt-14">
+            <div
+              className="text-[11px] font-semibold tracking-[0.2em] uppercase text-center mb-5"
+              style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
+            >
+              What it checks
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {[
+                ['As-built circuit', 'Reconstructed from the copper the board actually ships — not the schematic you drew.'],
+                ['Firmware co-sim', 'Your firmware on an emulated MCU, coupled to the live analog solve.'],
+                ['Beyond a test suite', 'Rails, faults, shorts, USB-C, signal integrity, thermal, loop stability.'],
+              ].map(([h, b]) => (
+                <div
+                  key={h}
+                  className="rounded-xl p-4"
+                  style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
+                >
+                  <div className="text-[13px] font-semibold mb-1" style={{ color: 'var(--copper)' }}>{h}</div>
+                  <div className="text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>{b}</div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        <div className="mt-10 text-xs" style={{ color: 'var(--silk-faint)' }}>
-          Running locally via <code>hauksbee serve</code>. The same engine as
-          <code> hauksbee run</code> on the command line and <code>hauksbee-ci</code> in a pipeline.
+        <div
+          className="mt-12 text-center text-[12px]"
+          style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
+        >
+          <code>hauksbee serve</code> · same engine as <code>hauksbee run</code> and <code>hauksbee-ci</code>
         </div>
       </div>
     </div>
@@ -717,9 +726,9 @@ function BoardMap({ components }: { components: WebComponent[] }) {
     for (const c of components) {
       const x = pad + (c.x - minX) * scale
       const y = pad + (c.y - minY) * scale
-      ctx.fillStyle = '#3b82f6'
+      ctx.fillStyle = '#e08a4e'
       ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif'
+      ctx.fillStyle = '#8fa0b3'; ctx.font = '10px sans-serif'
       ctx.fillText(c.reference, x + 5, y + 3)
     }
   }, [components])
