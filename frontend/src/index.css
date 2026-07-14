@@ -31,25 +31,20 @@
   --copper-deep: #a65f34;
   --live: #57e0a0;
   --silk: #eef2f6;
-  --silk-dim: #8fa0b3;
-  --silk-faint: #566577;
+  --silk-dim: #93a1b3;
+  --silk-faint: #5f6c7d;
   --rule: #1b2735;
-}
 
-/* Landing signature: a signal pulse traveling along a copper trace. */
-@keyframes traceflow {
-  0%   { stroke-dashoffset: 220; opacity: 0; }
-  12%  { opacity: 1; }
-  88%  { opacity: 1; }
-  100% { stroke-dashoffset: 0; opacity: 0; }
-}
-@keyframes padglow {
-  0%, 100% { fill: var(--copper-deep); }
-  50%      { fill: var(--copper-hi); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .trace-pulse { animation: none !important; opacity: 0.9 !important; stroke-dashoffset: 0 !important; }
-  .trace-pad { animation: none !important; }
+  /* Landing surfaces: a calm near-black canvas with one elevated card, so the
+     upload action is the single focal point (the SaaS "one clear thing to do").
+     Clean system sans for prose; mono only for the wordmark, format chips and
+     CLI — that pairing is what reads as a tool, not a terminal toy. */
+  --canvas: #0a0c10;
+  --surface: #14171d;
+  --surface-2: #191d24;
+  --hairline: #232936;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, 'Fira Code', monospace;
 }
 
 * {
@@ -64,7 +59,9 @@ html, body, #root {
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -89,62 +86,48 @@ select option {
   50% { opacity: 0.7; box-shadow: 0 0 8px #22c55ecc; }
 }
 
-/* ── Landing "board input" slot ──────────────────────────────────────────────
-   A framed input with copper crop-mark corner brackets (top-left, bottom-right)
-   — a test-fixture / footprint motif, not a generic dashed drop box. Copper
-   ignites on hover and drag-over. */
-.slot {
-  position: relative;
-  margin-top: 1.5rem;
-  border-radius: 10px;
-  background: linear-gradient(180deg, var(--void-2), var(--void));
-  border: 1px solid var(--rule);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+/* ── Landing upload card ──────────────────────────────────────────────────────
+   The single focal point: one elevated, softly-shadowed card that holds the
+   drop area + primary action (CloudConvert's calm central card, dark-themed).
+   Copper ignites on hover and drag-over; no crop-marks, no busy chrome. */
+.drop-card {
+  border-radius: 16px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  border: 1px solid var(--hairline);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 24px 60px -24px rgba(0,0,0,0.7);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
-.slot::before, .slot::after {
-  content: '';
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  border-color: var(--copper);
-  border-style: solid;
-  opacity: 0.7;
-  transition: opacity 0.18s ease, border-color 0.18s ease;
-  pointer-events: none;
-}
-.slot::before { top: 7px; left: 7px; border-width: 1.5px 0 0 1.5px; }
-.slot::after  { bottom: 7px; right: 7px; border-width: 0 1.5px 1.5px 0; }
-.slot:hover {
+.drop-card:hover {
   border-color: var(--copper-deep);
-  background: linear-gradient(180deg, var(--void-3), var(--void-2));
 }
-.slot:hover::before, .slot:hover::after { opacity: 1; }
-.slot[data-active='true'] {
+.drop-card[data-active='true'] {
   border-color: var(--copper);
-  box-shadow: 0 0 0 1px rgba(224,138,78,0.4), 0 0 28px rgba(224,138,78,0.16) inset;
-}
-.slot[data-active='true']::before, .slot[data-active='true']::after {
-  opacity: 1;
-  border-color: var(--copper-hi);
-}
-/* The firmware sub-slot: quieter, and its active state reads "live" green. */
-.slot-sub[data-active='true'] {
-  border-color: var(--live);
-  box-shadow: 0 0 0 1px rgba(87,224,160,0.3);
-}
-.slot-sub[data-active='true']::before, .slot-sub[data-active='true']::after {
-  border-color: var(--live);
+  box-shadow: 0 0 0 1px rgba(224,138,78,0.5), 0 0 48px -6px rgba(224,138,78,0.28),
+              0 24px 60px -24px rgba(0,0,0,0.7);
 }
 
-/* Inline code chips on the Landing (mono file extensions / commands). */
-.max-w-3xl code {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 0.92em;
+/* The firmware jack: a quiet secondary row; its active state reads "live". */
+.fw-row {
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--void);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.fw-row:hover { border-color: var(--silk-faint); }
+.fw-row[data-active='true'] {
+  border-color: var(--live);
+  background: rgba(87,224,160,0.05);
+}
+
+/* Format chips (mono file extensions) and inline CLI code on the Landing. */
+.landing code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
   color: var(--copper-hi);
-  background: rgba(224,138,78,0.07);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 0 4px;
+  background: rgba(224,138,78,0.08);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 6px;
 }
 
 /* Copper busy spinner (an arc that sweeps, like a probe settling). */

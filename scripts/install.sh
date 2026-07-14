@@ -99,6 +99,9 @@ else
   info "  export PATH=\"$BINDIR:\$PATH\""
 fi
 printf '\n'
+ok "Everything is current: web UI (frontend/dist) + hauksbee + hauksbee-ci."
+info "  Re-run this script any time (e.g. after 'git pull') to rebuild them all."
+printf '\n'
 log "Done. Verify with:"
 info "  hauksbee run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
 info "  hauksbee-ci run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/blinky.toml"
