@@ -394,7 +394,11 @@ impl PartitionedTransient {
             // for the scalar balance. Pure linear islands off the rail keep the
             // fast closed-form path.
             if isl.linear && !touches_rail(isl) {
-                match LinearIsland::compile(circuit, isl, opts.gmin) {
+                // `model_temp()` (not raw `temperature_c`): the reducer bakes
+                // resistor values into A/B at compile time, and the effective
+                // temperature is what the monolithic stamp derates tc1
+                // resistors with — TNOM when the temperature effect is off.
+                match LinearIsland::compile(circuit, isl, opts.gmin, opts.model_temp()) {
                     Some(li) => {
                         let n = li.n_states();
                         let free: Vec<NodeId> = collect_free_nodes(isl, &li);
@@ -544,6 +548,19 @@ impl PartitionedTransient {
         while t < tstop - eps {
             let h = dt.min(tstop - t);
             let tnext = t + h;
+
+            // The cached exponential is exact only for the step it was built
+            // at. The truncated FINAL step (`h < dt`, whenever `tstop` is not
+            // an integer multiple of `dt` — the common case) must rebuild it,
+            // or the last sample (and a co-sim chunk's exit state) silently
+            // replays a full-dt advance over a shorter interval.
+            // `ensure_cache` is a no-op while `h == dt`, so every interior
+            // step keeps the amortized one-mat-vec fast path untouched.
+            if h != dt {
+                for li in &mut self.linear {
+                    li.ensure_cache(h);
+                }
+            }
 
             // Update cut-source-driven boundary voltages in the exchange buffer
             // at the new time (zero-order hold input for this step).

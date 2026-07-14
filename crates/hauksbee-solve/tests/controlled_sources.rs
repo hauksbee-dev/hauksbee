@@ -213,7 +213,7 @@ fn linear_island_with_controlled_source_forces_mna() {
         // real dynamics, so without the refusal it would take the fast path.
         assert!(isl.linear);
         assert!(
-            LinearIsland::compile(&c, isl, 1e-12).is_none(),
+            LinearIsland::compile(&c, isl, 1e-12, 27.0).is_none(),
             "{}-containing island must refuse state-space reduction and \
              route to MNA",
             if vcvs { "VCVS" } else { "VCCS" }
@@ -658,7 +658,7 @@ fn linear_island_with_current_controlled_source_forces_mna() {
         let isl = &p.islands[0];
         assert!(isl.linear, "the hazard precondition holds: island is linear");
         assert!(
-            LinearIsland::compile(&c, isl, 1e-12).is_none(),
+            LinearIsland::compile(&c, isl, 1e-12, 27.0).is_none(),
             "{}-containing island must refuse state-space reduction",
             if cccs { "CCCS" } else { "CCVS" }
         );

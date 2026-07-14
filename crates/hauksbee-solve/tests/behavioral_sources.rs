@@ -138,7 +138,7 @@ fn behavioral_vdep_fuses_islands_and_taints_nonlinear() {
         // exhaustive-match arm exists for the day a `linear`-classified
         // island ever carries one, and refusing is exact either way.
         assert!(
-            LinearIsland::compile(&c, &p.islands[0], 1e-12).is_none(),
+            LinearIsland::compile(&c, &p.islands[0], 1e-12, 27.0).is_none(),
             "an island containing a B-source must route to MNA"
         );
     }
