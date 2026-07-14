@@ -72,7 +72,7 @@ function statusMsg() {
 }
 
 // ── Sim frame generator ──
-function makeFaults(): { component: string; fault_kind: string; value: number; limit: number; t: number }[] {
+function makeFaults(): { component: string; kind: string; value: number; limit: number; t: number }[] {
   if (!FAULT_MODE) return []
   // Ramp: stress increases from t=0.5s; fault triggers at t=2s
   if (sim_time < 0.5) return []
@@ -83,7 +83,7 @@ function makeFaults(): { component: string; fault_kind: string; value: number; l
   // Post 2.5s: R1 destroyed
   return [{
     component: 'R1',
-    fault_kind: 'overpower',
+    kind: 'overpower',
     value: parseFloat((4.8 + Math.random() * 0.4).toFixed(3)),
     limit: 0.25,
     t: parseFloat(sim_time.toFixed(4)),
