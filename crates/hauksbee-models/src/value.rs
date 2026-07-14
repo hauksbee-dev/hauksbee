@@ -57,7 +57,42 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // Replace comma-decimal only when it looks like "5,1K" (digit-comma-digit),
     // not when comma is used as a thousands separator (rare in BOM values).
     let cleaned = normalise_comma_decimal(&cleaned);
-    parse_inner(&cleaned)
+    // Chip-size codes are packages, not magnitudes: "0402" must never read as
+    // 402 Ω, and in "0402_47k" the code is a naming prefix, not the value.
+    let mut v: &str = &cleaned;
+    while let Some(rest) = strip_size_code(v) {
+        if rest.is_empty() {
+            return None; // bare "0402" / "0603" / ... — not a value
+        }
+        v = rest;
+    }
+    parse_inner(v)
+}
+
+/// EIA imperial chip-size codes that leak into BOM value fields ("0402",
+/// "0402_47k"). `"0402".parse::<f64>()` is 402 — silently accepting one binds
+/// a 47 kΩ part at 402 Ω.
+const FOOTPRINT_SIZE_CODES: [&str; 9] = [
+    "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
+];
+
+/// If `s` starts with a chip-size code, return what follows: `Some("")` for a
+/// bare code, `Some(rest)` when a `_`/`-`/space separator follows (the real
+/// value). `None` when the leading digits are NOT a size code ("12065" and
+/// "0402.5" are ordinary numbers).
+fn strip_size_code(s: &str) -> Option<&str> {
+    for code in FOOTPRINT_SIZE_CODES {
+        if let Some(rest) = s.strip_prefix(code) {
+            return match rest.chars().next() {
+                None => Some(rest),
+                Some('_') | Some('-') | Some(' ') | Some('\t') => {
+                    Some(rest[1..].trim_start())
+                }
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 /// Replace a single comma acting as a decimal separator (e.g. "5,1K" -> "5.1K").
@@ -152,10 +187,10 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let _ = frac_start; // suppress warning
                             // Rebuild as "4.7"
         let combined = format!("{}.{}", before, frac_digits);
-        let unit = parse_unit(after_frac.trim());
+        let unit = parse_tail(after_frac)?;
         (combined, unit)
     } else {
-        let unit = parse_unit(after_suffix.trim());
+        let unit = parse_tail(after_suffix)?;
         (before.to_string(), unit)
     };
 
@@ -204,29 +239,75 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     }
 }
 
-/// Extract a trailing unit string. Returns `Some(unit)` or `None`.
-fn parse_unit(s: &str) -> Option<String> {
-    if s.is_empty() {
-        return None;
+/// Parse the tail of a value string (everything after the numeric part and
+/// SI suffix). Returns `Some(unit)` when the WHOLE tail is accounted for — a
+/// unit token, an ignorable annotation (voltage rating, tolerance,
+/// dielectric), or both — and `None` when unparsed garbage remains. The
+/// caller must then reject the string: silently dropping the tail is exactly
+/// how "0402_47k" once read as 402 Ω.
+fn parse_tail(t: &str) -> Option<Option<String>> {
+    if t.is_empty() {
+        return Some(None);
     }
+    let first = t.chars().next().unwrap();
+    if first.is_whitespace() {
+        // Space-separated tail: a whole unit word keeps its unit ("10k Ohm");
+        // anything else is an annotation we ignore ("47k 1%", "22u X7R").
+        let tt = t.trim_start();
+        if let Some((unit, rest)) = unit_token(tt) {
+            if tail_is_annotation(rest) {
+                return Some(Some(unit));
+            }
+        }
+        return Some(None);
+    }
+    if is_annotation_start(first) {
+        return Some(None); // "/25V", ",25V", "@100MHz" rating-style tails
+    }
+    // Directly attached: must be a unit, optionally followed by an annotation
+    // ("uF/25V") or a rating that starts with a digit ("F50V").
+    let (unit, rest) = unit_token(t)?;
+    if tail_is_annotation(rest) {
+        return Some(Some(unit));
+    }
+    None
+}
+
+/// Extract a leading unit token. Returns the unit and the remainder after it.
+fn unit_token(s: &str) -> Option<(String, &str)> {
     let upper = s.to_uppercase();
-    // Strip leading whitespace already handled by the caller.
-    let unit = if upper.starts_with("OHM") || upper.starts_with("OH") {
-        "Ω"
+    let (unit, len) = if upper.starts_with("OHMS") {
+        ("Ω", 4)
+    } else if upper.starts_with("OHM") || upper.starts_with("OH") {
+        ("Ω", if upper.starts_with("OHM") { 3 } else { 2 })
     } else if upper.starts_with('R') {
-        "Ω"
+        ("Ω", 1)
     } else if upper.starts_with('F') {
-        "F"
+        ("F", 1)
     } else if upper.starts_with('H') {
-        "H"
+        ("H", 1)
     } else if upper.starts_with('V') {
-        "V"
+        ("V", 1)
     } else if upper.starts_with('A') {
-        "A"
+        ("A", 1)
     } else {
         return None;
     };
-    Some(unit.to_string())
+    Some((unit.to_string(), &s[len..]))
+}
+
+/// True when `rest` is empty or begins an ignorable trailing annotation.
+fn tail_is_annotation(rest: &str) -> bool {
+    match rest.chars().next() {
+        None => true,
+        Some(c) => c.is_whitespace() || c.is_ascii_digit() || is_annotation_start(c),
+    }
+}
+
+/// Characters that begin a tolerated trailing annotation (voltage rating,
+/// tolerance, dielectric): the magnitude before them is already complete.
+fn is_annotation_start(c: char) -> bool {
+    matches!(c, '/' | ',' | ';' | '%' | '(' | '@' | '±' | '+')
 }
 
 /// Adjust SI value for unit-specific conversions.
@@ -344,5 +425,43 @@ mod tests {
         check("0", 0.0); // actually zero resistance (jumper)
         check("0R", 0.0);
         check("0R0", 0.0);
+    }
+
+    /// Bug regression: bare EIA chip-size codes must not read as magnitudes
+    /// ("0402".parse::<f64>() is 402 — a 47 kΩ part bound at 402 Ω), and a
+    /// leading size code is a naming prefix to strip, not the value.
+    #[test]
+    fn test_footprint_size_codes() {
+        for c in [
+            "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
+        ] {
+            assert!(
+                parse_value(c).is_none(),
+                "bare size code {c:?} must not parse as a magnitude"
+            );
+        }
+        // Code + separator: the real value follows.
+        check("0402_47k", 47_000.0);
+        check("0603 100nF", 100e-9);
+        check("0805-2k2", 2_200.0);
+        // Genuine numbers that merely start like a code stay numbers.
+        check("12065", 12_065.0);
+        check("0402.5", 402.5);
+    }
+
+    /// Bug regression: the grammar must consume the WHOLE input. Trailing
+    /// garbage silently dropped is how "0402_47k" once read as 402 Ω.
+    #[test]
+    fn test_trailing_garbage_rejected() {
+        assert!(parse_value("10k_junk").is_none());
+        assert!(parse_value("47kXYZ").is_none());
+        assert!(parse_value("100n_47k").is_none());
+        // Annotations (tolerance, rating, dielectric) are still tolerated.
+        check("47k 1%", 47_000.0);
+        check("22uF/25V", 22e-6);
+        check("100nF 50V", 100e-9);
+        check("22u X7R", 22e-6);
+        check("10k Ohm", 10_000.0);
+        check("600@100MHz", 600.0); // ferrite bead impedance@frequency
     }
 }
