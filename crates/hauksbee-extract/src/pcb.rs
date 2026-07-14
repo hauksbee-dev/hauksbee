@@ -37,12 +37,22 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
     // pads, so we synthesize a table from the names we encounter.
     let mut table = NetTable::default();
     for n in root.find_all("net") {
-        match (n.arg_i64(0), n.arg_value(0), n.arg_value(1)) {
-            (Some(id), _, name) => table.declare(id, name.unwrap_or_default()),
-            (None, Some(name), _) => {
+        let Some(first) = n.arg(0) else { continue };
+        if first.is_string() {
+            // v10 name-only declaration: `(net "name")`. An empty name means
+            // "no net" and must not be interned (see `net_ref`).
+            let name = first.value();
+            if !name.is_empty() {
                 table.id_of(&name);
             }
-            _ => {}
+        } else if let Some(id) = first.as_i64() {
+            table.declare(id, n.arg_value(1).unwrap_or_default());
+        } else if let Some(name) = n.arg_value(1).filter(|s| !s.is_empty()) {
+            // The id slot is present but not a valid i64 (overflow, garbage).
+            // The declared name is still authoritative: never adopt the raw
+            // digit string as the net's name — that would break exact-name
+            // matches downstream (ground/power detection on "GND"/"VSS").
+            table.id_of(&name);
         }
     }
 
@@ -100,14 +110,21 @@ impl NetTable {
 /// A pad/segment net reference: `(net 4 "GND")` in ≤v9, `(net "GND")` in v10.
 fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
     let net = list.find("net")?;
-    if let Some(id) = net
-        .arg(0)
-        .filter(|t| !t.is_string())
-        .and_then(|t| t.as_i64())
-    {
-        return Some(id);
+    if let Some(first) = net.arg(0).filter(|t| !t.is_string()) {
+        // ≤v9 numeric id slot. An unparseable id (overflow, garbage) must not
+        // leak its digit string in as a name — resolve through the declared
+        // name in the next slot instead.
+        if let Some(id) = first.as_i64() {
+            return Some(id);
+        }
+        let name = net.arg_value(1).filter(|n| !n.is_empty())?;
+        return Some(table.id_of(&name));
     }
-    let name = net.arg_value(0)?;
+    // v10 name-only reference. An empty name means "no net": interning ""
+    // would hand every unconnected pad in the file the same synthetic id,
+    // fusing unrelated pads onto one node. No net clause and `(net "")`
+    // must land in the same place — `None`.
+    let name = net.arg_value(0).filter(|n| !n.is_empty())?;
     Some(table.id_of(&name))
 }
 
