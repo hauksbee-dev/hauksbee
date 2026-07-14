@@ -13,11 +13,45 @@ export interface SolverControls {
   integration: 'trap' | 'gear2'
   fixed_dt: number        // seconds; 0 = adaptive
   granularity: number     // 0..1
+  /** Faults mutate the circuit (destructive mode). Additive: server defaults false. */
+  destructive_faults?: boolean
 }
+
+// ============================================================
+// Power supplies (wire mirror of protocol.rs PowerSupplyConfig)
+// ============================================================
+
+/** USB power profile. serde snake_case of V5_0_5a / V5_1_5a / V5_3a. */
+export type UsbSpecWire = 'v5_0_5a' | 'v5_1_5a' | 'v5_3a'
+
+/** Battery chemistry. serde snake_case of LiIon / Alkaline / NiMh / LiFePo4. */
+export type ChemistryWire = 'li_ion' | 'alkaline' | 'ni_mh' | 'li_fe_po4'
+
+/** Tagged supply config exactly as the server (de)serializes it
+ *  (`#[serde(tag = "kind", rename_all = "snake_case")]`). */
+export type PowerSupplyWire =
+  | { kind: 'ideal'; volts: number }
+  | { kind: 'bench'; volts: number; current_limit_a: number }
+  | { kind: 'wall'; volts: number; r_out_ohms: number; ripple_vpp: number; ripple_hz: number }
+  | { kind: 'usb'; spec: UsbSpecWire }
+  | {
+      kind: 'battery'
+      chemistry: ChemistryWire
+      cells: number
+      capacity_mah: number
+      soc: number
+      r_internal_ohms: number
+    }
 
 // ============================================================
 // Server → Client
 // ============================================================
+
+/** One attached peripheral (id, kind) for the UI's control panel. */
+export interface PeripheralInfo {
+  id: string
+  kind: string
+}
 
 export interface BoardInfoMsg {
   type: 'BoardInfo'
@@ -30,19 +64,35 @@ export interface BoardInfoMsg {
   component_kinds: Record<string, string>
   /** [(ref, backend_name), ...] -- serialized as nested arrays */
   mcus: [string, string][]
-  /** Future: list of power supply net names. Optional chaining required. */
-  power_supplies?: string[]
+  /** Configurable supply nets: net name -> the supply currently driving it.
+   *  A MAP on the wire (not a list of names); omitted when the board has none. */
+  power_supplies?: Record<string, PowerSupplyWire>
+  /** Attached peripherals; omitted when empty. */
+  peripherals?: PeripheralInfo[]
   /** Future: URL to the pre-exported GLB for 3D view. Optional chaining required. */
   glb_url?: string
 }
 
 export interface SimFault {
   component: string
-  fault_kind: string
+  /** Fault kind ("overcurrent", "overpower", ...). Wire field is `kind`. */
+  kind: string
   value: number
   limit: number
   /** Simulation time when fault was detected */
   t: number
+  /** Whether the circuit was mutated (destructive mode) in response. */
+  destroyed?: boolean
+}
+
+/** Live readout of a configurable supply (SimFrame.supply_states values). */
+export interface SupplyStateWire {
+  /** "ideal" | "bench" | "wall" | "usb" | "battery" */
+  kind: string
+  /** Last measured rail current delivered into the net (A). */
+  current_a: number
+  /** Battery state-of-charge (0..1); 1.0 for non-depleting supplies. */
+  soc: number
 }
 
 export interface SimFrame {
@@ -58,10 +108,10 @@ export interface SimFrame {
   uart: Record<string, number[]>
   /** Per-net current magnitude (A), optional */
   net_currents?: Record<string, number>
-  /** Future: per-component faults. Optional chaining required. */
+  /** Faults raised since the last frame; omitted when empty. */
   faults?: SimFault[]
-  /** Future: power supply state of charge per net. Optional chaining required. */
-  power_supply_soc?: Record<string, number>
+  /** Live supply readout per supply net; omitted when empty. */
+  supply_states?: Record<string, SupplyStateWire>
 }
 
 export interface StatusMsg {
@@ -101,5 +151,7 @@ export type ClientMessage =
   | { type: 'SetInput'; source: string; value: number }
   | { type: 'AddProbe'; net: string }
   | { type: 'RemoveProbe'; net: string }
-  /** Future: configure a power supply on a net. Gate on BoardInfo.power_supplies presence. */
-  | { type: 'SetPowerSupply'; net: string; supply: Record<string, unknown> }
+  /** Configure a power supply on a net. Gate on BoardInfo.power_supplies presence. */
+  | { type: 'SetPowerSupply'; net: string; supply: PowerSupplyWire }
+  /** Live-control a peripheral by id (value interpreted per peripheral kind). */
+  | { type: 'SetPeripheral'; id: string; value: number }
