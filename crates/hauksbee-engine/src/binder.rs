@@ -159,7 +159,7 @@ pub fn bind_board_with(
         if net.id == 0 {
             continue;
         }
-        let node = if is_ground(&net.name) {
+        let node = if is_canonical_ground(&net.name) {
             NodeId::GROUND
         } else {
             circuit.node(&net.name)
@@ -197,14 +197,34 @@ pub fn bind_board_with(
     // vreg is present we let it source its output net rather than overriding
     // with an ideal rail (only the input rail stays ideal).
     let has_vreg = board.components.iter().any(|c| {
-        matches!(
-            resolve(lib, c).model.as_ref().map(|m| m.kind),
-            Some(ComponentKind::Vreg)
-        )
+        !c.dnp
+            && matches!(
+                resolve(lib, c).model.as_ref().map(|m| m.kind),
+                Some(ComponentKind::Vreg)
+            )
     });
 
     // ── Pass 2: bind every component ────────────────────────────────────────
     for comp in &board.components {
+        // A DNP part sits on the layout but is not assembled: it is
+        // electrically ABSENT. It must contribute no device and no pin-to-net
+        // wiring — a DNP bridge resistor stamped anyway would join two nets
+        // that are open on the real board. Every checks/* module already
+        // filters `dnp`; the binder must too.
+        if comp.dnp {
+            report.push(BindRow {
+                reference: comp.reference.clone(),
+                value: comp.value.clone(),
+                model_id: None,
+                confidence: Confidence::Exact,
+                outcome: BindOutcome::Skipped {
+                    reason: "DNP (not populated)".to_string(),
+                },
+                warning: None,
+                guesses: Vec::new(),
+            });
+            continue;
+        }
         let res = resolve(lib, comp);
         let model = res.model.clone();
         let conf = res.confidence;
@@ -351,6 +371,11 @@ fn bind_behavioral(
     // reads R8). Built once.
     let mut resistor_ohms: HashMap<String, f64> = HashMap::new();
     for comp in &board.components {
+        // A DNP resistor is absent from the assembled board: the limit it
+        // would have programmed must fall back to the open-resistance default.
+        if comp.dnp {
+            continue;
+        }
         if comp.reference.starts_with('R') {
             if let Some(p) = parse_value(&comp.value) {
                 resistor_ohms.insert(comp.reference.clone(), p.si);
@@ -361,6 +386,10 @@ fn bind_behavioral(
 
     let mut out = Vec::new();
     for comp in &board.components {
+        // Not assembled -> no behavioural device (same rule as pass 2).
+        if comp.dnp {
+            continue;
+        }
         let res = resolve(lib, comp);
         let model = res.model;
 
@@ -685,15 +714,39 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         ));
     }
 
-    // Generic signal diode by reference class. KiCad's stock "Device:D" symbol
-    // carries the value "D" with no MPN, so the model db cannot resolve it; a
-    // bare SOD/SMA/SMB/MELF/DO diode footprint with no resolved model is the
-    // same case. These are real silicon junctions on the board (on Tarski the
-    // ~94 D_stretch/D_inject/D_hyst pulse-stretcher diodes), so leaving them
-    // OPEN silently deletes a conducting path. Mirror the r_/c_/l_ fallbacks:
-    // when the part is unmistakably a 2-terminal diode, bind a generic 1N4148
-    // signal diode (datasheet-grounded params below).
-    if prefix.starts_with('D') && prefix != "DAC" {
+    // Generic signal diode by reference class or footprint evidence. KiCad's
+    // stock "Device:D" symbol carries the value "D" with no MPN, so the model
+    // db cannot resolve it; a bare SOD/SMA/SMB/MELF/DO diode footprint with no
+    // resolved model is the same case. These are real silicon junctions on the
+    // board (on Tarski the ~94 D_stretch/D_inject/D_hyst pulse-stretcher
+    // diodes), so leaving them OPEN silently deletes a conducting path. Mirror
+    // the r_/c_/l_ fallbacks: when the part is unmistakably a 2-terminal
+    // diode, bind a generic 1N4148 signal diode (datasheet-grounded params
+    // below).
+    //
+    // The reference gate covers both the KiCad "D" class and the MIL-STD/ANSI
+    // diode designators (CR, VD, ZD, VR) — a "CR1" zener must never reach the
+    // C-first-letter capacitor heuristic below. The footprint gate is
+    // reference-independent: a diode body is a diode whatever the ref says.
+    let diode_prefix = (prefix.starts_with('D') && prefix != "DAC")
+        || matches!(prefix.as_str(), "CR" | "VD" | "ZD" | "VR");
+    let fp = comp.footprint.to_ascii_uppercase();
+    // Footprint families for small 2-pin signal/switching diodes. The "D_"
+    // test is anchored to the footprint-name position (after the "Lib:"
+    // separator) rather than a bare `contains("D_")`: now that this evidence
+    // is consulted for EVERY reference class, a bare substring would false-
+    // positive on any "..._SMD_..." footprint name.
+    let fp_is_diode = fp.contains("SOD")
+        || fp.contains("SMA")
+        || fp.contains("SMB")
+        || fp.contains("SMC")
+        || fp.contains("MELF")
+        || fp.contains("DO-")
+        || fp.contains("DIODE")
+        || fp.contains("LED")
+        || fp.starts_with("D_")
+        || fp.contains(":D_");
+    if diode_prefix || fp_is_diode {
         let v = comp.value.trim();
         let val_is_generic = v.is_empty()
             || v.eq_ignore_ascii_case("D")
@@ -701,19 +754,15 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             || v.eq_ignore_ascii_case("1N4148")
             || v.eq_ignore_ascii_case("1N4148W")
             || v.eq_ignore_ascii_case("1N4148WS");
-        let fp = comp.footprint.to_ascii_uppercase();
-        // Footprint families for small 2-pin signal/switching diodes.
-        let fp_is_diode = fp.contains("SOD")
-            || fp.contains("SMA")
-            || fp.contains("SMB")
-            || fp.contains("SMC")
-            || fp.contains("MELF")
-            || fp.contains("DO-")
-            || fp.contains("D_")
-            || fp.contains("DIODE");
+        // A value that parses only as an electrical RATING (volts/amps) is not
+        // a passive magnitude: a zener marked "5.1V" is 5.1 volts of breakdown,
+        // not 5.1 farads. Such a value must not veto the diode fallback.
+        let val_is_passive_magnitude = parse_value(&comp.value)
+            .map(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
+            .unwrap_or(false);
         // Bind the fallback when the value is a generic diode token, OR the
-        // value is unparseable-as-a-passive but the footprint is a diode body.
-        if val_is_generic || (parse_value(&comp.value).is_none() && fp_is_diode) {
+        // footprint is a diode body and the value is not a passive magnitude.
+        if val_is_generic || (fp_is_diode && !val_is_passive_magnitude) {
             return Some(make_entry(
                 "signal_diode_1n4148_fallback",
                 ComponentKind::Diode,
@@ -729,7 +778,13 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
                     .collect(),
             ));
         }
+    }
 
+    // A part whose reference class or footprint says "diode" must never fall
+    // through to the R/C/L first-letter heuristic below: "CR1" with value
+    // "5.1V" used to land there via 'C' and bind as a 5.1 FARAD capacitor.
+    if diode_prefix || fp_is_diode {
+        return None;
     }
 
     // Passives by reference class, when a magnitude can be recovered from the
@@ -1254,7 +1309,7 @@ fn bind_component(
         Vreg => bind_vreg(comp, model, circuit, &role_nets, has_vreg),
         Opamp => bind_opamp(comp, model, circuit, &role_nets),
         Comparator => bind_comparator(comp, model, circuit, &role_nets),
-        AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets),
+        AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets, power_nets),
         Digital | ShiftRegister => {
             bind_digital(comp, model, circuit, &role_nets, digital);
             let kind = if model.kind == ShiftRegister {
@@ -1884,6 +1939,7 @@ fn bind_analog_switch(
     model: &ModelEntry,
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
+    power_nets: &HashMap<String, f64>,
 ) -> (BindOutcome, Option<String>) {
     // True SPDT when both throws are wired (com + s0 + s1 + ctrl): two
     // complementary VSwitch legs. select low -> com<->s0, select high ->
@@ -1902,6 +1958,14 @@ fn bind_analog_switch(
         let ron = model.params.get_f64("ron").unwrap_or(50.0);
         let roff = model.params.get_f64("roff").unwrap_or(1e9);
         let vth = model.params.get_f64("vth").unwrap_or(1.5);
+        // The s0 leg senses (vcc - select), so its thresholds must be
+        // referenced to the ACTUAL rail on the vcc net. A hardcoded 5 V rail
+        // put von at 3.75 V on a 3.3 V board — unreachable (vcc - select
+        // never exceeds 3.3 V), leaving com<->s0 permanently open.
+        let vcc_v = power_nets
+            .get(circuit.node_name(vcc))
+            .copied()
+            .unwrap_or(DEFAULT_VCC);
         circuit.add(Device::VSwitch {
             name: format!("{}_s1", comp.reference),
             a: com,
@@ -1920,8 +1984,8 @@ fn bind_analog_switch(
             // Conducts when the select is LOW: sense vcc - select.
             ctrl_p: vcc,
             ctrl_n: sel,
-            von: 5.0 - vth + 0.25,
-            voff: 5.0 - vth - 0.25,
+            von: vcc_v - vth + 0.25,
+            voff: vcc_v - vth - 0.25,
             ron,
             roff,
         });
@@ -2584,6 +2648,26 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 
 // ── Power-net detection ──────────────────────────────────────────────────────
 
+/// True only for the canonical ground net itself: `"GND"` or `"0"`, optionally
+/// behind a hierarchical sheet path (`"/Power/GND"`). Matches
+/// [`Circuit::node`]'s own ground rule so pass-1 interning and later
+/// `circuit.node(name)` calls agree on which net is node 0.
+///
+/// Deliberately NARROWER than [`is_ground`]: AGND / DGND / PGND / ISOGND /
+/// CHASSIS_GND are real, distinct nets whose whole point is that they are NOT
+/// the same copper as GND until something (a ferrite bead, a 0 Ω link, a star
+/// point) joins them. Folding them all onto node 0 before binding turned every
+/// such bridge into an inert self-loop and erased the board's ground topology —
+/// the split-ground / galvanic-isolation structure this tool exists to check.
+/// Rail-default and rating heuristics keep the broad [`is_ground`]; only the
+/// pass-1 node assignment uses this.
+fn is_canonical_ground(name: &str) -> bool {
+    let n = name.trim();
+    // Hierarchical labels export as "/sheet/GND"; the leaf name decides.
+    let leaf = n.rsplit('/').next().unwrap_or(n).trim();
+    leaf == "0" || leaf.eq_ignore_ascii_case("gnd")
+}
+
 /// True for ground-family net names.
 pub fn is_ground(name: &str) -> bool {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
@@ -2630,6 +2714,10 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
 fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
     let mut out: HashMap<i64, f64> = HashMap::new();
     for comp in &board.components {
+        // A DNP part's power_out pin drives nothing on the real board.
+        if comp.dnp {
+            continue;
+        }
         for pin in &comp.pins {
             if !pin.kind.starts_with("power_out") {
                 continue;
