@@ -2,24 +2,18 @@
  * PowerPanel.tsx
  *
  * Power supply configuration panel. Gated on BoardInfo.power_supplies being present
- * (optional future protocol field). Shows a quiet empty state when absent.
+ * (a net -> supply-config MAP on the wire; omitted when the board has none).
+ * Shows a quiet empty state when absent.
  *
- * Sends SetPowerSupply messages: { type: 'SetPowerSupply', net, supply }
+ * Sends SetPowerSupply messages: { type: 'SetPowerSupply', net, supply } where
+ * `supply` is the server's tagged wire shape (see lib/supply-wire.ts).
  */
 
 import { useState, useEffect } from 'react'
 import type { BoardInfoMsg, SimFrame } from '../types/protocol'
 import type { ClientMessage } from '../types/protocol'
-
-type SupplyType = 'Ideal' | 'Bench' | 'Wall' | 'USB' | 'Battery'
-
-interface SupplyConfig {
-  type: SupplyType
-  volts: number
-  currentLimit: number   // A
-  ripple: number         // Vpp
-  capacity: number       // Ah (Battery only)
-}
+import { toWireSupply, supplyNetNames } from '../lib/supply-wire'
+import type { SupplyConfig, SupplyType } from '../lib/supply-wire'
 
 const SUPPLY_DEFAULTS: Record<SupplyType, SupplyConfig> = {
   Ideal:   { type: 'Ideal',   volts: 5.0, currentLimit: 10,   ripple: 0,    capacity: 0 },
@@ -36,9 +30,9 @@ interface PowerPanelProps {
 }
 
 function usePowerSupplies(boardInfo: BoardInfoMsg | null): string[] | null {
-  // Defensive: BoardInfo.power_supplies is a future optional field
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (boardInfo as any)?.power_supplies ?? null
+  // power_supplies is a net -> config map (omitted when the board has none);
+  // extract the net names. Treating it as an array crashed the whole view.
+  return supplyNetNames(boardInfo?.power_supplies)
 }
 
 export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
@@ -78,15 +72,15 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
   function updateConfig(net: string, patch: Partial<SupplyConfig>) {
     setConfigs(prev => {
       const next = { ...prev, [net]: { ...(prev[net] ?? SUPPLY_DEFAULTS.Ideal), ...patch } }
-      const cfg = next[net]
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      send({ type: 'SetPowerSupply', net, supply: cfg } as any)
+      // The server deserializes a tagged enum; the raw UI config used to fail
+      // serde and the panel silently did nothing. Map to the wire shape.
+      send({ type: 'SetPowerSupply', net, supply: toWireSupply(next[net]) })
       return next
     })
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const socByNet = (frame as any)?.power_supply_soc as Record<string, number> | undefined
+  // Live SoC comes from SimFrame.supply_states (net -> {kind, current_a, soc}).
+  const supplyStates = frame?.supply_states
 
   return (
     <div
@@ -102,7 +96,7 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
       <div className="overflow-y-auto" style={{ maxHeight: 300 }}>
         {supplyNets.map(net => {
           const cfg = configs[net] ?? SUPPLY_DEFAULTS.Ideal
-          const soc = socByNet?.[net]
+          const soc = supplyStates?.[net]?.soc
 
           return (
             <div
