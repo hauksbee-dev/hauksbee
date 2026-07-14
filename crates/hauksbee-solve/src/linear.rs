@@ -258,7 +258,20 @@ impl LinearIsland {
     /// Try to compile a linear island to state-space. Returns `None` if the
     /// island has no dynamics or a structure the dense reducer can't factor;
     /// the caller then routes it through MNA.
-    pub fn compile(circuit: &Circuit, island: &Island, gmin: f64) -> Option<LinearIsland> {
+    ///
+    /// `temp_c` is the EFFECTIVE model temperature
+    /// ([`crate::SolverOptions::model_temp`]): the reducer bakes device values
+    /// into its A/B matrices at compile time, so a `tc1`-bearing resistor must
+    /// be evaluated at the same temperature the monolithic stamp uses
+    /// (`stamp::resistor_value`) or the fast path silently disagrees with the
+    /// reference engine on every thermal sweep. Callers with temperature
+    /// effects off pass TNOM (27), which makes the derating a no-op.
+    pub fn compile(
+        circuit: &Circuit,
+        island: &Island,
+        gmin: f64,
+        temp_c: f64,
+    ) -> Option<LinearIsland> {
         if !island.linear {
             return None;
         }
@@ -426,10 +439,18 @@ impl LinearIsland {
             }
         };
 
-        // Resistors: conductance into M, input nodes drive the RHS.
+        // Resistors: conductance into M, input nodes drive the RHS. The
+        // resistance is temperature-derated exactly as the monolithic stamp
+        // does (`stamp::resistor_value`): nominal ohms scaled by
+        // 1 + tc1·(T − TNOM). `temp_c` already encodes the effects.temperature
+        // gate (it is TNOM when the effect is off), so the formula below is
+        // byte-identical to the reference path in both modes.
         for &id in &island.devices {
-            if let Device::Resistor { a, b, ohms, .. } = &circuit.devices[id.0 as usize] {
-                let r = *ohms;
+            if let Device::Resistor { a, b, ohms, tc1, .. } = &circuit.devices[id.0 as usize] {
+                let r = match tc1 {
+                    Some(tc) => *ohms * (1.0 + tc * (temp_c - 27.0)),
+                    None => *ohms,
+                };
                 if r <= 0.0 {
                     continue;
                 }
@@ -985,7 +1006,7 @@ mod tests {
     fn single_rc_state_space() {
         let c = rc();
         let part = crate::partition::Partition::analyze(&c);
-        let li = LinearIsland::compile(&c, &part.islands[0], 0.0).expect("compile");
+        let li = LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).expect("compile");
         assert_eq!(li.n_states(), 1);
         assert!((li.a[0] + 1000.0).abs() < 1e-6, "A={}", li.a[0]);
         assert!((li.b[0] - 1000.0).abs() < 1e-6, "B={}", li.b[0]);
@@ -995,7 +1016,7 @@ mod tests {
     fn rc_step_matches_analytic() {
         let c = rc();
         let part = crate::partition::Partition::analyze(&c);
-        let mut li = LinearIsland::compile(&c, &part.islands[0], 0.0).unwrap();
+        let mut li = LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).unwrap();
         let dt = 1e-5;
         li.ensure_cache(dt);
         let mut x = vec![0.0];
@@ -1041,7 +1062,7 @@ mod tests {
         });
         let part = crate::partition::Partition::analyze(&c);
         assert!(
-            LinearIsland::compile(&c, &part.islands[0], 0.0).is_none(),
+            LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).is_none(),
             "compile must refuse a zero-farad cap island rather than divide by zero"
         );
     }
@@ -1083,7 +1104,7 @@ mod tests {
         });
         let part = crate::partition::Partition::analyze(&c);
         assert!(
-            LinearIsland::compile(&c, &part.islands[0], 0.0).is_none(),
+            LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).is_none(),
             "compile must refuse a zero-henry inductor island rather than divide by zero"
         );
     }
@@ -1123,7 +1144,7 @@ mod tests {
             ic: Some(0.0),
         });
         let part = crate::partition::Partition::analyze(&c);
-        let li = LinearIsland::compile(&c, &part.islands[0], 0.0).expect("compile");
+        let li = LinearIsland::compile(&c, &part.islands[0], 0.0, 27.0).expect("compile");
         assert_eq!(li.n_states(), 2);
     }
 }
