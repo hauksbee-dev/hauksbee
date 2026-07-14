@@ -39,6 +39,9 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         // advertised a URL the server was not actually listening on.
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
         if dir.is_some() {
+            // dist/ is gitignored: a `git pull` updates frontend/src but not the
+            // built bundle, so warn when what we serve predates the sources.
+            crate::commands::common::warn_if_dist_stale(&static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
             println!("      http://{bound}\n");
             println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / gerber zip) to get a");

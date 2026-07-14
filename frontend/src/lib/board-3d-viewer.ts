@@ -406,7 +406,7 @@ export class Board3DViewer {
     board: ParsedBoard,
     componentStates: Record<string, Record<string, number>>,
     componentKinds: Record<string, string>,
-    faults?: { component: string; fault_kind: string; value: number; limit: number; t: number }[],
+    faults?: { component: string; kind: string; value: number; limit: number; t: number }[],
   ) {
     const activeRefs = new Set<string>()
     const faultRefs = new Set<string>(faults?.map(f => f.component) ?? [])
