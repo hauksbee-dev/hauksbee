@@ -735,6 +735,29 @@ impl AvrMcu {
             if boot.is_null() {
                 bail!("read_ihex_file failed for '{}'", path.display());
             }
+            // Bounds gate: simavr allocated exactly `flashend + 1` bytes of
+            // flash for THIS part, and `copy_nonoverlapping` below trusts the
+            // hex's own addresses. A hex built for a larger part (a mega2560
+            // image loaded onto a 328p) would memcpy straight past the buffer
+            // — silent heap corruption, not a diagnostic. The `.elf` path is
+            // arch-gated; give the `.hex` path the equivalent fail-loud check.
+            let flash_size = (*self.avr).flashend as usize + 1;
+            let base = boot_base as usize;
+            let size = boot_size as usize;
+            let end = base.checked_add(size);
+            if end.is_none_or(|e| e > flash_size) {
+                libc::free(boot as *mut libc::c_void);
+                bail!(
+                    "firmware '{}' does not fit this MCU's flash: the image spans \
+                     0x{:05X}..0x{:05X} but flash is only {} bytes (0x00000..0x{:05X}) — \
+                     was this hex built for a larger part?",
+                    path.display(),
+                    base,
+                    base.saturating_add(size),
+                    flash_size,
+                    flash_size,
+                );
+            }
             ptr::copy_nonoverlapping(
                 boot,
                 (*self.avr).flash.add(boot_base as usize),
