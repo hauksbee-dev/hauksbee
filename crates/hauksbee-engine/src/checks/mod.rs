@@ -40,11 +40,14 @@ pub mod usb_c;
 use hauksbee_extract::{ExtractedBoard, NetLintReport};
 use hauksbee_models::ModelLibrary;
 
-/// The full engine-level lint: the connectivity net-lint plus the three
-/// model-aware checks — strap pins, MCU resource conflicts, and the
-/// unmodelled-MCU coverage note. Kept as one function so every surface (`--lint`,
-/// `--check`, the JSON aggregate) runs the identical set and no caller can
-/// reopen the "Looks healthy over an unexamined MCU" hole by forgetting one.
+/// The full engine-level lint: the connectivity net-lint plus the model-aware
+/// checks — strap pins, MCU resource conflicts, the unmodelled-MCU coverage
+/// note, and configured-device decode faults (e.g. a CYPD3177 PD-sink divider).
+/// Kept as one function so every surface (`--lint`, `--check`, the JSON
+/// aggregate, TUI, the web front door) runs the identical set and no caller can
+/// reopen the "Looks healthy" hole by forgetting one — device_decode used to be
+/// spliced in only on the `--lint` path, so the other surfaces returned a false
+/// PASS on those faults.
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
     report
@@ -53,6 +56,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(resources_lint(board, lib).findings);
+    report
+        .findings
+        .extend(device_decode::device_decode_lint(board, lib).findings);
     report
 }
 

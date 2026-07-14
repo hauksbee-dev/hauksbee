@@ -147,11 +147,14 @@ pub fn net_copper_from_text(text: &str) -> Vec<NetCopper> {
 /// KiCad `.kicad_pcb` document root. Mirrors `drc::collect_primitives` but keeps
 /// only what an ampacity question needs.
 pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
-    // net id -> name
+    // net id -> name, and the inverse (name -> id) so a track that cites its
+    // net by NAME rather than numeric id (some KiCad generations) still resolves.
     let mut names: HashMap<i64, String> = HashMap::new();
+    let mut by_name: HashMap<String, i64> = HashMap::new();
     for n in root.find_all("net") {
         if let (Some(id), Some(name)) = (n.arg_i64(0), n.arg_value(1)) {
-            names.entry(id).or_insert(name);
+            names.entry(id).or_insert(name.clone());
+            by_name.entry(name).or_insert(id);
         }
     }
 
@@ -167,7 +170,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(id) = net_id_of(seg) else { continue };
+        let Some(id) = net_id_of(seg, &by_name) else { continue };
         let w = seg.find_f64("width").unwrap_or(0.0);
         if w <= 0.0 {
             continue;
@@ -180,7 +183,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(id) = net_id_of(arc) else { continue };
+        let Some(id) = net_id_of(arc, &by_name) else { continue };
         let w = arc.find_f64("width").unwrap_or(0.0);
         if w <= 0.0 {
             continue;
@@ -190,7 +193,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     // Zones: a net that carries a filled pour has its real cross-section in the
     // pour, not the segments. Record the zone count so the net is marked Poured.
     for zone in root.find_all("zone") {
-        let Some(id) = net_id_of(zone) else { continue };
+        let Some(id) = net_id_of(zone, &by_name) else { continue };
         // Only copper-layer zones count (keepouts on edge cuts do not conduct).
         let on_copper = zone
             .find("layers")
@@ -250,10 +253,18 @@ fn accumulate(
     max_w.entry(id).and_modify(|m| *m = m.max(w)).or_insert(w);
 }
 
-/// Resolve a `(net N "name")` or `(net N)` child of a primitive to its id.
-fn net_id_of(list: &List) -> Option<i64> {
+/// Resolve a primitive's `(net ...)` child to a net id. Handles the numeric
+/// form `(net N)` / `(net N "name")` AND the name-only form `(net "NAME")` some
+/// KiCad generations emit on tracks, resolving the latter through the file's own
+/// `(net N "name")` declarations. Without the name fallback a name-only export
+/// yields zero segments, so the IPC-2221 ampacity audit silently reports no
+/// copper — a false all-clear on a safety check.
+fn net_id_of(list: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
     let net = list.find("net")?;
-    net.arg_i64(0)
+    if let Some(id) = net.arg_i64(0) {
+        return Some(id);
+    }
+    by_name.get(&net.arg_value(0)?).copied()
 }
 
 /// A trace-current finding: a discrete-trace net whose narrowest segment cannot
@@ -492,6 +503,25 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_only_net_reference_still_resolves_copper() {
+        // A track that cites its net by NAME rather than numeric id (some KiCad
+        // generations) must still be measured — otherwise the IPC-2221 ampacity
+        // audit silently sees zero copper on the net, a false all-clear.
+        let pcb = r#"(kicad_pcb
+          (net 0 "")
+          (net 1 "GND")
+          (segment (start 0 0) (end 1 0) (width 0.25) (layer "F.Cu") (net "GND"))
+        )"#;
+        let nets = net_copper_from_text(pcb);
+        let gnd = nets
+            .iter()
+            .find(|n| n.name == "GND")
+            .expect("GND net should be measured from its name-only track");
+        assert_eq!(gnd.kind, CopperKind::Traces);
+        assert!((gnd.min_trace_width_mm.unwrap() - 0.25).abs() < 1e-9);
+    }
 
     // Hand-checked against standard trace-width calculators (1 oz external):
     // 0.25 mm (~10 mil) @ 10 C rise ~ 0.88 A; 1.0 mm @ 10 C ~ 2.39 A.

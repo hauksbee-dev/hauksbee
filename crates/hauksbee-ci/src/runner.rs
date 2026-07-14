@@ -799,19 +799,19 @@ fn run_one(
                 t_ms: ft_ms,
             });
         }
-        // Boot-coverage: record the first time each watched net reaches its
-        // required driven level (the firmware actively driving the control net).
-        // Skipped on a held-stale frame so a stale voltage cannot fake a reach.
+        // Boot-coverage: track each watched net reaching AND HOLDING its
+        // required driven level (the firmware actively driving the control net
+        // and keeping it there). `boot_coverage_update` re-arms the moment the
+        // net drops back below level, so a one-frame glitch above threshold that
+        // then collapses cannot latch a pass — first_reach_ms ends up holding
+        // the start of the run's final continuous hold, or nothing if the net is
+        // not held to the end. Skipped on a held-stale frame so a stale voltage
+        // cannot fake a reach.
         if analog_ok {
             for (net, level) in &boot_watch {
                 let key = (net.clone(), level.to_bits());
-                if first_reach_ms.contains_key(&key) {
-                    continue;
-                }
                 if let Some(&v) = frame.net_voltages.get(net) {
-                    if v >= *level - 1e-6 {
-                        first_reach_ms.insert(key, t_ms);
-                    }
+                    boot_coverage_update(&mut first_reach_ms, key, v, *level, t_ms);
                 }
             }
             // Per-net windows for every threshold this frame has passed.
@@ -955,6 +955,31 @@ fn windows_overlap(windows: &[(f64, f64)], start_s: f64, end_s: f64) -> bool {
     windows
         .iter()
         .any(|&(ws, we)| start_s < we && ws < end_s)
+}
+
+/// Update the boot-coverage reach record for one watched net at one frame.
+///
+/// Records the start of the current continuous "at/above level" hold (once),
+/// and RE-ARMS — forgets the reach — the instant the net drops back below
+/// level. So after the loop, `first_reach_ms[key]` is the start of the run's
+/// FINAL continuous hold (present only if the net is still held at the last
+/// frame processed); a one-frame glitch above threshold that then collapses
+/// leaves no record. This is what makes the assertion's documented "reach AND
+/// hold" contract real — previously any single crossing latched a pass forever,
+/// so firmware that pulsed the control net once and let it fall to 0 V still
+/// passed.
+fn boot_coverage_update(
+    first_reach_ms: &mut HashMap<(String, u64), f64>,
+    key: (String, u64),
+    v: f64,
+    level: f64,
+    t_ms: f64,
+) {
+    if v >= level - 1e-6 {
+        first_reach_ms.entry(key).or_insert(t_ms);
+    } else {
+        first_reach_ms.remove(&key);
+    }
 }
 
 /// A scenario's measurement window: an id (empty for run-wide), the time it
@@ -1790,6 +1815,43 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Replay a voltage series through the per-frame boot-coverage update and
+    // return the recorded reach time (start of the final continuous hold), or
+    // None if the net is not held at the end.
+    fn boot_reach(series: &[(f64, f64)], level: f64) -> Option<f64> {
+        let key = ("CTRL".to_string(), level.to_bits());
+        let mut first_reach_ms: HashMap<(String, u64), f64> = HashMap::new();
+        for &(t_ms, v) in series {
+            boot_coverage_update(&mut first_reach_ms, key.clone(), v, level, t_ms);
+        }
+        first_reach_ms.get(&key).copied()
+    }
+
+    #[test]
+    fn boot_coverage_requires_reach_and_hold_not_just_a_glitch() {
+        // Driven up promptly and held to the end: passes, reach time is the
+        // first crossing.
+        assert_eq!(
+            boot_reach(&[(0.0, 0.0), (5.0, 5.0), (10.0, 5.0), (50.0, 5.0)], 3.0),
+            Some(5.0)
+        );
+        // A one-frame glitch above threshold that then collapses to 0 V for the
+        // rest of the run must NOT latch a pass (the old bug).
+        assert_eq!(
+            boot_reach(&[(0.0, 0.0), (5.0, 5.0), (10.0, 0.0), (50.0, 0.0)], 3.0),
+            None
+        );
+        // Dropped then recovered and held to the end: the recorded reach is the
+        // start of the FINAL hold (so a late recovery is judged against the
+        // deadline, not the early glitch).
+        assert_eq!(
+            boot_reach(&[(5.0, 5.0), (10.0, 0.0), (30.0, 5.0), (50.0, 5.0)], 3.0),
+            Some(30.0)
+        );
+        // Never reaches: None.
+        assert_eq!(boot_reach(&[(0.0, 0.0), (50.0, 1.0)], 3.0), None);
+    }
 
     #[test]
     fn references_sheetfile_matches_bare_and_subdir_values() {

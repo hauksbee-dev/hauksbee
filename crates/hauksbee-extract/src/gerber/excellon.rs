@@ -83,9 +83,18 @@ pub fn parse(text: &str) -> DrillFile {
                     .take_while(|c| c.is_ascii_digit() || *c == ':')
                     .collect();
                 if let Some((i, d)) = spec.split_once(':') {
-                    if let (Ok(i), Ok(d)) = (i.trim().parse(), d.trim().parse()) {
-                        int_digits = i;
-                        dec_digits = d;
+                    if let (Ok(i), Ok(d)) = (i.trim().parse::<usize>(), d.trim().parse::<usize>()) {
+                        // Guard a corrupt/hostile FILE_FORMAT (e.g. `99999:1`):
+                        // these widths feed `format!("{:0>width$}")` and the
+                        // slicing below, so an absurd value panics
+                        // ("Formatting argument out of range") or allocates
+                        // wildly. Real Excellon coordinate formats are tiny
+                        // (≤ ~6 digits per side); ignore anything larger and
+                        // keep the sane defaults.
+                        if i <= 12 && d <= 12 {
+                            int_digits = i;
+                            dec_digits = d;
+                        }
                     }
                 }
             }
@@ -336,6 +345,28 @@ T2
 X92.0Y-97.0
 M30
 ";
+
+    #[test]
+    fn absurd_file_format_width_does_not_panic() {
+        // A corrupt/hostile FILE_FORMAT must not drive the implicit-decimal
+        // format! width past its limit — `;FILE_FORMAT=99999:1` used to panic
+        // with "Formatting argument out of range". Integer coordinates (no
+        // decimal point) exercise the width path.
+        let drill = "\
+M48
+FMAT,2
+INCH
+;FILE_FORMAT=99999:1
+T1C0.035
+%
+G90
+T1
+X0100Y0200
+M30
+";
+        let d = parse(drill); // must return, not panic
+        assert_eq!(d.holes.len(), 1);
+    }
 
     #[test]
     fn kicad_metric_decimal() {
