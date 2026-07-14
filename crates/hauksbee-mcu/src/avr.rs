@@ -198,6 +198,18 @@ struct SharedState {
     /// True once the current transaction's address byte carried the R/W=read
     /// bit, so subsequent master-read clocks pull bytes from the slave.
     twi_read: bool,
+    /// 7-bit addresses of the modeled I2C slaves, from
+    /// [`Mcu::set_i2c_slave_addresses`] (the engine populates it from the
+    /// attached bus's responder registry). `Some` gates the address ACK: an
+    /// address in the set is ACKed, any other is NACKed — the honest
+    /// no-answer the `SoftI2cResponder` already gives, so a firmware bus
+    /// scanner finds exactly the modeled devices instead of all 127. `None`
+    /// (never configured) keeps the legacy ACK-everything behaviour for
+    /// standalone users whose `on_i2c` handler models the whole bus itself.
+    twi_known_addrs: Option<std::collections::HashSet<u8>>,
+    /// True while the active transaction's address byte was ACKed. A NACKed
+    /// transaction gets no fabricated data ACKs / read bytes.
+    twi_acked: bool,
 
     /// User-installed callbacks.
     callbacks: Callbacks,
@@ -412,9 +424,21 @@ unsafe extern "C" fn twi_hook(
             // New transaction.
             let addr7 = addr_byte >> 1;
             let read_flag = (addr_byte & 1) != 0;
+            // Gate the address ACK on the modeled-slave set (mirrors the
+            // SoftI2cResponder: only an address a slave models gets the ACK;
+            // an unknown address is NACKed honestly, so a firmware bus
+            // scanner finds exactly the modeled devices and NACK-handling
+            // firmware paths are actually exercised). With no set installed
+            // (standalone `on_i2c` users modelling the whole bus) every
+            // address is ACKed, as before.
+            let known = s
+                .twi_known_addrs
+                .as_ref()
+                .is_none_or(|set| set.contains(&addr7));
             s.twi_addr = addr7;
             s.twi_active = true;
             s.twi_read = read_flag;
+            s.twi_acked = known;
 
             // Fire user callback and use its return value (if any); for START
             // events the return value is meaningless, but we keep the API uniform.
@@ -425,11 +449,14 @@ unsafe extern "C" fn twi_hook(
                 });
             }
 
-            // Send ACK so the firmware's Wire library doesn't stall.
+            // Answer the address: ACK (data=1) for a modeled slave so the
+            // firmware's Wire library proceeds, NACK (data=0) otherwise —
+            // simavr's TWI master decodes the ACK-condition message's data
+            // bit into TW_M{T,R}_SLA_ACK / _NACK status.
             if !avr.is_null() {
                 let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
                 if !twi_in.is_null() {
-                    let ack = ffi::avr_twi_irq_msg(TWI_COND_ACK as u8, addr7, 1);
+                    let ack = ffi::avr_twi_irq_msg(TWI_COND_ACK as u8, addr7, known as u8);
                     ffi::avr_raise_irq(twi_in, ack);
                 }
             }
@@ -437,47 +464,59 @@ unsafe extern "C" fn twi_hook(
             // Master-read clock: the firmware wants a byte from the slave. Ask
             // the handler for the reply and inject it back into the TWI receiver
             // with READ|ACK so the firmware's Wire library completes the read.
+            //
+            // A NACKed (unmodeled) address gets NOTHING injected: no slave
+            // drives SDA, so fabricating an ACKed 0xFF here would invent a
+            // device the bus does not have. A compliant master saw the
+            // address NACK and never clocks a read; one that reads anyway
+            // sees the dead bus (TWINT stays low for the rest of its chunk),
+            // which is what real hardware does.
             let addr7 = s.twi_addr;
-            let reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
-                cb(I2cEvent::Read { addr: addr7 }).unwrap_or(0xFF)
-            } else {
-                0xFF
-            };
-            if !avr.is_null() {
-                let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
-                if !twi_in.is_null() {
-                    let reply = ffi::avr_twi_irq_msg(
-                        (TWI_COND_READ | TWI_COND_ACK) as u8,
-                        addr7,
-                        reply_byte,
-                    );
-                    ffi::avr_raise_irq(twi_in, reply);
+            if s.twi_acked {
+                let reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
+                    cb(I2cEvent::Read { addr: addr7 }).unwrap_or(0xFF)
+                } else {
+                    0xFF
+                };
+                if !avr.is_null() {
+                    let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
+                    if !twi_in.is_null() {
+                        let reply = ffi::avr_twi_irq_msg(
+                            (TWI_COND_READ | TWI_COND_ACK) as u8,
+                            addr7,
+                            reply_byte,
+                        );
+                        ffi::avr_raise_irq(twi_in, reply);
+                    }
                 }
             }
         } else if msg_flags & TWI_COND_WRITE != 0 && s.twi_active {
-            // Data byte written by firmware.
+            // Data byte written by firmware. Dispatched (and ACKed) only for
+            // a modeled slave; a NACKed address's data bytes go nowhere and
+            // are NACKed, exactly like a wire with no slave on it.
             let addr7 = s.twi_addr;
-            let _reply_byte = if let Some(cb) = &mut s.callbacks.on_i2c {
-                cb(I2cEvent::Write {
-                    addr: addr7,
-                    data: data_byte,
-                })
-                .unwrap_or(0)
-            } else {
-                0
-            };
+            let acked = s.twi_acked;
+            if acked {
+                if let Some(cb) = &mut s.callbacks.on_i2c {
+                    let _ = cb(I2cEvent::Write {
+                        addr: addr7,
+                        data: data_byte,
+                    });
+                }
+            }
 
-            // ACK the byte.
+            // ACK the byte for a modeled slave, NACK it otherwise.
             if !avr.is_null() {
                 let twi_in = ffi::avr_io_getirq(avr, TWI_GETIRQ, TWI_IRQ_INPUT);
                 if !twi_in.is_null() {
-                    let ack = ffi::avr_twi_irq_msg(TWI_COND_ACK as u8, addr7, 1);
+                    let ack = ffi::avr_twi_irq_msg(TWI_COND_ACK as u8, addr7, acked as u8);
                     ffi::avr_raise_irq(twi_in, ack);
                 }
             }
         } else if msg_flags & TWI_COND_STOP != 0 && s.twi_active {
             s.twi_active = false;
             s.twi_read = false;
+            s.twi_acked = false;
             let addr7 = s.twi_addr;
             if let Some(cb) = &mut s.callbacks.on_i2c {
                 let _ = cb(I2cEvent::Stop { addr: addr7 });
@@ -612,6 +651,8 @@ impl AvrMcu {
             twi_addr: 0,
             twi_active: false,
             twi_read: false,
+            twi_known_addrs: None,
+            twi_acked: false,
             callbacks: Callbacks {
                 on_pin_change: None,
                 on_uart: None,
@@ -953,6 +994,11 @@ impl Mcu for AvrMcu {
             s.callbacks.on_i2c = Some(cb);
         }
         self.register_twi_hook();
+    }
+
+    fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.twi_known_addrs = Some(addresses.iter().copied().collect());
     }
 
     fn on_spi(&mut self, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
