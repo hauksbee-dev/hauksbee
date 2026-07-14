@@ -60,9 +60,14 @@ pub fn serve(
             },
         );
 
+        // Bind FIRST, then print. The requested port may be busy, in which case
+        // the bind falls back to another port; printing `addr` before binding
+        // advertised a URL the server was not actually listening on.
+        let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
         if dir.is_some() {
+            warn_if_dist_stale(&static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
-            println!("      http://{addr}\n");
+            println!("      http://{bound}\n");
             println!("  Lands on this board's report; press \"run it\" for the live 2D/3D sim.");
             println!("  Ctrl-C to stop.\n");
         } else {
@@ -70,8 +75,8 @@ pub fn serve(
             // clone has no dist/ yet. Serve the websocket + API regardless (so an
             // external viewer still works) but tell the user how to get the live
             // view rather than leaving them on a blank 404 page.
-            println!("\n  hauksbee websocket server is live at ws://{addr}/ws  (Ctrl-C to stop)\n");
-            println!("  The live viewer at http://{addr} needs the frontend built once:\n");
+            println!("\n  hauksbee websocket server is live at ws://{bound}/ws  (Ctrl-C to stop)\n");
+            println!("  The live viewer at http://{bound} needs the frontend built once:\n");
             println!("      cd frontend && bun install && bun run build\n");
             println!("  then re-run this command. For a quick non-visual check, try:\n");
             println!("      hauksbee run <board> --report      # bind table");
@@ -79,7 +84,103 @@ pub fn serve(
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
         server
-            .serve_app(&addr, dir.as_deref(), board_file, analyze, startup_json)
+            .serve_app_on(listener, dir.as_deref(), board_file, analyze, startup_json)
             .await
     })
+}
+
+/// Advisory staleness check for the served React bundle. `frontend/dist` is a
+/// gitignored build artifact: `git pull` updates `frontend/src` but never
+/// `dist/`, so `hauksbee serve` happily serves a stale bundle and the user
+/// re-hits bugs that are already fixed in the sources. If any file under the
+/// sibling `frontend/src` (or `frontend/index.html`) is newer than
+/// `dist/index.html`, say so — loudly enough to act on, quietly enough not to
+/// block anything.
+pub fn warn_if_dist_stale(dist_dir: &Path) {
+    let Some(frontend) = dist_dir.parent() else { return };
+    if let Some(msg) = dist_stale_message(dist_dir, &[frontend.join("src"), frontend.join("index.html")]) {
+        eprintln!("{msg}");
+    }
+}
+
+/// Testable core of [`warn_if_dist_stale`]: returns the warning to print when
+/// `dist_dir/index.html` is older than any file under `source_paths`.
+pub fn dist_stale_message(dist_dir: &Path, source_paths: &[PathBuf]) -> Option<String> {
+    let built = std::fs::metadata(dist_dir.join("index.html"))
+        .and_then(|m| m.modified())
+        .ok()?;
+    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+    let mut stack: Vec<PathBuf> = source_paths.to_vec();
+    while let Some(p) = stack.pop() {
+        let Ok(meta) = std::fs::metadata(&p) else { continue };
+        if meta.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&p) {
+                stack.extend(entries.flatten().map(|e| e.path()));
+            }
+        } else if let Ok(m) = meta.modified() {
+            if m > built && newest.as_ref().is_none_or(|(_, t)| m > *t) {
+                newest = Some((p, m));
+            }
+        }
+    }
+    let (path, _) = newest?;
+    Some(format!(
+        "  warning: the web app bundle looks STALE — frontend/dist was built before\n  \
+         '{}' changed. You may be served old, already-fixed behaviour. Rebuild with:\n\n      \
+         cd frontend && bun install && bun run build\n",
+        path.display()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// The staleness advisory fires when a source file is newer than the built
+    /// dist/index.html, and stays quiet when the build is up to date. This is
+    /// the regression test for the "git pull updated src, `hauksbee serve`
+    /// served the old bundle, user re-hit an already-fixed bug" trap.
+    #[test]
+    fn dist_stale_message_fires_only_when_sources_are_newer() {
+        let root = std::env::temp_dir().join(format!("hauksbee-stale-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dist = root.join("dist");
+        let src = root.join("src");
+        fs::create_dir_all(&dist).unwrap();
+        fs::create_dir_all(src.join("components")).unwrap();
+
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let write_with_mtime = |p: &Path, t: std::time::SystemTime| {
+            fs::write(p, "x").unwrap();
+            let f = fs::File::options().write(true).open(p).unwrap();
+            f.set_modified(t).unwrap();
+        };
+
+        // Fresh build: sources older than dist -> no warning.
+        write_with_mtime(&src.join("components/App.tsx"), old);
+        write_with_mtime(&dist.join("index.html"), std::time::SystemTime::now());
+        assert!(
+            dist_stale_message(&dist, &[src.clone()]).is_none(),
+            "up-to-date dist must not warn"
+        );
+
+        // A pull touched a nested source file after the build -> warn, naming it.
+        write_with_mtime(&dist.join("index.html"), old);
+        write_with_mtime(
+            &src.join("components/App.tsx"),
+            std::time::SystemTime::now(),
+        );
+        let msg = dist_stale_message(&dist, &[src.clone()])
+            .expect("stale dist must produce a warning");
+        assert!(msg.contains("STALE"), "message names the condition: {msg}");
+        assert!(msg.contains("App.tsx"), "message names the newer file: {msg}");
+        assert!(msg.contains("bun run build"), "message says how to fix: {msg}");
+
+        // No dist at all (fresh clone): nothing to compare, no warning here
+        // (the serve commands already print the build instructions).
+        assert!(dist_stale_message(&root.join("missing"), &[src]).is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
