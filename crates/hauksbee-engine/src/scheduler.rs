@@ -97,6 +97,15 @@ struct LiveMcu {
     shared: Arc<Mutex<McuShared>>,
     /// Last known GPIO output levels, for diagnostics / frame state.
     last_levels: HashMap<(char, u8), bool>,
+    /// The configured-output pin set reported by the core at the END of the
+    /// previous chunk (`pins_configured_output`). Tracked so a pin the
+    /// firmware switches from output back to input (DDR output→input, e.g.
+    /// an open-drain bus hand-off) gets its Thevenin driver DISABLED again:
+    /// without the release, a handed-off net stays clamped at its stale
+    /// driven level — the latched-bus failure. Backends that cannot report
+    /// direction always return an empty set, so this stays empty there and
+    /// the release is a no-op (edge-enabled drivers are never torn down).
+    configured_outputs: std::collections::HashSet<(char, u8)>,
     /// Logic-high output voltage for this MCU's GPIO drivers (rail-dependent:
     /// 5 V for classic AVR, 3.3 V for STM32-class parts).
     logic_high_v: f64,
@@ -1092,30 +1101,18 @@ impl Scheduler {
                     drv.set_volts(&mut self.circuit, v);
                 }
             }
-            // 2b. Early promotion from the configured pin direction. A pin the
-            // firmware set as an OUTPUT but has so far only held at its reset
-            // level (DDR write, no PORT toggle — e.g. an active-low enable held
-            // low from boot) emits no pin-change edge, so the loop above never
-            // enables its driver and the net would float. Enable such drivers
-            // from `pins_configured_output`, at the pin's last known level
-            // (default low, the AVR reset PORT state). Backends that cannot
-            // report direction return an empty set, making this a no-op there;
-            // the edge-driven enable above remains the primary path.
-            let configured = m.core.pins_configured_output();
-            for pin in configured {
-                if let Some(drv) = m.binding.gpio_drivers.get_mut(&(pin.port, pin.bit)) {
-                    if !drv.enabled {
-                        drv.set_enabled(&mut self.circuit, true);
-                        let level = m
-                            .last_levels
-                            .get(&(pin.port, pin.bit))
-                            .copied()
-                            .unwrap_or(false);
-                        let v = if level { m.logic_high_v } else { 0.0 };
-                        drv.set_volts(&mut self.circuit, v);
-                    }
-                }
-            }
+            // 2b. Promotion AND release from the configured pin direction
+            // (`pins_configured_output`); see `sync_configured_outputs`.
+            // Backends that cannot report direction return an empty set,
+            // making both halves a no-op there; the edge-driven enable above
+            // remains the primary path.
+            let configured: std::collections::HashSet<(char, u8)> = m
+                .core
+                .pins_configured_output()
+                .into_iter()
+                .map(|p| (p.port, p.bit))
+                .collect();
+            self.sync_configured_outputs(mi, configured);
         }
 
         // 5(prev). Digital components drive their outputs from current state,
@@ -1685,6 +1682,49 @@ impl Scheduler {
     }
 
     /// Current voltage of a net by name.
+    /// Reconcile one MCU's GPIO Thevenin drivers with the configured-output
+    /// pin set its core reported at the end of a chunk (both halves of the
+    /// dynamic-promotion story, 05-cosim-fidelity §4.1):
+    ///
+    /// * **Promotion** — a pin the firmware set as an OUTPUT but has so far
+    ///   only held at its reset level (DDR write, no PORT toggle — e.g. an
+    ///   active-low enable held low from boot) emits no pin-change edge, so
+    ///   the edge loop never enables its driver and the net would float.
+    ///   Enable such drivers at the pin's last known level (default low, the
+    ///   AVR reset PORT state).
+    /// * **Release** — a pin that dropped OUT of the set (DDR output→input,
+    ///   e.g. an open-drain bus hand-off) gets its driver DISABLED again, so
+    ///   the net is genuinely let go instead of staying clamped at its stale
+    ///   driven level (the latched-bus failure). Only pins the core itself
+    ///   previously reported as outputs are released: an edge-enabled driver
+    ///   on a direction-blind backend (empty set both chunks) is never torn
+    ///   down.
+    fn sync_configured_outputs(
+        &mut self,
+        mi: usize,
+        configured: std::collections::HashSet<(char, u8)>,
+    ) {
+        let m = &mut self.mcus[mi];
+        for &(port, bit) in &configured {
+            if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
+                if !drv.enabled {
+                    drv.set_enabled(&mut self.circuit, true);
+                    let level = m.last_levels.get(&(port, bit)).copied().unwrap_or(false);
+                    let v = if level { m.logic_high_v } else { 0.0 };
+                    drv.set_volts(&mut self.circuit, v);
+                }
+            }
+        }
+        for &(port, bit) in m.configured_outputs.difference(&configured) {
+            if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
+                if drv.enabled {
+                    drv.set_enabled(&mut self.circuit, false);
+                }
+            }
+        }
+        m.configured_outputs = configured;
+    }
+
     pub fn net_voltage(&self, net: &str) -> Option<f64> {
         let node = self.net_nodes.get(net)?;
         self.node_volts.get(node.0 as usize).copied()
@@ -2724,6 +2764,7 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         binding,
         shared,
         last_levels: HashMap::new(),
+        configured_outputs: std::collections::HashSet::new(),
         logic_high_v,
     }
 }
@@ -3003,6 +3044,80 @@ mod tests {
             }
             _ => panic!("driver vsource missing"),
         }
+    }
+
+    /// A Nano driving net BUS from A2 (PC2) into a plain 10k pull-down: the
+    /// minimal board on which a released (DDR output→input) pin is
+    /// electrically distinguishable from a latched one.
+    #[cfg(feature = "avr")]
+    const RELEASE_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "BUS")
+
+  (module Module:Arduino_Nano (layer F.Cu)
+    (at 100 100)
+    (fp_text reference A1 (at 0 0) (layer F.SilkS))
+    (fp_text value Arduino_Nano (at 0 2) (layer F.Fab))
+    (pad 4 thru_hole circle (at 0 4) (size 1 1) (net 1 "GND"))
+    (pad 27 thru_hole circle (at 0 27) (size 1 1) (net 2 "+5V"))
+    (pad 21 thru_hole circle (at 0 21) (size 1 1) (net 3 "BUS"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "BUS"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+
+    /// Regression for the driver-release half of `sync_configured_outputs`: a
+    /// pin reported configured-output one chunk and gone the next (DDR
+    /// output→input, the open-drain bus hand-off) must have its Thevenin
+    /// driver disabled, so the net falls to its pull instead of staying
+    /// clamped at the stale driven level (the latched-bus failure). The board
+    /// binds `simavr:atmega328p`, so this needs the GPL-gated `avr` feature.
+    #[cfg(feature = "avr")]
+    #[test]
+    fn sync_configured_outputs_releases_dropped_pins() {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(RELEASE_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // Chunk 1: the core reports PC2 configured as an output, last driven
+        // HIGH (the DDR-write-no-toggle promotion path). The driver enables
+        // and the BUS net is clamped high through the 10k pull-down.
+        sched.mcus[0].last_levels.insert(('C', 2), true);
+        let mut configured = std::collections::HashSet::new();
+        configured.insert(('C', 2u8));
+        sched.sync_configured_outputs(0, configured);
+        assert!(
+            sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled,
+            "a configured-output pin must have its driver enabled"
+        );
+        assert!(sched.solve_chunk(1e-3), "driven solve converges");
+        let driven = sched.net_voltage("BUS").expect("BUS solved");
+        assert!(driven > 3.0, "driven-high BUS must read ~5 V, got {driven:.2} V");
+
+        // Chunk 2: the pin drops out of the configured set (DDR back to
+        // input, no PORT edge). The driver must be DISABLED and the pull-down
+        // must win; the old code left it enabled and the net latched at 5 V.
+        sched.sync_configured_outputs(0, std::collections::HashSet::new());
+        assert!(
+            !sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled,
+            "a pin released back to input must have its driver disabled"
+        );
+        assert!(sched.solve_chunk(1e-3), "released solve converges");
+        let released = sched.net_voltage("BUS").expect("BUS solved");
+        assert!(
+            released < 0.5,
+            "released BUS must fall through its pull-down, got {released:.2} V (latched bus)"
+        );
     }
 }
 
