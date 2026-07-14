@@ -181,6 +181,61 @@ async fn analyze_with_firmware_threads_board_and_firmware_bytes() {
 }
 
 #[tokio::test]
+async fn served_html_is_no_cache_but_hashed_assets_are_not() {
+    // frontend/dist is a gitignored build artifact served under stable names;
+    // a cached index.html kept pointing at old asset hashes after a rebuild
+    // and resurrected "already fixed" bugs. The entry HTML must always
+    // revalidate; the hash-named assets need no such marking.
+    let dir = std::env::temp_dir().join(format!("hauksbee-cache-test-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html><title>x</title>").unwrap();
+    std::fs::write(dir.join("assets/app-abc123.js"), "console.log(1)").unwrap();
+
+    let analyze: frontdoor::FirmwareAnalyzer =
+        Arc::new(|_: &str, _: &str, _: Option<(&str, &[u8])>| "{\"ok\":true}".to_string());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let dir_clone = dir.clone();
+    tokio::spawn(async move {
+        hauksbee_server::serve_frontdoor_on(
+            listener,
+            Some(&dir_clone),
+            analyze,
+            "{\"preloaded\":false}".to_string(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let html = http(
+        addr,
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(html.contains("200 OK"), "index should 200: {html:.160}");
+    let html_lower = html.to_ascii_lowercase();
+    assert!(
+        html_lower.contains("cache-control: no-cache"),
+        "index.html must be no-cache: {html:.400}"
+    );
+
+    let js = http(
+        addr,
+        "GET /assets/app-abc123.js HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(js.contains("200 OK"), "asset should 200: {js:.160}");
+    assert!(
+        !js.to_ascii_lowercase().contains("cache-control: no-cache"),
+        "hash-named assets must not be forced to revalidate: {js:.400}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn analyze_with_firmware_without_firmware_part_falls_back() {
     let addr = spawn_fw().await;
     let boundary = "----hauksbeetestboundary2";
