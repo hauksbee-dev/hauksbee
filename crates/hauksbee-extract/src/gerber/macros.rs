@@ -121,7 +121,11 @@ pub fn instantiate_macro(
                 };
                 let r = d / 2.0;
                 let rot = decimal(&p.angle, &vars).unwrap_or(0.0).to_radians();
-                let n = nv.max(3) as usize;
+                // The Gerber spec bounds a polygon primitive to 3..=12 vertices.
+                // Clamp rather than trust the file: an out-of-spec count (e.g.
+                // `%AMFOO*5,1,4294967295,...*%` from a hostile/corrupt gerber)
+                // would otherwise drive a multi-gigabyte vertex push (OOM/hang).
+                let n = nv.clamp(3, 12) as usize;
                 for k in 0..n {
                     let a = rot + k as f64 * std::f64::consts::TAU / n as f64;
                     pts.push((x + r * a.cos(), y + r * a.sin()));
@@ -401,5 +405,26 @@ mod tests {
         let pts = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.5, 0.5)];
         let hull = convex_hull(pts);
         assert_eq!(hull.len(), 4); // interior point dropped
+    }
+
+    #[test]
+    fn polygon_vertex_count_is_clamped() {
+        use gerber_types::{MacroBoolean, PolygonPrimitive};
+        // An out-of-spec vertex count (here u32::MAX, as a hostile/corrupt
+        // gerber could declare) must be clamped to the Gerber-legal 3..=12, not
+        // trusted — otherwise it drives a multi-gigabyte vertex push (OOM/hang).
+        let poly = PolygonPrimitive {
+            exposure: MacroBoolean::Value(true),
+            vertices: MacroInteger::Value(u32::MAX),
+            center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
+            diameter: MacroDecimal::Value(1.0),
+            angle: MacroDecimal::Value(0.0),
+        };
+        let m = ApertureMacro {
+            name: "FOO".to_string(),
+            content: vec![MacroContent::Polygon(poly)],
+        };
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        assert!(pts.len() <= 12, "vertex count must be clamped, got {}", pts.len());
     }
 }
