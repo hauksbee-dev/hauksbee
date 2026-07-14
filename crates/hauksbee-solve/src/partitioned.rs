@@ -549,6 +549,19 @@ impl PartitionedTransient {
             let h = dt.min(tstop - t);
             let tnext = t + h;
 
+            // The cached exponential is exact only for the step it was built
+            // at. The truncated FINAL step (`h < dt`, whenever `tstop` is not
+            // an integer multiple of `dt` — the common case) must rebuild it,
+            // or the last sample (and a co-sim chunk's exit state) silently
+            // replays a full-dt advance over a shorter interval.
+            // `ensure_cache` is a no-op while `h == dt`, so every interior
+            // step keeps the amortized one-mat-vec fast path untouched.
+            if h != dt {
+                for li in &mut self.linear {
+                    li.ensure_cache(h);
+                }
+            }
+
             // Update cut-source-driven boundary voltages in the exchange buffer
             // at the new time (zero-order hold input for this step).
             self.apply_sources(circuit, tnext);
