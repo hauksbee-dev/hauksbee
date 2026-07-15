@@ -494,3 +494,249 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
     assert_eq!(bound.node("ANODE_NET"), Some(a), "P$2 is the anode (1=K 2=A)");
     assert_eq!(bound.node("CATHODE_NET"), Some(k), "P$1 is the cathode");
 }
+
+/// Bug #12: a dual op-amp (LM358) defines out_a/in_plus_a/in_minus_a AND the
+/// _b channel, but the binder only looked up channel A — one device stamped,
+/// channel B's output net left floating with no warning. Both channels must
+/// stamp, keyed with the multi-unit `_q<N>` suffix the CI aggregation matches.
+#[test]
+fn dual_opamp_stamps_one_device_per_channel() {
+    // LM358 SOIC-8 pad map (opamp_comparator.toml): 1=out_a, 2=in_minus_a,
+    // 3=in_plus_a, 4=vss, 5=in_plus_b, 6=in_minus_b, 7=out_b, 8=vcc.
+    let u = comp(
+        "U1",
+        "LM358",
+        "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("3", 3, ""),
+            pin("4", 4, ""),
+            pin("5", 5, ""),
+            pin("6", 6, ""),
+            pin("7", 7, ""),
+            pin("8", 8, ""),
+        ],
+    );
+    let b = board(
+        &[
+            (1, "OUT_A"),
+            (2, "INM_A"),
+            (3, "INP_A"),
+            (4, "GND"),
+            (5, "INP_B"),
+            (6, "INM_B"),
+            (7, "OUT_B"),
+            (8, "+3V3"),
+        ],
+        vec![u],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let out_of = |unit: &str| {
+        bound
+            .circuit
+            .devices
+            .iter()
+            .find_map(|d| match d {
+                Device::OpAmp { name, out, .. } if name == unit => Some(*out),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{unit} must stamp as a Device::OpAmp"))
+    };
+    // One device per channel, per-unit keyed, wired to its OWN output net.
+    assert_eq!(bound.node("OUT_A"), Some(out_of("U1_q1")));
+    assert_eq!(bound.node("OUT_B"), Some(out_of("U1_q2")));
+    assert_eq!(
+        bound
+            .circuit
+            .devices
+            .iter()
+            .filter(|d| matches!(d, Device::OpAmp { .. }))
+            .count(),
+        2,
+        "a dual op-amp is exactly two OpAmp devices"
+    );
+}
+
+/// Bug #12 (comparator half): the LM393 dual comparator gets one Comparator
+/// per channel, same `_q<N>` keying.
+#[test]
+fn dual_comparator_stamps_one_device_per_channel() {
+    // LM393 SOIC-8 pad map: 1=out_a, 2=in_minus_a, 3=in_plus_a, 4=vss,
+    // 5=in_plus_b, 6=in_minus_b, 7=out_b, 8=vcc.
+    let u = comp(
+        "U2",
+        "LM393",
+        "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("3", 3, ""),
+            pin("4", 4, ""),
+            pin("5", 5, ""),
+            pin("6", 6, ""),
+            pin("7", 7, ""),
+            pin("8", 8, ""),
+        ],
+    );
+    let b = board(
+        &[
+            (1, "OUT_A"),
+            (2, "INM_A"),
+            (3, "INP_A"),
+            (4, "GND"),
+            (5, "INP_B"),
+            (6, "INM_B"),
+            (7, "OUT_B"),
+            (8, "+5V"),
+        ],
+        vec![u],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let outs: Vec<(String, hauksbee_ir::NodeId)> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|d| match d {
+            Device::Comparator { name, out, .. } => Some((name.clone(), *out)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outs.len(), 2, "a dual comparator is exactly two devices: {outs:?}");
+    assert!(outs.contains(&("U2_q1".to_string(), bound.node("OUT_A").unwrap())));
+    assert!(outs.contains(&("U2_q2".to_string(), bound.node("OUT_B").unwrap())));
+}
+
+/// A single-channel op-amp-class part (LMV7219, unsuffixed out/in_plus/
+/// in_minus roles) keeps its pre-fix shape exactly: ONE device under the bare
+/// reference, no `_q` suffix.
+#[test]
+fn single_channel_comparator_keeps_the_bare_reference() {
+    // LMV7219 SOT-23-5 pad map: 1=out, 2=vss, 3=in_plus, 4=in_minus, 5=vcc.
+    let u = comp(
+        "U3",
+        "LMV7219",
+        "Package_TO_SOT_SMD:SOT-23-5",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("3", 3, ""),
+            pin("4", 4, ""),
+            pin("5", 5, ""),
+        ],
+    );
+    let b = board(
+        &[(1, "OUT"), (2, "GND"), (3, "INP"), (4, "INM"), (5, "+5V")],
+        vec![u],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+    assert!(
+        bound
+            .circuit
+            .devices
+            .iter()
+            .any(|d| matches!(d, Device::Comparator { name, .. } if name == "U3")),
+        "a single comparator stays under the bare ref"
+    );
+}
+
+/// Bug #13: the CD74HC4066 quad bilateral switch has FOUR independent gates
+/// (in_out_<n>a/<n>b + ctrl_<n>); the old single-SPST fall-through bound gate
+/// 1 only and silently dropped gates 2..4. All four must stamp, `_s<n>`-keyed,
+/// each switching its own pair under its own control net.
+#[test]
+fn quad_bilateral_switch_stamps_one_vswitch_per_gate() {
+    // CD74HC4066 pad map (analog_switch.toml): 1=in_out_1a, 2=in_out_1b,
+    // 3=in_out_2a, 4=in_out_2b, 5=ctrl_2, 6=ctrl_1, 7=vss, 8=ctrl_4,
+    // 9=ctrl_3, 10=in_out_3a, 11=in_out_3b, 12=in_out_4a, 13=in_out_4b, 14=vcc.
+    let u = comp(
+        "SW2",
+        "CD74HC4066",
+        "Package_SO:TSSOP-14_4.4x5mm_P0.65mm",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("3", 3, ""),
+            pin("4", 4, ""),
+            pin("5", 12, ""),
+            pin("6", 11, ""),
+            pin("7", 9, ""),
+            pin("8", 14, ""),
+            pin("9", 13, ""),
+            pin("10", 5, ""),
+            pin("11", 6, ""),
+            pin("12", 7, ""),
+            pin("13", 8, ""),
+            pin("14", 10, ""),
+        ],
+    );
+    let b = board(
+        &[
+            (1, "G1A"),
+            (2, "G1B"),
+            (3, "G2A"),
+            (4, "G2B"),
+            (5, "G3A"),
+            (6, "G3B"),
+            (7, "G4A"),
+            (8, "G4B"),
+            (9, "GND"),
+            (10, "+3V3"),
+            (11, "CTRL1"),
+            (12, "CTRL2"),
+            (13, "CTRL3"),
+            (14, "CTRL4"),
+        ],
+        vec![u],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    for n in 1..=4 {
+        let (a, bnode, ctrl) = bound
+            .circuit
+            .devices
+            .iter()
+            .find_map(|d| match d {
+                Device::VSwitch {
+                    name, a, b, ctrl_p, ..
+                } if *name == format!("SW2_s{n}") => Some((*a, *b, *ctrl_p)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("gate {n} must stamp as SW2_s{n}"));
+        assert_eq!(bound.node(&format!("G{n}A")), Some(a), "gate {n} A leg");
+        assert_eq!(bound.node(&format!("G{n}B")), Some(bnode), "gate {n} B leg");
+        assert_eq!(
+            bound.node(&format!("CTRL{n}")),
+            Some(ctrl),
+            "gate {n} control"
+        );
+    }
+    assert_eq!(
+        bound
+            .circuit
+            .devices
+            .iter()
+            .filter(|d| matches!(d, Device::VSwitch { .. }))
+            .count(),
+        4,
+        "a quad bilateral switch is exactly four VSwitch devices"
+    );
+}
+
+/// Bug #14: bare "VDD" carries no magnitude — on a 3.3 V/1.8 V board it is the
+/// local core rail, so assuming 5 V overdrives the whole net. It must resolve
+/// to None (no ideal-supply stamp); voltage-suffixed forms keep their volts.
+#[test]
+fn bare_vdd_is_not_assumed_to_be_5v() {
+    use hauksbee_engine::power_rail_voltage;
+    assert_eq!(power_rail_voltage("VDD"), None, "bare VDD has no magnitude");
+    assert_eq!(power_rail_voltage("/VDD"), None);
+    // Voltage-suffixed VDD forms still resolve.
+    assert_eq!(power_rail_voltage("VDD3V3"), Some(3.3));
+    assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
+    assert_eq!(power_rail_voltage("VDD_5V"), Some(5.0));
+    // Bare VCC keeps the TTL 5 V convention.
+    assert_eq!(power_rail_voltage("VCC"), Some(5.0));
+}
