@@ -102,10 +102,12 @@ impl VcdSink {
 
     /// Number of recorded transitions (for assertions / tests).
     pub fn transition_count(&self) -> usize {
-        self.changes
-            .iter()
-            .filter(|c| c.t_ps > 0 || c.level)
-            .count()
+        // The initial value dump every net emits at t=0 is not a transition,
+        // regardless of its level — exclude it by timestamp only. The old
+        // `|| c.level` term wrongly counted the t=0 dump for a net that powers
+        // up HIGH, over-counting by one (inconsistent with `transitions_for`,
+        // which drops the initial dump via `saturating_sub(1)`).
+        self.changes.iter().filter(|c| c.t_ps > 0).count()
     }
 
     /// Transitions recorded for a named net.
@@ -263,5 +265,34 @@ mod tests {
         assert!(vcd.contains("$timescale 1ps"), "has timescale");
         assert!(vcd.contains("$var wire 1"), "declares the net");
         assert!(vcd.contains("$enddefinitions"), "well-formed header");
+    }
+
+    #[test]
+    fn transition_count_excludes_the_t0_dump_even_when_high() {
+        // A net that powers up HIGH emits its initial value dump at t=0 with
+        // level=HIGH. That dump is NOT a transition; transition_count must
+        // exclude it (it used to count it via `|| c.level`, over-counting by 1
+        // and disagreeing with transitions_for).
+        let mut c = Circuit::new();
+        let n = c.node("PWR");
+        let mut sink = VcdSink::new("VCD", vec![("PWR".into(), n)], None);
+        let levels = [5.0, 0.0, 5.0, 0.0]; // HIGH at t=0, then 3 edges
+        let mut volts = vec![0.0; c.node_count()];
+        for (step, &v) in levels.iter().enumerate() {
+            volts[n.0 as usize] = v;
+            let mut ctx = TickCtx {
+                circuit: &mut c,
+                node_volts: &volts,
+                t: step as f64 * 1e-4,
+                dt: 1e-4,
+            };
+            sink.post_solve(&mut ctx);
+        }
+        assert_eq!(sink.transitions_for("PWR"), 3, "per-net count drops the initial dump");
+        assert_eq!(
+            sink.transition_count(),
+            3,
+            "aggregate must match, not over-count the HIGH t=0 dump"
+        );
     }
 }

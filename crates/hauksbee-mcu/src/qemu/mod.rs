@@ -476,6 +476,8 @@ pub struct QemuBackend {
     adc_mask_shadow: u32,
     /// One-time warning flag for ADC injection without a gdbstub.
     adc_no_gdb_warned: bool,
+    /// One-time warning flag for digital-input injection without a gdbstub.
+    digital_no_gdb_warned: bool,
 }
 
 impl QemuBackend {
@@ -579,6 +581,7 @@ impl QemuBackend {
             i2c_ring_active: None,
             adc_mask_shadow: 0,
             adc_no_gdb_warned: false,
+            digital_no_gdb_warned: false,
         })
     }
 
@@ -1015,10 +1018,18 @@ impl Mcu for QemuBackend {
                 cur & !(1 << pin.bit)
             };
             if next != cur {
-                if let Some(g) = self.gdb.as_mut() {
-                    if g.write_u32(bank.in_reg, next).is_ok() {
-                        self.in_shadow.insert(bank.letter, next);
+                let Some(g) = self.gdb.as_mut() else {
+                    if !self.digital_no_gdb_warned {
+                        self.digital_no_gdb_warned = true;
+                        eprintln!(
+                            "qemu: DROPPING digital-input injection: no gdbstub attached, \
+                             so guest memory cannot be written (matching set_analog_in)"
+                        );
                     }
+                    return;
+                };
+                if g.write_u32(bank.in_reg, next).is_ok() {
+                    self.in_shadow.insert(bank.letter, next);
                 }
             }
         }
