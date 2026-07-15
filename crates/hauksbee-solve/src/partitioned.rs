@@ -95,6 +95,11 @@ struct NonlinearIsland {
     /// set to verify rather than an implicit "whatever write_back skips".
     owned: Vec<(NodeId, usize)>,
     first_step: bool,
+    /// Spacing of the reactive history pair (previous COMMITTED step): the
+    /// Gear-2 variable-step BDF2 stencil needs it on the one non-uniform step
+    /// this fixed-step path takes — the truncated final step onto tstop.
+    /// 0.0 until the first commit ("assume uniform").
+    h_prev: f64,
 }
 
 /// A linear island with at most this many states is small enough that the exact
@@ -1424,6 +1429,7 @@ impl NonlinearIsland {
             boundary,
             owned,
             first_step: true,
+            h_prev: 0.0,
         })
     }
 
@@ -1504,7 +1510,7 @@ impl NonlinearIsland {
         if first {
             self.ws.x.copy_from_slice(&self.x_accepted);
         }
-        let coeffs = IntegCoeffs::for_step(opts.integration, h, self.first_step);
+        let coeffs = IntegCoeffs::for_step(opts.integration, h, self.h_prev, self.first_step);
         let r = newton_solve(
             &mut self.ws,
             &self.sub,
@@ -1592,6 +1598,7 @@ impl NonlinearIsland {
         );
         self.x_accepted.copy_from_slice(&self.ws.x);
         self.first_step = false;
+        self.h_prev = h;
     }
 }
 
