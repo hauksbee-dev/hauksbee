@@ -90,12 +90,15 @@ pub fn instantiate_macro(
                     continue;
                 };
                 let (hw, hh) = (w / 2.0, h / 2.0);
-                pts.extend([
-                    (x - hw, y - hh),
-                    (x + hw, y - hh),
-                    (x + hw, y + hh),
-                    (x - hw, y + hh),
-                ]);
+                // The CenterLine primitive carries a rotation angle; the
+                // earlier axis-aligned emission silently dropped it, so a
+                // rotated rectangular pad was reconstructed axis-aligned.
+                // Rotate each corner offset, then translate by the center
+                // (matching the Polygon primitive's handling above).
+                let (sin, cos) = decimal(&l.angle, &vars).unwrap_or(0.0).to_radians().sin_cos();
+                for (dx, dy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
+                    pts.push((x + dx * cos - dy * sin, y + dx * sin + dy * cos));
+                }
             }
             MacroContent::Outline(o) => {
                 if !exposed(&o.exposure, &vars) {
@@ -426,5 +429,25 @@ mod tests {
         };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
         assert!(pts.len() <= 12, "vertex count must be clamped, got {}", pts.len());
+    }
+
+    #[test]
+    fn center_line_applies_rotation() {
+        use gerber_types::{CenterLinePrimitive, MacroBoolean};
+        // A 4×2 rectangle centred at the origin, rotated 90°: width and height
+        // swap, so the instantiated hull spans ~2 in x and ~4 in y. The old
+        // handler ignored the angle and emitted an axis-aligned 4×2.
+        let cl = CenterLinePrimitive {
+            exposure: MacroBoolean::Value(true),
+            dimensions: (MacroDecimal::Value(4.0), MacroDecimal::Value(2.0)),
+            center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
+            angle: MacroDecimal::Value(90.0),
+        };
+        let m = ApertureMacro { name: "CL".to_string(), content: vec![MacroContent::CenterLine(cl)] };
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!((maxx - minx - 2.0).abs() < 1e-6, "x span {} (expected ~2 after 90° rotation)", maxx - minx);
+        assert!((maxy - miny - 4.0).abs() < 1e-6, "y span {} (expected ~4 after 90° rotation)", maxy - miny);
     }
 }
