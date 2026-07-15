@@ -866,11 +866,16 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             (ok, format!("I({reference}) peak {peak:.4}A (<= {limit}A)"))
         }
         None => (
-            // No current data: only resistors/diodes are tracked. Treat absence
-            // as a soft pass but say so, rather than failing a check we cannot
-            // measure for this component kind.
-            true,
-            format!("I({reference}): no current data (only R/D tracked); skipped"),
+            // No current data. The runner rejects a max_current on an untracked
+            // component kind at bind time (`check_trackable_assert_refs`), so
+            // reaching this branch means the tracked device never produced a
+            // sample — fail loud rather than report a guard that was never
+            // evaluated as green.
+            false,
+            format!(
+                "I({reference}): no current data was recorded for this component; \
+                 the guard was never evaluated, so it cannot be reported green"
+            ),
         ),
     }
 }
@@ -890,8 +895,11 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 (ok, format!("Tj({reference}) peak {tj:.1}C (<= {limit}C)"))
             }
             None => (
-                // No thermal data: the part never dissipated measurably, so it
-                // cannot have exceeded the ceiling. Pass, but say so.
+                // No thermal data. The runner rejects a max_temp on a component
+                // with no thermal model at bind time (`check_trackable_assert_refs`),
+                // so here the part IS stress-monitored and simply never dissipated
+                // measurably: its junction sat at ambient, so it cannot have
+                // exceeded the ceiling. An honest pass, and say so.
                 true,
                 format!("Tj({reference}): no dissipation measured (idle/non-dissipating); skipped"),
             ),
