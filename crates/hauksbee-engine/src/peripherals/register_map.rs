@@ -829,6 +829,14 @@ impl I2cSlave for RegisterMapSensor {
                                 self.cmd_acc.push(data);
                             }
                             self.cmd_phase = CmdPhase::Active(idx);
+                            // A group that completes on this very byte
+                            // (group_bytes == 1) must drain NOW: the Active arm
+                            // only runs on the NEXT write, and a repeated START
+                            // or STOP clears cmd_acc, so a single-byte command
+                            // was silently dropped with no state change. drain
+                            // is a no-op until a full group is buffered, so
+                            // prefix bytes and multi-byte commands are untouched.
+                            self.drain_command_groups(idx);
                         }
                         None => {
                             // A command family the spec does not declare:
@@ -1724,6 +1732,58 @@ expr = "if(pd == 0.0, code / 4096 * 4.096, 0.0)"
 [sensor.protocol]
 style = "i2c_pointer"
 "#;
+
+    // A command-framed device whose command completes in a SINGLE byte
+    // (group_bytes = 1): the command byte IS the group. Regression for round-4
+    // #4 — the group used to never drain (drain ran only from the Active arm on
+    // the next write), so a Start/Write/Stop produced no state change at all.
+    const ONE_BYTE_CMD_SPEC: &str = r#"
+[sensor]
+name = "ONEBYTE"
+bus = "i2c"
+i2c_address = 0x30
+channels = 1
+
+[[sensor.state]]
+name = "x"
+default = 0.0
+
+[[sensor.write_command]]
+name = "set_x"
+match_mask = 0x00
+match_value = 0x00
+group_bytes = 1
+
+[[sensor.write_command.field]]
+name = "val"
+bits = [7, 0]
+
+[sensor.write_command.update]
+x = "val"
+
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+
+    #[test]
+    fn single_byte_write_command_drains_on_the_completing_byte() {
+        let sensor = RegisterMapSensor::from_toml(ONE_BYTE_CMD_SPEC).unwrap();
+        let addr = 0x30;
+        let mut bus = I2cBus::new("U").with_slave(Box::new(sensor));
+        for ev in [
+            I2cEvent::Start { addr, read: false },
+            I2cEvent::Write { addr, data: 0xAA }, // the whole 1-byte command
+            I2cEvent::Stop { addr },
+        ] {
+            bus.dispatch(ev);
+        }
+        let s = bus.slave::<RegisterMapSensor>(addr).unwrap();
+        assert_eq!(
+            s.channel_state("x", 0),
+            Some(170.0),
+            "a group_bytes=1 command must apply on its single byte, not be dropped"
+        );
+    }
 
     #[test]
     fn command_write_updates_channels_and_output_laws() {

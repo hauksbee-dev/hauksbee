@@ -387,16 +387,36 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
         parts.push(format!("max={:.3}V (<= {hi}V)", win.max_v));
     }
     if let (Some(d), Some(for_ms)) = (a.dip_below, a.for_max_ms) {
-        let dip_ms = win.dip_duration_s(d) * 1000.0;
-        ok &= dip_ms <= for_ms + 1e-6;
-        parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
+        // A duration needs at least two samples to measure (windows(2) yields
+        // nothing from one point, so dip_duration_s folds to 0 and silently
+        // auto-passes). A window that spans less than one frame is degenerate —
+        // fail loudly rather than claim a timing spec we could not evaluate.
+        if win.samples.len() < 2 {
+            ok = false;
+            parts.push(format!(
+                "dip<{d}V: window has {} sample(s), too few to measure a duration",
+                win.samples.len()
+            ));
+        } else {
+            let dip_ms = win.dip_duration_s(d) * 1000.0;
+            ok &= dip_ms <= for_ms + 1e-6;
+            parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
+        }
     }
     if let (Some(d), Some(r), Some(within_ms)) = (a.dip_below, a.recover_to, a.recover_within_ms) {
-        let rec_ms = win.recovery_s(d, r) * 1000.0;
-        ok &= rec_ms <= within_ms + 1e-6;
-        parts.push(format!(
-            "recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"
-        ));
+        if win.samples.len() < 2 {
+            ok = false;
+            parts.push(format!(
+                "recover-to-{r}V: window has {} sample(s), too few to measure a duration",
+                win.samples.len()
+            ));
+        } else {
+            let rec_ms = win.recovery_s(d, r) * 1000.0;
+            ok &= rec_ms <= within_ms + 1e-6;
+            parts.push(format!(
+                "recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"
+            ));
+        }
     }
 
     (
@@ -1027,5 +1047,67 @@ mod tests {
         assert!(m.contains("undriven"), "got: {m}");
         assert!(m.contains("driven LOW"), "got: {m}");
         assert!(!m.contains("firmware left it Hi-Z"), "must not assert Hi-Z, got: {m}");
+    }
+
+    // A scenario window shorter than one frame yields a single rail sample; a
+    // dip/recovery duration cannot be measured from one point, so the check
+    // must FAIL loudly rather than silently report 0 ms and auto-pass
+    // (round-4 #16).
+    #[test]
+    fn rail_window_dip_with_one_sample_does_not_auto_pass() {
+        use super::check_rail_window;
+        use crate::runner::RunOutcome;
+        use crate::scenarios::RailWindow;
+        use std::collections::HashMap;
+
+        // Build a RunOutcome carrying only one (scenario, net) rail window.
+        fn outcome_with_window(win: RailWindow) -> RunOutcome {
+            let mut rail_windows = HashMap::new();
+            rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
+            RunOutcome {
+                seed: 0,
+                windows: HashMap::new(),
+                uart: HashMap::new(),
+                faults: Vec::new(),
+                toggles: HashMap::new(),
+                peak_current: HashMap::new(),
+                peak_temp_c: HashMap::new(),
+                peripherals: HashMap::new(),
+                rail_windows,
+                protection_tripped: HashMap::new(),
+                sim_ms: 100.0,
+                first_reach_ms: HashMap::new(),
+                driven_nets: Default::default(),
+                drive_direction_observable: false,
+                first_fault_ms: None,
+                ac: None,
+                analog_valid: true,
+                failed_windows: Vec::new(),
+                analog_abort: false,
+                sampled_values: Vec::new(),
+                net_series: HashMap::new(),
+            }
+        }
+
+        let a: crate::spec::Assertion = toml::from_str(
+            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\n\
+             dip_below = 3.0\nfor_max_ms = 1.0\n",
+        )
+        .unwrap();
+
+        // One sample, sitting BELOW the dip threshold: the old code measured a
+        // 0 ms dip (windows(2) is empty) and auto-passed.
+        let mut win = RailWindow::new();
+        win.observe(0.099, 2.5);
+        let (ok, msg) = check_rail_window(&a, &outcome_with_window(win));
+        assert!(!ok, "a 1-sample dip window must not auto-pass; got pass: {msg}");
+        assert!(msg.contains("sample"), "message should explain the degenerate window: {msg}");
+
+        // Sanity: a proper 2-sample window that never dips below 3 V passes.
+        let mut good = RailWindow::new();
+        good.observe(0.000, 5.0);
+        good.observe(0.010, 5.0);
+        let (ok2, msg2) = check_rail_window(&a, &outcome_with_window(good));
+        assert!(ok2, "a 2-sample window that never dips must pass: {msg2}");
     }
 }
