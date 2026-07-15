@@ -398,3 +398,103 @@ fn kicad_pro_rules_apply_assignments_and_wildcard_patterns() {
     assert!((rules.clearance_for_net("+BATT") - 0.127).abs() < 1e-9);
     assert!((rules.effective_clearance("/USB/USB_D+", "/USB/USB_D-") - 0.11).abs() < 1e-9);
 }
+
+/// Wrap copper items in a 4-layer board (F/In1/In2/B) with nets A and B.
+fn board4(items: &str) -> String {
+    format!(
+        r#"(kicad_pcb (version 20221018) (generator pcbnew)
+  (layers
+    (0 "F.Cu" signal)
+    (1 "In1.Cu" signal)
+    (2 "In2.Cu" signal)
+    (31 "B.Cu" signal)
+  )
+  (net 0 "")
+  (net 1 "A")
+  (net 2 "B")
+{items}
+)
+"#
+    )
+}
+
+fn drc4(items: &str) -> hauksbee_extract::DrcReport {
+    ExtractedBoard::drc(&board4(items)).expect("drc runs")
+}
+
+#[test]
+fn through_via_shorts_inner_layer_copper_on_4_layer_board() {
+    // A through via named only (layers "F.Cu" "B.Cu") physically passes
+    // through In1.Cu/In2.Cu too: a different-net track on In1.Cu hitting the
+    // barrel is a short (this was silently missed when the via was bucketed
+    // only onto the two named end layers).
+    let items = r#"
+  (via (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "In1.Cu") (net 2))
+"#;
+    let report = drc4(items);
+    assert_short(&report, "A", "B");
+    let f = report.shorts().next().unwrap();
+    assert_eq!(f.layer, "In1.Cu", "the short is found on the inner layer");
+}
+
+#[test]
+fn blind_via_fills_its_inner_span() {
+    // A blind via F.Cu→In2.Cu passes through In1.Cu: a different-net In1.Cu
+    // track through it is a short.
+    let items = r#"
+  (via blind (at 5 0) (size 1.0) (drill 0.4) (layers "F.Cu" "In2.Cu") (net 1))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "In1.Cu") (net 2))
+"#;
+    assert_short(&drc4(items), "A", "B");
+}
+
+#[test]
+fn buried_via_stays_off_layers_outside_its_span() {
+    // A buried In1.Cu→In2.Cu via does NOT reach F.Cu: a crossing F.Cu track on
+    // another net is clean.
+    let items = r#"
+  (via blind (at 5 0) (size 1.0) (drill 0.4) (layers "In1.Cu" "In2.Cu") (net 1))
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+    let report = drc4(items);
+    assert!(
+        report.is_clean(),
+        "buried via must not appear on F.Cu: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn mask_only_pad_carries_no_copper() {
+    // A pad whose (layers ...) names only non-copper layers (a mask opening,
+    // e.g. a fiducial window) has NO copper: it must not be stamped onto every
+    // copper layer and shorted against a track running underneath.
+    let items = r#"
+  (footprint "Fiducial" (at 5 0)
+    (property "Reference" "FID1")
+    (pad "" smd rect (at 0 0) (size 2 2) (layers "F.Mask") (net 1 "A"))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert!(
+        report.is_clean(),
+        "mask-only pad is not copper: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn pad_without_layers_list_still_gets_all_copper() {
+    // No (layers ...) list at all: keep the through-hole-style fallback that
+    // places the pad on every copper layer — here it shorts a B.Cu track.
+    let items = r#"
+  (footprint "R" (at 5 0)
+    (property "Reference" "R1")
+    (pad "1" thru_hole circle (at 0 0) (size 2 2) (drill 1) (net 1 "A"))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "B.Cu") (net 2))
+"#;
+    assert_short(&drc(items), "A", "B");
+}
