@@ -228,12 +228,12 @@ impl StampPlan {
                     // Temperature-independent resistors fold into the backbone.
                     // tc1 resistors depend on options.temperature (not known at
                     // compile time), so they stay interpreted-with-resolved-
-                    // slots; non-positive resistances stamp nothing on the
-                    // interpreted path and are skipped entirely here.
+                    // slots. A non-positive resistance is a SHORT, clamped to
+                    // the same 1e-6 Ω floor as the interpreted stamp so both
+                    // assemblies agree (skipping it here would turn a 0-Ω
+                    // jumper into an open on the planned path only).
                     if tc1.is_none() {
-                        if *ohms > 0.0 {
-                            push_pair(&mut cond_ops, *a, *b, 1.0 / *ohms);
-                        }
+                        push_pair(&mut cond_ops, *a, *b, 1.0 / ohms.max(1e-6));
                     } else {
                         restamp.push(Restamp::Slotted {
                             id,

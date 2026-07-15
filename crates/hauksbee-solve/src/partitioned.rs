@@ -210,6 +210,14 @@ pub struct PartitionedTransient {
     linear: Vec<LinearIsland>,
     /// Per linear island: its state vector (caps/inductors) and input scratch.
     lin_state: Vec<Vec<f64>>,
+    /// Per linear island: the ACCEPTED state at step entry, snapshotted on the
+    /// first sweep. The exact ZOH advance x(t+dt) = Ad·x(t) + Bd·u depends on
+    /// the boundary input u, and u moves across relaxation sweeps on a coupled
+    /// partition — so every sweep must re-advance from this snapshot with the
+    /// CURRENT u (reset then step). Advancing only on the first sweep froze
+    /// the Ad·x + Bd·u term at the seed exchange's u and committed that stale
+    /// state into the island's history, an accumulating error.
+    lin_state_prev: Vec<Vec<f64>>,
     lin_input_buf: Vec<Vec<f64>>,
     /// Per linear island: free-node voltage scratch and the global node of each.
     lin_free_nodes: Vec<Vec<NodeId>>,
@@ -379,6 +387,7 @@ impl PartitionedTransient {
         let n_nodes = part.n_nodes;
         let mut linear = Vec::new();
         let mut lin_state = Vec::new();
+        let mut lin_state_prev = Vec::new();
         let mut lin_input_buf = Vec::new();
         let mut lin_free_nodes = Vec::new();
         let mut lin_vfree = Vec::new();
@@ -403,6 +412,7 @@ impl PartitionedTransient {
                         let n = li.n_states();
                         let free: Vec<NodeId> = collect_free_nodes(isl, &li);
                         lin_state.push(vec![0.0; n]);
+                        lin_state_prev.push(vec![0.0; n]);
                         lin_input_buf.push(vec![0.0; li.n_inputs_total()]);
                         lin_vfree.push(vec![0.0; li.n_free()]);
                         lin_free_nodes.push(free);
@@ -482,6 +492,7 @@ impl PartitionedTransient {
             opts: *opts,
             linear,
             lin_state,
+            lin_state_prev,
             lin_input_buf,
             lin_free_nodes,
             lin_vfree,
@@ -746,9 +757,12 @@ impl PartitionedTransient {
     /// over all owned slots and the global node where it occurred; `<= 1.0`
     /// means the exchange has relaxed to the solver's own tolerance convention.
     ///
-    /// `first` advances island state from accepted history (the actual time
-    /// step); later sweeps re-solve in place to relax coupling without
-    /// committing.
+    /// `first` marks the actual time step: nonlinear islands advance from
+    /// accepted history and later sweeps re-solve in place to relax coupling
+    /// without committing. Linear islands snapshot their accepted state on the
+    /// first sweep and re-advance from that snapshot on EVERY sweep, so the
+    /// exact ZOH update always sees the current boundary input (see
+    /// [`linear_phase_a`]).
     fn sweep(
         &mut self,
         circuit: &Circuit,
@@ -775,14 +789,15 @@ impl PartitionedTransient {
                         (
                             self.linear.as_slice(),
                             self.lin_state.as_mut_slice(),
+                            self.lin_state_prev.as_mut_slice(),
                             self.lin_input_buf.as_mut_slice(),
                             self.lin_vfree.as_mut_slice(),
                         )
                             .into_par_iter()
                             .with_min_len(PAR_MIN_ISLANDS_PER_TASK)
-                            .for_each(|(li, state, buf, vfree)| {
+                            .for_each(|(li, state, prev, buf, vfree)| {
                                 linear_phase_a(
-                                    li, circuit, vbuf, tnext, first, state, buf, vfree,
+                                    li, circuit, vbuf, tnext, first, state, prev, buf, vfree,
                                 )
                             })
                     },
@@ -803,14 +818,15 @@ impl PartitionedTransient {
             }
         } else {
             {
-                for (((li, state), buf), vfree) in self
+                for ((((li, state), prev), buf), vfree) in self
                     .linear
                     .iter()
                     .zip(self.lin_state.iter_mut())
+                    .zip(self.lin_state_prev.iter_mut())
                     .zip(self.lin_input_buf.iter_mut())
                     .zip(self.lin_vfree.iter_mut())
                 {
-                    linear_phase_a(li, circuit, vbuf, tnext, first, state, buf, vfree);
+                    linear_phase_a(li, circuit, vbuf, tnext, first, state, prev, buf, vfree);
                 }
                 let mut first_err: Option<String> = None;
                 for nl in self.nonlinear.iter_mut() {
@@ -1134,9 +1150,19 @@ impl RailLoads for PartitionedRailLoads<'_> {
 /// Phase (a) of the Jacobi sweep for one linear island: gather inputs from the
 /// frozen read buffer (boundary voltages, then current-source values evaluated
 /// at the end of the step — ZOH over the interval), advance the exact
-/// matrix-exponential state on the first sweep, and reconstruct free-node
-/// voltages into the island's private `vfree` scratch (pre-allocated per S1,
-/// plan §4.2; `node_voltages` overwrites every entry, so no clearing needed).
+/// matrix-exponential state from the ACCEPTED snapshot, and reconstruct
+/// free-node voltages into the island's private `vfree` scratch (pre-allocated
+/// per S1, plan §4.2; `node_voltages` overwrites every entry, so no clearing
+/// needed).
+///
+/// The advance runs on EVERY sweep, not just the first: the exact ZOH update
+/// x(t+dt) = Ad·x(t) + Bd·u depends on the boundary input u, and on a coupled
+/// partition u moves as the relaxation exchange settles. `li.step` mutates the
+/// state in place, so the first sweep snapshots the accepted x(t) into `prev`
+/// and every sweep resets to that snapshot before re-advancing with the
+/// current u — otherwise the committed state would carry the seed exchange's
+/// stale u into all subsequent steps (bug-hunt: stale boundary input in the
+/// Jacobi relaxation).
 ///
 /// Reads only `vbuf` and island-private state; writes only island-private
 /// scratch. That is the whole safety argument for running every island's
@@ -1150,6 +1176,7 @@ fn linear_phase_a(
     tnext: f64,
     first: bool,
     state: &mut [f64],
+    prev: &mut [f64],
     buf: &mut [f64],
     vfree: &mut [f64],
 ) {
@@ -1164,8 +1191,14 @@ fn linear_phase_a(
         }
     }
     if first {
-        li.step(state, buf);
+        // Snapshot the accepted state at step entry so later sweeps can
+        // re-advance over the same interval with a fresher boundary input.
+        prev.copy_from_slice(state);
+    } else {
+        // Reset to the accepted history, then re-advance with the current u.
+        state.copy_from_slice(prev);
     }
+    li.step(state, buf);
     li.node_voltages(state, buf, vfree);
 }
 
@@ -2127,6 +2160,142 @@ mod tests {
         assert!(
             (o_mono - o_part).abs() <= 1e-6,
             "comparator output diverged: mono {o_mono} vs torn {o_part}"
+        );
+    }
+
+    /// Bug-hunt (solver r2 #4): a linear island's exact ZOH advance must see
+    /// the CURRENT boundary input on every relaxation sweep, not the seed
+    /// exchange's. `linear_phase_a` used to call `li.step` only on the first
+    /// sweep; later sweeps refreshed the Su·u reconstruction term but the
+    /// Ad·x + Bd·u state advance stayed frozen at the first sweep's stale u,
+    /// and the committed state carried that error into every subsequent step.
+    ///
+    /// The fixture makes the defect ORDERS OF MAGNITUDE, not fractions: a
+    /// VCVS island A owns `s` (pinned to `V(vin)`, so island B's current draw
+    /// cannot move it — the partition is physically exact), and the linear
+    /// island B owns `m` (one cap state fed from `s` through R) with `s` as
+    /// its boundary input. `vin` steps 0 -> 1 V exactly at a sample boundary
+    /// (t1, riser width 1 ns << dt). On the riser step, sweep 1 runs before
+    /// A's new `s` reaches the exchange, so B's first-sweep input is the
+    /// PRE-STEP 0 V; only the second sweep sees 1 V. For a piecewise-constant
+    /// input the exact-exponential ZOH advance is EXACT, so against the
+    /// analytic waveform the fixed engine sits at ~2e-10 while the stale-input
+    /// defect loses the riser step's entire charge (~(1 - e^{-dt/tau}) ~ 1e-2
+    /// absolute, measured 9.9e-3) — a 1e-4 gate separates them by two orders
+    /// each way. (An Auto-vs-Off differential can't gate this tightly: with a
+    /// smoothly varying input both the trapezoidal oracle and the end-of-step
+    /// ZOH carry O(dt) input-placement error of the same scale as the defect
+    /// — measured 3.8e-3 fixed vs 5.2e-3 broken on an RC feedback fixture —
+    /// so the analytic oracle is the honest referee.)
+    #[test]
+    fn coupled_linear_island_readvances_with_fresh_boundary_input() {
+        let mut c = Circuit::new();
+        let vin = c.node("vin");
+        let s = c.node("s");
+        let m = c.node("m");
+        let t1 = 2e-4; // riser lands exactly on sample 20 (dt = 1e-5)
+        let riser = 1e-9; // << dt, >> any float drift in the accumulated t
+        let v1 = c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pwl(vec![
+                hauksbee_ir::PwlPoint { t:0.0, v: 0.0 },
+                hauksbee_ir::PwlPoint { t:t1, v: 0.0 },
+                hauksbee_ir::PwlPoint { t:t1 + riser, v: 1.0 },
+                hauksbee_ir::PwlPoint { t:1.0, v: 1.0 },
+            ]),
+        });
+        // V(s) = V(vin): an ideal repeater. The point of routing vin through
+        // an island-owned node instead of wiring B to the pin directly: `s`
+        // is only refreshed by island A's phase (a), so B's first sweep of
+        // the riser step genuinely reads the stale pre-step value.
+        let e1 = c.add(Device::Vcvs {
+            name: "E1".into(),
+            p: s,
+            n: NodeId::GROUND,
+            cp: vin,
+            cn: NodeId::GROUND,
+            gain: 1.0,
+        });
+        let r2 = c.add(Device::Resistor {
+            name: "R2".into(),
+            a: s,
+            b: m,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let c1 = c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: m,
+            b: NodeId::GROUND,
+            farads: 1e-6,
+            ic: Some(0.0),
+        });
+        let part = Partition {
+            islands: vec![
+                // Island A: the VCVS owning `s` — flagged non-linear so it is
+                // solved as an MNA sub-block (the state-space reducer refuses
+                // E/G anyway).
+                Island {
+                    devices: vec![e1],
+                    nodes: vec![vin, s],
+                    linear: false,
+                    boundary_in: vec![vin],
+                },
+                // Island B: the linear island under test — one cap state,
+                // boundary input `s` owned by island A.
+                Island {
+                    devices: vec![r2, c1],
+                    nodes: vec![s, m],
+                    linear: true,
+                    boundary_in: vec![s],
+                },
+            ],
+            sources: vec![v1],
+            n_nodes: c.max_node() as usize,
+            tears: Vec::new(),
+        };
+        let dt = 1e-5;
+        let tstop = 1e-3; // riser at step 20, then 0.8 tau of charging
+        let tau = 1e3 * 1e-6; // R2 * C1 = 1 ms
+        let opts = fixed_opts(dt);
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
+            .expect("well-formed coupled partition builds");
+        assert!(
+            !engine.linear.is_empty(),
+            "island B must reach the state-space path for this test to bite"
+        );
+        assert!(engine.coupled, "B's read of `s` must register as coupling");
+        let n = engine.global_x_len();
+        let mut buf = vec![0.0; n];
+        let mut worst = 0.0f64;
+        let mut t_worst = 0.0f64;
+        engine
+            .run_streaming(&c, tstop, |st| {
+                buf.copy_from_slice(st.x);
+                // The streamed x carries node k's voltage at index k-1.
+                let mp = buf[m.0 as usize - 1];
+                // Analytic truth: m = 0 until the riser, then the RC charge
+                // 1 - e^{-(t - t1)/tau} (the 1 ns riser width contributes
+                // < 1e-6 relative, far below the gate).
+                let mr = if st.time <= t1 {
+                    0.0
+                } else {
+                    1.0 - (-(st.time - t1) / tau).exp()
+                };
+                let err = (mp - mr).abs();
+                if err > worst {
+                    worst = err;
+                    t_worst = st.time;
+                }
+            })
+            .expect("the exchange relaxes within the cap");
+        assert!(
+            worst < 1e-4,
+            "linear island advanced with a stale boundary input: worst abs err \
+             {worst:.3e} V vs the analytic waveform (at t={t_worst:.3e} s; the \
+             stale-input defect loses the riser step's charge, ~1e-2 V)"
         );
     }
 }

@@ -451,10 +451,11 @@ impl LinearIsland {
                     Some(tc) => *ohms * (1.0 + tc * (temp_c - 27.0)),
                     None => *ohms,
                 };
-                if r <= 0.0 {
-                    continue;
-                }
-                let g = 1.0 / r;
+                // Non-positive resistance = SHORT (matching the interpreted
+                // stamp): clamp to the shared 1e-6 Ω floor and stamp a stiff
+                // conductance rather than skipping, which would silently turn
+                // a 0-Ω jumper into an open on this fast path only.
+                let g = 1.0 / r.max(1e-6);
                 match (slot(*a), slot(*b)) {
                     (Slot::Free(fa), Slot::Free(fb)) => {
                         m[mi(fa, fa)] += g;
