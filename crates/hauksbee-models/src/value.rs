@@ -101,30 +101,72 @@ fn strip_size_code(s: &str) -> Option<&str> {
     None
 }
 
-/// Replace a single comma acting as a decimal separator (e.g. "5,1K" -> "5.1K").
+/// Normalise commas: a European decimal separator ("5,1K" -> "5.1K") vs a
+/// thousands grouping ("10,000" -> "10000", "1,000,000" -> "1000000"). A
+/// 3-digit group after the comma is treated as a thousands separator, a 1-2
+/// digit group as a decimal — so "10,000" is 10000, not 10.0.
 fn normalise_comma_decimal(s: &str) -> String {
-    // Only replace if there's exactly one comma and it's surrounded by digits
     let comma_count = s.bytes().filter(|&b| b == b',').count();
+    // Multiple commas are thousands grouping if each is followed by 3 digits.
+    if comma_count > 1 {
+        if is_thousands_grouped(s) {
+            return s.replace(',', "");
+        }
+        return s.to_string();
+    }
     if comma_count == 1 {
         let idx = s.find(',').unwrap();
         let before_comma = &s[..idx];
         let after_comma = &s[idx + 1..];
-        // Check: last char before comma is digit AND first char after is digit
         let prev_digit = before_comma
             .chars()
             .next_back()
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false);
-        let next_digit = after_comma
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false);
-        if prev_digit && next_digit {
+        // Length of the digit run immediately after the comma.
+        let run = after_comma.chars().take_while(|c| c.is_ascii_digit()).count();
+        if prev_digit && run >= 1 {
+            // 3 digits → thousands separator (drop the comma); 1-2 → decimal.
+            if run == 3 {
+                return format!("{}{}", before_comma, after_comma);
+            }
             return format!("{}.{}", before_comma, after_comma);
         }
     }
     s.to_string()
+}
+
+/// True when every comma in `s` is followed by exactly three digits — the
+/// signature of thousands grouping ("1,000,000").
+fn is_thousands_grouped(s: &str) -> bool {
+    for (i, b) in s.bytes().enumerate() {
+        if b == b',' {
+            let run = s[i + 1..].chars().take_while(|c| c.is_ascii_digit()).count();
+            if run != 3 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// EIA tolerance letters (F=±1%, G=±2%, J=±5%, K=±10%, M=±20%) collide with the
+/// unit/multiplier letters. A lone trailing 'F' after a RESISTANCE-scale
+/// multiplier is the ±1% tolerance code, not the Farad unit: "10KF" is a 10 kΩ
+/// 1% resistor (not 10 kilofarad) and "100RF" is 100 Ω 1%. Sub-farad prefixes
+/// (p/n/u/m) and a bare "1F" are genuine Farads and are left alone.
+fn fixup_tolerance_unit(unit: Option<String>, suffix: Option<&str>) -> Option<String> {
+    if unit.as_deref() != Some("F") {
+        return unit;
+    }
+    match suffix {
+        // 'R' already means ohms; the trailing F is tolerance → ohmic value.
+        Some("R") => Some("Ω".to_string()),
+        // Resistance-scale multipliers: F is a tolerance code, not a unit.
+        Some("k") | Some("M") | Some("G") | Some("T") | Some("MEG") | Some("GIG") => None,
+        // No multiplier, or a capacitance-scale prefix (p/n/u/m): genuine Farad.
+        _ => unit,
+    }
 }
 
 /// Normalise unicode characters that appear in BOM values.
@@ -199,6 +241,11 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let unit = parse_tail(after_suffix)?;
         (before.to_string(), unit)
     };
+
+    // Resolve the EIA tolerance-letter / unit collision: after a
+    // resistance-scale multiplier a lone trailing 'F' is the ±1% tolerance
+    // code, not the Farad unit.
+    let unit = fixup_tolerance_unit(unit, suffix_str);
 
     let mantissa: f64 = mantissa_str.parse().ok()?;
     let si = mantissa * multiplier;
@@ -505,5 +552,31 @@ mod tests {
         // A capacitance with a voltage RATING annotation still parses (unit F).
         check("22uF/25V", 22e-6);
         check("100nF 50V", 100e-9);
+    }
+
+    /// Bug regression: a 3-digit group after a comma is a thousands separator,
+    /// not a decimal — "10,000" is 10000, not 10.0. 1-2 digits stay decimal.
+    #[test]
+    fn test_comma_thousands_vs_decimal() {
+        check("10,000", 10_000.0);
+        check("1,000,000", 1_000_000.0);
+        check("5,1K", 5_100.0); // European decimal
+        check("2,2uF", 2.2e-6);
+    }
+
+    /// Bug regression: an EIA tolerance letter 'F' after a resistance-scale
+    /// multiplier is ±1%, not the Farad unit — "10KF" is a 10 kΩ resistor, not
+    /// a 10-kilofarad capacitor.
+    #[test]
+    fn test_tolerance_letter_is_not_farad() {
+        let r = parse_value("10KF").unwrap();
+        assert_ne!(r.unit.as_deref(), Some("F"), "10KF must not be a capacitor");
+        assert_eq!(r.si, 10_000.0);
+        let r2 = parse_value("100RF").unwrap();
+        assert_eq!(r2.unit.as_deref(), Some("Ω"), "100RF is 100 Ω 1%");
+        assert_eq!(r2.si, 100.0);
+        // Genuine capacitances (sub-farad prefixes, or bare) stay Farads.
+        assert_eq!(parse_value("4.7uF").unwrap().unit.as_deref(), Some("F"));
+        assert_eq!(parse_value("1F").unwrap().unit.as_deref(), Some("F"));
     }
 }
