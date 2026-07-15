@@ -528,8 +528,9 @@ fn gather_device_meta(
     let mut metas = Vec::new();
     for (id, dev) in circuit.iter() {
         // Match analog devices by name. Multi-unit packages stamp one device
-        // per unit with a suffix ("IC3906_q2", "SW1_s0"); strip it so the
-        // package's ratings apply to every unit.
+        // per unit with a suffix ("IC3906_q2", "SW1_s0", "RN1_e3" for passive
+        // array elements); strip it so the package's ratings apply to every
+        // unit.
         let name = dev.name();
         let base = name
             .rsplit_once("_q")
@@ -537,6 +538,11 @@ fn gather_device_meta(
             .map(|(b, _)| b)
             .or_else(|| {
                 name.rsplit_once("_s")
+                    .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+                    .map(|(b, _)| b)
+            })
+            .or_else(|| {
+                name.rsplit_once("_e")
                     .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
                     .map(|(b, _)| b)
             })
@@ -1466,7 +1472,62 @@ fn role_node_map_pins(
             m.entry(role.clone()).or_insert(node);
         }
     }
+    // Electrode-letter pad "numbers" fill any remaining gap. Eagle-style and
+    // vendor footprints name pads by electrode ("A"/"K" on a diode, "G"/"D"/
+    // "S" on a MOSFET, "C"/"B"/"E" on a BJT) instead of numbering them; with
+    // no pinfunction (footprint-only extraction) and a numerically-keyed
+    // model pad map, such a part previously matched nothing and bound OPEN —
+    // a real junction silently deleted. The letters reuse the kind-aware
+    // pinfunction vocabulary, so "C" stays cathode-on-a-diode and
+    // collector-on-a-BJT.
+    if let Some(kind) = kind {
+        for pin in &comp.pins {
+            let Some(node) = node_of(pin.net) else {
+                continue;
+            };
+            if let Some(role) = role_from_electrode_pad(kind, &pin.number) {
+                m.entry(role).or_insert(node);
+            }
+        }
+    }
+    // Eagle "P$1"/"P$2" ordinal pads: strip the "P$" prefix and re-consult the
+    // model's by-pin-number map, so a P$-numbered footprint still reaches a
+    // "1"/"2"-keyed pad map.
+    for pin in &comp.pins {
+        let Some(ord) = ordinal_pad(&pin.number) else {
+            continue;
+        };
+        if let (Some(role), Some(node)) = (pins.get(ord.as_str()), node_of(pin.net)) {
+            m.entry(role.clone()).or_insert(node);
+        }
+    }
     m
+}
+
+/// Interpret an electrode-letter pad "number" as a binder role for `kind`.
+/// Only the kinds whose pads are conventionally lettered participate (diode,
+/// BJT, MOSFET) — on everything else a lettered pad is not an electrode name.
+/// A purely numeric pad is a pad number, never an electrode.
+fn role_from_electrode_pad(kind: ComponentKind, pad: &str) -> Option<String> {
+    use ComponentKind::*;
+    if !matches!(kind, Diode | BjtNpn | BjtPnp | Nmos | Pmos) {
+        return None;
+    }
+    let p = pad.trim();
+    if !p.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    // Reuse the kind-aware pinfunction vocabulary ("A"->anode on a diode,
+    // "B1"->base_q1 on a dual BJT, ...), which already rejects non-electrode
+    // tokens per kind.
+    role_from_pinfunction(kind, p)
+}
+
+/// Eagle ordinal pad names: "P$1" -> "1". Returns `None` for anything else.
+fn ordinal_pad(pad: &str) -> Option<String> {
+    let p = pad.trim();
+    let rest = p.strip_prefix("P$").or_else(|| p.strip_prefix("p$"))?;
+    (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())).then(|| rest.to_string())
 }
 
 /// Normalize a schematic pinfunction into a binder role. Pin names are only
@@ -1552,6 +1613,14 @@ fn bind_passive(
         .get_str("value_override")
         .unwrap_or(&comp.value);
     let parsed = parse_value(effective_value);
+    // A passive with more than two pads is an ARRAY (a bussed or isolated
+    // R/C network), not one 2-terminal element. The old path silently took
+    // the first two pads and stamped ONE device, deleting every other element
+    // in the pack — a 4-resistor array became a single resistor. Split it
+    // into per-element devices instead.
+    if comp.pins.len() > 2 {
+        return bind_passive_array(comp, parsed.as_ref(), circuit, node_of);
+    }
     let (a, b) = two_terminal_nodes(comp, node_of);
     let (Some(a), Some(b)) = (a, b) else {
         return (
@@ -1575,7 +1644,23 @@ fn bind_passive(
             )),
         );
     };
-    // Decide R / C / L from the reference designator prefix and the unit.
+    let device = passive_device(comp, comp.reference.clone(), a, b, &p);
+    let label = device_label(&device);
+    circuit.add(device);
+    (BindOutcome::Analog { device: label }, None)
+}
+
+/// Build the concrete R / C / L device for the passive `comp` between `a` and
+/// `b`, deciding the kind from the reference-designator prefix and the parsed
+/// unit. Shared by the single-element path and the array path so both stay in
+/// lockstep on the R/C/L decision.
+fn passive_device(
+    comp: &Component,
+    name: String,
+    a: NodeId,
+    b: NodeId,
+    p: &hauksbee_models::value::ParsedValue,
+) -> Device {
     let unit = p.unit.as_deref().unwrap_or("");
     let prefix = comp
         .reference
@@ -1583,9 +1668,9 @@ fn bind_passive(
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>()
         .to_ascii_uppercase();
-    let device = if prefix.starts_with('C') || unit.eq_ignore_ascii_case("F") {
+    if prefix.starts_with('C') || unit.eq_ignore_ascii_case("F") {
         Device::Capacitor {
-            name: comp.reference.clone(),
+            name,
             a,
             b,
             farads: p.si,
@@ -1593,7 +1678,7 @@ fn bind_passive(
         }
     } else if prefix.starts_with('L') || unit.eq_ignore_ascii_case("H") {
         Device::Inductor {
-            name: comp.reference.clone(),
+            name,
             a,
             b,
             henries: p.si,
@@ -1601,16 +1686,125 @@ fn bind_passive(
         }
     } else {
         Device::Resistor {
-            name: comp.reference.clone(),
+            name,
             a,
             b,
             ohms: p.si.max(1e-6),
             tc1: None,
         }
+    }
+}
+
+/// Bind a multi-pad passive array (resistor network / capacitor array) as one
+/// device PER ELEMENT, never as a single 2-terminal element.
+///
+/// Pad conventions:
+///   - EVEN pad count -> isolated array: sequential pad pairs in natural pad
+///     order (1-2, 3-4, …) each carry one element at the pack's per-element
+///     value (the value field of an array is per element, not the pack total).
+///   - ODD pad count -> assumed BUSSED array: the lowest-numbered pad is the
+///     shared common and every other pad carries one element to it. That
+///     pairing is a convention, not a certainty, so this variant always binds
+///     WITH a loud warning naming the assumption — never a silent guess.
+///
+/// Elements are stamped as `<ref>_e<n>`; [`gather_device_meta`] strips the
+/// suffix so the pack's ratings apply to every element.
+fn bind_passive_array(
+    comp: &Component,
+    parsed: Option<&hauksbee_models::value::ParsedValue>,
+    circuit: &mut Circuit,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> (BindOutcome, Option<String>) {
+    let Some(p) = parsed else {
+        return (
+            BindOutcome::Unresolved {
+                reason: format!("unparseable value '{}'", comp.value),
+            },
+            Some(format!(
+                "{}: value '{}' not parseable, left open",
+                comp.reference, comp.value
+            )),
+        );
     };
-    let label = device_label(&device);
-    circuit.add(device);
-    (BindOutcome::Analog { device: label }, None)
+    // Natural pad order: numeric pads sort numerically ("2" before "10"), any
+    // non-numeric pads after them lexicographically.
+    let mut pads: Vec<&hauksbee_extract::Pin> = comp.pins.iter().collect();
+    pads.sort_by_key(|pin| {
+        (
+            pin.number.trim().parse::<u64>().unwrap_or(u64::MAX),
+            pin.number.clone(),
+        )
+    });
+
+    let mut notes: Vec<String> = Vec::new();
+    // (element name, a, b) before connectivity filtering.
+    let mut elements: Vec<(String, Option<NodeId>, Option<NodeId>)> = Vec::new();
+    if pads.len() % 2 == 0 {
+        // Isolated-array convention: sequential pad pairs.
+        for (i, pair) in pads.chunks(2).enumerate() {
+            elements.push((
+                format!("{}_e{}", comp.reference, i + 1),
+                node_of(pair[0].net),
+                node_of(pair[1].net),
+            ));
+        }
+    } else {
+        // Odd pad count: ambiguous. Bind the common bussed convention (lowest
+        // pad shared), but loudly — the report must show the assumption.
+        let common = node_of(pads[0].net);
+        for (i, pin) in pads[1..].iter().enumerate() {
+            elements.push((
+                format!("{}_e{}", comp.reference, i + 1),
+                common,
+                node_of(pin.net),
+            ));
+        }
+        notes.push(format!(
+            "{}: {}-pad passive array is ambiguous; bound as BUSSED by convention \
+             (pad {} common, {} elements) — verify against the part's datasheet",
+            comp.reference,
+            pads.len(),
+            pads[0].number,
+            pads.len() - 1,
+        ));
+    }
+
+    let mut stamped = 0usize;
+    let mut label = String::new();
+    for (name, a, b) in elements {
+        let (Some(a), Some(b)) = (a, b) else {
+            notes.push(format!(
+                "{name}: array element missing a connection, left open"
+            ));
+            continue;
+        };
+        let device = passive_device(comp, name, a, b, p);
+        if stamped == 0 {
+            label = device_label(&device);
+        }
+        circuit.add(device);
+        stamped += 1;
+    }
+    let warning = (!notes.is_empty()).then(|| notes.join("; "));
+    if stamped == 0 {
+        return (
+            BindOutcome::Unresolved {
+                reason: "passive array has no fully-connected element".to_string(),
+            },
+            warning.or_else(|| {
+                Some(format!(
+                    "{} ({}): passive array missing connections, left open",
+                    comp.reference, comp.value
+                ))
+            }),
+        );
+    }
+    (
+        BindOutcome::Analog {
+            device: format!("{label} x{stamped}"),
+        },
+        warning,
+    )
 }
 
 fn two_terminal_nodes(
@@ -2692,9 +2886,28 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
         "+3V" | "3V" => Some(3.0),
         "+12V" | "12V" => Some(12.0),
         "+1V8" | "1V8" | "1.8V" => Some(1.8),
+        // Negative rails (analog supplies, RS-232 drivers, op-amp VEE feeds).
+        // These previously fell through every arm — the substring fallback
+        // below requires a leading '+' or a VCC/VBUS token — so "-5V" returned
+        // None, got no SupplyLeg, and silently floated at 0 V. A negative rail
+        // is NOT ground: it must keep its own node AND get a supply at the
+        // negative voltage. Bare "VEE" is deliberately unresolved: its
+        // magnitude is board-dependent (-5/-12/-15 are all common), so
+        // inventing one would guess; name the net with its voltage instead.
+        "-5V" | "-5V0" | "-5.0V" => Some(-5.0),
+        "-12V" | "-12.0V" => Some(-12.0),
+        "-15V" | "-15.0V" => Some(-15.0),
+        "-3V3" | "-3.3V" => Some(-3.3),
         _ => {
+            // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative and
+            // never fall into the positive "contains 5V" branch through an
+            // incidental VCC/VBUS token elsewhere in the name.
+            if let Some(v) = negative_rail_fallback(&n) {
+                Some(v)
             // "+5V_USB", "VCC_5V" style names.
-            if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
+            } else if n.contains("5V")
+                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
+            {
                 Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") {
                 Some(3.3)
@@ -2703,6 +2916,38 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             }
         }
     }
+}
+
+/// "-5V", "-12V_RAIL", "-5V0", "-3V3_ANALOG" -> the negative rail voltage.
+/// Mirrors the '+'-prefixed positive fallback: a leading '-', then a numeric
+/// magnitude in plain ("12V") or KiCad digit-V-digit ("3V3", "5V0") form.
+/// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
+fn negative_rail_fallback(n: &str) -> Option<f64> {
+    let rest = n.strip_prefix('-')?;
+    let int_part: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if int_part.is_empty() {
+        return None;
+    }
+    let after = &rest[int_part.len()..];
+    if !after.starts_with('V') {
+        return None;
+    }
+    // Digits directly after the 'V' are the decimal part ("5V0", "3V3").
+    let frac: String = after[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let magnitude: f64 = if frac.is_empty() {
+        int_part.parse().ok()?
+    } else {
+        format!("{}.{}", int_part.trim_end_matches('.'), frac)
+            .parse()
+            .ok()?
+    };
+    (magnitude > 0.0 && magnitude.is_finite()).then_some(-magnitude)
 }
 
 /// A net that carries a `power_out` (or `power_out+no_connect`) pin whose
