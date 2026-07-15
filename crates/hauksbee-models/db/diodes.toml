@@ -38,9 +38,14 @@ max_voltage_v = 100.0      # VRRM
 [[models]]
 id = "1n4001"
 kind = "diode"
-description = "1N400x rectifier diode (1N4001–1N4007), DO-41"
+description = "1N400x rectifier diode family fallback, DO-41 (each member has an explicit entry below that outranks this)"
 
 [models.match]
+# Family safety net. Every member 1N4002–1N4007 also has a dedicated entry
+# with its real breakdown voltage; those win the tie because an exact literal
+# regex is more constrained than this character class (see
+# CompiledEntry::regex_specificity). In practice this entry only ever binds
+# 1N4001 itself.
 value_re = "(?i)^1N400[1-7]$"
 
 [models.params]
@@ -52,7 +57,7 @@ cjo = 2.0e-11
 vj  = 0.75
 m   = 0.333
 tt  = 5.76e-6
-bv  = 50.0     # 1N4001; BV rises to 1000V for 1N4007 — conservative here
+bv  = 50.0     # 1N4001 VRRM; higher-voltage members bind their own entries below
 
 [models.pins]
 "A" = "anode"
@@ -61,6 +66,66 @@ bv  = 50.0     # 1N4001; BV rises to 1000V for 1N4007 — conservative here
 [models.ratings]
 max_current_a = 1.0        # IF(AV)
 max_surge_current_a = 30.0 # IFSM 8.3ms half-sine
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4002"
+kind = "diode"
+description = "1N4002 rectifier diode, DO-41 (explicit match over 1N400x family)"
+
+[models.match]
+value_re = "(?i)^1N4002$"
+
+[models.params]
+# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 100.0   # 1N4002 rated 100 V PIV
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 100.0      # VRRM 1N4002
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4003"
+kind = "diode"
+description = "1N4003 rectifier diode, DO-41 (explicit match over 1N400x family)"
+
+[models.match]
+value_re = "(?i)^1N4003$"
+
+[models.params]
+# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 200.0   # 1N4003 rated 200 V PIV
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 200.0      # VRRM 1N4003
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -91,6 +156,96 @@ bv  = 400.0   # 1N4004 rated 400 V PIV
 max_current_a = 1.0
 max_surge_current_a = 30.0
 max_voltage_v = 400.0      # VRRM 1N4004
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4005"
+kind = "diode"
+description = "1N4005 rectifier diode, DO-41 (explicit match over 1N400x family)"
+
+[models.match]
+value_re = "(?i)^1N4005$"
+
+[models.params]
+# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 600.0   # 1N4005 rated 600 V PIV
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 600.0      # VRRM 1N4005
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4006"
+kind = "diode"
+description = "1N4006 rectifier diode, DO-41 (explicit match over 1N400x family)"
+
+[models.match]
+value_re = "(?i)^1N4006$"
+
+[models.params]
+# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 800.0   # 1N4006 rated 800 V PIV
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 800.0      # VRRM 1N4006
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "1n4007"
+kind = "diode"
+description = "1N4007 rectifier diode, DO-41 (explicit match over 1N400x family)"
+
+[models.match]
+value_re = "(?i)^1N4007$"
+
+[models.params]
+# Source: ON Semiconductor 1N4001-1N4007 SPICE model
+is  = 7.62e-9
+n   = 1.984
+rs  = 0.042
+cjo = 2.0e-11
+vj  = 0.75
+m   = 0.333
+tt  = 5.76e-6
+bv  = 1000.0  # 1N4007 rated 1000 V PIV
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 30.0
+max_voltage_v = 1000.0     # VRRM 1N4007
 
 # ─────────────────────────────────────────────────────────────────────────────
 

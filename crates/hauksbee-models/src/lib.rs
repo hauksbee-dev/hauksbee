@@ -483,9 +483,13 @@ impl ModelLibrary {
     /// ([`SourceLayer::priority`], specificity score) pair — the layer is the
     /// *first* key of the comparison, so a user-dir entry beats a pack entry
     /// beats a builtin entry no matter how the specificity scores fall.
-    /// Within a layer the specificity score orders entries; a full tie is
-    /// broken by insertion order (first loaded wins). User SPICE cards are
-    /// layer 40, the highest, and match by exact card name, so they are
+    /// Within a layer the specificity score orders entries; a score tie is
+    /// broken by regex constrainedness ([`CompiledEntry::regex_specificity`]),
+    /// so an exact-literal override (`^1N4004$`) beats the family pattern
+    /// (`^1N400[1-7]$`) it carves out of. A remaining tie is broken by the
+    /// lexicographically-smallest entry id — never by load order, so
+    /// resolution is deterministic regardless of file order. User SPICE cards
+    /// are layer 40, the highest, and match by exact card name, so they are
     /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
         // Layer 40: SPICE cards — match by card name against value and MPN.
@@ -493,16 +497,27 @@ impl ModelLibrary {
             return self.resolution_from_spice(card, q.clone());
         }
 
-        // Layers 0..30: one scan, best (layer priority, specificity) wins.
+        // Layers 0..30: one scan, best (layer priority, specificity,
+        // regex constrainedness, smallest id) wins. The last two keys make
+        // ties deterministic and independent of load order.
+        use std::cmp::Reverse;
+        let sort_key = |le: &'_ LayeredEntry, score: u32| {
+            (
+                le.layer.priority(),
+                score,
+                le.compiled.regex_specificity(),
+                Reverse(le.compiled.entry.id.clone()),
+            )
+        };
         let mut best: Option<(&LayeredEntry, u32)> = None;
         for le in &self.entries {
             if !le.compiled.matches(q) {
                 continue;
             }
             let score = le.compiled.specificity_score(q);
-            let key = (le.layer.priority(), score);
             if best
-                .map(|(b, s)| key > (b.layer.priority(), s))
+                .as_ref()
+                .map(|(b, s)| sort_key(le, score) > sort_key(b, *s))
                 .unwrap_or(true)
             {
                 best = Some((le, score));
