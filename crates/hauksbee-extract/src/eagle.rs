@@ -162,7 +162,15 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let components = elements
         .into_iter()
         .map(|el| {
-            let (sin, cos) = el.rot_deg.to_radians().sin_cos();
+            // A mirrored element (`MR<deg>`) reflects about Y (negate local X)
+            // and then rotates by `-deg` — mirroring flips the sense of
+            // rotation. Rotating by `+deg` here diverged from the
+            // corpus-validated placement in drc.rs (place_pkg_item) for any
+            // `MR<deg>` whose deg is not a multiple of 180 (e.g. MR90 put pads
+            // on the wrong side of the origin); the two forms coincide only
+            // when the rotation absorbs the sign.
+            let eff_rot = if el.mirrored { -el.rot_deg } else { el.rot_deg };
+            let (sin, cos) = eff_rot.to_radians().sin_cos();
             let pins = packages
                 .get(&el.package)
                 .map(|pads| {

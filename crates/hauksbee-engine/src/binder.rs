@@ -1748,6 +1748,17 @@ fn bind_passive_array(
                 node_of(pair[1].net),
             ));
         }
+        // Sequential 1-2/3-4 pairing is as much a convention as the odd-count
+        // bussed one — a mirror-pinout isolated array (some Bourns SIP packs
+        // pair 1-8/2-7) would pair differently, and that is not knowable from
+        // the netlist alone. Emit the same "verify against the datasheet" note
+        // the odd branch does, rather than binding silently.
+        notes.push(format!(
+            "{}: {}-pad passive array bound as sequential isolated pairs \
+             (1-2, 3-4, …) by convention — verify against the part's datasheet",
+            comp.reference,
+            pads.len(),
+        ));
     } else {
         // Odd pad count: ambiguous. Bind the common bussed convention (lowest
         // pad shared), but loudly — the report must show the assumption.
@@ -2232,10 +2243,27 @@ fn bind_analog_switch(
         // referenced to the ACTUAL rail on the vcc net. A hardcoded 5 V rail
         // put von at 3.75 V on a 3.3 V board — unreachable (vcc - select
         // never exceeds 3.3 V), leaving com<->s0 permanently open.
-        let vcc_v = power_nets
-            .get(circuit.node_name(vcc))
-            .copied()
-            .unwrap_or(DEFAULT_VCC);
+        // The s0 leg's thresholds are referenced to the ACTUAL rail voltage, so
+        // an unresolved VCC net can't be a silent guess: a non-canonically
+        // named rail (e.g. "VDD_MUX" on a 3.3 V board) that falls back to 5 V
+        // reintroduces the very "com<->s0 permanently open" bug the threshold
+        // math above fixes. Fall back to DEFAULT_VCC but SAY SO, matching the
+        // passive-array convention warning.
+        let (vcc_v, vcc_warning) = match power_nets.get(circuit.node_name(vcc)).copied() {
+            Some(v) => (v, None),
+            None => (
+                DEFAULT_VCC,
+                Some(format!(
+                    "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
+                     modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail \
+                     — on a lower-voltage board the common<->s0 throw may read as open, \
+                     so verify the switch's actual supply",
+                    comp.reference,
+                    comp.value,
+                    circuit.node_name(vcc),
+                )),
+            ),
+        };
         circuit.add(Device::VSwitch {
             name: format!("{}_s1", comp.reference),
             a: com,
@@ -2263,7 +2291,7 @@ fn bind_analog_switch(
             BindOutcome::Analog {
                 device: "spdt x2".to_string(),
             },
-            None,
+            vcc_warning,
         );
     }
 

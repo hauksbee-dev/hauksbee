@@ -678,7 +678,12 @@ impl QemuBackend {
         std::thread::sleep(Duration::from_millis(window_ms));
         self.qmp.stop().context("qmp stop")?;
 
-        self.cycles += (seconds * self.config.frequency_hz as f64).round() as u64;
+        // Credit cycles from the window we ACTUALLY ran (window_ms), not the
+        // requested `seconds`: the clamp above floors/caps the real run, so
+        // crediting `seconds` would systematically skew the guest cycle bracket
+        // the chunk's GPIO-edge timestamps are measured against.
+        self.cycles +=
+            ((window_ms as f64 / 1000.0) * self.config.frequency_hz as f64).round() as u64;
 
         self.poll_gpio_edges();
         // Service the mailbox bus cells while the guest is paused (05 §5.2),
