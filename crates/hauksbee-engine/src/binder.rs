@@ -340,7 +340,7 @@ pub fn bind_board_with(
     // reference for the parts we stamp) and the component's resolved ratings +
     // footprint, so the stress monitor can evaluate it. Supplies/regulators are
     // matched by their Vsource device id directly.
-    let device_meta = gather_device_meta(board, lib, &circuit);
+    let device_meta = gather_device_meta(board, lib, &circuit, &mcus, &digital, &dacs);
 
     BoundBoard {
         name: board.name.clone(),
@@ -503,6 +503,9 @@ fn gather_device_meta(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     circuit: &Circuit,
+    mcus: &[McuBinding],
+    digital: &[crate::digital::DigitalComponent],
+    dacs: &[DacBinding],
 ) -> Vec<DeviceMeta> {
     // Index components by reference, with their resolved kind/ratings/footprint.
     struct CompInfo {
@@ -532,23 +535,13 @@ fn gather_device_meta(
         // array elements); strip it so the package's ratings apply to every
         // unit.
         let name = dev.name();
-        let base = name
-            .rsplit_once("_q")
-            .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
-            .map(|(b, _)| b)
-            .or_else(|| {
-                name.rsplit_once("_s")
-                    .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
-                    .map(|(b, _)| b)
-            })
-            .or_else(|| {
-                name.rsplit_once("_e")
-                    .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
-                    .map(|(b, _)| b)
-            })
-            .unwrap_or(name);
+        let base = crate::stress::strip_unit_suffix(name);
         if let Some(info) = by_ref.get(base) {
-            // Only monitor kinds the evaluator knows how to score.
+            // Only monitor kinds the evaluator knows how to score as a whole
+            // analog device (one through-current / across-voltage). MCU / logic
+            // / DAC / ADC parts are NOT in this list on purpose: their
+            // stress-relevant quantity is per-PIN current, covered by the
+            // pin-driver pass below.
             let monitor = matches!(
                 info.kind,
                 ComponentKind::Passive
@@ -584,6 +577,61 @@ fn gather_device_meta(
                         ratings: info.ratings.clone(),
                     });
                 }
+            }
+        }
+    }
+
+    // Per-pin driver legs: pin-overcurrent for MCU / logic / DAC / ADC pins.
+    // These parts have no single through-current an analog meta could score —
+    // what their datasheets limit is the current each PIN sources or sinks
+    // (`max_pin_current_a`). Every driven pin is stamped as a Thevenin
+    // [`crate::drivers::PinDriver`] (a hidden Vsource behind the output
+    // resistance), and that Vsource's branch unknown IS the pin current, so
+    // the honest check is one meta per driver Vsource: the monitor's generic
+    // Vsource operating-point arm then reports the pin current (voltage and
+    // power stay zero there, which is right — a pin check is current-only).
+    // A tri-stated driver leg carries ~0 A through its 1 GΩ leg, so undriven
+    // pins never false-trip. Parts whose model carries no `max_pin_current_a`
+    // get no pin metas: there is no rating to check, only noise to add.
+    //
+    // References are keyed "<ref>:<pin>" ("U1:PB5", "U2:qa", "U3:vout_a") so a
+    // fault names the offending pin; ':' never appears in stamped device names,
+    // so these keys cannot collide with the _q/_s/_e unit-suffix rule.
+    // Driver maps are HashMaps, so each part's pins are sorted for a
+    // deterministic meta (and therefore fault/frame) order across runs.
+    let push_pin = |metas: &mut Vec<DeviceMeta>, reference: &str, pin: String, vsource| {
+        if let Some(info) = by_ref.get(reference) {
+            if info.ratings.max_pin_current_a.is_some() {
+                metas.push(DeviceMeta {
+                    reference: format!("{reference}:{pin}"),
+                    device: vsource,
+                    kind: info.kind,
+                    footprint: info.footprint.clone(),
+                    ratings: info.ratings.clone(),
+                });
+            }
+        }
+    };
+    for m in mcus {
+        let mut pins: Vec<_> = m.gpio_drivers.iter().collect();
+        pins.sort_by_key(|(pb, _)| **pb);
+        for ((port, bit), drv) in pins {
+            let pin = format!("P{}{bit}", port.to_ascii_uppercase());
+            push_pin(&mut metas, &m.reference, pin, drv.vsource);
+        }
+    }
+    for d in digital {
+        let mut roles: Vec<_> = d.drivers.iter().collect();
+        roles.sort_by_key(|(role, _)| role.as_str());
+        for (role, drv) in roles {
+            push_pin(&mut metas, &d.reference, role.clone(), drv.vsource);
+        }
+    }
+    for d in dacs {
+        for (ch, drv) in d.vout_drivers.iter().enumerate() {
+            if let Some(drv) = drv {
+                let pin = format!("vout_{}", char::from(b'a' + ch as u8));
+                push_pin(&mut metas, &d.reference, pin, drv.vsource);
             }
         }
     }
