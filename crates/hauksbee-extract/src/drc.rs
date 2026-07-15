@@ -271,21 +271,54 @@ pub fn clearance_rules_from_kicad_pro<'a>(
 }
 
 fn kicad_netclass_pattern_matches(pattern: &str, net: &str) -> bool {
+    // Iterative two-pointer glob: on a mismatch, back up to just past the most
+    // recent `*` and let it absorb one more net character. Each retry advances
+    // that star's anchor, so matching is O(len(pattern) · len(net)) — no
+    // exponential backtracking on `*`-heavy patterns from a crafted .kicad_pro
+    // (the old recursive `inner(&p[1..], n) || inner(p, &n[1..])` was).
     fn inner(p: &[char], n: &[char]) -> bool {
-        if p.is_empty() {
-            return n.is_empty();
-        }
-        match p[0] {
-            '*' => inner(&p[1..], n) || (!n.is_empty() && inner(p, &n[1..])),
-            '?' => !n.is_empty() && inner(&p[1..], &n[1..]),
-            '[' => {
-                let Some(end) = p.iter().position(|c| *c == ']') else {
-                    return !n.is_empty() && p[0] == n[0] && inner(&p[1..], &n[1..]);
-                };
-                !n.is_empty() && class_matches(&p[1..end], n[0]) && inner(&p[end + 1..], &n[1..])
+        let (mut pi, mut ni) = (0usize, 0usize);
+        // Resume point: (pattern index after the last `*`, net index the next
+        // retry should restart from).
+        let mut star: Option<(usize, usize)> = None;
+        while ni < n.len() {
+            // How many (pattern, net) chars the token at p[pi] consumes
+            // against n[ni]; None on a mismatch.
+            let step: Option<(usize, usize)> = if pi >= p.len() {
+                None
+            } else {
+                match p[pi] {
+                    '*' => {
+                        star = Some((pi + 1, ni));
+                        pi += 1;
+                        continue;
+                    }
+                    '?' => Some((1, 1)),
+                    '[' => match p[pi..].iter().position(|c| *c == ']') {
+                        Some(end) => {
+                            class_matches(&p[pi + 1..pi + end], n[ni]).then_some((end + 1, 1))
+                        }
+                        // Unterminated class: `[` is a literal.
+                        None => (p[pi] == n[ni]).then_some((1, 1)),
+                    },
+                    c => (c == n[ni]).then_some((1, 1)),
+                }
+            };
+            match (step, star) {
+                (Some((dp, dn)), _) => {
+                    pi += dp;
+                    ni += dn;
+                }
+                (None, Some((sp, sn))) => {
+                    pi = sp;
+                    ni = sn + 1;
+                    star = Some((sp, sn + 1));
+                }
+                (None, None) => return false,
             }
-            c => !n.is_empty() && c == n[0] && inner(&p[1..], &n[1..]),
         }
+        // Net exhausted: the rest of the pattern must be all `*`.
+        p[pi..].iter().all(|c| *c == '*')
     }
     fn class_matches(class: &[char], c: char) -> bool {
         let mut i = 0;
@@ -993,6 +1026,22 @@ fn expand_layers(token: &str, copper_layers: &[String]) -> Vec<String> {
     }
 }
 
+/// Expand a via's named end layers to the inclusive span of copper layers its
+/// barrel passes through, using the board's declared (stackup-ordered) copper
+/// list. `["F.Cu", "B.Cu"]` on a 4-layer board becomes F/In1/In2/B; a buried
+/// `["In1.Cu", "In2.Cu"]` fills its inner span too. Names not present in the
+/// declared stack keep the list verbatim (nothing to interpolate against).
+fn via_layer_span(names: &[String], copper_layers: &[String]) -> Vec<String> {
+    let idx: Vec<usize> = names
+        .iter()
+        .filter_map(|n| copper_layers.iter().position(|c| c == n))
+        .collect();
+    match (idx.iter().min(), idx.iter().max()) {
+        (Some(&lo), Some(&hi)) => copper_layers[lo..=hi].to_vec(),
+        _ => names.to_vec(),
+    }
+}
+
 /// Collect the copper layer names the board declares (from `(layers ...)`),
 /// falling back to the canonical two-layer stack.
 fn copper_layers_of(root: &List) -> Vec<String> {
@@ -1079,7 +1128,11 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
         let layer_token = via
             .find("layers")
             .and_then(|l| {
-                // `(layers "F.Cu" "B.Cu")`: span the named copper layers.
+                // `(layers "F.Cu" "B.Cu")` names only the via's END layers; the
+                // barrel physically passes through every copper layer between
+                // them. Expand the named span across the board's ordered
+                // copper stack so inner-layer copper (In1.Cu, ...) is tested
+                // too — mirroring how pads reach all layers via expand_layers.
                 let names: Vec<String> = (0..)
                     .map_while(|i| l.arg_value(i))
                     .filter(|n| n.ends_with(".Cu"))
@@ -1087,7 +1140,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
                 if names.is_empty() {
                     None
                 } else {
-                    Some(names)
+                    Some(via_layer_span(&names, &copper_layers))
                 }
             })
             .unwrap_or_else(|| copper_layers.clone());
@@ -1215,19 +1268,20 @@ fn collect_pad(
         (pad_origin.0 + wx, pad_origin.1 + wy)
     };
 
-    // Layers this pad sits on.
-    let layers: Vec<String> = pad
-        .find("layers")
-        .map(|l| {
-            let toks: Vec<String> = (0..).map_while(|i| l.arg_value(i)).collect();
+    // Layers this pad sits on. No `(layers ...)` list at all → assume every
+    // copper layer (through-hole style). A list that names only non-copper
+    // layers (e.g. `(layers "F.Mask")`) means the pad carries NO copper: it
+    // must stay off the copper buckets entirely, not fall back to all of them.
+    let layers: Vec<String> = match pad.find("layers") {
+        Some(l) => {
             let mut out = Vec::new();
-            for t in toks {
+            for t in (0..).map_while(|i| l.arg_value(i)) {
                 out.extend(expand_layers(&t, copper_layers));
             }
             out
-        })
-        .filter(|v: &Vec<String>| !v.is_empty())
-        .unwrap_or_else(|| copper_layers.to_vec());
+        }
+        None => copper_layers.to_vec(),
+    };
 
     let shape = match shape_tok.as_str() {
         "circle" => {
@@ -3355,6 +3409,53 @@ pub mod altium_drc {
             out.push(Polygon { layer, net, pts });
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod netclass_glob_tests {
+    use super::kicad_netclass_pattern_matches as m;
+
+    #[test]
+    fn glob_semantics_are_preserved() {
+        // Literals and `?`.
+        assert!(m("abc", "abc"));
+        assert!(!m("abc", "abx"));
+        assert!(!m("abc", "abcd"));
+        assert!(m("/USB/USB_D?", "/USB/USB_D+"));
+        assert!(!m("/USB/USB_D?", "/USB/USB_D"));
+        // `*` at edges and interior.
+        assert!(m("*", ""));
+        assert!(m("*", "anything"));
+        assert!(m("*abc*", "abc"));
+        assert!(m("*abc*", "xxabcyy"));
+        assert!(!m("*abc*", "xxabyy"));
+        assert!(m("a*b*c", "aXXbYYc"));
+        assert!(m("a*b*c", "abc"));
+        assert!(!m("a*b*c", "aXXbYY"));
+        assert!(m("a*", "a"));
+        assert!(!m("a*", "b"));
+        // Character classes (ranges + literals) and the unterminated-`[`
+        // literal fallback.
+        assert!(m("/DDR/ddr-a[0-9]", "/DDR/ddr-a7"));
+        assert!(!m("/DDR/ddr-a[0-9]", "/DDR/ddr-ax"));
+        assert!(m("[abc]x", "bx"));
+        assert!(!m("[abc]x", "dx"));
+        assert!(m("a[", "a["));
+        assert!(!m("a[", "ab"));
+    }
+
+    #[test]
+    fn pathological_star_pattern_terminates() {
+        // The old recursive matcher was exponential here (catastrophic
+        // backtracking on `*`-heavy patterns from a crafted .kicad_pro); the
+        // two-pointer matcher is O(pattern · net). Correctness only: it
+        // terminates and returns false.
+        let pattern = "*a".repeat(30);
+        let net = format!("{}b", "a".repeat(500));
+        assert!(!m(&pattern, &net));
+        // And the matching counterpart still matches.
+        assert!(m(&pattern, &"a".repeat(500)));
     }
 }
 
