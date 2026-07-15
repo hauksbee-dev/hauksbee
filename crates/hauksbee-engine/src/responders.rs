@@ -194,9 +194,13 @@ pub struct BitBangSpiPins {
 ///
 /// ## Supported waveform (stated subset — refused loudly outside it)
 ///
-/// * **SPI mode 0** (CPOL=0, CPHA=0): SCLK idles LOW at CS assert; the master
-///   samples MISO on the RISING edge; the slave shifts on the FALLING edge.
-///   A CS assert with SCLK high is a mode violation and faults the responder.
+/// * **All four SPI modes**, taken from the sensor spec's `protocol.spi_mode`
+///   (0..=3) and threaded here through the bus ([`SpiBus::spi_mode`]). The
+///   responder derives CPOL (idle clock level) and CPHA (sample-on-leading vs.
+///   -trailing edge) from the declared mode and times its sample/shift edges to
+///   match. A CS assert with SCLK at the wrong idle level for the declared CPOL,
+///   or a MOSI transition during the declared sample phase, is a mode violation
+///   and faults the responder (see "SPI mode coverage" below).
 /// * **MSB first**, 8-bit frames. A CS deassert mid-byte is reported.
 ///
 /// ## Bridging a bit stream to a byte-level model, honestly
@@ -218,23 +222,42 @@ pub struct BitBangSpiPins {
 ///   see — error + responder disabled. (A slave that genuinely answers 0x00,
 ///   e.g. during a command/write phase, is exact.)
 ///
-/// **SPI mode coverage.** This responder models SPI **mode 0** (CPOL=0, CPHA=0:
-/// sample MOSI on the rising edge, shift MISO on the falling edge, present bit 7
-/// at CS-assert). The other three modes are both caught loudly, so nothing is
-/// silently mistimed:
+/// **SPI mode coverage.** The responder honors the sensor's *declared* mode and
+/// polices the firmware against it — the point is to be right for the declared
+/// mode and loud when the firmware clocks a different one, never silently
+/// mistimed. From `mode = (CPOL, CPHA)`:
 ///
-/// * **CPOL=1 (modes 2 & 3)** idle SCLK HIGH — caught at CS-assert by the "CS
-///   asserted with SCLK high" fault below.
-/// * **CPHA=1 (modes 1 & 3)** change MOSI on the *leading* (rising) edge rather
-///   than the trailing one, so a MOSI transition arrives *while SCLK is high* —
-///   illegal for mode 0. The per-edge model sees that ordering directly (unlike
-///   the CS-assert idle level, which cannot separate mode 0 from mode 1), so a
-///   MOSI edge during a SCLK-high window faults the responder in `on_edge`.
+/// * **CPOL** is the idle SCLK level (0 → idles LOW, 1 → idles HIGH). The
+///   *leading* edge is the one away from idle (CPOL=0 → rising, CPOL=1 →
+///   falling); the *trailing* edge returns to idle.
+/// * **CPHA=0** samples MOSI on the leading edge and shifts MISO on the trailing
+///   edge, presenting bit 7 at CS-assert (before any clock). **CPHA=1** shifts
+///   on the leading edge and samples on the trailing edge, driving bit 7 on the
+///   first leading edge (not at CS-assert).
+///
+/// Two per-edge guards catch a spec/firmware disagreement, each naming the
+/// declared mode so the mismatch is obvious:
+///
+/// * **Wrong idle at CS-assert.** The clock must sit at the declared CPOL idle
+///   level when CS asserts; a mismatch (e.g. SCLK high for a CPOL=0 mode) faults.
+/// * **MOSI moved during the sample phase.** The master must hold MOSI stable
+///   across the half-period in which the slave samples (the level the clock
+///   rests at *after* a sample edge, `CPOL == CPHA`). A MOSI transition there
+///   contradicts the declared mode — the firmware is clocking a different phase —
+///   so it faults rather than accumulate a mistimed bit. (For mode 0 this is
+///   exactly the classic "MOSI moved while SCLK high".)
 ///
 /// [`SpiSlave::miso_preview`]: crate::peripherals::spi::SpiSlave::miso_preview
+/// [`SpiBus::spi_mode`]: crate::peripherals::spi::SpiBus::spi_mode
 pub struct BitBangSpiResponder {
     bus: Arc<Mutex<SpiBus>>,
     pins: BitBangSpiPins,
+    /// Clock idle level: `CPOL` of the declared mode (SCLK idles HIGH when set).
+    cpol: bool,
+    /// Clock phase: `CPHA` of the declared mode. `false` (CPHA=0) samples on the
+    /// leading edge and presents bit 7 at CS-assert; `true` (CPHA=1) shifts on
+    /// the leading edge and drives bit 7 on the first leading edge.
+    cpha: bool,
     /// CS currently asserted (we are mid-transaction).
     selected: bool,
     /// Last seen SCLK / MOSI output levels (edges carry only the new level, so
@@ -249,8 +272,8 @@ pub struct BitBangSpiResponder {
     /// preview and LOW bits are being presented pending the byte-end check).
     presented: Option<u8>,
     /// The NEXT byte's preview, fetched at the byte boundary and promoted to
-    /// `presented` on the following falling edge (mode 0: the slave shifts a
-    /// fresh bit 7 out on the falling edge after the last sample).
+    /// `presented` on the following shift edge (the slave shifts a fresh bit 7
+    /// out on the shift edge after the last sample of the previous byte).
     pending: Option<Option<u8>>,
     /// Set on the first waveform/contract violation: the responder stops
     /// answering entirely (the firmware sees a dead MISO line, loudly broken)
@@ -260,11 +283,24 @@ pub struct BitBangSpiResponder {
 
 impl BitBangSpiResponder {
     pub fn new(bus: Arc<Mutex<SpiBus>>, pins: BitBangSpiPins) -> Self {
+        // The declared clock mode travels with the slave, cached on the bus at
+        // construction; decode it into CPOL/CPHA once. `spi_mode` is validated
+        // to 0..=3 upstream, but the bit ops are harmless for any u8.
+        let mode = {
+            let bus = bus.lock().unwrap_or_else(|e| e.into_inner());
+            bus.spi_mode()
+        };
+        let cpol = mode & 0b10 != 0;
+        let cpha = mode & 0b01 != 0;
         BitBangSpiResponder {
             bus,
             pins,
+            cpol,
+            cpha,
             selected: false,
-            sclk: false,
+            // SCLK starts at the declared idle level so the first observed edge
+            // is classified against the right resting level.
+            sclk: cpol,
             mosi: false,
             nbits: 0,
             acc: 0,
@@ -272,6 +308,20 @@ impl BitBangSpiResponder {
             pending: None,
             faulted: false,
         }
+    }
+
+    /// The clock level the master must hold MOSI stable at: the level SCLK rests
+    /// at *after* a sample edge, i.e. through the slave's sample window. For
+    /// CPHA=0 the sample edge is leading, so the clock rests at `!CPOL` (away
+    /// from idle); for CPHA=1 it is trailing, resting at `CPOL`. That collapses
+    /// to `CPOL == CPHA` (mode 0 → HIGH, the classic "MOSI stable while high").
+    fn sample_hold_level(&self) -> bool {
+        self.cpol == self.cpha
+    }
+
+    /// The declared mode as its 0..=3 number, for diagnostics.
+    fn mode_num(&self) -> u8 {
+        (u8::from(self.cpol) << 1) | u8::from(self.cpha)
     }
 
     /// True once a waveform or preview-contract violation disabled this
@@ -292,8 +342,8 @@ impl BitBangSpiResponder {
         self.faulted = true;
     }
 
-    /// The current bit of the presented byte, MSB first: after `nbits` rising
-    /// edges the wire carries bit `7 - nbits`. `None` preview presents LOW.
+    /// The current bit of the presented byte, MSB first: after `nbits` sampled
+    /// bits the wire carries bit `7 - nbits`. `None` preview presents LOW.
     fn miso_bit(&self) -> bool {
         let byte = self.presented.unwrap_or(0);
         (byte >> (7 - self.nbits)) & 1 != 0
@@ -307,18 +357,25 @@ impl InputResponder for BitBangSpiResponder {
 
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
         if pin == self.pins.mosi {
-            // Mode-0 masters change MOSI only while SCLK is LOW (the shift phase),
-            // holding it stable across the rising sample edge. A MOSI transition
-            // during a SCLK-HIGH window is the CPHA=1 (mode 1 / mode 3) signature:
-            // those masters drive new data on the leading edge. The idle SCLK
-            // level at CS-assert cannot tell mode 0 from mode 1, but this edge
-            // ordering can — so we fault rather than silently mistime the byte.
-            if self.selected && !self.faulted && self.sclk && high != self.mosi {
-                self.fault(
-                    "MOSI changed while SCLK high — that is the CPHA=1 (SPI mode 1/3) \
-                     shift phase; only mode 0 (CPOL=0, CPHA=0) is modeled for \
-                     bit-banged SPI",
-                );
+            // The master must hold MOSI stable through the slave's sample window
+            // — the half-period at `sample_hold_level` (the clock's resting level
+            // after a sample edge). A MOSI transition there is not the declared
+            // mode's shift phase: the firmware is clocking a different phase, so
+            // we fault rather than accumulate a mistimed bit. (Mode 0: the sample
+            // window is SCLK-high, so this is the classic "MOSI moved while high".)
+            if self.selected
+                && !self.faulted
+                && self.sclk == self.sample_hold_level()
+                && high != self.mosi
+            {
+                let sample_rising = self.sample_hold_level(); // sample edge into the hold level
+                self.fault(&format!(
+                    "MOSI changed during the sample phase — declared SPI mode {} samples on \
+                     the SCLK-{} ({}) edge; the firmware is clocking a different mode",
+                    self.mode_num(),
+                    if sample_rising { "rising" } else { "falling" },
+                    if self.cpha { "trailing" } else { "leading" },
+                ));
             }
             self.mosi = high;
             return Vec::new();
@@ -334,19 +391,27 @@ impl InputResponder for BitBangSpiResponder {
                 if self.faulted {
                     return Vec::new();
                 }
-                if self.sclk {
-                    self.fault(
-                        "CS asserted with SCLK high — only SPI mode 0 (CPOL=0, CPHA=0) \
-                         is modeled for bit-banged SPI",
-                    );
+                // The clock must be resting at the declared CPOL idle level.
+                if self.sclk != self.cpol {
+                    self.fault(&format!(
+                        "CS asserted with SCLK {} but declared SPI mode {} idles {} (CPOL={})",
+                        level_name(self.sclk),
+                        self.mode_num(),
+                        level_name(self.cpol),
+                        u8::from(self.cpol),
+                    ));
                     return Vec::new();
                 }
                 let mut bus = self.bus.lock().unwrap_or_else(|e| e.into_inner());
                 bus.cs_assert();
                 self.presented = bus.miso_preview();
                 drop(bus);
-                // Present bit 7 immediately: mode 0 slaves drive MISO from CS
-                // assert, before the first clock.
+                if self.cpha {
+                    // CPHA=1: bit 7 is driven on the FIRST leading edge, not now.
+                    return Vec::new();
+                }
+                // CPHA=0: present bit 7 immediately — the slave drives MISO from
+                // CS assert, before the first clock.
                 return vec![(self.pins.miso, self.miso_bit())];
             }
             if high && self.selected {
@@ -368,16 +433,22 @@ impl InputResponder for BitBangSpiResponder {
             return Vec::new();
         }
 
-        // SCLK edge.
+        // SCLK edge. Classify it against the declared mode: the LEADING edge is
+        // the one away from the CPOL idle level; CPHA selects whether the slave
+        // SAMPLES on the leading edge (CPHA=0) or the trailing one (CPHA=1).
+        let rising = high && !self.sclk;
+        let falling = !high && self.sclk;
         self.sclk = high;
-        if !self.selected || self.faulted {
+        if !self.selected || self.faulted || (!rising && !falling) {
             return Vec::new();
         }
-        if high {
-            // Rising edge: the sampling edge for BOTH directions in mode 0.
-            // The MISO bit the firmware is about to digitalRead was driven on
-            // the previous falling edge (or at CS assert); the MOSI bit on the
-            // wire right now joins the accumulator.
+        let is_leading = high != self.cpol;
+        let sampling_edge = is_leading != self.cpha;
+
+        if sampling_edge {
+            // Sample edge: the MISO bit the firmware is about to digitalRead was
+            // driven on the previous shift edge (or at CS assert for CPHA=0); the
+            // MOSI bit on the wire right now joins the accumulator.
             self.acc = (self.acc << 1) | u8::from(self.mosi);
             self.nbits += 1;
             if self.nbits == 8 {
@@ -412,12 +483,23 @@ impl InputResponder for BitBangSpiResponder {
             }
             return Vec::new();
         }
-        // Falling edge: the slave shifts the next bit out (mode 0). At a byte
-        // boundary, promote the prefetched next byte first.
+        // Shift edge: the slave drives the next MISO bit. At a byte boundary,
+        // promote the prefetched next byte first. For CPHA=1 the first leading
+        // edge of a transaction is a shift edge, so this is where bit 7 first
+        // reaches the wire (nothing was presented at CS-assert).
         if let Some(next) = self.pending.take() {
             self.presented = next;
         }
         vec![(self.pins.miso, self.miso_bit())]
+    }
+}
+
+/// `"high"` / `"low"` for a clock level, used in the mode-mismatch diagnostics.
+fn level_name(high: bool) -> &'static str {
+    if high {
+        "high"
+    } else {
+        "low"
     }
 }
 
@@ -1024,6 +1106,140 @@ addr_mask = 0x7f
         assert!(
             m.resp.faulted(),
             "nonzero reply with no preview must fault the responder"
+        );
+    }
+
+    // ── Bit-banged SPI: the non-zero modes ───────────────────────────────────
+
+    /// The mode-0 SPI_SPEC with an explicit `spi_mode`, so a fixture can build
+    /// the same sensor for any declared clock mode.
+    fn spec_for_mode(mode: u8) -> String {
+        format!("{SPI_SPEC}spi_mode = {mode}\n")
+    }
+
+    /// A mode-parametric bit-level SPI master: it derives CPOL/CPHA from the
+    /// declared mode and drives the responder the way a firmware clocking THAT
+    /// mode would — idle clock at CPOL, MOSI changed on the shift edge, MISO
+    /// sampled on the sample edge. The generalization of the mode-0-only
+    /// [`SpiMaster`] above.
+    struct ModeMaster {
+        resp: BitBangSpiResponder,
+        miso: bool,
+        cpol: bool,
+        cpha: bool,
+    }
+
+    impl ModeMaster {
+        fn edge(&mut self, pin: (char, u8), high: bool) {
+            for (p, level) in self.resp.on_edge(pin, high) {
+                assert_eq!(p, PINS.miso, "responder must only drive MISO");
+                self.miso = level;
+            }
+        }
+        /// Park SCLK at the declared idle (CPOL) level before selecting.
+        fn idle(&mut self) {
+            self.edge(PINS.sclk, self.cpol);
+        }
+        fn select(&mut self) {
+            self.edge(PINS.cs_n, false);
+        }
+        fn deselect(&mut self) {
+            self.edge(PINS.cs_n, true);
+        }
+        /// Clock one MSB-first byte in the declared mode, returning the MISO byte.
+        fn xfer(&mut self, mosi: u8) -> u8 {
+            let mut got = 0u8;
+            for i in (0..8).rev() {
+                let bit = (mosi >> i) & 1 != 0;
+                if !self.cpha {
+                    // CPHA=0: set MOSI at idle, sample on the leading edge (read
+                    // MISO there), shift on the trailing edge.
+                    self.edge(PINS.mosi, bit);
+                    self.edge(PINS.sclk, !self.cpol); // leading (sample)
+                    got = (got << 1) | u8::from(self.miso);
+                    self.edge(PINS.sclk, self.cpol); // trailing (shift)
+                } else {
+                    // CPHA=1: shift on the leading edge (the slave drives MISO
+                    // there; the master drives MOSI there too), sample on the
+                    // trailing edge.
+                    self.edge(PINS.sclk, !self.cpol); // leading (shift)
+                    self.edge(PINS.mosi, bit);
+                    self.edge(PINS.sclk, self.cpol); // trailing (sample)
+                    got = (got << 1) | u8::from(self.miso);
+                }
+            }
+            got
+        }
+    }
+
+    fn mode_master(mode: u8) -> (ModeMaster, Arc<Mutex<SpiBus>>) {
+        let mut sensor = RegisterMapSensor::from_toml(&spec_for_mode(mode)).unwrap();
+        sensor.set_input("gyro_x", 1234.0);
+        let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(sensor))));
+        let resp = BitBangSpiResponder::new(bus.clone(), PINS);
+        (
+            ModeMaster {
+                resp,
+                miso: false,
+                cpol: mode & 0b10 != 0,
+                cpha: mode & 0b01 != 0,
+            },
+            bus,
+        )
+    }
+
+    /// PROOF: a full mode-3 (CPOL=1, CPHA=1) read — idle clock HIGH, shift on the
+    /// falling (leading) edge, sample on the rising (trailing) edge — answers
+    /// WHO_AM_I and the i16 gyro value bit-exactly and never faults. Proves the
+    /// declared mode drives the timing end to end.
+    #[test]
+    fn bitbang_spi_mode3_end_to_end_read() {
+        let (mut m, _bus) = mode_master(3);
+        m.idle(); // clock idles high in mode 3
+        m.select();
+        let _status = m.xfer(0x80 | 0x0f);
+        let who = m.xfer(0x00);
+        m.deselect();
+        assert_eq!(who, 0x42, "WHO_AM_I over mode-3 bit-banged SPI");
+        assert!(!m.resp.faulted());
+
+        m.select();
+        let _status = m.xfer(0x80 | 0x22);
+        let lo = m.xfer(0x00);
+        let hi = m.xfer(0x00);
+        m.deselect();
+        assert_eq!(i16::from_le_bytes([lo, hi]), 1234, "gyro over mode 3");
+        assert!(!m.resp.faulted());
+    }
+
+    /// PROOF: a mode-1 (CPOL=0, CPHA=1) read succeeds — CPHA=1 is now MODELED
+    /// (bit 7 driven on the first leading edge, sample on the trailing edge),
+    /// not faulted, WHEN the spec declares it. Contrast with
+    /// `bitbang_spi_refuses_cpha1_clock_phase`, where a mode-0 spec meets CPHA=1
+    /// clocking and must still fault.
+    #[test]
+    fn bitbang_spi_mode1_end_to_end_read() {
+        let (mut m, _bus) = mode_master(1);
+        m.idle(); // clock idles low in mode 1
+        m.select();
+        assert!(!m.resp.faulted(), "mode 1 must not fault at CS assert");
+        let _status = m.xfer(0x80 | 0x0f);
+        let who = m.xfer(0x00);
+        m.deselect();
+        assert_eq!(who, 0x42, "WHO_AM_I over mode-1 bit-banged SPI");
+        assert!(!m.resp.faulted(), "CPHA=1 must be modeled when declared");
+    }
+
+    /// A mode-2 (CPOL=1, CPHA=0) device idles SCLK HIGH; a CS assert with SCLK
+    /// LOW is the wrong idle level for the declared CPOL and must fault.
+    #[test]
+    fn bitbang_spi_mode2_wrong_idle_faults() {
+        let (mut m, _bus) = mode_master(2);
+        m.edge(PINS.sclk, false); // force SCLK low: wrong idle for CPOL=1
+        m.select();
+        assert!(
+            m.resp.faulted(),
+            "mode 2 idles SCLK high — a CS assert with SCLK low must fault"
         );
     }
 
