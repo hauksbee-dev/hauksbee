@@ -57,6 +57,9 @@ pub fn parse(text: &str) -> DrillFile {
     // handled by detecting the absence of a '.' and applying the tool format.
     let mut int_digits = 2usize; // INCH default 2.4; METRIC default 3.3
     let mut dec_digits = 4usize;
+    // True once an explicit `;FILE_FORMAT=` set the coordinate split, so a
+    // later INCH/METRIC line does not clobber it with its unit default.
+    let mut format_set = false;
     let mut leading_zero_omitted = true; // LZ means leading kept; default omit
 
     for raw in text.lines() {
@@ -94,6 +97,7 @@ pub fn parse(text: &str) -> DrillFile {
                         if i <= 12 && d <= 12 {
                             int_digits = i;
                             dec_digits = d;
+                            format_set = true;
                         }
                     }
                 }
@@ -114,8 +118,13 @@ pub fn parse(text: &str) -> DrillFile {
         if line == "METRIC" || line.starts_with("METRIC") || line == "M71" {
             metric = true;
             explicit_units = true;
-            int_digits = 3;
-            dec_digits = 3;
+            // METRIC default is 3.3, but a prior `;FILE_FORMAT=` may have set
+            // the real split (e.g. 4:4); only impose the default if none was
+            // given — symmetric with the INCH handler below.
+            if !format_set {
+                int_digits = 3;
+                dec_digits = 3;
+            }
             apply_zero_mode(line, &mut leading_zero_omitted);
             continue;
         }
@@ -124,7 +133,7 @@ pub fn parse(text: &str) -> DrillFile {
             explicit_units = true;
             // Default INCH is 2.4, but a prior `;FILE_FORMAT=` may have set the
             // real split (e.g. 2:5); only impose the default if none was given.
-            if int_digits == 2 && dec_digits == 4 {
+            if !format_set {
                 int_digits = 2;
                 dec_digits = 4;
             }
@@ -384,6 +393,32 @@ M30
         // 3.3 metric, leading zeros omitted: X123456 -> 123.456
         let v = parse_coord("123456", 3, 3, true).unwrap();
         assert!((v - 123.456).abs() < 1e-6);
+    }
+
+    #[test]
+    fn metric_honors_preceding_file_format() {
+        // A `;FILE_FORMAT=4:4` before METRIC must win: METRIC must not clobber
+        // it back to the 3:3 default (the INCH handler already guarded this).
+        // X12345678 under 4:4 -> 1234.5678 mm; under a forced 3:3 it would be
+        // 12345.678.
+        let drill = "\
+M48
+;FILE_FORMAT=4:4
+METRIC
+T1C0.350
+%
+G90
+T1
+X12345678Y00010000
+M30
+";
+        let d = parse(drill);
+        assert_eq!(d.holes.len(), 1);
+        assert!(
+            (d.holes[0].x - 1234.5678).abs() < 1e-4,
+            "x was {} (expected 4:4 scaling, not the 3:3 default)",
+            d.holes[0].x
+        );
     }
 
     // The Altium dialect the Inkplate 6 ships: `;FILE_FORMAT=2:5`, `INCH,LZ`,

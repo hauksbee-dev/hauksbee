@@ -125,11 +125,18 @@ impl Circuit {
 
     /// Intern a node name, returning its id. `"0"` and `"gnd"`
     /// (case-insensitive) both map to ground.
+    ///
+    /// Matching is case-INSENSITIVE, like SPICE net identity and every other
+    /// resolution path in this crate (`find_node`, subckt ports, device/model
+    /// lookup). A case-sensitive match here split one net into two — `node("OUT")`
+    /// and `node("Out")` returned different ids — and disagreed with the
+    /// case-insensitive `find_node`, so a `.ic V(out)=…` card seeded only one of
+    /// the halves. The first-seen casing is kept for display.
     pub fn node(&mut self, name: &str) -> NodeId {
         if name == "0" || name.eq_ignore_ascii_case("gnd") {
             return NodeId::GROUND;
         }
-        if let Some(i) = self.node_names.iter().position(|n| n == name) {
+        if let Some(i) = self.node_names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
             return NodeId(i as u32);
         }
         let id = self.node_names.len() as u32;

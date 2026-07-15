@@ -66,7 +66,13 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
         }
         v = rest;
     }
-    parse_inner(v)
+    // A value expressed purely in volts ("5V1", "3V3", "12V") is not an R/C/L
+    // magnitude — it is a zener/TVS breakdown or a rating. parse_inner would
+    // read "5V1" as 5.0 V (silently dropping the ".1") and, worse, returning
+    // Some() defeats the signal-diode fallback in the binder (which keys off
+    // parse_value() == None for non-passive values), leaving the part open.
+    // Return None so the diode/reference-class fallbacks handle it.
+    parse_inner(v).filter(|p| p.unit.as_deref() != Some("V"))
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
@@ -222,7 +228,13 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
         return (1e9, Some("GIG"), &s[3..]);
     }
     match s.as_bytes()[0] {
-        b'f' | b'F' => (1e-15, Some("f"), &s[1..]),
+        // Lowercase 'f' is femto; UPPERCASE 'F' is the Farad UNIT, not a
+        // multiplier. Consuming 'F' as femto turned a bare-Farad value ("1F",
+        // a supercap) into 1e-15 F — off by 10^15. Femto essentially never
+        // appears bare-uppercase in BOMs, so 'F' falls through to parse_tail,
+        // which recognises it as the Farad unit (×1). ("100nF" is unaffected:
+        // the explicit 'n' multiplier is consumed first, then 'F' is the unit.)
+        b'f' => (1e-15, Some("f"), &s[1..]),
         b'p' | b'P' => (1e-12, Some("p"), &s[1..]),
         b'n' | b'N' => (1e-9, Some("n"), &s[1..]),
         b'u' | b'U' => (1e-6, Some("u"), &s[1..]),
@@ -463,5 +475,35 @@ mod tests {
         check("22u X7R", 22e-6);
         check("10k Ohm", 10_000.0);
         check("600@100MHz", 600.0); // ferrite bead impedance@frequency
+    }
+
+    /// Bug regression: a bare uppercase 'F' is the Farad unit, not the femto
+    /// multiplier. "1F" (a supercap) must be 1 farad, not 1e-15.
+    #[test]
+    fn test_bare_farad_is_not_femto() {
+        check("1F", 1.0);
+        check("10F", 10.0);
+        check("0.1F", 0.1);
+        check("4.7F", 4.7);
+        // Explicit-multiplier capacitances are unaffected (multiplier first).
+        check("100nF", 100e-9);
+        check("0.1uF", 0.1e-6);
+        check("10pF", 10e-12);
+    }
+
+    /// Bug regression: a value expressed purely in volts is a zener/TVS rating,
+    /// not an R/C/L magnitude. It must parse to None so the diode fallback
+    /// handles it, instead of reading "5V1" as 5.0 (dropping the ".1").
+    #[test]
+    fn test_pure_voltage_codes_are_not_magnitudes() {
+        for v in ["5V1", "3V3", "12V", "5V", "18V", "1V8"] {
+            assert!(
+                parse_value(v).is_none(),
+                "pure-voltage value {v:?} must not parse as a magnitude"
+            );
+        }
+        // A capacitance with a voltage RATING annotation still parses (unit F).
+        check("22uF/25V", 22e-6);
+        check("100nF 50V", 100e-9);
     }
 }

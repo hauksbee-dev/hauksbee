@@ -77,7 +77,7 @@ kind = "bjt_npn"
 description = "BC237/BC547 NPN general-purpose TO-92, 45V, 100mA"
 
 [models.match]
-value_re = "(?i)^BC2[3-5][0-9]$|^BC54[7-9][A-C]?$"
+value_re = "(?i)^BC23[789]$|^BC54[7-9][A-C]?$"
 
 [models.params]
 # Source: Fairchild BC546/547/548/549/550 datasheet, SPICE parameters
@@ -229,7 +229,11 @@ kind = "bjt_pnp"
 description = "BC307/BC557 PNP small-signal TO-92, 45V, 100mA"
 
 [models.match]
-value_re = "(?i)^BC3(0[0-9]|[12][0-9])$|^BC55[7-9][A-C]?$"
+# PNP small-signal set only: BC307/308/309 and BC320/321/322/327/328/329.
+# The old `BC3[12][0-9]` alt also caught the NPN BC317/318/319 (complements of
+# BC320/321/322) and silently modelled them as PNP; they are left unresolved
+# (loud) rather than wrong-polarity.
+value_re = "(?i)^BC3(0[789]|2[012789])$|^BC55[7-9][A-C]?$"
 
 [models.params]
 # Source: Fairchild BC557/558/559 datasheet, SPICE parameters
