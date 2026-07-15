@@ -456,7 +456,7 @@ mod tests {
             *v = 0.2 * (i as f64 + 1.0);
         }
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
 
@@ -491,7 +491,7 @@ mod tests {
         let x: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.37).cos() * 1.5 + 0.2).collect();
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
 
@@ -526,7 +526,7 @@ mod tests {
         let mut x: Vec<f64> = (0..n).map(|i| 0.3 + 0.05 * i as f64).collect();
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
 
         let mut st = BypassState::build(&c, &layout);
@@ -610,7 +610,7 @@ mod tests {
             model: BjtModel::default(),
         });
 
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let run = |bypass: crate::options::NewtonBypass| {
             let mut opts = SolverOptions::default();
             opts.newton_bypass = bypass;
@@ -662,7 +662,7 @@ mod tests {
         let mut x: Vec<f64> = vec![0.4; n];
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let mut st = BypassState::build(&c, &layout);
         st.begin_solve();
