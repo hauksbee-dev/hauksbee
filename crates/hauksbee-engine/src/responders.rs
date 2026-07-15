@@ -583,6 +583,12 @@ pub struct SoftI2cResponder {
     addr: u8,
     /// True when the open transaction's address matched an attached slave.
     active: bool,
+    /// Every modeled address this transaction has touched since the last
+    /// STOP. A repeated START re-addresses without a STOP, so this ADDS; the
+    /// physical STOP then names each member to the bus — not just the
+    /// last-addressed slave, and even when the FINAL leg was a NACKed
+    /// unmodeled address (`active` false).
+    touched: Vec<u8>,
     /// The SDA level this responder is currently driving into the MCU input,
     /// while a slave-owned phase holds the line.
     drive: Option<bool>,
@@ -605,6 +611,7 @@ impl SoftI2cResponder {
             phase: I2cPhase::Idle,
             addr: 0,
             active: false,
+            touched: Vec::new(),
             drive: None,
             warned_addrs: Vec::new(),
             trace: std::env::var_os("HAUKSBEE_SOFT_I2C_TRACE").is_some(),
@@ -668,8 +675,12 @@ impl SoftI2cResponder {
     /// the bus and its ctx-bearing `on_stop` is delivered by the scheduler's
     /// chunk-boundary `flush_stops`, same as the hardware-TWI path.
     fn on_stop(&mut self, out: &mut Vec<((char, u8), bool)>) {
-        if self.active {
-            self.dispatch(I2cEvent::Stop { addr: self.addr });
+        // A physical STOP ends the WHOLE transaction, and a repeated-START
+        // chain may have addressed several slaves — every one gets its Stop
+        // (a DAC written in the first leg still commits its output net when
+        // a later leg re-addressed some other device), not just `self.addr`.
+        for addr in std::mem::take(&mut self.touched) {
+            self.dispatch(I2cEvent::Stop { addr });
         }
         self.active = false;
         self.phase = I2cPhase::Idle;
@@ -703,6 +714,9 @@ impl SoftI2cResponder {
                 );
             }
             self.active = known;
+            if known && !self.touched.contains(&addr) {
+                self.touched.push(addr);
+            }
             self.phase = I2cPhase::SlaveAck {
                 ack: known,
                 read_next: known && read,
@@ -1397,6 +1411,93 @@ style = "i2c_pointer"
         m.start();
         assert!(m.write_byte(0x68 << 1), "modeled address still ACKs");
         m.stop();
+    }
+
+    /// A DAC-style spec: a fast_write command latches the code and the output
+    /// law drives VOUT — the write-side device whose STOP delivery matters.
+    const I2C_DAC_SPEC: &str = r#"
+[sensor]
+name = "MINIDAC"
+bus = "i2c"
+i2c_address = 0x60
+
+[[sensor.state]]
+name = "code"
+default = 0.0
+
+[[sensor.write_command]]
+name = "fast_write"
+match_mask = 0xC0
+match_value = 0x00
+group_bytes = 2
+
+[[sensor.write_command.field]]
+name = "code_bits"
+bits = [11, 0]
+
+[sensor.write_command.update]
+code = "code_bits"
+
+[[sensor.output]]
+name = "vout"
+expr = "code / 4096 * 4.096"
+
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+
+    /// PROOF: a physical STOP closes the WHOLE repeated-START chain, not just
+    /// the last-addressed leg. Firmware writes the DAC at 0x60 (ACKed, code
+    /// latched), then a repeated START re-addresses 0x50 — unmodeled, NACKed —
+    /// and only then STOPs. The DAC must still get its transaction end: its
+    /// output law lands on the bound net at the chunk-boundary flush. Before
+    /// the fix both layers tracked only the most-recent address, so the ACKed
+    /// write silently never reached the net. Contrast with
+    /// `soft_i2c_reads_registers_via_repeated_start`, whose chain re-addresses
+    /// the SAME slave and never saw the bug.
+    #[test]
+    fn soft_i2c_stop_reaches_first_leg_after_address_change() {
+        use crate::drivers::PinDriver;
+        use crate::peripherals::TickCtx;
+        use hauksbee_ir::{Circuit, Device, SourceKind};
+
+        let mut circuit = Circuit::default();
+        let net = circuit.node("VOUT");
+        let driver = PinDriver::stamp(&mut circuit, net, "VOUT", "minidac", 1.0);
+        let vsource = driver.vsource;
+
+        let mut sensor = RegisterMapSensor::from_toml(I2C_DAC_SPEC).unwrap();
+        assert!(sensor.attach_output_driver_for_channel(0, driver));
+        let bus = Arc::new(Mutex::new(I2cBus::new("U4").with_slave(Box::new(sensor))));
+        let mut m = I2cMaster {
+            resp: SoftI2cResponder::new(bus.clone(), SCL, SDA),
+            sda_in: true,
+        };
+        m.init();
+
+        // Leg 1: fast_write code 2048 (0x08 0x00) -> 2.048 V once committed.
+        m.start();
+        assert!(m.write_byte(0x60 << 1), "DAC address+W must ACK");
+        assert!(m.write_byte(0x08));
+        assert!(m.write_byte(0x00));
+        // Leg 2: repeated START to a DIFFERENT, unmodeled address (NACKed) —
+        // the last-addressed slot no longer names the DAC.
+        m.start();
+        assert!(!m.write_byte((0x50 << 1) | 1), "unmodeled address must NACK");
+        m.stop();
+
+        let src_volts = |c: &Circuit| match c.devices[vsource.0 as usize] {
+            Device::Vsource { kind: SourceKind::Dc(v), .. } => v,
+            _ => panic!("driver vsource"),
+        };
+        assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
+        let volts = vec![0.0; 4];
+        let mut ctx = TickCtx { circuit: &mut circuit, node_volts: &volts, t: 0.0, dt: 1e-3 };
+        bus.lock().unwrap().flush_stops(&mut ctx);
+        assert!(
+            (src_volts(&circuit) - 2.048).abs() < 1e-9,
+            "first-leg DAC write must reach the net after the STOP"
+        );
     }
 
     /// A START mid-byte resyncs the engine (the asynchronous START detection

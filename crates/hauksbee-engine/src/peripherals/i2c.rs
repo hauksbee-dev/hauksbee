@@ -89,6 +89,13 @@ pub struct I2cBus {
     id: String,
     /// Address of the slave currently addressed (set on START), if any matched.
     active: Option<u8>,
+    /// Every modeled address the current transaction has touched since the
+    /// last STOP. A repeated START (Sr) legitimately re-addresses the bus
+    /// without a STOP, so this ADDS on each matched START; a STOP ends the
+    /// WHOLE transaction and must reach every member, not just the
+    /// last-addressed slave (a DAC written in leg one still commits its
+    /// output net even when leg two re-addressed an EEPROM).
+    txn_addrs: Vec<u8>,
     slaves: Vec<Box<dyn I2cSlave>>,
     /// Addresses that saw a STOP since the last [`I2cBus::flush_stops`]. The
     /// ctx-bearing `on_stop` cannot run inside the MCU callback (no `TickCtx`
@@ -102,6 +109,7 @@ impl I2cBus {
         I2cBus {
             id: id.to_string(),
             active: None,
+            txn_addrs: Vec::new(),
             slaves: Vec::new(),
             stop_pending: Vec::new(),
         }
@@ -142,6 +150,9 @@ impl I2cBus {
                     .iter()
                     .any(|s| s.address() == addr)
                     .then_some(addr);
+                if self.active.is_some() && !self.txn_addrs.contains(&addr) {
+                    self.txn_addrs.push(addr);
+                }
                 if let Some(s) = self.slave_mut(addr) {
                     s.on_start(read);
                 }
@@ -159,11 +170,21 @@ impl I2cBus {
                 self.slave_mut(a).map(|s| s.on_read())
             }
             I2cEvent::Stop { addr } => {
-                let a = self.active.take().unwrap_or(addr);
-                // Record the STOP; the ctx-bearing on_stop is delivered by
-                // `flush_stops` at the chunk boundary (see the trait docs).
-                if self.slave_mut(a).is_some() && !self.stop_pending.contains(&a) {
-                    self.stop_pending.push(a);
+                self.active = None;
+                // A physical STOP ends the whole transaction: every address it
+                // touched via (repeated) START gets its transaction end, plus
+                // the named address — honored, not overridden, so a caller can
+                // route a Stop to a specific slave. Record them; the
+                // ctx-bearing on_stop is delivered by `flush_stops` at the
+                // chunk boundary (see the trait docs).
+                let mut ended = std::mem::take(&mut self.txn_addrs);
+                if !ended.contains(&addr) {
+                    ended.push(addr);
+                }
+                for a in ended {
+                    if self.slave_mut(a).is_some() && !self.stop_pending.contains(&a) {
+                        self.stop_pending.push(a);
+                    }
                 }
                 None
             }
@@ -191,6 +212,7 @@ impl I2cBus {
     /// code-0 VOUT ≈ 0 V) before any firmware transaction has happened.
     pub fn drive_all(&mut self, ctx: &mut TickCtx) {
         self.stop_pending.clear();
+        self.txn_addrs.clear();
         for s in &mut self.slaves {
             s.on_stop(ctx);
         }
@@ -680,6 +702,84 @@ mod tests {
         assert_eq!(ee.contents()[0x00], 0xB1, "wraps at the 64-byte page end");
         assert_eq!(ee.contents()[0x20], 0xFF, "a default-32-byte-page wrap would land here");
         assert_eq!(ee.contents()[0x40], 0xFF, "no spill into the next 64-byte page");
+    }
+
+    /// Records `on_stop` deliveries, to prove STOP routing across a
+    /// repeated-START chain.
+    struct StopSpy {
+        addr: u8,
+        stops: usize,
+    }
+
+    impl I2cSlave for StopSpy {
+        fn address(&self) -> u8 {
+            self.addr
+        }
+        fn on_read(&mut self) -> u8 {
+            0
+        }
+        fn on_stop(&mut self, _ctx: &mut TickCtx) {
+            self.stops += 1;
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// PROOF: a physical STOP ends the WHOLE transaction. A repeated-START
+    /// chain that re-addresses a second slave (write 0x60, Sr, read 0x48,
+    /// STOP naming only 0x48) still delivers the transaction end to BOTH —
+    /// the first-leg device is not skipped just because the last START went
+    /// elsewhere. And a same-address chain stays a single delivery (no
+    /// duplicate Stops from the Sr).
+    #[test]
+    fn stop_reaches_every_slave_addressed_via_repeated_start() {
+        use hauksbee_ir::Circuit;
+
+        let mut bus = I2cBus::new("I2C")
+            .with_slave(Box::new(StopSpy { addr: 0x60, stops: 0 }))
+            .with_slave(Box::new(StopSpy { addr: 0x48, stops: 0 }));
+
+        // Leg 1: write to 0x60. Leg 2 (repeated START, no STOP between): read
+        // from 0x48. One physical STOP, naming the last-addressed slave.
+        for ev in [
+            I2cEvent::Start { addr: 0x60, read: false },
+            I2cEvent::Write { addr: 0x60, data: 0x08 },
+            I2cEvent::Start { addr: 0x48, read: true },
+            I2cEvent::Read { addr: 0x48 },
+            I2cEvent::Stop { addr: 0x48 },
+        ] {
+            bus.dispatch(ev);
+        }
+        let mut circuit = Circuit::default();
+        let volts: Vec<f64> = Vec::new();
+        let mut ctx = TickCtx { circuit: &mut circuit, node_volts: &volts, t: 0.0, dt: 1e-3 };
+        bus.flush_stops(&mut ctx);
+        assert_eq!(
+            bus.slave::<StopSpy>(0x60).unwrap().stops,
+            1,
+            "first-leg slave must see the transaction end"
+        );
+        assert_eq!(bus.slave::<StopSpy>(0x48).unwrap().stops, 1);
+
+        // Same-address repeated START (the register-read idiom): exactly one
+        // delivery, not one per leg.
+        for ev in [
+            I2cEvent::Start { addr: 0x48, read: false },
+            I2cEvent::Write { addr: 0x48, data: 0x00 },
+            I2cEvent::Start { addr: 0x48, read: true },
+            I2cEvent::Read { addr: 0x48 },
+            I2cEvent::Stop { addr: 0x48 },
+        ] {
+            bus.dispatch(ev);
+        }
+        let mut ctx = TickCtx { circuit: &mut circuit, node_volts: &volts, t: 0.0, dt: 1e-3 };
+        bus.flush_stops(&mut ctx);
+        assert_eq!(bus.slave::<StopSpy>(0x48).unwrap().stops, 2, "one more, not two");
+        assert_eq!(bus.slave::<StopSpy>(0x60).unwrap().stops, 1, "untouched slave stays at 1");
     }
 
     #[test]
