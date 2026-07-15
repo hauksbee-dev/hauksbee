@@ -262,3 +262,235 @@ fn cr_designated_diode_is_not_a_capacitor() {
     assert_eq!(bound.node("ANODE_NET"), Some(a), "anode on the A-pin net");
     assert_eq!(bound.node("CATHODE_NET"), Some(k), "cathode on the K-pin net");
 }
+
+/// Bug (binder-r3 #1): a multi-element passive array (a 4-pad isolated
+/// resistor network) used to bind as ONE 2-terminal resistor across its first
+/// two pads — the other elements silently vanished from the circuit. An even
+/// pad count is the isolated-array convention: sequential pad pairs (1-2,
+/// 3-4, …), one element per pair at the pack's per-element value.
+#[test]
+fn isolated_passive_array_stamps_one_element_per_pad_pair() {
+    // 4-pad isolated array: element 1 = pads 1-2 (NET_A..NET_B), element 2 =
+    // pads 3-4 (NET_C..NET_D).
+    let rn = comp(
+        "RN1",
+        "10k",
+        "Resistor_SMD:R_Array_Concave_2x0603",
+        vec![pin("1", 1, ""), pin("2", 2, ""), pin("3", 3, ""), pin("4", 4, "")],
+    );
+    let b = board(
+        &[(1, "NET_A"), (2, "NET_B"), (3, "NET_C"), (4, "NET_D")],
+        vec![rn],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let resistors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|d| match d {
+            Device::Resistor { name, a, b, ohms, .. } if name.starts_with("RN1") => {
+                Some((name.clone(), *a, *b, *ohms))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resistors.len(),
+        2,
+        "a 4-pad isolated array is TWO resistors, never a silent single \
+         element; got {resistors:?}"
+    );
+    let node = |n: &str| bound.node(n).unwrap();
+    let bridges = |x: &str, y: &str| {
+        resistors
+            .iter()
+            .any(|(_, a, b, _)| (*a == node(x) && *b == node(y)) || (*a == node(y) && *b == node(x)))
+    };
+    assert!(bridges("NET_A", "NET_B"), "element 1 spans pads 1-2");
+    assert!(bridges("NET_C", "NET_D"), "element 2 spans pads 3-4");
+    assert!(
+        !bridges("NET_B", "NET_C"),
+        "no element may span across the pad-pair boundary"
+    );
+    for (name, _, _, ohms) in &resistors {
+        assert!(
+            (*ohms - 10_000.0).abs() < 1e-6,
+            "{name}: each element carries the per-element value, got {ohms}"
+        );
+    }
+}
+
+/// Odd pad counts are ambiguous (bussed common could sit at either end). The
+/// binder assumes the bussed convention (lowest pad common) but must say so
+/// LOUDLY in the bind report — never a silent single-element bind.
+#[test]
+fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
+    // 5-pad bussed array: pad 1 common, elements to pads 2..5.
+    let rn = comp(
+        "RN2",
+        "4k7",
+        "Resistor_THT:R_Array_SIP5",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("3", 3, ""),
+            pin("4", 4, ""),
+            pin("5", 5, ""),
+        ],
+    );
+    let b = board(
+        &[(1, "COM"), (2, "N2"), (3, "N3"), (4, "N4"), (5, "N5")],
+        vec![rn],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let resistors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|d| match d {
+            Device::Resistor { name, a, b, .. } if name.starts_with("RN2") => {
+                Some((name.clone(), *a, *b))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resistors.len(),
+        4,
+        "a 5-pad bussed array is FOUR elements off the common, got {resistors:?}"
+    );
+    let com = bound.node("COM").unwrap();
+    for (name, a, b) in &resistors {
+        assert!(
+            *a == com || *b == com,
+            "{name}: every bussed element must touch the common pad's net"
+        );
+    }
+    // And the assumption is loud, not silent.
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|r| r.reference == "RN2")
+        .expect("RN2 gets a bind row");
+    let w = row.warning.as_deref().unwrap_or("");
+    assert!(
+        w.contains("BUSSED"),
+        "ambiguous odd-pad array must carry a loud bussed-assumption warning, got {w:?}"
+    );
+}
+
+/// Bug (binder-r3 #2): negative supply rails ("-5V", "-12V") were never
+/// recognised by `power_rail_voltage` (the substring fallback required a
+/// leading '+'), so the net got no SupplyLeg and silently floated at 0 V.
+/// A negative rail must get a supply at the NEGATIVE voltage — and must not
+/// be conflated with ground.
+#[test]
+fn negative_rails_get_supply_legs_at_negative_voltage() {
+    // An op-amp-style split supply: R1 from -5V to GND, R2 from -12V to GND
+    // (loads so the nets are real).
+    let r1 = comp(
+        "R1",
+        "10k",
+        "Resistor_SMD:R_0402_1005Metric",
+        vec![pin("1", 1, ""), pin("2", 3, "")],
+    );
+    let r2 = comp(
+        "R2",
+        "10k",
+        "Resistor_SMD:R_0402_1005Metric",
+        vec![pin("1", 2, ""), pin("2", 3, "")],
+    );
+    let b = board(&[(1, "-5V"), (2, "-12V"), (3, "GND")], vec![r1, r2]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let leg_volts = |net: &str| -> f64 {
+        bound
+            .supplies
+            .iter()
+            .find(|l| l.net_name == net)
+            .unwrap_or_else(|| panic!("net {net} must get a SupplyLeg, not float at 0 V"))
+            .supply
+            .nominal_volts()
+    };
+    assert_eq!(leg_volts("-5V"), -5.0, "-5V rail supplies -5.0 V");
+    assert_eq!(leg_volts("-12V"), -12.0, "-12V rail supplies -12.0 V");
+
+    // Not ground: the rail keeps its own (non-ground) node.
+    let n5 = bound.node("-5V").expect("-5V interned");
+    assert!(!n5.is_ground(), "-5V must never fold onto ground node 0");
+
+    // And the report carries the rail rows at the negative voltage.
+    for (name, v) in [("-5V", -5.0), ("-12V", -12.0)] {
+        let row = bound
+            .report
+            .rows
+            .iter()
+            .find(|r| r.reference == format!("RAIL:{name}"))
+            .unwrap_or_else(|| panic!("RAIL:{name} row expected"));
+        assert!(
+            matches!(row.outcome, BindOutcome::PowerRail { volts } if volts == v),
+            "{name}: expected PowerRail at {v} V, got {:?}",
+            row.outcome
+        );
+    }
+}
+
+/// Bug (binder-r3 #3): electrode-letter pad numbers ("A"/"K" on a diode
+/// footprint, no pinfunction, numerically-keyed fallback pad map) were never
+/// interpreted as roles, so the diode bound OPEN — a real junction deleted.
+/// The pad letters must map to anode/cathode with correct polarity.
+#[test]
+fn diode_with_electrode_letter_pads_binds_with_correct_polarity() {
+    // Footprint-only extraction: pads are NAMED "A"/"K", pinfunctions empty.
+    // Value "D" resolves through the engine's 1N4148 fallback, whose pad map
+    // is keyed "1"/"2" — so before the fix nothing matched and D1 bound open.
+    let d = comp(
+        "D1",
+        "D",
+        "Diode_SMD:D_SOD-323",
+        vec![pin("A", 1, ""), pin("K", 2, "")],
+    );
+    let b = board(&[(1, "ANODE_NET"), (2, "CATHODE_NET")], vec![d]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let (a, k) = bound
+        .circuit
+        .devices
+        .iter()
+        .find_map(|dv| match dv {
+            Device::Diode { name, a, k, .. } if name == "D1" => Some((*a, *k)),
+            _ => None,
+        })
+        .expect("A/K-padded diode must bind as a Device::Diode, not OPEN");
+    assert_eq!(bound.node("ANODE_NET"), Some(a), "pad A is the anode");
+    assert_eq!(bound.node("CATHODE_NET"), Some(k), "pad K is the cathode");
+}
+
+/// Eagle "P$1"/"P$2" ordinal pads reach the model's numeric pad map after
+/// normalisation ("P$1" -> "1" = cathode in the KiCad Device:D convention).
+#[test]
+fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
+    let d = comp(
+        "D2",
+        "D",
+        "Diode_SMD:D_SOD-323",
+        vec![pin("P$1", 1, ""), pin("P$2", 2, "")],
+    );
+    let b = board(&[(1, "CATHODE_NET"), (2, "ANODE_NET")], vec![d]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let (a, k) = bound
+        .circuit
+        .devices
+        .iter()
+        .find_map(|dv| match dv {
+            Device::Diode { name, a, k, .. } if name == "D2" => Some((*a, *k)),
+            _ => None,
+        })
+        .expect("P$-padded diode must bind as a Device::Diode, not OPEN");
+    assert_eq!(bound.node("ANODE_NET"), Some(a), "P$2 is the anode (1=K 2=A)");
+    assert_eq!(bound.node("CATHODE_NET"), Some(k), "P$1 is the cathode");
+}
