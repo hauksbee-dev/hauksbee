@@ -140,6 +140,130 @@ impl CompiledEntry {
         }
         score
     }
+
+    /// Fine-grained regex constrainedness, used as a same-layer tie-break.
+    ///
+    /// [`specificity_score`](Self::specificity_score) only counts *which*
+    /// rule fields are present, so a dedicated override (`^1N4004$`) and the
+    /// family entry it carves out of (`^1N400[1-7]$`) tie when both match the
+    /// same value. This score ranks the patterns themselves: an exact literal
+    /// outranks a character-class/alternation family pattern, so the override
+    /// wins deterministically instead of by load order.
+    pub fn regex_specificity(&self) -> u32 {
+        let rules = &self.entry.r#match;
+        [
+            rules.value_re.as_deref(),
+            rules.mpn_re.as_deref(),
+            rules.footprint_re.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(pattern_constrainedness)
+        .sum()
+    }
+}
+
+/// Heuristic constrainedness of a regex pattern (higher = more exact).
+///
+/// The pattern is split on top-level `|` and the *least* constrained branch
+/// counts — an alternation is only as specific as its loosest arm. Within a
+/// branch: literal characters score 2, a character class (`[...]`) or escaped
+/// class (`\d`, `\w`, …) scores 1 (it pins one position but admits several
+/// characters), anchors score 1, and wildcards / quantifiers / grouping
+/// punctuation score 0. So `^1N4004$` (14) outranks `^1N400[1-7]$` (13) while
+/// both keep the same field-level [`CompiledEntry::specificity_score`].
+pub fn pattern_constrainedness(pattern: &str) -> u32 {
+    split_top_level_alternation(pattern)
+        .into_iter()
+        .map(branch_constrainedness)
+        .min()
+        .unwrap_or(0)
+}
+
+/// Split a pattern on `|` at nesting depth zero (outside classes and groups).
+fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
+    let mut branches = Vec::new();
+    let bytes = pattern.as_bytes();
+    let mut depth = 0usize;
+    let mut in_class = false;
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1, // skip the escaped byte
+            b'[' if !in_class => in_class = true,
+            b']' if in_class => in_class = false,
+            b'(' if !in_class => depth += 1,
+            b')' if !in_class => depth = depth.saturating_sub(1),
+            b'|' if !in_class && depth == 0 => {
+                branches.push(&pattern[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    branches.push(&pattern[start..]);
+    branches
+}
+
+/// Constrainedness of a single alternation-free branch (see
+/// [`pattern_constrainedness`] for the character weights).
+fn branch_constrainedness(branch: &str) -> u32 {
+    let mut score = 0u32;
+    let mut chars = branch.chars().peekable();
+    let mut in_class = false;
+    while let Some(c) = chars.next() {
+        if in_class {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                ']' => in_class = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '\\' => match chars.next() {
+                // Escaped class: pins one position, admits several chars.
+                Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => score += 1,
+                // Escaped metacharacter: a literal.
+                Some(_) => score += 2,
+                None => {}
+            },
+            '[' => {
+                in_class = true;
+                score += 1;
+            }
+            '(' => {
+                // Skip inline flags: `(?i)` scores nothing, `(?i:` / `(?:`
+                // fall through so the group body is scored normally.
+                if chars.peek() == Some(&'?') {
+                    chars.next();
+                    while let Some(&n) = chars.peek() {
+                        chars.next();
+                        if n == ':' || n == ')' {
+                            break;
+                        }
+                    }
+                }
+            }
+            '{' => {
+                // Repetition count `{m,n}`: contributes nothing.
+                while let Some(&n) = chars.peek() {
+                    chars.next();
+                    if n == '}' {
+                        break;
+                    }
+                }
+            }
+            '^' | '$' => score += 1,
+            ')' | '.' | '*' | '+' | '?' => {}
+            _ => score += 2,
+        }
+    }
+    score
 }
 
 /// Normalise common BOM variations before regex matching.
@@ -192,5 +316,49 @@ impl MatchRules {
             + self.value_re.is_some() as usize
             + self.footprint_re.is_some() as usize
             + self.mpn_re.is_some() as usize
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::pattern_constrainedness;
+
+    #[test]
+    fn exact_literal_outranks_character_class_family() {
+        // The 1N400x case: the dedicated override must score above the family.
+        assert!(
+            pattern_constrainedness("(?i)^1N4004$") > pattern_constrainedness("(?i)^1N400[1-7]$")
+        );
+    }
+
+    #[test]
+    fn anchored_exact_outranks_unanchored_prefix() {
+        // ^INA186$ vs (?i)^INA186 — the anchored exact is more constrained.
+        assert!(pattern_constrainedness("^INA186$") > pattern_constrainedness("(?i)^INA186"));
+    }
+
+    #[test]
+    fn alternation_scores_its_loosest_branch() {
+        // ^BAT5[0-9]$|^BAT43$ is only as specific as its looser arm.
+        let alt = pattern_constrainedness("(?i)^BAT5[0-9]$|^BAT43$");
+        assert_eq!(alt, pattern_constrainedness("^BAT5[0-9]$"));
+        assert!(pattern_constrainedness("(?i)^BAT54$") > alt);
+    }
+
+    #[test]
+    fn inline_flags_and_groups_score_nothing() {
+        assert_eq!(pattern_constrainedness("(?i)AB"), pattern_constrainedness("AB"));
+        assert_eq!(pattern_constrainedness("(AB)"), pattern_constrainedness("AB"));
+    }
+
+    #[test]
+    fn wildcards_and_quantifiers_score_nothing() {
+        assert_eq!(
+            pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
+            pattern_constrainedness("^1N4148[A-Z0-9-]$")
+        );
+        assert!(pattern_constrainedness("^ABC$") > pattern_constrainedness("^AB.$"));
     }
 }
