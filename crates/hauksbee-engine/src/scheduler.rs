@@ -42,6 +42,17 @@ use crate::stress::{FaultEvent, StressMonitor};
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 
+/// Resistance at or above which a resistor leg is too weak to count as
+/// evidence that a net is really driven, for the plain digital-input sync. An
+/// open pushbutton contact ([`crate::peripherals::controls`]' `CONTACT_ROFF`)
+/// and a tri-stated [`PinDriver`] leg are both 1 GΩ — their ~0 V "drive" is a
+/// numerical artifact, not a level a real input pin would see (on hardware the
+/// pin's internal pull-up, unmodeled in the analog circuit, would win). A real
+/// pull resistor (10 k–1 M) sits far below this. Checked against the LIVE ohms
+/// each chunk, so a pressed button (contact swapped to ~100 Ω) becomes
+/// evidence the moment it closes.
+const WEAK_DIGITAL_DRIVE_OHMS: f64 = 1e8;
+
 /// A strict headless run (`--strict`) or hauksbee-ci aborts (exit 3,
 /// invalid-for-analysis) once the analog solve fails this many chunks in a row.
 /// Three, not one: a single failed chunk is often a stiff step the warm-started
@@ -109,6 +120,20 @@ struct LiveMcu {
     /// Logic-high output voltage for this MCU's GPIO drivers (rail-dependent:
     /// 5 V for classic AVR, 3.3 V for STM32-class parts).
     logic_high_v: f64,
+    /// MCU *input* pins owned by a synchronous input responder (a 165 chain's
+    /// MISO, a bit-banged SPI MISO, a soft-I2C SDA). These pins get their
+    /// level at edge granularity from the responder INSIDE the MCU run loop,
+    /// so the per-chunk plain digital-input sync must never also drive them:
+    /// a chunk-boundary level would stomp the mid-transaction bit the
+    /// responder just presented.
+    responder_input_pins: std::collections::HashSet<(char, u8)>,
+    /// Last logic level pushed into the core for each plain digital input pin
+    /// — the hysteresis memory of the per-chunk node-voltage → digital-pin
+    /// sync (no entry = never pushed; the core still holds its power-on
+    /// level). Also the change filter: `set_digital_in` is only called when
+    /// the decided level differs, so poll backends (Renode/QEMU, one socket
+    /// round-trip per call) pay per *transition*, not per chunk.
+    digital_in_levels: HashMap<(char, u8), bool>,
 }
 
 /// The scheduler driving one bound board.
@@ -240,6 +265,17 @@ pub struct Scheduler {
     /// last chunk (a micro-tick each). A diagnostic that a `shiftOut` burst
     /// produced N ordered micro-ticks, not one collapsed level.
     last_replay_microticks: usize,
+    /// Net node -> indices into `circuit.devices` of every device touching the
+    /// node EXCEPT the MCU pin drivers' own Thevenin legs. This is the "is
+    /// this net actually driven by the circuit?" evidence the per-chunk plain
+    /// digital-input sync consults: a net whose only attachments are MCU pin
+    /// legs is electrically floating (its ~0 V solve comes from the pins' own
+    /// 1 GΩ tri-state legs, not a real driver), and pushing that fictional
+    /// LOW into the core would defeat a firmware-enabled internal pull-up
+    /// (which the analog circuit does not model). Rebuilt on every
+    /// [`Scheduler::relayout`], so devices stamped later (peripheral controls,
+    /// buttons) are included.
+    digital_in_evidence: HashMap<u32, Vec<u32>>,
 }
 
 
@@ -418,6 +454,7 @@ impl Scheduler {
             replay_pin_nets,
             last_chunk_edges: Vec::new(),
             last_replay_microticks: 0,
+            digital_in_evidence: HashMap::new(),
         };
 
         // One (initially absent) input-responder registry slot per live MCU;
@@ -440,7 +477,41 @@ impl Scheduler {
             sched.attach_mcp4728_dacs(dacs);
         }
 
+        // Index the non-pin-driver devices touching each net, for the plain
+        // digital-input sync's "is this net really driven?" check.
+        sched.rebuild_digital_in_evidence();
+
         Ok(sched)
+    }
+
+    /// Rebuild [`Scheduler::digital_in_evidence`]: net node -> device indices,
+    /// excluding every MCU pin driver's own Thevenin legs (the hidden vsource
+    /// and the series resistor). Those legs exist on EVERY wired pin — input
+    /// pins included, tri-stated at 1 GΩ — so counting them would make every
+    /// net look driven. A driven *output* pin of another MCU is still honored:
+    /// the per-chunk sync separately treats any net with an ENABLED gpio
+    /// driver as driven (see `run_chunk`), so an MCU-to-MCU GPIO link syncs.
+    fn rebuild_digital_in_evidence(&mut self) {
+        let mut pin_legs: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for m in &self.mcus {
+            for drv in m.binding.gpio_drivers.values() {
+                pin_legs.insert(drv.vsource.0);
+                pin_legs.insert(drv.resistor.0);
+            }
+        }
+        let mut evidence: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (i, d) in self.circuit.devices.iter().enumerate() {
+            if pin_legs.contains(&(i as u32)) {
+                continue;
+            }
+            for n in d.nodes() {
+                if n == NodeId::GROUND {
+                    continue;
+                }
+                evidence.entry(n.0).or_default().push(i as u32);
+            }
+        }
+        self.digital_in_evidence = evidence;
     }
 
     /// Build and attach the MCP4728 DAC slaves discovered by the binder. One
@@ -559,6 +630,7 @@ impl Scheduler {
                     continue;
                 };
                 let levels: LogicLevels = chain.levels(&self.digital);
+                let miso = chain.miso;
                 let chain = Arc::new(Mutex::new(chain));
                 // Register with the owning MCU's responder registry: dispatch
                 // is keyed on the chain's PL/SCLK pins, so every other edge is
@@ -572,6 +644,9 @@ impl Scheduler {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .register(Box::new(responder));
+                // MISO is responder-owned from here on: the plain
+                // digital-input sync must never also drive it.
+                self.mcus[mi].responder_input_pins.insert(miso);
                 self.hc165_chains.push(chain);
                 break;
             }
@@ -756,6 +831,9 @@ impl Scheduler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .register(Box::new(responder));
+        // MISO is responder-owned: the plain digital-input sync must never
+        // also drive it.
+        self.mcus[mi].responder_input_pins.insert(pins.miso);
         self.spi_buses.push(bus);
         Ok(())
     }
@@ -799,6 +877,10 @@ impl Scheduler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .register(Box::new(responder));
+        // SDA is bidirectional and responder-owned: the responder answers
+        // ACKs/read bits on it inside the run loop, so the plain
+        // digital-input sync must never also drive it.
+        self.mcus[mi].responder_input_pins.insert(sda);
         self.i2c_buses.push(bus);
         Ok(())
     }
@@ -1005,6 +1087,19 @@ impl Scheduler {
         self.last_chunk_edges.clear();
         self.last_replay_microticks = 0;
 
+        // Nets currently driven by ANY MCU's enabled GPIO driver, for the
+        // plain digital-input sync below: an enabled driver is real drive
+        // evidence even though pin-driver legs are excluded from the static
+        // `digital_in_evidence` index (this is what makes a direct
+        // MCU-to-MCU GPIO link readable on the receiving side).
+        let mcu_driven_nets: std::collections::HashSet<u32> = self
+            .mcus
+            .iter()
+            .flat_map(|m| m.binding.gpio_drivers.values())
+            .filter(|d| d.enabled)
+            .map(|d| d.net.0)
+            .collect();
+
         // 1. MCU: inject latest ADC voltages, run the chunk, drain captures.
         for mi in 0..self.mcus.len() {
             let m = &mut self.mcus[mi];
@@ -1028,6 +1123,80 @@ impl Scheduler {
                 }
                 let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
                 m.core.set_analog_in(ch, v.max(0.0));
+            }
+            // 1a. Plain digital inputs: mirror the previous chunk's SOLVED net
+            // voltage into the core's digital-in for every wired GPIO pin the
+            // circuit (not the firmware) owns — the missing direction of the
+            // pin coupling (`set_digital_in` previously had no engine caller,
+            // so a pushbutton / limit switch / comparator output on a plain
+            // input pin never reached `digitalRead`). Symmetric to the
+            // adc_nets loop above: injected before `run_micros`, so firmware
+            // reads the level of the last settled operating point.
+            //
+            // A pin is synced only when ALL of these hold:
+            //   * its driver is tri-stated (an enabled driver means the
+            //     firmware owns the pin as an output — same promotion rule as
+            //     the ADC skip above);
+            //   * it is not responder-owned (165 MISO / bit-bang SPI MISO /
+            //     soft-I2C SDA get edge-granularity drives from their
+            //     responder inside the run loop; a chunk-boundary level would
+            //     fight them);
+            //   * its net shows real drive evidence: a non-pin device with
+            //     live resistance under `WEAK_DIGITAL_DRIVE_OHMS` (or any
+            //     non-R/C device), or another enabled GPIO driver. A floating
+            //     net's ~0 V solve is the pins' own 1 GΩ legs talking, and
+            //     pushing it would defeat an (unmodeled) internal pull-up.
+            //
+            // Levels use the 0.3/0.7-rail thresholds (the classic CMOS
+            // Vil/Vih convention at the MCU's own rail) with the in-between
+            // band as hysteresis: a mid-rail solve holds the pin's previous
+            // level rather than chattering. `set_digital_in` fires only on a
+            // level CHANGE, so poll backends pay per transition. Skipped on
+            // the very first chunk (`sim_time == 0`): nothing has been solved
+            // yet, and pushing the zero-filled seed would report fiction —
+            // the core's power-on level is the honest state until a solve.
+            if self.sim_time > 0.0 {
+                let vih = 0.7 * m.logic_high_v;
+                let vil = 0.3 * m.logic_high_v;
+                for (&(port, bit), drv) in &m.binding.gpio_drivers {
+                    if drv.enabled || m.responder_input_pins.contains(&(port, bit)) {
+                        continue;
+                    }
+                    let net = drv.net.0;
+                    let driven = mcu_driven_nets.contains(&net)
+                        || self.digital_in_evidence.get(&net).is_some_and(|devs| {
+                            devs.iter().any(|&di| {
+                                match self.circuit.devices.get(di as usize) {
+                                    Some(Device::Resistor { ohms, .. }) => {
+                                        *ohms < WEAK_DIGITAL_DRIVE_OHMS
+                                    }
+                                    // A capacitor cannot decide a DC level.
+                                    Some(Device::Capacitor { .. }) => false,
+                                    Some(_) => true,
+                                    None => false,
+                                }
+                            })
+                        });
+                    if !driven {
+                        continue;
+                    }
+                    let v = self.node_volts.get(net as usize).copied().unwrap_or(0.0);
+                    let prev = m.digital_in_levels.get(&(port, bit)).copied();
+                    let level = if v >= vih {
+                        true
+                    } else if v <= vil {
+                        false
+                    } else {
+                        match prev {
+                            Some(p) => p, // hysteresis: hold the last level
+                            None => continue, // mid-band, no history: leave power-on
+                        }
+                    };
+                    if prev != Some(level) {
+                        m.core.set_digital_in(PinId { port, bit }, level);
+                        m.digital_in_levels.insert((port, bit), level);
+                    }
+                }
             }
             // Push modeled I2C temperature-sensor readings into the backend's own
             // emulated device (the QEMU ESP32 tmp105). The simavr/Renode backends
@@ -2274,6 +2443,9 @@ impl Scheduler {
         }
         // The unknown vector changed shape; a prior warm seed no longer applies.
         self.last_dc_seed = None;
+        // New devices may touch input-pin nets (peripheral controls, buttons):
+        // refresh the plain digital-input sync's drive-evidence index.
+        self.rebuild_digital_in_evidence();
     }
 }
 
@@ -2766,6 +2938,8 @@ fn core_with_hooks(mut core: Box<dyn Mcu + Send>, binding: McuBinding) -> LiveMc
         last_levels: HashMap::new(),
         configured_outputs: std::collections::HashSet::new(),
         logic_high_v,
+        responder_input_pins: std::collections::HashSet::new(),
+        digital_in_levels: HashMap::new(),
     }
 }
 
@@ -3117,6 +3291,182 @@ mod tests {
         assert!(
             released < 0.5,
             "released BUS must fall through its pull-down, got {released:.2} V (latched bus)"
+        );
+    }
+
+    // ── Plain digital-input sync (BUG #17) ──────────────────────────────────
+
+    /// A trait-level mock core recording every `set_digital_in` call, so the
+    /// run_chunk digital-input sync is provable on the MIT-clean build (no
+    /// emulator backend needed — the sync is engine logic, not backend logic).
+    struct RecordingCore {
+        digital_ins: Arc<Mutex<Vec<((char, u8), bool)>>>,
+    }
+
+    impl Mcu for RecordingCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, pin: PinId, high: bool) {
+            self.digital_ins
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(((pin.port, pin.bit), high));
+        }
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+            }
+        }
+    }
+
+    /// A board with NO MCU module: two pulled nets (10 k to +5 V, 10 k to
+    /// GND) plus a pulled-high net standing in for a responder-owned MISO.
+    /// The test hand-wires a mock MCU onto these nets, exactly the shape the
+    /// binder produces (tri-stated PinDriver per wired pin).
+    const PLAIN_INPUT_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "BTN_HI")
+  (net 4 "BTN_LO")
+  (net 5 "RESP")
+
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 2 "+5V"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 3 "BTN_HI"))
+  )
+  (module Resistor:R2 (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "BTN_LO"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+  (module Resistor:R3 (layer F.Cu)
+    (at 130 100)
+    (fp_text reference R3 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 2 "+5V"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 5 "RESP"))
+  )
+)
+"#;
+
+    /// Regression for BUG #17: `Mcu::set_digital_in` had ZERO engine callers,
+    /// so a plain circuit-driven digital input (pushbutton, limit switch,
+    /// comparator output) never reached firmware — `digitalRead` saw only the
+    /// core's power-on level. Proves, through the real `step`/`run_chunk`
+    /// path with real solved node voltages:
+    ///   * a tri-stated input pin on a net pulled HIGH gets exactly one
+    ///     `set_digital_in(pin, true)` (change-filtered, not per-chunk spam);
+    ///   * one on a net pulled LOW gets exactly one `set_digital_in(pin, false)`;
+    ///   * a responder-owned pin is NEVER driven by the sync, even though its
+    ///     net is solidly pulled high (the responder alone owns it);
+    ///   * a floating net (no device but the pin's own tri-state leg) is left
+    ///     alone — its ~0 V solve is fiction, and pushing it would defeat an
+    ///     internal pull-up.
+    #[test]
+    fn plain_digital_inputs_reach_the_core() {
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // Hand-wire a mock MCU: one tri-stated (input) driver per wired pin,
+        // exactly what the binder stamps for a wired digital-capable pin the
+        // firmware never drives.
+        let hi_node = sched.net_nodes["BTN_HI"];
+        let lo_node = sched.net_nodes["BTN_LO"];
+        let resp_node = sched.net_nodes["RESP"];
+        let float_node = sched.circuit.node("FLOATY"); // wired to nothing else
+        let mut gpio_drivers = HashMap::new();
+        for (pin, node, name) in [
+            (('C', 0u8), hi_node, "BTN_HI"),
+            (('C', 1), lo_node, "BTN_LO"),
+            (('C', 2), resp_node, "RESP"),
+            (('C', 3), float_node, "FLOATY"),
+        ] {
+            let mut drv = crate::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                node,
+                name,
+                &format!("t_{}{}", pin.0, pin.1),
+                crate::drivers::DEFAULT_RO,
+            );
+            drv.set_enabled(&mut sched.circuit, false); // input: tri-stated
+            gpio_drivers.insert(pin, drv);
+        }
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            module: false,
+        };
+        let digital_ins = Arc::new(Mutex::new(Vec::new()));
+        let core = RecordingCore {
+            digital_ins: digital_ins.clone(),
+        };
+        sched.mcus.push(core_with_hooks(Box::new(core), binding));
+        sched.responder_registries.push(None);
+        // PC2 stands in for a responder-owned MISO/SDA pin.
+        sched.mcus[0].responder_input_pins.insert(('C', 2));
+        // Pick up the freshly stamped driver legs (and rebuild the
+        // drive-evidence index) exactly as attach_peripheral would.
+        sched.relayout();
+
+        // Several chunks: chunk 1 has no solved voltages yet (no push);
+        // chunk 2+ sees the solved levels; later chunks must not re-push.
+        sched.step(5.0 * DEFAULT_CHUNK_S);
+
+        let calls = digital_ins.lock().unwrap_or_else(|e| e.into_inner());
+        let for_pin = |pin: (char, u8)| -> Vec<bool> {
+            calls.iter().filter(|(p, _)| *p == pin).map(|&(_, l)| l).collect()
+        };
+        assert_eq!(
+            for_pin(('C', 0)),
+            vec![true],
+            "pulled-high plain input must be pushed HIGH exactly once, got {calls:?}"
+        );
+        assert_eq!(
+            for_pin(('C', 1)),
+            vec![false],
+            "pulled-low plain input must be pushed LOW exactly once, got {calls:?}"
+        );
+        assert!(
+            for_pin(('C', 2)).is_empty(),
+            "responder-owned pin must never be driven by the chunk sync, got {calls:?}"
+        );
+        assert!(
+            for_pin(('C', 3)).is_empty(),
+            "floating net must not be pushed (its 0 V solve is the tri-state \
+             legs talking), got {calls:?}"
         );
     }
 }
