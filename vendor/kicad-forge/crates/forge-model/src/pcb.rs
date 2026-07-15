@@ -566,8 +566,14 @@ impl<'a> Pad<'a> {
         let (fx, fy, frot) = fp.at();
         let (px, py, _) = self.at();
         let angle = frot * PI / 180.0;
-        let rx = px * angle.cos() - py * angle.sin();
-        let ry = px * angle.sin() + py * angle.cos();
+        // KiCad's board frame is y-DOWN with CCW-positive rotation, so the
+        // world offset is (px·cos + py·sin, −px·sin + py·cos) — NOT the textbook
+        // y-up matrix. The y-up form (px·cos − py·sin, px·sin + py·cos) mirrors
+        // X for any non-0/180° footprint (e.g. frot=90 sends a pad at (0, py) to
+        // −py instead of +py). This matches hauksbee-extract's pcb/drc/si pad
+        // transforms, which document the same y-down derivation.
+        let rx = px * angle.cos() + py * angle.sin();
+        let ry = -px * angle.sin() + py * angle.cos();
         (fx + rx, fy + ry)
     }
 }
@@ -812,4 +818,35 @@ pub(crate) fn fmt_f64(v: f64) -> String {
     let trimmed = s.trim_end_matches('0');
     let trimmed = trimmed.trim_end_matches('.');
     trimmed.to_string()
+}
+
+#[cfg(test)]
+mod pad_transform_tests {
+    use super::Pcb;
+
+    // A pad offset (0, 5) inside a footprint placed at (10, 20) rotated 90°
+    // (KiCad y-down, CCW-positive) lands at world (15, 20): the +Y local offset
+    // rotates onto +X. The old y-up matrix wrongly produced (5, 20) — a mirror.
+    #[test]
+    fn rotated_pad_absolute_pos_uses_kicad_y_down_frame() {
+        let text = r#"(kicad_pcb
+  (footprint "R_test" (at 10 20 90)
+    (pad "1" smd rect (at 0 5) (size 1 1))
+  )
+)"#;
+        let pcb = Pcb::parse(text).expect("parse");
+        let fp = pcb.footprints().into_iter().next().expect("one footprint");
+        let pad = fp.pads().into_iter().next().expect("one pad");
+        let (x, y) = pad.absolute_pos(&fp);
+        assert!((x - 15.0).abs() < 1e-9, "x = {x}, expected 15.0 (y-down rotation)");
+        assert!((y - 20.0).abs() < 1e-9, "y = {y}, expected 20.0");
+
+        // 270° sends +Y local onto −X: world (5, 20).
+        let text270 = text.replace("(at 10 20 90)", "(at 10 20 270)");
+        let pcb = Pcb::parse(&text270).expect("parse");
+        let fp = pcb.footprints().into_iter().next().unwrap();
+        let pad = fp.pads().into_iter().next().unwrap();
+        let (x, _y) = pad.absolute_pos(&fp);
+        assert!((x - 5.0).abs() < 1e-9, "x = {x}, expected 5.0 at 270°");
+    }
 }

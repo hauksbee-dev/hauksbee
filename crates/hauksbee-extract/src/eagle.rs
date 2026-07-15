@@ -27,6 +27,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         y: f64,
         rot_deg: f64,
         mirrored: bool,
+        dnp: bool,
     }
     let mut elements: Vec<El> = Vec::new();
     // signals
@@ -86,6 +87,14 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                                 .parse()
                                 .unwrap_or(0.0),
                             mirrored: rot.starts_with('M'),
+                            // Eagle marks a do-not-populate / assembly-variant
+                            // part with populate="no" on the element. Without
+                            // this every Eagle part read as populated, unlike
+                            // the KiCad readers which thread the analogous field.
+                            dnp: a
+                                .get("populate")
+                                .map(|p| p.eq_ignore_ascii_case("no"))
+                                .unwrap_or(false),
                         });
                     }
                     b"signal" => {
@@ -181,7 +190,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 position: Some((el.x, el.y, el.rot_deg)),
                 layer: if el.mirrored { "B.Cu" } else { "F.Cu" }.to_string(),
                 properties: Vec::new(),
-                dnp: false,
+                dnp: el.dnp,
                 pins,
             }
         })

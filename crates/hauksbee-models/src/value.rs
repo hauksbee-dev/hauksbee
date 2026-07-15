@@ -209,6 +209,24 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
             i += 1;
         }
     }
+    // Optional scientific-notation exponent ("4.7e3", "1e-6"): e/E, optional
+    // sign, one or more digits. Only consumed after a real mantissa (i > start)
+    // and only when digits actually follow the 'e' — otherwise a lone 'e' is
+    // left for the tail (no unit token begins with 'E', so it fails loudly
+    // rather than silently eating a bad char). f64::parse handles the exponent.
+    if i > start && i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        let mut j = i + 1;
+        if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+            j += 1;
+        }
+        let exp_digits_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > exp_digits_start {
+            i = j;
+        }
+    }
     if i == start {
         // No leading digits — not a numeric value.
         return None;
@@ -323,6 +341,20 @@ fn parse_tail(t: &str) -> Option<Option<String>> {
     if is_annotation_start(first) {
         return Some(None); // "/25V", ",25V", "@100MHz" rating-style tails
     }
+    // A lone EIA tolerance-code letter directly attached after the value+
+    // multiplier is a tolerance, not a unit: "4k7K" = 4.7 kΩ ±10%, "10RG" =
+    // 10 Ω ±2%, "2k2J" = 2.2 kΩ ±5%, "1M0G" = 1 MΩ ±2%. G/J/K/M have no unit
+    // meaning, so a lone one (optionally trailed by another annotation) is
+    // ignorable. F is deliberately NOT handled here: it collides with the Farad
+    // unit and is resolved by unit_token + fixup_tolerance_unit instead.
+    if let Some(rest) = strip_eia_tolerance_letter(t) {
+        if rest.is_empty()
+            || rest.starts_with(char::is_whitespace)
+            || rest.starts_with(is_annotation_start)
+        {
+            return Some(None);
+        }
+    }
     // Directly attached: must be a unit, optionally followed by an annotation
     // ("uF/25V") or a rating that starts with a digit ("F50V").
     let (unit, rest) = unit_token(t)?;
@@ -369,6 +401,20 @@ fn is_annotation_start(c: char) -> bool {
     matches!(c, '/' | ',' | ';' | '%' | '(' | '@' | '±' | '+')
 }
 
+/// If `t` begins with a lone EIA tolerance-code letter (G=±2%, J=±5%, K=±10%,
+/// M=±20%), return the remainder after it; otherwise `None`. These only reach
+/// [`parse_tail`] as a SECOND letter — the first SI multiplier is already
+/// consumed by [`parse_suffix`] — so a leading k/m/g here is a tolerance code,
+/// never a multiplier (a real "10k" never gets here with a leading 'k'). 'F' is
+/// excluded: it means Farad and is handled by [`fixup_tolerance_unit`].
+fn strip_eia_tolerance_letter(t: &str) -> Option<&str> {
+    let mut chars = t.chars();
+    match chars.next() {
+        Some('G' | 'g' | 'J' | 'j' | 'K' | 'k' | 'M' | 'm') => Some(chars.as_str()),
+        _ => None,
+    }
+}
+
 /// Adjust SI value for unit-specific conversions.
 /// Currently all base units map directly (Ω, F, H are already base SI);
 /// this is a hook for future unit-aware scaling.
@@ -403,6 +449,38 @@ mod tests {
         check("100", 100.0);
         check("1.5", 1.5);
         check("0.1", 0.1);
+    }
+
+    #[test]
+    fn test_eia_tolerance_letters_are_not_units() {
+        // RKM + EIA tolerance codes: the trailing letter is a tolerance, the
+        // magnitude must still parse (regression for round-4 #1).
+        check("4k7K", 4700.0); // 4.7 kΩ ±10%
+        check("10RM", 10.0); // 10 Ω ±20%
+        check("10RG", 10.0); // 10 Ω ±2%
+        check("2k2J", 2200.0); // 2.2 kΩ ±5%
+        check("1M0G", 1_000_000.0); // 1 MΩ ±2%
+        check("100J", 100.0); // 100 Ω ±5%, no multiplier
+        check("100RK", 100.0); // 100 Ω ±10%
+        // The tolerance letter followed by a further annotation still parses.
+        check("4k7K 1%", 4700.0);
+        // Bare 'F' is still the Farad unit, not a tolerance code.
+        check("1F", 1.0);
+        check("4k7", 4700.0); // no tolerance letter: unchanged
+    }
+
+    #[test]
+    fn test_scientific_notation() {
+        // Exponential notation is a common script/SPICE-exported numeric form
+        // (regression for round-4 #2).
+        check("4.7e3", 4700.0);
+        check("1e-6", 1e-6);
+        check("1E-6", 1e-6);
+        check("2.2e-9", 2.2e-9);
+        check("1e3", 1000.0);
+        check("4.7e3F", 4700.0); // exponent then a unit (Farads)
+        // A lone 'e' with no exponent digits is NOT a number.
+        assert!(parse_value("4e").is_none());
     }
 
     #[test]

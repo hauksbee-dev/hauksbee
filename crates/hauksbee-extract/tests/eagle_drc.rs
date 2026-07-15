@@ -118,6 +118,34 @@ fn element_missing_package_still_extracts_and_keeps_nets() {
     );
 }
 
+/// Round-4 #7: an Eagle <element> marked populate="no" (do-not-populate /
+/// assembly variant) must extract with dnp=true, matching the KiCad readers.
+/// A populated element (no populate attr) stays dnp=false.
+#[test]
+fn eagle_populate_no_sets_dnp() {
+    let packages = r#"
+<package name="P">
+  <smd name="1" x="0" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>
+"#;
+    let elements = r#"
+<element name="R1" library="lib" package="P" value="10k" x="0" y="0"/>
+<element name="R2" library="lib" package="P" value="10k" x="5" y="0" populate="no"/>
+"#;
+    let signals = r#"
+<signal name="NET1">
+  <contactref element="R1" pad="1"/>
+  <contactref element="R2" pad="1"/>
+</signal>
+"#;
+    let text = board(packages, elements, signals, default_rules());
+    let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
+    let r1 = brd.components.iter().find(|c| c.reference == "R1").expect("R1");
+    let r2 = brd.components.iter().find(|c| c.reference == "R2").expect("R2");
+    assert!(!r1.dnp, "R1 has no populate attribute -> populated");
+    assert!(r2.dnp, "R2 populate=\"no\" -> do-not-populate");
+}
+
 #[test]
 fn dispatch_recognises_eagle() {
     // A board with two crossing wires on different nets dispatches to the Eagle
