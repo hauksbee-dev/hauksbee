@@ -1,7 +1,7 @@
 //! Regression tests for defects found in the 2026-07 bug hunt. Each test pins
 //! a specific fixed defect so it cannot silently return.
 
-use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+use hauksbee_ir::{Circuit, Device, NodeId, SourceKind, SpiceLoader};
 use hauksbee_solve::{Partitioning, SolverOptions, StepControl, Transient};
 
 fn rc(farads: f64) -> Circuit {
@@ -69,6 +69,74 @@ fn zero_farad_cap_yields_finite_waveform() {
     assert!(
         out.iter().all(|v| v.is_finite()),
         "zero-farad cap produced a non-finite node voltage: {out:?}"
+    );
+}
+
+/// Bug-hunt (solver r2 #3): a 0-Ω resistor is a SHORT, not an open. The
+/// resistor stamp computes conductance 1/R and used to SKIP a non-positive R,
+/// leaving the two nodes coupled only through the 1e-12 gmin shunt — a 0-Ω
+/// jumper silently broke its net (node 2 floated near 0 V instead of
+/// following node 1). ngspice treats R=0 as a short; hauksbee now clamps to a
+/// 1e-6 Ω floor in the SPICE loader AND stamps a stiff conductance for any
+/// non-positive R on all three assembly paths (interpreted stamp,
+/// linear-island compile, planned backbone).
+#[test]
+fn zero_ohm_resistor_is_a_short_not_an_open() {
+    // The user-facing path: a deck with a 0-Ω jumper from the driven node to
+    // the loaded node. V(2) must follow V(1), not float.
+    let deck = "jumper\nV1 1 0 DC 1\nR0 1 2 0\nRL 2 0 1k\n.end\n";
+    let c = SpiceLoader::load(deck).expect("deck parses");
+    for partitioning in [Partitioning::Off, Partitioning::Auto] {
+        let opts = SolverOptions {
+            step: StepControl::Fixed { dt: 1e-6 },
+            partitioning,
+            ..SolverOptions::default()
+        };
+        let wf = Transient::new(opts).run(&c, 1e-5).unwrap();
+        let v1 = *wf.node(&c, "1").expect("node 1").last().unwrap();
+        let v2 = *wf.node(&c, "2").expect("node 2").last().unwrap();
+        assert!(
+            (v2 - v1).abs() < 1e-6,
+            "0-ohm jumper must short node 2 to node 1 under {partitioning:?}: \
+             V(1)={v1:.6} vs V(2)={v2:.6}"
+        );
+    }
+
+    // The IR path (no loader clamp in the way): a raw Circuit with ohms: 0.0
+    // must still short through the stamp's own floor.
+    let mut c = Circuit::new();
+    let n1 = c.node("1");
+    let n2 = c.node("2");
+    c.add(Device::Vsource {
+        name: "V1".into(),
+        p: n1,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(1.0),
+    });
+    c.add(Device::Resistor {
+        name: "R0".into(),
+        a: n1,
+        b: n2,
+        ohms: 0.0,
+        tc1: None,
+    });
+    c.add(Device::Resistor {
+        name: "RL".into(),
+        a: n2,
+        b: NodeId::GROUND,
+        ohms: 1e3,
+        tc1: None,
+    });
+    let opts = SolverOptions {
+        step: StepControl::Fixed { dt: 1e-6 },
+        ..SolverOptions::default()
+    };
+    let wf = Transient::new(opts).run(&c, 1e-5).unwrap();
+    let v1 = *wf.node(&c, "1").unwrap().last().unwrap();
+    let v2 = *wf.node(&c, "2").unwrap().last().unwrap();
+    assert!(
+        (v2 - v1).abs() < 1e-6,
+        "raw ohms=0.0 must stamp a short: V(1)={v1:.6} vs V(2)={v2:.6}"
     );
 }
 
