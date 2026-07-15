@@ -445,6 +445,13 @@ pub struct ProtocolSpec {
     /// Default 0x7f.
     #[serde(default = "default_addr_mask")]
     pub addr_mask: u8,
+    /// SPI only: the datasheet-declared clock mode, `(CPOL, CPHA)`:
+    /// `0 = (0,0)`, `1 = (0,1)`, `2 = (1,0)`, `3 = (1,1)`. Governs the idle
+    /// clock level and which edge samples vs. shifts on the bit-banged SPI
+    /// responder. Default `0` (CPOL=0, CPHA=0) — the historical behaviour, so
+    /// specs that omit it are unchanged.
+    #[serde(default)]
+    pub spi_mode: u8,
 }
 
 fn default_true() -> bool {
@@ -561,6 +568,30 @@ impl SensorSpec {
 
         if s.name.trim().is_empty() {
             return Err(err("sensor.name must not be empty".into()));
+        }
+
+        // SPI mode is 0..=3 always (CPOL/CPHA are one bit each); a larger value
+        // is a spec typo, not a wire mode, and must fail loud rather than be
+        // silently truncated when the responder derives CPOL/CPHA from it.
+        if s.protocol.spi_mode > 3 {
+            return Err(err(format!(
+                "protocol.spi_mode {} is out of range; SPI modes are 0..=3 \
+                 (0=CPOL0/CPHA0, 1=CPOL0/CPHA1, 2=CPOL1/CPHA0, 3=CPOL1/CPHA1)",
+                s.protocol.spi_mode
+            )));
+        }
+        // The clock mode only means something on SPI; a nonzero mode on an I2C
+        // sensor is a mistake worth refusing (mirrors the SPI-only i2c_address
+        // exclusivity below), while an omitted/zero mode stays back-compatible.
+        if s.bus != Bus::Spi && s.protocol.spi_mode != 0 {
+            return Err(err(format!(
+                "protocol.spi_mode = {} is SPI-only, but bus = \"{}\"",
+                s.protocol.spi_mode,
+                match s.bus {
+                    Bus::I2c => "i2c",
+                    Bus::Spi => "spi",
+                }
+            )));
         }
 
         match s.bus {
@@ -1344,5 +1375,64 @@ addr_mask = 0x7f
         assert_eq!(spec.sensor.protocol.style, ProtocolStyle::SpiReg);
         assert!(spec.sensor.protocol.rw_read_is_high);
         assert_eq!(spec.sensor.protocol.addr_mask, 0x7f);
+        // Omitting spi_mode defaults to mode 0 (back-compat).
+        assert_eq!(spec.sensor.protocol.spi_mode, 0);
+    }
+
+    /// A minimal `spi_reg` sensor with a chosen `spi_mode`, for the mode tests.
+    fn spi_spec_with_mode(mode: &str) -> String {
+        format!(
+            r#"
+[sensor]
+name = "MINIMAG"
+bus = "spi"
+
+[[sensor.register]]
+addr = 0x0f
+const = [0x42]
+
+[sensor.protocol]
+style = "spi_reg"
+{mode}
+"#
+        )
+    }
+
+    #[test]
+    fn spi_mode_3_accepted_on_spi() {
+        let spec = SensorSpec::from_toml(&spi_spec_with_mode("spi_mode = 3")).unwrap();
+        assert_eq!(spec.sensor.protocol.spi_mode, 3);
+    }
+
+    #[test]
+    fn spi_mode_4_rejected() {
+        let e = SensorSpec::from_toml(&spi_spec_with_mode("spi_mode = 4")).unwrap_err();
+        assert!(
+            format!("{e}").contains("spi_mode 4 is out of range"),
+            "unexpected error: {e}"
+        );
+    }
+
+    #[test]
+    fn spi_mode_on_i2c_bus_rejected() {
+        let bad = r#"
+[sensor]
+name = "MINI6050"
+bus = "i2c"
+i2c_address = 0x68
+
+[[sensor.register]]
+addr = 0x75
+const = [0x68]
+
+[sensor.protocol]
+style = "i2c_pointer"
+spi_mode = 2
+"#;
+        let e = SensorSpec::from_toml(bad).unwrap_err();
+        assert!(
+            format!("{e}").contains("spi_mode = 2 is SPI-only"),
+            "unexpected error: {e}"
+        );
     }
 }

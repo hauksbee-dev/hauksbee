@@ -244,6 +244,9 @@ pub struct RegisterMapSensor {
     rw_read_is_high: bool,
     addr_mask: u8,
     spi_reg_protocol: bool,
+    /// Declared SPI clock mode (0..=3); surfaced via `SpiSlave::spi_mode` so the
+    /// bit-banged responder times its edges to the datasheet mode.
+    spi_mode: u8,
 
     /// addr -> compiled register.
     registers: HashMap<u8, CompiledRegister>,
@@ -474,6 +477,7 @@ impl RegisterMapSensor {
             rw_read_is_high: s.protocol.rw_read_is_high,
             addr_mask: s.protocol.addr_mask,
             spi_reg_protocol,
+            spi_mode: s.protocol.spi_mode,
             registers,
             addr_order,
             inputs,
@@ -951,6 +955,10 @@ impl I2cSlave for RegisterMapSensor {
 // ── SPI: spi_reg protocol ──────────────────────────────────────────────────
 
 impl SpiSlave for RegisterMapSensor {
+    fn spi_mode(&self) -> u8 {
+        self.spi_mode
+    }
+
     fn transfer(&mut self, mosi: u8) -> u8 {
         if self.spi_first_byte {
             // Command byte: high bit = R/W per `rw_read_is_high`, low bits (per
