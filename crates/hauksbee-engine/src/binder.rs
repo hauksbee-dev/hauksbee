@@ -276,7 +276,13 @@ pub fn bind_board_with(
     // netlist does not encode the final address per device, so by-ref ordering
     // is the deterministic stand-in; it matches the board's U1101/02/03 layout
     // and the firmware's CONF_MCP4728_ADDRS = {0x60,0x61,0x62}.
-    dacs.sort_by(|a, b| a.reference.cmp(&b.reference));
+    //
+    // Sort by a NATURAL key (alpha prefix, then the parsed trailing integer),
+    // not raw String Ord: byte-lexicographic ordering puts "U10" before "U2",
+    // which would hand out addresses in the wrong order for non-uniform-width
+    // designators (U2 -> 0x61, U10 -> 0x60). Natural order gives U2 -> 0x60,
+    // U10 -> 0x61.
+    dacs.sort_by(|a, b| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)));
     for (i, d) in dacs.iter_mut().enumerate() {
         d.address = 0x60 + i as u8;
     }
@@ -2736,6 +2742,69 @@ fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
         }
     }
     out
+}
+
+/// A natural-order sort key for a reference designator: the leading alpha
+/// prefix, then the parsed trailing integer, then the raw string as a
+/// tie-break. Ordering by this puts "U2" before "U10" (2 < 10), unlike raw
+/// byte-lexicographic `String` Ord which puts "U10" before "U2" because '1' <
+/// '2'. Used to assign MCP4728 addresses in ascending device order regardless
+/// of designator width.
+fn natural_ref_key(reference: &str) -> (String, u64, String) {
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| !c.is_ascii_digit())
+        .collect();
+    let digits: String = reference[prefix.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let num = digits.parse::<u64>().unwrap_or(0);
+    (prefix.to_ascii_uppercase(), num, reference.to_string())
+}
+
+#[cfg(test)]
+mod natural_ref_key_tests {
+    use super::*;
+
+    #[test]
+    fn natural_key_orders_numerically_not_lexicographically() {
+        // Raw String Ord would rank "U10" < "U2" (byte-wise '1' < '2'); the
+        // natural key must rank U2 before U10 so addresses ascend by device.
+        let mut refs = vec!["U10", "U2", "U1", "U100"];
+        refs.sort_by(|a, b| natural_ref_key(a).cmp(&natural_ref_key(b)));
+        assert_eq!(refs, vec!["U1", "U2", "U10", "U100"]);
+    }
+
+    #[test]
+    fn mcp4728_addresses_ascend_by_natural_device_order() {
+        // Simulate the address-assignment pass over DAC bindings whose
+        // designators are non-uniform width (U2, U10). U2 must get 0x60 and
+        // U10 0x61 — the reverse of the old lexicographic bug (#12).
+        let mut dacs = vec![
+            DacBinding {
+                reference: "U10".into(),
+                address: 0,
+                vref: 0.0,
+                gain: 0,
+                vout_drivers: [None, None, None, None],
+            },
+            DacBinding {
+                reference: "U2".into(),
+                address: 0,
+                vref: 0.0,
+                gain: 0,
+                vout_drivers: [None, None, None, None],
+            },
+        ];
+        dacs.sort_by(|a, b| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)));
+        for (i, d) in dacs.iter_mut().enumerate() {
+            d.address = 0x60 + i as u8;
+        }
+        let addr = |r: &str| dacs.iter().find(|d| d.reference == r).unwrap().address;
+        assert_eq!(addr("U2"), 0x60, "U2 is the first device");
+        assert_eq!(addr("U10"), 0x61, "U10 is the second device");
+    }
 }
 
 #[cfg(test)]
