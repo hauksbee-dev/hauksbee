@@ -106,6 +106,16 @@ fn normalize_rs274x(text: &str) -> String {
         // Only extended-code lines (start and end with %) can need splitting.
         if trimmed.starts_with('%') && trimmed.ends_with('%') && trimmed.len() > 2 {
             let inner = &trimmed[1..trimmed.len() - 1];
+            // An aperture macro (`%AM<name>*<primitive>*...*%`) is a SINGLE
+            // statement whose `*`-separated parts are its primitives, not
+            // independent extended codes. Splitting it would yield an empty
+            // `%AM<name>*%` plus orphan primitive blocks, silently collapsing
+            // the pad to a fallback disc. Pass macro blocks through untouched.
+            if inner.starts_with("AM") {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
             // Count statements (each ends with '*'). One is the normal case.
             let stmts: Vec<&str> = inner.split('*').filter(|s| !s.is_empty()).collect();
             if stmts.len() > 1 {
@@ -522,6 +532,35 @@ M02*
             assert!((c.r - 0.5).abs() < 1e-6);
         } else {
             panic!("round flash should be a disc/capsule");
+        }
+    }
+
+    #[test]
+    fn single_line_aperture_macro_survives_normalization() {
+        // A single-line aperture macro packs its primitives with '*'
+        // separators. The block splitter must not treat them as independent
+        // extended codes and collapse the macro to an empty def — that shrinks
+        // the pad to a fallback disc. AMBOX is a 2×2 CenterLine rectangle.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%AMBOX*21,1,2,2,0,0,0*%
+%ADD10BOX*%
+D10*
+X0Y0D03*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let f = prims.iter().find(|p| p.kind == PrimKind::Flash).expect("flash");
+        if let Shape::Polygon { pts, .. } = &f.shape {
+            let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+            assert!(
+                (maxx - minx - 2.0).abs() < 1e-3,
+                "macro rect width {} (expected ~2 mm; the macro was destroyed if it collapsed)",
+                maxx - minx
+            );
+        } else {
+            panic!("macro flash must instantiate a polygon, not a fallback disc");
         }
     }
 }
