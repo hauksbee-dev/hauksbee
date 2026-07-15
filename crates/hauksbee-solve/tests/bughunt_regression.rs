@@ -257,3 +257,65 @@ fn truncated_final_step_matches_monolithic() {
          (rel err {rel:.3e})"
     );
 }
+
+/// Bug-hunt r4 #9: `stamp_bjt` fed the vbc pnjlim call a critical voltage
+/// built from nf·Vt while limiting on the nr·Vt scale, so an NF != NR model
+/// gated/clamped the reverse junction at the wrong threshold on every Newton
+/// iteration. Black-box gate for the fix (the vcrit arithmetic itself is
+/// pinned by a unit test in stamp.rs): a DEEPLY SATURATED NF != NR BJT — base
+/// overdriven so vbc is a forward junction voltage and the reverse limiter is
+/// exercised on the way in — must converge to a sane saturation point.
+#[test]
+fn saturated_bjt_with_nf_ne_nr_converges() {
+    use hauksbee_ir::BjtModel;
+    use hauksbee_solve::{run_op, Probe};
+
+    let mut c = Circuit::new();
+    let vcc = c.node("vcc");
+    let nb = c.node("b");
+    let nc = c.node("c");
+    c.add(Device::Vsource {
+        name: "VCC".into(),
+        p: vcc,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0),
+    });
+    // Rb sets ib ~ 0.42 mA; bf·ib far exceeds the ~4.8 mA Rc allows: hard
+    // saturation, vbc forward.
+    c.add(Device::Resistor { name: "RB".into(), a: vcc, b: nb, ohms: 10e3, tc1: None });
+    c.add(Device::Resistor { name: "RC".into(), a: vcc, b: nc, ohms: 1e3, tc1: None });
+    c.add(Device::Bjt {
+        name: "Q1".into(),
+        c: nc,
+        b: nb,
+        e: NodeId::GROUND,
+        model: BjtModel { nr: 1.5, ..BjtModel::default() },
+    });
+    let out = run_op(
+        &c,
+        &SolverOptions::default(),
+        &[Probe::NodeVoltage("c".into()), Probe::NodeVoltage("b".into())],
+    )
+    .expect("NF != NR saturated BJT must converge");
+    let vc = out.rows[0][0];
+    let vb = out.rows[0][1];
+    // The NR = 1.5 root: solving ic = (cf-cr) - cr/br, ib = cf/bf + cr/br at
+    // ib ~ 0.42 mA / ic ~ 5 mA gives cf ~ 5.7 mA, cr ~ 0.36 mA, so
+    // vbe = Vt·ln(cf/is) ~ 0.82 V and vbc = 1.5·Vt·ln(cr/is) ~ 1.12 V — the
+    // widened reverse junction puts vce slightly NEGATIVE (~-0.30 V), unlike
+    // the familiar NR = 1 saturation floor. The gate here is convergence to
+    // that sane root, not a particular millivolt.
+    assert!(
+        vc > -0.6 && vc < 0.2,
+        "collector must sit at the deep-saturation root, got {vc} V"
+    );
+    assert!(
+        vb > 0.5 && vb < 1.0,
+        "base must sit at a forward junction voltage, got {vb} V"
+    );
+    assert!(
+        vb - vc > 0.5,
+        "saturation means a hard-forward b-c junction, got vbc = {} V",
+        vb - vc
+    );
+}

@@ -1322,6 +1322,62 @@ fn sigmoid(x: f64) -> f64 {
     }
 }
 
+/// Level-1 channel current and tangents `(id, gm, gds)` at FOLDED, post-swap
+/// voltages (`vov = vgs - vth`, `vds >= 0`), shared by the transient stamp and
+/// the AC tangent so the two linearizations CANNOT drift apart.
+///
+/// The subthreshold blend is the `softplus` overdrive (the gate-charge region
+/// switch's discipline, applied to the channel itself):
+///
+///   vov_eff = 2·n·Vt · softplus(vov / (2·n·Vt))
+///
+/// fed into the plain Shichman-Hodges triode/saturation expressions. Above
+/// threshold `vov_eff -> vov` (the square law, exponentially fast); below,
+/// `vov_eff -> 2·n·Vt·e^(vov/(2·n·Vt))`, so the saturation current tends to
+/// `2·beta·(n·Vt)²·e^(vov/(n·Vt))` — an exponential subthreshold tail with
+/// slope n·Vt, which is what the old two-branch form MEANT its
+/// "continuity scale" to buy. That form matched neither value nor slope at
+/// `vgs == vth` (the exponential branch carried `beta·(n·Vt)²·e` where the
+/// square law carries 0), so a gate sweep saw `id` drop by the full
+/// `i0` and `gm` collapse to 0 crossing threshold — a Newton limit-cycle trap
+/// and a lie against the model's "smooth subthreshold tail" doc. The blended
+/// overdrive is C-infinity in `vgs`, so `id` and `gm` are continuous
+/// everywhere by construction (`gm` picks up the `sigmoid` chain factor
+/// d vov_eff/d vgs). Channel-length modulation multiplies every region
+/// including the tail — the (1 + lambda·vds) factor would otherwise jump at
+/// the region switch.
+#[inline]
+pub(crate) fn mos_channel(
+    beta: f64,
+    nvt: f64,
+    vov: f64,
+    vds: f64,
+    lambda: f64,
+    gmin: f64,
+) -> (f64, f64, f64) {
+    let two_nvt = 2.0 * nvt;
+    let u = vov / two_nvt;
+    let vov_eff = two_nvt * softplus(u);
+    let dvov = sigmoid(u); // d vov_eff / d vgs, the C1 chain factor
+    let clm = 1.0 + lambda * vds;
+    if vds < vov_eff {
+        // Triode (vov_eff > 0 always, so vds -> 0 lands here: id -> 0, no
+        // phantom subthreshold current across a zero-bias channel).
+        let id = beta * (vov_eff * vds - 0.5 * vds * vds) * clm;
+        let gm = beta * vds * clm * dvov;
+        let gds =
+            beta * ((vov_eff - vds) * clm + (vov_eff * vds - 0.5 * vds * vds) * lambda);
+        (id, gm.max(gmin), gds.max(gmin))
+    } else {
+        // Saturation; the subthreshold exponential is this branch's
+        // small-vov_eff limit, not a separate region.
+        let id = 0.5 * beta * vov_eff * vov_eff * clm;
+        let gm = beta * vov_eff * clm * dvov;
+        let gds = 0.5 * beta * vov_eff * vov_eff * lambda;
+        (id, gm.max(gmin), gds.max(gmin))
+    }
+}
+
 /// THE CHARGE-MODEL CHOICE (dev-plan 04 §3.3, decided here): the gate
 /// charges are the "simpler-but-honest" per-junction alternative to true
 /// Meyer capacitances, for a structural reason, not just a stability one.
@@ -1634,9 +1690,16 @@ fn stamp_bjt<S: StampSink>(
     // Intrinsic junction voltages with polarity folded in.
     let vbe = sign * (vx(bi) - vx(ei));
     let vbc = sign * (vx(bi) - vx(ci));
+    // Separate critical voltages per junction (SPICE3's VCRITF/VCRITR):
+    // pnjlim's gate (`vnew > vcrit`) and its `arg <= 0` fallback (return
+    // vcrit) are only self-consistent when vcrit is built from the SAME n·Vt
+    // the call limits with — feeding the vbc call the nf-scaled vcrit made
+    // the reverse limiter fire at the wrong threshold whenever nf != nr.
+    // Iteration-path only; the converged root is unchanged.
     let vcrit_be = vcrit(is, model.nf * vt);
+    let vcrit_bc = vcrit(is, model.nr * vt);
     let vbe = pnjlim(vbe, sign * (vx_prev(bi) - vx_prev(ei)), model.nf * vt, vcrit_be);
-    let vbc = pnjlim(vbc, sign * (vx_prev(bi) - vx_prev(ci)), model.nr * vt, vcrit_be);
+    let vbc = pnjlim(vbc, sign * (vx_prev(bi) - vx_prev(ci)), model.nr * vt, vcrit_bc);
 
     let nvf = model.nf * vt;
     let nvr = model.nr * vt;
@@ -1648,17 +1711,28 @@ fn stamp_bjt<S: StampSink>(
     let cr = is * (er - 1.0); // reverse diffusion
 
     // Base-width modulation (Early effect): SGP's base-charge factor with
-    // VAR/IKF absent is qb = q1 = 1/(1 - vbc/VAF), and the transport current
-    // is DIVIDED by qb — i.e. MULTIPLIED by (1 - vbc/VAF), which is > 1 in
-    // forward-active (vbc < 0), so ic grows with vce and ro = VAF/IC, the
-    // classic Early slope. (This arc FIXED an inversion here: the previous
-    // code divided by (1 - vbc/VAF), shrinking ic with vce — undetected
-    // because the bias decks' collector points are bias-network-set, exposed
-    // by the §3.2 amplifier-gain cross-check against ngspice. For the
-    // default model `vaf` is infinite, `early == 1.0`, and `1/1.0 == 1.0`
-    // exactly: default-model decks are bit-identical across the fix.)
-    let early = if ctx.opts.effects.early_effect && model.vaf.is_finite() {
-        1.0 - vbc / model.vaf
+    // IKF absent is qb = q1 = 1/(1 - vbc/VAF - vbe/VAR), and the transport
+    // current is DIVIDED by qb — i.e. MULTIPLIED by (1 - vbc/VAF - vbe/VAR),
+    // which is > 1 in forward-active (vbc < 0), so ic grows with vce and
+    // ro = VAF/IC, the classic Early slope; the -vbe/VAR term is the REVERSE
+    // Early voltage, shrinking ic as the forward junction charges the base
+    // (it dominates in saturation/reverse-active, where VAR-carrying models
+    // used to mis-simulate silently: the field was parsed and dropped here).
+    // (This arc FIXED an inversion here: the previous code divided by
+    // (1 - vbc/VAF), shrinking ic with vce — undetected because the bias
+    // decks' collector points are bias-network-set, exposed by the §3.2
+    // amplifier-gain cross-check against ngspice. For the default model both
+    // `vaf` and `var` are infinite, `early == 1.0`, and `1/1.0 == 1.0`
+    // exactly: default-model decks are bit-identical across both fixes.)
+    let early = if ctx.opts.effects.early_effect {
+        let mut e = 1.0;
+        if model.vaf.is_finite() {
+            e -= vbc / model.vaf;
+        }
+        if model.var.is_finite() {
+            e -= vbe / model.var;
+        }
+        e
     } else {
         1.0
     };
@@ -1714,15 +1788,23 @@ fn stamp_bjt<S: StampSink>(
     // the RHS brackets whole; folding only some terms breaks PNP convergence.
     let exact_tangent = eff != ext;
     if exact_tangent {
-        let gc_be = gm; // gif·q1_inv, gmin-floored like the legacy path
-        let early_deriv = if ctx.opts.effects.early_effect
-            && model.vaf.is_finite()
-            && early > 0.1
-        {
+        // The base-charge factor's own partials (both zero unless the effect
+        // is on, the voltage is finite, and the clamp is not engaged):
+        // ∂q1_inv/∂vbc = -1/vaf, ∂q1_inv/∂vbe = -1/var, each contributing
+        // (cf-cr)·∂q1_inv to the transport-current row.
+        let early_free = ctx.opts.effects.early_effect && early > 0.1;
+        let early_deriv = if early_free && model.vaf.is_finite() {
             -(cf - cr) / model.vaf
         } else {
             0.0
         };
+        let var_deriv = if early_free && model.var.is_finite() {
+            -(cf - cr) / model.var
+        } else {
+            0.0
+        };
+        // gif·q1_inv (gmin-floored like the legacy path) plus the VAR term.
+        let gc_be = gm + var_deriv;
         let gc_bc = -gir * q1_inv - gmu + early_deriv;
         // Row c: gc_be·vbe + gc_bc·vbc; row b: gpi·vbe + gmu·vbc; row e is
         // minus their sum (KCL). Each junction-voltage dependence is a
@@ -1861,37 +1943,14 @@ fn stamp_mosfet<S: StampSink>(
     }
 
     let nsub = model.n_sub.max(1.0);
-    let (ids, gm, gds) = if vgs - vth < -nsub * vt * 10.0 {
-        // Deep subthreshold: negligible current, tiny conductance.
-        (0.0, ctx.opts.gmin, ctx.opts.gmin)
-    } else if vgs <= vth {
-        // Subthreshold exponential region (smooth turn-on).
-        let i0 = beta * (nsub * vt) * (nsub * vt) * std::f64::consts::E; // continuity scale
-        let id = i0 * ((vgs - vth) / (nsub * vt)).exp();
-        let gm = id / (nsub * vt);
-        (id.min(1e3), gm.max(ctx.opts.gmin), ctx.opts.gmin)
+    // Channel evaluation via the shared C1-continuous blend (see
+    // [`mos_channel`]) — the AC tangent calls the SAME function at the OP.
+    let lambda = if ctx.opts.effects.early_effect {
+        model.lambda
     } else {
-        let lambda = if ctx.opts.effects.early_effect {
-            model.lambda
-        } else {
-            0.0
-        };
-        let vov = vgs - vth;
-        if vds < vov {
-            // Triode.
-            let id = beta * (vov * vds - 0.5 * vds * vds) * (1.0 + lambda * vds);
-            let gm = beta * vds * (1.0 + lambda * vds);
-            let gds = beta
-                * ((vov - vds) * (1.0 + lambda * vds) + (vov * vds - 0.5 * vds * vds) * lambda);
-            (id, gm.max(ctx.opts.gmin), gds.max(ctx.opts.gmin))
-        } else {
-            // Saturation.
-            let id = 0.5 * beta * vov * vov * (1.0 + lambda * vds);
-            let gm = beta * vov * (1.0 + lambda * vds);
-            let gds = 0.5 * beta * vov * vov * lambda;
-            (id, gm.max(ctx.opts.gmin), gds.max(ctx.opts.gmin))
-        }
+        0.0
     };
+    let (ids, gm, gds) = mos_channel(beta, nsub * vt, vgs - vth, vds, lambda, ctx.opts.gmin);
 
     // Map back through the swap and polarity. The drain current flows d->s in
     // N-channel space; after a swap it flows the other way.
@@ -2739,6 +2798,142 @@ mod bjt_physics_tests {
         }
     }
 
+    /// Residual (terminal-current) rows `(f_b, f_c)` of a one-BJT system at a
+    /// PINNED iterate: b at `vb` (previous iterate `vb_prev`), c at `vc`, e
+    /// grounded — the pure DC physics through the same `stamp_residual` sink
+    /// Newton brackets with. Temperature toggle OFF so `is` and `Vt` match
+    /// hand arithmetic exactly.
+    fn bjt_residual(model: BjtModel, vb: f64, vc: f64, vb_prev: f64) -> (f64, f64) {
+        let mut cir = Circuit::new();
+        let nb = cir.node("b");
+        let nc = cir.node("c");
+        cir.add(Device::Bjt {
+            name: "Q1".into(),
+            c: nc,
+            b: nb,
+            e: hauksbee_ir::NodeId::GROUND,
+            model,
+        });
+        let layout = Layout::new(&cir);
+        let b_row = layout.node(nb).unwrap();
+        let c_row = layout.node(nc).unwrap();
+        let mut x = vec![0.0; layout.size];
+        x[b_row] = vb;
+        x[c_row] = vc;
+        let mut x_prev = x.clone();
+        x_prev[b_row] = vb_prev;
+        let state = ReactiveState::new(1);
+        let mut opts = SolverOptions::default();
+        opts.effects.temperature = false;
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
+        let spdt = std::collections::HashMap::new();
+        let ctx = StampCtx {
+            circuit: &cir,
+            layout: &layout,
+            opts: &opts,
+            x: &x,
+            x_prev: &x_prev,
+            time: 0.0,
+            coeffs,
+            state: &state,
+            dc: true,
+            use_ic: false,
+            gmin: 0.0,
+            src_scale: 1.0,
+            branch_reg: 0.0,
+            cmp_freeze: None,
+            switch_freeze: None,
+            spdt_sibling: &spdt,
+        };
+        let mut f = vec![0.0; layout.size];
+        stamp_residual(&ctx, &mut f);
+        (f[b_row], f[c_row])
+    }
+
+    /// Bug-hunt r4 #11: `VAR` (reverse Early voltage) was parsed but never
+    /// stamped — the base-charge factor carried only `-vbc/VAF`. The SGP
+    /// factor is `q1_inv = 1 - vbc/VAF - vbe/VAR`, so at a forward vbe a
+    /// finite VAR must scale the TRANSPORT current by exactly the corrected
+    /// factor and in the physically-correct DIRECTION (forward base charge
+    /// SHRINKS ic); the base current carries no q1 dependence and must be
+    /// bit-identical, and VAR = ∞ must reproduce the VAF-only arithmetic.
+    #[test]
+    fn bjt_var_scales_transport_current() {
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        let (vb, vc) = (0.65, 3.0);
+        let m_inf = BjtModel { vaf: 100.0, ..BjtModel::default() };
+        let m_fin = BjtModel { vaf: 100.0, var: 15.0, ..BjtModel::default() };
+        let (fb_inf, fc_inf) = bjt_residual(m_inf, vb, vc, vb);
+        let (fb_fin, fc_fin) = bjt_residual(m_fin, vb, vc, vb);
+        // Base current has no q1 factor: untouched to the bit.
+        assert_eq!(fb_inf.to_bits(), fb_fin.to_bits());
+        // Collector current scales by q1_inv(VAR)/q1_inv(∞) — smaller, not
+        // larger (the ibc offset is ~1e-11 relative at this bias).
+        let (vbe, vbc) = (vb, vb - vc);
+        let q_inf = 1.0 - vbc / 100.0;
+        let q_fin = q_inf - vbe / 15.0;
+        assert!(fc_fin.abs() < fc_inf.abs(), "finite VAR must reduce ic");
+        let ratio = fc_fin / fc_inf;
+        assert!(
+            (ratio - q_fin / q_inf).abs() < 1e-9,
+            "ic ratio {ratio} != q1 ratio {}",
+            q_fin / q_inf
+        );
+        // VAR = ∞ is the old VAF-only physics exactly: analytic collector
+        // current at this iterate (br = 1, sign conventions folded out).
+        let is = m_inf.is;
+        let cf = is * ((vbe / vt).clamp(-40.0, 40.0).exp() - 1.0);
+        let cr = is * ((vbc / vt).clamp(-40.0, 40.0).exp() - 1.0);
+        let ic = (cf - cr) * q_inf - cr / m_inf.br;
+        assert!(
+            (fc_inf.abs() - ic).abs() < 1e-9 * ic,
+            "VAR=inf collector current {} != VAF-only analytic {ic}",
+            fc_inf.abs()
+        );
+    }
+
+    /// Bug-hunt r4 #9: the vbc pnjlim call was fed the FORWARD critical
+    /// voltage (built from nf·Vt) while limiting on the nr·Vt scale, so with
+    /// nf != nr the reverse limiter gated and clamped at the wrong threshold
+    /// (SPICE3 computes separate VCRITF/VCRITR for exactly this reason).
+    /// Iteration-path only — but the wrong clamp bends Newton's path, so pin
+    /// the vcrit values AND the stamped residual at a limited iterate.
+    #[test]
+    fn bjt_vbc_limiter_uses_reverse_vcrit() {
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        let m = BjtModel { nr: 1.5, ..BjtModel::default() };
+        let vcrit_f = vcrit(m.is, m.nf * vt);
+        let vcrit_r = vcrit(m.is, m.nr * vt);
+        assert!(vcrit_r > vcrit_f, "nr-built vcrit must scale with nr");
+        // The regression point: vbc stepping 0.9 -> 1.0 V sits BELOW the
+        // nr-built vcrit (must pass unlimited) but ABOVE the nf-built one the
+        // old wiring passed (which clamped it).
+        assert!(vcrit_f < 1.0 && 1.0 < vcrit_r);
+        assert_eq!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_r), 1.0);
+        assert_ne!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_f), 1.0);
+        // Stamp-level: b at 1.0 V (prev 0.9), c grounded — both junctions
+        // forward. The base-row residual is F_b = A·x - rhs at the RAW x, so
+        // a limited junction contributes its tangent extrapolated back to the
+        // raw voltage: F_b = ib(limited) + gpi·(vbe_raw - vbe_lim)
+        //                               + gmu·(vbc_raw - vbc_lim).
+        // With the fix vbc passes UNLIMITED (vbc_lim == 1.0, its term is 0);
+        // the old wiring clamped vbc near 0.95 V, shifting cr/gmu well past
+        // this tolerance.
+        let (fb, _) = bjt_residual(m, 1.0, 0.0, 0.9);
+        let (nvf, nvr) = (m.nf * vt, m.nr * vt);
+        let vbe_lim = pnjlim(1.0, 0.9, nvf, vcrit_f);
+        let ef = (vbe_lim / nvf).clamp(-40.0, 40.0).exp();
+        let er = (1.0 / nvr).clamp(-40.0, 40.0).exp();
+        let ib = m.is * (ef - 1.0) / m.bf + m.is * (er - 1.0) / m.br;
+        let gpi = m.is * ef / (nvf * m.bf);
+        let expected = ib + gpi * (1.0 - vbe_lim);
+        assert!(
+            (fb.abs() - expected).abs() < 1e-9 * expected,
+            "base residual {} != analytic {expected} at the nr-limited iterate",
+            fb.abs()
+        );
+    }
+
     /// The extracted shared depletion helper reproduces the diode's charge
     /// arithmetic bit-for-bit (the §3.1 regression surface must not move).
     #[test]
@@ -2751,6 +2946,103 @@ mod bjt_physics_tests {
             assert_eq!(q_d.to_bits(), (0.0f64 + q_h).to_bits(), "Q mismatch at {vd}");
             assert_eq!(c_d.to_bits(), (0.0f64 + c_h).to_bits(), "C mismatch at {vd}");
         }
+    }
+}
+
+#[cfg(test)]
+mod mos_channel_tests {
+    use super::*;
+
+    /// Bug-hunt r4 #10: the old two-branch channel had a genuine downward id
+    /// jump of the full `i0 = beta·(n·Vt)²·e` at `vgs == vth` (and gm
+    /// collapsed from `i0/(n·Vt)` to 0) — the "continuity scale" matched
+    /// nothing. The blended overdrive must give id and gm with NO jump across
+    /// threshold: consecutive fine-sweep deltas bounded by the local slope,
+    /// one-sided limits at vth agreeing tightly, and gm equal to the true
+    /// derivative d id/d vgs (C1 by finite difference). Swept for a
+    /// signal-scale beta AND a power-scale kp, with and without CLM, and for
+    /// a crossing that lands in triode (small vds) as well as saturation.
+    /// stamp.rs and ac.rs share this ONE function, so the DC and AC tangents
+    /// cannot disagree at the boundary by construction.
+    #[test]
+    fn mos_channel_id_and_gm_continuous_across_vth() {
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        for &(beta, nsub, lambda, vds) in &[
+            (2e-5, 1.0, 0.0, 2.0),   // default-scale kp, saturation crossing
+            (2e-5, 2.0, 0.02, 2.0),  // slope factor + CLM
+            (20.0, 1.5, 0.05, 2.0),  // power-scale kp
+            (20.0, 1.5, 0.05, 0.03), // crossing inside triode (small vds)
+        ] {
+            let nvt: f64 = nsub * vt;
+            let f = |vov: f64| mos_channel(beta, nvt, vov, vds, lambda, 0.0);
+            let clm = 1.0 + lambda * vds;
+            // Fine sweep across the threshold: each id step bounded by the
+            // local gm (no jump), each gm step bounded by the curvature scale
+            // beta·clm (the square-law d²id/dvgs², which the blend never
+            // exceeds by more than the sigmoid-chain factor).
+            let h = 1e-4;
+            let mut prev = f(-0.3);
+            let mut k = 1;
+            while -0.3 + (k as f64) * h <= 0.3 {
+                let vov = -0.3 + (k as f64) * h;
+                let cur = f(vov);
+                let gmax = prev.1.max(cur.1);
+                assert!(
+                    (cur.0 - prev.0).abs() <= gmax * h * 1.5 + 1e-18,
+                    "id jump at vov={vov} (beta={beta}): {} -> {}",
+                    prev.0,
+                    cur.0
+                );
+                assert!(
+                    (cur.1 - prev.1).abs() <= 3.0 * beta * clm * h + 1e-18,
+                    "gm jump at vov={vov} (beta={beta}): {} -> {}",
+                    prev.1,
+                    cur.1
+                );
+                prev = cur;
+                k += 1;
+            }
+            // One-sided limits at exactly vth: value and slope agree tightly.
+            let below = f(-1e-9);
+            let at = f(0.0);
+            let above = f(1e-9);
+            assert!((above.0 - below.0).abs() <= 1e-6 * at.0.abs().max(1e-30));
+            assert!((above.1 - below.1).abs() <= 1e-6 * at.1.abs().max(1e-30));
+            // gm IS d id / d vgs — through the threshold, not just beside it.
+            for &v in &[-0.1, -0.02, 0.0, 0.02, 0.1] {
+                let d = 1e-7;
+                let fd = (f(v + d).0 - f(v - d).0) / (2.0 * d);
+                let gm = f(v).1;
+                assert!(
+                    (fd - gm).abs() <= 1e-4 * gm.abs().max(1e-15),
+                    "gm != d id/d vgs at vov={v} (beta={beta}): fd={fd:e} gm={gm:e}"
+                );
+            }
+        }
+    }
+
+    /// The blend keeps the promised physics on both sides: an exponential
+    /// tail with slope n·Vt below threshold, the plain square law above, and
+    /// zero current across a zero-bias channel.
+    #[test]
+    fn mos_channel_regions_physically_sane() {
+        let vt = hauksbee_ir::thermal_voltage_c(27.0);
+        let nvt = vt; // nsub = 1
+        let beta = 2e-5;
+        let f = |vov: f64, vds: f64| mos_channel(beta, nvt, vov, vds, 0.0, 0.0);
+        // Deep subthreshold: one n·Vt of gate bias is one decade-of-e — the
+        // exponential tail's defining ratio.
+        let ratio = f(-0.2 + nvt, 2.0).0 / f(-0.2, 2.0).0;
+        assert!(
+            (ratio - std::f64::consts::E).abs() < 0.05 * std::f64::consts::E,
+            "subthreshold slope: id ratio per n·Vt = {ratio}, want ~e"
+        );
+        // Strong inversion: the unblemished square law to well under 0.1%.
+        let sq = 0.5 * beta * 0.5 * 0.5;
+        assert!(((f(0.5, 2.0).0 - sq) / sq).abs() < 1e-3);
+        // vds = 0: no phantom channel current at any gate bias.
+        assert_eq!(f(-0.1, 0.0).0, 0.0);
+        assert_eq!(f(0.5, 0.0).0, 0.0);
     }
 }
 
