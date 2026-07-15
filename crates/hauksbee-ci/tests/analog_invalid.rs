@@ -167,3 +167,51 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
         "a tripped analog abort refuses even when assertions pass"
     );
 }
+
+#[test]
+fn tripped_abort_with_no_invalid_assertion_errors_in_junit_not_all_green() {
+    // Same state as `tripped_abort_forces_exit_3_even_when_assertions_pass`: the
+    // abort tripped but the only assertion (UART, not analog-derived) passed, so
+    // no per-assertion result carries INVALID. The run exits 3 — and the JUnit
+    // surface must agree: `render_human` and `render_github_annotations` both
+    // special-case this state, so `render_junit` must too, with one synthetic
+    // errored testcase instead of a false `failures="0" errors="0"` ALL-GREEN.
+    let spec = load_spec(
+        "abort_junit.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=1\n[[assert]]\nkind=\"uart\"\ncontains=\"hi\"\n",
+    );
+    let mut out = outcome_with("n1", 5.0, 1.0, false, vec![(0.0, 0.0003)], true);
+    out.uart.insert("U1".to_string(), "hi there".to_string());
+    let results = evaluate(&spec, &[out]);
+    assert!(results.iter().all(|r| r.passed && !r.invalid));
+
+    let result = ci_result(results, true);
+    assert_eq!(result.exit_code(), 3);
+    let xml = result.render_junit();
+    assert!(
+        xml.contains("errors=\"1\"") && !xml.contains("errors=\"0\""),
+        "junit must count the abort as an error, not report all-green: {xml}"
+    );
+    // 1 real assertion + 1 synthetic abort testcase.
+    assert!(xml.contains("tests=\"2\""), "{xml}");
+    assert!(
+        xml.contains("<error") && xml.contains("INVALID for analysis"),
+        "the synthetic errored testcase must be present and explain itself: {xml}"
+    );
+}
+
+#[test]
+fn abort_with_an_invalid_assertion_does_not_double_count_in_junit() {
+    // When an assertion already carries the INVALID, the synthetic testcase must
+    // NOT be added on top: the error count stays at the per-assertion count.
+    let spec = load_spec("abort_junit_dup.toml", VOLTAGE_SPEC);
+    let out = outcome_with("n1", 5.0, 1.0, false, vec![(0.0, 0.0005)], true);
+    let results = evaluate(&spec, &[out]);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].invalid);
+
+    let result = ci_result(results, true);
+    let xml = result.render_junit();
+    assert!(xml.contains("tests=\"1\""), "no synthetic testcase added: {xml}");
+    assert!(xml.contains("errors=\"1\""), "{xml}");
+}
