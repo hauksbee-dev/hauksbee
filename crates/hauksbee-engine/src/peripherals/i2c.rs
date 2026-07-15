@@ -247,8 +247,13 @@ impl Peripheral for I2cBus {
 
 /// A generic 24Cxx I2C EEPROM with a 16-bit word address (covers 24C32..24C512
 /// addressing; smaller parts simply wrap). Write protocol: two address bytes
-/// (hi, lo) then data bytes, auto-incrementing. Read protocol: current-address
-/// reads return successive bytes.
+/// (hi, lo) then data bytes, auto-incrementing *within the write page* — like
+/// the real parts, a page write that runs past the page boundary wraps the low
+/// address bits back to the page start and overwrites from there (24C32/24C64
+/// datasheets: "the address roll over during write is from the last byte of the
+/// current page to the first byte of the same page"). Read protocol:
+/// current-address reads return successive bytes, rolling over the whole array
+/// (reads are not page-bound on the real parts either).
 pub struct Eeprom24c {
     addr: u8,
     mem: Vec<u8>,
@@ -257,9 +262,17 @@ pub struct Eeprom24c {
     /// Bytes consumed of the 2-byte word-address phase in the current write.
     addr_phase: u8,
     addr_hi: u8,
+    /// Write-page size in bytes (power of two). Defaults to 32, the 24C32/24C64
+    /// page size — the smallest parts this 16-bit-address model covers.
+    /// Configure via [`Eeprom24c::with_page_size`] for larger parts (64 for
+    /// 24C128/24C256, 128 for 24C512).
+    page_size: usize,
 }
 
 impl Eeprom24c {
+    /// The default write-page size (bytes): the 24C32/24C64 datasheet value.
+    pub const DEFAULT_PAGE_SIZE: usize = 32;
+
     /// `size` is the total byte capacity (e.g. 4096 for a 24C32 = 32 kbit).
     pub fn new(address: u8, size: usize) -> Self {
         Eeprom24c {
@@ -268,7 +281,20 @@ impl Eeprom24c {
             ptr: 0,
             addr_phase: 0,
             addr_hi: 0,
+            page_size: Self::DEFAULT_PAGE_SIZE,
         }
+    }
+
+    /// Set the write-page size (bytes) for the modeled part. Must be a power of
+    /// two (every 24Cxx page size is); a non-power-of-two or zero panics, since
+    /// it describes an EEPROM that does not exist.
+    pub fn with_page_size(mut self, page_size: usize) -> Self {
+        assert!(
+            page_size.is_power_of_two(),
+            "24Cxx page size must be a power of two, got {page_size}"
+        );
+        self.page_size = page_size;
+        self
     }
 
     /// Read the backing memory (for assertions).
@@ -308,11 +334,18 @@ impl I2cSlave for Eeprom24c {
                 self.addr_phase = 2;
             }
             _ => {
-                // Data byte: store and auto-increment within the page.
+                // Data byte: store and auto-increment within the page. Real
+                // 24Cxx parts wrap only the low (page-offset) address bits on a
+                // page write, so a write running past the page boundary rolls
+                // back to the page start rather than spilling into the next
+                // page. Pages never exceed the array, so page_size is clamped
+                // to the memory size for tiny test configurations.
                 if self.ptr < self.mem.len() {
                     self.mem[self.ptr] = data;
                 }
-                self.ptr = (self.ptr + 1) % self.mem.len();
+                let page = self.page_size.min(self.mem.len());
+                let page_base = self.ptr - (self.ptr % page);
+                self.ptr = (page_base + (self.ptr % page + 1) % page) % self.mem.len();
             }
         }
     }
@@ -327,6 +360,7 @@ impl I2cSlave for Eeprom24c {
         let mut m = HashMap::new();
         m.insert("size".into(), self.mem.len() as f64);
         m.insert("ptr".into(), self.ptr as f64);
+        m.insert("page_size".into(), self.page_size as f64);
         m
     }
 
@@ -565,6 +599,87 @@ mod tests {
         assert!(ee.contains(b"Hi"), "EEPROM should contain 'Hi'");
         assert_eq!(ee.contents()[0x10], b'H');
         assert_eq!(ee.contents()[0x11], b'i');
+    }
+
+    #[test]
+    fn eeprom_page_write_wraps_at_page_boundary_not_into_next_page() {
+        // 24C32-class part: 32-byte write pages. Start a page write two bytes
+        // before the end of page 0 (address 0x001E) and stream four data bytes:
+        // the real part stores the first two at 0x1E/0x1F, then rolls the low
+        // address bits over to the START of the same page (0x00/0x01). It never
+        // spills linearly into page 1 (0x20).
+        let mut bus = I2cBus::new("I2C").with_slave(Box::new(Eeprom24c::new(0x50, 4096)));
+        let mut evs = vec![
+            I2cEvent::Start {
+                addr: 0x50,
+                read: false,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x00,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x1E,
+            },
+        ];
+        for data in [0xA0, 0xA1, 0xA2, 0xA3] {
+            evs.push(I2cEvent::Write { addr: 0x50, data });
+        }
+        evs.push(I2cEvent::Stop { addr: 0x50 });
+        for ev in evs {
+            bus.dispatch(ev);
+        }
+        let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
+        assert_eq!(ee.contents()[0x1E], 0xA0);
+        assert_eq!(ee.contents()[0x1F], 0xA1);
+        assert_eq!(ee.contents()[0x00], 0xA2, "third byte wraps to the page start");
+        assert_eq!(ee.contents()[0x01], 0xA3);
+        assert_eq!(
+            ee.contents()[0x20],
+            0xFF,
+            "the next page must be untouched (no linear spill)"
+        );
+    }
+
+    #[test]
+    fn eeprom_page_size_is_configurable() {
+        // A 64-byte-page part (24C128/24C256 class): a write crossing 0x3F
+        // wraps to 0x00. (With the default 32-byte page it would wrap to 0x20
+        // instead — asserted untouched below — so this proves the configured
+        // size is honored, not just that some wrap happened.)
+        let mut bus = I2cBus::new("I2C")
+            .with_slave(Box::new(Eeprom24c::new(0x50, 4096).with_page_size(64)));
+        for ev in [
+            I2cEvent::Start {
+                addr: 0x50,
+                read: false,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x00,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0x3F,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0xB0,
+            },
+            I2cEvent::Write {
+                addr: 0x50,
+                data: 0xB1,
+            },
+            I2cEvent::Stop { addr: 0x50 },
+        ] {
+            bus.dispatch(ev);
+        }
+        let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
+        assert_eq!(ee.contents()[0x3F], 0xB0);
+        assert_eq!(ee.contents()[0x00], 0xB1, "wraps at the 64-byte page end");
+        assert_eq!(ee.contents()[0x20], 0xFF, "a default-32-byte-page wrap would land here");
+        assert_eq!(ee.contents()[0x40], 0xFF, "no spill into the next 64-byte page");
     }
 
     #[test]
