@@ -225,6 +225,52 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
     );
 }
 
+/// R5: an analog-switch VCC net that does not resolve to a known rail voltage
+/// (a non-canonical name like "VDD_MUX") must NOT silently assume 5 V — that
+/// reintroduces the "s0 permanently open on a low-voltage board" bug the
+/// rail-referenced thresholds fixed. It still falls back to 5 V, but says so in
+/// the bind report.
+#[test]
+fn spdt_unresolved_vcc_rail_warns() {
+    let sw = comp(
+        "SW1",
+        "SN74LVC1G3157",
+        "Package_TO_SOT_SMD:SOT-23-6",
+        vec![
+            pin("1", 4, ""), // B2 = s1
+            pin("2", 6, ""), // GND
+            pin("3", 3, ""), // B1 = s0
+            pin("4", 2, ""), // A  = com
+            pin("5", 1, ""), // VCC (non-canonical net name below)
+            pin("6", 5, ""), // S  = select
+        ],
+    );
+    let b = board(
+        &[
+            (1, "VDD_MUX"), // no recognizable rail voltage
+            (2, "COM_NET"),
+            (3, "S0_NET"),
+            (4, "S1_NET"),
+            (5, "SEL"),
+            (6, "GND"),
+        ],
+        vec![sw],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|r| r.reference == "SW1")
+        .expect("SW1 gets a bind row");
+    let w = row.warning.as_deref().unwrap_or("");
+    assert!(
+        w.contains("assumed") && w.contains("VDD_MUX"),
+        "an unresolved analog-switch VCC rail must warn instead of silently \
+         assuming 5 V, got {w:?}"
+    );
+}
+
 /// Bug #6: a "CR1" zener (MIL-STD/ANSI diode designator) with value "5.1V" and
 /// a diode footprint used to skip the diode fallback (prefix isn't 'D') and
 /// land in the R/C/L first-letter heuristic, where 'C' bound it as a 5.1 FARAD
@@ -319,6 +365,20 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
             "{name}: each element carries the per-element value, got {ohms}"
         );
     }
+    // R5: the 1-2/3-4 sequential pairing is a convention (a mirror-pinout array
+    // would pair differently), so the even-count path must say so in the bind
+    // report — matching the odd-count branch, not a silent guess.
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|r| r.reference == "RN1")
+        .expect("RN1 gets a bind row");
+    let w = row.warning.as_deref().unwrap_or("");
+    assert!(
+        w.contains("sequential"),
+        "even-pad isolated array must carry the sequential-pairing note, got {w:?}"
+    );
 }
 
 /// Odd pad counts are ambiguous (bussed common could sit at either end). The

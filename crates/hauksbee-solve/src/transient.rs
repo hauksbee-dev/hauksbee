@@ -1041,41 +1041,65 @@ fn lte_estimate(
 /// window enumerates corners only up to [`MAX_BREAKPOINTS`]; beyond the cap
 /// the controller is left to its own rhythm (once locked onto a periodic
 /// waveform the accepted-step history carries the curvature signal, so the
-/// cap loses the guarantee only for the tail, not the lock-on). PWL lists are
-/// finite by construction and are never truncated.
+/// cap loses the guarantee only for the tail, not the lock-on). PWL vertices
+/// and ramp kinks are finite by construction and are never truncated — they
+/// are collected into a separate always-kept list ([`Corners`]) so the cap
+/// counts only PULSE corners and a dense periodic source can never evict a
+/// late PWL landing.
 const MAX_BREAKPOINTS: usize = 100_000;
 
+/// Corner times split by whether they may be truncated. Keeping the two kinds
+/// apart is what lets the [`MAX_BREAKPOINTS`] cap bound only the unbounded
+/// PULSE enumeration without ever evicting a finite PWL vertex — see
+/// [`breakpoint_table`].
+#[derive(Default)]
+struct Corners {
+    /// PWL vertices and ramp kinks — finite by construction, NEVER truncated.
+    always: Vec<f64>,
+    /// PULSE periodic corners — capped at [`MAX_BREAKPOINTS`] collectively.
+    capped: Vec<f64>,
+}
+
 fn breakpoint_table(circuit: &Circuit, tstop: f64) -> Vec<f64> {
-    let mut bps: Vec<f64> = Vec::new();
+    let mut corners = Corners::default();
     for (_, dev) in circuit.iter() {
         let kind = match dev {
             Device::Vsource { kind, .. } | Device::Isource { kind, .. } => kind,
             _ => continue,
         };
-        push_source_corners(kind, tstop, &mut bps);
+        push_source_corners(kind, tstop, &mut corners);
     }
+    // Cap ONLY the PULSE-derived corners: a fast periodic source over a long
+    // window enumerates unboundedly, and once locked onto a periodic waveform
+    // the accepted-step history carries the curvature signal. The PWL vertices
+    // and ramp kinks in `always` are the mandatory landings the co-sim's edge
+    // drive depends on and are finite by construction, so a dense PULSE
+    // elsewhere must never push a late PWL corner past the cap (the bug this
+    // split fixes: the old single list truncated the merged, time-sorted array,
+    // silently dropping a late PWL vertex behind an earlier PULSE burst).
+    corners.capped.truncate(MAX_BREAKPOINTS);
+    let mut bps = corners.always;
+    bps.append(&mut corners.capped);
     bps.sort_by(|a, b| a.partial_cmp(b).expect("breakpoints are finite"));
     // Dedup within a relative epsilon: two corners closer than the controller
     // could ever distinguish are one landing.
     bps.dedup_by(|a, b| (*a - *b).abs() <= f64::max(1e-18, *b * 1e-12));
-    bps.truncate(MAX_BREAKPOINTS);
     bps
 }
 
 /// Push one source's time-domain corners into `bps` (times strictly inside
 /// `(0, tstop)`). Recursive so a `Ramped` envelope contributes both its own
 /// full-amplitude corner at `scale_to` AND every corner of the inner source.
-fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, bps: &mut Vec<f64>) {
+fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, corners: &mut Corners) {
     use hauksbee_ir::SourceKind;
-    let push = |t: f64, bps: &mut Vec<f64>| {
-        if t > 0.0 && t < tstop {
-            bps.push(t);
-        }
-    };
+    let in_window = |t: f64| t > 0.0 && t < tstop;
     match kind {
         SourceKind::Pwl(points) => {
+            // PWL vertices are always-kept (finite by construction).
             for pt in points {
-                push(pt.t, bps);
+                if in_window(pt.t) {
+                    corners.always.push(pt.t);
+                }
             }
         }
         SourceKind::Pulse {
@@ -1088,15 +1112,18 @@ fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, bps: &mut Vec
         } => {
             // Corners per period: leading edge start/end, trailing edge
             // start/end. Zero-length edges still get their corner (the
-            // discontinuity itself is the thing to land on).
+            // discontinuity itself is the thing to land on). Capped: the cap
+            // now counts only PULSE corners, so PWL vertices never contend for
+            // the budget.
             let step = if *period > 0.0 { *period } else { tstop };
             let one_shot = *period <= 0.0;
             let mut t0 = *delay;
-            while t0 < tstop && bps.len() < MAX_BREAKPOINTS {
-                push(t0, bps);
-                push(t0 + rise, bps);
-                push(t0 + rise + width, bps);
-                push(t0 + rise + width + fall, bps);
+            while t0 < tstop && corners.capped.len() < MAX_BREAKPOINTS {
+                for t in [t0, t0 + rise, t0 + rise + width, t0 + rise + width + fall] {
+                    if in_window(t) {
+                        corners.capped.push(t);
+                    }
+                }
                 if one_shot {
                     break;
                 }
@@ -1104,10 +1131,13 @@ fn push_source_corners(kind: &hauksbee_ir::SourceKind, tstop: f64, bps: &mut Vec
             }
         }
         SourceKind::Ramped { scale_to, inner } => {
-            // The ramp's own kink at full amplitude, then the inner's corners
-            // (the inner is not time-shifted, so its corner times are unchanged).
-            push(*scale_to, bps);
-            push_source_corners(inner, tstop, bps);
+            // The ramp's own kink at full amplitude (always-kept), then the
+            // inner's corners (the inner is not time-shifted, so its corner
+            // times are unchanged).
+            if in_window(*scale_to) {
+                corners.always.push(*scale_to);
+            }
+            push_source_corners(inner, tstop, corners);
         }
         SourceKind::Dc(_) | SourceKind::Sin { .. } => {}
     }
@@ -1186,5 +1216,63 @@ impl Workspace {
     /// A node->unknown index closure for event checks.
     fn layout_nodes(&self) -> impl Fn(NodeId) -> Option<usize> + '_ {
         move |n: NodeId| self.layout.node(n)
+    }
+}
+
+#[cfg(test)]
+mod breakpoint_cap_tests {
+    use super::{breakpoint_table, MAX_BREAKPOINTS};
+    use hauksbee_ir::{Circuit, Device, NodeId, PwlPoint, SourceKind};
+
+    /// R5 regression: a late PWL vertex must survive even when a fast PULSE
+    /// source enumerates far more than `MAX_BREAKPOINTS` corners ahead of it.
+    /// The old single-list `truncate` kept only the earliest 100k times across
+    /// ALL sources, so the PWL landing at 0.9 s was silently dropped behind the
+    /// PULSE burst that filled the cap in the first ~25 ms — exactly the
+    /// stride-over-a-pulse aliasing the breakpoint table exists to prevent.
+    #[test]
+    fn pwl_vertex_survives_a_cap_exhausting_pulse() {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let b = c.node("b");
+        // 1 us period over a 1 s window: ~4M corners, so the cap fills within
+        // the first ~25 ms and no PULSE corner past that is enumerated.
+        c.add(Device::Vsource {
+            name: "Vpulse".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pulse {
+                v1: 0.0,
+                v2: 5.0,
+                delay: 0.0,
+                rise: 1e-9,
+                fall: 1e-9,
+                width: 0.5e-6,
+                period: 1e-6,
+            },
+        });
+        // A single sharp PWL vertex at 0.9 s, long after the cap-filling burst.
+        c.add(Device::Vsource {
+            name: "Vpwl".into(),
+            p: b,
+            n: NodeId::GROUND,
+            kind: SourceKind::Pwl(vec![
+                PwlPoint { t: 0.0, v: 0.0 },
+                PwlPoint { t: 0.9, v: 5.0 },
+                PwlPoint { t: 0.9 + 1e-6, v: 0.0 },
+            ]),
+        });
+        let bps = breakpoint_table(&c, 1.0);
+        assert!(
+            bps.iter().any(|&t| (t - 0.9).abs() < 1e-12),
+            "the late PWL vertex at 0.9 s must be in the breakpoint table, \
+             not evicted by the earlier PULSE burst"
+        );
+        // The PULSE corners are still bounded (the cap did its job).
+        assert!(
+            bps.len() <= MAX_BREAKPOINTS + 8,
+            "pulse corners stay capped, got {} breakpoints",
+            bps.len()
+        );
     }
 }

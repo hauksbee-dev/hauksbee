@@ -815,7 +815,11 @@ fn parse_ohms(v: &str) -> Option<f64> {
         if let Some(idx) = s.find(suffix) {
             let (a, b) = s.split_at(idx);
             let b = &b[suffix.len()..];
-            let a: f64 = a.parse().ok()?;
+            // Leading-suffix sub-1-ohm notation ("R47" = 0.47 Ω) leaves the
+            // integer part empty; treat it as 0 rather than failing the parse
+            // (which would abort the whole resistor search via `?` and silently
+            // skip the LED-current check on a near-dead-short).
+            let a: f64 = if a.is_empty() { 0.0 } else { a.parse().ok()? };
             if b.is_empty() {
                 return Some(a * mult);
             }
@@ -1069,4 +1073,25 @@ pub fn render_netlint(report: &NetLintReport) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod parse_ohms_tests {
+    use super::parse_ohms;
+
+    #[test]
+    fn leading_r_sub_ohm_notation_parses() {
+        // R5 regression: "R47" = 0.47 Ω (the leading-R sub-1-ohm marking). The
+        // empty integer part used to fail the parse and, via `?`, abort the
+        // whole rail-resistor search — silently skipping the LED-current check
+        // on a near-dead-short.
+        assert_eq!(parse_ohms("R47"), Some(0.47));
+        assert_eq!(parse_ohms("r47"), Some(0.47));
+        // The forms that already worked must still work.
+        assert_eq!(parse_ohms("4R7"), Some(4.7));
+        assert_eq!(parse_ohms("47R"), Some(47.0));
+        assert_eq!(parse_ohms("0R"), Some(0.0));
+        assert_eq!(parse_ohms("4K7"), Some(4700.0));
+        assert_eq!(parse_ohms("330"), Some(330.0));
+    }
 }
