@@ -461,3 +461,344 @@ fn opamp_unity_buffer_phase_margin_about_90() {
     // and a little numerical slack). The buffer is unconditionally stable.
     assert!(pm > 80.0 && pm < 100.0, "phase margin {pm} deg (want ~90)");
 }
+
+// --- AC-vs-DC solver parity (fix/ac-parity) ----------------------------------
+//
+// The AC assembly was written separately from the DC/transient assembly; each
+// test below gates one device arm's small-signal stamp against the semantics
+// the DC path settled on (stamp.rs), through black-box transfer functions.
+
+/// A 0-Ω jumper in the signal path must be a SHORT (the transient stamp's
+/// 1e-6 Ω floor), not an open: `mid` follows `in` and the RC transfer at
+/// `out` is the analytic corner, jumper or no jumper.
+#[test]
+fn zero_ohm_jumper_is_a_short_in_ac() {
+    let r = 1.0e3_f64;
+    let c = 159.155e-9_f64; // fc ~ 1 kHz with R = 1k
+    let mut ckt = Circuit::new();
+    let vin = ckt.node("in");
+    let mid = ckt.node("mid");
+    let out = ckt.node("out");
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "R0".into(),
+        a: vin,
+        b: mid,
+        ohms: 0.0, // the jumper
+        tc1: None,
+    });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: mid,
+        b: out,
+        ohms: r,
+        tc1: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
+    let fc = 1.0 / (std::f64::consts::TAU * r * c);
+    let spec = AcSpec {
+        fstart: fc,
+        fstop: fc,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    // The node behind the jumper carries the full drive: |V(mid)| = 1, 0 deg.
+    let vmid = resp.points[0].node(&ckt, "mid").unwrap();
+    assert!(
+        (vmid.norm() - 1.0).abs() < 1e-5,
+        "mid should follow in through the 0-ohm jumper, |V(mid)|={}",
+        vmid.norm()
+    );
+    assert!(vmid.arg().abs() < 1e-4, "jumper phase shift {}", vmid.arg());
+    // And the transfer at out is the untouched analytic RC corner.
+    let (_f, db, phase) = resp.bode(&ckt, "out")[0];
+    assert!((db + 3.0103).abs() < 1e-3, "corner gain {db} dB (want -3.01)");
+    assert!((phase + 45.0).abs() < 1e-3, "corner phase {phase} deg (want -45)");
+}
+
+/// The AC resistor takes the SAME tc1 temperature derating as the DC path:
+/// at 77 C with tc1 = 4e-3, R = 1k derates to 1.2k and the RC corner moves to
+/// 1/(2π·1.2k·C) — where the response must be exactly -3.01 dB / -45 deg.
+#[test]
+fn ac_resistor_gets_the_dc_paths_tc1_derating() {
+    let r = 1.0e3_f64;
+    let tc1 = 4e-3_f64;
+    let temp_c = 77.0_f64; // +50 C over the 27 C reference
+    let r_derated = r * (1.0 + tc1 * (temp_c - 27.0)); // 1.2k, stamp.rs formula
+    let c = 159.155e-9_f64;
+    let mut ckt = Circuit::new();
+    let vin = ckt.node("in");
+    let out = ckt.node("out");
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: out,
+        ohms: r,
+        tc1: Some(tc1),
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: c,
+        ic: None,
+    });
+    let mut o = opts();
+    o.temperature_c = temp_c; // effects.temperature defaults on
+    let fc = 1.0 / (std::f64::consts::TAU * r_derated * c);
+    let spec = AcSpec {
+        fstart: fc,
+        fstop: fc,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(o).run(&ckt, &spec).unwrap();
+    let (_f, db, phase) = resp.bode(&ckt, "out")[0];
+    assert!(
+        (db + 3.0103).abs() < 1e-3,
+        "derated corner gain {db} dB (want -3.01 at fc of the DERATED R)"
+    );
+    assert!((phase + 45.0).abs() < 1e-3, "derated corner phase {phase} deg");
+}
+
+/// A comparator output is held at its rail through the DC stamp's 1-S output
+/// stage; small-signal that rail is AC ground. AC-coupling a unit drive onto
+/// the output through 1 nF at 1 kHz must divide down to ~ωC/1S ≈ 6.3e-6, not
+/// float at the full drive through gmin (the pre-fix open).
+#[test]
+fn comparator_output_is_held_by_its_output_stage_in_ac() {
+    let mut ckt = Circuit::new();
+    let vin = ckt.node("in");
+    let x = ckt.node("x");
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Capacitor {
+        name: "CC".into(),
+        a: vin,
+        b: x,
+        farads: 1e-9,
+        ic: None,
+    });
+    ckt.add(Device::Comparator {
+        name: "U1".into(),
+        out: x,
+        inp: NodeId::GROUND,
+        inn: NodeId::GROUND,
+        out_lo: 0.0,
+        out_hi: 5.0,
+        hysteresis: 0.0,
+    });
+    let spec = AcSpec {
+        fstart: 1e3,
+        fstop: 1e3,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let vx = resp.points[0].node(&ckt, "x").unwrap().norm();
+    let expect = std::f64::consts::TAU * 1e3 * 1e-9; // ωC / 1 S
+    assert!(
+        vx < 1e-4,
+        "comparator output floats in AC: |V(x)|={vx} (want ~{expect:.2e})"
+    );
+    assert!(
+        (vx - expect).abs() < 0.05 * expect,
+        "|V(x)|={vx}, want the ωC/gout divider ~{expect:.2e}"
+    );
+}
+
+/// At a cold operating point (vbe ≈ 0, vbc strongly reverse) the true
+/// small-signal gmu is ~0 and the DC stamp leaves gpi/gmu UNFLOORED; a gmin
+/// floor on gmu coupled a floating base to a driven collector through the
+/// phantom divider gmu/(gpi+gmu+gmin) ≈ 1/3. The base must stay quiet.
+#[test]
+fn cold_bjt_base_is_not_coupled_through_a_floored_gmu() {
+    let mut ckt = Circuit::new();
+    let nc = ckt.node("c");
+    let nb = ckt.node("b");
+    ckt.add(Device::Vsource {
+        name: "VC".into(),
+        p: nc,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0),
+    });
+    ckt.add(Device::Bjt {
+        name: "Q1".into(),
+        c: nc,
+        b: nb,
+        e: NodeId::GROUND,
+        model: hauksbee_ir::BjtModel::default(),
+    });
+    let spec = AcSpec {
+        fstart: 1e3,
+        fstop: 1e3,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let vb = resp.points[0].node(&ckt, "b").unwrap().norm();
+    let vc = resp.points[0].node(&ckt, "c").unwrap().norm();
+    assert!((vc - 1.0).abs() < 1e-9, "collector is driven, |V(c)|={vc}");
+    assert!(
+        vb / vc < 1e-2,
+        "cold base picked up the collector drive: |V(b)|/|V(c)| = {} (floored gmu gives ~0.33)",
+        vb / vc
+    );
+}
+
+/// SPDT break-before-make parity: two paired legs (`*_s0`/`*_s1`, shared
+/// common node) both nominally on — the DC stamp's winner-take-all collapses
+/// the lower-margin leg to roff. The AC quiescent conductance must match:
+/// the losing rail-side leg must NOT short the injection node in `.ac`.
+#[test]
+fn spdt_bbm_loser_leg_is_open_in_ac_like_dc() {
+    let mut ckt = Circuit::new();
+    let a = ckt.node("a");
+    let out = ckt.node("out");
+    let inj = ckt.node("inj");
+    let c0 = ckt.node("c0");
+    let c1 = ckt.node("c1");
+    // Dedicated AC injection: VINJ drives, the control biases are AC-grounded.
+    ckt.add(Device::Vsource {
+        name: "VINJ".into(),
+        p: inj,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Resistor {
+        name: "RS".into(),
+        a: inj,
+        b: a,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    ckt.add(Device::Vsource {
+        name: "VC0".into(),
+        p: c0,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0), // margin (5-1.5)/1 = 3.5: firmly selected
+    });
+    ckt.add(Device::Vsource {
+        name: "VC1".into(),
+        p: c1,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(2.5), // margin (2.5-1.5)/1 = 1.0: raw-on, loses
+    });
+    // Selected throw: a -> out.
+    ckt.add(Device::VSwitch {
+        name: "SW1_s0".into(),
+        a,
+        b: out,
+        ctrl_p: c0,
+        ctrl_n: NodeId::GROUND,
+        von: 2.0,
+        voff: 1.0,
+        ron: 1.0,
+        roff: 1e9,
+    });
+    // Losing throw: a -> GND rail. Bare tanh at margin 1.0 is ~0.94 S (a
+    // short); the DC break-before-make drives it to ~roff.
+    ckt.add(Device::VSwitch {
+        name: "SW1_s1".into(),
+        a,
+        b: NodeId::GROUND,
+        ctrl_p: c1,
+        ctrl_n: NodeId::GROUND,
+        von: 2.0,
+        voff: 1.0,
+        ron: 1.0,
+        roff: 1e9,
+    });
+    let spec = AcSpec {
+        fstart: 1e3,
+        fstop: 1e3,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let va = resp.points[0].node(&ckt, "a").unwrap().norm();
+    let vout = resp.points[0].node(&ckt, "out").unwrap().norm();
+    assert!(
+        va > 0.9,
+        "loser SPDT leg shorted the common node in AC: |V(a)|={va} (bare tanh ~1e-3)"
+    );
+    // The genuinely selected throw still conducts: out follows a.
+    assert!(
+        (vout - va).abs() < 1e-3,
+        "selected throw should follow: |V(out)|={vout}, |V(a)|={va}"
+    );
+}
+
+/// The DC limit of an AC sweep: an inductor's branch row at f -> 0 is the
+/// transient path's short (v_a - v_b = 0), never a singular/blown stamp, and
+/// a capacitor's admittance -> 0 stays regular through the gmin shunt.
+#[test]
+fn reactive_stamps_are_regular_at_the_dc_limit() {
+    let mut ckt = Circuit::new();
+    let vin = ckt.node("in");
+    let out = ckt.node("out");
+    ckt.add(Device::Vsource {
+        name: "VIN".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    ckt.add(Device::Inductor {
+        name: "L1".into(),
+        a: vin,
+        b: out,
+        henries: 1e-3,
+        ic: None,
+    });
+    ckt.add(Device::Resistor {
+        name: "R1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    ckt.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: 1e-9,
+        ic: None,
+    });
+    // 1 uHz: ωL ~ 6e-9 Ω, ωC ~ 6e-15 S — the DC limit for both elements.
+    let spec = AcSpec {
+        fstart: 1e-6,
+        fstop: 1e-6,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let vout = resp.points[0].node(&ckt, "out").unwrap();
+    assert!(
+        (vout.norm() - 1.0).abs() < 1e-6,
+        "inductor should be the DC short at f->0: |V(out)|={}",
+        vout.norm()
+    );
+    assert!(vout.arg().abs() < 1e-4, "phase {} at the DC limit", vout.arg());
+}

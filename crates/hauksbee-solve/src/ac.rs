@@ -38,7 +38,7 @@ use crate::cmatrix::ComplexSystem;
 use crate::newton::{dc_operating_point, Workspace};
 use crate::options::SolverOptions;
 use crate::system::Layout;
-use hauksbee_ir::{BjtModel, Circuit, Device, MosLevel, MosfetModel, NodeId};
+use hauksbee_ir::{BjtModel, Circuit, Device, DeviceId, MosLevel, MosfetModel, NodeId};
 
 /// How to space the frequency sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,9 +205,12 @@ impl AcAnalysis {
         let freqs = spec.frequencies();
         let mut points = Vec::with_capacity(freqs.len());
         let n_nodes = circuit.node_count();
+        // SPDT leg pairing for the switch quiescent conductance (the DC
+        // stamp's break-before-make coupling), built once per sweep.
+        let siblings = spdt_siblings(circuit);
         for &f in &freqs {
             let w = std::f64::consts::TAU * f;
-            let x = self.solve_at(circuit, &ws.layout, &op, w)?;
+            let x = self.solve_at(circuit, &ws.layout, &op, w, &siblings)?;
             // Map unknowns back to node phasors (ground = 0).
             let mut node_phasor = vec![Complex64::new(0.0, 0.0); n_nodes];
             for node in 1..n_nodes {
@@ -230,6 +233,7 @@ impl AcAnalysis {
         layout: &Layout,
         op: &OperatingPoint,
         w: f64,
+        siblings: &std::collections::HashMap<DeviceId, DeviceId>,
     ) -> Result<Vec<Complex64>, String> {
         let mut sys = ComplexSystem::new(layout.size);
         let dedicated_ac_source = has_dedicated_ac_source(circuit);
@@ -262,7 +266,9 @@ impl AcAnalysis {
                 }
                 _ => Complex64::new(0.0, 0.0),
             };
-            stamp_ac(&mut sys, layout, op, dev, id, w, &self.opts, drive);
+            stamp_ac(
+                &mut sys, layout, op, dev, id, w, &self.opts, drive, circuit, siblings,
+            );
         }
         // A behavioral expression that faults AT THE OPERATING POINT (should
         // be impossible — the OP solve just evaluated it cleanly — but a
@@ -316,6 +322,7 @@ impl OperatingPoint {
 }
 
 /// Stamp one device's small-signal model into the complex system at `w`.
+#[allow(clippy::too_many_arguments)]
 fn stamp_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
@@ -327,16 +334,23 @@ fn stamp_ac(
     // The complex AC drive amplitude for this device (0 for a non-source or an
     // AC-grounded source), resolved by the caller from the deck's stimulus.
     drive: Complex64,
+    circuit: &Circuit,
+    // SPDT leg sibling map for the switch break-before-make quiescent
+    // conductance (see the VSwitch arm); empty for SPDT-free decks.
+    siblings: &std::collections::HashMap<DeviceId, DeviceId>,
 ) {
     let n = |node: NodeId| layout.node(node);
     match dev {
         Device::Resistor {
             a, b, ohms, tc1, ..
         } => {
-            let r = resistor_value(*ohms, *tc1, opts);
-            if r > 0.0 {
-                sys.stamp_admittance(n(*a), n(*b), Complex64::new(1.0 / r, 0.0));
-            }
+            // A non-positive resistance is a SHORT, not an open: mirror the
+            // transient stamp's 1e-6 Ω floor (stamp.rs) so a 0-Ω jumper
+            // couples its nodes with a stiff conductance instead of leaving
+            // them gmin-isolated. Also covers a tc1 derating driving r
+            // below 0. Same tc1 temperature derating as the DC path.
+            let r = resistor_value(*ohms, *tc1, opts).max(1e-6);
+            sys.stamp_admittance(n(*a), n(*b), Complex64::new(1.0 / r, 0.0));
         }
         Device::Capacitor { a, b, farads, .. } => {
             // jwC.
@@ -441,10 +455,51 @@ fn stamp_ac(
             roff,
             ..
         } => {
-            let g = vswitch_g(op.v(*ctrl_p) - op.v(*ctrl_n), *von, *voff, *ron, *roff);
+            // Quiescent conductance at the OP, INCLUDING the SPDT break-
+            // before-make winner-take-all the DC stamp applies (stamp.rs,
+            // `effects.spdt_bbm`): without the win factor a half-selected
+            // rail leg sat at the bare tanh conductance the operating point
+            // was never solved at, shorting the common node in `.ac` only.
+            // Sibling-free legs (and spdt_bbm off) keep the bare tanh value.
+            let vctrl = op.v(*ctrl_p) - op.v(*ctrl_n);
+            let mut s = vswitch_s(vctrl, *von, *voff);
+            if opts.effects.spdt_bbm {
+                if let Some(sib) = siblings.get(&id) {
+                    if let Some(Device::VSwitch {
+                        ctrl_p: scp,
+                        ctrl_n: scn,
+                        von: svon,
+                        voff: svoff,
+                        ..
+                    }) = circuit.devices.get(sib.0 as usize)
+                    {
+                        let vmid = 0.5 * (von + voff);
+                        let span = (von - voff).abs().max(1e-9);
+                        let svmid = 0.5 * (svon + svoff);
+                        let sspan = (svon - svoff).abs().max(1e-9);
+                        let margin_self = (vctrl - vmid) / span;
+                        let margin_sib = ((op.v(*scp) - op.v(*scn)) - svmid) / sspan;
+                        let k_bbm = opts.effects.spdt_bbm_k;
+                        let arg = (k_bbm * (margin_self - margin_sib)).clamp(-40.0, 40.0);
+                        s *= 1.0 / (1.0 + (-arg).exp());
+                    }
+                }
+            }
+            let g = vswitch_g_from_s(s, *ron, *roff);
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(g, 0.0));
         }
-        Device::Comparator { .. } => { /* digital output: no small-signal path */ }
+        Device::Comparator { out, .. } => {
+            // Digital output: no small-signal INPUT path (the bang-bang
+            // transfer has no tangent), but the DC stamp holds the output at
+            // its rail through a 1-S output stage on every path — small-
+            // signal that rail is AC ground, so the quiescent output
+            // conductance stays. Stamping nothing left the output node a
+            // gmin-open, and anything AC-coupled to it saw the wrong (near-
+            // infinite) impedance instead of the stiff output stage.
+            if let Some(oi) = n(*out) {
+                sys.add(oi, oi, Complex64::new(1.0, 0.0));
+            }
+        }
         // Controlled sources are linear and frequency-independent: the AC
         // stamp is the transient stamp with real-valued entries.
         Device::Vcvs {
@@ -727,8 +782,12 @@ fn stamp_bjt_ac(
     };
     let q1_inv = early.max(0.1);
 
-    let gpi = (is * ef / (nvf * model.bf)).max(opts.gmin);
-    let gmu = (is * er / (nvr * model.br)).max(opts.gmin);
+    // gpi/gmu UNFLOORED, exactly like the transient stamp (stamp.rs floors
+    // only gm/go): a gmin floor here coupled a cold base to a driven
+    // collector through a phantom 1e-12 S gmu the DC path never stamps —
+    // the node-diagonal gmin shunt is the only conditioning, both paths.
+    let gpi = is * ef / (nvf * model.bf);
+    let gmu = is * er / (nvr * model.br);
     let gif = is * ef / nvf;
     let gir = is * er / nvr;
     let gm = (gif * q1_inv).max(opts.gmin);
@@ -957,13 +1016,51 @@ fn opamp_ac_gain(gain: f64, pole_hz: Option<f64>, w: f64) -> Complex64 {
     a0 / Complex64::new(1.0, w / wp)
 }
 
-fn vswitch_g(vctrl: f64, von: f64, voff: f64, ron: f64, roff: f64) -> f64 {
+/// The switch's smooth tanh selection fraction `s` in [0, 1] at control
+/// voltage `vctrl` — the transient stamp's formula (stamp.rs), split out so
+/// the AC arm can apply the break-before-make win factor between `s` and the
+/// log-interpolated conductance exactly where the DC stamp applies it.
+fn vswitch_s(vctrl: f64, von: f64, voff: f64) -> f64 {
     let vmid = 0.5 * (von + voff);
     let span = ((von - voff).abs()).max(1e-9);
+    0.5 * (1.0 + (3.0 * (vctrl - vmid) / span).tanh())
+}
+
+/// Log-interpolated switch conductance at selection fraction `s` (the
+/// transient stamp's `gsw = exp(ln goff + s·(ln gon − ln goff))`).
+fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
     let gon = 1.0 / ron.max(1e-12);
     let goff = 1.0 / roff.max(1e-12);
-    let s = 0.5 * (1.0 + (3.0 * (vctrl - vmid) / span).tanh());
     (goff.ln() + s * (gon.ln() - goff.ln())).exp()
+}
+
+/// SPDT leg sibling map: two `VSwitch` devices sharing the same common node
+/// `a` whose names differ only in the binder's `_s0`/`_s1` throw suffix.
+/// Mirrors `SpdtPairs::analyze` in newton.rs (the DC path's pairing rule,
+/// rebuilt here because the workspace keeps its map private). Empty for
+/// boards with no SPDTs — the break-before-make factor is then inert.
+fn spdt_siblings(circuit: &Circuit) -> std::collections::HashMap<DeviceId, DeviceId> {
+    let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
+        std::collections::HashMap::new();
+    for (id, dev) in circuit.iter() {
+        if let Device::VSwitch { name, a, .. } = dev {
+            let base = name
+                .strip_suffix("_s0")
+                .or_else(|| name.strip_suffix("_s1"))
+                .map(|s| s.to_string());
+            if let Some(base) = base {
+                groups.entry((a.0, base)).or_default().push(id);
+            }
+        }
+    }
+    let mut sibling = std::collections::HashMap::new();
+    for (_, ids) in groups {
+        if ids.len() == 2 {
+            sibling.insert(ids[0], ids[1]);
+            sibling.insert(ids[1], ids[0]);
+        }
+    }
+    sibling
 }
 
 #[inline]
