@@ -355,18 +355,23 @@ fn classify_topology(input_name: &str, output_name: &str) -> Topology {
 fn rail_nominal_v(name: &str) -> Option<f64> {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     let leaf = n.rsplit('/').next().unwrap_or(&n);
-    // Solar / PV / VIN inputs are the high side of an MPPT buck.
-    if leaf.contains("SOLAR") || leaf.contains("PV") || leaf == "VIN" || leaf.contains("VBUS_IN") {
-        return Some(40.0);
-    }
-    if leaf.contains("BAT") || leaf.contains("DCDC_OUT") || leaf.contains("VOUT") {
-        return Some(13.0);
-    }
+    // Explicit numeric voltage tokens are reliable, so they come FIRST — a rail
+    // named "+12V" always reports 12 V regardless of any role-name hint below.
     for (tok, v) in [("+12V", 12.0), ("+5V", 5.0), ("+3V3", 3.3), ("+3.3V", 3.3), ("+1V8", 1.8)] {
         if leaf == tok {
             return Some(v);
         }
     }
+    // Solar / PV markers genuinely encode the high side of an MPPT buck.
+    if leaf.contains("SOLAR") || leaf.contains("PV") || leaf.contains("VBUS_IN") {
+        return Some(40.0);
+    }
+    // Bare generic regulator pin names (VIN / VOUT / BAT / DCDC_OUT) carry NO
+    // reliable voltage — they are the most common labels on ordinary non-solar
+    // designs. The old code fabricated 40 V / 13 V for them, which outranked a
+    // real "+12V" token on the OTHER rail and flipped a buck to a boost,
+    // silently skipping the ripple check on the stage. Return None so
+    // classify_topology falls through to its Buck default instead of guessing.
     None
 }
 
@@ -392,5 +397,20 @@ mod tests {
     #[test]
     fn classify_boost_when_output_higher() {
         assert_eq!(classify_topology("+3V3", "+12V"), Topology::Boost);
+    }
+
+    #[test]
+    fn generic_output_name_does_not_fabricate_a_boost() {
+        // Regression (R5): a real 3.3 V buck whose output rail is just named
+        // generically "VOUT" must stay a Buck. The old VOUT->13.0 guess
+        // outranked the "+12V" input token and mis-flagged the stage Boost,
+        // which silently skipped its ripple check.
+        assert_eq!(rail_nominal_v("VOUT"), None);
+        assert_eq!(rail_nominal_v("VIN"), None);
+        assert_eq!(rail_nominal_v("BAT"), None);
+        assert_eq!(classify_topology("+12V", "VOUT"), Topology::Buck);
+        assert_eq!(classify_topology("VIN", "VOUT"), Topology::Buck);
+        // A numeric token still beats a generic name on the other rail.
+        assert_eq!(rail_nominal_v("+12V"), Some(12.0));
     }
 }

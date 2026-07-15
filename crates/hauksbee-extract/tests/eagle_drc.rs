@@ -146,6 +146,38 @@ fn eagle_populate_no_sets_dnp() {
     assert!(r2.dnp, "R2 populate=\"no\" -> do-not-populate");
 }
 
+/// Round-5: a mirrored, rotated Eagle element (`MR90`) must place its pads with
+/// the corpus-validated drc.rs handedness — flip-X then rotate by `-deg`, not
+/// the old `+deg` form that put pads on the wrong side of the origin whenever
+/// the rotation was not a multiple of 180.
+#[test]
+fn eagle_mirrored_rotated_pad_uses_drc_handedness() {
+    let packages = r#"
+<package name="P">
+  <smd name="1" x="2" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>
+"#;
+    let elements = r#"
+<element name="U1" library="lib" package="P" value="" x="0" y="0" rot="MR90"/>
+"#;
+    let signals = r#"
+<signal name="NET1">
+  <contactref element="U1" pad="1"/>
+</signal>
+"#;
+    let text = board(packages, elements, signals, default_rules());
+    let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
+    let u1 = brd.components.iter().find(|c| c.reference == "U1").expect("U1");
+    let p1 = u1.pins.iter().find(|p| p.number == "1").expect("pad 1");
+    let (x, y) = p1.position.expect("pad 1 has a position");
+    // flip-X then rotate by -90°: local (2, 0) -> world (0, +2). The old +90°
+    // form put it at (0, -2), on the wrong side of the package origin.
+    assert!(
+        (x - 0.0).abs() < 1e-6 && (y - 2.0).abs() < 1e-6,
+        "MR90 pad expected at (0, 2), got ({x}, {y})"
+    );
+}
+
 #[test]
 fn dispatch_recognises_eagle() {
     // A board with two crossing wires on different nets dispatches to the Eagle
