@@ -262,7 +262,7 @@ fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Compone
     // The strap net itself must not be a rail/ground (it never is for a strap,
     // but guard anyway so the membership scan is meaningful).
     if let Some(n) = board.net(net_id) {
-        if is_ground_name(&n.name) || rail_voltage_name(&n.name).is_some() {
+        if is_ground_name(&n.name) || is_rail_name(&n.name) {
             return None;
         }
     }
@@ -283,7 +283,7 @@ fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Compone
             }
             // Never hop through a power rail or ground.
             if let Some(on) = board.net(oid) {
-                if is_ground_name(&on.name) || rail_voltage_name(&on.name).is_some() {
+                if is_ground_name(&on.name) || is_rail_name(&on.name) {
                     continue;
                 }
             }
@@ -302,7 +302,7 @@ fn clock_source_reaching(board: &ExtractedBoard, net_id: i64) -> Option<&Compone
 /// `net_id` and that net is not a rail/ground.
 fn oscillator_driving_net(board: &ExtractedBoard, net_id: i64) -> Option<&Component> {
     let net = board.net(net_id)?;
-    if is_ground_name(&net.name) || rail_voltage_name(&net.name).is_some() {
+    if is_ground_name(&net.name) || is_rail_name(&net.name) {
         return None;
     }
     for (c, _p) in board.net_members(net_id) {
@@ -348,7 +348,7 @@ fn wrong_pull(
             let Some(oid) = op.net else { continue };
             let Some(on) = board.net(oid) else { continue };
             let to_ground = is_ground_name(&on.name);
-            let to_rail = rail_voltage_name(&on.name).is_some();
+            let to_rail = is_rail_name(&on.name);
             // A pull toward the level the strap needs is "correct".
             let correct = (want_high && to_rail) || (!want_high && to_ground);
             let is_wrong = (want_high && to_ground) || (!want_high && to_rail);
@@ -382,25 +382,30 @@ fn is_ground_name(name: &str) -> bool {
     ) || n.starts_with("GND")
 }
 
-fn rail_voltage_name(name: &str) -> Option<f64> {
+/// Is this net name a power rail? Every use in this file is boolean ("is the
+/// far side of this pull / this hop a rail"), so this is a predicate, not a
+/// voltage table. Breadth matches boot.rs's `is_power_or_ground_net`, and for
+/// the same calibration reason: the old exact-name table (3V3/5V/1V8 plus
+/// VCC/VBUS-gated forms) missed VBAT/VSYS/VMOT/VIN and bare voltages (9V/12V),
+/// so a correct pull-up to "VBAT" read as a signal net — which both let the
+/// clock-reach hop wander onto a rail (a spurious HIGH clock finding through an
+/// oscillator's VDD) and hid a genuine wrong-direction pull from `wrong_pull`.
+fn is_rail_name(name: &str) -> bool {
     let n = norm(name);
-    match n.as_str() {
-        "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" => Some(5.0),
-        "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" | "VDD3P3" | "+3V3A" => Some(3.3),
-        "+3V" | "3V" => Some(3.0),
-        "+1V8" | "1V8" | "1.8V" => Some(1.8),
-        _ => {
-            if n.contains("3V3") || n.contains("3.3V") {
-                Some(3.3)
-            } else if n.contains("5V")
-                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
-            {
-                Some(5.0)
-            } else {
-                None
-            }
-        }
+    // Ground is its own family, never a rail.
+    if is_ground_name(name) {
+        return false;
     }
+    // Explicit '+' rail (e.g. "+3V3", "+5V", "+12V").
+    if n.starts_with('+') {
+        return true;
+    }
+    // V-prefixed rails (VCC/VDD/VBAT/VMOT/VSYS/VIN/VIO/VREF…) and bare voltage
+    // names starting with a digit and carrying a 'V' ("12V", "3V3", "9V").
+    let v_named = n.starts_with('V') && n.len() >= 2;
+    let voltage_named =
+        n.contains('V') && n.chars().next().is_some_and(|c| c.is_ascii_digit());
+    v_named || voltage_named
 }
 
 fn is_unconnected_net(name: &str) -> bool {
@@ -573,6 +578,67 @@ mod tests {
   )
 )"#
         )
+    }
+
+    #[test]
+    fn strap_pullup_to_vbat_rail_does_not_reach_oscillator_vdd() {
+        // Bug #19 regression: same shape as the +3V3 test above, but the rail
+        // is named "VBAT" — a name the old exact table did not recognise, so
+        // the series-R hop walked onto the rail, found the oscillator's VDD,
+        // and fired a spurious HIGH "free-running clock" finding on a correct
+        // pull-up. VBAT must count as a rail; the board is clean.
+        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 3 "/GPIO0")
+  (net 5 "VBAT")
+  (net 6 "/OSC_EN")
+  (net 7 "Net-(CR2-OUT)")
+  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U3 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 5 "VBAT"))
+    (pad 25 smd rect (at 0 5) (net 3 "/GPIO0"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R36 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 3 "/GPIO0"))
+    (pad 2 smd rect (at 2 0) (net 5 "VBAT"))
+  )
+  (module Oscillator:Oscillator_SMD_4Pin (layer F.Cu)
+    (at 140 100)
+    (fp_text reference CR2 (at 0 0) (layer F.SilkS))
+    (fp_text value Q25MHz/25ppm/3V/4P (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 6 "/OSC_EN"))
+    (pad 2 smd rect (at 1 0) (net 1 "GND"))
+    (pad 3 smd rect (at 2 0) (net 7 "Net-(CR2-OUT)"))
+    (pad 4 smd rect (at 3 0) (net 5 "VBAT"))
+  )
+)"#;
+        let r = strap_findings(text);
+        assert_eq!(
+            r.of_check(LintCheck::StrapPin).count(),
+            0,
+            "a pull-up to a VBAT-named rail shared with an oscillator's VDD must not fire"
+        );
+    }
+
+    #[test]
+    fn boot0_pulled_to_vbat_rail_fires_medium() {
+        // Bug #20 regression: BOOT0 needs LOW, and here it is pulled up to a
+        // rail named "VBAT". The old table returned None for VBAT, so the
+        // wrong-direction pull read as "not a rail" and the genuine mis-strap
+        // was silently missed. It must fire the Medium wrong-pull finding.
+        let text = stm32_boot0_board(true).replace("+3V3", "VBAT");
+        let r = strap_findings(&text);
+        let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
+        assert_eq!(strap.len(), 1, "BOOT0 pulled high to VBAT is wrong (needs low)");
+        assert!(matches!(strap[0].severity, Severity::Medium));
+        assert!(strap[0].message.contains("boot0"));
+        assert!(strap[0].message.contains("wrong level"));
     }
 
     #[test]
