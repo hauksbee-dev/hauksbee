@@ -157,28 +157,80 @@ fn pin_net_for_role(
     comp.pins.iter().find(|p| p.number == pad).and_then(|p| p.net)
 }
 
-/// Power nets of a part: the nets on its pads that are not ground. For a
-/// connector / regulator / FET these are the contacts the rated current flows
-/// through. Ground nets are excluded (the return current is not the rail the
+/// The *rail-carrying* power nets of a part: only the pads whose model pin role
+/// is a supply/through terminal (an in/out/vbus/bat/pack rail). The part's full
+/// continuous rating flows on these, and only these — an enable, feedback,
+/// bypass, soft-start, sense or signal pin carries no rail current, so charging
+/// it the full rating would manufacture a load and over-flag a correctly-sized
+/// signal trace. Ground pins are excluded (the return is not the rail the
 /// ampacity question is about).
+///
+/// When the model gives *no* pin roles at all (an untyped connector), we fall
+/// back to "every non-ground pad" — a connector's contacts are all through
+/// terminals, and a rating with no pin map is the old conservative behaviour.
 fn power_nets_of(
     board: &ExtractedBoard,
     comp: &hauksbee_extract::Component,
-    _model: &hauksbee_models::ModelEntry,
+    model: &hauksbee_models::ModelEntry,
 ) -> Vec<i64> {
+    let has_roles = !model.pins.is_empty();
     let mut nets = Vec::new();
     for p in &comp.pins {
-        if let Some(id) = p.net {
-            if let Some(net) = board.net(id) {
-                if !super::converter::is_ground_net(&net.name) {
-                    nets.push(id);
-                }
+        let Some(id) = p.net else { continue };
+        let Some(net) = board.net(id) else { continue };
+        if super::converter::is_ground_net(&net.name) {
+            continue;
+        }
+        if has_roles {
+            // Charge the rating only to pads the model names as a rail terminal.
+            let role = model
+                .pins
+                .iter()
+                .find(|(pad, _)| **pad == p.number)
+                .map(|(_, r)| r.as_str());
+            match role {
+                Some(r) if is_rail_role(r) => nets.push(id),
+                // A named non-rail role (en/fb/bypass/ss/sense/data/…), or a
+                // pad the model does not name, carries no rail current: skip.
+                _ => {}
             }
+        } else {
+            nets.push(id);
         }
     }
     nets.sort_unstable();
     nets.dedup();
     nets
+}
+
+/// Whether a model pin role names a rail terminal that carries the part's
+/// continuous current — a supply input, a regulated/switched output, or a
+/// bus/battery through terminal. Enable, feedback, bypass, soft-start, sense,
+/// reference and signal/data roles are deliberately excluded: they set or
+/// monitor the rail but do not carry it.
+fn is_rail_role(role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    // Explicit rail terminals. `in`/`out` and their voltage-named variants,
+    // plus USB VBUS, battery and pack rails.
+    matches!(
+        r.as_str(),
+        "in" | "out"
+            | "vin"
+            | "vout"
+            | "vcc"
+            | "vdd"
+            | "vbus"
+            | "vsys"
+            | "pvin"
+            | "bat"
+            | "vbat"
+            | "vplus"
+            | "vminus"
+            | "pack_p"
+            | "pack_n"
+    ) || r.starts_with("vin")
+        || r.starts_with("vout")
+        || r.starts_with("in_out")
 }
 
 /// Run the trace-ampacity check and append its findings (and an info note) to an
@@ -246,6 +298,112 @@ pub fn append_ampacity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use hauksbee_extract::{Net, Pin};
+
+    fn pin(number: &str, net: i64) -> Pin {
+        Pin {
+            number: number.into(),
+            net: Some(net),
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    fn model_from_toml(src: &str) -> hauksbee_models::ModelEntry {
+        toml::from_str(src).expect("valid model toml")
+    }
+
+    #[test]
+    fn power_nets_of_charges_only_rail_pins_not_en_fb() {
+        // A 5-pin LDO: in/gnd/en/noise_bypass/out. Its continuous rating flows
+        // on the in and out rails only — the EN and noise_bypass (bypass) pins
+        // carry no rail current, so power_nets_of must not return them (#11).
+        let model = model_from_toml(
+            r#"
+                id = "lp2985_3v3"
+                kind = "vreg"
+                [pins]
+                "1" = "in"
+                "2" = "gnd"
+                "3" = "en"
+                "4" = "noise_bypass"
+                "5" = "out"
+            "#,
+        );
+        let comp = hauksbee_extract::Component {
+            reference: "U1".into(),
+            value: "LP2985-3.3".into(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![
+                pin("1", 10), // in  -> VIN
+                pin("2", 11), // gnd -> GND
+                pin("3", 12), // en  -> EN
+                pin("4", 13), // noise_bypass -> BYP
+                pin("5", 14), // out -> +3V3
+            ],
+        };
+        let board = ExtractedBoard {
+            name: "t".into(),
+            nets: vec![
+                Net { id: 10, name: "VIN".into() },
+                Net { id: 11, name: "GND".into() },
+                Net { id: 12, name: "EN".into() },
+                Net { id: 13, name: "BYP".into() },
+                Net { id: 14, name: "+3V3".into() },
+            ],
+            components: vec![comp.clone()],
+        };
+        let nets = power_nets_of(&board, &comp, &model);
+        assert_eq!(nets, vec![10, 14], "only the in/out rails carry the rating");
+        assert!(!nets.contains(&11), "GND excluded");
+        assert!(!nets.contains(&12), "EN must not be charged the rail current");
+        assert!(!nets.contains(&13), "bypass must not be charged the rail current");
+    }
+
+    #[test]
+    fn power_nets_of_untyped_part_falls_back_to_all_nonground() {
+        // A connector with no pin roles: every non-ground contact is a through
+        // terminal, so the fallback keeps the prior conservative behaviour.
+        let model = model_from_toml(r#"id = "conn"
+kind = "connector""#);
+        let comp = hauksbee_extract::Component {
+            reference: "J1".into(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![pin("1", 20), pin("2", 21)],
+        };
+        let board = ExtractedBoard {
+            name: "t".into(),
+            nets: vec![
+                Net { id: 20, name: "VBUS".into() },
+                Net { id: 21, name: "GND".into() },
+            ],
+            components: vec![comp.clone()],
+        };
+        assert_eq!(power_nets_of(&board, &comp, &model), vec![20]);
+    }
+
+    #[test]
+    fn rail_roles_recognised_signal_roles_not() {
+        for r in ["in", "out", "vbus", "vin", "vout", "bat", "pvin", "vsys", "in_out_1a"] {
+            assert!(is_rail_role(r), "{r} should be a rail role");
+        }
+        for r in ["en", "fb", "noise_bypass", "ss", "sda", "scl", "ref", "gnd", "data"] {
+            assert!(!is_rail_role(r), "{r} must not be a rail role");
+        }
+    }
 
     #[test]
     fn power_delivery_kinds_only() {
