@@ -83,6 +83,16 @@ pub trait SpiSlave: Send {
         None
     }
 
+    /// The datasheet-declared SPI clock mode `(CPOL, CPHA)` this slave expects
+    /// the master to clock: `0 = (0,0)`, `1 = (0,1)`, `2 = (1,0)`, `3 = (1,1)`.
+    /// Only the bit-banged SPI responder (05 §1.5), which reconstructs the wire
+    /// timing from GPIO edges, consults this; the byte-level `on_spi` path is
+    /// mode-agnostic (simavr's hardware SPI already clocks the configured mode).
+    /// Default `0` (CPOL=0, CPHA=0) — the historical assumption.
+    fn spi_mode(&self) -> u8 {
+        0
+    }
+
     fn state(&self) -> HashMap<String, f64> {
         HashMap::new()
     }
@@ -137,16 +147,29 @@ pub struct SpiBus {
     /// hardware-NSS `FinishTransmission`). Makes `framing_mode` report `Backend`
     /// so the coverage reflects that the backend, not the heuristic, owns framing.
     backend_deselect_seen: bool,
+    /// The slave's declared SPI clock mode (`spi_mode()`), cached at construction
+    /// so the bit-banged responder can read it without re-locking the slave. See
+    /// [`SpiSlave::spi_mode`].
+    spi_mode: u8,
 }
 
 impl SpiBus {
     pub fn new(id: &str, slave: Box<dyn SpiSlave>) -> Self {
+        let spi_mode = slave.spi_mode();
         SpiBus {
             id: id.to_string(),
             slave,
             cs_pin: None,
             backend_deselect_seen: false,
+            spi_mode,
         }
+    }
+
+    /// The declared SPI clock mode (0..=3) of this bus's slave, cached from
+    /// [`SpiSlave::spi_mode`] at construction. Consumed by the bit-banged SPI
+    /// responder to time its sample/shift edges (05 §1.5).
+    pub fn spi_mode(&self) -> u8 {
+        self.spi_mode
     }
 
     /// The MCU pin driving this slave's chip-select, if resolved.
