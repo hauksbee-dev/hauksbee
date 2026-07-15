@@ -447,10 +447,28 @@ fn operating_point(
             }
         }
         Some(Device::Capacitor { a, b, .. }) => {
+            // An ideal capacitor's through-current is displacement current —
+            // it needs dv/dt across chunks, not one voltage sample — and it
+            // dissipates no real power. Every capacitor check (over-voltage,
+            // reverse bias) is voltage-based, so the zeros disable nothing.
             let v = node_v(*a) - node_v(*b);
             OperatingPoint {
                 current_a: 0.0,
                 voltage_v: v,
+                power_w: 0.0,
+            }
+        }
+        Some(Device::Inductor { a, b, .. }) => {
+            // The winding current lives in the inductor's branch unknown
+            // (like a Vsource's), not in a node-voltage difference — without
+            // it the surge-current check could never fire for a coil. Power
+            // stays zero: an ideal inductor *stores* v·i rather than
+            // dissipating it, and reporting it as heat would false-trip the
+            // power-gated thermal check on every energised coil.
+            let i = branch_current(meta.device).unwrap_or(0.0);
+            OperatingPoint {
+                current_a: i.abs(),
+                voltage_v: node_v(*a) - node_v(*b),
                 power_w: 0.0,
             }
         }
@@ -499,17 +517,91 @@ fn operating_point(
                 power_w: v.abs() * i,
             }
         }
-        Some(Device::Mosfet { d, g, s, .. }) => {
+        Some(Device::Mosfet {
+            d, g, s, b, model, ..
+        }) => {
+            // Shichman-Hodges level-1 channel at the sampled node voltages —
+            // the same blended-overdrive equations the solver stamps (see
+            // `mos_channel` in hauksbee-solve), so the monitor sees the
+            // current the simulated channel actually carries. This arm used
+            // to hardcode current/power to zero, which silently disabled the
+            // Overcurrent, Overpower, and power-gated Overtemperature checks
+            // for every MOSFET.
+            //
+            // Fold polarity into N-channel space and let the higher terminal
+            // act as the drain (the level-1 channel is symmetric; the solver
+            // performs the same swap).
+            let sign = match model.polarity {
+                hauksbee_ir::Polarity::N => 1.0,
+                hauksbee_ir::Polarity::P => -1.0,
+            };
+            let mut vd = sign * node_v(*d);
+            let vg = sign * node_v(*g);
+            let mut vs = sign * node_v(*s);
+            if vd < vs {
+                std::mem::swap(&mut vd, &mut vs);
+            }
+            let vgs = vg - vs;
+            let vds_f = vd - vs;
+
+            // Body-effect threshold shift, matching the solver's expression.
+            // `gamma == 0` (most models) never reads the bulk voltage.
+            let mut vth = model.vto;
+            if model.gamma > 0.0 {
+                if let Some(bulk) = b {
+                    let phi = model.phi.max(1e-6);
+                    let vbs = sign * node_v(*bulk) - vs;
+                    let arg = (phi - vbs).max(0.0);
+                    vth = model.vto + model.gamma * (arg.sqrt() - phi.sqrt());
+                }
+            }
+
+            // Blended overdrive `vov_eff = 2nVt·softplus(vov/(2nVt))`: the
+            // square law above threshold, an exponential subthreshold tail
+            // below (see `mos_channel` for why the blend, not two branches).
+            let vt = hauksbee_ir::thermal_voltage_c(circuit.temp_c);
+            let two_nvt = 2.0 * model.n_sub.max(1.0) * vt;
+            let u = (vgs - vth) / two_nvt;
+            // Numerically stable softplus ln(1 + e^u).
+            let softplus = if u > 40.0 {
+                u
+            } else if u < -40.0 {
+                u.exp()
+            } else {
+                u.exp().ln_1p()
+            };
+            let vov_eff = two_nvt * softplus;
+            // Channel-length modulation is always applied here (the solver
+            // gates it on a sim option the monitor cannot see); lambda is 0
+            // for most models, and when it isn't, including it errs toward
+            // the slightly *higher* current — conservative for a limit check.
+            let clm = 1.0 + model.lambda * vds_f;
+            let ids = if vds_f < vov_eff {
+                // Triode.
+                model.beta() * (vov_eff * vds_f - 0.5 * vds_f * vds_f) * clm
+            } else {
+                // Saturation.
+                0.5 * model.beta() * vov_eff * vov_eff * clm
+            };
+            // Report the real (unfolded) drain-source voltage; the fold and
+            // swap preserve its magnitude, so |vds·ids| is the channel
+            // dissipation either way. Clamps mirror the BJT arm.
             let vds = node_v(*d) - node_v(*s);
-            let _ = g;
             OperatingPoint {
-                current_a: 0.0,
+                current_a: ids.abs().min(1e3),
                 voltage_v: vds,
-                power_w: 0.0,
+                power_w: (vds_f * ids).abs().min(1e6),
             }
         }
         Some(Device::Vsource { .. }) => {
-            // Supply / regulator: branch current is the sourced current.
+            // Supply / regulator output leg: the sourced current is the
+            // branch unknown. Voltage and power stay zero ON PURPOSE — this
+            // IR device is the regulator's ideal *output* source only. Its
+            // across-voltage is its own setpoint (checking the rail against
+            // itself is meaningless), and the real pass-element dissipation
+            // is (Vin − Vout)·I, which needs the input node this device does
+            // not carry. Only the Overcurrent check applies (see
+            // `build_checks`'s Vreg arm).
             let i = branch_current(meta.device).unwrap_or(0.0);
             OperatingPoint {
                 current_a: i.abs(),
