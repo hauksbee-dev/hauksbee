@@ -80,16 +80,20 @@ pub fn analyze(
 /// ground is a series element (e.g. GPIO -> R -> MOSFET gate), which sets no
 /// default level, so it does NOT count as a bias and the net is still flagged.
 /// An unknown/unresolvable net name returns false (assume biased; stay silent).
+///
+/// "Resistor" is the strict shared predicate ([`super::straps::is_assembled_resistor`]):
+/// plain R refs only. An RV varistor / RT thermistor / RN network is `R…`-prefixed
+/// but sets no DC level (a varistor is high-impedance below its clamp), so crediting
+/// one as a bias would silently suppress a real boot hazard.
 pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
     };
-    let is_resistor =
-        |c: &hauksbee_extract::Component| c.reference.starts_with('R') || c.reference.starts_with('r');
     for (comp, _) in board.net_members(net.id) {
-        // A DNP (not-assembled) resistor is electrically absent: it must NOT be
-        // credited as a bias (that would suppress a real hazard).
-        if comp.dnp || !is_resistor(comp) {
+        // A DNP (not-assembled) resistor is electrically absent, and a
+        // varistor/thermistor/network/ferrite is not a bias-setting resistor:
+        // neither may be credited (that would suppress a real hazard).
+        if !super::straps::is_assembled_resistor(comp) {
             continue;
         }
         for p in &comp.pins {
@@ -180,10 +184,30 @@ fn switch_control_pad(footprint: &str) -> Option<&'static str> {
         "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
         "D2PAK", "TO-220", "TO-247",
     ];
-    if THREE_LEAD.iter().any(|p| f.contains(p)) {
+    if THREE_LEAD.iter().any(|p| is_three_lead_variant(&f, p)) {
         return Some("1");
     }
     None
+}
+
+/// Whether footprint `f` contains 3-lead package name `p` AND really is the
+/// 3-lead variant. "SOT-23-5" / "SOT-23-6" / "SC-70-5" still contain the bare
+/// package name, but a trailing `-N` lead count other than 3 is a different
+/// pinout where pad 1 is not the control terminal — so the match must not fire
+/// (this mirrors the explicit SOT-23-8 handling in the caller). A bare name
+/// with no lead-count suffix ("SOT-23") is the 3-lead package.
+fn is_three_lead_variant(f: &str, p: &str) -> bool {
+    let Some(idx) = f.find(p) else {
+        return false;
+    };
+    let after = &f[idx + p.len()..];
+    if let Some(rest) = after.strip_prefix('-') {
+        let count: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !count.is_empty() {
+            return count == "3";
+        }
+    }
+    true
 }
 
 /// A pad named as a MOSFET *gate* (`G`/`GATE`).
@@ -403,6 +427,28 @@ mod tests {
     }
 
     #[test]
+    fn varistor_or_thermistor_to_ground_is_not_a_bias() {
+        // An RV varistor is high-impedance below its clamp and sets NO DC
+        // level; an RT thermistor likewise is not a bias resistor. Crediting
+        // either would silently suppress a real held-high boot hazard (#8).
+        let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("RV1", 1, 2)]);
+        assert!(net_has_no_bias_resistor(&b, "GATE"), "RV to GND must not count as a bias");
+        let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("RT1", 1, 2)]);
+        assert!(net_has_no_bias_resistor(&b, "GATE"), "RT to GND must not count as a bias");
+        // A plain R with the same wiring IS a bias (the strict predicate keeps it).
+        let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("R1", 1, 2)]);
+        assert!(!net_has_no_bias_resistor(&b, "GATE"));
+    }
+
+    #[test]
+    fn dnp_resistor_to_ground_is_not_a_bias() {
+        let mut r = resistor("R1", 1, 2);
+        r.dnp = true;
+        let b = board(&[(1, "GATE"), (2, "GND")], vec![r]);
+        assert!(net_has_no_bias_resistor(&b, "GATE"), "a DNP resistor is electrically absent");
+    }
+
+    #[test]
     fn series_resistor_to_a_signal_is_not_a_bias() {
         let b = board(&[(1, "GPIO"), (2, "GATE")], vec![resistor("R1", 1, 2)]);
         assert!(net_has_no_bias_resistor(&b, "GPIO"));
@@ -455,6 +501,12 @@ mod tests {
         assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23"), Some("1"));
         assert_eq!(switch_control_pad("SOT-23-3"), Some("1"));
         assert_eq!(switch_control_pad("Package_TO_SOT_SMD:TO-252-3_DPAK"), Some("1"));
+        // 5/6-pin SOT-23 variants contain "SOT-23" but pad 1 is NOT the
+        // control terminal there (#9): they must not match the 3-lead rule.
+        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23-5"), None);
+        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23-6"), None);
+        assert_eq!(switch_control_pad("SOT23-5"), None);
+        assert_eq!(switch_control_pad("SOT23-6_HandSoldering"), None);
         assert_eq!(switch_control_pad("SOT-23-8_Handsoldering"), Some("4"));
         assert_eq!(switch_control_pad("Package_SO:SO-8_Power"), Some("4"));
         assert_eq!(switch_control_pad("Package_SO:SO-8"), None);
