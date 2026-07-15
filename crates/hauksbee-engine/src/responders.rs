@@ -218,6 +218,19 @@ pub struct BitBangSpiPins {
 ///   see — error + responder disabled. (A slave that genuinely answers 0x00,
 ///   e.g. during a command/write phase, is exact.)
 ///
+/// **SPI mode coverage.** This responder models SPI **mode 0** (CPOL=0, CPHA=0:
+/// sample MOSI on the rising edge, shift MISO on the falling edge, present bit 7
+/// at CS-assert). The other three modes are both caught loudly, so nothing is
+/// silently mistimed:
+///
+/// * **CPOL=1 (modes 2 & 3)** idle SCLK HIGH — caught at CS-assert by the "CS
+///   asserted with SCLK high" fault below.
+/// * **CPHA=1 (modes 1 & 3)** change MOSI on the *leading* (rising) edge rather
+///   than the trailing one, so a MOSI transition arrives *while SCLK is high* —
+///   illegal for mode 0. The per-edge model sees that ordering directly (unlike
+///   the CS-assert idle level, which cannot separate mode 0 from mode 1), so a
+///   MOSI edge during a SCLK-high window faults the responder in `on_edge`.
+///
 /// [`SpiSlave::miso_preview`]: crate::peripherals::spi::SpiSlave::miso_preview
 pub struct BitBangSpiResponder {
     bus: Arc<Mutex<SpiBus>>,
@@ -294,6 +307,19 @@ impl InputResponder for BitBangSpiResponder {
 
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
         if pin == self.pins.mosi {
+            // Mode-0 masters change MOSI only while SCLK is LOW (the shift phase),
+            // holding it stable across the rising sample edge. A MOSI transition
+            // during a SCLK-HIGH window is the CPHA=1 (mode 1 / mode 3) signature:
+            // those masters drive new data on the leading edge. The idle SCLK
+            // level at CS-assert cannot tell mode 0 from mode 1, but this edge
+            // ordering can — so we fault rather than silently mistime the byte.
+            if self.selected && !self.faulted && self.sclk && high != self.mosi {
+                self.fault(
+                    "MOSI changed while SCLK high — that is the CPHA=1 (SPI mode 1/3) \
+                     shift phase; only mode 0 (CPOL=0, CPHA=0) is modeled for \
+                     bit-banged SPI",
+                );
+            }
             self.mosi = high;
             return Vec::new();
         }
@@ -934,6 +960,42 @@ addr_mask = 0x7f
         m.edge(PINS.sclk, false);
         let got = m.xfer(0x80 | 0x0f);
         assert_eq!(got, 0x00, "a faulted responder must not drive MISO");
+    }
+
+    /// CPHA=1 (mode 1) idles SCLK LOW exactly like mode 0, so the CS-assert
+    /// polarity guard cannot catch it — but a mode-1 master changes MOSI on the
+    /// leading edge, i.e. while SCLK is HIGH. The per-edge responder sees that
+    /// ordering and must fault rather than silently mistime the byte.
+    #[test]
+    fn bitbang_spi_refuses_cpha1_clock_phase() {
+        let (mut m, _bus) = spi_master();
+        m.edge(PINS.cs_n, true); // idle
+        m.select(); // CS low, SCLK low: passes the polarity guard
+        assert!(!m.resp.faulted(), "mode 1 idles SCLK low — not caught at CS assert");
+
+        // Mode-1 shift phase: raise SCLK (leading edge), THEN drive the bit.
+        m.edge(PINS.sclk, true);
+        m.edge(PINS.mosi, true); // MOSI changes while SCLK high -> CPHA=1 tell
+        assert!(
+            m.resp.faulted(),
+            "MOSI transition during a SCLK-high window must fault as mode 1/3"
+        );
+    }
+
+    /// A well-behaved mode-0 master that happens to re-drive MOSI to the SAME
+    /// level while SCLK is high must NOT fault (no transition, no phase signal).
+    #[test]
+    fn bitbang_spi_tolerates_idempotent_mosi_while_high() {
+        let (mut m, _bus) = spi_master();
+        m.edge(PINS.cs_n, true);
+        m.select();
+        m.edge(PINS.mosi, true); // set bit while SCLK low (legal mode-0 setup)
+        m.edge(PINS.sclk, true); // sample
+        m.edge(PINS.mosi, true); // redundant same-level write while high: no edge
+        assert!(
+            !m.resp.faulted(),
+            "an idempotent MOSI write (no level change) is not a phase signal"
+        );
     }
 
     /// A slave with no `miso_preview` that replies nonzero: the bridge
