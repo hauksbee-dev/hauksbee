@@ -118,6 +118,52 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
 }
 
 #[test]
+fn max_current_on_untracked_component_kind_is_rejected_not_green() {
+    // C1 is a real capacitor on the board, so the typo check passes — but peak
+    // current is only measured for resistors and diodes, so the guard would
+    // never be evaluated. That must be a loud rejection, never a green pass.
+    let board =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
+    let p = write_tmp(
+        "untracked_current.toml",
+        &format!(
+            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_current\"\nref=\"C1\"\namps=1.0\n",
+            board.display()
+        ),
+    );
+    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("C1"), "should name the ref: {msg}");
+    assert!(
+        msg.contains("resistors and diodes"),
+        "should explain what is trackable: {msg}"
+    );
+}
+
+#[test]
+fn max_temp_on_component_without_thermal_model_is_rejected_not_green() {
+    // U1 (the ESP32 module) is a real component, but MCUs are not
+    // stress-monitored, so no junction temperature is ever estimated for it: a
+    // max_temp guard on it would report green without being evaluated.
+    let board =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
+    let p = write_tmp(
+        "untracked_temp.toml",
+        &format!(
+            "board=\"{}\"\nduration_ms=1\n[[assert]]\nkind=\"max_temp\"\nref=\"U1\"\ncelsius=85\n",
+            board.display()
+        ),
+    );
+    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("U1"), "should name the ref: {msg}");
+    assert!(
+        msg.contains("no thermal model"),
+        "should explain why it is untrackable: {msg}"
+    );
+}
+
+#[test]
 fn after_ms_on_toggle_is_rejected() {
     let p = write_tmp(
         "toggleafter.toml",
