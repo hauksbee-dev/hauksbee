@@ -1129,6 +1129,9 @@ fn attach_scenarios(
         let scope = a.scenario.clone().unwrap_or_default();
         // The window start is the scoped scenario's start_ms; a run-wide window
         // (no scope) starts at 0 and must not borrow the first scenario's start.
+        // An unknown scope is a hard error, never a silent whole-run window:
+        // `Spec::validate` already rejects it at load, so this is belt-and-braces
+        // for any future call path that builds a Spec without validating.
         let start_s = if scope.is_empty() {
             0.0
         } else {
@@ -1136,7 +1139,13 @@ fn attach_scenarios(
                 .iter()
                 .find(|s| s.id.as_deref() == Some(scope.as_str()))
                 .map(|s| s.start_ms / 1000.0)
-                .unwrap_or(0.0)
+                .ok_or_else(|| {
+                    SpecError::Invalid(format!(
+                        "rail_window on '{net}' is scoped to scenario '{scope}', but no \
+                         [[scenario]] declares that id; refusing to measure it over the \
+                         whole run"
+                    ))
+                })?
         };
         match windows.iter_mut().find(|w| w.id == scope) {
             Some(w) => {

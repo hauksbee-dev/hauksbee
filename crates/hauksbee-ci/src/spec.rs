@@ -789,6 +789,42 @@ impl Spec {
         for a in &self.asserts {
             a.validate()?;
         }
+        // An assertion's `scenario` scope must name a declared [[scenario]] id.
+        // Without this, an unknown scope would silently fall back to a window
+        // starting at t=0 and the assertion would be measured over the WHOLE
+        // run instead of the scenario window it claims to judge — a check that
+        // never fails the way the spec author intended. Same fail-loud pattern
+        // as the unknown-net / unknown-profile validation.
+        for a in &self.asserts {
+            let Some(scope) = a.scenario.as_deref() else { continue };
+            if scope.is_empty() {
+                // Explicit "" means the run-wide window, same as leaving it unset.
+                continue;
+            }
+            if !self.scenarios.iter().any(|s| s.id.as_deref() == Some(scope)) {
+                let ids: Vec<&str> = self
+                    .scenarios
+                    .iter()
+                    .filter_map(|s| s.id.as_deref())
+                    .collect();
+                let hint = if self.scenarios.is_empty() {
+                    "the spec declares no [[scenario]] blocks".to_string()
+                } else if ids.is_empty() {
+                    "the declared [[scenario]] blocks have no `id` — give the scenario an \
+                     `id` and reference it here"
+                        .to_string()
+                } else {
+                    format!("declared scenario ids: {}", ids.join(", "))
+                };
+                return Err(SpecError::Invalid(format!(
+                    "{} assertion '{}' is scoped to scenario '{scope}', but no [[scenario]] \
+                     declares that id ({hint}); an unknown scope would silently be measured \
+                     over the whole run instead of the scenario window",
+                    a.kind,
+                    a.label(),
+                )));
+            }
+        }
         for s in &self.sensors {
             s.validate()?;
         }

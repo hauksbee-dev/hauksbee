@@ -880,19 +880,56 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     }
 }
 
+/// Does a per-device map key (or fault component name) belong to `reference`?
+/// True for the bare ref itself and for any of its per-unit keys: a multi-unit
+/// package stamps one device per unit with a `_q<N>` / `_s<N>` suffix
+/// ("IC3906_q2", "SW1_s0"), so per-unit producers (`peak_temp_c`, faults) never
+/// record the bare package ref. Mirrors the binder's suffix rule and the
+/// runner's `thermally_tracked` gate — the gate accepts a bare ref whose units
+/// are monitored, so the consumers here MUST match those unit keys too, or a
+/// safety assert on a multi-unit package could never fail.
+fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
+    key == reference
+        || key.strip_prefix(reference).is_some_and(|s| {
+            s.strip_prefix("_q")
+                .or_else(|| s.strip_prefix("_s"))
+                .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+        })
+}
+
 /// max_temp: the steady-state junction temperature of `ref` must stay at or
 /// below `celsius` (if given) or below the device's own max junction temp (if
 /// not, in which case we lean on whether an overtemperature fault fired).
+///
+/// Both the peak lookup and the fault match aggregate over the package's units
+/// (`key_belongs_to_ref`): `peak_temp_c` and the fault list are keyed by the
+/// stamped device name, which for a multi-unit package is the per-unit
+/// `SW1_q1` / `SW1_s0` form, never the bare `SW1` the assertion names.
 fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let reference = a.reference.clone().unwrap_or_default();
-    let peak = out.peak_temp_c.get(&reference).copied();
+    // Hottest matching entry: the bare ref for a single device, or the hottest
+    // unit of a multi-unit package.
+    let peak = out
+        .peak_temp_c
+        .iter()
+        .filter(|(k, _)| key_belongs_to_ref(&reference, k))
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(k, v)| (k.clone(), *v));
 
     // Explicit ceiling: compare the peak junction temperature against it.
     if let Some(limit) = a.celsius {
         return match peak {
-            Some(tj) => {
+            Some((key, tj)) => {
                 let ok = tj <= limit + 1e-6;
-                (ok, format!("Tj({reference}) peak {tj:.1}C (<= {limit}C)"))
+                let unit = if key != reference {
+                    format!(" (hottest unit {key})")
+                } else {
+                    String::new()
+                };
+                (
+                    ok,
+                    format!("Tj({reference}) peak {tj:.1}C{unit} (<= {limit}C)"),
+                )
             }
             None => (
                 // No thermal data. The runner rejects a max_temp on a component
@@ -907,22 +944,23 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     }
 
     // No explicit ceiling: pass unless an overtemperature fault fired for this
-    // component (the monitor compares Tj against the device's own max Tj).
+    // component or any of its units (the monitor compares Tj against the
+    // device's own max Tj).
     let over = out
         .faults
         .iter()
-        .find(|f| f.component == reference && f.kind == "overtemperature");
+        .find(|f| key_belongs_to_ref(&reference, &f.component) && f.kind == "overtemperature");
     match over {
         Some(f) => (
             false,
             format!(
-                "Tj({reference}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
-                f.value, f.limit, f.t_ms
+                "Tj({}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
+                f.component, f.value, f.limit, f.t_ms
             ),
         ),
         None => {
             let detail = match peak {
-                Some(tj) => format!("Tj({reference}) peak {tj:.1}C, within device max"),
+                Some((_, tj)) => format!("Tj({reference}) peak {tj:.1}C, within device max"),
                 None => format!("Tj({reference}): no dissipation measured; within device max"),
             };
             (true, detail)
@@ -942,7 +980,23 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::boot_below_threshold_msg;
+    use super::{boot_below_threshold_msg, key_belongs_to_ref};
+
+    // The base-ref vs per-unit-key rule: a package ref owns itself and its
+    // `_q<N>` / `_s<N>` unit keys, and nothing else (no SW1/SW10 prefix bleed,
+    // no arbitrary underscore suffixes).
+    #[test]
+    fn unit_key_matching_is_exact_or_unit_suffixed() {
+        assert!(key_belongs_to_ref("SW1", "SW1"));
+        assert!(key_belongs_to_ref("SW1", "SW1_q1"));
+        assert!(key_belongs_to_ref("SW1", "SW1_q12"));
+        assert!(key_belongs_to_ref("SW1", "SW1_s0"));
+        assert!(!key_belongs_to_ref("SW1", "SW10"));
+        assert!(!key_belongs_to_ref("SW1", "SW10_q1"));
+        assert!(!key_belongs_to_ref("SW1", "SW1_heater"));
+        assert!(!key_belongs_to_ref("SW1", "SW1_q1a"));
+        assert!(!key_belongs_to_ref("SW1", "SW2_q1"));
+    }
 
     // A boot-coverage net that the firmware actively drove but that never crossed
     // the threshold must NOT be reported as Hi-Z / undefined: it was driven.

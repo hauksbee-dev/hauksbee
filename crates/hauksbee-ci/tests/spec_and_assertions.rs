@@ -242,3 +242,72 @@ fn boot_coverage_requires_net_min_and_deadline() {
     let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
     assert!(err.to_string().contains("deadline_ms"), "got: {err}");
 }
+
+// --- scenario-scope validation (regression) --------------------------------
+//
+// A `scenario = "id"` scope on an assertion must name a declared [[scenario]]
+// id. Before the fix, an unknown scope silently defaulted the window start to
+// t=0, so the rail_window was measured over the WHOLE run instead of the
+// scenario window it claimed to judge — and the "never sampled in scenario
+// window" failure could never fire.
+
+#[test]
+fn rail_window_scoped_to_undeclared_scenario_is_rejected() {
+    let p = write_tmp(
+        "railwin_badscope.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
+         [[scenario]]\nid=\"burst\"\npart=\"U1\"\nprofile=\"p\"\nsupply_net=\"+3.3V\"\nstart_ms=1.0\n\
+         [[profile]]\nid=\"p\"\n[[profile.segment]]\nlevel_a=0.1\n\
+         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"brust\"\n",
+    );
+    let err = Spec::load(&p).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("'brust'"), "must name the bad scope: {msg}");
+    assert!(msg.contains("burst"), "must list the declared ids: {msg}");
+    assert!(
+        msg.contains("whole run"),
+        "must explain the silent-whole-run hazard: {msg}"
+    );
+}
+
+#[test]
+fn scenario_scope_with_no_scenarios_declared_is_rejected() {
+    let p = write_tmp(
+        "railwin_noscenarios.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
+         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"burst\"\n",
+    );
+    let err = Spec::load(&p).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("no [[scenario]]"),
+        "must say no scenarios are declared: {msg}"
+    );
+}
+
+// The scope check covers every assertion kind that carries `scenario`, not
+// just rail_window: any sibling scoped to an unknown id is rejected the same
+// way rather than silently evaluated whole-run.
+#[test]
+fn any_assert_kind_scoped_to_undeclared_scenario_is_rejected() {
+    let p = write_tmp(
+        "trip_badscope.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
+         [[assert]]\nkind=\"protection_trip\"\nsupply_net=\"VBAT\"\nexpect_trip=true\nscenario=\"nope\"\n",
+    );
+    let err = Spec::load(&p).unwrap_err();
+    assert!(err.to_string().contains("'nope'"), "got: {err}");
+}
+
+// A correctly-scoped rail_window (declared id) still loads.
+#[test]
+fn rail_window_scoped_to_declared_scenario_loads() {
+    let p = write_tmp(
+        "railwin_goodscope.toml",
+        "board=\"b.kicad_pcb\"\nduration_ms=10\n\
+         [[scenario]]\nid=\"burst\"\npart=\"U1\"\nprofile=\"p\"\nsupply_net=\"+3.3V\"\nstart_ms=1.0\n\
+         [[profile]]\nid=\"p\"\n[[profile.segment]]\nlevel_a=0.1\n\
+         [[assert]]\nkind=\"rail_window\"\nnet=\"+3.3V\"\nmin=3.0\nscenario=\"burst\"\n",
+    );
+    Spec::load(&p).expect("declared scope loads");
+}
