@@ -2066,19 +2066,60 @@ fn bind_opamp(
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
-    // Use the first (A) channel: out_a / in_plus_a / in_minus_a, falling back
-    // to generic role names.
-    let out = pick(roles, &["out_a", "out", "out_1"]).copied();
-    let inp = pick(roles, &["in_plus_a", "in_plus", "inp", "in+"]).copied();
-    let inn = pick(roles, &["in_minus_a", "in_minus", "inn", "in-"]).copied();
     let reference = pick(roles, &["ref", "reference", "vref"]).copied();
-    let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
-        return open_warning(comp, "opamp pins not all connected");
-    };
     let gain = model.params.get_f64("gain").unwrap_or(1e5);
     let pole_hz = model.params.get_f64("pole_hz");
     let rail_lo = model.params.get_f64("rail_lo").unwrap_or(0.0);
     let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
+    let warning = model
+        .params
+        .get_str("warning")
+        .map(|w| format!("{} ({}): {w}", comp.reference, comp.value));
+
+    // Multi-channel packages (LM358 dual, INA2181 dual, LM324 quad) carry
+    // per-channel roles out_a/in_plus_a/in_minus_a, ..._b/_c/_d. Stamp one
+    // OpAmp per complete channel — the old channel-A-only lookup left channel
+    // B/C/D outputs silently floating. Per-unit names use the `_q<N>` key the
+    // CI thermal aggregation matches (as bind_bjt does for paired BJTs).
+    let mut stamped = 0;
+    for (unit, sfx) in ["_a", "_b", "_c", "_d"].iter().enumerate() {
+        let (Some(out), Some(inp), Some(inn)) = (
+            roles.get(&format!("out{sfx}")).copied(),
+            roles.get(&format!("in_plus{sfx}")).copied(),
+            roles.get(&format!("in_minus{sfx}")).copied(),
+        ) else {
+            continue; // channel not (fully) wired on this board
+        };
+        circuit.add(Device::OpAmp {
+            name: format!("{}_q{}", comp.reference, unit + 1),
+            out,
+            inp,
+            inn,
+            reference,
+            gain,
+            pole_hz,
+            rail_lo,
+            rail_hi,
+        });
+        stamped += 1;
+    }
+    if stamped > 0 {
+        return (
+            BindOutcome::Behavioral {
+                device: format!("opamp x{stamped}"),
+            },
+            warning,
+        );
+    }
+
+    // Single-channel parts (INA181/186, generic role names): one device under
+    // the bare reference, exactly as before.
+    let out = pick(roles, &["out", "out_1"]).copied();
+    let inp = pick(roles, &["in_plus", "inp", "in+"]).copied();
+    let inn = pick(roles, &["in_minus", "inn", "in-"]).copied();
+    let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
+        return open_warning(comp, "opamp pins not all connected");
+    };
     circuit.add(Device::OpAmp {
         name: comp.reference.clone(),
         out,
@@ -2090,10 +2131,6 @@ fn bind_opamp(
         rail_lo,
         rail_hi,
     });
-    let warning = model
-        .params
-        .get_str("warning")
-        .map(|w| format!("{} ({}): {w}", comp.reference, comp.value));
     (
         BindOutcome::Behavioral {
             device: "opamp".to_string(),
@@ -2108,15 +2145,48 @@ fn bind_comparator(
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
 ) -> (BindOutcome, Option<String>) {
-    let out = pick(roles, &["out_a", "out", "out_1", "q"]).copied();
-    let inp = pick(roles, &["in_plus_a", "in_plus", "inp", "in+"]).copied();
-    let inn = pick(roles, &["in_minus_a", "in_minus", "inn", "in-"]).copied();
-    let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
-        return open_warning(comp, "comparator pins not all connected");
-    };
     let out_lo = model.params.get_f64("out_lo").unwrap_or(0.0);
     let out_hi = model.params.get_f64("out_hi").unwrap_or(5.0);
     let hyst = model.params.get_f64("hysteresis").unwrap_or(0.005);
+
+    // Multi-channel packages (LM393 dual, LM339 quad): one Comparator per
+    // complete out_X/in_plus_X/in_minus_X channel, keyed `_q<N>` — same shape
+    // and rationale as bind_opamp above.
+    let mut stamped = 0;
+    for (unit, sfx) in ["_a", "_b", "_c", "_d"].iter().enumerate() {
+        let (Some(out), Some(inp), Some(inn)) = (
+            roles.get(&format!("out{sfx}")).copied(),
+            roles.get(&format!("in_plus{sfx}")).copied(),
+            roles.get(&format!("in_minus{sfx}")).copied(),
+        ) else {
+            continue;
+        };
+        circuit.add(Device::Comparator {
+            name: format!("{}_q{}", comp.reference, unit + 1),
+            out,
+            inp,
+            inn,
+            out_lo,
+            out_hi,
+            hysteresis: hyst,
+        });
+        stamped += 1;
+    }
+    if stamped > 0 {
+        return (
+            BindOutcome::Behavioral {
+                device: format!("comparator x{stamped}"),
+            },
+            None,
+        );
+    }
+
+    let out = pick(roles, &["out", "out_1", "q"]).copied();
+    let inp = pick(roles, &["in_plus", "inp", "in+"]).copied();
+    let inn = pick(roles, &["in_minus", "inn", "in-"]).copied();
+    let (Some(out), Some(inp), Some(inn)) = (out, inp, inn) else {
+        return open_warning(comp, "comparator pins not all connected");
+    };
     circuit.add(Device::Comparator {
         name: comp.reference.clone(),
         out,
@@ -2195,6 +2265,48 @@ fn bind_analog_switch(
             },
             None,
         );
+    }
+
+    // Multi-gate bilateral packages (CD74HC4066 quad): numbered gate roles
+    // in_out_<n>a / in_out_<n>b switched by ctrl_<n>, each gate electrically
+    // independent. Stamp one VSwitch per complete gate — the old single-SPST
+    // fall-through bound gate 1 only and silently dropped gates 2..4. Per-unit
+    // names use the `_s<n>` key the CI thermal aggregation matches (the same
+    // family as the SPDT's `_s0`/`_s1` legs above).
+    {
+        let ron = model.params.get_f64("ron").unwrap_or(50.0);
+        let roff = model.params.get_f64("roff").unwrap_or(1e9);
+        let vth = model.params.get_f64("vth").unwrap_or(1.5);
+        let mut stamped = 0;
+        for n in 1..=4 {
+            let (Some(a), Some(b), Some(ctrl)) = (
+                roles.get(&format!("in_out_{n}a")).copied(),
+                roles.get(&format!("in_out_{n}b")).copied(),
+                roles.get(&format!("ctrl_{n}")).copied(),
+            ) else {
+                continue; // gate not (fully) wired on this board
+            };
+            circuit.add(Device::VSwitch {
+                name: format!("{}_s{n}", comp.reference),
+                a,
+                b,
+                ctrl_p: ctrl,
+                ctrl_n: vss,
+                von: vth + 0.1,
+                voff: vth - 0.1,
+                ron,
+                roff,
+            });
+            stamped += 1;
+        }
+        if stamped > 0 {
+            return (
+                BindOutcome::Behavioral {
+                    device: format!("vswitch x{stamped}"),
+                },
+                None,
+            );
+        }
     }
 
     // SPST fallback: switch COM<->S0 (or in_out_a<->in_out_b) controlled by
@@ -2881,7 +2993,14 @@ pub fn is_ground(name: &str) -> bool {
 pub fn power_rail_voltage(name: &str) -> Option<f64> {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     match n.as_str() {
-        "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" | "+5V0" => Some(5.0),
+        // Bare "VDD" is deliberately NOT here: it names a supply with no
+        // magnitude, and on 3.3 V / 1.8 V boards (STM32/ESP32/nRF52) it is
+        // usually the local 3.3 V core rail — stamping it Ideal at 5 V
+        // overdrives every device on the net. Same discipline as bare "VEE"
+        // below: inventing a voltage would guess; name the net with its
+        // voltage (VDD3V3, VDD_5V) instead. Bare "VCC" stays: it is the
+        // TTL/bipolar convention and conventionally means 5 V.
+        "+5V" | "5V" | "VCC" | "+VCC" | "VBUS" | "+5V0" => Some(5.0),
         "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" => Some(3.3),
         "+3V" | "3V" => Some(3.0),
         "+12V" | "12V" => Some(12.0),
@@ -2904,9 +3023,14 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             // incidental VCC/VBUS token elsewhere in the name.
             if let Some(v) = negative_rail_fallback(&n) {
                 Some(v)
-            // "+5V_USB", "VCC_5V" style names.
+            // "+5V_USB", "VCC_5V", "VDD_5V" style names: a voltage-suffixed
+            // VDD carries its magnitude explicitly, unlike the bare "VDD"
+            // excluded above.
             } else if n.contains("5V")
-                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
+                && (n.starts_with('+')
+                    || n.contains("VCC")
+                    || n.contains("VBUS")
+                    || n.contains("VDD"))
             {
                 Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") {
