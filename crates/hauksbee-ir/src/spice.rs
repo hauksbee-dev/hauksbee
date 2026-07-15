@@ -2518,7 +2518,13 @@ fn parse_rcl(
             name,
             a,
             b,
-            ohms: value,
+            // A non-positive resistance means a SHORT (ngspice treats R=0 as a
+            // jumper), but the solver stamps conductance 1/R, so R=0 exactly
+            // would stamp NOTHING and silently turn the jumper into an open.
+            // Clamp to the same 1e-6 Ω floor the engine's board binder applies
+            // (`bind_passive`), so every assembly path sees a tiny positive
+            // resistance and the net stays connected.
+            ohms: value.max(1e-6),
             tc1: kv.get("tc1").copied().or_else(|| kv.get("tc").copied()),
         },
         RclKind::C => Device::Capacitor {
@@ -3888,6 +3894,30 @@ mod tests {
         }
         let ok = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=1 VTO=1)\n.end\n";
         assert!(SpiceLoader::load(ok).is_ok(), "LEVEL=1 must stay accepted");
+    }
+
+    /// Bug-hunt: a 0-Ω resistor is a SHORT (ngspice convention), but the
+    /// solver stamps conductance 1/R and skips a non-positive R — so an
+    /// unclamped `ohms: 0.0` reached the stamp as an OPEN and silently broke
+    /// the jumper's net. The loader clamps to the same 1e-6 Ω floor the
+    /// engine's board binder applies, so wrong topology can never reach the
+    /// solver from a deck.
+    #[test]
+    fn zero_or_negative_resistance_clamps_to_a_short() {
+        let net = "jumper\nV1 1 0 DC 1\nR0 1 2 0\nRneg 2 3 -5\nRok 3 0 1k\n.end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        let ohms_of = |name: &str| -> f64 {
+            c.devices
+                .iter()
+                .find_map(|d| match d {
+                    Device::Resistor { name: n, ohms, .. } if n == name => Some(*ohms),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{name} present"))
+        };
+        assert_eq!(ohms_of("R0"), 1e-6, "0 Ω clamps to the 1e-6 short floor");
+        assert_eq!(ohms_of("Rneg"), 1e-6, "negative R clamps to the short floor");
+        assert_eq!(ohms_of("Rok"), 1e3, "positive R passes through unchanged");
     }
 
     /// Dev-plan 04 §3.3: SPICE-convention PMOS threshold (negative VTO for
