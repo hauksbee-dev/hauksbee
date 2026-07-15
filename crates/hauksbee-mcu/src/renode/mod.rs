@@ -387,6 +387,27 @@ impl<C> Drop for BridgeServer<C> {
 #[derive(Default)]
 struct I2cBridgeState {
     active: Option<(u8, I2cBridgeMode)>,
+    /// STM32F1 two-byte-receive prefetch quirk (host-side policy).
+    ///
+    /// Renode 1.16.1's `STM32F4_I2C` controller model (used by the stock
+    /// `stm32f103.repl`) asks the slave for bytes exactly ONCE per read
+    /// transaction — `Read()` at the address phase — and never asks again when
+    /// its receive fifo drains. Firmware running the RM0008 two-byte receive
+    /// sequence (POS/ACK, then two DR reads gated on RxNE — see
+    /// `testdata/firmware/stm32_i2c_thermostat/main.c`) would therefore time
+    /// out waiting for RxNE on the second byte: the model's fifo holds only
+    /// the single byte that one `Read()` returned. With this flag set, a
+    /// `read_count == 1` request fetches TWO bytes from the slave callback and
+    /// returns both, so the pending two-byte receive is filled while every
+    /// byte still comes from the host model.
+    ///
+    /// The flag is deliberately OFF by default: on any platform whose
+    /// controller model asks per byte, a genuine single-byte read must consume
+    /// exactly one byte from the slave (a stateful slave's register pointer
+    /// advances per byte served) and return exactly one byte. It is enabled
+    /// per backend from the platform description (see
+    /// [`platform_needs_i2c_single_read_prefetch`]).
+    single_read_prefetch: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -498,8 +519,17 @@ impl I2cBridgeState {
                 }
                 I2C_OP_READ => {
                     self.ensure_mode(addr, I2cBridgeMode::Read, &mut cb);
-                    let mut response = Vec::with_capacity(read_count);
-                    for _ in 0..read_count {
+                    // See `single_read_prefetch`: only the gated STM32F1
+                    // two-byte-receive path over-fetches. A normal single-byte
+                    // read consumes exactly one byte from the slave callback
+                    // and returns exactly one byte.
+                    let fetch_count = if read_count == 1 && self.single_read_prefetch {
+                        2
+                    } else {
+                        read_count
+                    };
+                    let mut response = Vec::with_capacity(fetch_count);
+                    for _ in 0..fetch_count {
                         response.push(cb(I2cEvent::Read { addr }).unwrap_or(0xFF));
                     }
                     if trace {
@@ -888,7 +918,20 @@ impl RenodeBackend {
         }
 
         let trace = std::env::var_os("HAUKSBEE_RENODE_I2C_TRACE").is_some();
-        let mut state = I2cBridgeState::default();
+        // The STM32F1 two-byte-receive prefetch is derived from the platform
+        // description; HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH=1/0 overrides
+        // it for out-of-tree platforms whose Renode controller model has the
+        // same one-shot `Read()` behaviour (or provably does not).
+        let single_read_prefetch = match std::env::var("HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH")
+        {
+            Ok(v) if v == "1" => true,
+            Ok(v) if v == "0" => false,
+            _ => platform_needs_i2c_single_read_prefetch(&self.config.platform),
+        };
+        let mut state = I2cBridgeState {
+            single_read_prefetch,
+            ..I2cBridgeState::default()
+        };
         let bridge = BridgeServer::start("I2C", cb, move |stream, callback| {
             state.handle_stream(stream, callback, trace)
         })?;
@@ -1008,6 +1051,19 @@ fn monitor_failed(resp: &str) -> bool {
     lower.contains("error") || lower.contains("exception") || lower.contains("failed")
 }
 
+/// Does this platform's I2C controller model need the single-byte-read
+/// prefetch (see [`I2cBridgeState::single_read_prefetch`])?
+///
+/// The quirk exists for Renode 1.16.1's eager `STM32F4_I2C` model as
+/// instantiated by the stock STM32F1 platform description, where the shipped
+/// `stm32_i2c_thermostat` firmware runs the RM0008 two-byte receive sequence.
+/// Only the STM32F1 platforms get it; everywhere else (including the
+/// F4-Discovery, where the bridge wiring was collateral and no in-tree
+/// firmware depends on the sequence) a single-byte read is served exactly.
+fn platform_needs_i2c_single_read_prefetch(platform: &str) -> bool {
+    platform.to_ascii_lowercase().contains("stm32f1")
+}
+
 fn render_i2c_bridge_source(port: u16, addresses: &[u8]) -> String {
     let mut classes = String::new();
     for addr in addresses {
@@ -1046,13 +1102,17 @@ namespace Antmicro.Renode.Peripherals.I2C
 
         public byte[] Read(int count)
         {{
-            // Renode 1.16.1's STM32F4_I2C model asks the I2C slave for one byte
-            // during the STM32F1 two-byte receive sequence used by the test
-            // firmware. Returning both bytes lets the controller fill the
-            // pending two-byte receive while every byte still comes from the
-            // host callback.
-            var requested = count == 1 ? 2 : count;
-            var response = Request(2, new byte[0], requested);
+            // The host decides how many bytes come back. On the STM32F1
+            // platforms it prefetches two bytes for a count==1 request,
+            // because Renode 1.16.1's STM32F4_I2C model asks the slave exactly
+            // once per read transaction and never re-asks when its fifo
+            // drains — the STM32F1 two-byte receive sequence would time out
+            // waiting for RxNE otherwise. Everywhere else the response is
+            // exactly `count` bytes, so a genuine single-byte read consumes
+            // exactly one byte from the host model. Keeping that policy on the
+            // Rust side (I2cBridgeState::single_read_prefetch) makes it
+            // unit-testable; this class just forwards the true count.
+            var response = Request(2, new byte[0], count);
             if(response.Length >= count)
             {{
                 return response;
@@ -1689,6 +1749,116 @@ mod tests {
         assert!(c.adc_channels.is_empty());
         assert!(c.i2c_controllers.is_empty());
         assert!(c.spi_controllers.is_empty());
+    }
+
+    /// Drive one I2C bridge read request through the real
+    /// [`I2cBridgeState::handle_stream`] path over a local socket pair, with a
+    /// stateful slave model (a register pointer that advances one step per
+    /// byte served). Returns the response bytes Renode would receive and the
+    /// final pointer position (== number of `I2cEvent::Read` callback
+    /// invocations).
+    fn run_bridge_read(single_read_prefetch: bool, read_count: u32) -> (Vec<u8>, u8) {
+        use std::io::Read as _;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().expect("local addr").port();
+
+        // Stateful slave: serves 0x10, 0x11, 0x12, ... and advances its
+        // register pointer once per byte read. Start/Stop are acknowledged
+        // without advancing anything.
+        let pointer = Arc::new(Mutex::new(0u8));
+        let slave_pointer = Arc::clone(&pointer);
+        let cb: I2cCb = Box::new(move |event| match event {
+            I2cEvent::Read { .. } => {
+                let mut p = slave_pointer.lock().unwrap();
+                let value = 0x10 + *p;
+                *p += 1;
+                Some(value)
+            }
+            _ => None,
+        });
+        let callback = Arc::new(Mutex::new(cb));
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let (mut server, _) = listener.accept().expect("accept");
+
+        // op=READ, addr=0x48, read_count, payload_len=0 — the exact wire
+        // header the generated C# `Read(count)` now sends (true count).
+        let mut request = vec![I2C_OP_READ, 0x48];
+        request.extend_from_slice(&read_count.to_be_bytes());
+        request.extend_from_slice(&0u32.to_be_bytes());
+        client.write_all(&request).expect("write request");
+
+        let mut state = I2cBridgeState {
+            single_read_prefetch,
+            ..I2cBridgeState::default()
+        };
+        state
+            .handle_stream(&mut server, &callback, false)
+            .expect("handle_stream");
+
+        let mut len_bytes = [0u8; 4];
+        client.read_exact(&mut len_bytes).expect("response length");
+        let mut response = vec![0u8; u32::from_be_bytes(len_bytes) as usize];
+        client.read_exact(&mut response).expect("response payload");
+
+        let final_pointer = *pointer.lock().unwrap();
+        (response, final_pointer)
+    }
+
+    /// BUG #18 regression: a genuine single-byte read must invoke the slave
+    /// callback exactly once (the register pointer advances by 1, not 2) and
+    /// return exactly one byte to Renode — no over-fetch, no over-return.
+    #[test]
+    fn single_byte_read_consumes_and_returns_exactly_one_byte() {
+        let (response, pointer) = run_bridge_read(false, 1);
+        assert_eq!(response, vec![0x10], "exactly one byte returned to Renode");
+        assert_eq!(pointer, 1, "slave callback invoked exactly once");
+    }
+
+    /// The gated STM32F1 two-byte-receive prefetch still works where enabled:
+    /// a count==1 request fetches and returns two bytes so Renode 1.16.1's
+    /// one-shot STM32F4_I2C fifo can satisfy both DR reads.
+    #[test]
+    fn stm32f1_prefetch_still_fills_two_byte_receive() {
+        let (response, pointer) = run_bridge_read(true, 1);
+        assert_eq!(response, vec![0x10, 0x11]);
+        assert_eq!(pointer, 2);
+    }
+
+    /// Multi-byte reads are untouched by the quirk in either mode.
+    #[test]
+    fn multi_byte_read_fetches_exactly_read_count() {
+        let (response, pointer) = run_bridge_read(true, 3);
+        assert_eq!(response, vec![0x10, 0x11, 0x12]);
+        assert_eq!(pointer, 3);
+    }
+
+    /// The prefetch gate: only STM32F1 platform descriptions enable the
+    /// two-byte-receive quirk; the F4-Discovery (collateral wiring) and every
+    /// other platform serve single-byte reads exactly.
+    #[test]
+    fn single_read_prefetch_gated_to_stm32f1_platforms() {
+        assert!(platform_needs_i2c_single_read_prefetch(
+            &RenodeConfig::stm32f103().platform
+        ));
+        assert!(!platform_needs_i2c_single_read_prefetch(
+            &RenodeConfig::stm32f4_discovery().platform
+        ));
+        assert!(!platform_needs_i2c_single_read_prefetch(
+            &RenodeConfig::nrf52840().platform
+        ));
+    }
+
+    /// The generated C# no longer makes the over-fetch decision: it forwards
+    /// the controller's true `count` on the wire (the Rust host owns the
+    /// prefetch policy, which the tests above pin).
+    #[test]
+    fn generated_bridge_source_requests_true_count() {
+        let source = render_i2c_bridge_source(4242, &[0x48]);
+        assert!(source.contains("Request(2, new byte[0], count)"));
+        assert!(!source.contains("count == 1 ? 2 : count"));
     }
 
     #[test]
