@@ -171,13 +171,29 @@ fn hierarchy_subsheet_components_are_loaded() {
             SUBSHEET_REF,
         ),
     );
-    // If the sub-sheet were dropped, this errors with "unknown component"; if it
-    // is loaded, the assert is evaluable (and a 100 A ceiling trivially holds).
-    let res = run(&RunConfig { spec, ..Default::default() }).unwrap_or_else(|e| {
-        panic!("sub-sheet ref {SUBSHEET_REF} not found, hierarchy not loaded: {e}")
-    });
-    assert!(
-        res.passed(),
-        "sub-sheet component must be present and within its ceiling"
-    );
+    // If the sub-sheet were dropped, this errors with "unknown component". If it
+    // is loaded, the ref resolves — and then either the assert is evaluable (a
+    // 100 A ceiling trivially holds) or, for a socket kind whose current is not
+    // tracked, the runner rejects the assert as untrackable ("resistors and
+    // diodes"). Both loaded outcomes prove the hierarchy was followed; only
+    // "unknown component" means it was not. (This test previously relied on the
+    // untracked-kind case silently passing green — that silent pass was bug #18
+    // and is now a loud rejection.)
+    match run(&RunConfig { spec, ..Default::default() }) {
+        Ok(res) => assert!(
+            res.passed(),
+            "sub-sheet component must be present and within its ceiling"
+        ),
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("unknown component"),
+                "sub-sheet ref {SUBSHEET_REF} not found, hierarchy not loaded: {msg}"
+            );
+            assert!(
+                msg.contains("resistors and diodes"),
+                "expected the untracked-kind rejection, got: {msg}"
+            );
+        }
+    }
 }

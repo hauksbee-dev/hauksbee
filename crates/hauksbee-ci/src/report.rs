@@ -159,13 +159,23 @@ impl CiResult {
         // INVALID assertions map to JUnit `<error>` (the test could not run to a
         // verdict), ordinary reds to `<failure>`. Keep the two counts distinct so
         // a CI dashboard shows "errored" apart from "failed".
-        let errors = self.invalid_count();
+        //
+        // An analog abort that no assertion happened to cover (05 §3b) still
+        // forces exit 3, so it must surface here too: `render_human` and
+        // `render_github_annotations` both special-case that state, and a JUnit
+        // that said `failures="0" errors="0"` would be a false ALL-GREEN on the
+        // one surface most CI dashboards actually read. Emit one synthetic
+        // errored testcase (the same `<error>` shape `render_junit_error` uses)
+        // and count it in tests/errors.
+        let synthetic_abort = self.analog_abort && self.invalid_count() == 0;
+        let errors = self.invalid_count() + usize::from(synthetic_abort);
+        let tests = self.results.len() + usize::from(synthetic_abort);
         let failures = self.results.iter().filter(|r| !r.passed && !r.invalid).count();
         let mut out = String::new();
         out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         out.push_str(&format!(
             "<testsuites name=\"hauksbee-ci\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
-            self.results.len(),
+            tests,
             failures,
             errors,
             self.elapsed.as_secs_f64()
@@ -173,7 +183,7 @@ impl CiResult {
         out.push_str(&format!(
             "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
             xml_escape(&self.spec_name),
-            self.results.len(),
+            tests,
             failures,
             errors,
             self.elapsed.as_secs_f64()
@@ -202,6 +212,17 @@ impl CiResult {
                     xml_escape(&r.detail)
                 ));
             }
+            out.push_str("    </testcase>\n");
+        }
+        if synthetic_abort {
+            let msg = "analog co-sim aborted (solve failed on too many chunks in a row); \
+                       the run is INVALID for analysis (05 §3b)";
+            out.push_str("    <testcase classname=\"analog\" name=\"analog co-sim converged\">\n");
+            out.push_str(&format!(
+                "      <error message=\"{}\">{}</error>\n",
+                xml_escape(msg),
+                xml_escape(msg)
+            ));
             out.push_str("    </testcase>\n");
         }
         out.push_str("  </testsuite>\n");

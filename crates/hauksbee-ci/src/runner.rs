@@ -539,6 +539,72 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
     Ok(())
 }
 
+/// Fail loud when a `max_current` / `max_temp` assertion names a component the
+/// engine cannot actually measure. `check_component_refs` catches typos against
+/// the board; this catches the subtler hole where the ref is a real component
+/// but of a kind that is never tracked, so the guard would report a green pass
+/// without ever being evaluated:
+///
+///   - peak current is recorded only for the device kinds
+///     `update_peak_currents` walks (resistors and diodes, by exact device
+///     name), so a `max_current` on a capacitor / IC / transistor package
+///     would always take the "no current data" branch;
+///   - junction temperature exists only for stress-monitored devices (the
+///     binder's `DeviceMeta` list), so a `max_temp` on an unmonitored kind
+///     (MCU, connector, anything the model library could not resolve) would
+///     always take the "no dissipation measured" branch.
+///
+/// Runs post-bind (the bound circuit is what decides trackability), before the
+/// engine is built, so the spec is rejected up front rather than reported green.
+fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), SpecError> {
+    // Current tracking covers exactly what `update_peak_currents` records:
+    // resistors and diodes, keyed by device name.
+    let current_tracked: std::collections::HashSet<&str> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|d| match d {
+            Device::Resistor { name, .. } | Device::Diode { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    // Thermal tracking covers every stress-monitored device. Multi-unit
+    // packages stamp per-unit metas ("IC3906_q0"), so accept a ref whose units
+    // are monitored too.
+    let thermally_tracked = |r: &str| {
+        bound.device_meta.iter().any(|m| {
+            m.reference == r
+                || m.reference
+                    .strip_prefix(r)
+                    .is_some_and(|s| s.starts_with("_q") || s.starts_with("_s"))
+        })
+    };
+    for a in &spec.asserts {
+        let Some(reference) = &a.reference else { continue };
+        match a.kind.as_str() {
+            "max_current" if !current_tracked.contains(reference.as_str()) => {
+                return Err(SpecError::Invalid(format!(
+                    "max_current assert references '{reference}', but peak current is only \
+                     measured for resistors and diodes; this component binds as a kind whose \
+                     through-current is never tracked, so the guard would report green without \
+                     ever being evaluated — point the assert at a resistor/diode in the same \
+                     path, or drop it"
+                )));
+            }
+            "max_temp" if !thermally_tracked(reference) => {
+                return Err(SpecError::Invalid(format!(
+                    "max_temp assert references '{reference}', but it has no thermal model \
+                     (it is not a stress-monitored device kind, or the model library could \
+                     not resolve it), so its junction temperature is never estimated and the \
+                     guard would report green without ever being evaluated"
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Apply overrides for this run to a fresh copy of the extracted board.
 fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard, SpecError> {
     let mut board = base.clone();
@@ -608,6 +674,11 @@ fn run_one(
             .apply(&mut bound)
             .map_err(|e| SpecError::Invalid(e.to_string()))?;
     }
+
+    // Reject max_current/max_temp asserts on components the bound circuit
+    // cannot measure (untracked kinds), before any simulation runs: an
+    // unevaluated guard must be a loud error, never a green pass.
+    check_trackable_assert_refs(spec, &bound)?;
 
     // 0. Apply opt-in capacitor parasitics (ESR/ESL) before anything else, so the
     //    decoupling is honest for the whole run. Off by default.
