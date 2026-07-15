@@ -190,8 +190,10 @@ fn examine_strap(
 
 /// A two-terminal resistor (ref R*, not RV/RT/RN/RP/RM, two connected pads, not
 /// a ferrite/inductor), and assembled (not DNP). Mirrors the extract lint's
-/// `is_resistor` plus a DNP guard.
-fn is_assembled_resistor(c: &Component) -> bool {
+/// `is_resistor` plus a DNP guard. Shared with the boot check's bias-resistor
+/// predicate — a varistor (RV) or thermistor (RT) to ground sets no DC level
+/// and must never be credited as a bias.
+pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
     if c.dnp {
         return false;
     }
