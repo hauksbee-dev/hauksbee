@@ -773,10 +773,18 @@ fn stamp_bjt_ac(
     let nvr = model.nr * vt;
     let ef = (vbe / nvf).clamp(-40.0, 40.0).exp();
     let er = (vbc / nvr).clamp(-40.0, 40.0).exp();
-    // SGP base-charge factor q1_inv = 1/qb = 1 - vbc/VAF (see the transient
-    // stamp for the inversion this arc fixed; identity for infinite vaf).
-    let early = if opts.effects.early_effect && model.vaf.is_finite() {
-        1.0 - vbc / model.vaf
+    // SGP base-charge factor q1_inv = 1/qb = 1 - vbc/VAF - vbe/VAR (see the
+    // transient stamp for the inversion this arc fixed and for the reverse
+    // Early term; identity for infinite vaf AND var).
+    let early = if opts.effects.early_effect {
+        let mut e = 1.0;
+        if model.vaf.is_finite() {
+            e -= vbc / model.vaf;
+        }
+        if model.var.is_finite() {
+            e -= vbe / model.var;
+        }
+        e
     } else {
         1.0
     };
@@ -800,13 +808,19 @@ fn stamp_bjt_ac(
         // row e their negated sum via the shared transconductance helper.
         let cf = is * (ef - 1.0);
         let cr = is * (er - 1.0);
-        let early_deriv = if opts.effects.early_effect && model.vaf.is_finite() && early > 0.1
-        {
+        // q1_inv's own partials, exactly the transient exact-tangent terms.
+        let early_free = opts.effects.early_effect && early > 0.1;
+        let early_deriv = if early_free && model.vaf.is_finite() {
             -(cf - cr) / model.vaf
         } else {
             0.0
         };
-        let gc_be = gm;
+        let var_deriv = if early_free && model.var.is_finite() {
+            -(cf - cr) / model.var
+        } else {
+            0.0
+        };
+        let gc_be = gm + var_deriv;
         let gc_bc = -gir * q1_inv - gmu + early_deriv;
         stamp_transconductance(sys, ci, ei, bi, ei, gc_be);
         stamp_transconductance(sys, ci, ei, bi, ci, gc_bc);
@@ -886,30 +900,16 @@ fn stamp_mosfet_ac(
     }
     let nsub = model.n_sub.max(1.0);
 
-    let (gm, gds) = if vgs - vth < -nsub * vt * 10.0 {
-        (opts.gmin, opts.gmin)
-    } else if vgs <= vth {
-        let i0 = beta * (nsub * vt) * (nsub * vt) * std::f64::consts::E;
-        let id = i0 * ((vgs - vth) / (nsub * vt)).exp();
-        ((id / (nsub * vt)).max(opts.gmin), opts.gmin)
+    // Small-signal channel tangent: the SAME shared C1 blend the transient
+    // stamp linearizes (`crate::stamp::mos_channel`), evaluated at the OP —
+    // one function, so the DC and AC tangents cannot disagree at threshold.
+    let lambda = if opts.effects.early_effect {
+        model.lambda
     } else {
-        let lambda = if opts.effects.early_effect {
-            model.lambda
-        } else {
-            0.0
-        };
-        let vov = vgs - vth;
-        if vds < vov {
-            let gm = beta * vds * (1.0 + lambda * vds);
-            let gds = beta
-                * ((vov - vds) * (1.0 + lambda * vds) + (vov * vds - 0.5 * vds * vds) * lambda);
-            (gm.max(opts.gmin), gds.max(opts.gmin))
-        } else {
-            let gm = beta * vov * (1.0 + lambda * vds);
-            let gds = 0.5 * beta * vov * vov * lambda;
-            (gm.max(opts.gmin), gds.max(opts.gmin))
-        }
+        0.0
     };
+    let (_, gm, gds) =
+        crate::stamp::mos_channel(beta, nsub * vt, vgs - vth, vds, lambda, opts.gmin);
 
     let (di, gi, si) = (layout.node(d), layout.node(gnode), layout.node(s));
     let (dn, sn) = if swap { (si, di) } else { (di, si) };
