@@ -344,6 +344,12 @@ impl Workspace {
     }
 }
 
+/// Staged-path stall window: how many consecutive iterations the undamped
+/// node-step norm may fail to improve (by 0.1%) before the solve is declared
+/// limit-cycling and bailed early. Module-level so the stall regression tests
+/// stay in lockstep with the detector.
+const STALL_WINDOW: usize = 12;
+
 /// Run Newton iterations to convergence (or `max_newton`) for one assembled
 /// operating point. Mutates `ws.x` in place toward the solution.
 #[allow(clippy::too_many_arguments)]
@@ -446,7 +452,6 @@ pub fn newton_solve(
     // (branch_reg>0); the normal path is unaffected.
     let mut best_norm = f64::INFINITY;
     let mut stall = 0usize;
-    const STALL_WINDOW: usize = 12;
     // Undamped step inf-norm of the PREVIOUS line-search iteration, plus the
     // hysteresis arm state, the lazy-arming predictor's history (see the
     // line_search block). Armed at entry: the first iteration always searches.
@@ -740,80 +745,16 @@ pub fn newton_solve(
         let undamped_node_converged =
             node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
 
+        // Measure the TRUE undamped node step, then (staged path only) damp
+        // ws.x in place. The returned norm is captured BEFORE the damping
+        // rewrites ws.x — see the ordering invariant on
+        // `measure_and_damp_node_steps` — and is what the census, the
+        // "maxdV(undamped)" debug line, and the stall detector all report.
+        let (undamped_step_norm, undamped_step_argmax, census_osc_nodes) =
+            measure_and_damp_node_steps(ws, branch_reg > 0.0);
         // Census (lever-3 attribution): the node-block step norm this
-        // iteration will be judged on, captured BEFORE the damping rewrites
-        // ws.x. Pure readout behind the cached bool.
-        let census_step_norm = if census_on {
-            let mut n = 0.0f64;
-            for i in 0..ws.layout.n_nodes {
-                let d = (ws.x[i] - ws.lin_point[i]).abs();
-                if d > n {
-                    n = d;
-                }
-            }
-            n
-        } else {
-            0.0
-        };
-        // How many nodes the staged damping classifies as oscillating this
-        // iteration (integer side-channel out of the damping loop below; no
-        // float behaviour touched).
-        let mut census_osc_nodes = 0u64;
-
-        // Adaptive damped Newton (staged-DC only). A node sitting behind a
-        // reverse-biased diode plus a DC-open cap is nearly floating and
-        // high-gain, so the undamped Newton map can limit-cycle (a node and its
-        // neighbour flip-flop between two values). A GLOBAL fixed fraction can't
-        // win: too high sustains the two-cycle, too low crawls the converging
-        // nodes. Instead damp PER NODE by whether its undamped step reversed
-        // direction from the previous iteration: a sign reversal means that node
-        // is oscillating, so damp it hard (and progressively harder the longer it
-        // oscillates, tracked implicitly by the shrinking effective step); a
-        // same-sign step means it is converging, so take a near-full step. This
-        // kills the oscillation while letting the well-behaved majority converge
-        // fast. At the root every step is zero, so damping is inert. Active only
-        // for branch_reg>0, so the normal solve paths stay bit-identical.
-        if branch_reg > 0.0 {
-            const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
-            const ALPHA_CONVERGING: f64 = 0.9; // same-sign: near-full step
-            const ALPHA_OSCILLATING: f64 = 0.25; // sign reversed: base damping
-            for i in 0..ws.layout.n_nodes {
-                let full = ws.x[i] - ws.lin_point[i];
-                let prev = ws.prev_step[i];
-                // Oscillating if this step opposes the previous one and both are
-                // non-trivial.
-                let oscillating = prev * full < 0.0 && prev.abs() > 1e-9 && full.abs() > 1e-9;
-                // PROGRESSIVE damping: a fixed fraction (0.25) breaks a transient
-                // 2-cycle but can SUSTAIN a stubborn one (the measured
-                // refractory-reset follow-on limit cycle, where a synapse-mesh /
-                // BJT-mirror node and its neighbour flip-flop at the step cap for
-                // hundreds of iterations and never decay). Each consecutive
-                // oscillation halves the node's damping again (0.25, 0.125, ...),
-                // so a node that keeps reversing is driven toward a near-frozen
-                // step and the cycle collapses; a node that stops reversing resets
-                // its counter and resumes near-full steps. A converging node never
-                // oscillates, so this is inert at the root and bit-identical on the
-                // normal path (branch_reg==0 skips this block entirely).
-                let alpha = if oscillating {
-                    census_osc_nodes += 1;
-                    ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
-                    // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
-                    let shrink = ws.osc_count[i].saturating_sub(1).min(8);
-                    ALPHA_OSCILLATING / (1u32 << shrink) as f64
-                } else {
-                    ws.osc_count[i] = 0;
-                    ALPHA_CONVERGING
-                };
-                let mut step = alpha * full;
-                if step > NODE_STEP_MAX {
-                    step = NODE_STEP_MAX;
-                } else if step < -NODE_STEP_MAX {
-                    step = -NODE_STEP_MAX;
-                }
-                ws.prev_step[i] = step;
-                ws.x[i] = ws.lin_point[i] + step;
-            }
-        }
+        // iteration will be judged on. Pure readout behind the cached bool.
+        let census_step_norm = if census_on { undamped_step_norm } else { 0.0 };
 
         if census_on {
             crate::census::newton_iter_norm(
@@ -846,16 +787,11 @@ pub fn newton_solve(
             return NewtonResult { converged: true, iters };
         }
         if dbg_newton {
-            let mut maxd = 0.0f64;
-            let mut argi = 0usize;
-            for i in 0..ws.layout.n_nodes {
-                let d = (ws.x[i] - ws.lin_point[i]).abs();
-                if d > maxd {
-                    maxd = d;
-                    argi = i;
-                }
-            }
-            eprintln!("[newton] iter {iters} maxdV(undamped)={maxd:.3e} @node{argi} branch_reg={branch_reg:e}");
+            // Read the pre-damping snapshot: on the staged path ws.x now holds
+            // the DAMPED iterate, which is not what this line claims to print.
+            eprintln!(
+                "[newton] iter {iters} maxdV(undamped)={undamped_step_norm:.3e} @node{undamped_step_argmax} branch_reg={branch_reg:e}"
+            );
         }
         // Stall detection bails a limit-cycling solve early. It must NOT fire when
         // the discrete states are FROZEN (cmp_freeze/switch_freeze set): the inner
@@ -866,14 +802,12 @@ pub fn newton_solve(
         // (no freeze) the early bail is the correct limit-cycle guard.
         let frozen = ws.cmp_freeze.is_some() || ws.switch_freeze.is_some();
         if branch_reg > 0.0 && !frozen {
-            // Norm of the undamped node step this iteration.
-            let mut norm = 0.0f64;
-            for i in 0..ws.layout.n_nodes {
-                let d = (ws.x[i] - ws.lin_point[i]).abs();
-                if d > norm {
-                    norm = d;
-                }
-            }
+            // Judge stall on the UNDAMPED node step captured before the damping
+            // block rewrote ws.x. The damped step shrinks geometrically with the
+            // per-node alpha on every oscillating iteration, so measuring it
+            // here would register phantom "progress" each iteration and keep
+            // resetting the stall counter on a genuine limit cycle.
+            let norm = undamped_step_norm;
             if norm < best_norm * 0.999 {
                 best_norm = norm;
                 stall = 0;
@@ -898,6 +832,93 @@ pub fn newton_solve(
             };
         }
     }
+}
+
+/// Measure the node-block Newton step and (staged path only) damp it in place.
+///
+/// Returns `(undamped_norm, undamped_argmax, osc_nodes)`: the infinity-norm of
+/// the TRUE undamped node step `ws.x - ws.lin_point`, the node index attaining
+/// it, and how many nodes the damping classified as oscillating this iteration
+/// (always 0 when `damp` is false).
+///
+/// ORDERING INVARIANT: the norm is captured BEFORE the damping rewrites `ws.x`.
+/// After the rewrite `ws.x - ws.lin_point` is the DAMPED step, which shrinks
+/// with the per-node alpha on every consecutive oscillating iteration even
+/// while a genuine limit cycle's undamped amplitude is unchanged; measuring it
+/// post-rewrite makes the stall detector see phantom "progress" every
+/// iteration (resetting its counter instead of accumulating) and misreports
+/// the "maxdV(undamped)" debug line. Callers that report the undamped step
+/// must use the returned norm, never re-derive it from `ws.x` afterwards.
+///
+/// The damping itself is the adaptive damped Newton of the staged-DC path. A
+/// node sitting behind a reverse-biased diode plus a DC-open cap is nearly
+/// floating and high-gain, so the undamped Newton map can limit-cycle (a node
+/// and its neighbour flip-flop between two values). A GLOBAL fixed fraction
+/// can't win: too high sustains the two-cycle, too low crawls the converging
+/// nodes. Instead damp PER NODE by whether its undamped step reversed
+/// direction from the previous iteration: a sign reversal means that node is
+/// oscillating, so damp it hard (and progressively harder the longer it
+/// oscillates, tracked implicitly by the shrinking effective step); a
+/// same-sign step means it is converging, so take a near-full step. This
+/// kills the oscillation while letting the well-behaved majority converge
+/// fast. At the root every step is zero, so damping is inert. Active only for
+/// branch_reg>0 (`damp`), so the normal solve paths stay bit-identical.
+fn measure_and_damp_node_steps(ws: &mut Workspace, damp: bool) -> (f64, usize, u64) {
+    let mut undamped_norm = 0.0f64;
+    let mut undamped_argmax = 0usize;
+    for i in 0..ws.layout.n_nodes {
+        let d = (ws.x[i] - ws.lin_point[i]).abs();
+        if d > undamped_norm {
+            undamped_norm = d;
+            undamped_argmax = i;
+        }
+    }
+    // How many nodes the staged damping classifies as oscillating this
+    // iteration (integer side-channel out of the damping loop; no float
+    // behaviour touched). Census readout.
+    let mut osc_nodes = 0u64;
+    if damp {
+        const NODE_STEP_MAX: f64 = 2.0; // hard cap (V) per iteration
+        const ALPHA_CONVERGING: f64 = 0.9; // same-sign: near-full step
+        const ALPHA_OSCILLATING: f64 = 0.25; // sign reversed: base damping
+        for i in 0..ws.layout.n_nodes {
+            let full = ws.x[i] - ws.lin_point[i];
+            let prev = ws.prev_step[i];
+            // Oscillating if this step opposes the previous one and both are
+            // non-trivial.
+            let oscillating = prev * full < 0.0 && prev.abs() > 1e-9 && full.abs() > 1e-9;
+            // PROGRESSIVE damping: a fixed fraction (0.25) breaks a transient
+            // 2-cycle but can SUSTAIN a stubborn one (the measured
+            // refractory-reset follow-on limit cycle, where a synapse-mesh /
+            // BJT-mirror node and its neighbour flip-flop at the step cap for
+            // hundreds of iterations and never decay). Each consecutive
+            // oscillation halves the node's damping again (0.25, 0.125, ...),
+            // so a node that keeps reversing is driven toward a near-frozen
+            // step and the cycle collapses; a node that stops reversing resets
+            // its counter and resumes near-full steps. A converging node never
+            // oscillates, so this is inert at the root and bit-identical on the
+            // normal path (branch_reg==0 skips this block entirely).
+            let alpha = if oscillating {
+                osc_nodes += 1;
+                ws.osc_count[i] = ws.osc_count[i].saturating_add(1);
+                // 0.25 / 2^(min(osc_count-1, 8)) -> floors at ~1e-3.
+                let shrink = ws.osc_count[i].saturating_sub(1).min(8);
+                ALPHA_OSCILLATING / (1u32 << shrink) as f64
+            } else {
+                ws.osc_count[i] = 0;
+                ALPHA_CONVERGING
+            };
+            let mut step = alpha * full;
+            if step > NODE_STEP_MAX {
+                step = NODE_STEP_MAX;
+            } else if step < -NODE_STEP_MAX {
+                step = -NODE_STEP_MAX;
+            }
+            ws.prev_step[i] = step;
+            ws.x[i] = ws.lin_point[i] + step;
+        }
+    }
+    (undamped_norm, undamped_argmax, osc_nodes)
 }
 
 /// Stamp the full nonlinear system at `ws.x` (a trial point) with the SAME
@@ -2440,5 +2461,131 @@ mod switch_freeze_tests {
         let states = eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty());
         let states2 = eval_switch_states(&c, &ws.layout, &root, &states, &SpdtPairs::empty());
         assert_eq!(states, states2, "switch states at the root must be self-consistent");
+    }
+}
+
+#[cfg(test)]
+mod staged_stall_norm_tests {
+    use super::{measure_and_damp_node_steps, Workspace, STALL_WINDOW};
+    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+
+    // A minimal two-node workspace (source -> divider) purely as a vehicle for
+    // the damping/stall bookkeeping; the "solver" below is scripted by hand.
+    fn two_node_ws() -> Workspace {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let b = c.node("b");
+        c.add(Device::Vsource {
+            name: "V".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor { name: "R".into(), a, b, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor { name: "Rg".into(), a: b, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        Workspace::new(&c)
+    }
+
+    // The bug this guards (R4 #8): the staged-DC stall detector must measure the
+    // UNDAMPED Newton step, not the damped one. The per-node oscillation damping
+    // overwrites ws.x in place with `lin_point + alpha*full`, alpha shrinking
+    // geometrically (0.25, 0.125, ... to a ~1e-3 floor) for every consecutive
+    // oscillating iteration — so a post-damping `|x - lin_point|` KEEPS shrinking
+    // on a genuine limit cycle whose undamped amplitude is CONSTANT. A detector
+    // fed that damped norm sees phantom "progress" every iteration, resets its
+    // counter, and delays the STALL_WINDOW early bail by ~9 extra full
+    // (assemble+refactor+solve) iterations. `measure_and_damp_node_steps` must
+    // therefore capture the norm BEFORE damping rewrites ws.x.
+    //
+    // Script a perfect limit cycle at the proposal level: every iteration the
+    // (pretend) linear solve proposes a constant-amplitude, sign-flipping step on
+    // node 0. Assert (a) the returned norm is the constant undamped amplitude on
+    // every iteration even as the damped step in ws.x shrinks, (b) the stall
+    // detector arithmetic fed that norm bails right after STALL_WINDOW, and
+    // (c) the same arithmetic fed the post-damping norm (the old, broken
+    // quantity) would NOT have bailed within the same horizon — the exact
+    // failure mode being regressed against.
+    #[test]
+    fn stall_norm_is_the_undamped_step_not_the_damped_one() {
+        let mut ws = two_node_ws();
+        assert!(ws.layout.n_nodes >= 2, "divider should have two nodes");
+        const A: f64 = 0.5; // cycle amplitude (V), below the 2 V per-node cap
+        let rounds = STALL_WINDOW + 3;
+
+        // Fixed detector replica (fed the returned undamped norm) and the
+        // broken one (fed the post-damping |x - lin_point|), same arithmetic
+        // as newton_solve's stall block.
+        let (mut best_norm, mut stall, mut bailed_at) = (f64::INFINITY, 0usize, None);
+        let (mut damped_best, mut damped_stall, mut damped_bailed) = (f64::INFINITY, 0usize, false);
+        let mut last_damped = f64::INFINITY;
+
+        for k in 0..rounds {
+            // Mimic the solver: linearize at the current iterate, then the
+            // "solve" proposes the opposite rail — a constant-amplitude
+            // two-cycle, the textbook staged-DC limit cycle.
+            ws.lin_point.copy_from_slice(&ws.x);
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            ws.x[0] = ws.lin_point[0] + sign * A;
+
+            let (norm, argmax, osc) = measure_and_damp_node_steps(&mut ws, true);
+
+            // (a) The reported norm is the TRUE undamped amplitude, every
+            // iteration, no matter how hard the damping has throttled ws.x.
+            assert!(
+                (norm - A).abs() < 1e-12,
+                "iter {k}: undamped step norm must be the constant cycle amplitude {A}, got {norm}"
+            );
+            assert_eq!(argmax, 0, "iter {k}: the cycling node attains the max step");
+            if k >= 1 {
+                assert_eq!(osc, 1, "iter {k}: the sign-flipping node must be classed oscillating");
+            }
+
+            // The damped step left in ws.x shrinks geometrically while the
+            // undamped amplitude does not — the regime that fooled the old
+            // detector. (alpha halves each consecutive oscillation until the
+            // shrink exponent saturates at iteration 9.)
+            let damped = (ws.x[0] - ws.lin_point[0]).abs();
+            if (1..=8).contains(&k) {
+                assert!(
+                    damped < last_damped * 0.75,
+                    "iter {k}: damped step should keep shrinking ({last_damped} -> {damped})"
+                );
+            }
+            last_damped = damped;
+
+            // (b) Detector fed the undamped norm: a constant amplitude never
+            // improves on best_norm, so the counter accumulates.
+            if norm < best_norm * 0.999 {
+                best_norm = norm;
+                stall = 0;
+            } else {
+                stall += 1;
+                if stall >= STALL_WINDOW && bailed_at.is_none() {
+                    bailed_at = Some(k + 1);
+                }
+            }
+            // (c) Detector fed the damped norm: every shrink is a phantom
+            // "improvement" that resets the counter.
+            if damped < damped_best * 0.999 {
+                damped_best = damped;
+                damped_stall = 0;
+            } else {
+                damped_stall += 1;
+                if damped_stall >= STALL_WINDOW {
+                    damped_bailed = true;
+                }
+            }
+        }
+
+        assert_eq!(
+            bailed_at,
+            Some(STALL_WINDOW + 1),
+            "a constant-amplitude limit cycle must trip the stall bail right after the window"
+        );
+        assert!(
+            !damped_bailed,
+            "measuring the DAMPED step must not have bailed in this horizon — if it did, \
+             the scripted cycle no longer distinguishes the undamped from the damped norm"
+        );
     }
 }
