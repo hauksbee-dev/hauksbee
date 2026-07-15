@@ -216,6 +216,88 @@ fn polarized_cap_reverse_bias_faults() {
     assert!(f.value > 1.5, "reverse magnitude {:.2} V reported", f.value);
 }
 
+#[test]
+fn overloaded_nmos_overcurrent_faults() {
+    // Drive the stress monitor directly: an NMOS held fully on, whose channel
+    // carries ~2 A against a 1 A continuous rating, must raise `overcurrent`.
+    // Regression for the Mosfet arm of operating_point() hardcoding current
+    // and power to zero — with the zeros, the Overcurrent / Overpower /
+    // Overtemperature checks could never fire for any MOSFET.
+    let mut circuit = Circuit::new();
+    let drain = circuit.node("DRAIN");
+    let gate = circuit.node("GATE");
+    let source = circuit.node("GND");
+    // Power-FET-ish level-1 card: beta = KP·(W/L) = 0.5 A/V², Vth = 2 V.
+    let fet = circuit.add(Device::Mosfet {
+        name: "Q1".into(),
+        d: drain,
+        g: gate,
+        s: source,
+        b: None,
+        model: hauksbee_ir::MosfetModel {
+            vto: 2.0,
+            kp: 0.5,
+            ..Default::default()
+        },
+    });
+
+    let mut ratings = Ratings::default();
+    ratings.max_current_a = Some(1.0);
+    let meta = DeviceMeta {
+        reference: "Q1".into(),
+        device: fet,
+        kind: ComponentKind::Nmos,
+        footprint: "Package_TO_SOT_THT:TO-220-3_Vertical".into(),
+        ratings,
+    };
+    let mut mon = StressMonitor::new(vec![meta]);
+
+    // Vgs = 5 V (3 V of overdrive), Vds = 2 V → triode:
+    // Id = beta·(vov·vds − vds²/2) = 0.5·(3·2 − 2) = 2 A, 2× the rating.
+    let node_v = |n: NodeId| {
+        if n == drain {
+            2.0
+        } else if n == gate {
+            5.0
+        } else {
+            0.0
+        }
+    };
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+
+    // A continuous rating must be sustained past the SUSTAIN_CHUNKS window.
+    let mut raised = None;
+    for chunk in 0..10 {
+        let faults = mon.evaluate(&mut circuit, &node_v, &no_branch, chunk as f64 * 1e-4);
+        if let Some(f) = faults
+            .into_iter()
+            .find(|f| f.kind.as_str() == "overcurrent")
+        {
+            raised = Some(f);
+            break;
+        }
+    }
+    let f = raised.expect("overloaded NMOS should raise overcurrent");
+    assert_eq!(f.component, "Q1");
+    assert!(
+        (f.value - 2.0).abs() < 0.1,
+        "reported current {:.3} A is the solved channel current",
+        f.value
+    );
+    assert_eq!(f.limit, 1.0);
+
+    // The conducting channel dissipates Vds·Id ≈ 4 W, so the power-gated
+    // thermal path must be live too: the monitor publishes a junction
+    // temperature above ambient. (Impossible before the fix — power was 0,
+    // so no MOSFET ever got a temperature or an Overtemperature check.)
+    let tj = mon
+        .temp_by_ref()
+        .get("Q1")
+        .copied()
+        .expect("Tj published for a dissipating FET");
+    assert!(tj > 25.0, "junction temp {tj:.1} C sits above ambient");
+}
+
 // This test runs a real firmware co-sim, so it needs an MCU backend. The demo
 // firmware is AVR; gate it on the `avr` feature so a renode-only build (no
 // libsimavr) skips it cleanly rather than panicking at engine construction.
