@@ -862,8 +862,18 @@ fn is_dc_bridge(comp: &hauksbee_extract::Component) -> bool {
             return true;
         }
     }
-    // Ferrite bead (FB/L prefix) - a DC short.
-    r.starts_with("FB") || (r.starts_with('L') && r.len() <= 4)
+    // Ferrite bead / inductor - a DC short. An inductor reference is `L`
+    // followed only by digits (L1, L23); a bare `L*` prefix test would also
+    // match LED1 / LDO1 and manufacture DC shorts out of LEDs and regulators,
+    // wrongly unioning their far nets into the CC reachable set. A part whose
+    // library names it a ferrite/inductor bridges regardless of reference.
+    if r.starts_with("FB") {
+        return true;
+    }
+    let lib = comp.lib_id.to_ascii_lowercase();
+    let inductor_ref =
+        r.starts_with('L') && r.len() >= 2 && r[1..].chars().all(|c| c.is_ascii_digit());
+    inductor_ref || lib.contains("ferrite") || lib.contains("inductor")
 }
 
 /// The internal CC Rd (ohms) a controller provides, keyed on its value/part
@@ -1166,6 +1176,39 @@ impl UsbcReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- DC-bridge predicate (#10) ------------------------------------------
+
+    fn bridge_part(reference: &str, value: &str, lib_id: &str) -> hauksbee_extract::Component {
+        hauksbee_extract::Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: lib_id.into(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![],
+        }
+    }
+
+    #[test]
+    fn dc_bridge_matches_inductors_and_ferrites_not_leds_or_ldos() {
+        // Real inductor / ferrite refs bridge (DC shorts).
+        assert!(is_dc_bridge(&bridge_part("L1", "600R@100MHz", "Device:L")));
+        assert!(is_dc_bridge(&bridge_part("L23", "10uH", "Device:L")));
+        assert!(is_dc_bridge(&bridge_part("FB1", "600R@100MHz", "Device:FerriteBead")));
+        // A ferrite-naming library bridges even with an odd reference.
+        assert!(is_dc_bridge(&bridge_part("Z1", "BLM18", "Device:Ferrite_Bead")));
+        // LED1 / LDO1 are NOT DC shorts: a bare `L*` prefix match would union
+        // their far nets into the CC reachable set.
+        assert!(!is_dc_bridge(&bridge_part("LED1", "RED", "Device:LED")));
+        assert!(!is_dc_bridge(&bridge_part("LDO1", "AP2112K", "Regulator_Linear:AP2112K")));
+        // A 0-ohm resistor still bridges; a 5.1k Rd does not.
+        assert!(is_dc_bridge(&bridge_part("R5", "0R", "Device:R")));
+        assert!(!is_dc_bridge(&bridge_part("R6", "5.1k", "Device:R")));
+    }
 
     // --- Spec constants (Tables 4-20, 4-21, 4-22) ---------------------------
 
