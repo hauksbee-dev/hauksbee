@@ -651,6 +651,21 @@ impl AsBuiltOverlay {
         for b in bound.behavioral.iter_mut() {
             b.remap_node(&remap);
         }
+        // Digital components cache raw NodeIds the same way: `roles` maps each
+        // wired pin to its net node (read at tick to SAMPLE input levels via
+        // `node_v`, and read by the 595/165 chain builders to find SER/QH), and
+        // each `PinDriver.net` is the output node the driver stamps onto. Left
+        // unremapped after a bodge wire, an input role samples the orphaned
+        // (now floating ~0 V) `to` node instead of the merged net, so a buffer
+        // or shift-register reads a stale LOW regardless of the real signal.
+        for d in bound.digital.iter_mut() {
+            for n in d.roles.values_mut() {
+                *n = remap(*n);
+            }
+            for drv in d.drivers.values_mut() {
+                drv.net = remap(drv.net);
+            }
+        }
         report.lines.push(format!(
             "jumper {} -> {}: nets merged",
             jumper.to.get_ref(),
@@ -834,6 +849,29 @@ mod tests {
             vout_drivers: [Some(drv(n)), None, None, None],
         };
 
+        // A digital buffer whose input role `a0` and output driver `y0` both
+        // sit on the net being merged away: after the jumper its cached role
+        // NodeId and driver net must follow to BUS or it samples/drives the
+        // orphaned floating node.
+        use crate::digital::{DigitalComponent, LogicLevels};
+        let mut dig_roles = HashMap::new();
+        dig_roles.insert("a0".to_string(), n);
+        let mut dig_drivers = HashMap::new();
+        dig_drivers.insert("y0".to_string(), drv(n));
+        let digital = DigitalComponent {
+            reference: "U7".to_string(),
+            levels: LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 3.15,
+                vil: 1.35,
+                ro: 25.0,
+            },
+            roles: dig_roles,
+            drivers: dig_drivers,
+            logic: None,
+        };
+
         let mut net_nodes = HashMap::new();
         net_nodes.insert("BUS".to_string(), bus);
         net_nodes.insert("N".to_string(), n);
@@ -843,7 +881,7 @@ mod tests {
             circuit: Circuit::new(),
             net_nodes,
             net_names: Vec::new(),
-            digital: Vec::new(),
+            digital: vec![digital],
             mcus: vec![mcu],
             component_kinds: HashMap::new(),
             input_sources: HashMap::new(),
@@ -868,5 +906,8 @@ mod tests {
             bus,
             "DAC output driver net remapped"
         );
+        let d = &bound.digital[0];
+        assert_eq!(d.roles["a0"], bus, "digital input role NodeId remapped");
+        assert_eq!(d.drivers["y0"].net, bus, "digital output driver net remapped");
     }
 }
