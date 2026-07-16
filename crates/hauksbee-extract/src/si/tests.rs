@@ -72,6 +72,24 @@ fn parse_helpers_handle_unicode_and_spice_multipliers() {
 }
 
 #[test]
+fn parse_ohms_no_longer_drifts_from_the_canonical_parser() {
+    // R25 (DRIFT-2): lowercase 'm' is MILLIohm, not mega — "2m2" is 2.2 mΩ, a
+    // current-sense shunt marking. The hand-rolled parser uppercased first and
+    // read it as 2.2 MΩ (a 1e9 error).
+    assert_eq!(super::parse_ohms("2m2"), Some(0.0022));
+    assert_eq!(super::parse_ohms("1m"), Some(0.001));
+    // R25 (DRIFT-3): leading-R sub-ohm shunt marks parse (were None in si.rs).
+    assert_eq!(super::parse_ohms("R47"), Some(0.47));
+    assert_eq!(super::parse_ohms("R1"), Some(0.1));
+    // R25 (DRIFT-4): an inline tolerance annotation must not reject the value.
+    assert_eq!(super::parse_ohms("10k 1%"), Some(10_000.0));
+    assert_eq!(super::parse_ohms("4.7k 1%"), Some(4700.0));
+    // Uppercase 'M' is still mega (SPICE convention) — the milli fix must not
+    // regress this.
+    assert_eq!(super::parse_ohms("4M7"), Some(4.7e6));
+}
+
+#[test]
 fn routed_length_sums_segments() {
     let doc = root_of(
         r#"(net 1 "USB_DP")
