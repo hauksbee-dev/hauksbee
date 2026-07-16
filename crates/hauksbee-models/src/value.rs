@@ -195,6 +195,30 @@ fn normalise_unicode(s: &str) -> String {
 /// unit   = 'F' | 'H' | 'R' | 'OHM' | 'V' | 'A'   (optional, informational)
 /// ```
 fn parse_inner(s: &str) -> Option<ParsedValue> {
+    // RKM / IEC 60062 leading-letter form: when the magnitude is < 1 the
+    // decimal-point letter comes FIRST — "R47" = 0.47 Ω, "R1" = 0.1 Ω,
+    // "R047" = 0.047 Ω (exactly the marking on a current-sense shunt). The
+    // grammar below requires a leading digit, so this form was silently
+    // rejected (returning None => the part read as an OPEN / vanished) even
+    // though the middle-letter ("2R2", "4R7") and leading-zero ("0R47") forms
+    // already parse. Rewrite the leading-R form to its "0R47" equivalent so it
+    // reuses the already-correct path. Scoped to 'R' (ohms) with an immediately
+    // following digit — the only unambiguous leading-letter marking — so a
+    // unit-prefixed token is never mis-read.
+    let rewritten;
+    let s = {
+        let b = s.as_bytes();
+        let mut k = 0;
+        if k < b.len() && (b[k] == b'+' || b[k] == b'-') {
+            k += 1;
+        }
+        if k + 1 < b.len() && (b[k] == b'R' || b[k] == b'r') && b[k + 1].is_ascii_digit() {
+            rewritten = format!("{}0{}", &s[..k], &s[k..]);
+            rewritten.as_str()
+        } else {
+            s
+        }
+    };
     let bytes = s.as_bytes();
     if bytes.is_empty() {
         return None;
@@ -585,6 +609,22 @@ mod tests {
         check("1n5", 1.5e-9);
         check("2k2", 2_200.0);
         check("4M7", 4.7e6);
+    }
+
+    #[test]
+    fn test_rkm_leading_letter_below_one_ohm() {
+        // R18: the RKM leading-letter form (magnitude < 1) puts the decimal
+        // letter first — the exact marking on a current-sense shunt. It was
+        // silently rejected (None => read as an OPEN) while "0R47"/"2R2" parsed.
+        check("R47", 0.47);
+        check("R1", 0.1);
+        check("R047", 0.047);
+        check("r47", 0.47); // lowercase marking
+        // The leading-zero and middle-letter equivalents still parse identically.
+        check("0R47", 0.47);
+        // A bare "R" with no following digit is not a value.
+        assert!(parse_value("R").is_none(), "bare R is not a value");
+        assert!(parse_value("R_LABEL").is_none(), "R + non-digit is not a value");
     }
 
     #[test]

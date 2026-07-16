@@ -1289,6 +1289,28 @@ fn parse_subckt_header(line: usize, raw: &str) -> Result<SubcktDef, SpiceError> 
                 text: raw.into(),
             });
         } else {
+            // Refuse a repeated port name, exactly as duplicate defaults (above)
+            // and duplicate `.param` cards are refused. The port map in
+            // `expand_instance` is a HashMap keyed on the lowercased port name,
+            // so a repeated port silently keeps only the LAST caller node and
+            // discards the earlier connection — the arity check passes (list
+            // lengths match) and the flattened netlist is mis-wired with no
+            // diagnostic. Port matching is case-insensitive there, so compare
+            // case-insensitively here too.
+            if ports
+                .iter()
+                .any(|p: &String| p.eq_ignore_ascii_case(tok))
+            {
+                return Err(SpiceError::Syntax {
+                    line,
+                    msg: format!(
+                        "`.subckt {name}` port `{tok}` is listed more than once; \
+                         give each port a distinct name (last-wins would silently \
+                         drop a caller connection)"
+                    ),
+                    text: raw.into(),
+                });
+            }
             ports.push(tok.clone());
         }
     }
@@ -4299,6 +4321,34 @@ mod tests {
                 .contains("more than once"),
             "duplicate X-line override must be refused"
         );
+    }
+
+    /// R18: a `.subckt` header that lists the same port name twice must be
+    /// refused, not silently accepted. The port map is a HashMap keyed on the
+    /// lowercased port name, so a repeated port keeps only the LAST caller node
+    /// and drops the earlier connection while the arity check still passes —
+    /// mis-wiring the flattened netlist with no diagnostic. Matches the loud
+    /// refusal of duplicate defaults / duplicate `.param` cards.
+    #[test]
+    fn subckt_duplicate_port_name_is_refused() {
+        let dup_port = "d\n.subckt divider in out out\nR1 in mid 1k\nR2 mid out 1k\n.ends\nX1 vin vmid vout divider\n.end\n";
+        let err = SpiceLoader::load(dup_port).unwrap_err().to_string();
+        assert!(
+            err.contains("more than once") && err.contains("out"),
+            "duplicate subckt port must be refused, got: {err}"
+        );
+        // Case-insensitive: port matching is case-insensitive, so "OUT"/"out" collide.
+        let dup_case = "d\n.subckt s a OUT out\nR1 a OUT 1k\n.ends\nX1 x y z s\n.end\n";
+        assert!(
+            SpiceLoader::load(dup_case)
+                .unwrap_err()
+                .to_string()
+                .contains("more than once"),
+            "case-insensitive duplicate port must be refused"
+        );
+        // A subckt with all-distinct ports still loads cleanly.
+        let ok = "d\n.subckt divider in mid out\nR1 in mid 1k\nR2 mid out 1k\n.ends\nX1 vin vmid vout divider\n.end\n";
+        assert!(SpiceLoader::load(ok).is_ok(), "distinct ports must still load");
     }
 
     /// Bug-hunt: a 0-Ω resistor is a SHORT (ngspice convention), but the
