@@ -1209,7 +1209,18 @@ fn parse_subckt_header(line: usize, raw: &str) -> Result<SubcktDef, SpiceError> 
                     text: raw.into(),
                 });
             }
-            defaults.push((k.to_ascii_lowercase(), v.to_string()));
+            let key = k.to_ascii_lowercase();
+            if defaults.iter().any(|(dk, _)| dk == &key) {
+                return Err(SpiceError::Syntax {
+                    line,
+                    msg: format!(
+                        "`.subckt {name}` default parameter `{key}` is defined more than once; \
+                         remove the duplicate (last-wins was silent)"
+                    ),
+                    text: raw.into(),
+                });
+            }
+            defaults.push((key, v.to_string()));
         } else if in_params {
             return Err(SpiceError::Syntax {
                 line,
@@ -1375,7 +1386,18 @@ fn expand_instance(
                     text: raw.into(),
                 });
             }
-            overrides.push((k.to_ascii_lowercase(), v.to_string()));
+            let key = k.to_ascii_lowercase();
+            if overrides.iter().any(|(ok, _)| ok == &key) {
+                return Err(SpiceError::Syntax {
+                    line: lineno,
+                    msg: format!(
+                        "`{inst_name}` sets override parameter `{key}` more than once; \
+                         remove the duplicate (last-wins was silent)"
+                    ),
+                    text: raw.into(),
+                });
+            }
+            overrides.push((key, v.to_string()));
         } else {
             positional.push(tok);
         }
@@ -1466,6 +1488,27 @@ fn expand_instance(
         .into_iter()
         .flatten()
         .collect();
+    // A body-local `.param` that shadows a name ALREADY in the instance scope
+    // (a global, an X-line override, or a subckt default) resolves
+    // order-dependently: a sibling `.param` referencing the shadowed name might
+    // bind either the outer value or the local one depending on topological
+    // resolution order. Refuse the shadow, consistent with the duplicate-.param
+    // discipline. (R8 #7)
+    for card in &local_cards {
+        if inst_env.contains_key(&card.name) {
+            return Err(SpiceError::Syntax {
+                line: card.line,
+                msg: format!(
+                    "subckt-local `.param {}` shadows a parameter already in scope \
+                     (a global, an X-line override, or a subckt default); rename it — \
+                     which value a sibling param sees would otherwise depend on \
+                     resolution order",
+                    card.name
+                ),
+                text: card.raw.clone(),
+            });
+        }
+    }
     let inst_env = Rc::new(resolve_params(&local_cards, &inst_env)?);
 
     // Port name -> caller's actual node.
@@ -1536,9 +1579,22 @@ fn expand_instance(
                 .to_ascii_uppercase();
             let mut new_toks = btoks.clone();
             new_toks[0] = format!("{}.{}", inst_name, btoks[0]);
-            for &i in node_indices_for(kind) {
-                if i < btoks.len() {
-                    new_toks[i] = map_node(&btoks[i], &port_map, &inst_name);
+            // An E/G (VCVS/VCCS) POLY/VALUE/TABLE form has a keyword — not a
+            // node — at index 3. Mangling it as a node ("X1.POLY") turned the
+            // clean "POLY controlled-source unsupported" refusal into a cryptic
+            // "malformed number". Skip node-mapping for these so the verbatim
+            // line reaches parse_controlled and is refused by name. (R8 #16)
+            let eg_ctrl_form = matches!(kind, 'E' | 'G')
+                && btoks.len() > 3
+                && {
+                    let t = btoks[3].to_ascii_lowercase();
+                    t.starts_with("poly") || t.starts_with("value") || t.starts_with("table")
+                };
+            if !eg_ctrl_form {
+                for &i in node_indices_for(kind) {
+                    if i < btoks.len() {
+                        new_toks[i] = map_node(&btoks[i], &port_map, &inst_name);
+                    }
                 }
             }
             // F/H control references are LOCAL to the subckt body (see the
@@ -4108,6 +4164,59 @@ mod tests {
         assert!(
             SpiceLoader::load(deck2).is_err(),
             "VAL and val are the same parameter and must be refused as duplicates"
+        );
+    }
+
+    /// Round-8 #7: a subckt body-local `.param` that shadows a name already in
+    /// scope (a global here) resolves order-dependently — refuse it.
+    #[test]
+    fn subckt_local_param_shadowing_outer_is_refused() {
+        let deck = "d\n.param vdd=10\n.subckt amp in out\n.param bias={vdd*0.5}\n\
+                    .param vdd={5}\nR1 in out {bias}\n.ends\nX1 a b amp\n.end\n";
+        let err = SpiceLoader::load(deck).unwrap_err().to_string();
+        assert!(
+            err.contains("shadows a parameter") && err.contains("vdd"),
+            "{err}"
+        );
+        // A local param that does NOT collide with an outer name is fine.
+        let ok = "d\n.param vdd=10\n.subckt amp in out\n.param gain={vdd*0.5}\n\
+                  R1 in out {gain}\n.ends\nX1 a b amp\n.end\n";
+        assert!(SpiceLoader::load(ok).is_ok(), "a non-shadowing local param must load");
+    }
+
+    /// Round-8 #16: the E/G POLY/VALUE/TABLE refusal must survive subckt
+    /// expansion — the POLY keyword must not be mangled as a node, which
+    /// degraded the clean refusal into a cryptic "malformed number".
+    #[test]
+    fn subckt_eg_poly_refusal_names_poly() {
+        let deck = "d\n.subckt blk a b\nE1 a b POLY(1) a b 0 2\n.ends\nX1 x y blk\n.end\n";
+        let err = SpiceLoader::load(deck).unwrap_err().to_string();
+        assert!(
+            err.to_uppercase().contains("POLY"),
+            "the refusal must name POLY, not degrade to a number error: {err}"
+        );
+    }
+
+    /// Round-8 #17: duplicate subckt-header default params and duplicate X-line
+    /// override params are refused (last-wins was silent), consistent with the
+    /// duplicate-`.param` discipline.
+    #[test]
+    fn subckt_duplicate_default_and_override_params_are_refused() {
+        let dup_default = "d\n.subckt s a b r=1 r=2\nR1 a b {r}\n.ends\nX1 x y s\n.end\n";
+        assert!(
+            SpiceLoader::load(dup_default)
+                .unwrap_err()
+                .to_string()
+                .contains("more than once"),
+            "duplicate subckt default must be refused"
+        );
+        let dup_override = "d\n.subckt s a b r=9\nR1 a b {r}\n.ends\nX1 x y s r=1 r=2\n.end\n";
+        assert!(
+            SpiceLoader::load(dup_override)
+                .unwrap_err()
+                .to_string()
+                .contains("more than once"),
+            "duplicate X-line override must be refused"
         );
     }
 

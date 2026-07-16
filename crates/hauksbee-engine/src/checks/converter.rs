@@ -283,10 +283,16 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             }
             // Pick the rail that (a) the FETs vote for and (b) carries a bulk cap
             // to ground - that disambiguates the input rail from any gate-drive
-            // bootstrap net or sense net also hanging off the FET.
+            // bootstrap net or sense net also hanging off the FET. Scan the
+            // candidates in a deterministic order (by net id): iterating the
+            // HashMap directly made the first-cap winner depend on iteration
+            // order when more than one rail carried a bulk cap.
+            let mut rail_list: Vec<(i64, usize)> =
+                rail_votes.iter().map(|(&k, &v)| (k, v)).collect();
+            rail_list.sort_by_key(|&(id, _)| id);
             let mut input_rail_id = None;
             let mut input_cap = None;
-            for (&rail, _) in rail_votes.iter() {
+            for &(rail, _) in &rail_list {
                 if let Some(cap) = bulk_cap_on_rail(board, rail, &ground_ids) {
                     input_rail_id = Some(rail);
                     input_cap = Some(cap);
@@ -296,8 +302,12 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             // If no FET-side rail carries a bulk cap, fall back to the most-voted
             // rail (still a valid topology; the ripple check will simply have no
             // cap to test, the ampacity check still works on the switch node).
+            // Break vote ties by lowest net id so the choice is deterministic.
             let input_rail_id = input_rail_id.or_else(|| {
-                rail_votes.iter().max_by_key(|(_, v)| **v).map(|(k, _)| *k)
+                rail_list
+                    .iter()
+                    .max_by_key(|&&(id, v)| (v, std::cmp::Reverse(id)))
+                    .map(|&(id, _)| id)
             });
             let Some(input_rail_id) = input_rail_id else {
                 continue;

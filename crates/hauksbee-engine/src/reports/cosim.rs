@@ -41,11 +41,17 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
     // table's ordering so JSON and text agree on "most active".
     let mut rows: Vec<_> = sched.stats.iter().collect();
     rows.sort_by(|a, b| {
-        b.1.toggles.cmp(&a.1.toggles).then(
-            (b.1.max_v - b.1.min_v)
-                .partial_cmp(&(a.1.max_v - a.1.min_v))
-                .unwrap_or(std::cmp::Ordering::Equal),
-        )
+        b.1.toggles
+            .cmp(&a.1.toggles)
+            .then(
+                (b.1.max_v - b.1.min_v)
+                    .partial_cmp(&(a.1.max_v - a.1.min_v))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            // Total-order tiebreak on net name: without it two nets with equal
+            // toggles and equal voltage range order by HashMap iteration, so the
+            // JSON activity summary was nondeterministic across runs.
+            .then_with(|| a.0.cmp(b.0))
     });
     let activity_summary: Vec<NetActivity> = rows
         .iter()

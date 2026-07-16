@@ -66,6 +66,44 @@ fn oversized_net_id_keeps_declared_name() {
 }
 
 #[test]
+fn numeric_net_zero_means_no_net_not_a_shared_node() {
+    // Round-8 #3: KiCad ≤9 writes `(net 0 "")` on every unconnected / free
+    // pad. Interning id 0 fused all of them onto one shared node (and left a
+    // bogus empty-named net in the table). Two unrelated pads on `(net 0 "")`
+    // must each carry NO net, not the same id 0.
+    let pcb = r#"(kicad_pcb (version 20240108)
+  (net 0 "")
+  (net 1 "SIG")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu")
+    (property "Reference" "U1")
+    (property "Value" "part")
+    (pad "1" smd roundrect (at 0 0) (size 0.5 0.5) (layers "F.Cu") (pinfunction "EN") (net 0 ""))
+    (pad "2" smd roundrect (at 1 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "SIG")))
+  (footprint "MountingHole:MountingHole_3.2mm" (layer "F.Cu")
+    (property "Reference" "H1")
+    (property "Value" "hole")
+    (pad "1" smd roundrect (at 9 0) (size 0.5 0.5) (layers "F.Cu") (net 0 ""))))
+"#;
+    let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
+    // No net 0 / empty-named net was interned.
+    assert!(
+        board.nets.iter().all(|n| !(n.id == 0 || n.name.is_empty())),
+        "net 0 / empty-named net must never be interned: {:?}",
+        board.nets.iter().map(|n| (n.id, &n.name)).collect::<Vec<_>>()
+    );
+    // The two `(net 0 "")` pads carry no net; they are NOT fused together.
+    let u1 = board.components.iter().find(|c| c.reference == "U1").unwrap();
+    let h1 = board.components.iter().find(|c| c.reference == "H1").unwrap();
+    let u1_p1 = u1.pins.iter().find(|p| p.number == "1").unwrap();
+    let u1_p2 = u1.pins.iter().find(|p| p.number == "2").unwrap();
+    let h1_p1 = &h1.pins[0];
+    assert_eq!(u1_p1.net, None, "U1 pad 1 on (net 0 \"\") must have no net");
+    assert_eq!(h1_p1.net, None, "H1 mounting pad on (net 0 \"\") must have no net");
+    // The genuinely-connected pad still resolves.
+    assert!(u1_p2.net.is_some(), "U1 pad 2 on SIG must resolve");
+}
+
+#[test]
 fn v10_empty_net_name_means_no_net() {
     // KiCad 10 writes `(net "")` on unrouted pads (no top-level net table,
     // no numeric ids). The empty name is "no net" — it must not be interned,

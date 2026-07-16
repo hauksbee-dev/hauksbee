@@ -622,6 +622,35 @@ impl AsBuiltOverlay {
                 *nid = from;
             }
         }
+        // The circuit's device terminals are remapped above, but the binder also
+        // cached raw NodeIds on the event-driven layer — the MCUs' role/ADC/GPIO
+        // node maps, the supply legs, the DAC output drivers, and any behavioral
+        // device's node map. Left unremapped they point at the orphaned `to`
+        // node, so ADC injection, GPIO drive, rail stamping, and DAC output all
+        // read/write the wrong (now-floating) node after a bodge-wire. (R8 #6)
+        let remap = |n: NodeId| if n == to { from } else { n };
+        for mcu in bound.mcus.iter_mut() {
+            for n in mcu.role_nets.values_mut() {
+                *n = remap(*n);
+            }
+            for n in mcu.adc_nets.values_mut() {
+                *n = remap(*n);
+            }
+            for drv in mcu.gpio_drivers.values_mut() {
+                drv.net = remap(drv.net);
+            }
+        }
+        for dac in bound.dacs.iter_mut() {
+            for drv in dac.vout_drivers.iter_mut().flatten() {
+                drv.net = remap(drv.net);
+            }
+        }
+        for leg in bound.supplies.iter_mut() {
+            leg.net = remap(leg.net);
+        }
+        for b in bound.behavioral.iter_mut() {
+            b.remap_node(&remap);
+        }
         report.lines.push(format!(
             "jumper {} -> {}: nets merged",
             jumper.to.get_ref(),
@@ -755,5 +784,89 @@ mod tests {
         assert_eq!(levenshtein("kitten", "sitting"), 3);
         assert_eq!(levenshtein("", "abc"), 3);
         assert_eq!(levenshtein("same", "same"), 0);
+    }
+
+    /// Round-8 #6: an as-built `[[jumper]]` merging net `N` (NodeId 2) onto
+    /// `BUS` (NodeId 1) must remap not only the circuit devices and net_nodes
+    /// but also the cached NodeIds the binder stashed on the event-driven layer
+    /// — the MCU's role/ADC/GPIO node maps and the DAC output drivers. Left
+    /// stale they point at the orphaned node.
+    #[test]
+    fn jumper_remaps_cached_mcu_and_dac_node_ids() {
+        use crate::binder::{BoundBoard, DacBinding, McuBinding};
+        use crate::drivers::PinDriver;
+        use crate::report::BindReport;
+        use hauksbee_ir::{Circuit, DeviceId, NodeId};
+        use std::collections::HashMap;
+
+        let bus = NodeId(1);
+        let n = NodeId(2);
+        let drv = |net: NodeId| PinDriver {
+            vsource: DeviceId(0),
+            net,
+            enabled: true,
+            roff: 1e9,
+            resistor: DeviceId(1),
+            ron: 25.0,
+        };
+
+        let mut role_nets = HashMap::new();
+        role_nets.insert("adc0".to_string(), n);
+        let mut adc_nets = HashMap::new();
+        adc_nets.insert(0u8, n);
+        let mut gpio_drivers = HashMap::new();
+        gpio_drivers.insert(('A', 5u8), drv(n));
+        let mcu = McuBinding {
+            reference: "U1".to_string(),
+            backend: String::new(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets,
+            gpio_drivers,
+            adc_nets,
+            module: false,
+        };
+        let dac = DacBinding {
+            reference: "U9".to_string(),
+            address: 0x60,
+            vref: 3.3,
+            gain: 1,
+            vout_drivers: [Some(drv(n)), None, None, None],
+        };
+
+        let mut net_nodes = HashMap::new();
+        net_nodes.insert("BUS".to_string(), bus);
+        net_nodes.insert("N".to_string(), n);
+
+        let mut bound = BoundBoard {
+            name: String::new(),
+            circuit: Circuit::new(),
+            net_nodes,
+            net_names: Vec::new(),
+            digital: Vec::new(),
+            mcus: vec![mcu],
+            component_kinds: HashMap::new(),
+            input_sources: HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: vec![dac],
+            report: BindReport::default(),
+        };
+
+        let overlay =
+            AsBuiltOverlay::parse("[[jumper]]\nfrom = \"BUS\"\nto = \"N\"\n", "t.toml").unwrap();
+        overlay.apply(&mut bound).expect("jumper applies");
+
+        // Every cached NodeId that was N must now be BUS.
+        let m = &bound.mcus[0];
+        assert_eq!(m.role_nets["adc0"], bus, "role_nets remapped");
+        assert_eq!(m.adc_nets[&0], bus, "adc_nets remapped");
+        assert_eq!(m.gpio_drivers[&('A', 5)].net, bus, "gpio driver net remapped");
+        assert_eq!(
+            bound.dacs[0].vout_drivers[0].as_ref().unwrap().net,
+            bus,
+            "DAC output driver net remapped"
+        );
     }
 }

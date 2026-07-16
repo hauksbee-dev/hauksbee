@@ -114,7 +114,13 @@ fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f6
             (r, tj, over)
         })
         .collect();
-    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            // Reference-name tiebreak so two devices at equal Tj (e.g. a dual
+            // package's pooled siblings) always emit in a stable order.
+            .then_with(|| a.0.cmp(&b.0))
+    });
     rows
 }
 
