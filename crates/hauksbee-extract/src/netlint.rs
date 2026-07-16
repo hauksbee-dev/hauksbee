@@ -188,7 +188,13 @@ fn rail_voltage(name: &str) -> Option<f64> {
             Some(3.7)
         }
         _ => {
-            if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
+            // A numeric rail carries its own magnitude ("+15V", "24V", "+15V0").
+            // This MUST precede the loose contains("5V") branch: "+15V" contains
+            // the substring "5V" and starts with '+', so without this it was
+            // mislabeled a 5 V rail.
+            if let Some(v) = numeric_rail_magnitude(&n) {
+                Some(v)
+            } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
                 Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
                 Some(3.3)
@@ -205,6 +211,32 @@ fn rail_voltage(name: &str) -> Option<f64> {
             }
         }
     }
+}
+
+/// A rail whose name carries its own numeric magnitude: an optional leading
+/// '+', then digits, 'V', and optional trailing digits — plain "15V"/"24V" or
+/// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
+/// don't start with a digit after the optional '+' (VCC, VDD_IO), leaving them
+/// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
+fn numeric_rail_magnitude(n: &str) -> Option<f64> {
+    let rest = n.strip_prefix('+').unwrap_or(n);
+    let int_part: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if int_part.is_empty() {
+        return None;
+    }
+    let after = rest[int_part.len()..].strip_prefix('V')?;
+    let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let mag: f64 = if frac.is_empty() {
+        int_part.parse().ok()?
+    } else {
+        format!("{}.{}", int_part.trim_end_matches('.'), frac)
+            .parse()
+            .ok()?
+    };
+    (mag > 0.0 && mag <= 60.0 && mag.is_finite()).then_some(mag)
 }
 
 /// Number of pads that carry a net (footprints sometimes add net-less paste /
@@ -425,7 +457,6 @@ fn parse_capacitance_uf(value: &str) -> Option<f64> {
             break;
         }
     }
-    let n: f64 = num.parse().ok()?;
     let mut unit = String::new();
     while let Some(&ch) = chars.peek() {
         if ch.is_ascii_alphabetic() {
@@ -435,6 +466,26 @@ fn parse_capacitance_uf(value: &str) -> Option<f64> {
             break;
         }
     }
+    // R-style decimal: a digit run AFTER the unit letter is the fractional part
+    // ("4u7" = 4.7 uF, "1n5" = 1.5 nF), mirroring parse_ohms' "4K7" handling.
+    // Without this the "7"/"5" was dropped and the value under-reported.
+    let frac: String = {
+        let mut f = String::new();
+        while let Some(&ch) = chars.peek() {
+            if ch.is_ascii_digit() {
+                f.push(ch);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        f
+    };
+    let n: f64 = if frac.is_empty() {
+        num.parse().ok()?
+    } else {
+        format!("{}.{}", num.trim_end_matches('.'), frac).parse().ok()?
+    };
     if unit.starts_with("pf") || unit == "p" {
         Some(n / 1_000_000.0)
     } else if unit.starts_with("nf") || unit == "n" {
@@ -1093,5 +1144,39 @@ mod parse_ohms_tests {
         assert_eq!(parse_ohms("0R"), Some(0.0));
         assert_eq!(parse_ohms("4K7"), Some(4700.0));
         assert_eq!(parse_ohms("330"), Some(330.0));
+    }
+}
+
+#[cfg(test)]
+mod rail_and_cap_tests {
+    use super::{parse_capacitance_uf, rail_voltage};
+
+    #[test]
+    fn numeric_rails_keep_their_magnitude() {
+        // R12: "+15V"/"+25V"/"+35V" contain the substring "5V" and start with
+        // '+', so the loose fallback mislabeled them 5.0 V.
+        assert_eq!(rail_voltage("+15V"), Some(15.0));
+        assert_eq!(rail_voltage("+25V"), Some(25.0));
+        assert_eq!(rail_voltage("+35V"), Some(35.0));
+        assert_eq!(rail_voltage("24V"), Some(24.0));
+        assert_eq!(rail_voltage("+15V0"), Some(15.0));
+        // Genuine 5 V rails still resolve to 5.
+        assert_eq!(rail_voltage("+5V"), Some(5.0));
+        assert_eq!(rail_voltage("VCC5V"), Some(5.0));
+        // A hierarchical leaf still normalises.
+        assert_eq!(rail_voltage("/Power/+15V"), Some(15.0));
+    }
+
+    #[test]
+    fn r_style_capacitance_keeps_the_fractional_part() {
+        // R12: "4u7" = 4.7 uF (unit letter as the decimal point); the trailing
+        // digit was dropped, under-reporting the value.
+        assert_eq!(parse_capacitance_uf("4u7"), Some(4.7));
+        assert_eq!(parse_capacitance_uf("1u5"), Some(1.5));
+        assert_eq!(parse_capacitance_uf("2n2"), Some(2.2 / 1000.0));
+        // Explicit-decimal and unit-suffixed forms unchanged.
+        assert_eq!(parse_capacitance_uf("4.7uF"), Some(4.7));
+        assert_eq!(parse_capacitance_uf("10u"), Some(10.0));
+        assert_eq!(parse_capacitance_uf("100nF"), Some(0.1));
     }
 }
