@@ -334,15 +334,17 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     let Some((a, b)) = sep else {
         return vec![tok.to_string()];
     };
-    let split_pn = |s: &str| -> Option<(String, u32)> {
+    // Also return the numeric field's WIDTH so a zero-padded designator range
+    // keeps its width when expanded.
+    let split_pn = |s: &str| -> Option<(String, u32, usize)> {
         let p: String = s.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
         let num = &s[p.len()..];
         if num.is_empty() || !num.bytes().all(|c| c.is_ascii_digit()) {
             return None;
         }
-        num.parse::<u32>().ok().map(|n| (p, n))
+        num.parse::<u32>().ok().map(|n| (p, n, num.len()))
     };
-    let (Some((lp, ln)), Some((rp, rn))) = (split_pn(&tok[..a]), split_pn(&tok[b..])) else {
+    let (Some((lp, ln, lw)), Some((rp, rn, _))) = (split_pn(&tok[..a]), split_pn(&tok[b..])) else {
         return vec![tok.to_string()];
     };
     // The end prefix must be empty (short form) or match the start prefix, the
@@ -350,7 +352,14 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     if !(rp.is_empty() || rp == lp) || rn < ln || rn - ln > 10_000 {
         return vec![tok.to_string()];
     }
-    (ln..=rn).map(|n| format!("{lp}{n}")).collect()
+    // Preserve the start endpoint's zero-padding width: a BOM row "C01-C10" must
+    // expand to C01..C10, not C1..C10, or the padded P&P references (C01..C09)
+    // never match on lookup and their value/MPN/DNP enrichment is silently lost.
+    // A leading zero signals a fixed-width field; without one, format naturally.
+    let width = if lw > 1 && tok[..a].as_bytes()[lp.len()] == b'0' { lw } else { 0 };
+    (ln..=rn)
+        .map(|n| format!("{lp}{n:0>width$}"))
+        .collect()
 }
 
 /// Parse a BOM CSV into `reference -> BomEntry` enrichment. Handles the common
@@ -491,6 +500,26 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         assert_eq!(b.get("C10").unwrap().mpn, "CL10");
         assert_eq!(b.get("R2").unwrap().value, "10k");
         assert!(!b.contains_key("C1-C10"), "the range key itself is gone");
+    }
+
+    #[test]
+    fn bom_range_preserves_zero_padded_designator_width() {
+        // R38: a zero-padded range "C01-C10" (Altium/OrCAD style) must expand to
+        // C01..C10, not C1..C10 — the P&P references keep their padding, so the
+        // stripped keys never matched on lookup and value/MPN/DNP enrichment was
+        // silently dropped for the single-digit members.
+        let csv = "Designator,Value,Fitted\n\"C01-C10\",100n,No\n";
+        let b = parse_bom(csv);
+        assert_eq!(b.len(), 10, "C01..C10 is ten parts");
+        assert!(b.contains_key("C01"), "padded key C01 must be present");
+        assert!(b.contains_key("C09"), "padded key C09 must be present");
+        assert!(!b.contains_key("C1"), "the stripped key C1 must NOT be produced");
+        assert_eq!(b.get("C01").unwrap().value, "100n");
+        assert!(b.get("C05").unwrap().dnp, "the DNP flag reaches every padded member");
+        // An unpadded range is unchanged (natural width).
+        let b2 = parse_bom("Designator,Value\nR1-R3,10k\n");
+        assert!(b2.contains_key("R1") && b2.contains_key("R3"));
+        assert!(!b2.contains_key("R01"));
     }
 
     #[test]

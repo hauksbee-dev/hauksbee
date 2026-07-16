@@ -212,6 +212,23 @@ impl Workspace {
     /// non-finite entry returns +inf (a poisoned point is never a root). Read-only
     /// w.r.t. the operating point; it just stamps and multiplies.
     pub fn dc_residual_inf_norm(&mut self, circuit: &Circuit, opts: &SolverOptions) -> f64 {
+        self.dc_residual_inf_norm_with(circuit, opts, false)
+    }
+
+    /// As [`Self::dc_residual_inf_norm`], but stamps the residual under the same
+    /// `use_ic` the iterate was solved with. The steady-state DC path uses
+    /// `use_ic = false`; a transient initial-condition solve pins reactive nodes
+    /// to their `.ic` via a penalty conductance, so measuring the residual with
+    /// caps OPEN (`use_ic = false`) would report the KCL of a *different* system
+    /// than the one the iterate actually satisfies — making the ResidualAccept
+    /// backstop reject a genuine IC operating point (or judge it against the
+    /// wrong system). The caller passes the `use_ic` in force for that solve.
+    pub fn dc_residual_inf_norm_with(
+        &mut self,
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        use_ic: bool,
+    ) -> f64 {
         let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(circuit.devices.len());
         self.matrix.clear_values();
@@ -228,7 +245,7 @@ impl Workspace {
             coeffs,
             state: &empty,
             dc: true,
-            use_ic: false,
+            use_ic,
             gmin: opts.gmin,
             src_scale: 1.0,
             branch_reg: 0.0,
@@ -1495,7 +1512,10 @@ fn dc_solve(
     // bit-identical.
     if opts.ladder.has(Strategy::ResidualAccept) {
         let tol = opts.residual_accept_tol;
-        let res = ws.dc_residual_inf_norm(circuit, opts);
+        // Measure the residual under the SAME use_ic the iterate was solved with,
+        // or an IC-pinned operating point is judged against the caps-open system
+        // it never satisfied.
+        let res = ws.dc_residual_inf_norm_with(circuit, opts, use_ic);
         if res.is_finite() && res < tol {
             crate::diagnostics::note(Strategy::ResidualAccept);
             if dbg {
@@ -2320,6 +2340,60 @@ mod residual_tests {
             "the ic-honoring DC path pins the midpoint to ic=0, got {}",
             idx(&ws_ic)
         );
+    }
+
+    #[test]
+    fn residual_of_an_ic_pinned_iterate_is_measured_under_use_ic() {
+        // R38: the ResidualAccept backstop measures the KCL residual on the
+        // current iterate to decide whether it is a root. For a transient IC solve
+        // the iterate satisfies the IC-PINNED system (cap shorted to its ic via a
+        // penalty conductance); measuring the residual with caps OPEN
+        // (use_ic=false, the old hard-coded value) reports the KCL of a DIFFERENT
+        // system, so a genuine IC operating point looks badly imbalanced and is
+        // wrongly rejected. The residual must be taken under the same use_ic.
+        let mut c = Circuit::new();
+        let top = c.node("top");
+        let mid = c.node("mid");
+        c.add(Device::Vsource {
+            name: "V".into(),
+            p: top,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor { name: "R1".into(), a: top, b: mid, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor { name: "R2".into(), a: mid, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        // Cap across the lower leg pinned to ic=0, so the ic solve holds mid at 0 V
+        // — far from the true 0.5 V divider bias, giving the caps-open KCL a large
+        // imbalance at this iterate.
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: mid,
+            b: NodeId::GROUND,
+            farads: 1e-6,
+            ic: Some(0.0),
+        });
+        let opts = SolverOptions::default();
+
+        let mut ws = Workspace::new(&c);
+        dc_operating_point(&mut ws, &c, &opts).unwrap(); // use_ic = true, pins mid to 0
+
+        // Under the SAME use_ic the iterate was solved with, it is a root.
+        let r_ic = ws.dc_residual_inf_norm_with(&c, &opts, true);
+        assert!(
+            r_ic < 1e-6,
+            "the IC-pinned iterate is a root under use_ic=true, residual {r_ic:e}"
+        );
+
+        // With caps OPEN (the old hard-coded use_ic=false), the pinned node shows
+        // ~1 mA of KCL imbalance — the false rejection ResidualAccept would make.
+        let r_open = ws.dc_residual_inf_norm_with(&c, &opts, false);
+        assert!(
+            r_open > 1e-4,
+            "the caps-open residual at the IC point is large, {r_open:e} — measuring \
+             it there is the bug"
+        );
+        // The no-arg form is the caps-open one, confirming the default is unchanged.
+        assert!((ws.dc_residual_inf_norm(&c, &opts) - r_open).abs() < 1e-12);
     }
 }
 
