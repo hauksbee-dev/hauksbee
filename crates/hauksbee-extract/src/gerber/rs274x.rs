@@ -33,9 +33,9 @@ use gerber_types::{
     Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
 };
 use gerber_types::{Circle, Polygon as GPolygon, Rectangular};
-use gerber_types::{CoordinateNumber, Coordinates, InterpolationMode};
+use gerber_types::{CoordinateNumber, CoordinateOffset, Coordinates, InterpolationMode};
 
-use super::geo::{Capsule, Shape};
+use super::geo::{point_in_polygon, Capsule, Shape};
 use super::macros::instantiate_macro;
 
 /// Arc flattening resolution (matches drc's ARC_SEGMENTS).
@@ -178,8 +178,13 @@ struct Plotter<'a> {
     y: f64,
     aperture: Option<i32>,
     interp: InterpolationMode,
-    /// Inside a G36 region: accumulating contour points.
-    region: Option<Vec<(f64, f64)>>,
+    /// Inside a G36 region: the accumulated contours. RS-274X 4.10.4 lets one
+    /// region carry several closed contours (each begun by a D02 move) — an
+    /// outer boundary plus holes cut out of it, or several disjoint islands —
+    /// so contours are kept SEPARATE; the last entry is the contour currently
+    /// being drawn. Flattening them into one ring bridged the pieces with
+    /// phantom edges (false shorts across islands, holes filled back in).
+    region: Option<Vec<Vec<(f64, f64)>>>,
     /// Polarity in effect when the current region OPENED. A region is a single
     /// primitive, so its whole fill takes the polarity at G36 time; captured
     /// here so a clear (LPC) region is dropped like a clear draw/flash, instead
@@ -253,7 +258,9 @@ impl<'a> Plotter<'a> {
                 GCode::RegionMode(true) => {
                     // A region takes the polarity in effect when it opens.
                     self.region_dark = self.dark;
-                    self.region = Some(Vec::new());
+                    // One (empty) current contour; further contours are opened
+                    // by D02 moves while the region is open.
+                    self.region = Some(vec![Vec::new()]);
                 }
                 GCode::RegionMode(false) => self.close_region(),
                 GCode::QuadrantMode(m) => {
@@ -334,16 +341,47 @@ impl<'a> Plotter<'a> {
                     self.x = nx;
                     self.y = ny;
                 }
+                // Inside a region, a D02 move also TERMINATES the current
+                // contour and begins the next one (RS-274X 4.10.4: every
+                // contour of a region starts with a D02). The new contour is
+                // seeded lazily by its first D01 (which reads the moved-to
+                // point as its start), so a redundant D02 before any draw
+                // does not leave an empty contour behind.
+                if let Some(contours) = self.region.as_mut() {
+                    if contours.last().is_some_and(|c| !c.is_empty()) {
+                        contours.push(Vec::new());
+                    }
+                }
             }
             Operation::Interpolate(coord, offset) => {
                 let (sx, sy) = (self.x, self.y);
                 let (ex, ey) = coord.as_ref().map(|c| self.coord(c)).unwrap_or((sx, sy));
-                if let Some(pts) = self.region.as_mut() {
-                    // Region contour: just collect the vertices.
-                    if pts.is_empty() {
-                        pts.push((sx, sy));
+                if self.region.is_some() {
+                    // Region contour: collect the boundary vertices. A segment
+                    // drawn under circular interpolation (G02/G03) contributes
+                    // its flattened arc — the same centre/sweep geometry a
+                    // stroked arc sweeps — NOT just its chord: chord-collapsing
+                    // turned a round pour drawn as two semicircles into a
+                    // zero-area polygon, vanishing its copper entirely.
+                    let seg: Vec<(f64, f64)> = match self.interp {
+                        InterpolationMode::Linear => vec![(ex, ey)],
+                        InterpolationMode::ClockwiseCircular
+                        | InterpolationMode::CounterclockwiseCircular => {
+                            let (ox, oy) = self.offset_mm(offset);
+                            let ccw =
+                                matches!(self.interp, InterpolationMode::CounterclockwiseCircular);
+                            self.arc_samples(sx, sy, ex, ey, ox, oy, ccw)
+                        }
+                    };
+                    let contour = self
+                        .region
+                        .as_mut()
+                        .and_then(|c| c.last_mut())
+                        .expect("an open region always has a current contour");
+                    if contour.is_empty() {
+                        contour.push((sx, sy));
                     }
-                    pts.push((ex, ey));
+                    contour.extend(seg);
                 } else if self.dark {
                     // A routed segment of the current aperture's width.
                     let width = self.aperture_line_width();
@@ -353,15 +391,7 @@ impl<'a> Plotter<'a> {
                         }
                         InterpolationMode::ClockwiseCircular
                         | InterpolationMode::CounterclockwiseCircular => {
-                            let (ox, oy) = offset
-                                .as_ref()
-                                .map(|o| {
-                                    (
-                                        o.x.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
-                                        o.y.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
-                                    )
-                                })
-                                .unwrap_or((0.0, 0.0));
+                            let (ox, oy) = self.offset_mm(offset);
                             let ccw =
                                 matches!(self.interp, InterpolationMode::CounterclockwiseCircular);
                             self.push_arc(sx, sy, ex, ey, ox, oy, ccw, width / 2.0);
@@ -531,9 +561,30 @@ impl<'a> Plotter<'a> {
         best
     }
 
+    /// The I/J arc offset of a circular D01, scaled to board millimetres
+    /// ((0, 0) when the offset — or either axis — is absent).
+    fn offset_mm(&self, offset: &Option<CoordinateOffset>) -> (f64, f64) {
+        offset
+            .as_ref()
+            .map(|o| {
+                (
+                    o.x.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
+                    o.y.as_ref().map(num).unwrap_or(0.0) * self.to_mm,
+                )
+            })
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// Resolve a circular D01's geometry: centre, radius, start angle and
+    /// signed sweep, honouring the quadrant mode. This is the ONE place the
+    /// centre/sweep math lives — the stroked-arc path (`push_arc`) and the
+    /// region-contour path both flatten from these numbers, so a pour boundary
+    /// arc lands on byte-identical points to the same arc drawn as a track.
+    /// `None` when the radius degenerates (centre on the start point): the
+    /// "arc" is then just its chord.
     #[allow(clippy::too_many_arguments)]
-    fn push_arc(
-        &mut self,
+    fn arc_params(
+        &self,
         sx: f64,
         sy: f64,
         ex: f64,
@@ -541,8 +592,7 @@ impl<'a> Plotter<'a> {
         ox: f64,
         oy: f64,
         ccw: bool,
-        r: f64,
-    ) {
+    ) -> Option<(f64, f64, f64, f64, f64)> {
         let (cx, cy) = if self.single_quadrant {
             // G74: I/J are unsigned magnitudes, so the true centre is one of the
             // four ±I,±J offsets from the start. Per RS-274X §4.5, pick the
@@ -556,8 +606,7 @@ impl<'a> Plotter<'a> {
         };
         let radius = ((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy)).sqrt();
         if radius <= f64::EPSILON {
-            self.push_capsule(sx, sy, ex, ey, r);
-            return;
+            return None;
         }
         let a0 = (sy - cy).atan2(sx - cx);
         let mut a1 = (ey - cy).atan2(ex - cx);
@@ -572,28 +621,141 @@ impl<'a> Plotter<'a> {
                 a1 -= TAU;
             }
         }
-        let sweep = a1 - a0;
+        Some((cx, cy, radius, a0, a1 - a0))
+    }
+
+    /// The flattened arc: `ARC_SEGMENTS` points sampled from just past the
+    /// start through the endpoint (the start itself is NOT included, so the
+    /// samples chain onto a path that already holds it). A degenerate radius
+    /// yields just the endpoint — the chord.
+    #[allow(clippy::too_many_arguments)]
+    fn arc_samples(
+        &self,
+        sx: f64,
+        sy: f64,
+        ex: f64,
+        ey: f64,
+        ox: f64,
+        oy: f64,
+        ccw: bool,
+    ) -> Vec<(f64, f64)> {
+        let Some((cx, cy, radius, a0, sweep)) = self.arc_params(sx, sy, ex, ey, ox, oy, ccw)
+        else {
+            return vec![(ex, ey)];
+        };
+        (1..=ARC_SEGMENTS)
+            .map(|i| {
+                let a = a0 + sweep * (i as f64 / ARC_SEGMENTS as f64);
+                (cx + radius * a.cos(), cy + radius * a.sin())
+            })
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_arc(
+        &mut self,
+        sx: f64,
+        sy: f64,
+        ex: f64,
+        ey: f64,
+        ox: f64,
+        oy: f64,
+        ccw: bool,
+        r: f64,
+    ) {
         let mut prev = (sx, sy);
-        for i in 1..=ARC_SEGMENTS {
-            let t = i as f64 / ARC_SEGMENTS as f64;
-            let a = a0 + sweep * t;
-            let p = (cx + radius * a.cos(), cy + radius * a.sin());
+        for p in self.arc_samples(sx, sy, ex, ey, ox, oy, ccw) {
             self.push_capsule(prev.0, prev.1, p.0, p.1, r);
             prev = p;
         }
     }
 
     fn close_region(&mut self) {
-        if let Some(pts) = self.region.take() {
-            // A clear-polarity region is a cut-out, not copper — dropping it
-            // matches the draw/flash handling and the module's polarity
-            // contract. Materializing it would union nets across a gap.
-            if self.region_dark && pts.len() >= 3 {
-                self.out.push(CopperPrim {
-                    shape: Shape::Polygon { pts, r: 0.0 },
-                    kind: PrimKind::Region,
-                });
+        let Some(contours) = self.region.take() else {
+            return;
+        };
+        // A clear-polarity region is a cut-out, not copper — dropping it
+        // matches the draw/flash handling and the module's polarity
+        // contract. Materializing it would union nets across a gap.
+        if !self.region_dark {
+            return;
+        }
+        // Contours that enclose no area (a stray D02 with no draws, a lone
+        // segment) are dropped, as the flat model always did.
+        let contours: Vec<Vec<(f64, f64)>> =
+            contours.into_iter().filter(|c| c.len() >= 3).collect();
+        if contours.is_empty() {
+            return;
+        }
+        // The overwhelmingly common case (KiCad emits one contour per G36
+        // block): a plain polygon, exactly as before.
+        if contours.len() == 1 {
+            let pts = contours.into_iter().next().unwrap();
+            self.out.push(CopperPrim {
+                shape: Shape::Polygon { pts, r: 0.0 },
+                kind: PrimKind::Region,
+            });
+            return;
+        }
+        // Several contours in one region (RS-274X 4.10.4): group them into the
+        // physically-connected pieces of copper they fill, because the
+        // connectivity tracer unions per PRIMITIVE — two disjoint islands
+        // sharing one primitive would falsely short their nets. Nesting depth
+        // (how many other contours enclose a contour) classifies each one: an
+        // even-depth contour is an outer boundary — its own piece of copper —
+        // and an odd-depth contour is a hole cut out of its immediate
+        // (depth-1) parent. Legal region contours never cross, so any single
+        // vertex is a valid containment witness. An island nested inside a
+        // hole (depth 2) is an outer again: its copper is electrically
+        // separate from the surrounding ring's.
+        let n = contours.len();
+        // encloses[i] = the contours strictly containing contour i.
+        let encloses: Vec<Vec<usize>> = (0..n)
+            .map(|i| {
+                let (px, py) = contours[i][0];
+                (0..n)
+                    .filter(|&j| j != i && point_in_polygon(px, py, &contours[j]))
+                    .collect()
+            })
+            .collect();
+        // Each contour's emit group: an outer owns itself; a hole belongs to
+        // its immediate parent — the DEEPEST contour enclosing it (depth-1,
+        // which is even, i.e. an outer).
+        let group_of: Vec<usize> = (0..n)
+            .map(|i| {
+                if encloses[i].len() % 2 == 0 {
+                    i
+                } else {
+                    encloses[i]
+                        .iter()
+                        .copied()
+                        .max_by_key(|&j| encloses[j].len())
+                        .expect("an odd-depth contour has at least one encloser")
+                }
+            })
+            .collect();
+        let mut buckets: Vec<Vec<Vec<(f64, f64)>>> = (0..n).map(|_| Vec::new()).collect();
+        for (i, c) in contours.into_iter().enumerate() {
+            if group_of[i] == i {
+                buckets[i].insert(0, c); // the outer boundary leads its group
+            } else {
+                buckets[group_of[i]].push(c);
             }
+        }
+        for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
+            let shape = if bucket.len() == 1 {
+                // A hole-less island: a plain polygon, like a lone contour.
+                let pts = bucket.into_iter().next().unwrap();
+                Shape::Polygon { pts, r: 0.0 }
+            } else {
+                // Outer + holes: even-odd containment reads the ring as copper
+                // and the hole interiors as empty.
+                Shape::MultiPolygon { contours: bucket }
+            };
+            self.out.push(CopperPrim {
+                shape,
+                kind: PrimKind::Region,
+            });
         }
     }
 }
@@ -782,6 +944,166 @@ M02*
                 }
             }
         }
+    }
+
+    #[test]
+    fn region_arc_segment_is_flattened_not_chorded() {
+        // A filled circle drawn as a G36 region of two G03 semicircles (centre
+        // at the origin, radius 1 mm). The old region branch recorded only each
+        // D01's ENDPOINT — ignoring the circular interpolation mode and the I/J
+        // offset — so the contour collapsed to the degenerate chord polygon
+        // [(-1,0),(1,0),(-1,0)]: zero area, whole pour vanished from
+        // connectivity (false OPEN for anything connecting through it).
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+G75*
+G36*
+X-1000000Y0D02*
+G03*
+X1000000Y0I1000000J0D01*
+X-1000000Y0I-1000000J0D01*
+G37*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let region = prims
+            .iter()
+            .find(|p| p.kind == PrimKind::Region)
+            .expect("the pour must materialize as a region");
+        let Shape::Polygon { pts, .. } = &region.shape else {
+            panic!("a single-contour region stays a plain polygon");
+        };
+        assert!(
+            pts.len() > 3,
+            "two flattened semicircles carry many vertices, got {} (3 = the chord collapse)",
+            pts.len()
+        );
+        // Every boundary vertex sits on the 1 mm circle (the same centre/sweep
+        // math as a stroked arc), and the disc INTERIOR is inside the polygon.
+        for &(x, y) in pts {
+            let radius = (x * x + y * y).sqrt();
+            assert!(
+                (radius - 1.0).abs() < 1e-6,
+                "contour vertex ({x:.4},{y:.4}) is off the arc circle"
+            );
+        }
+        assert!(
+            point_in_polygon(0.0, 0.0, pts),
+            "the disc centre must be INSIDE the filled region (a chord polygon has no inside)"
+        );
+    }
+
+    #[test]
+    fn region_disjoint_contours_do_not_bridge() {
+        // One G36 region holding TWO disjoint square islands (RS-274X 4.10.4:
+        // each contour begins with a D02 move): [0,5]x[0,5] and [95,100]x[0,5],
+        // 90 mm apart. The old flat contour vector never split on the second
+        // D02, dropped that contour's start vertex, and emitted ONE polygon
+        // with a phantom bridge edge — reading two electrically-isolated pads
+        // (one per island) onto the same net: a false SHORT.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+G36*
+X0Y0D02*
+X5000000Y0D01*
+X5000000Y5000000D01*
+X0Y5000000D01*
+X0Y0D01*
+X95000000Y0D02*
+X100000000Y0D01*
+X100000000Y5000000D01*
+X95000000Y5000000D01*
+X95000000Y0D01*
+G37*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let regions: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Region).collect();
+        assert_eq!(
+            regions.len(),
+            2,
+            "two disjoint islands are two separate copper pieces, not one bridged polygon"
+        );
+        // Containment: a point in each square is copper, the 90 mm gap is not.
+        let covered = |x: f64, y: f64| {
+            regions.iter().any(|p| match &p.shape {
+                Shape::Polygon { pts, .. } => point_in_polygon(x, y, pts),
+                _ => panic!("hole-less islands stay plain polygons"),
+            })
+        };
+        assert!(covered(2.5, 2.5), "inside the first island");
+        assert!(covered(97.5, 2.5), "inside the second island");
+        assert!(!covered(50.0, 2.5), "the gap between the islands is NOT copper");
+        // Connectivity: a pad on each island must land on DIFFERENT nets. With
+        // the bridged single polygon both pads unioned through the one region
+        // primitive onto one net.
+        let mut layer: Vec<CopperPrim> = prims.clone();
+        layer.push(CopperPrim {
+            shape: Shape::disc(2.5, 2.5, 0.5),
+            kind: PrimKind::Flash,
+        });
+        layer.push(CopperPrim {
+            shape: Shape::disc(97.5, 2.5, 0.5),
+            kind: PrimKind::Flash,
+        });
+        let (_board, stats) = crate::gerber::connect::reconstruct("t", vec![layer], vec![], vec![]);
+        assert_eq!(
+            stats.n_nets, 2,
+            "one pad per island: two isolated nets, not a false short"
+        );
+    }
+
+    #[test]
+    fn region_hole_contour_is_cut_out_not_filled() {
+        // A region with a hole: outer square [0,20]x[0,20], inner square hole
+        // [8,12]x[8,12] as a second contour. The ring is copper; the hole
+        // interior is NOT. The old flat concatenation bridged the two contours
+        // and dropped the hole's start vertex, so the two non-coincident bridge
+        // edges enclosed a sliver of RING copper — (0,0)-(12,8)-(8,8) — whose
+        // parity read OUTSIDE (false open through the ring).
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+G36*
+X0Y0D02*
+X20000000Y0D01*
+X20000000Y20000000D01*
+X0Y20000000D01*
+X0Y0D01*
+X8000000Y8000000D02*
+X12000000Y8000000D01*
+X12000000Y12000000D01*
+X8000000Y12000000D01*
+X8000000Y8000000D01*
+G37*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let regions: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Region).collect();
+        assert_eq!(regions.len(), 1, "outer + its hole is ONE piece of copper");
+        let Shape::MultiPolygon { contours } = &regions[0].shape else {
+            panic!("a region with a hole must carry both contours, not one flat ring");
+        };
+        assert_eq!(contours.len(), 2, "the outer boundary and its hole");
+        use crate::gerber::geo::point_in_contours;
+        assert!(
+            point_in_contours(2.0, 15.0, contours),
+            "a point in the ring is copper"
+        );
+        assert!(
+            point_in_contours(6.0, 4.5, contours),
+            "ring copper on the old bridge-edge sliver must still be INSIDE"
+        );
+        assert!(
+            !point_in_contours(10.0, 10.0, contours),
+            "the hole interior is NOT copper"
+        );
+        assert!(
+            !point_in_contours(30.0, 30.0, contours),
+            "outside the outer boundary is NOT copper"
+        );
     }
 
     #[test]

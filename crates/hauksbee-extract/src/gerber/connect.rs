@@ -293,18 +293,29 @@ pub fn reconstruct(
                 }
                 for &rgi in &near_regions {
                     let b = prims[rgi].bounds;
-                    if let Shape::Polygon { pts, .. } = &prims[rgi].shape {
-                        let grid = region_grids.get(&rgi);
+                    // Only polygonal regions participate: a capsule-shaped
+                    // region primitive has no filled outline to contain into.
+                    if !matches!(prims[rgi].shape, Shape::Capsule(_)) {
                         // (a) Containment: a sample point inside the filled
                         // outline means the pour copper is *on* that primitive.
-                        // Large pours use the grid; small ones test directly.
+                        // Large pours use the grid; small ones test directly. A
+                        // multi-contour pour (an outer with holes) uses even-odd
+                        // containment — inside the ring is in, inside a hole is
+                        // out; these are rare and small, so they take the exact
+                        // test without a grid.
                         let inside = test_pts.iter().any(|&(px, py)| {
                             if px < b[0] || px > b[2] || py < b[1] || py > b[3] {
                                 return false;
                             }
-                            match grid {
-                                Some(g) => g.contains(px, py),
-                                None => super::geo::point_in_polygon(px, py, pts),
+                            match &prims[rgi].shape {
+                                Shape::Polygon { pts, .. } => match region_grids.get(&rgi) {
+                                    Some(g) => g.contains(px, py),
+                                    None => super::geo::point_in_polygon(px, py, pts),
+                                },
+                                Shape::MultiPolygon { contours } => {
+                                    super::geo::point_in_contours(px, py, contours)
+                                }
+                                Shape::Capsule(_) => false,
                             }
                         });
                         // (b) Edge penetration: a pad/track whose finite-width
