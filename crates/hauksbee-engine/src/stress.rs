@@ -158,13 +158,22 @@ impl DeviceMeta {
 }
 
 /// Derive a resistor's power rating from its footprint package size. Standard
-/// chip-resistor ratings: 0402 1/16 W, 0603 1/10 W, 0805 1/8 W, 1206 1/4 W;
-/// through-hole / unknown defaults to 1/4 W.
+/// chip-resistor ratings: 01005 1/32 W, 0201 1/20 W, 0402 1/16 W, 0603 1/10 W,
+/// 0805 1/8 W, 1206 1/4 W; through-hole / unknown defaults to 1/4 W.
 pub fn resistor_power_from_footprint(footprint: &str) -> f64 {
     let f = footprint.to_ascii_uppercase();
     // Match the imperial size token anywhere in the footprint string
-    // (e.g. "Resistor_SMD:R_0402_1005Metric").
-    if f.contains("0402") {
+    // (e.g. "Resistor_SMD:R_0402_1005Metric"). The imperial code is paired with
+    // its metric code, and the metric code of a small part collides with the
+    // imperial code of a larger one: imperial 0201 → metric 0603
+    // ("R_0201_0603Metric"), imperial 01005 → metric 0402. So the smallest
+    // packages MUST be matched first, before the larger imperial tokens they
+    // embed as a metric suffix, or they are silently over-rated.
+    if f.contains("01005") {
+        1.0 / 32.0
+    } else if f.contains("0201") {
+        1.0 / 20.0
+    } else if f.contains("0402") {
         1.0 / 16.0
     } else if f.contains("0603") {
         1.0 / 10.0
@@ -574,11 +583,15 @@ fn operating_point(
                 hauksbee_ir::Polarity::P => -1.0,
             };
             let vt = hauksbee_ir::thermal_voltage_c(circuit.temp_c);
+            // Temperature-corrected saturation current, consistent with the
+            // temp-corrected Vt above and with the solver's stamp (which pairs
+            // `is_at(t)` with the temp-corrected thermal voltage).
+            let is = model.is_at(circuit.temp_c);
             let vbe = sign * (node_v(*b) - node_v(*e));
             let vbc = sign * (node_v(*b) - node_v(*c));
             let ex = |v: f64, n: f64| ((v / (n * vt)).clamp(-100.0, 200.0)).exp();
-            let cf = model.is * (ex(vbe, model.nf) - 1.0);
-            let cr = model.is * (ex(vbc, model.nr) - 1.0);
+            let cf = is * (ex(vbe, model.nf) - 1.0);
+            let cr = is * (ex(vbc, model.nr) - 1.0);
             let ic = (cf - cr) - cr / model.br;
             let ib = cf / model.bf + cr / model.br;
             let vce = node_v(*c) - node_v(*e);
@@ -873,6 +886,70 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     // clamp silently caps the computed current far below the real one).
     // Reverse beyond breakdown: small leakage (ignored).
     let exp_arg = (vd / vt).clamp(-100.0, 200.0);
-    let i = model.is * (exp_arg.exp() - 1.0);
+    // Temperature-corrected saturation current, matching the solver's
+    // `diode_eval` (which uses `is_at(t)` whenever it uses the temp-corrected
+    // Vt). Pairing a temp-corrected Vt with the nominal `is` understated the
+    // forward current of a hot junction — the monitor's over-current/over-power
+    // checks saw a cooler device than the solve actually settled at.
+    let i = model.is_at(temp_c) * (exp_arg.exp() - 1.0);
     i.clamp(-1e3, 1e3)
+}
+
+#[cfg(test)]
+mod monitor_temp_tests {
+    use super::*;
+
+    #[test]
+    fn resistor_rating_reads_imperial_not_the_metric_collision() {
+        // The imperial size code is paired with its metric code, and a small
+        // part's metric code equals a larger part's imperial code: imperial 0201
+        // → metric 0603 ("R_0201_0603Metric"), imperial 01005 → metric 0402.
+        // A substring match on "0603"/"0402" first therefore over-rated the tiny
+        // parts by up to ~2× their real power, hiding genuine over-power faults.
+        let w = |f: &str| resistor_power_from_footprint(f);
+        assert!(
+            (w("Resistor_SMD:R_0201_0603Metric") - 1.0 / 20.0).abs() < 1e-12,
+            "0201 must rate at 1/20 W, not the 0603's 1/10 W"
+        );
+        assert!(
+            (w("Resistor_SMD:R_01005_0402Metric") - 1.0 / 32.0).abs() < 1e-12,
+            "01005 must rate at 1/32 W, not the 0402's 1/16 W"
+        );
+        // The larger imperial parts are unaffected (their metric suffix does not
+        // embed a smaller imperial token that wins first).
+        assert!((w("R_0402_1005Metric") - 1.0 / 16.0).abs() < 1e-12);
+        assert!((w("R_0603_1608Metric") - 1.0 / 10.0).abs() < 1e-12);
+        assert!((w("R_0805_2012Metric") - 1.0 / 8.0).abs() < 1e-12);
+        assert!((w("R_1206_3216Metric") - 1.0 / 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn diode_current_tracks_temperature_corrected_saturation() {
+        // At a fixed forward bias, a hot junction carries MORE current than the
+        // nominal-Is formula gives (Is rises steeply with temperature). The
+        // monitor must use is_at(T), the same correction the solver applies, so
+        // its over-current / over-power checks see the real hot-junction current.
+        let model = hauksbee_ir::DiodeModel::default();
+        let vd = 0.6;
+        let i_cold = diode_current(&model, vd, 27.0);
+        let i_hot = diode_current(&model, vd, 125.0);
+        assert!(
+            i_hot > i_cold * 2.0,
+            "hot-junction current must be well above cold: cold={i_cold:e}, hot={i_hot:e}"
+        );
+        // And the reported current must equal the temp-corrected Shockley value,
+        // not the nominal-Is one.
+        let vt_hot = hauksbee_ir::thermal_voltage_c(125.0) * model.n;
+        let expected = model.is_at(125.0) * ((vd / vt_hot).exp() - 1.0);
+        assert!(
+            (i_hot - expected).abs() <= expected.abs() * 1e-9,
+            "diode_current must use is_at(T): got {i_hot:e}, expected {expected:e}"
+        );
+        // The old nominal-Is result would be materially smaller — guard the gap.
+        let nominal = model.is * ((vd / vt_hot).exp() - 1.0);
+        assert!(
+            i_hot > nominal * 1.5,
+            "temp-corrected current must exceed the nominal-Is current it replaced"
+        );
+    }
 }

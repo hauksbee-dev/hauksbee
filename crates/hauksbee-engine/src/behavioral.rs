@@ -216,6 +216,23 @@ struct LawLeg {
     program: EvalNode<DefaultNumericTypes>,
     /// The controllable source device (Isource for current, Vsource for voltage).
     source: DeviceId,
+    /// For a Voltage law, its series output resistor and that resistor's
+    /// on-resistance (ohms). Deactivating an `only_in_state` voltage law must
+    /// tri-state this resistor (OFF_OHMS) to RELEASE the pin — zeroing the
+    /// Vsource alone would clamp the pin to 0 V through the stiff series R (a
+    /// near-short). A Current law releases correctly by zeroing its Isource, so
+    /// it carries `None` here.
+    series_r: Option<(DeviceId, f64)>,
+}
+
+/// One FSM transition with its guard compiled once at stamp time. Re-parsing the
+/// guard string every chunk was wasteful and swallowed parse errors silently; a
+/// guard that fails to compile is reported once here and stored as `None` (never
+/// fires) rather than being re-parsed (and re-failing) on every chunk.
+#[derive(Debug, Clone)]
+struct CompiledTransition {
+    tr: hauksbee_models::behavioral::Transition,
+    guard: Option<EvalNode<DefaultNumericTypes>>,
 }
 
 /// A behavioural device bound onto the circuit: its stamped legs plus live FSM
@@ -236,7 +253,7 @@ pub struct BehavioralDevice {
 
     /// FSM state names (empty when the model has no FSM).
     fsm_states: Vec<String>,
-    fsm_transitions: Vec<hauksbee_models::behavioral::Transition>,
+    fsm_transitions: Vec<CompiledTransition>,
     /// state -> pin role -> behaviour override.
     state_pins: BTreeMap<String, BTreeMap<String, StatePinBehaviour>>,
     /// Current FSM state index, and time spent in it.
@@ -411,7 +428,28 @@ impl BehavioralDevice {
         // ── FSM ────────────────────────────────────────────────────────────
         if let Some(fsm) = &model.fsm {
             dev.fsm_states = fsm.states.clone();
-            dev.fsm_transitions = fsm.transitions.clone();
+            // Compile each transition guard once. A guard that fails to parse is
+            // reported here (not silently, not re-parsed every chunk) and stored
+            // as `None`, so it simply never fires.
+            dev.fsm_transitions = fsm
+                .transitions
+                .iter()
+                .map(|tr| {
+                    let guard = match evalexpr::build_operator_tree::<DefaultNumericTypes>(&tr.guard)
+                    {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            eprintln!(
+                                "[behavioural] {reference}: FSM guard '{}' ({} -> {}) \
+                                 failed to parse: {e}; transition disabled",
+                                tr.guard, tr.from, tr.to
+                            );
+                            None
+                        }
+                    };
+                    CompiledTransition { tr: tr.clone(), guard }
+                })
+                .collect();
             dev.state_pins = fsm.state_pins.clone();
             dev.state_idx = fsm
                 .initial
@@ -521,13 +559,16 @@ impl BehavioralDevice {
                     continue;
                 }
             };
-            let source = match law.kind {
-                LawKind::Current => circuit.add(Device::Isource {
-                    name: format!("Ibeh_{reference}_{}", law.name),
-                    p: a_node,
-                    n: b_node,
-                    kind: SourceKind::Dc(0.0),
-                }),
+            let (source, series_r): (DeviceId, Option<(DeviceId, f64)>) = match law.kind {
+                LawKind::Current => (
+                    circuit.add(Device::Isource {
+                        name: format!("Ibeh_{reference}_{}", law.name),
+                        p: a_node,
+                        n: b_node,
+                        kind: SourceKind::Dc(0.0),
+                    }),
+                    None,
+                ),
                 LawKind::Voltage => {
                     let drv = circuit.node(&format!("__beh_{reference}_{}_law", law.name));
                     let vs = circuit.add(Device::Vsource {
@@ -536,20 +577,22 @@ impl BehavioralDevice {
                         n: b_node,
                         kind: SourceKind::Dc(0.0),
                     });
-                    circuit.add(Device::Resistor {
+                    let on_ohms = law.r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
+                    let r = circuit.add(Device::Resistor {
                         name: format!("Rbeh_{reference}_{}_law", law.name),
                         a: drv,
                         b: a_node,
-                        ohms: law.r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS),
+                        ohms: on_ohms,
                         tc1: None,
                     });
-                    vs
+                    (vs, Some((r, on_ohms)))
                 }
             };
             dev.laws.push(LawLeg {
                 law: law.clone(),
                 program,
                 source,
+                series_r,
             });
         }
 
@@ -652,14 +695,32 @@ impl BehavioralDevice {
             self.update_converter(circuit, node_v);
         }
 
-        // 5. Expression laws.
+        // 5. Expression laws. Evaluate against a context rebuilt AFTER the FSM
+        //    advanced: `advance_fsm` may have changed the active state and reset
+        //    `t_in_state`, and a law's expr can read `state_<name>` / `t_in_state`
+        //    / its own gating. Using the pre-advance `ctx` here lagged the law one
+        //    chunk behind the state that gates it.
+        let ctx = self.build_context(node_v, t);
         let active = self.state().to_string();
         for leg in &self.laws {
             if let Some(req) = &leg.law.only_in_state {
                 if req != &active {
+                    // Deactivate: RELEASE the pin. A voltage law tri-states its
+                    // series resistor (OFF_OHMS) so the pin floats; leaving the
+                    // resistor on while zeroing the Vsource would clamp the pin to
+                    // 0 V through the stiff series R (a near-short). A current law
+                    // releases by zeroing its Isource.
+                    if let Some((r, _)) = leg.series_r {
+                        set_resistor_ohms(circuit, r, OFF_OHMS);
+                    }
                     set_source_dc(circuit, leg.source, 0.0);
                     continue;
                 }
+            }
+            // Active: restore the series resistor's on-resistance in case a prior
+            // chunk tri-stated it.
+            if let Some((r, on)) = leg.series_r {
+                set_resistor_ohms(circuit, r, on);
             }
             // Guard against a non-finite law value (e.g. a divide-by-zero when a
             // programming resistor is a 0-ohm jumper): a NaN/Inf source would
@@ -714,7 +775,8 @@ impl BehavioralDevice {
             return;
         }
         let cur = self.state().to_string();
-        for tr in &self.fsm_transitions {
+        for ct in &self.fsm_transitions {
+            let tr = &ct.tr;
             if tr.from != cur {
                 continue;
             }
@@ -723,10 +785,9 @@ impl BehavioralDevice {
                     continue;
                 }
             }
-            let fired = match evalexpr::build_operator_tree::<DefaultNumericTypes>(&tr.guard) {
-                Ok(p) => guard_true(&p, ctx),
-                Err(_) => false,
-            };
+            // Guard compiled once at stamp time; a guard that failed to parse is
+            // `None` and never fires.
+            let fired = ct.guard.as_ref().is_some_and(|p| guard_true(p, ctx));
             if fired {
                 if let Some(idx) = self.fsm_states.iter().position(|s| s == &tr.to) {
                     self.state_idx = idx;
