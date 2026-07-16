@@ -134,6 +134,17 @@ pub struct Workspace {
     /// `effects.spdt_bbm` is on (the device-model default; the typed compat
     /// field restores the bridging model).
     spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    /// TEST-ONLY probe of the stall/census norm plumbing: when armed
+    /// (`Some`), every `newton_solve` iteration appends
+    /// `(stall_norm, post_globalizer_norm)` — the norm actually handed to the
+    /// stall detector and census, and the node-step norm re-measured from
+    /// `ws.x` AFTER the line search has rewritten it. The pair is what lets a
+    /// unit test prove the detector sees the TRUE undamped step (the two
+    /// differ by exactly `use_alpha` on a backtracked iteration) without any
+    /// side channel existing in a shipping binary: the field and its writes
+    /// are compiled out of non-test builds.
+    #[cfg(test)]
+    stall_norm_probe: Option<Vec<(f64, f64)>>,
 }
 
 impl Workspace {
@@ -333,6 +344,8 @@ impl Workspace {
             bypass: None,
             bypass_hold: false,
             spdt_sibling,
+            #[cfg(test)]
+            stall_norm_probe: None,
         }
     }
 
@@ -652,6 +665,19 @@ pub fn newton_solve(
         let undamped_converged = converged(&ws.x, &ws.lin_point, &ws.layout, opts);
         let undamped_node_converged =
             node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+        // The TRUE undamped node-block step norm, captured HERE for the same
+        // reason as the predicates above: the Armijo line search below rewrites
+        // ws.x to lin_point + use_alpha*dx, so a measurement taken after it
+        // sees the GLOBALIZED step (use_alpha * max|dx|), not the Newton step.
+        // The stall detector and the census/"maxdV(undamped)" readouts judge
+        // limit-cycle progress on this norm; feeding them the globalized step
+        // registers phantom "progress" whenever the search backtracks — the
+        // exact failure the post-damping ordering invariant on
+        // `damp_node_steps` already guards against, one damper earlier. On the
+        // paths where the line search is off, nothing touches ws.x between
+        // here and the damping block, so this is bit-identical to the old
+        // post-search measurement.
+        let (undamped_step_norm, undamped_step_argmax) = node_step_norm(ws);
 
         // GLOBAL Armijo line-search (opt-in). Backtrack the full Newton step dx =
         // (ws.x - lin_point) until the trial point's nonlinear residual decreases
@@ -758,13 +784,23 @@ pub fn newton_solve(
         // (undamped_converged / undamped_node_converged were computed above,
         // BEFORE the line search could rewrite ws.x -- see the R7 #3 comment.)
 
-        // Measure the TRUE undamped node step, then (staged path only) damp
-        // ws.x in place. The returned norm is captured BEFORE the damping
-        // rewrites ws.x — see the ordering invariant on
-        // `measure_and_damp_node_steps` — and is what the census, the
-        // "maxdV(undamped)" debug line, and the stall detector all report.
-        let (undamped_step_norm, undamped_step_argmax, census_osc_nodes) =
-            measure_and_damp_node_steps(ws, branch_reg > 0.0);
+        // (Staged path only) damp ws.x in place. The undamped norm the census,
+        // the "maxdV(undamped)" debug line and the stall detector report was
+        // captured ABOVE, before the line search — never re-derived from ws.x
+        // here, where it would be the globalized and/or damped step (see the
+        // ordering invariant on `damp_node_steps`).
+        #[cfg(test)]
+        if ws.stall_norm_probe.is_some() {
+            // Record the stall/census norm next to a re-measurement of ws.x
+            // at THIS point (post-line-search, pre-damping): the regression
+            // test asserts the first is the true undamped step, not the
+            // second (the globalized step the R15 bug reported).
+            let post_ls = node_step_norm(ws).0;
+            if let Some(probe) = ws.stall_norm_probe.as_mut() {
+                probe.push((undamped_step_norm, post_ls));
+            }
+        }
+        let census_osc_nodes = damp_node_steps(ws, branch_reg > 0.0);
         // Census (lever-3 attribution): the node-block step norm this
         // iteration will be judged on. Pure readout behind the cached bool.
         let census_step_norm = if census_on { undamped_step_norm } else { 0.0 };
@@ -847,21 +883,39 @@ pub fn newton_solve(
     }
 }
 
-/// Measure the node-block Newton step and (staged path only) damp it in place.
+/// Infinity-norm of the node-block step `ws.x - ws.lin_point` and the node
+/// index attaining it.
 ///
-/// Returns `(undamped_norm, undamped_argmax, osc_nodes)`: the infinity-norm of
-/// the TRUE undamped node step `ws.x - ws.lin_point`, the node index attaining
-/// it, and how many nodes the damping classified as oscillating this iteration
-/// (always 0 when `damp` is false).
+/// ORDERING INVARIANT: call this on the FRESH Newton iterate — after the
+/// backsolve writes ws.x, before EITHER globalizer (the Armijo line search or
+/// the staged per-node damping) rewrites it. Both are path globalizations:
+/// they shorten the step the iteration walks, not the distance to the root,
+/// so measuring after either one hands the stall detector a shrunken norm
+/// (use_alpha*|dx| after the search, alpha_node*|dx| after the damping) that
+/// registers phantom "progress" every backtracking iteration — resetting the
+/// stall counter on a genuine limit cycle — and misreports the
+/// census/"maxdV(undamped)" readouts. Same doctrine as the convergence
+/// predicates: judge on the undamped step, always.
+fn node_step_norm(ws: &Workspace) -> (f64, usize) {
+    let mut undamped_norm = 0.0f64;
+    let mut undamped_argmax = 0usize;
+    for i in 0..ws.layout.n_nodes {
+        let d = (ws.x[i] - ws.lin_point[i]).abs();
+        if d > undamped_norm {
+            undamped_norm = d;
+            undamped_argmax = i;
+        }
+    }
+    (undamped_norm, undamped_argmax)
+}
+
+/// (Staged path only) damp the node-block step in place.
 ///
-/// ORDERING INVARIANT: the norm is captured BEFORE the damping rewrites `ws.x`.
-/// After the rewrite `ws.x - ws.lin_point` is the DAMPED step, which shrinks
-/// with the per-node alpha on every consecutive oscillating iteration even
-/// while a genuine limit cycle's undamped amplitude is unchanged; measuring it
-/// post-rewrite makes the stall detector see phantom "progress" every
-/// iteration (resetting its counter instead of accumulating) and misreports
-/// the "maxdV(undamped)" debug line. Callers that report the undamped step
-/// must use the returned norm, never re-derive it from `ws.x` afterwards.
+/// Returns how many nodes the damping classified as oscillating this
+/// iteration (always 0 when `damp` is false). The undamped step norm is NOT
+/// measured here — see `node_step_norm` and its ordering invariant; on the
+/// line-search-armed path ws.x is already the globalized point by the time
+/// this runs, so a measurement taken here would be doubly wrong.
 ///
 /// The damping itself is the adaptive damped Newton of the staged-DC path. A
 /// node sitting behind a reverse-biased diode plus a DC-open cap is nearly
@@ -876,16 +930,7 @@ pub fn newton_solve(
 /// kills the oscillation while letting the well-behaved majority converge
 /// fast. At the root every step is zero, so damping is inert. Active only for
 /// branch_reg>0 (`damp`), so the normal solve paths stay bit-identical.
-fn measure_and_damp_node_steps(ws: &mut Workspace, damp: bool) -> (f64, usize, u64) {
-    let mut undamped_norm = 0.0f64;
-    let mut undamped_argmax = 0usize;
-    for i in 0..ws.layout.n_nodes {
-        let d = (ws.x[i] - ws.lin_point[i]).abs();
-        if d > undamped_norm {
-            undamped_norm = d;
-            undamped_argmax = i;
-        }
-    }
+fn damp_node_steps(ws: &mut Workspace, damp: bool) -> u64 {
     // How many nodes the staged damping classifies as oscillating this
     // iteration (integer side-channel out of the damping loop; no float
     // behaviour touched). Census readout.
@@ -931,7 +976,7 @@ fn measure_and_damp_node_steps(ws: &mut Workspace, damp: bool) -> (f64, usize, u
             ws.x[i] = ws.lin_point[i] + step;
         }
     }
-    (undamped_norm, undamped_argmax, osc_nodes)
+    osc_nodes
 }
 
 /// Stamp the full nonlinear system at `ws.x` (a trial point) with the SAME
@@ -2479,7 +2524,7 @@ mod switch_freeze_tests {
 
 #[cfg(test)]
 mod staged_stall_norm_tests {
-    use super::{measure_and_damp_node_steps, Workspace, STALL_WINDOW};
+    use super::{damp_node_steps, node_step_norm, Workspace, STALL_WINDOW};
     use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 
     // A minimal two-node workspace (source -> divider) purely as a vehicle for
@@ -2507,8 +2552,12 @@ mod staged_stall_norm_tests {
     // on a genuine limit cycle whose undamped amplitude is CONSTANT. A detector
     // fed that damped norm sees phantom "progress" every iteration, resets its
     // counter, and delays the STALL_WINDOW early bail by ~9 extra full
-    // (assemble+refactor+solve) iterations. `measure_and_damp_node_steps` must
-    // therefore capture the norm BEFORE damping rewrites ws.x.
+    // (assemble+refactor+solve) iterations. The norm must therefore be
+    // captured by `node_step_norm` BEFORE `damp_node_steps` rewrites ws.x —
+    // the same measure-then-damp call order `newton_solve` uses (R15: the
+    // measure moved further up still, ahead of the Armijo line search, which
+    // is the OTHER globalizer that rewrites ws.x and contaminated the norm
+    // the same way).
     //
     // Script a perfect limit cycle at the proposal level: every iteration the
     // (pretend) linear solve proposes a constant-amplitude, sign-flipping step on
@@ -2540,7 +2589,8 @@ mod staged_stall_norm_tests {
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
             ws.x[0] = ws.lin_point[0] + sign * A;
 
-            let (norm, argmax, osc) = measure_and_damp_node_steps(&mut ws, true);
+            let (norm, argmax) = node_step_norm(&ws);
+            let osc = damp_node_steps(&mut ws, true);
 
             // (a) The reported norm is the TRUE undamped amplitude, every
             // iteration, no matter how hard the damping has throttled ws.x.
@@ -2703,6 +2753,72 @@ mod line_search_convergence_tests {
              floor-backtracked line-search step (alpha=1/64) was measured as \
              the convergence step. iters={}, v={:.6}, |F|={:.3e}",
             r.iters, ws.x[i], f_end
+        );
+    }
+
+    // The bug this guards (R15): the stall detector and census were handed a
+    // node-step norm measured AFTER the Armijo line search had rewritten
+    // ws.x = lin_point + use_alpha*dx — i.e. use_alpha * max|dx|, the
+    // GLOBALIZED step, under a contract that promises the TRUE undamped step.
+    // On the TransientDyn path (branch_reg > 0 AND the line search armed,
+    // exactly as the transient driver arms them) a hard-backtracking limit
+    // cycle therefore fed the detector a shrunken, alpha-modulated norm —
+    // phantom "progress" of the same species the post-damping ordering
+    // invariant already guards one globalizer later. Same board as above (the
+    // rootless V forces the alpha floor on every iteration), instrumented
+    // through the test-only `stall_norm_probe`, which records per iteration
+    // the norm handed to the stall detector alongside a re-measurement of
+    // ws.x taken at the OLD (contaminated) point, post-line-search.
+    #[test]
+    fn stall_detector_sees_the_undamped_step_not_the_line_searched_one() {
+        let (c, v) = rootless_v_board();
+        let opts = SolverOptions::default();
+        let mut ws = Workspace::new(&c);
+        // Arm exactly what the TransientDyn transient driver arms: the staged
+        // branch regularizer (which gates the stall detector) plus the global
+        // Armijo line search.
+        ws.set_staged_branch_reg(1e-2);
+        ws.set_tran_line_search(true);
+        ws.stall_norm_probe = Some(Vec::new());
+        let i = ws.layout.node(v).expect("node v is an unknown");
+        ws.x[i] = 1.0;
+
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
+        let state = ReactiveState::new(c.devices.len());
+        let _ = newton_solve(
+            &mut ws, &c, &opts, 0.0, 1e-6, coeffs, &state, false, false, opts.gmin, 1.0,
+        );
+        let probe = ws.stall_norm_probe.take().expect("probe was armed");
+        assert!(
+            probe.len() >= 2,
+            "fixture drift: the solve ended after {} iteration(s); the probe \
+             needs a real iteration history",
+            probe.len()
+        );
+
+        // (a) The stall norm is never SMALLER than the post-line-search
+        // remeasurement: the search only ever shortens the step, so a stall
+        // norm below it would mean the detector is reading something that is
+        // not the undamped step at all.
+        // (b) At least one iteration backtracked hard (this board exists to
+        // force the alpha floor), and there the two norms must genuinely
+        // diverge — under the R15 bug they are EQUAL on every iteration.
+        let mut hard_backtracks = 0usize;
+        for (k, &(stall_norm, post_ls_norm)) in probe.iter().enumerate() {
+            assert!(
+                stall_norm >= post_ls_norm * (1.0 - 1e-12),
+                "iter {k}: stall norm {stall_norm:.6e} below the globalized \
+                 step {post_ls_norm:.6e} — not the undamped step"
+            );
+            if post_ls_norm < stall_norm * 0.25 {
+                hard_backtracks += 1;
+            }
+        }
+        assert!(
+            hard_backtracks >= 1,
+            "fixture drift: no iteration backtracked below alpha = 1/4, so \
+             this run cannot distinguish the undamped norm from the \
+             line-searched one (probe: {probe:?})"
         );
     }
 }
