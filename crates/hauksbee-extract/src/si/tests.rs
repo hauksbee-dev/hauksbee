@@ -49,6 +49,25 @@ fn parse_helpers() {
     assert_eq!(super::parse_farads("4p7"), Some(4.7e-12));
     assert_eq!(super::parse_farads("0.1uF"), Some(0.1e-6));
     assert_eq!(super::parse_farads("TBD"), None);
+    // R33: a trailing dielectric / voltage / tolerance token (space- or
+    // letter-separated) is metadata, not a fractional part — the base value must
+    // still parse, not drop to None (which produced a false "crystal has no load
+    // caps" finding on a correctly-capped board). The "4p7" fraction form (digits
+    // IMMEDIATELY after the unit) still works. (Approx compare: `a*mult` differs
+    // from the literal in the last bit for some values, e.g. 22e-12.)
+    let farads_approx = |s: &str, want: f64| {
+        let got = super::parse_farads(s);
+        assert!(
+            got.is_some_and(|v| (v - want).abs() <= want.abs() * 1e-9),
+            "parse_farads({s:?}) = {got:?}, want ~{want:e}"
+        );
+    };
+    farads_approx("18pF C0G", 18e-12);
+    farads_approx("18pF 50V", 18e-12);
+    farads_approx("10n 5%", 10e-9);
+    farads_approx("22p X7R", 22e-12);
+    farads_approx("4p7", 4.7e-12); // fraction still parses
+    farads_approx("2n2 50V", 2.2e-9); // fraction + rating
     assert_eq!(super::parse_ohms("2.2k/R0603"), Some(2200.0));
     assert_eq!(super::parse_ohms("4k7"), Some(4700.0));
     assert_eq!(super::parse_ohms("0R"), Some(0.0));

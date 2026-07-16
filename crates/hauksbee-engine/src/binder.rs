@@ -3313,7 +3313,14 @@ fn embedded_rail_magnitude(n: &str) -> Option<f64> {
                 format!("{head}.{frac}").parse().ok()
             };
             if let Some(m) = mag {
-                if m > 0.0 && m <= 60.0 && m.is_finite() {
+                // No upper clamp: mirror positive_rail_fallback (which resolves
+                // "+65V" -> 65). A <=60 V clamp made embedded_rail_magnitude
+                // return None for a genuine high-voltage rail ("VBUS_65V"), so
+                // control fell through to the loose "contains 5V" substring branch,
+                // which matched the "5V" INSIDE "65V" and silently solved a 65 V
+                // rail at 5 V — masking overvoltage stress. The supply-token + 'V'
+                // gate is specific enough without the range clamp.
+                if m > 0.0 && m.is_finite() {
                     return Some(m);
                 }
             }
@@ -3913,6 +3920,22 @@ mod rail_voltage_tests {
         assert_eq!(power_rail_voltage("VCC_5V"), Some(5.0));
         assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
         assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
+    }
+
+    /// R33: a supply-token rail ABOVE 60 V that embeds a "5V"/"3V3" digit
+    /// substring ("VBUS_65V" contains "5V", "VDD_63V3" contains "3V3") must read
+    /// its FULL magnitude. embedded_rail_magnitude used to clamp >60 V to None, so
+    /// control fell through to the loose substring branch and silently solved a
+    /// 65 V rail at 5 V — masking overvoltage stress. The '+' form ("+65V") was
+    /// already correct via positive_rail_fallback; the token form now matches it.
+    #[test]
+    fn high_voltage_token_rails_are_not_swallowed_by_the_5v_substring() {
+        assert_eq!(power_rail_voltage("VBUS_65V"), Some(65.0));
+        assert_eq!(power_rail_voltage("VBUS_75V"), Some(75.0));
+        assert_eq!(power_rail_voltage("VCC_95V"), Some(95.0));
+        assert_eq!(power_rail_voltage("VDD_63V3"), Some(63.3));
+        // The '+' form was already correct and must stay so.
+        assert_eq!(power_rail_voltage("+65V"), Some(65.0));
     }
 
     /// R16: a bare domain-suffixed SIGNAL net that merely contains "3V3"/"3.3V"

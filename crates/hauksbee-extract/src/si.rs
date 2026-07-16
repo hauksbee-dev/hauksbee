@@ -339,17 +339,27 @@ fn parse_farads(v: &str) -> Option<f64> {
             let (a, b) = s.split_at(idx);
             let b = &b[suffix.len()..];
             let a: f64 = a.trim().parse().ok()?;
-            if b.is_empty() {
+            // "4p7" style: the suffix doubles as a decimal point, but ONLY when
+            // digits IMMEDIATELY follow it. A space- or letter-separated trailing
+            // token — a dielectric code ("18pF C0G"), a voltage rating
+            // ("18pF 50V"), or a tolerance ("10n 5%") — is metadata, not a
+            // fraction: ignore it and take the base value, matching netlint's
+            // parse_capacitance_uf. (Before this, any trailing token poisoned the
+            // fractional parse and dropped the whole value to None, producing a
+            // false "crystal has no load caps" finding.)
+            let frac_digits: String = b.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if frac_digits.is_empty() {
                 return Some(a * mult);
             }
-            // "4p7" style: suffix as decimal point.
-            let frac: f64 = format!("0.{}", b.trim()).parse().ok()?;
+            let frac: f64 = format!("0.{frac_digits}").parse().ok()?;
             return Some((a + frac) * mult);
         }
     }
     // A bare number with no unit on a crystal load cap is implausibly farads;
     // treat as picofarads only when it is a small integer-ish value, else reject.
-    let n: f64 = s.parse().ok()?;
+    // Take only the leading whitespace-delimited token so a trailing metadata
+    // token ("18 C0G") does not defeat the parse.
+    let n: f64 = s.split_whitespace().next()?.parse().ok()?;
     if (1.0..=100.0).contains(&n) {
         Some(n * 1e-12)
     } else {
