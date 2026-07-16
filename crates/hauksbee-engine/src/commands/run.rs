@@ -226,7 +226,15 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // JSON emitters (thermal coverage, co-sim notes); they must fall THROUGH this
     // combined branch or those JSON paths become unreachable dead code.
     if cfg.json && !cfg.thermal && !cfg.headless {
-        return crate::reports::check::emit_combined_json(&cfg.board, &board, &text, &raw, altium.is_some(), &lib);
+        return crate::reports::check::emit_combined_json(
+            &cfg.board,
+            &board,
+            &text,
+            &raw,
+            altium.is_some(),
+            &lib,
+            cfg.strict,
+        );
     }
 
     // Default flow (no report/headless/ac flag). The interactive terminal UI is

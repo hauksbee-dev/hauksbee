@@ -1131,11 +1131,17 @@ impl NetlistBuilder {
         //     survives pin deduplication.
         if !self.no_connect_nodes.is_empty() {
             let nc_nodes = std::mem::take(&mut self.no_connect_nodes);
-            let nc_roots: std::collections::HashSet<usize> =
-                nc_nodes.iter().map(|&n| self.uf.find(n)).collect();
-            for (i, r) in &root_of_pin {
-                if nc_roots.contains(r) {
-                    let ps = &self.pin_sites[*i];
+            // Tag by pin-site COINCIDENCE, not shared net ROOT: `point_node`
+            // dedups union-find nodes by coordinate, so a no_connect placed on a
+            // pin yields the same node id as that pin's site. Keying on the root
+            // instead blanketed a whole net when an (ERC-invalid) no_connect fell
+            // on a connected multi-pin net — suppressing genuine floating-pin
+            // findings and dropping a driven power-rail pin. Match the pin the
+            // marker actually sits on, mirroring KiCad's per-pin `+no_connect`.
+            let nc_set: std::collections::HashSet<usize> = nc_nodes.into_iter().collect();
+            for (i, _r) in &root_of_pin {
+                let ps = &self.pin_sites[*i];
+                if nc_set.contains(&ps.node) {
                     let kind = &mut self.components[ps.comp].pins[ps.pin_idx].kind;
                     if !kind.to_ascii_lowercase().contains("no_connect") {
                         if kind.is_empty() {

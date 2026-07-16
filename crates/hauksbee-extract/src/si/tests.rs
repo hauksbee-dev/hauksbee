@@ -55,6 +55,23 @@ fn parse_helpers() {
 }
 
 #[test]
+fn parse_helpers_handle_unicode_and_spice_multipliers() {
+    // R24: both micro glyphs — the micro sign U+00B5 and the Greek small-letter
+    // mu U+03BC — must parse as 1e-6 (libraries write "4.7µF" with either).
+    assert_eq!(super::parse_farads("4.7\u{00b5}F"), Some(4.7e-6));
+    assert_eq!(super::parse_farads("4.7\u{03bc}F"), Some(4.7e-6));
+    assert_eq!(super::parse_farads("0.1\u{03bc}F"), Some(0.1e-6));
+    // Both ohm glyphs — Greek capital omega U+03A9 and the ohm sign U+2126.
+    assert_eq!(super::parse_ohms("10\u{03a9}"), Some(10.0));
+    assert_eq!(super::parse_ohms("10\u{2126}"), Some(10.0));
+    // SPICE-style MEG/GIG multipliers, matched before the single-letter scan.
+    assert_eq!(super::parse_ohms("10MEG"), Some(1e7));
+    assert_eq!(super::parse_ohms("2GIG"), Some(2e9));
+    // The 4M7 single-letter decimal notation still means 4.7 MΩ (not MEG).
+    assert_eq!(super::parse_ohms("4M7"), Some(4.7e6));
+}
+
+#[test]
 fn routed_length_sums_segments() {
     let doc = root_of(
         r#"(net 1 "USB_DP")
