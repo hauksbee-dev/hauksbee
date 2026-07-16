@@ -388,6 +388,42 @@ fn i2c_no_pullup_is_not_our_finding() {
     );
 }
 
+#[test]
+fn i2c_dual_pullups_combine_in_parallel_not_min() {
+    // A bus terminated at BOTH ends: two 10k pull-ups to +3V3 (one per end),
+    // 15 sensor pins (~150 pF). Two pull-ups sit in PARALLEL, so the effective
+    // R is 5k (not 10k): t_r ~ 0.8473*5000*150e-3 = 635 ns, comfortably under the
+    // 1000 ns standard-mode limit -> silent. The old code took the SMALLEST single
+    // resistor (10k), computing ~1271 ns and firing a false-positive finding on a
+    // bus that is actually in spec. min-of-parallel-resistors over-reports t_r.
+    let mut body = String::from(r#"(net 1 "SDA") (net 2 "+3V3")
+        (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+          (property "Reference" "R1") (property "Value" "10k")
+          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+        (footprint "Resistor_SMD:R_0402" (at 7 5) (layer "F.Cu")
+          (property "Reference" "R2") (property "Value" "10k")
+          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#);
+    for i in 0..15 {
+        body.push_str(&format!(
+            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
+              (property "Reference" "U{}") (property "Value" "SENSOR")
+              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
+            10 + i,
+            i + 1
+        ));
+    }
+    let b = pcb(&body);
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, &mut r);
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "two 10k pull-ups are 5k in parallel: the bus is in spec, no false positive"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Antenna keepout check.
 // ---------------------------------------------------------------------------
@@ -451,6 +487,29 @@ fn antenna_keepout_engulfing_pour_fires_high() {
         r.finding_count(),
         1,
         "a pour that engulfs the keepout must fire"
+    );
+    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
+}
+
+#[test]
+fn antenna_keepout_nonconvex_engulfing_pour_fires_high() {
+    // A REAL KiCad pour outline is deeply non-convex (it weaves around vias, pads
+    // and thermal reliefs). This plane covers the whole antenna keepout (board x
+    // 41..59, y 22.25..37.25) but carries a notch far from it (x 85..95, y 60..100),
+    // giving the outline reflex vertices. The old convex-only `point_in_poly`
+    // winding test returns false for a point inside such a polygon the moment two
+    // edges disagree in sign, so it silently missed the engulf and reported a
+    // false all-clear on exactly the copper-under-antenna geometry the check
+    // exists to catch. The even-odd ray cast handles arbitrary polygons.
+    let intruder = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
+        (filled_polygon (layer "F.Cu")
+          (pts (xy 0 0) (xy 100 0) (xy 100 100) (xy 95 100)
+               (xy 95 60) (xy 85 60) (xy 85 100) (xy 0 100))))"#;
+    let r = run_keepout(&wroom_text(intruder));
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "a non-convex pour that engulfs the keepout must fire"
     );
     assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
 }

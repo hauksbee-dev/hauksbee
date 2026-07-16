@@ -761,11 +761,13 @@ fn is_connector_like(c: &Component) -> bool {
         || fp.contains("uext")
 }
 
-/// Find the pull-up resistance on an I2C net: a resistor with one pad on the net
-/// and the other on a rail-like node. Returns the smallest such R (the strongest
-/// pull dominates) in ohms.
+/// Find the effective pull-up resistance on an I2C net: every resistor with one
+/// pad on the net and the other on a rail-like node. Multiple pull-ups on one
+/// net sit in PARALLEL, so the effective R is the reciprocal of the summed
+/// conductances (1/(Σ 1/Rᵢ)) — strictly SMALLER than any single resistor, i.e.
+/// a faster bus. Returns ohms, or `None` if the net carries no pull-up.
 fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
-    let mut best: Option<f64> = None;
+    let mut conductance = 0.0_f64; // Σ 1/Rᵢ (siemens)
     for (c, _p) in board.net_members(net_id) {
         if !is_resistor(c) {
             continue;
@@ -778,11 +780,13 @@ fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
         });
         if to_rail {
             if let Some(r) = parse_ohms(&c.value) {
-                best = Some(best.map_or(r, |b: f64| b.min(r)));
+                if r > 0.0 {
+                    conductance += 1.0 / r;
+                }
             }
         }
     }
-    best
+    (conductance > 0.0).then(|| 1.0 / conductance)
 }
 
 /// Estimate bus capacitance (pF) on an I2C net from device count plus optional
@@ -1190,9 +1194,15 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                         }
                     }
                     // (b) keepout corner inside the pour (containment / engulf).
+                    // A real KiCad pour outline is deeply NON-convex (it weaves
+                    // around every via / pad / thermal relief), so the convex
+                    // `point_in_poly` winding test returns false for interior
+                    // points the moment two edges disagree — silently missing the
+                    // engulf it was written to catch. Use the even-odd ray cast,
+                    // which is correct for arbitrary (non-convex) polygons.
                     if hit.is_none() && fill.len() >= 3 {
                         for &(kx, ky) in &keepout_corners {
-                            if point_in_poly(kx, ky, &fill) {
+                            if crate::gerber::geo::point_in_polygon(kx, ky, &fill) {
                                 hit = Some((kx, ky));
                                 break;
                             }
