@@ -201,7 +201,7 @@ impl Workspace {
     /// non-finite entry returns +inf (a poisoned point is never a root). Read-only
     /// w.r.t. the operating point; it just stamps and multiplies.
     pub fn dc_residual_inf_norm(&mut self, circuit: &Circuit, opts: &SolverOptions) -> f64 {
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(circuit.devices.len());
         self.matrix.clear_values();
         for v in self.rhs.iter_mut() {
@@ -253,7 +253,7 @@ impl Workspace {
     /// Argmax companion of [`Self::dc_residual_inf_norm`]: returns
     /// `(max|F|, node_index)` so callers can name the worst-balanced node.
     pub fn dc_residual_argmax(&mut self, circuit: &Circuit, opts: &SolverOptions) -> (f64, usize) {
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(circuit.devices.len());
         self.matrix.clear_values();
         for v in self.rhs.iter_mut() {
@@ -1106,7 +1106,7 @@ fn dc_solve(
     seed: Option<&[f64]>,
 ) -> Result<(), String> {
     ws.used_staged_dc = false;
-    let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+    let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
     let solve = |ws: &mut Workspace, gmin: f64, scale: f64| {
         newton_solve(
@@ -1607,7 +1607,7 @@ fn staged_event_solve(
     branch_reg: f64,
     dbg: bool,
 ) -> Option<Vec<f64>> {
-    let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+    let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
     let empty = ReactiveState::new(circuit.devices.len());
     // The event-driven inner solves converge LINEARLY in their tail (the decayed
     // damping that breaks the diode/comparator oscillation also slows the final
@@ -1925,7 +1925,7 @@ fn solve_diode_is_homotopy(
         ws.x.copy_from_slice(&x);
         // Use the plain seeded Newton at the staged gmin (no recursion into the
         // staged ladder — we are already inside it and supply the warm start).
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(work.devices.len());
         let r = newton_solve(&mut ws, &work, opts, 0.0, 1.0, coeffs, &empty, true, false, staged_gmin, 1.0);
         if !r.converged {
@@ -2321,7 +2321,7 @@ mod vswitch_jacobian_tests {
         let (c, out) = gentle_feedback_switch_circuit();
         let opts = SolverOptions::default();
         let mut ws = Workspace::new(&c);
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, true);
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(c.devices.len());
         // Cold start from zero (the default x), full sources, DC. Plain Newton,
         // no homotopy: this is the bare per-step behaviour the tangent improves.
