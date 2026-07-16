@@ -840,7 +840,12 @@ impl BehavioralDevice {
         let iout = ((node_v(c.out_drv_node) - node_v(c.out_node)) / c.out_r_ohms).abs();
         let vout = node_v(c.out_node).max(1e-6);
         let vin = node_v(c.in_node).max(1e-6);
-        let eff = c.cfg.efficiency.unwrap_or(0.9).clamp(0.05, 1.0);
+        // Validation (`hauksbee-models::validate_behavioral`) accepts any
+        // efficiency in (0,1]; honour it. The tiny floor is purely a divide
+        // guard for the reflected-current computation below, not a physics
+        // clamp — a 1% efficient stage really does reflect 100x the output
+        // power onto its input.
+        let eff = c.cfg.efficiency.unwrap_or(0.9).clamp(1e-9, 1.0);
 
         // Reflected input current for this output power.
         let mut iin = (vout * iout) / (eff * vin);
@@ -855,12 +860,28 @@ impl BehavioralDevice {
             }
         }
 
-        // Input-current limit: if the reflected input draw exceeds the limit,
-        // throttle the output further so the input draw is held at the limit.
-        if c.iin_limit_a.is_finite() && iin > c.iin_limit_a && iin > 1e-9 {
-            let throttle = c.iin_limit_a / iin;
-            v_cmd = (v_cmd * throttle).min(v_cmd);
-            iin = c.iin_limit_a;
+        // Input-current limit: throttle the output further so the input draw
+        // is held at the limit. Anchored to the *previous command* like the
+        // output-CC fold and `cc_regulate`, and ungated (computed every chunk,
+        // applied through `min`) so an under-limit chunk holds the CC point
+        // instead of resetting to the setpoint. The reflected draw scales with
+        // the SQUARE of the command into a resistive load (iin ∝ vout·iout),
+        // so the command that draws exactly the limit is
+        // `last_cmd·sqrt(limit/iin)`; a setpoint-scaled (or linear-anchored)
+        // law is a period-2 limit cycle that never settles.
+        if c.iin_limit_a.is_finite() && iin > 1e-9 {
+            let v_in_lim = c.last_cmd_vout.max(1e-6) * (c.iin_limit_a / iin).sqrt();
+            if v_in_lim < v_cmd {
+                v_cmd = v_in_lim;
+                // The output runs THIS chunk at the throttled command, so the
+                // input Isource must draw that operating point's power, not
+                // the stale measured one: re-reflect through the load
+                // conductance seen this chunk (iout/vout). Otherwise the
+                // output would deliver full power while the input drew the
+                // previous under-limit current — energy from nowhere, and the
+                // limit never actually enforced.
+                iin = (v_cmd * v_cmd * (iout / vout)) / (eff * vin);
+            }
         }
         v_cmd = v_cmd.clamp(0.0, c.cfg.vout_setpoint);
 
