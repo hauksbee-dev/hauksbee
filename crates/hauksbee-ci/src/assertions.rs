@@ -511,6 +511,23 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let deadline = a.deadline_ms.unwrap_or(0.0);
     let key = (net.clone(), level.to_bits());
 
+    // The boot window is [0, deadline], but the firmware run only produced data
+    // out to sim_ms. If the deadline lands past the end of the simulation the
+    // tail of the window was never observed, so "boot window clean" would be
+    // asserting coverage over an unsimulated interval — a false green. Report it
+    // as unmet (mirrors check_voltage's "never sampled" failure) rather than
+    // trusting a first-cross with no chance of a later drop being seen.
+    if deadline > out.sim_ms + 1e-9 {
+        return (
+            false,
+            format!(
+                "boot deadline {deadline} ms is past the end of the {:.2} ms simulation, \
+                 so boot coverage for control net '{net}' cannot be confirmed — extend the run duration",
+                out.sim_ms
+            ),
+        );
+    }
+
     let first_cross = out.boot_first_cross_ms.get(&key).copied();
     let drop_after = out.boot_drop_after_cross_ms.get(&key).copied();
     match first_cross {
@@ -1330,14 +1347,15 @@ mod tests {
         .unwrap();
 
         // (1) reached at 5 ms, held through the 10 ms deadline, released at 50 ms.
-        let mut out = RunOutcome::default();
+        // The 100 ms sim covers the whole boot window.
+        let mut out = RunOutcome { sim_ms: 100.0, ..Default::default() };
         out.boot_first_cross_ms.insert(key.clone(), 5.0);
         out.boot_drop_after_cross_ms.insert(key.clone(), 50.0);
         let (ok, msg) = check_boot_coverage(&assertion, &out);
         assert!(ok, "held-through-deadline then released must pass: {msg}");
 
         // (2) reached at 5 ms but fell back at 8 ms, before the deadline.
-        let mut out = RunOutcome::default();
+        let mut out = RunOutcome { sim_ms: 100.0, ..Default::default() };
         out.boot_first_cross_ms.insert(key.clone(), 5.0);
         out.boot_drop_after_cross_ms.insert(key.clone(), 8.0);
         let (ok, msg) = check_boot_coverage(&assertion, &out);
@@ -1345,13 +1363,51 @@ mod tests {
         assert!(msg.contains("fell back below"), "distinct dropped message: {msg}");
 
         // (3) never reached: fails with the below-threshold diagnosis, not a drop.
-        let out = RunOutcome::default();
+        let out = RunOutcome { sim_ms: 100.0, ..Default::default() };
         let (ok, msg) = check_boot_coverage(&assertion, &out);
         assert!(!ok, "never-reached must fail");
         assert!(
             !msg.contains("fell back below"),
             "never-reached must not read as a reached-then-dropped: {msg}"
         );
+    }
+
+    #[test]
+    fn boot_coverage_deadline_past_sim_end_is_not_a_false_green() {
+        // R34: the run stops at duration_ms, so RunOutcome only carries data out
+        // to sim_ms. A first-cross before a deadline that lands PAST sim_ms left
+        // drop_after = None (a later drop could never be observed), and the old
+        // code returned GREEN "boot window clean" — asserting coverage over an
+        // unsimulated tail. The deadline outrunning the sim must FAIL, not pass.
+        use super::check_boot_coverage;
+        use crate::runner::RunOutcome;
+        use crate::spec::Assertion;
+
+        let net = "EN".to_string();
+        let level = 3.0_f64;
+        let key = (net.clone(), level.to_bits());
+        // deadline 50 ms, but the firmware only ran 20 ms.
+        let assertion: Assertion = toml::from_str(
+            "kind = \"boot-coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 50.0\n",
+        )
+        .unwrap();
+
+        let mut out = RunOutcome { sim_ms: 20.0, ..Default::default() };
+        out.boot_first_cross_ms.insert(key.clone(), 5.0); // crossed early, never dropped in-window
+        let (ok, msg) = check_boot_coverage(&assertion, &out);
+        assert!(!ok, "deadline past the sim end must not pass on an unobserved window: {msg}");
+        assert!(
+            msg.contains("past the end") && msg.contains("cannot be confirmed"),
+            "must name the sim-too-short cause, not a spurious clean pass: {msg}"
+        );
+
+        // Control: the same crossing with a deadline INSIDE the sim still passes.
+        let inside: Assertion = toml::from_str(
+            "kind = \"boot-coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n",
+        )
+        .unwrap();
+        let (ok, _msg) = check_boot_coverage(&inside, &out);
+        assert!(ok, "a deadline within the simulated window still passes");
     }
 
     // A genuinely undriven net on a backend that can report drive direction (AVR)
