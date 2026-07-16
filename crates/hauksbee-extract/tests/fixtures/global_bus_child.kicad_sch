@@ -1,0 +1,114 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-000000000031")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~")
+					(number "1")
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~")
+					(number "2")
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a51")
+		(property "Reference" "RC"
+			(at 102 100 90)
+		)
+		(property "Value" "10k"
+			(at 102 100 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b71"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b72"))
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 110 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a52")
+		(property "Reference" "RD"
+			(at 112 100 90)
+		)
+		(property "Value" "10k"
+			(at 112 100 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b73"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b74"))
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 120 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a53")
+		(property "Reference" "RF"
+			(at 122 100 90)
+		)
+		(property "Value" "10k"
+			(at 122 100 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b75"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b76"))
+	)
+	(wire
+		(pts
+			(xy 100 96.19) (xy 100 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c51")
+	)
+	(wire
+		(pts
+			(xy 110 96.19) (xy 110 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c52")
+	)
+	(wire
+		(pts
+			(xy 120 96.19) (xy 120 90)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c53")
+	)
+	(label "GB0"
+		(at 100 93 0)
+	)
+	(label "GB1"
+		(at 110 93 0)
+	)
+	(label "LB0"
+		(at 120 93 0)
+	)
+	(global_label "GB[0..1]"
+		(shape input)
+		(at 130 80 0)
+	)
+	(label "LB[0..1]"
+		(at 130 85 0)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
