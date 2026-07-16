@@ -355,6 +355,12 @@ impl Params {
         self.0.get(key)?.as_str()
     }
 
+    /// Retrieve a boolean param by name. `None` when the key is absent or its
+    /// value is not a bool — so `flag = false` is distinguishable from omitted.
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        self.0.get(key)?.as_bool()
+    }
+
     /// Insert a float param.
     pub fn set_f64(&mut self, key: impl Into<String>, v: f64) {
         self.0.insert(key.into(), ParamValue::Float(v));
@@ -402,5 +408,35 @@ impl ParamValue {
             ParamValue::String(s) => Some(s.as_str()),
             _ => None,
         }
+    }
+
+    /// Return as `bool` for boolean values. `None` for non-bool params, so a
+    /// caller can distinguish `flag = false` from an omitted/non-bool `flag`.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ParamValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Params;
+
+    #[test]
+    fn get_bool_distinguishes_false_from_absent() {
+        // R24: the MCU `module` flag was presence-checked, so `module = false`
+        // wrongly activated module (Arduino-header) mapping. get_bool must return
+        // Some(false) for an explicit false and None for an absent/non-bool key.
+        let p: Params = toml::from_str("module = false\nother = 3\nname = \"x\"").unwrap();
+        assert_eq!(p.get_bool("module"), Some(false));
+        assert_eq!(p.get_bool("missing"), None);
+        // A non-bool value is not coerced to a bool.
+        assert_eq!(p.get_bool("other"), None);
+        assert_eq!(p.get_bool("name"), None);
+
+        let t: Params = toml::from_str("module = true").unwrap();
+        assert_eq!(t.get_bool("module"), Some(true));
     }
 }
