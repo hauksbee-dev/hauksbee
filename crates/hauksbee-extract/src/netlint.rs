@@ -229,6 +229,14 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     }
     let after = rest[int_part.len()..].strip_prefix('V')?;
     let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    // The name must be ENTIRELY consumed by the "<digits>V<digits>" grammar.
+    // Otherwise rail-named SIGNAL nets — "5V_DET", "3V3_EN", "5V_SEL", "12V_PG"
+    // — over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
+    // reports a monitor/enable net as a supply and suppresses genuine findings
+    // (a missing I2C pull-up whose divider taps a "5V_DET" sense net).
+    if !after[frac.len()..].is_empty() {
+        return None;
+    }
     let mag: f64 = if frac.is_empty() {
         int_part.parse().ok()?
     } else {
@@ -1214,6 +1222,27 @@ mod rail_and_cap_tests {
         assert_eq!(rail_voltage("VCC5V"), Some(5.0));
         // A hierarchical leaf still normalises.
         assert_eq!(rail_voltage("/Power/+15V"), Some(15.0));
+    }
+
+    #[test]
+    fn rail_named_signal_nets_are_not_rails() {
+        // R31: numeric_rail_magnitude read only the leading "<digits>V<digits>"
+        // and ignored any trailing text, so rail-named SIGNAL nets over-matched
+        // as supplies ("5V_DET" -> 5.0 V). net_is_raillike then wrongly treated a
+        // presence/enable/select net as a rail — e.g. suppressing a missing I2C
+        // pull-up whose divider taps a "5V_DET" sense net. A name must be entirely
+        // consumed by the numeric-rail grammar to count.
+        // These reach the numeric-rail grammar (they start with a digit and are
+        // not exact-arm rails); the trailing signal suffix must disqualify them.
+        assert_eq!(rail_voltage("5V_DET"), None);
+        assert_eq!(rail_voltage("5V_DETECT"), None);
+        assert_eq!(rail_voltage("12V_PG"), None);
+        assert_eq!(rail_voltage("24V_MON"), None);
+        // Genuine numeric rails (whole name consumed) still resolve.
+        assert_eq!(rail_voltage("5V"), Some(5.0));
+        assert_eq!(rail_voltage("3V3"), Some(3.3));
+        assert_eq!(rail_voltage("+12V"), Some(12.0));
+        assert_eq!(rail_voltage("15V0"), Some(15.0));
     }
 
     #[test]

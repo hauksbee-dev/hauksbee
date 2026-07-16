@@ -580,6 +580,22 @@ impl ModelLibrary {
 
         for entry in db_file.models {
             let id = entry.id.clone();
+            // Fail loud on an entry with no match rules. An all-None `[match]`
+            // block (an omitted section, or a typo'd key like `mch_re` that serde
+            // silently drops) matches EVERY component at specificity 0. Since the
+            // user layer outranks pack/builtin in `resolve`'s sort key, one such
+            // stray entry would silently rebind the whole board to it — a
+            // wholesale-wrong simulation with no diagnostic. The schema documents
+            // "at least one rule must be populated"; enforce it here.
+            if entry.r#match.is_empty() {
+                return Err(ModelError::ValidationFailed {
+                    id,
+                    messages: "entry has no match rules (lib_id / value_re / \
+                               footprint_re / mpn_re all absent); at least one is \
+                               required, else it would match every component"
+                        .to_string(),
+                });
+            }
             let compiled = CompiledEntry::compile(entry).map_err(|e| ModelError::InvalidRegex {
                 id: id.clone(),
                 error: e,
@@ -752,6 +768,41 @@ mod tests {
     #[test]
     fn builtin_loads_without_panic() {
         let _l = lib();
+    }
+
+    #[test]
+    fn entry_without_match_rules_is_rejected_loud() {
+        // R31: an all-None `[match]` block (an omitted section, or a typo'd key
+        // like `mch_re` that serde silently drops) matches EVERY component at
+        // specificity 0. Since the user layer outranks pack/builtin, one such
+        // stray entry would silently rebind the whole board to it. Loading must
+        // fail loud instead of silently accepting a universal catch-all.
+        let mut lib = ModelLibrary::builtin();
+        let stray = r#"
+            [[models]]
+            id = "stray"
+            kind = "passive"
+        "#;
+        let err = lib
+            .load_toml_str(stray, "stray.toml", SourceLayer::UserDir)
+            .expect_err("an entry with no match rules must be rejected");
+        assert!(
+            matches!(&err, ModelError::ValidationFailed { id, .. } if id == "stray"),
+            "must be a ValidationFailed naming the stray entry, got: {err:?}"
+        );
+
+        // A well-formed entry (one match rule) still loads.
+        let ok = r#"
+            [[models]]
+            id = "real"
+            kind = "passive"
+            [models.match]
+            lib_id = "Device:R"
+        "#;
+        assert!(
+            lib.load_toml_str(ok, "real.toml", SourceLayer::UserDir).is_ok(),
+            "an entry with a populated match rule must load"
+        );
     }
 
     /// Round-7 #14: the report's Display truncates long fields to fit the table;
