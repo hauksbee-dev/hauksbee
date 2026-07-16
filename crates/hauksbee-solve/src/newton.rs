@@ -1111,6 +1111,24 @@ pub fn dc_operating_point(
     dc_operating_point_seeded(ws, circuit, opts, None)
 }
 
+/// Solve the DC operating point for AC small-signal analysis, NEVER honoring
+/// initial conditions. SPICE `.ac` always linearizes around the ordinary DC
+/// operating point and ignores `.ic`/UIC. [`dc_operating_point`] sets `use_ic`
+/// whenever any cap/inductor carries an IC, which pins those elements to their
+/// IC (a cap with `ic` is shorted, an inductor's branch current is fixed) — the
+/// transient initial state, NOT the steady-state bias. Reusing that for AC would
+/// collapse the true bias and evaluate every nonlinear device tangent (diode gd,
+/// BJT gm/gpi/go, MOSFET gm/gds) at the wrong point, silently corrupting the
+/// Bode response. This entry point forces `use_ic = false` so AC always sees the
+/// real DC bias.
+pub fn dc_operating_point_no_ic(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+) -> Result<(), String> {
+    dc_solve(ws, circuit, opts, false, None)
+}
+
 /// Solve the DC operating point, optionally warm-started from a `seed` (a prior
 /// operating point of the same circuit, e.g. the previous co-sim chunk's final
 /// unknowns). A good seed lets plain Newton converge in ~1 iteration, skipping
@@ -2200,7 +2218,7 @@ mod nan_guard_tests {
 
 #[cfg(test)]
 mod residual_tests {
-    use super::{dc_operating_point, Workspace};
+    use super::{dc_operating_point, dc_operating_point_no_ic, Workspace};
     use crate::options::SolverOptions;
     use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 
@@ -2249,6 +2267,58 @@ mod residual_tests {
         assert!(
             (r_off - 2e-3).abs() < 1e-4,
             "a 1 V error at the midpoint should leave ~2 mA KCL residual, got {r_off:e}"
+        );
+    }
+
+    #[test]
+    fn ac_operating_point_ignores_initial_conditions() {
+        // R32: AC analysis linearizes around the ordinary DC operating point and
+        // must IGNORE initial conditions. A 1 V divider (two equal 1k) with a cap
+        // across the lower leg carrying ic=0: the TRUE DC bias floats the cap open,
+        // so the midpoint sits at 0.5 V. `dc_operating_point` honors the ic (pins
+        // the cap, shorting the midpoint to 0 V) — correct for the transient
+        // initial state but WRONG for AC, where it would evaluate every nonlinear
+        // tangent at a collapsed bias. `dc_operating_point_no_ic` (used by AC) must
+        // return the real 0.5 V bias regardless of the ic.
+        let mut c = Circuit::new();
+        let top = c.node("top");
+        let mid = c.node("mid");
+        c.add(Device::Vsource {
+            name: "V".into(),
+            p: top,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor { name: "R1".into(), a: top, b: mid, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor { name: "R2".into(), a: mid, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: mid,
+            b: NodeId::GROUND,
+            farads: 1e-6,
+            ic: Some(0.0),
+        });
+        let opts = SolverOptions::default();
+        let idx = |ws: &Workspace| ws.layout.node(mid).map(|i| ws.x[i]).unwrap_or(f64::NAN);
+
+        // AC path: the ic is ignored, so the midpoint is the true divider bias.
+        let mut ws_ac = Workspace::new(&c);
+        dc_operating_point_no_ic(&mut ws_ac, &c, &opts).unwrap();
+        assert!(
+            (idx(&ws_ac) - 0.5).abs() < 1e-6,
+            "AC operating point must ignore ic and see 0.5 V, got {}",
+            idx(&ws_ac)
+        );
+
+        // The ic-honoring path (transient initial state) pins the cap to ic=0,
+        // shorting the midpoint — proving the two paths genuinely differ, so
+        // reusing it for AC would corrupt the bias.
+        let mut ws_ic = Workspace::new(&c);
+        dc_operating_point(&mut ws_ic, &c, &opts).unwrap();
+        assert!(
+            idx(&ws_ic).abs() < 1e-6,
+            "the ic-honoring DC path pins the midpoint to ic=0, got {}",
+            idx(&ws_ic)
         );
     }
 }
