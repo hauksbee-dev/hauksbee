@@ -315,6 +315,30 @@ fn led_overcurrent_fires() {
     assert_eq!(count(&r, LintCheck::LedCurrentSanity), 1);
 }
 
+/// R15: the LED-current check must not abandon its rail search on the first
+/// co-located R-ref part whose value does not parse. Here a DNP option resistor
+/// (R0, value "DNP") sits on the anode net BEFORE the real 68 ohm series
+/// resistor; the old `?` on parse_ohms returned None for the whole search, so
+/// the over-current LED was silently passed. The genuine series resistor must
+/// still be found and the finding must fire.
+#[test]
+fn led_current_search_skips_unparseable_resistor_and_still_fires() {
+    let comps = r#"
+    (comp (ref D1) (value LED) (footprint LED_SMD:LED_0603))
+    (comp (ref R0) (value DNP) (footprint Resistor_SMD:R_0402))
+    (comp (ref R1) (value 68) (footprint Resistor_SMD:R_0402))"#;
+    let nets = r#"
+    (net (code 1) (name "+5V") (node (ref R1) (pin 1)))
+    (net (code 2) (name "LEDA") (node (ref R0) (pin 1)) (node (ref R1) (pin 2)) (node (ref D1) (pin 1)))
+    (net (code 3) (name "GND") (node (ref R0) (pin 2)) (node (ref D1) (pin 2)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(
+        count(&r, LintCheck::LedCurrentSanity),
+        1,
+        "the DNP resistor must not abort the search before the real 68 ohm series R"
+    );
+}
+
 /// A sane 1 kohm series resistor from 3.3 V (~1.3 mA) does not fire.
 #[test]
 fn led_sane_current_is_clean() {

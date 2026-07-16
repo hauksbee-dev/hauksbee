@@ -398,7 +398,9 @@ impl StressMonitor {
 
             let mut worst_stress = 0.0f64;
             for chk in &checks {
-                let frac = if chk.limit > 0.0 {
+                let frac = if chk.kind == FaultKind::Overtemperature {
+                    thermal_stress_frac(chk.value, chk.limit, self.ambient_c)
+                } else if chk.limit > 0.0 {
                     (chk.value / chk.limit).abs()
                 } else {
                     0.0
@@ -916,9 +918,45 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     i.clamp(-1e3, 1e3)
 }
 
+/// Thermal utilisation as a RISE-based fraction: (Tj − ambient)/(Tj_max −
+/// ambient). An idle part reads ~0 — comparable with the power/current/voltage
+/// checks, which are all true 0-at-idle ratios — and a part at its junction
+/// limit reads 1.0. The old absolute-Celsius ratio (Tj/Tj_max) floored every
+/// dissipating part at ~ambient/Tj_max (~0.2), giving the exported heat-map a
+/// spurious floor. The trip threshold is unchanged: frac > 1 ⟺ Tj > Tj_max under
+/// either formula. Clamped at 0 so a below-ambient junction never reads negative.
+fn thermal_stress_frac(tj_c: f64, tj_max_c: f64, ambient_c: f64) -> f64 {
+    let span = tj_max_c - ambient_c;
+    if span > 0.0 {
+        ((tj_c - ambient_c) / span).max(0.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod monitor_temp_tests {
     use super::*;
+
+    /// R15: the exported thermal stress fraction is rise-based, so a lightly-
+    /// loaded part reads ~0, not the ~0.2 floor the absolute Tj/Tj_max ratio gave
+    /// every dissipating device — while the fault trip (frac > 1) is unchanged.
+    #[test]
+    fn thermal_stress_is_rise_based_not_absolute() {
+        // Ambient 25 C, Tj_max 125 C.
+        // A part barely above ambient reads ~0, not 25/125 = 0.20.
+        assert!(thermal_stress_frac(26.0, 125.0, 25.0) < 0.02, "idle part ~0");
+        // Exactly ambient reads 0.
+        assert_eq!(thermal_stress_frac(25.0, 125.0, 25.0), 0.0);
+        // Halfway up the rise band reads 0.5.
+        assert!((thermal_stress_frac(75.0, 125.0, 25.0) - 0.5).abs() < 1e-9);
+        // At the junction limit reads exactly 1.0 (the trip boundary is preserved).
+        assert!((thermal_stress_frac(125.0, 125.0, 25.0) - 1.0).abs() < 1e-9);
+        // Over the limit reads > 1 (still trips).
+        assert!(thermal_stress_frac(150.0, 125.0, 25.0) > 1.0);
+        // A below-ambient junction never reads negative.
+        assert_eq!(thermal_stress_frac(10.0, 125.0, 25.0), 0.0);
+    }
 
     #[test]
     fn resistor_rating_reads_imperial_not_the_metric_collision() {

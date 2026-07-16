@@ -71,6 +71,46 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
     assert!(f.message.contains("AMS1117") || f.message.contains("1.00 A"), "cites the regulator current: {}", f.message);
 }
 
+/// R15: the SI chokepoint `engine_si` must carry the engine-layer ampacity +
+/// ripple findings that the bare extractor `si_checks` structurally cannot
+/// produce (it has no ModelLibrary to attribute currents). This is the call the
+/// aggregate surfaces (`--check`, the combined `--json`, the TUI, the web front
+/// door) now make, so they no longer print a false-clean SI section over an
+/// under-width power trace that `--si` flags.
+#[test]
+fn engine_si_chokepoint_adds_ampacity_missing_from_bare_si_checks() {
+    let (board, text) = board_and_text(
+        r#"
+  (net 1 "+3V3")
+  (net 2 "VIN")
+  (net 3 "GND")
+  (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (property "Value" "AMS1117-3.3")
+    (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
+    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "+3V3"))
+    (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN")))
+  (segment (start 0 0) (end 10 0) (width 0.15) (layer "F.Cu") (net 1))
+"#,
+    );
+    let lib = ModelLibrary::builtin();
+    // The bare extractor call cannot attribute the regulator's current, so it has
+    // no ampacity finding — exactly what every aggregate surface used to call.
+    let bare = board.si_checks(Some(&text));
+    assert!(
+        findings_of(&bare, SiCheck::TraceAmpacity).is_empty(),
+        "bare si_checks cannot attribute currents, so it carries no ampacity finding"
+    );
+    // The chokepoint adds it, so the aggregate surfaces now see the under-width rail.
+    let via_chokepoint = hauksbee_engine::checks::engine_si(&board, &lib, Some(&text));
+    assert_eq!(
+        findings_of(&via_chokepoint, SiCheck::TraceAmpacity).len(),
+        1,
+        "engine_si must surface the ampacity finding: {:?}",
+        via_chokepoint.findings
+    );
+}
+
 /// The same regulator + rail, but the rail is poured (a copper zone) with only a
 /// thin pad-entry stub: the trace-current engine's Poured exemption must hold, so
 /// `--si` stays silent on it even though the part cites 1.0 A.

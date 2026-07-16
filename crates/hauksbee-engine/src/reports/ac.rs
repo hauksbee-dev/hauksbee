@@ -68,7 +68,11 @@ pub fn emit(
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
-                not_found_nets: Vec::new(),
+                // The requested nets are ALL missing here — surface them in the
+                // structured field too, not just the prose reason, so a machine
+                // consumer reading `not_found_nets` sees them (matching the
+                // partial-sweep path below and this report's never-silent promise).
+                not_found_nets: nodes.clone(),
                 coverage: None,
             });
             println!("{}", jr.to_json());
