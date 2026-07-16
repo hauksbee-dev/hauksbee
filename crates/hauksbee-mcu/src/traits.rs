@@ -46,6 +46,15 @@ pub struct McuState {
     pub cycles: u64,
     /// True if the MCU is in a sleep / idle state awaiting an interrupt.
     pub sleeping: bool,
+    /// True once the core has terminated cleanly and will make no further
+    /// progress (simavr's `cpu_Done`, e.g. a `sleep` with interrupts disabled).
+    pub done: bool,
+    /// True once the core has crashed and will make no further progress
+    /// (simavr's `cpu_Crashed`: illegal opcode, out-of-RAM write, stack death).
+    /// This used to be swallowed — the run loop broke out of its step loop but
+    /// still reported a clean `Ok`, so a crashed MCU was indistinguishable from
+    /// a healthy chunk. Backends that cannot detect a crash leave it false.
+    pub crashed: bool,
 }
 
 /// An event on the I2C (TWI) bus, as seen from the perspective of an

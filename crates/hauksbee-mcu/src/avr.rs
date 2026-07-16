@@ -604,6 +604,19 @@ pub struct AvrMcu {
     /// it here keeps the guest cycle counter (and thus its timers/UART baud)
     /// from drifting behind simulated time over a long run.
     cycle_carry: u64,
+
+    /// Absolute cumulative cycle target: the sum of every whole-cycle budget
+    /// ever requested through `run_cycles` (and thus `run_micros`). The step
+    /// loop runs until `avr->cycle >= run_target` rather than `start + n`:
+    /// `avr_run` advances by whole instructions (1–5 cycles), so each chunk
+    /// stops up to 4 cycles PAST its endpoint, and a per-chunk `start + n`
+    /// target discarded that overshoot — re-incurring it every chunk, the
+    /// guest clock ran unboundedly AHEAD of simulated time. Anchoring to this
+    /// running absolute target lets a prior chunk's overshoot shrink (or
+    /// zero) the next chunk's deficit, so `|cycle − freq·t|` stays bounded by
+    /// one instruction forever. `cycle_carry` still owns the sub-cycle
+    /// fraction; this owns the instruction-boundary remainder on top of it.
+    run_target: u64,
 }
 
 // SAFETY: We never share AvrMcu across threads simultaneously; it is Send
@@ -698,6 +711,7 @@ impl AvrMcu {
             hooked_ports: Vec::new(),
             firmware_loaded: false,
             cycle_carry: 0,
+            run_target: 0,
         })
     }
 
@@ -905,31 +919,46 @@ impl Mcu for AvrMcu {
         }
 
         self.firmware_loaded = true;
+        // Re-anchor the absolute run target (and drop any pending sub-cycle
+        // carry) at the counter the freshly loaded image starts from, so a
+        // reload doesn't inherit the previous image's timing remainders.
+        self.run_target = self.raw_cycle();
+        self.cycle_carry = 0;
         Ok(())
     }
 
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let start = self.raw_cycle();
-        let target = start + n;
+        // Advance the ABSOLUTE cumulative target by this request and step to
+        // it, instead of aiming at `start + n`. See `run_target`'s field doc:
+        // the per-chunk target threw away each chunk's whole-instruction
+        // overshoot (up to 4 cycles), so over many chunks the emulated clock
+        // drifted unboundedly ahead of simulated time. If a prior chunk
+        // overshot, `start` already sits at/past part of this budget and the
+        // loop below runs correspondingly fewer cycles (possibly zero).
+        self.run_target = self.run_target.saturating_add(n);
 
-        loop {
-            let current = self.raw_cycle();
-            if current >= target {
-                break;
-            }
+        while self.raw_cycle() < self.run_target {
             let status = unsafe { ffi::avr_run(self.avr) };
             if status == ffi::cpu_Done as i32 || status == ffi::cpu_Crashed as i32 {
+                // Terminal core: stop immediately instead of spinning toward a
+                // target a finished/crashed CPU can never reach. The terminal
+                // state stays readable via `state().done` / `state().crashed`.
                 break;
             }
         }
 
-        Ok(self.raw_cycle() - start)
+        Ok(self.raw_cycle().saturating_sub(start))
     }
 
     fn run_micros(&mut self, us: u64) -> Result<()> {
         // Carry the sub-cycle remainder across calls so the guest cycle count
         // tracks simulated time exactly even when freq isn't a multiple of the
-        // chunk rate (e.g. a 3.6864 MHz crystal over 100 µs chunks).
+        // chunk rate (e.g. a 3.6864 MHz crystal over 100 µs chunks). The
+        // whole-cycle budget then feeds `run_cycles`' absolute target, which
+        // absorbs the instruction-boundary overshoot the same way the carry
+        // absorbs the fraction: together the guest clock tracks freq·t with
+        // at most one instruction of error, never accumulating.
         let (cycles, carry) = cycle_budget(us, self.frequency_hz, self.cycle_carry);
         self.cycle_carry = carry;
         self.run_cycles(cycles)?;
@@ -1034,11 +1063,17 @@ impl Mcu for AvrMcu {
         unsafe {
             let pc = (*self.avr).pc;
             let cycles = (*self.avr).cycle;
-            let sleeping = (*self.avr).state == ffi::cpu_Sleeping as i32;
+            let cpu = (*self.avr).state;
             McuState {
                 pc,
                 cycles,
-                sleeping,
+                sleeping: cpu == ffi::cpu_Sleeping as i32,
+                // Terminal states, surfaced so a crashed/finished core is
+                // distinguishable from a healthy chunk (run_cycles breaks its
+                // step loop on these but still returns Ok — the state snapshot
+                // is where callers see WHY the core stopped making progress).
+                done: cpu == ffi::cpu_Done as i32,
+                crashed: cpu == ffi::cpu_Crashed as i32,
             }
         }
     }
