@@ -780,6 +780,12 @@ impl Spec {
         if self.duration_ms <= 0.0 {
             return Err(SpecError::Invalid("duration_ms must be positive".into()));
         }
+        // A non-positive frame_ms (a typo, or "as fine as possible") was silently
+        // clamped to 1 µs downstream, running ~1000x more frames than any real
+        // cadence and hanging a fast CI check with no explanation. Name it.
+        if self.frame_ms <= 0.0 {
+            return Err(SpecError::Invalid("frame_ms must be positive".into()));
+        }
         for s in &self.supplies {
             s.validate()?;
         }
@@ -1326,5 +1332,59 @@ impl Assertion {
             }
             other => other.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    fn spec_from(src: &str) -> Spec {
+        let mut spec: Spec = toml::from_str(src).expect("valid toml");
+        spec.base_dir = PathBuf::from(".");
+        spec
+    }
+
+    // `frame_ms` must sit at the top level, BEFORE the [[assert]] table, or TOML
+    // captures it as a field of the assert.
+    fn spec_src(frame_ms: &str) -> String {
+        format!(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = {frame_ms}
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#
+        )
+    }
+
+    #[test]
+    fn non_positive_frame_ms_is_rejected() {
+        // Round-26: a zero/negative frame_ms was silently clamped to 1 µs downstream,
+        // running ~1000x more frames than any real cadence and hanging the check with
+        // no explanation. Validation must name it up front rather than clamp silently.
+        for bad in ["0", "-0.5"] {
+            let src = spec_src(bad);
+            let err = spec_from(&src)
+                .validate()
+                .expect_err("non-positive frame_ms must fail validation");
+            assert!(
+                matches!(&err, SpecError::Invalid(m) if m.contains("frame_ms")),
+                "expected a frame_ms validation error, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn positive_frame_ms_passes_validation() {
+        assert!(
+            spec_from(&spec_src("0.1")).validate().is_ok(),
+            "a positive frame_ms is a valid cadence"
+        );
     }
 }
