@@ -238,6 +238,13 @@ struct NetlistBuilder {
     /// hierarchical label (child side) that must connect member-wise. Resolved
     /// in `finish`, once every bus and bus label is known.
     bus_boundaries: Vec<BusBoundary>,
+    /// Union-find nodes carrying an explicit `(no_connect ...)` flag. A pin whose
+    /// net root matches one of these is a DELIBERATE no-connect, so netlint's
+    /// floating-pin suppression must honor it — mirroring the KiCad-netlist
+    /// loader, which preserves KiCad's own `pintype "…+no_connect"` /
+    /// `unconnected-(…)` signal. Without this the two loaders disagree and the
+    /// schematic path cries wolf on a deliberately-unconnected control pin.
+    no_connect_nodes: Vec<usize>,
     next_sheet: SheetId,
 }
 
@@ -271,6 +278,7 @@ impl NetlistBuilder {
             hier_child: Vec::new(),
             bus_labels: Vec::new(),
             bus_boundaries: Vec::new(),
+            no_connect_nodes: Vec::new(),
             next_sheet: 0,
         }
     }
@@ -443,7 +451,11 @@ impl NetlistBuilder {
         // still materialise the node so the coordinate is accounted for.
         for nc in root.find_all("no_connect") {
             if let Some(at) = at_xy(nc) {
-                self.node_at(sheet, at);
+                // Record the node so a pin sharing its net root can be tagged an
+                // explicit no-connect in `finish` (netlint suppression parity
+                // with the KiCad-netlist loader).
+                let node = self.node_at(sheet, at);
+                self.no_connect_nodes.push(node);
             }
         }
 
@@ -1109,6 +1121,31 @@ impl NetlistBuilder {
             let ps = &self.pin_sites[*i];
             let id = net_id_of_root.get(r).copied();
             self.components[ps.comp].pins[ps.pin_idx].net = id;
+        }
+
+        // 5a. Tag every pin sitting on an explicit `(no_connect ...)` root as a
+        //     deliberate no-connect, so netlint's floating-control-pin
+        //     suppression (which checks `pin.kind` for "no_connect") honors it
+        //     on the schematic path exactly as it already does on the
+        //     KiCad-netlist path. Done BEFORE the unit merge so the flag
+        //     survives pin deduplication.
+        if !self.no_connect_nodes.is_empty() {
+            let nc_nodes = std::mem::take(&mut self.no_connect_nodes);
+            let nc_roots: std::collections::HashSet<usize> =
+                nc_nodes.iter().map(|&n| self.uf.find(n)).collect();
+            for (i, r) in &root_of_pin {
+                if nc_roots.contains(r) {
+                    let ps = &self.pin_sites[*i];
+                    let kind = &mut self.components[ps.comp].pins[ps.pin_idx].kind;
+                    if !kind.to_ascii_lowercase().contains("no_connect") {
+                        if kind.is_empty() {
+                            *kind = "no_connect".to_string();
+                        } else {
+                            kind.push_str("+no_connect");
+                        }
+                    }
+                }
+            }
         }
 
         // 5b. Merge multi-unit instances. A part drawn as several gates shares

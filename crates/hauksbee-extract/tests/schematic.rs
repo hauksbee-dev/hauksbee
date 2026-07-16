@@ -276,6 +276,33 @@ fn same_net(b: &ExtractedBoard, a: (&str, &str), c: (&str, &str)) -> bool {
 }
 
 #[test]
+fn fixture_no_connect_control_pin_is_tagged_and_suppressed() {
+    // R21: a control pin (U1 "OE") left unwired with an explicit (no_connect)
+    // must be TAGGED as a no-connect on the schematic path, exactly as the
+    // KiCad-netlist loader preserves KiCad's "input+no_connect" pintype. Without
+    // the tag, netlint's floating-control-pin check has no way to honor the
+    // deliberate no-connect and cries wolf.
+    let Some(b) = fixture("no_connect_control_pin.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    let u1 = b.component("U1").expect("U1 present");
+    let oe = u1.pins.iter().find(|p| p.number == "1").expect("OE pin");
+    assert!(
+        oe.kind.to_ascii_lowercase().contains("no_connect"),
+        "the no-connected OE pin must be tagged no_connect, got kind={:?}",
+        oe.kind
+    );
+    // End to end: the floating-control-pin lint must NOT fire on the deliberate
+    // no-connect (the exact false-positive the missing tag caused).
+    let r = b.net_lint();
+    let floating = r
+        .of_check(hauksbee_extract::LintCheck::FloatingControlPin)
+        .count();
+    assert_eq!(floating, 0, "explicit no-connect must suppress the floating-control finding");
+}
+
+#[test]
 fn fixture_two_resistors_in_series() {
     let Some(b) = fixture("two_resistors.kicad_sch") else {
         eprintln!("fixture missing; skipping");
