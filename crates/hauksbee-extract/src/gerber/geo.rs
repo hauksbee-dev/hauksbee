@@ -26,6 +26,16 @@ pub enum Shape {
     /// Closed polygon (rect/oval/poly/custom flash, region pour). `r` inflates
     /// the outline (corner radius of a roundrect carried as polygon + radius).
     Polygon { pts: Vec<(f64, f64)>, r: f64 },
+    /// One connected piece of pour copper with holes: the first contour is the
+    /// outer boundary, the rest are holes cut out of it (RS-274X 4.10.4 lets a
+    /// single G36/G37 region carry several contours). Containment is even-odd —
+    /// a point is copper iff it lies inside an odd number of contours — so the
+    /// ring reads as copper and a hole's interior reads as empty. Disjoint
+    /// islands of one region are split into separate shapes upstream (one shape
+    /// = one conductor for the union-find), so a `MultiPolygon` is always a
+    /// single electrically-connected piece. No inflation radius: pours are
+    /// drawn at their true outline.
+    MultiPolygon { contours: Vec<Vec<(f64, f64)>> },
 }
 
 impl Shape {
@@ -54,6 +64,12 @@ impl Shape {
                 pts: pts.iter().map(|(x, y)| (x + dx, y + dy)).collect(),
                 r: *r,
             },
+            Shape::MultiPolygon { contours } => Shape::MultiPolygon {
+                contours: contours
+                    .iter()
+                    .map(|c| c.iter().map(|(x, y)| (x + dx, y + dy)).collect())
+                    .collect(),
+            },
         }
     }
 
@@ -81,6 +97,23 @@ impl Shape {
                 }
                 [b[0] - r, b[1] - r, b[2] + r, b[3] + r]
             }
+            Shape::MultiPolygon { contours } => {
+                let mut b = [
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::NEG_INFINITY,
+                ];
+                for c in contours {
+                    for &(x, y) in c {
+                        b[0] = b[0].min(x);
+                        b[1] = b[1].min(y);
+                        b[2] = b[2].max(x);
+                        b[3] = b[3].max(y);
+                    }
+                }
+                b
+            }
         }
     }
 
@@ -89,6 +122,17 @@ impl Shape {
         match self {
             Shape::Capsule(c) => ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0),
             Shape::Polygon { pts, .. } => {
+                let n = pts.len().max(1) as f64;
+                (
+                    pts.iter().map(|p| p.0).sum::<f64>() / n,
+                    pts.iter().map(|p| p.1).sum::<f64>() / n,
+                )
+            }
+            // The outer boundary's vertex average. For a ring this may fall in
+            // a hole, but the centre is only a *representative* point for
+            // pad/flash matching, and pours never anchor pads.
+            Shape::MultiPolygon { contours } => {
+                let pts = contours.first().map(|c| c.as_slice()).unwrap_or(&[]);
                 let n = pts.len().max(1) as f64;
                 (
                     pts.iter().map(|p| p.0).sum::<f64>() / n,
@@ -148,6 +192,16 @@ fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) 
         .min(point_seg_dist2(b1.0, b1.1, a1.0, a1.1, a2.0, a2.1))
         .min(point_seg_dist2(b2.0, b2.1, a1.0, a1.1, a2.0, a2.1))
         .sqrt()
+}
+
+/// Even-odd containment over a set of closed contours: inside iff enclosed by
+/// an odd number of them. For a pour-with-holes (outer + holes) the ring reads
+/// inside and a hole's interior reads outside; this is the containment rule a
+/// [`Shape::MultiPolygon`] carries.
+pub fn point_in_contours(px: f64, py: f64, contours: &[Vec<(f64, f64)>]) -> bool {
+    contours
+        .iter()
+        .fold(false, |inside, c| inside ^ point_in_polygon(px, py, c))
 }
 
 pub fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
@@ -210,19 +264,7 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
         }
         (Shape::Capsule(c), Shape::Polygon { pts, r })
         | (Shape::Polygon { pts, r }, Shape::Capsule(c)) => {
-            let seg_a = (c.ax, c.ay);
-            let seg_b = (c.bx, c.by);
-            let mut best = f64::INFINITY;
-            let n = pts.len();
-            if n >= 2 {
-                let mut j = n - 1;
-                for i in 0..n {
-                    best = best.min(seg_seg_dist(seg_a, seg_b, pts[j], pts[i]));
-                    j = i;
-                }
-            } else if n == 1 {
-                best = point_seg_dist2(pts[0].0, pts[0].1, c.ax, c.ay, c.bx, c.by).sqrt();
-            }
+            let best = seg_contour_dist((c.ax, c.ay), (c.bx, c.by), pts);
             let contained = point_in_polygon(c.ax, c.ay, pts) || point_in_polygon(c.bx, c.by, pts);
             if contained {
                 -(c.r + r).max(0.0) - 1e-6
@@ -240,7 +282,83 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
                 edge
             }
         }
+        // The multi-contour arms mirror the polygon arms above: the copper edge
+        // is the nearest of ALL contour boundaries (a hole's rim is copper edge
+        // just like the outer rim), and containment is even-odd (a capsule
+        // endpoint sitting in a hole is NOT contained — the hole is empty).
+        (Shape::Capsule(c), Shape::MultiPolygon { contours })
+        | (Shape::MultiPolygon { contours }, Shape::Capsule(c)) => {
+            let best = contours
+                .iter()
+                .map(|pts| seg_contour_dist((c.ax, c.ay), (c.bx, c.by), pts))
+                .fold(f64::INFINITY, f64::min);
+            let contained = point_in_contours(c.ax, c.ay, contours)
+                || point_in_contours(c.bx, c.by, contours);
+            if contained {
+                -c.r.max(0.0) - 1e-6
+            } else {
+                best - c.r
+            }
+        }
+        (Shape::Polygon { pts, r }, Shape::MultiPolygon { contours })
+        | (Shape::MultiPolygon { contours }, Shape::Polygon { pts, r }) => {
+            let edge = contours
+                .iter()
+                .map(|c| poly_poly_edge_dist(pts, c))
+                .fold(f64::INFINITY, f64::min)
+                - r;
+            // Contained when a polygon vertex sits in the region's copper
+            // (even-odd), or any contour rim vertex sits inside the polygon
+            // (the polygon laps over that piece of boundary copper).
+            let contained = pts
+                .first()
+                .is_some_and(|&(x, y)| point_in_contours(x, y, contours))
+                || contours
+                    .iter()
+                    .any(|c| c.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pts)));
+            if contained {
+                edge.min(0.0) - 1e-6
+            } else {
+                edge
+            }
+        }
+        (Shape::MultiPolygon { contours: ca }, Shape::MultiPolygon { contours: cb }) => {
+            let edge = ca
+                .iter()
+                .flat_map(|a| cb.iter().map(move |b| poly_poly_edge_dist(a, b)))
+                .fold(f64::INFINITY, f64::min);
+            let contained = ca
+                .first()
+                .and_then(|c| c.first())
+                .is_some_and(|&(x, y)| point_in_contours(x, y, cb))
+                || cb
+                    .first()
+                    .and_then(|c| c.first())
+                    .is_some_and(|&(x, y)| point_in_contours(x, y, ca));
+            if contained {
+                edge.min(0.0) - 1e-6
+            } else {
+                edge
+            }
+        }
     }
+}
+
+/// Nearest distance from segment AB to a closed contour's edges (0 when they
+/// cross). Degenerate contours fall back to point distance.
+fn seg_contour_dist(a: (f64, f64), b: (f64, f64), pts: &[(f64, f64)]) -> f64 {
+    let mut best = f64::INFINITY;
+    let n = pts.len();
+    if n >= 2 {
+        let mut j = n - 1;
+        for i in 0..n {
+            best = best.min(seg_seg_dist(a, b, pts[j], pts[i]));
+            j = i;
+        }
+    } else if n == 1 {
+        best = point_seg_dist2(pts[0].0, pts[0].1, a.0, a.1, b.0, b.1).sqrt();
+    }
+    best
 }
 
 /// A grid-accelerated point-in-polygon tester for a large fixed polygon (a
