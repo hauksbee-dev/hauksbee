@@ -376,6 +376,37 @@ fn ac_partial_json_surfaces_a_not_found_node() {
 }
 
 #[test]
+fn plain_check_surfaces_open_active_ic_bind_honesty() {
+    // R22 (L4-01): `--check --plain` used to print ONLY the DRC/lint/SI verdicts
+    // and drop the bind-role honesty that the text/JSON/web surfaces all carry —
+    // so a board whose active ICs are unmodelled read "healthy" while
+    // firmware/analog/AC/thermal on their nets were never covered. The plain
+    // persona must warn about the open active ICs like the sibling --bind plain
+    // mode does. Watchy has active-IC (U-prefix) parts and, run without
+    // --models-dir, they are unresolved.
+    let b = board("../hauksbee-ci/examples/boards/watchy.kicad_pcb");
+    let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    assert!(
+        out.status.success(),
+        "--check --plain does not gate without --strict; got {:?}",
+        out.status.code()
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("active IC(s) are unresolved")
+            && stdout.contains("INCOMPLETE")
+            && stdout.contains("--models-dir"),
+        "plain --check must surface the open-active-IC bind honesty; got:\n{stdout}"
+    );
+    // And it must not be a false alarm on the copper checks — the heads-up
+    // explicitly says the DRC below is unaffected.
+    assert!(
+        stdout.contains("copper checks below are unaffected"),
+        "the heads-up must keep the copper verdict trustworthy; got:\n{stdout}"
+    );
+}
+
+#[test]
 fn plain_and_strict_compose() {
     // Plain output AND a non-zero exit on the same run.
     let b = shorted_board();
