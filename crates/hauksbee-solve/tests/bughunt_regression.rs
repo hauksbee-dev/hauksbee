@@ -319,3 +319,47 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
         vb - vc
     );
 }
+
+/// Bug-hunt r6 #F7: `IntegCoeffs::for_step` built the Gear2/BDF2 stencil from
+/// the CURRENT h alone, assuming a uniform grid — but the adaptive controller
+/// changes h at almost every step (growth factor up to 2x), so the 2nd-order
+/// stencil was applied to unequally spaced history and silently degraded to
+/// FIRST order exactly where Gear2 is selected. The fix threads the previous
+/// accepted step into the coefficients (variable-step BDF2, r = h/h_prev; the
+/// derivation and order proof live in stamp.rs unit tests). Black-box gate:
+/// an adaptive-step Gear2 RC charge must track the analytic exponential to
+/// the controller's accuracy class across the whole waveform, not just at the
+/// settled tail.
+#[test]
+fn adaptive_gear2_rc_tracks_analytic() {
+    let (r, cap) = (1e3, 1e-6);
+    let tau = r * cap;
+    let c = rc(cap);
+    let opts = SolverOptions {
+        integration: hauksbee_solve::Integration::Gear2,
+        // dt_initial well below tau and dt_max well above force the
+        // controller through a long ramp of h-doubling steps: the exact
+        // regime where the uniform-grid stencil is wrong at every step.
+        step: StepControl::Adaptive {
+            dt_initial: tau / 1e4,
+            dt_min: tau / 1e7,
+            dt_max: tau / 4.0,
+        },
+        ..SolverOptions::default()
+    };
+    let (t, out) = run_out(&c, opts, 5.0 * tau);
+    let mut worst = 0.0f64;
+    for (ti, oi) in t.iter().zip(&out) {
+        let want = 1.0 - (-ti / tau).exp();
+        worst = worst.max((oi - want).abs());
+    }
+    // Measured on this fixture: 1.9e-2 worst error with the uniform-grid
+    // coefficients (first-order pollution at every h change), 1.5e-3 with
+    // variable-step BDF2 (the reltol=1e-3 accuracy class the controller
+    // promises). Gate between them with margin on both sides.
+    assert!(
+        worst < 4e-3,
+        "adaptive Gear2 RC deviates from analytic: worst abs err {worst:.3e} \
+         (uniform-grid BDF2 regression gives ~1.9e-2 here)"
+    );
+}

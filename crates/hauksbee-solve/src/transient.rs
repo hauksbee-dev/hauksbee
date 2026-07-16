@@ -419,7 +419,11 @@ impl Transient {
             // until the next ordinary accept). A bool store, read only when
             // `NewtonBypass::On` is armed; inert on every default run.
             ws.set_bypass_hold(pred_skip_once);
-            let coeffs = IntegCoeffs::for_step(opts.integration, h, first_step);
+            // `h_prev_accepted` is the spacing of the reactive history pair
+            // (x1..x2); Gear-2's variable-step BDF2 stencil needs it whenever
+            // the adaptive controller changed h. 0.0 (no accepted step yet)
+            // means "assume uniform", exact because the seeded history is flat.
+            let coeffs = IntegCoeffs::for_step(opts.integration, h, h_prev_accepted, first_step);
             let r = newton_solve(
                 &mut ws,
                 circuit,

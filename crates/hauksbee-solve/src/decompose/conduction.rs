@@ -331,7 +331,7 @@ mod tests {
             let state = ReactiveState::new(circuit.devices.len());
 
             for (dc, first) in [(true, true), (false, true), (false, false)] {
-                let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, first);
+                let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, first);
                 for probe in probes {
                     for (i, v) in probe.iter().enumerate() {
                         if let Some(row) = ws.layout.node(m[i]) {
@@ -549,7 +549,7 @@ mod tests {
                 }
                 ws.matrix.clear_values();
                 ws.rhs.iter_mut().for_each(|v| *v = 0.0);
-                let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, true);
+                let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
                 let ctx = StampCtx {
                     circuit: &circuit,
                     layout: &ws.layout,

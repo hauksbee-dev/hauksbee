@@ -146,7 +146,7 @@ mod tests {
         dc_operating_point(&mut ws, &circuit, &opts).expect("mirror array DC op");
 
         let n_dev = circuit.devices.len();
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, true);
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
         let state = ReactiveState::new(n_dev);
 
         // Warm the Newton path itself: from the operating point, a few re-solves
