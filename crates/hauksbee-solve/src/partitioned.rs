@@ -1558,7 +1558,7 @@ impl NonlinearIsland {
     fn step(
         &mut self,
         h: f64,
-        _tnext: f64,
+        tnext: f64,
         first: bool,
         opts: &SolverOptions,
     ) -> Result<(), String> {
@@ -1570,8 +1570,17 @@ impl NonlinearIsland {
             &mut self.ws,
             &self.sub,
             opts,
-            // time only affects sub-sources, which are all DC-pinned; pass 0.
-            0.0,
+            // The trial time must be the REAL tnext, exactly as the monolithic
+            // per-step Newton passes `t + h`. Only the synthesized boundary
+            // pins are time-invariant (SourceKind::Dc by construction — build,
+            // seed and refresh all write Dc, so tnext cannot move them); an
+            // independent source that is a genuine MEMBER of this island was
+            // copied verbatim by clone_remapped and keeps its Sin/Pulse/Pwl
+            // kind, and its stamp evaluates kind.eval(ctx.time). Passing 0.0
+            // here froze such members at their t=0 value for the whole march —
+            // a silently wrong waveform on the default Auto path (the linear
+            // islands already evaluate their isources at tnext).
+            tnext,
             h,
             coeffs,
             &self.state,
