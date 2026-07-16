@@ -238,10 +238,11 @@ impl Engine for HauksbeeEngine {
     }
 
     fn reset(&mut self) {
-        self.sched.sim_time = 0.0;
-        for st in self.sched.stats.values_mut() {
-            *st = Default::default();
-        }
+        // Restart the sim clock AND drop every run-accumulated diagnostic (failed
+        // chunks/windows, the consecutive-failure streak, the sub-µs clock carry,
+        // net stats, per-frame peaks). Zeroing only `sim_time` here once let the
+        // previous run's failure surface and clock carry bleed into the next run.
+        self.sched.reset_run_state();
     }
 
     fn set_controls(&mut self, controls: SolverControls) {

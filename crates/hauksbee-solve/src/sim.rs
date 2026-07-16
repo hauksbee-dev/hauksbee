@@ -281,9 +281,16 @@ pub fn run_dc(
         None => vec![f64::NAN], // one pass, no outer source touched
     };
 
-    let mut columns = Vec::with_capacity(probes.len() + 1);
+    let mut columns = Vec::with_capacity(probes.len() + 2);
     columns.push(dc.inner.name.clone());
     columns.extend(probes.iter().map(Probe::label));
+    // For a NESTED sweep, carry the outer coordinate as a trailing column so
+    // each row records which outer value it belongs to. Without it the outer
+    // source was silently dropped and the concatenated blocks read as one
+    // non-monotonic sweep (the inner axis repeated per outer point).
+    if let Some(outer) = &dc.outer {
+        columns.push(outer.name.clone());
+    }
 
     // A scratch circuit we re-stamp in place, so each point solves a fresh OP.
     let mut scratch = circuit.clone();
@@ -295,9 +302,12 @@ pub fn run_dc(
         for &iv in &inner_vals {
             set_source_value(&mut scratch, dc.inner.source, iv);
             let point = run_op(&scratch, opts, probes)?;
-            let mut row = Vec::with_capacity(probes.len() + 1);
+            let mut row = Vec::with_capacity(probes.len() + 2);
             row.push(iv);
             row.extend_from_slice(&point.rows[0]);
+            if dc.outer.is_some() {
+                row.push(ov);
+            }
             rows.push(row);
         }
     }
@@ -458,6 +468,12 @@ mod tests {
         assert_eq!(out.rows.len(), 6);
         let axis: Vec<f64> = out.rows.iter().map(|r| r[0]).collect();
         assert_eq!(axis, vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0]);
+        // R13: the outer coordinate is carried as a trailing column, so each row
+        // records which outer block it belongs to (was silently dropped).
+        assert_eq!(out.columns, vec!["Vin", "V(in)", "Vg"]);
+        let outer_col = out.columns.iter().position(|c| c == "Vg").unwrap();
+        let outer: Vec<f64> = out.rows.iter().map(|r| r[outer_col]).collect();
+        assert_eq!(outer, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]

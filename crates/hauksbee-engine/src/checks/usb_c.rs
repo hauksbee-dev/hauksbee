@@ -929,13 +929,22 @@ fn receptacle_score(comp: &hauksbee_extract::Component) -> i32 {
     s
 }
 
-/// Heuristic: is this component a resistor?
+/// Heuristic: is this component a plain resistor (a candidate CC pulldown)?
+/// Excludes the R-prefixed parts that are NOT plain resistors — RV (varistor),
+/// RT (thermistor/NTC), RN (network), RP/RM (arrays) — so an ESD/EMC part on the
+/// CC line is never over-credited as an Rd. Mirrors device_decode::resistor_ohms.
 fn is_resistor(comp: &hauksbee_extract::Component) -> bool {
     let lib = comp.lib_id.to_ascii_uppercase();
-    lib == "DEVICE:R"
-        || lib.ends_with(":R")
-        || lib.contains(":R_")
-        || comp.reference.starts_with('R')
+    if lib == "DEVICE:R" || lib.ends_with(":R") || lib.contains(":R_") {
+        return true;
+    }
+    let r = comp.reference.to_ascii_uppercase();
+    r.starts_with('R')
+        && !r.starts_with("RV")
+        && !r.starts_with("RT")
+        && !r.starts_with("RN")
+        && !r.starts_with("RP")
+        && !r.starts_with("RM")
 }
 
 /// Convenience: parse a board, extract its sink CC termination, attach the given
@@ -1312,6 +1321,19 @@ mod tests {
         assert!(!Attach::PoweredCableNoSink.powers());
         assert!(!Attach::DebugAccessory.powers());
         assert!(!Attach::AudioAccessory.powers());
+    }
+
+    #[test]
+    fn is_resistor_excludes_varistors_thermistors_networks() {
+        // R13: RV/RT/RN/RP/RM are NOT plain resistors and must not be credited
+        // as a CC pulldown, matching device_decode::resistor_ohms.
+        assert!(is_resistor(&bridge_part("R7", "5.1k", "")));
+        assert!(is_resistor(&bridge_part("X1", "", "Device:R")));
+        assert!(!is_resistor(&bridge_part("RV1", "", "")), "varistor");
+        assert!(!is_resistor(&bridge_part("RT1", "", "")), "thermistor");
+        assert!(!is_resistor(&bridge_part("RN1", "", "")), "network");
+        assert!(!is_resistor(&bridge_part("RP2", "", "")), "array");
+        assert!(!is_resistor(&bridge_part("RM3", "", "")), "array");
     }
 
     // --- Solver cross-checks against hand arithmetic ------------------------
