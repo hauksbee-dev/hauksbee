@@ -39,6 +39,10 @@ pub enum EnsembleCoverage {
     MonteCarlo { seeds: u32, components: usize },
     /// Deterministic all-min/all-max enumeration.
     Corners { corners: u32, components: usize },
+    /// A single pinned ensemble member (`--seed N`): the runner filtered the
+    /// ensemble down to exactly this one, so the nominal-baseline / sampled-count
+    /// arithmetic doesn't apply — report the member honestly instead.
+    SingleMember { seed: u32, components: usize },
 }
 
 impl EnsembleCoverage {
@@ -56,6 +60,10 @@ impl EnsembleCoverage {
                 "tolerance corners: {corners} deterministic min/max corner(s) over \
                  {components} component(s) — bounds the worst case only where the \
                  response is monotonic in each value"
+            ),
+            EnsembleCoverage::SingleMember { seed, components } => format!(
+                "single ensemble member: seed {seed} over {components} toleranced \
+                 component(s) — one pinned draw, not ensemble coverage"
             ),
         }
     }
@@ -374,5 +382,16 @@ mod ensemble_coverage_tests {
         assert!(one.contains("nominal baseline + 0 sampled seed(s)"), "{one}");
         let many = EnsembleCoverage::MonteCarlo { seeds: 31, components: 3 }.describe();
         assert!(many.contains("nominal baseline + 31 sampled seed(s)"), "{many}");
+    }
+
+    #[test]
+    fn single_member_names_the_seed_and_does_not_claim_ensemble_coverage() {
+        // R12: `--seed N` runs exactly one member; the banner must name it and
+        // NOT report "nominal baseline + 0 sampled" (the nominal didn't run) or
+        // "1 corner" (over-claiming one of 2^n corners).
+        let d = EnsembleCoverage::SingleMember { seed: 7, components: 3 }.describe();
+        assert!(d.contains("seed 7"), "{d}");
+        assert!(!d.contains("nominal baseline"), "must not claim the nominal ran: {d}");
+        assert!(!d.contains("corner"), "must not claim corner coverage: {d}");
     }
 }
