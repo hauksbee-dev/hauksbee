@@ -1,0 +1,140 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-000000000033")
+	(paper "A4")
+	(lib_symbols
+		(symbol "Device:R"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(symbol "R_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "~")
+					(number "1")
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "~")
+					(number "2")
+				)
+			)
+		)
+		(symbol "Test:Dual"
+			(pin_names
+				(offset 0)
+			)
+			(symbol "Dual_0_1"
+				(pin passive line
+					(at 0 -2.54 90)
+					(length 1.27)
+					(name "V+")
+					(number "5")
+				)
+			)
+			(symbol "Dual_1_1"
+				(pin passive line
+					(at 0 2.54 270)
+					(length 1.27)
+					(name "A")
+					(number "1")
+				)
+			)
+			(symbol "Dual_2_1"
+				(pin passive line
+					(at 0 2.54 270)
+					(length 1.27)
+					(name "B")
+					(number "2")
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Test:Dual")
+		(at 100 100 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a71")
+		(property "Reference" "U1"
+			(at 102 100 90)
+		)
+		(property "Value" "DUAL"
+			(at 102 100 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b91"))
+		(pin "5" (uuid "00000000-0000-0000-0000-000000000b92"))
+	)
+	(symbol
+		(lib_id "Test:Dual")
+		(at 120 100 0)
+		(unit 2)
+		(uuid "00000000-0000-0000-0000-000000000a72")
+		(property "Reference" "U1"
+			(at 122 100 90)
+		)
+		(property "Value" "DUAL"
+			(at 122 100 90)
+		)
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b93"))
+		(pin "5" (uuid "00000000-0000-0000-0000-000000000b94"))
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100 113.81 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a73")
+		(property "Reference" "R1"
+			(at 102 113.81 90)
+		)
+		(property "Value" "1k"
+			(at 102 113.81 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b95"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b96"))
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 120 113.81 0)
+		(unit 1)
+		(uuid "00000000-0000-0000-0000-000000000a74")
+		(property "Reference" "R2"
+			(at 122 113.81 90)
+		)
+		(property "Value" "1k"
+			(at 122 113.81 90)
+		)
+		(pin "1" (uuid "00000000-0000-0000-0000-000000000b97"))
+		(pin "2" (uuid "00000000-0000-0000-0000-000000000b98"))
+	)
+	(wire
+		(pts
+			(xy 100 102.54) (xy 100 110)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c71")
+	)
+	(wire
+		(pts
+			(xy 120 102.54) (xy 120 110)
+		)
+		(stroke (width 0) (type default))
+		(uuid "00000000-0000-0000-0000-000000000c72")
+	)
+	(label "NETA"
+		(at 100 105 0)
+	)
+	(label "NETB"
+		(at 120 105 0)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
