@@ -247,10 +247,37 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     (mag > 0.0 && mag <= 60.0 && mag.is_finite()).then_some(mag)
 }
 
-/// Number of pads that carry a net (footprints sometimes add net-less paste /
-/// mechanical pads, so `pins.len()` over-counts).
+/// Number of DISTINCT pads that carry a net. Some extraction paths list a pad
+/// more than once (a through-hole pad accessed from both sides, the Eagle `.brd`
+/// per-contact listing, IPC-356 top+bottom access records), so counting raw
+/// net-carrying pin ENTRIES over-counts and makes a genuine two-terminal part
+/// look like it has 3+ terminals. Dedup by pad number, matching si.rs's
+/// `connected_pads`.
 fn connected_pads(c: &Component) -> usize {
-    c.pins.iter().filter(|p| p.net.is_some()).count()
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for p in &c.pins {
+        if p.net.is_some() {
+            seen.insert(p.number.as_str());
+        }
+    }
+    seen.len()
+}
+
+/// The reference designator with a single split-keyboard mirror prefix stripped,
+/// uppercased. Split layouts (Corne / crkbd, Lily58) duplicate the right half
+/// with a lowercase `r` prefix (`rC2`, `rY1`, `rR3`, `rU1`), so the type
+/// classifiers must see `C2`/`Y1`/`R3`/`U1` underneath — otherwise `rC2` reads
+/// as an `R`-prefixed part and a mirrored decoupling cap is both misclassified
+/// and falsely flagged as a designator/footprint mismatch. Only a lowercase `r`
+/// immediately before an uppercase designator letter counts, so a genuine `R5`
+/// is untouched. Mirrors si.rs's `ref_designator`.
+fn ref_designator(reference: &str) -> String {
+    let r = reference.trim();
+    let bytes = r.as_bytes();
+    if bytes.len() >= 2 && bytes[0] == b'r' && bytes[1].is_ascii_uppercase() {
+        return r[1..].to_ascii_uppercase();
+    }
+    r.to_ascii_uppercase()
 }
 
 /// Is this component a plain two-terminal resistor (the kind that can be a
@@ -258,7 +285,7 @@ fn connected_pads(c: &Component) -> usize {
 /// having exactly two *connected* pads (extra net-less pads in the footprint are
 /// ignored, which is the bug that previously hid 0201 pull-ups).
 fn is_resistor(c: &Component) -> bool {
-    let r = c.reference.to_ascii_uppercase();
+    let r = ref_designator(&c.reference);
     let lib = c.lib_id.to_ascii_lowercase();
     // Exclude varistors (RV), thermistors (RT), and resistor networks (RN/RP/RM)
     // which are not plain two-terminal pulls.
@@ -290,7 +317,7 @@ fn has_integrated_i2c_pullups(c: &Component) -> bool {
 fn is_led(c: &Component) -> bool {
     let lib = c.lib_id.to_ascii_lowercase();
     let val = c.value.to_ascii_lowercase();
-    let r = c.reference.to_ascii_uppercase();
+    let r = ref_designator(&c.reference);
     lib.contains("led")
         || val.contains("led")
         || (r.starts_with("LED"))
@@ -406,12 +433,12 @@ fn members<'a>(board: &'a ExtractedBoard, net_id: i64) -> Vec<(&'a Component, &'
 
 /// Is this component a decoupling / bulk capacitor (ref C*, 2 connected pads)?
 fn is_capacitor(c: &Component) -> bool {
-    let r = c.reference.to_ascii_uppercase();
+    let r = ref_designator(&c.reference);
     r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && connected_pads(c) == 2
 }
 
 fn passive_prefix(reference: &str) -> Option<char> {
-    let r = reference.to_ascii_uppercase();
+    let r = ref_designator(reference);
     let first = r.chars().next()?;
     match first {
         'R' if !r.starts_with("RV") && !r.starts_with("RT") && !r.starts_with("RN") => Some('R'),
@@ -1178,6 +1205,76 @@ mod parse_ohms_tests {
         assert_eq!(parse_ohms("2m2"), Some(0.0022));
         // R25 (DRIFT-4): inline tolerance annotations are tolerated.
         assert_eq!(parse_ohms("10k 1%"), Some(10_000.0));
+    }
+}
+
+#[cfg(test)]
+mod mirror_and_pad_tests {
+    use super::{connected_pads, is_capacitor, passive_prefix, ref_designator};
+    use crate::{Component, Pin};
+
+    fn comp(reference: &str, footprint: &str, pads: &[(&str, Option<i64>)]) -> Component {
+        Component {
+            reference: reference.to_string(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: footprint.to_string(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: pads
+                .iter()
+                .map(|(num, net)| Pin {
+                    number: num.to_string(),
+                    net: *net,
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn split_keyboard_mirror_prefix_is_stripped_before_classifying() {
+        // R32: si.rs strips the split-keyboard mirror `r` prefix (rC2 -> C2), but
+        // netlint's classifiers uppercased the raw reference, so a mirrored-half
+        // decoupling cap `rC2` read as an `R` designator: is_capacitor missed it
+        // and check_design_file_qc raised a bogus DesignatorFootprintMismatch
+        // ("rC2 is an R designator but uses a C footprint") on a clean corpus board.
+        assert_eq!(ref_designator("rC2"), "C2");
+        assert_eq!(ref_designator("R5"), "R5"); // genuine R untouched
+        assert_eq!(ref_designator("rR3"), "R3");
+
+        // The prefix (used by the designator/footprint QC) now agrees with the
+        // footprint family for a mirrored cap.
+        assert_eq!(passive_prefix("rC2"), Some('C'));
+        assert_eq!(passive_prefix("rR3"), Some('R'));
+        assert_eq!(passive_prefix("R5"), Some('R'));
+
+        // is_capacitor recognises the mirrored cap.
+        let cap = comp(
+            "rC2",
+            "Capacitor_SMD:C_0402_1005Metric",
+            &[("1", Some(1)), ("2", Some(2))],
+        );
+        assert!(is_capacitor(&cap), "mirrored-half cap must classify as a capacitor");
+    }
+
+    #[test]
+    fn connected_pads_dedups_repeated_pad_numbers() {
+        // R32: some extractors (IPC-356 top+bottom access records, Eagle .brd
+        // per-contact listing, both-sided through-hole pads) list a pad more than
+        // once. Counting raw net-carrying pin ENTRIES made a two-terminal part
+        // look like 3+ terminals, so is_resistor/is_capacitor (which gate on
+        // `== 2`) silently dropped it. Dedup by distinct pad number, like si.rs.
+        let r = comp(
+            "R1",
+            "Resistor_SMD:R_0402",
+            &[("1", Some(5)), ("1", Some(5)), ("2", Some(6)), ("2", Some(6))],
+        );
+        assert_eq!(connected_pads(&r), 2, "four entries over two pads = two pads");
     }
 }
 

@@ -39,7 +39,7 @@
 use num_complex::Complex64;
 
 use crate::cmatrix::ComplexSystem;
-use crate::newton::{dc_operating_point, Workspace};
+use crate::newton::{dc_operating_point_no_ic, Workspace};
 use crate::options::SolverOptions;
 use crate::system::Layout;
 use hauksbee_ir::{BjtModel, Circuit, Device, DeviceId, MosLevel, MosfetModel, NodeId};
@@ -209,9 +209,12 @@ impl AcAnalysis {
     /// AC-grounded. Otherwise every independent voltage / current source is
     /// driven with unit AC amplitude for backwards compatibility.
     pub fn run(&self, circuit: &Circuit, spec: &AcSpec) -> Result<AcResponse, String> {
-        // 1. DC operating point (reusing the real solver verbatim).
+        // 1. DC operating point (reusing the real solver verbatim). AC linearizes
+        // around the ordinary DC bias and must IGNORE initial conditions — a cap
+        // pinned to its `ic` (shorted) would collapse a nonlinear stage's bias and
+        // corrupt every device tangent, so use the no-IC entry point.
         let mut ws = Workspace::new(circuit);
-        dc_operating_point(&mut ws, circuit, &self.opts)?;
+        dc_operating_point_no_ic(&mut ws, circuit, &self.opts)?;
         let op = OperatingPoint::capture(&ws, circuit);
 
         // 2. Sweep.
