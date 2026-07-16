@@ -1187,6 +1187,14 @@ fn attach_scenarios(
         hauksbee_models::LoadProfile::by_id(name)
     };
 
+    // Each scenario's own (id, supply_net, start) — seeded into the window set
+    // below so a scenario-scoped `protection_trip` assertion has a
+    // (scenario, net) verdict to read even when no rail_window names that net.
+    // Without this the scoped-trip map only ever covered rail_window nets, so a
+    // protection_trip scoped to a scenario with no matching rail_window always
+    // failed (in either polarity) regardless of the real trip.
+    let mut scenario_supplies: Vec<(String, String, f64)> = Vec::new();
+
     for sc in &spec.scenarios {
         let profile = resolve_profile(&sc.profile).ok_or_else(|| {
             SpecError::Invalid(format!(
@@ -1214,6 +1222,7 @@ fn attach_scenarios(
         })?;
 
         let id = sc.id.clone().unwrap_or_else(|| sc.part.clone());
+        scenario_supplies.push((id.clone(), net_name.clone(), sc.start_ms / 1000.0));
         let load = DynamicLoad::new(
             sched.circuit_mut(),
             &format!("load_{id}"),
@@ -1225,8 +1234,24 @@ fn attach_scenarios(
         sched.attach_peripheral(Box::new(load));
     }
 
-    // Build measurement windows from the rail_window assertions.
+    // Seed the window set with each scenario's own supply net, so a
+    // scenario-scoped protection_trip has a (scenario, net) verdict even with no
+    // rail_window on that net. The rail_window loop below then merges its own
+    // nets into the same by-id windows (dedup), so the two producers agree on
+    // the (scenario, net) key set the protection_trip consumer reads.
     let mut windows: Vec<ScenarioWindow> = Vec::new();
+    for (id, net, start_s) in scenario_supplies {
+        match windows.iter_mut().find(|w| w.id == id) {
+            Some(w) => {
+                if !w.nets.contains(&net) {
+                    w.nets.push(net);
+                }
+            }
+            None => windows.push(ScenarioWindow { id, start_s, nets: vec![net] }),
+        }
+    }
+
+    // Merge in the rail_window assertions' nets.
     for a in &spec.asserts {
         if a.kind != "rail_window" {
             continue;

@@ -292,11 +292,13 @@ fn scale_suffix(suffix: &str) -> f64 {
         1e-12
     } else if s.starts_with('f') {
         1e-15
-    } else if s.starts_with('a') {
-        1e-18
     } else {
-        // Unrecognised trailing unit with no scale letter (e.g. bare "V"): the
-        // value stands as written.
+        // No `a`=atto branch: atto is NOT in the SPICE3/ngspice scale set
+        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit — a
+        // current-valued model param "IBV=5A" must read 5 A, not 5e-18. This
+        // matches hauksbee-ir::spice::scale_suffix exactly (the authoritative
+        // loader this function mirrors). An unrecognised trailing unit with no
+        // scale letter (bare "V"/"A"/"Ohm") stands as written.
         1.0
     }
 }
@@ -382,7 +384,7 @@ R2 A B 2k
         // trailing farad unit: "4pF" took the femto branch and then failed to
         // parse "4p" as a mantissa, returning None and dropping CJO entirely.
         // The scale must be read from the FRONT of the suffix, the unit ignored.
-        let cases: [(&str, f64); 10] = [
+        let cases: [(&str, f64); 13] = [
             ("4pF", 4e-12),
             ("2.2uF", 2.2e-6),
             ("100nF", 100e-9),
@@ -393,6 +395,13 @@ R2 A B 2k
             ("2.52N", 2.52e-9),
             ("80", 80.0),
             ("1e-14", 1e-14),
+            // R17: a trailing ampere unit must NOT be read as the atto scale.
+            // Atto is not in the SPICE3/ngspice scale set and 'a' collides with
+            // amperes; a current param "IBV=5A" is 5 A, not 5e-18. Matches the
+            // authoritative hauksbee-ir loader this function mirrors.
+            ("5A", 5.0),
+            ("2.2A", 2.2),
+            ("100mA", 100e-3), // m=milli, A ignored
         ];
         for (input, expected) in cases {
             let got = parse_spice_number(input).unwrap_or_else(|| panic!("{input} parsed to None"));
