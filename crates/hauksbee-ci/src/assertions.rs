@@ -491,8 +491,10 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let deadline = a.deadline_ms.unwrap_or(0.0);
     let key = (net.clone(), level.to_bits());
 
-    let reached = out.first_reach_ms.get(&key).copied();
-    match reached {
+    let first_cross = out.boot_first_cross_ms.get(&key).copied();
+    let drop_after = out.boot_drop_after_cross_ms.get(&key).copied();
+    match first_cross {
+        // Never reached its level at all — genuinely undriven or driven-but-low.
         None => (
             false,
             boot_below_threshold_msg(
@@ -503,29 +505,45 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 boot_observed_range(&net, out),
             ),
         ),
-        Some(t_ms) if t_ms > deadline + 1e-9 => (
+        // Reached, but only after the deadline.
+        Some(tc) if tc > deadline + 1e-9 => (
             false,
             format!(
-                "control net '{net}' first reached {level} V at {t_ms:.2} ms, past the {deadline} ms boot deadline"
+                "control net '{net}' first reached {level} V at {tc:.2} ms, past the {deadline} ms boot deadline"
             ),
         ),
-        Some(t_ms) => {
-            // Driven in time. Now require no fault fired in the boot window
-            // *before* the net was first driven (rails must hold and nothing
-            // over-stresses while the control input is still undefined).
-            if let Some(ft) = out.first_fault_ms {
-                if ft < t_ms - 1e-9 {
+        Some(tc) => {
+            // Reached in time. It must then HOLD continuously through the
+            // deadline: a drop back below level at or before the deadline breaks
+            // coverage (this is the case the old end-of-run latch conflated with
+            // "never reached"). A drop AFTER the deadline is a legitimate release
+            // and does not fail — boot coverage is about the boot window only.
+            if let Some(td) = drop_after {
+                if td <= deadline + 1e-9 {
                     return (
                         false,
                         format!(
-                            "control net '{net}' was driven at {t_ms:.2} ms, but a stress fault fired earlier at {ft:.2} ms during the boot window"
+                            "control net '{net}' reached {level} V at {tc:.2} ms but fell back below it at {td:.2} ms, before the {deadline} ms boot deadline"
+                        ),
+                    );
+                }
+            }
+            // Held through the deadline. Now require no stress fault fired in the
+            // boot window *before* the net was first driven (rails must hold and
+            // nothing over-stresses while the control input is still undefined).
+            if let Some(ft) = out.first_fault_ms {
+                if ft < tc - 1e-9 {
+                    return (
+                        false,
+                        format!(
+                            "control net '{net}' was driven at {tc:.2} ms, but a stress fault fired earlier at {ft:.2} ms during the boot window"
                         ),
                     );
                 }
             }
             (
                 true,
-                format!("control net '{net}' driven to >= {level} V at {t_ms:.2} ms (<= {deadline} ms), boot window clean"),
+                format!("control net '{net}' driven to >= {level} V at {tc:.2} ms (<= {deadline} ms), boot window clean"),
             )
         }
     }
@@ -1098,6 +1116,50 @@ mod tests {
         assert!(!m.contains("Hi-Z"), "a driven pin is not Hi-Z, got: {m}");
     }
 
+    // Boot coverage must (1) pass a net that reaches its level by the deadline
+    // and holds THROUGH the deadline even if it is later released, (2) fail a net
+    // that reached but fell back before the deadline, with a message distinct
+    // from (3) a net that never reached at all. The old end-of-run latch
+    // conflated (2) and (3) and wrongly failed (1).
+    #[test]
+    fn boot_coverage_honours_deadline_hold_and_distinguishes_drop_from_never() {
+        use super::check_boot_coverage;
+        use crate::runner::RunOutcome;
+        use crate::spec::Assertion;
+
+        let net = "EN".to_string();
+        let level = 3.0_f64;
+        let key = (net.clone(), level.to_bits());
+        let assertion: Assertion = toml::from_str(
+            "kind = \"boot-coverage\"\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n",
+        )
+        .unwrap();
+
+        // (1) reached at 5 ms, held through the 10 ms deadline, released at 50 ms.
+        let mut out = RunOutcome::default();
+        out.boot_first_cross_ms.insert(key.clone(), 5.0);
+        out.boot_drop_after_cross_ms.insert(key.clone(), 50.0);
+        let (ok, msg) = check_boot_coverage(&assertion, &out);
+        assert!(ok, "held-through-deadline then released must pass: {msg}");
+
+        // (2) reached at 5 ms but fell back at 8 ms, before the deadline.
+        let mut out = RunOutcome::default();
+        out.boot_first_cross_ms.insert(key.clone(), 5.0);
+        out.boot_drop_after_cross_ms.insert(key.clone(), 8.0);
+        let (ok, msg) = check_boot_coverage(&assertion, &out);
+        assert!(!ok, "a drop before the deadline must fail");
+        assert!(msg.contains("fell back below"), "distinct dropped message: {msg}");
+
+        // (3) never reached: fails with the below-threshold diagnosis, not a drop.
+        let out = RunOutcome::default();
+        let (ok, msg) = check_boot_coverage(&assertion, &out);
+        assert!(!ok, "never-reached must fail");
+        assert!(
+            !msg.contains("fell back below"),
+            "never-reached must not read as a reached-then-dropped: {msg}"
+        );
+    }
+
     // A genuinely undriven net on a backend that can report drive direction (AVR)
     // keeps the honest Hi-Z / undefined wording.
     #[test]
@@ -1148,7 +1210,8 @@ mod tests {
                 protection_tripped_scoped: HashMap::new(),
                 ambient_c: 25.0,
                 sim_ms: 100.0,
-                first_reach_ms: HashMap::new(),
+                boot_first_cross_ms: HashMap::new(),
+                boot_drop_after_cross_ms: HashMap::new(),
                 driven_nets: Default::default(),
                 drive_direction_observable: false,
                 first_fault_ms: None,
@@ -1215,7 +1278,8 @@ mod tests {
                 protection_tripped_scoped,
                 ambient_c: 25.0,
                 sim_ms: 100.0,
-                first_reach_ms: HashMap::new(),
+                boot_first_cross_ms: HashMap::new(),
+                boot_drop_after_cross_ms: HashMap::new(),
                 driven_nets: Default::default(),
                 drive_direction_observable: false,
                 first_fault_ms: None,

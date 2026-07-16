@@ -527,6 +527,34 @@ impl RegisterMapSensor {
         self.inputs.get(name).copied()
     }
 
+    /// The modeled temperature in °C, if this sensor declares an LM75/TMP-style
+    /// temperature register (`q7.1_be` encoding). This is the value QEMU pushes
+    /// into its emulated `tmp105` device on the co-sim path — the same physical
+    /// temperature the firmware would decode from the register bytes, recovered
+    /// from the register's `expr` (with its `scale`/`offset`) rather than by
+    /// unpacking the count. Returns `None` when the sensor models no such
+    /// register, so a non-temperature RegisterMapSensor stays inert on that path.
+    ///
+    /// When several `q7.1_be` registers exist, the lowest address wins (the
+    /// canonical LM75 temperature register is 0x00), scanned in stable order.
+    fn modeled_temperature_c(&self) -> Option<f64> {
+        let addr = self
+            .addr_order
+            .iter()
+            .copied()
+            .find(|a| {
+                self.registers
+                    .get(a)
+                    .and_then(|r| r.spec.encoding)
+                    .map(|e| e == Encoding::Q71Be)
+                    .unwrap_or(false)
+            })?;
+        let reg = self.registers.get(&addr)?;
+        let program = reg.program.as_ref()?;
+        let value = eval_number(program, &self.inputs)?;
+        Some(value * reg.spec.scale.unwrap_or(1.0) + reg.spec.offset.unwrap_or(0.0))
+    }
+
     // ── Write side (05 §3.2) ─────────────────────────────────────────────────
 
     /// Override the spec's I2C address for this instance (a board carries
@@ -781,6 +809,10 @@ impl RegisterMapSensor {
 impl I2cSlave for RegisterMapSensor {
     fn address(&self) -> u8 {
         self.i2c_address
+    }
+
+    fn temperature_mc(&self) -> Option<i32> {
+        self.modeled_temperature_c().map(|c| (c * 1000.0).round() as i32)
     }
 
     fn on_start(&mut self, read: bool) {
@@ -1129,6 +1161,53 @@ style = "i2c_pointer"
                 "declarative LM75 bytes {decl_bytes:?} != hand-coded {hand_bytes:?} at {t} °C"
             );
         }
+    }
+
+    /// A spec-driven LM75 must report its modeled temperature through
+    /// `I2cSlave::temperature_mc` (the QEMU tmp105 push path), matching the
+    /// hand-coded `Lm75` and the value the firmware would decode. Before the fix
+    /// RegisterMapSensor fell through to the trait default `None`, so a co-sim on
+    /// QEMU read the emulated device's stale power-on default instead of the
+    /// modeled temperature.
+    #[test]
+    fn temperature_mc_reports_modeled_temperature() {
+        for &t in &[-40.0, -0.5, 0.0, 25.0, 36.6, 100.0] {
+            let mut sensor = RegisterMapSensor::from_toml(LM75_SPEC).unwrap();
+            sensor.set_input("temperature_c", t);
+            let hand = Lm75::new(0x48, t);
+            assert_eq!(
+                I2cSlave::temperature_mc(&sensor),
+                hand.temperature_mc(),
+                "spec-driven temperature_mc must match hand-coded Lm75 at {t} °C"
+            );
+            assert_eq!(
+                I2cSlave::temperature_mc(&sensor),
+                Some((t * 1000.0).round() as i32),
+                "temperature_mc must be the modeled °C in milli-degrees at {t} °C"
+            );
+        }
+    }
+
+    /// A RegisterMapSensor with no `q7.1_be` register is not a temperature
+    /// sensor and must stay `None` — QEMU must not push a bogus temperature into
+    /// a device that models something else.
+    #[test]
+    fn temperature_mc_is_none_for_non_temperature_sensor() {
+        const WHOAMI_ONLY: &str = r#"
+[sensor]
+name = "IDPART"
+bus = "i2c"
+i2c_address = 0x10
+
+[[sensor.register]]
+addr = 0x00
+const = [0xAB]
+
+[sensor.protocol]
+style = "i2c_pointer"
+"#;
+        let sensor = RegisterMapSensor::from_toml(WHOAMI_ONLY).unwrap();
+        assert_eq!(I2cSlave::temperature_mc(&sensor), None);
     }
 
     const SPI_IMU_SPEC: &str = r#"
