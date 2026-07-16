@@ -28,9 +28,13 @@
 //! Honest limits, documented in `docs/AC_ANALYSIS.md`: this linearizes about a
 //! single DC operating point, so it sees the *averaged* small-signal behaviour,
 //! not switching-level (cycle-by-cycle) dynamics, and it says nothing about
-//! large-signal stability. Behavioral comparators and voltage switches have no
-//! continuous small-signal model and contribute only their quiescent
-//! conductance.
+//! large-signal stability. Behavioral comparators have no small-signal input
+//! path and contribute only their quiescent output conductance. Voltage
+//! switches DO have a continuous small-signal model (the smooth tanh
+//! conductance is differentiable): they contribute their quiescent
+//! conductance PLUS the control transconductance
+//! `gm = (v_a − v_b)·dgsw/dvctrl` when `effects.switch_ctrl_gm` is set
+//! (default), mirroring the transient tangent.
 
 use num_complex::Complex64;
 
@@ -451,8 +455,9 @@ fn stamp_ac(
         } => stamp_opamp_ac(
             sys, layout, op, *out, *inp, *inn, *reference, *gain, *pole_hz, *rail_lo, *rail_hi, w,
         ),
-        // No continuous small-signal model: a switch sits at its quiescent
-        // conductance; a comparator output is a fixed rail (open small-signal).
+        // A switch is a smooth voltage-controlled conductance: small-signal it
+        // is its quiescent conductance PLUS a control transconductance (below).
+        // A comparator output is a fixed rail (open small-signal input).
         Device::VSwitch {
             a,
             b,
@@ -496,6 +501,30 @@ fn stamp_ac(
             }
             let g = vswitch_g_from_s(s, *ron, *roff);
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(g, 0.0));
+
+            // CONTROL TRANSCONDUCTANCE — the small-signal image of the
+            // transient tangent (stamp.rs, `stamp_vswitch`). The switch
+            // current i = gsw(vctrl)·(v_a − v_b) has the exact differential
+            //   di = gsw·(dv_a − dv_b) + (v_a − v_b)·(dgsw/dvctrl)·(dv_cp − dv_cn)
+            // The second term is the modulation path (switch-as-VGA); dropping
+            // it made `.ac` report a fixed resistor while transient captured
+            // the control coupling — a mirror divergence. The tanh derivative
+            // uses the BARE pre-break-before-make `th` (the transient tangent
+            // likewise ignores d(win)/dvctrl) while `g` is the same OP
+            // conductance the transient stamps (bbm win factor included). No
+            // ieq RHS correction here: AC is a pure phasor solve about the OP.
+            if opts.effects.switch_ctrl_gm {
+                let vmid = 0.5 * (von + voff);
+                let span = (von - voff).abs().max(1e-9);
+                let th = (3.0 * (vctrl - vmid) / span).tanh();
+                let gon = 1.0 / ron.max(1e-12);
+                let goff = 1.0 / roff.max(1e-12);
+                let dgsw_dvctrl = g * (gon.ln() - goff.ln()) * 0.5 * (1.0 - th * th) * (3.0 / span);
+                let gm_ctrl = (op.v(*a) - op.v(*b)) * dgsw_dvctrl;
+                if gm_ctrl != 0.0 {
+                    stamp_transconductance(sys, n(*a), n(*b), n(*ctrl_p), n(*ctrl_n), gm_ctrl);
+                }
+            }
         }
         Device::Comparator { out, .. } => {
             // Digital output: no small-signal INPUT path (the bang-bang
