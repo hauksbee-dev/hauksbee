@@ -73,20 +73,29 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .map(|o| o.sampled_values.len())
             .unwrap_or(0);
         let members = outcomes.len() as u32;
-        Some(match spec.ensemble_mode()? {
-            // Member 0 is the nominal baseline (it draws no random sample), so
-            // the number of genuinely SAMPLED seeds is members - 1. Reporting the
-            // full member count claimed `seeds=1` sampled something when it only
-            // ran the nominal.
-            tolerance::Mode::MonteCarlo => report::EnsembleCoverage::MonteCarlo {
-                seeds: members.saturating_sub(1),
-                components,
-            },
-            tolerance::Mode::Corners => report::EnsembleCoverage::Corners {
-                corners: members,
-                components,
-            },
-        })
+        // A pinned `--seed N` filters the ensemble down to that one member, so the
+        // "nominal baseline + members-1 sampled" (Monte-Carlo) and "N corners"
+        // (Corners) arithmetic no longer holds: members == 1 would otherwise
+        // claim "nominal + 0 sampled" (the nominal did NOT run) or "1 corner" out
+        // of 2^n. Report the single pinned member honestly instead.
+        if let Some(seed) = cfg.seed {
+            Some(report::EnsembleCoverage::SingleMember { seed, components })
+        } else {
+            Some(match spec.ensemble_mode()? {
+                // Member 0 is the nominal baseline (it draws no random sample), so
+                // the number of genuinely SAMPLED seeds is members - 1. Reporting
+                // the full member count claimed `seeds=1` sampled something when
+                // it only ran the nominal.
+                tolerance::Mode::MonteCarlo => report::EnsembleCoverage::MonteCarlo {
+                    seeds: members.saturating_sub(1),
+                    components,
+                },
+                tolerance::Mode::Corners => report::EnsembleCoverage::Corners {
+                    corners: members,
+                    components,
+                },
+            })
+        }
     } else {
         None
     };

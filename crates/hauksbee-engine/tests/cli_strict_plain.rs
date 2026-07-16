@@ -275,6 +275,44 @@ fn ac_loop_cli_reports_real_one_pole_phase_margin() {
 }
 
 #[test]
+fn ac_partial_json_surfaces_a_not_found_node() {
+    // R12: a valid sweep that requests one REAL net (OUT) and one that doesn't
+    // exist must still name the missing net in the JSON — the text path warns
+    // "net not found", so the JSON must not silently drop it.
+    let b = ac_loop_board();
+    let models = ac_loop_models();
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--models-dir",
+        models.to_str().unwrap(),
+        "--ac",
+        "1:1e8:50",
+        "--ac-node",
+        "OUT",
+        "--ac-node",
+        "/NONEXISTENT",
+        "--json",
+    ]);
+    assert!(
+        out.status.success(),
+        "a partially-valid sweep (one real net) still succeeds; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--json must emit parseable JSON");
+    assert_eq!(v["ac"]["valid"], serde_json::Value::Bool(true), "{stdout}");
+    let not_found = v["ac"]["not_found_nets"]
+        .as_array()
+        .expect("not_found_nets present when a requested net is missing");
+    assert!(
+        not_found.iter().any(|n| n.as_str() == Some("/NONEXISTENT")),
+        "the missing node must be named in not_found_nets; got: {stdout}"
+    );
+}
+
+#[test]
 fn plain_and_strict_compose() {
     // Plain output AND a non-zero exit on the same run.
     let b = shorted_board();
