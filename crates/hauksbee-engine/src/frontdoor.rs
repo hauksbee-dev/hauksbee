@@ -187,6 +187,24 @@ pub struct WebCosimSection {
     /// no SPI slaves, so the common JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spi_framing: Vec<WebSpiFraming>,
+    /// Per-gate power-up state panel (what the firmware does to each
+    /// transistor-gate control net at boot). Mirrors the CLI `--json`
+    /// `boot_gates` / `--plain` gate panel so the web surface can no longer give
+    /// false comfort on a board that energises a switched load at power-up.
+    /// Empty (and omitted) when the firmware ran no relevant gates, so the
+    /// common JSON shape is unchanged for existing consumers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boot_gates: Vec<WebBootGate>,
+}
+
+/// One row of the web boot-state panel: a transistor gate control net and what
+/// the firmware does to it at power-up. Mirrors the CLI `BootGateJson`.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebBootGate {
+    pub reference: String,
+    pub net: String,
+    /// `"driven_high"` | `"driven_low"` | `"floating"`.
+    pub state: String,
 }
 
 /// One SPI slave's chip-select framing tier, for the co-sim coverage (05 §2).
@@ -452,6 +470,7 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         analog_valid: true,
         failed_windows: Vec::new(),
         spi_framing: Vec::new(),
+        boot_gates: Vec::new(),
     }
 }
 
@@ -689,6 +708,52 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
 
     let uart_output = String::from_utf8_lossy(&last_uart).trim_end().to_string();
 
+    // Boot power-up advisory, mirroring the CLI `run` (--json/--plain) so the web
+    // surface carries the SAME safety warning. Without this, a board that drives a
+    // MOSFET-gate/relay/igniter net HIGH and holds it from reset (no bias
+    // resistor) reads as "no faults" on the web while the CLI warns it is
+    // energised at power-up — the exact false-comfort divergence this path's own
+    // honesty notes exist to prevent. The advisory is firmware-derived, so it is
+    // computed from the finished co-sim's drive sets; `firmware_ran` reuses the
+    // same zero-activity gate the notes above use.
+    let firmware_ran = !(total_toggles == 0 && uart_empty && !any_gpio_driven);
+    let boot_advisory = crate::checks::boot::analyze(
+        &board,
+        &sched.firmware_held_high_nets(),
+        &sched.firmware_output_configured_nets(),
+        &sched.firmware_driven_nets(),
+        firmware_ran,
+    );
+    // Each held-high control net is a serious finding (a switched load possibly
+    // energised at power-up), pushed BEFORE the electrical faults so it leads.
+    for net in &boot_advisory.held_high_control_nets {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "serious".to_string(),
+                what: format!("Control net '{net}' may be energised at power-up"),
+                why: format!(
+                    "'{net}' drives a transistor/relay, is driven HIGH and held from power-up, \
+                     and has no resistor setting a safe default. If a HIGH turns the switched \
+                     load ON when it must stay OFF until firmware enables it, it is energised at \
+                     power-up."
+                ),
+                fix: "Confirm the polarity is intended, or add a pull resistor that holds the \
+                      gate at its safe (OFF) level until the firmware drives it."
+                    .to_string(),
+            },
+        );
+    }
+    let boot_gates: Vec<WebBootGate> = boot_advisory
+        .gate_states
+        .iter()
+        .map(|(reference, net, state)| WebBootGate {
+            reference: reference.clone(),
+            net: net.clone(),
+            state: state.json().to_string(),
+        })
+        .collect();
+
     // Per-slave CS framing tier: exact | backend | heuristic (05 §2). Surfaced so
     // a JSON consumer can tell which slaves' transaction boundaries are real and
     // which are the chunk-boundary guess.
@@ -710,6 +775,7 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
         analog_valid,
         failed_windows,
         spi_framing,
+        boot_gates,
     }
 }
 
@@ -1081,6 +1147,7 @@ mod tests {
             analog_valid: false,
             failed_windows: vec![WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
             spi_framing: Vec::new(),
+            boot_gates: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         assert!(
@@ -1090,6 +1157,68 @@ mod tests {
         assert!(
             json.contains("\"failed_windows\""),
             "invalid run lists failed_windows: {json}"
+        );
+    }
+
+    /// R18: the web co-sim section carries the boot-state panel STRUCTURALLY
+    /// (mirroring the CLI `--json` `boot_gates`). A populated panel serializes;
+    /// an empty one is omitted so the common JSON shape is backward-compatible.
+    #[test]
+    fn cosim_section_serializes_boot_gates_when_present() {
+        let mut section = WebCosimSection {
+            ran: true,
+            seconds_simulated: 0.1,
+            uart_output: String::new(),
+            findings: Vec::new(),
+            gpio_nets: Vec::new(),
+            analog_valid: true,
+            failed_windows: Vec::new(),
+            spi_framing: Vec::new(),
+            boot_gates: vec![WebBootGate {
+                reference: "Q1".to_string(),
+                net: "GATE_CTRL".to_string(),
+                state: "driven_high".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        assert!(json.contains("\"boot_gates\""), "populated boot_gates serializes: {json}");
+        assert!(json.contains("GATE_CTRL") && json.contains("driven_high"), "panel row present: {json}");
+        // Empty => omitted (backward-compatible schema).
+        section.boot_gates.clear();
+        let json2 = serde_json::to_string(&section).unwrap();
+        assert!(!json2.contains("\"boot_gates\""), "empty boot_gates omitted: {json2}");
+    }
+
+    /// R18 parity: the web firmware co-sim must surface the SAME boot power-up
+    /// advisory as the CLI. boot_gate + variant-A firmware drives GATE_CTRL HIGH
+    /// and holds it from reset with no bias resistor; the CLI emits a
+    /// boot_control_net note + boot_gates panel (see cli_strict_plain.rs). The
+    /// web section must carry both. Gated on `avr` because it boots AVR firmware
+    /// on the in-process simavr backend (the renode/qemu build won't run it).
+    #[cfg(feature = "avr")]
+    #[test]
+    fn web_cosim_carries_the_boot_advisory() {
+        let json =
+            analyze_with_firmware_json("boot_gate.kicad_pcb", SHORTED, "boot_gate.elf", BOOT_GATE_FW);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let cosim = &v["cosim"];
+        if cosim["ran"] != serde_json::json!(true) {
+            eprintln!("skipping: boot_gate co-sim did not run in this build");
+            return;
+        }
+        // The gate panel is present and names the driven-high gate.
+        let gates = cosim.get("boot_gates").and_then(|g| g.as_array());
+        assert!(
+            gates.is_some_and(|g| !g.is_empty()),
+            "boot_gates panel must be present on the web co-sim: {json:.400}"
+        );
+        // The held-high hazard leads the findings as a serious item.
+        let findings = cosim["findings"].as_array().expect("findings array");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["what"].as_str().unwrap_or("").contains("energised at power-up")),
+            "the held-high control net must surface as a serious finding: {json:.600}"
         );
     }
 }
