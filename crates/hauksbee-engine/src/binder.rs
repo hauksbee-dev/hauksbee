@@ -56,6 +56,12 @@ pub struct McuBinding {
     pub gpio_drivers: HashMap<(char, u8), PinDriver>,
     /// ADC channel -> net node, so the scheduler can inject node voltages.
     pub adc_nets: HashMap<u8, NodeId>,
+    /// ADC channel -> its OWN GPIO `(port,bit)`, for analog-capable pins that also
+    /// carry a digital port pin (e.g. ATmega328P A0..A5 = PC0..PC5). ADC-ONLY
+    /// channels (A6/A7) have NO entry. The scheduler uses this to decide whether a
+    /// channel was promoted to output by checking THIS channel's own driver —
+    /// never merely whether some other pin's driver shares the net.
+    pub adc_pin: HashMap<u8, (char, u8)>,
     /// Whether this is a module wrapper (Arduino_Nano) using header pad names.
     pub module: bool,
 }
@@ -2776,6 +2782,7 @@ fn bind_mcu(
     // floating-low SRCLR'_S would have held the whole 74HC595 chain cleared.
     let mut gpio_drivers = HashMap::new();
     let mut adc_nets = HashMap::new();
+    let mut adc_pin = HashMap::new();
     for (role, &node) in &role_nets {
         if node.is_ground() {
             continue;
@@ -2794,6 +2801,12 @@ fn bind_mcu(
         // `apin_gpio_of_role` recovers the port pin behind an analog role.
         let port_bit = gpio_of_role(role, module).or_else(|| apin_gpio_of_role(role, module));
         if let Some((port, bit)) = port_bit {
+            // Record this ADC channel's OWN port pin (if it is an analog pin that
+            // also has a digital port pin) so the scheduler can tell a genuine
+            // self-promotion from a mere same-net neighbour's driver.
+            if let Some(ch) = adc_of_role(role, module) {
+                adc_pin.insert(ch, (port, bit));
+            }
             let net_name = circuit.node_name(node).to_string();
             let mut drv = PinDriver::stamp(
                 circuit,
@@ -2823,6 +2836,7 @@ fn bind_mcu(
         role_nets,
         gpio_drivers,
         adc_nets,
+        adc_pin,
         module,
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
