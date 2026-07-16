@@ -410,28 +410,46 @@ pub fn format_engineering(v: f64) -> String {
         (1e-9, "n"),
         (1e-12, "p"),
     ];
-    let mag = v.abs();
-    let (scale, suffix) = SUFFIX
-        .iter()
-        .find(|(s, _)| mag >= *s)
-        .copied()
-        .unwrap_or((1e-12, "p"));
-    let scaled = v / scale;
-    // Three significant digits on the scaled mantissa (which is in [1, 1000)).
-    let digits = if scaled.abs() >= 100.0 {
-        0
-    } else if scaled.abs() >= 10.0 {
-        1
-    } else {
-        2
+    // Three significant digits on the scaled mantissa (which lives in [1, 1000)).
+    let sig_digits = |m: f64| {
+        if m >= 100.0 {
+            0
+        } else if m >= 10.0 {
+            1
+        } else {
+            2
+        }
     };
-    let s = format!("{scaled:.digits$}");
+    let round_to = |m: f64, digits: usize| {
+        let factor = 10f64.powi(digits as i32);
+        (m * factor).round() / factor
+    };
+
+    let mag = v.abs();
+    let mut idx = SUFFIX
+        .iter()
+        .position(|(s, _)| mag >= *s)
+        .unwrap_or(SUFFIX.len() - 1);
+    let mut mantissa = mag / SUFFIX[idx].0;
+    let mut digits = sig_digits(mantissa);
+    // Detect the carry: rounding the mantissa to `digits` decimals can push it up
+    // to 1000 (e.g. 999999 -> "1000k", 999.6 -> "1000"). When that happens promote
+    // to the next-larger suffix so the shown mantissa stays in [1, 1000) — "1M"/"1k"
+    // rather than "1000k"/"1000". At the top suffix (G) there is nothing larger, so
+    // leave it (unreachable for realistic component tolerances).
+    if round_to(mantissa, digits) >= 1000.0 && idx > 0 {
+        idx -= 1;
+        mantissa = mag / SUFFIX[idx].0;
+        digits = sig_digits(mantissa);
+    }
+    let suffix = SUFFIX[idx].1;
+    let s = format!("{mantissa:.digits$}");
     let s = if s.contains('.') {
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     } else {
         s
     };
-    format!("{s}{suffix}")
+    format!("{}{s}{suffix}", if v < 0.0 { "-" } else { "" })
 }
 
 /// One-line description of a plan's sampled set: `R1=10.9k, R2=9.4k`.
@@ -555,5 +573,19 @@ mod tests {
         assert_eq!(format_engineering(0.05), "50m");
         assert_eq!(format_engineering(5.0), "5");
         assert_eq!(format_engineering(2_250_000.0), "2.25M");
+    }
+
+    #[test]
+    fn engineering_format_carries_past_a_decade_edge() {
+        // R23 (FMT-ENG-DECADE-ROUNDUP): rounding the mantissa up to 1000 must
+        // carry into the next-larger suffix — never emit a wrong-decade label
+        // like "1000k" or a bare "1000".
+        assert_eq!(format_engineering(999_999.0), "1M");
+        assert_eq!(format_engineering(999.6), "1k");
+        assert_eq!(format_engineering(999_500.0), "1M");
+        // A value already clear of the edge is unaffected.
+        assert_eq!(format_engineering(10_900.0), "10.9k");
+        // The carry composes with the sign.
+        assert_eq!(format_engineering(-999_999.0), "-1M");
     }
 }

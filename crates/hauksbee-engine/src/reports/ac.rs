@@ -162,8 +162,11 @@ pub fn emit(
     if let Some(path) = csv {
         let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
         for net in &nodes {
+            // A net name can carry a comma; RFC-4180 escape it so the column
+            // count stays fixed (mirrors sim.rs::csv_escape).
+            let net_cell = crate::commands::sim::csv_escape(net);
             for (f, db, ph) in resp.bode(circuit, net) {
-                out.push_str(&format!("{net},{f},{db},{ph}\n"));
+                out.push_str(&format!("{net_cell},{f},{db},{ph}\n"));
             }
         }
         std::fs::write(path, out)?;
