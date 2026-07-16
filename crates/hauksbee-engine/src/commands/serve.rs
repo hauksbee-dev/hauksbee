@@ -19,7 +19,7 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         // firmware-aware callback handles both the board-only path (firmware ==
         // None -> analyze_json) and the firmware co-sim path.
         let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
-            |name: &str, contents: &str, fw: Option<(&str, &[u8])>| match fw {
+            |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| match fw {
                 Some((fw_name, fw_bytes)) => {
                     crate::analyze_with_firmware_json(name, contents, fw_name, fw_bytes)
                 }

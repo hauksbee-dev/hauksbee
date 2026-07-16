@@ -565,17 +565,24 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // it into the live sim already running on `/ws`. Compute the report once here
     // and hand it to the app via `/api/startup`. Board-only unless firmware was
     // supplied (then include the in-process co-sim, matching the drop path).
+    // The analyzers take the board as raw bytes (so binary formats survive). A
+    // binary board (Altium) hands over the file's own bytes — its `text` is
+    // empty; text / Board-as-Code boards hand over the (possibly recompiled)
+    // text, which is exactly what the analysis must see for them.
+    let report_bytes: &[u8] = if altium.is_some() { &raw } else { text.as_bytes() };
     let report_json = match &cfg.firmware {
         Some(fw) => {
             let fw_name = crate::commands::common::file_name(fw);
             match std::fs::read(fw) {
-                Ok(bytes) => crate::analyze_with_firmware_json(&file_name, &text, &fw_name, &bytes),
+                Ok(bytes) => {
+                    crate::analyze_with_firmware_json(&file_name, report_bytes, &fw_name, &bytes)
+                }
                 // Firmware was already path-validated above; a read error here is
                 // unexpected, so fall back to the board-only report rather than fail.
-                Err(_) => crate::analyze_json(&file_name, &text),
+                Err(_) => crate::analyze_json(&file_name, report_bytes),
             }
         }
-        None => crate::analyze_json(&file_name, &text),
+        None => crate::analyze_json(&file_name, report_bytes),
     };
     let report_val: serde_json::Value =
         serde_json::from_str(&report_json).unwrap_or(serde_json::Value::Null);
