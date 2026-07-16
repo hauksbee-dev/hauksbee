@@ -576,6 +576,16 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
             }
         }
     }
+    // A `[[decoupling.override]]` keyed by a ref that names no board capacitor is
+    // silently dropped in apply_decoupling (the per-cap lookup never matches), so
+    // the parasitics the user opted into are never applied and a rail_window
+    // check sees a cleaner-than-real rail — a false GREEN. Validate the ref like
+    // every other, so a typo fails loud.
+    if let Some(dec) = &spec.decoupling {
+        for ov in &dec.overrides {
+            named.push((ov.reference.as_str(), "decoupling override"));
+        }
+    }
     for (reference, ctx) in named {
         if !set.contains(reference) {
             let near = crate::error::near_matches(reference, known_refs, 5);
@@ -2220,6 +2230,44 @@ mod tests {
         assert!(!windows_overlap(&w, 0.0, 0.001));
         // No failed windows: never overlaps.
         assert!(!windows_overlap(&[], 0.0, 1.0));
+    }
+
+    #[test]
+    fn decoupling_override_with_unknown_ref_fails_loud() {
+        // R33: a `[[decoupling.override]]` keyed by a ref that names no board
+        // capacitor was silently dropped (the per-cap lookup never matched), so
+        // the parasitics the user opted into were never applied and a rail_window
+        // check saw a cleaner-than-real rail — a false GREEN. The ref must be
+        // validated like every other, so a typo fails loud.
+        let spec: Spec = toml::from_str(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+
+[decoupling]
+parasitics = false
+
+[[decoupling.override]]
+ref = "C10"
+esr_ohms = 0.5
+"#,
+        )
+        .expect("valid toml");
+
+        // The board has C110, not C10 (a typo): must be rejected.
+        let err = check_component_refs(&spec, &["C110".to_string()])
+            .expect_err("an unknown decoupling override ref must fail loud");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("decoupling override") && m.contains("C10")),
+            "expected a decoupling-override ref error naming C10, got {err:?}"
+        );
+
+        // With the correct ref on the board it validates.
+        assert!(
+            check_component_refs(&spec, &["C10".to_string()]).is_ok(),
+            "a decoupling override matching a real cap ref must validate"
+        );
     }
 
     // ── qemu_bus_slave_warnings unit tests ───────────────────────────────────

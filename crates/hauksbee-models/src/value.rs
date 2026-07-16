@@ -66,6 +66,17 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
         }
         v = rest;
     }
+    // A JEDEC semiconductor part number ("1N4007", "1N5819", "2N3904", "2N7000")
+    // is NOT a passive magnitude, but its `<digit>N<digits>` shape collides with
+    // the RKM nano form: parse_inner reads "1N4007" as 1 + nano + ".4007" =
+    // 1.4007 nF. Returning Some() there defeats the binder's generic-diode
+    // fallback (which keys off parse_value() == None for non-passive values),
+    // silently deleting a conducting rectifier/Schottky/zener path. A real RKM
+    // value has a SHORT fractional part ("4n7", "1n5"); a JEDEC number is a single
+    // leading digit, then N, then 3+ serial digits — reject that whole form.
+    if is_jedec_semiconductor(v) {
+        return None;
+    }
     // A value expressed purely in volts ("5V1", "3V3", "12V") is not an R/C/L
     // magnitude — it is a zener/TVS breakdown or a rating. parse_inner would
     // read "5V1" as 5.0 V (silently dropping the ".1") and, worse, returning
@@ -73,6 +84,26 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // parse_value() == None for non-passive values), leaving the part open.
     // Return None so the diode/reference-class fallbacks handle it.
     parse_inner(v).filter(|p| p.unit.as_deref() != Some("V"))
+}
+
+/// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
+/// 2N3904, 3N201): exactly one leading digit, then `N`/`n`, then 3 or more serial
+/// digits and nothing else. The 3-digit floor keeps genuine RKM nano values
+/// ("4n7", "1n5", "2n2" — 1–2 fractional digits) parsing normally while catching
+/// the part numbers that would otherwise read as ~1.4 nF.
+fn is_jedec_semiconductor(v: &str) -> bool {
+    let b = v.as_bytes();
+    if b.len() < 5 {
+        return false;
+    }
+    if !b[0].is_ascii_digit() || b[0] == b'0' {
+        return false;
+    }
+    if !(b[1] == b'N' || b[1] == b'n') {
+        return false;
+    }
+    let serial = &b[2..];
+    serial.len() >= 3 && serial.iter().all(u8::is_ascii_digit)
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
@@ -718,6 +749,27 @@ mod tests {
         assert!(parse_value("DNP").is_none());
         assert!(parse_value("").is_none());
         assert!(parse_value("BC847").is_none());
+    }
+
+    #[test]
+    fn jedec_diode_part_numbers_are_not_passive_values() {
+        // R33: "1N4007" collided with the RKM nano form — parse_inner read it as
+        // 1 + nano + ".4007" = ~1.4 nF, so parse_value returned Some(). That
+        // defeated the binder's generic-diode fallback (which keys off
+        // parse_value() == None), silently deleting a conducting rectifier /
+        // Schottky / zener path. JEDEC 1N/2N part numbers must return None.
+        for pn in ["1N4007", "1N5819", "1N914", "1N4733", "2N3904", "2N7000", "3N201"] {
+            assert!(
+                parse_value(pn).is_none(),
+                "JEDEC part number {pn:?} must not parse as a passive value, got {:?}",
+                parse_value(pn)
+            );
+        }
+        // The short RKM nano values it must NOT reject still parse correctly.
+        check("4n7", 4.7e-9);
+        check("1n5", 1.5e-9);
+        check("2n2", 2.2e-9);
+        check("100n", 100e-9);
     }
 
     #[test]
