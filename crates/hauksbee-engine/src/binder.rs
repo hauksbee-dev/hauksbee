@@ -2446,10 +2446,15 @@ fn bind_analog_switch(
     let (a, b) = match (a, b) {
         (Some(a), Some(b)) if a != b => (a, b),
         _ => {
-            // Fall back: first two non-power roles.
+            // Fall back: first two non-power roles. The control role is EXCLUDED:
+            // it is the switch's gate, not a signal terminal. Wiring it as a
+            // throw would stamp a VSwitch whose `b` equals its own `ctrl_p`,
+            // fabricating a ~ron path that shorts a signal net to the control
+            // line (and injects/loads the control voltage) when the gate goes
+            // high — a conductive path that does not exist on the real board.
             let mut nodes: Vec<NodeId> = roles
                 .iter()
-                .filter(|(r, _)| !is_power_role(r))
+                .filter(|(r, _)| !is_power_role(r) && !is_ctrl_role(r))
                 .map(|(_, n)| *n)
                 .collect();
             nodes.sort_by_key(|n| n.0);
@@ -2932,6 +2937,14 @@ fn open_warning(comp: &Component, why: &str) -> (BindOutcome, Option<String>) {
 fn is_power_role(role: &str) -> bool {
     let r = role.to_ascii_lowercase();
     r.contains("vcc") || r.contains("vdd") || r.contains("vss") || r == "gnd"
+}
+
+/// The analog-switch gate/select roles (mirrors the `ctrl` pick list in the SPST
+/// fallback). Kept out of the throw-terminal candidates: the control net drives
+/// the switch, it is never one of its signal terminals.
+fn is_ctrl_role(role: &str) -> bool {
+    let r = role.to_ascii_lowercase();
+    r == "ctrl" || r == "ctrl_1" || r == "in"
 }
 
 fn device_label(d: &Device) -> String {
@@ -3614,6 +3627,47 @@ mod digital_ro_tests {
         assert!(
             matches!(outcome, BindOutcome::Behavioral { device } if device.contains("3.3")),
             "the source regulates to the declared 3.3 V"
+        );
+    }
+
+    /// R30 (spst-fallback-wires-ctrl-as-terminal): an analog switch with only its
+    /// common and control pins wired (the switched throw unconnected/DNP) reaches
+    /// the SPST fallback. The fallback must leave the switch OPEN — the control
+    /// net is the gate, never a signal terminal. The old code picked the two
+    /// lowest-NodeId non-POWER roles as the two throws, so it wired `ctrl` itself
+    /// as a terminal and stamped a VSwitch whose `b` equalled its own `ctrl_p`:
+    /// a fabricated ~ron path shorting the common signal net to the control line
+    /// (and injecting the control voltage) whenever the gate went high.
+    #[test]
+    fn spst_fallback_does_not_wire_control_as_a_switch_terminal() {
+        let model = make_entry(
+            "generic_analog_switch",
+            ComponentKind::AnalogSwitch,
+            "SPST with only com + ctrl wired",
+            hauksbee_models::Params::default(),
+            std::collections::BTreeMap::new(),
+        );
+        let mut circuit = Circuit::new();
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        roles.insert("com".into(), circuit.node("SIG"));
+        roles.insert("ctrl".into(), circuit.node("GATE"));
+        let power_nets: HashMap<String, f64> = HashMap::new();
+
+        let (outcome, _warning) =
+            bind_analog_switch(&bare_comp("U7"), &model, &mut circuit, &roles, &power_nets);
+
+        let vswitches = circuit
+            .devices
+            .iter()
+            .filter(|d| matches!(d, Device::VSwitch { .. }))
+            .count();
+        assert_eq!(
+            vswitches, 0,
+            "no throw is connected: the switch must be left open, not shorted to its control net"
+        );
+        assert!(
+            matches!(outcome, BindOutcome::Unresolved { .. }),
+            "an unconnected switch path must be reported as open/unresolved, got {outcome:?}"
         );
     }
 }

@@ -598,8 +598,17 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
             .join(", ")
     };
     let chunk_word = if failed_chunks == 1 { "chunk" } else { "chunks" };
+    // Note-level, NOT serious: analog non-convergence is a co-sim HONESTY caveat,
+    // not a board defect. Like its sibling caveats (substitute core, firmware not
+    // exercised — both note-level) it must DEMOTE the headline off "Looks healthy"
+    // via `cosim_caveat_headline` (whose `!analog_valid` term relies on this) and
+    // must NOT fold into the serious/total fault count in `fold_cosim_faults`.
+    // Marking it "serious" made the web report a phantom board fault on a run
+    // where only the solver failed to converge — contradicting both this contract
+    // and the CLI `--plain` path, which surfaces it as a heads-up note. The prose
+    // below stays loud (it leads the co-sim card); only the severity is honest.
     WebFinding {
-        level: "serious".to_string(),
+        level: "note".to_string(),
         what: "Analog co-sim did not converge: electrical results are not trustworthy".to_string(),
         why: format!(
             "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}. \
@@ -1353,7 +1362,11 @@ mod tests {
             end_s: 0.0034,
         }];
         let f = analog_invalid_finding(2, &windows);
-        assert_eq!(f.level, "serious", "analog invalidity is serious, not a note");
+        assert_eq!(
+            f.level, "note",
+            "analog invalidity is a note-level honesty caveat (it demotes the \
+             headline), not a serious board fault that folds into the count"
+        );
         assert!(
             f.what.to_lowercase().contains("not trustworthy"),
             "headline must refuse trust: {}",
@@ -1485,6 +1498,39 @@ mod tests {
         assert!(
             fold_cosim_faults(0, 0, &clean_ran_section()).is_none(),
             "a fault-free co-sim must not fold into the issue count"
+        );
+    }
+
+    #[test]
+    fn analog_invalidity_demotes_the_headline_not_folds_as_a_serious_fault() {
+        // Round-30 CLI/web parity: an analog solve that failed to converge is a
+        // co-sim HONESTY caveat, not a board defect. The web prepends the loud
+        // analog_invalid_finding exactly as run_web_cosim does. It must NOT fold
+        // into the serious/total fault count (fold returns None), and the bare
+        // "Looks healthy" headline must instead DEMOTE to the heads-up verdict —
+        // matching the CLI --plain "worth a look" note. Before the fix the finding
+        // was level "serious", so fold_cosim_faults returned Some((1,1,..)) and the
+        // web told the user to "fix the serious ones" for a phantom hardware fault.
+        let mut diverged = clean_ran_section();
+        diverged.analog_valid = false;
+        diverged.failed_windows = vec![WebFailedWindow { start_s: 0.0012, end_s: 0.0034 }];
+        diverged.findings.insert(
+            0,
+            analog_invalid_finding(2, &diverged.failed_windows.clone()),
+        );
+
+        // (1) The caveat does not fold as an electrical fault.
+        assert!(
+            fold_cosim_faults(0, 0, &diverged).is_none(),
+            "analog non-convergence must not fold into the serious/total count"
+        );
+
+        // (2) It demotes the bare healthy headline to the heads-up verdict.
+        let healthy = overall_headline(0, 0, false, false);
+        assert_eq!(
+            cosim_caveat_headline(&diverged, &healthy),
+            Some(overall_headline(0, 0, true, false)),
+            "a diverged analog solve must demote Looks healthy, not escalate serious"
         );
     }
 
