@@ -232,8 +232,13 @@ pub struct PartitionedTransient {
     /// any read, so reuse is a pure lifetime change (plan §4.2).
     lin_vfree: Vec<Vec<f64>>,
     nonlinear: Vec<NonlinearIsland>,
-    /// Global voltage source ids (cut points) and their global +/- nodes.
-    sources: Vec<DeviceId>,
+    /// Global voltage source ids (cut points), each paired with the terminal
+    /// the source *fixes* (decided once by [`order_sources`]): a cut source can
+    /// be emitted in either orientation — its already-resolved reference may be
+    /// `n` (the common rail-to-ground case) or `p` (a supply stacked below an
+    /// already-pinned node) — and `apply_sources` must pin the floating
+    /// terminal, never blindly `p`.
+    sources: Vec<(DeviceId, SourcePins)>,
     /// Detected shunt-fed rail tears, solved by scalar balance each step.
     tears: Vec<RailTearState>,
     /// Global node-voltage exchange buffer, indexed by NodeId.0. Between
@@ -1023,24 +1028,43 @@ impl PartitionedTransient {
     ///
     /// A source pins `v(p) - v(n) = val`. Whichever terminal is *not* already
     /// pinned (ground or a previously-resolved source node) is the one this
-    /// source fixes. `self.sources` is ordered so that a source whose reference
-    /// terminal is another source's pinned node comes later (see `try_build`),
-    /// which lets a single in-order sweep resolve stacked floating supplies.
+    /// source fixes — and that can be EITHER terminal: pinned-ness propagates
+    /// through a Vsource in both directions (see `partition.rs`), so a stacked
+    /// supply may reach us with `p` already resolved and `n` floating. Writing
+    /// `vbuf[p]` unconditionally would clobber the resolved reference with a
+    /// stale value and leave the floating node unset. `order_sources` decides
+    /// once, per source, which terminal is the floating one this source fixes;
+    /// here we just apply that decision in order (the ordering guarantees the
+    /// reference terminal was resolved by ground or a prior source).
     fn apply_sources(&mut self, circuit: &Circuit, t: f64) {
-        for &sid in &self.sources {
+        for &(sid, pins) in &self.sources {
             if let Device::Vsource { p, n, kind, .. } = &circuit.devices[sid.0 as usize] {
                 let val = kind.eval(t);
-                if !p.is_ground() {
-                    // Fix v(p) relative to n's (ground or resolved) value.
-                    let vn = if n.is_ground() {
-                        0.0
-                    } else {
-                        self.vbuf[n.0 as usize]
-                    };
-                    self.vbuf[p.0 as usize] = vn + val;
-                } else if !n.is_ground() {
-                    // Positive terminal on ground (negative rail): v(n) = -val.
-                    self.vbuf[n.0 as usize] = -val;
+                match pins {
+                    SourcePins::P => {
+                        // n is the resolved reference: v(p) = v(n) + val.
+                        if p.is_ground() {
+                            continue; // redundant (both terminals pinned)
+                        }
+                        let vn = if n.is_ground() {
+                            0.0
+                        } else {
+                            self.vbuf[n.0 as usize]
+                        };
+                        self.vbuf[p.0 as usize] = vn + val;
+                    }
+                    SourcePins::N => {
+                        // p is the resolved reference: v(n) = v(p) - val.
+                        if n.is_ground() {
+                            continue; // redundant (both terminals pinned)
+                        }
+                        let vp = if p.is_ground() {
+                            0.0
+                        } else {
+                            self.vbuf[p.0 as usize]
+                        };
+                        self.vbuf[n.0 as usize] = vp - val;
+                    }
                 }
             }
         }
@@ -1260,12 +1284,27 @@ fn verify_single_writer(
         .collect())
 }
 
+/// Which terminal a cut source *fixes* when applied in the ordered sweep.
+/// The other terminal is the already-resolved reference the value hangs off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourcePins {
+    /// `n` is the resolved reference; this source fixes `v(p) = v(n) + val`.
+    P,
+    /// `p` is the resolved reference; this source fixes `v(n) = v(p) - val`.
+    N,
+}
+
 /// Order cut voltage sources so each source's *reference* terminal is resolved
-/// before the source is applied. A source resolves the node `v(p)` (when `n` is
-/// ground/resolved) or `v(n)` (when `p` is ground). We greedily emit sources
-/// whose reference node is already pinned, starting from ground; any cycle (a
-/// pathological floating loop) is appended in original order as a fallback.
-fn order_sources(circuit: &Circuit, sources: &[DeviceId]) -> Vec<DeviceId> {
+/// before the source is applied, and record WHICH terminal each source fixes.
+/// A source resolves `v(p)` when `n` is ground/resolved, but equally `v(n)`
+/// when `p` is ground/resolved — pinned-ness propagates through a Vsource in
+/// both directions during partitioning, so both orientations genuinely occur
+/// (e.g. `V1 A→GND` pins A, then `V2 p=A n=B` reaches us with `p` resolved and
+/// must fix `v(B) = v(A) - val`, not overwrite `v(A)`). We greedily emit
+/// sources whose reference node is already pinned, starting from ground; any
+/// cycle (a pathological floating loop) is appended in original order as a
+/// fallback, oriented as pinning `p` unless `p` is ground.
+fn order_sources(circuit: &Circuit, sources: &[DeviceId]) -> Vec<(DeviceId, SourcePins)> {
     let mut resolved = std::collections::HashSet::new();
     resolved.insert(NodeId::GROUND);
     let mut out = Vec::with_capacity(sources.len());
@@ -1274,18 +1313,26 @@ fn order_sources(circuit: &Circuit, sources: &[DeviceId]) -> Vec<DeviceId> {
         let before = out.len();
         pending.retain(|&sid| {
             if let Device::Vsource { p, n, .. } = &circuit.devices[sid.0 as usize] {
-                // Resolvable if exactly one terminal is already resolved.
+                // Resolvable if exactly one terminal is already resolved: the
+                // resolved one is the reference, the other is what we fix.
                 let pr = resolved.contains(p);
                 let nr = resolved.contains(n);
                 if pr ^ nr {
-                    out.push(sid);
+                    out.push((sid, if nr { SourcePins::P } else { SourcePins::N }));
                     resolved.insert(*p);
                     resolved.insert(*n);
                     return false;
                 }
                 if pr && nr {
-                    // Redundant (both pinned) — emit and drop.
-                    out.push(sid);
+                    // Redundant (both pinned) — emit and drop. Orient away
+                    // from ground so apply_sources re-asserts consistency
+                    // without writing the ground slot.
+                    let pins = if p.is_ground() {
+                        SourcePins::N
+                    } else {
+                        SourcePins::P
+                    };
+                    out.push((sid, pins));
                     return false;
                 }
             }
@@ -1295,7 +1342,15 @@ fn order_sources(circuit: &Circuit, sources: &[DeviceId]) -> Vec<DeviceId> {
             break; // no progress; remaining are cyclic/floating
         }
     }
-    out.extend(pending);
+    // Cyclic/floating fallback: keep the legacy orientation (fix `p`, or `n`
+    // when `p` is ground) so behavior is unchanged for these pathologies.
+    for sid in pending {
+        let pins = match &circuit.devices[sid.0 as usize] {
+            Device::Vsource { p, .. } if p.is_ground() => SourcePins::N,
+            _ => SourcePins::P,
+        };
+        out.push((sid, pins));
+    }
     out
 }
 
@@ -2167,6 +2222,114 @@ mod tests {
         assert!(
             (o_mono - o_part).abs() <= 1e-6,
             "comparator output diverged: mono {o_mono} vs torn {o_part}"
+        );
+    }
+
+    /// Bug-hunt (R8 #2): a cut source emitted with its POSITIVE terminal as
+    /// the already-resolved reference must pin the floating `n`, not clobber
+    /// `p`. Pinned-ness propagates through a Vsource in both directions, so
+    /// `V1 A→GND` pins A and then `V2 p=A n=B (2 V)` pins B — but the old
+    /// `apply_sources` hard-assumed `n` was the reference: it overwrote
+    /// `vbuf[A]` with `vbuf[B] + 2` and never wrote `vbuf[B]` at all. With
+    /// pure DC sources the whole-circuit DC seed masks this (the stale
+    /// `vbuf[B]` happens to hold the correct value forever), so V1 is a step:
+    /// after the step, `vbuf[B]` still holds the t=0 value and BOTH boundary
+    /// nodes are frozen at their seed voltages (A = 0, B = -2 instead of
+    /// A = 5, B = 3) while the monolithic MNA path tracks the step exactly.
+    #[test]
+    fn stacked_source_with_resolved_positive_terminal_pins_the_floating_negative() {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        let b = c.node("b");
+        let m = c.node("m");
+        let v1 = c.add(Device::Vsource {
+            name: "V1".into(),
+            p: a,
+            n: NodeId::GROUND,
+            // 0 -> 5 V step at 1 us: the boundary values MUST move after t=0.
+            kind: SourceKind::Pulse {
+                v1: 0.0,
+                v2: 5.0,
+                delay: 1e-6,
+                rise: 1e-9,
+                fall: 1e-9,
+                width: 1.0,
+                period: 0.0,
+            },
+        });
+        // Stacked supply hanging BELOW the pinned rail: v(A) - v(B) = 2, so
+        // order_sources sees `p` (A) resolved and must fix `n` (B) = 3 V.
+        let v2 = c.add(Device::Vsource {
+            name: "V2".into(),
+            p: a,
+            n: b,
+            kind: SourceKind::Dc(2.0),
+        });
+        // B feeds a real island so the partitioned engine has work to do and
+        // B is a genuine cut-source boundary read every step.
+        let r1 = c.add(Device::Resistor {
+            name: "R1".into(),
+            a: b,
+            b: m,
+            ohms: 1e3,
+            tc1: None,
+        });
+        let c1 = c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: m,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: None, // both engines seed from the same t=0 DC point
+        });
+        let part = Partition {
+            islands: vec![Island {
+                devices: vec![r1, c1],
+                nodes: vec![b, m],
+                linear: true,
+                boundary_in: vec![b],
+            }],
+            sources: vec![v1, v2],
+            n_nodes: c.max_node() as usize,
+            tears: Vec::new(),
+        };
+        let dt = 5e-8;
+        let tstop = 20e-6; // 19 tau past the step: m has settled at v(B) = 3 V
+        let opts = fixed_opts(dt);
+        let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
+            .expect("stacked-source partition builds");
+        let n = engine.global_x_len();
+        let mut last = vec![0.0; n];
+        engine
+            .run_streaming(&c, tstop, |s| last.copy_from_slice(s.x))
+            .expect("partitioned run completes");
+
+        // Monolithic oracle: the MNA branch equations get this right for free.
+        let mono = crate::transient::Transient::new(SolverOptions {
+            partitioning: crate::options::Partitioning::Off,
+            ..opts
+        })
+        .run(&c, tstop)
+        .expect("monolithic oracle");
+        let a_mono = mono.final_node(&c, "a").expect("a present");
+        let b_mono = mono.final_node(&c, "b").expect("b present");
+        let m_mono = mono.final_node(&c, "m").expect("m present");
+        let a_part = last[a.0 as usize - 1];
+        let b_part = last[b.0 as usize - 1];
+        let m_part = last[m.0 as usize - 1];
+        // Exact values first (the physics is trivial), then the differential.
+        assert!((a_mono - 5.0).abs() <= 1e-9, "oracle sanity: a = {a_mono}");
+        assert!((b_mono - 3.0).abs() <= 1e-9, "oracle sanity: b = {b_mono}");
+        assert!(
+            (a_part - a_mono).abs() <= 1e-9,
+            "pinned rail clobbered: mono a {a_mono} vs torn {a_part}"
+        );
+        assert!(
+            (b_part - b_mono).abs() <= 1e-9,
+            "floating terminal never pinned: mono b {b_mono} vs torn {b_part}"
+        );
+        assert!(
+            (m_part - m_mono).abs() <= 1e-6,
+            "island fed a wrong boundary: mono m {m_mono} vs torn {m_part}"
         );
     }
 
