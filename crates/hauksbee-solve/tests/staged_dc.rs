@@ -13,7 +13,9 @@
 //! isolation and that it does not regress the ordinary diode solve.
 
 use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
-use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace, RobustnessLadder, Strategy};
+use hauksbee_solve::{
+    dc_operating_point, run_op, Probe, RobustnessLadder, SolverOptions, Strategy, Workspace,
+};
 
 fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     let mut c = Circuit::new();
@@ -192,4 +194,104 @@ fn multi_switch_core_converges_via_event_freeze() {
     // And it is a TRUE root, not a relaxed adoption: KCL closes at the solution.
     let res = ws.dc_residual_inf_norm(&c, &opts);
     assert!(res < 1e-6, "switched-core root residual should be ~0, got {res:e}");
+}
+
+/// A circuit whose TRUE nonlinear DC has no consistent comparator state (the
+/// output feeds its own inverting input through a diode: out HIGH forces the
+/// input above the reference which forces out LOW, and vice versa), so every
+/// rung of the homotopy/staged ladder limit-cycles. The RELAXED no-diode solve
+/// converges (the 1 GΩ diode stand-in cuts the feedback, the input rests at 0 V
+/// below the 2 V reference, out sits consistently HIGH), so `dc_solve` adopts
+/// it as the power-on surrogate and returns Ok — the right contract for
+/// transient seeding. At that adopted point the real diode is forward-biased by
+/// nearly the full 5 V rail, so the KCL residual is astronomically wrong.
+fn build_comparator_diode_chatter() -> Circuit {
+    let mut c = Circuit::new();
+    let model = DiodeModel { is: 4.352e-9, n: 1.9, rs: 0.65, ..DiodeModel::default() };
+
+    let vref = c.node("VREF");
+    c.add(Device::Vsource {
+        name: "VREF".into(),
+        p: vref,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(2.0),
+    });
+
+    let out = c.node("OUT");
+    let d_a = c.node("D_A");
+    let fb = c.node("FB");
+    c.add(Device::Comparator {
+        name: "UCHAT".into(),
+        out,
+        inp: vref,
+        inn: fb,
+        out_lo: 0.0,
+        out_hi: 5.0,
+        hysteresis: 0.003,
+    });
+    // out -> 1k -> diode -> fb -> 10k -> gnd: with out HIGH the diode conducts
+    // and fb rises above vref (flipping out LOW); with out LOW fb rests at 0
+    // (flipping out HIGH). No consistent static state exists.
+    c.add(Device::Resistor { name: "RFB".into(), a: out, b: d_a, ohms: 1.0e3, tc1: None });
+    c.add(Device::Diode { name: "DFB".into(), a: d_a, k: fb, model });
+    c.add(Device::Resistor { name: "RPD".into(), a: fb, b: NodeId::GROUND, ohms: 10.0e3, tc1: None });
+    c
+}
+
+/// `.op` honesty: when `dc_operating_point` falls back to the staged-DC
+/// relaxed surrogate (diodes forced OFF, KCL grossly violated at the adopted
+/// point), `run_op` must REFUSE to present it as a converged operating point.
+/// The seeding contract is untouched: `dc_operating_point` itself still
+/// returns Ok with the surrogate for the transient driver.
+#[test]
+fn run_op_rejects_staged_dc_relaxed_surrogate() {
+    let opts = SolverOptions::default();
+    let c = build_comparator_diode_chatter();
+
+    // The seeding-layer contract is preserved: Ok, flagged, huge residual.
+    let mut ws = Workspace::new(&c);
+    dc_operating_point(&mut ws, &c, &opts)
+        .expect("dc_operating_point must still adopt the relaxed surrogate for seeding");
+    assert!(ws.used_staged_dc(), "the staged-DC fallback should have engaged");
+    let res = ws.dc_residual_inf_norm(&c, &opts);
+    assert!(
+        !(res <= 1e-6),
+        "test premise: the adopted surrogate must NOT be a true root, residual {res:e}"
+    );
+
+    // The .op REPORT layer refuses it.
+    let probes = vec![Probe::NodeVoltage("FB".into())];
+    let err = run_op(&c, &opts, &probes)
+        .expect_err("run_op must not report a relaxed surrogate as a converged .op");
+    assert!(
+        err.contains("did not converge"),
+        "error should say non-convergence, got: {err}"
+    );
+}
+
+/// Control for the honesty gate: an ordinary convergent circuit (including one
+/// that engages the staged path but lands on a GENUINE root) still passes
+/// through `run_op` with a near-zero KCL residual.
+#[test]
+fn run_op_accepts_genuine_roots_including_staged_ones() {
+    let opts = SolverOptions::default();
+
+    // Plain resistive divider: trivially convergent.
+    let mut c = Circuit::new();
+    let a = c.node("A");
+    let b = c.node("B");
+    c.add(Device::Vsource { name: "V1".into(), p: a, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
+    c.add(Device::Resistor { name: "R1".into(), a, b, ohms: 1.0e3, tc1: None });
+    c.add(Device::Resistor { name: "R2".into(), a: b, b: NodeId::GROUND, ohms: 1.0e3, tc1: None });
+    let out = run_op(&c, &opts, &[Probe::NodeVoltage("B".into())])
+        .expect("a convergent divider must pass the .op residual gate");
+    assert!((out.rows[0][0] - 2.5).abs() < 1e-6, "divider mid: {}", out.rows[0][0]);
+
+    // The stiff diode board from `stiff_diode_dc_converges_to_finite_physical_root`:
+    // it exercises the staged machinery yet converges to a true root, so the
+    // residual gate must not reject it (used_staged_dc alone is NOT grounds).
+    let (cfull, _, _) = build(40, 4.352e-9);
+    let out = run_op(&cfull, &opts, &[Probe::NodeVoltage("RAIL".into())])
+        .expect("a genuinely converged stiff-diode .op must pass the residual gate");
+    assert!((out.rows[0][0] - 5.0).abs() < 1e-6);
 }
