@@ -332,7 +332,19 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let _ = frac_start; // suppress warning
                             // Rebuild as "4.7"
         let combined = format!("{}.{}", before, frac_digits);
-        let unit = parse_tail(after_frac)?;
+        let mut unit = parse_tail(after_frac)?;
+        if unit.is_none() {
+            // An RKM decimal-point letter that is ITSELF a unit — H in "4H7",
+            // F in "4F7" — leaves nothing after the fraction, so parse_tail
+            // returns no unit and the H/F was silently dropped. The value then
+            // read as unitless and downstream (parse_ohms) accepted a henry /
+            // farad part as a resistance. Recover the unit from the suffix letter.
+            unit = match suffix_str {
+                Some("H") => Some("H".to_string()),
+                Some("F") => Some("F".to_string()),
+                _ => None,
+            };
+        }
         (combined, unit)
     } else {
         let unit = parse_tail(after_suffix)?;
@@ -582,9 +594,18 @@ mod tests {
         check("4F7", 4.7); // 4.7 F
         check("1H5", 1.5); // 1.5 H
         check("2R2", 2.2); // resistor form still works
+        // R36: the H/F decimal-letter IS the unit — it must not be dropped, or
+        // downstream parse_ohms accepts a henry/farad part as a resistance. Only
+        // the ohmic 'R' form is legitimately unitless.
+        assert_eq!(parse_value("4H7").unwrap().unit.as_deref(), Some("H"));
+        assert_eq!(parse_value("4F7").unwrap().unit.as_deref(), Some("F"));
+        assert_eq!(parse_value("1H5").unwrap().unit.as_deref(), Some("H"));
+        assert_eq!(parse_value("2R2").unwrap().unit.as_deref(), None);
         // Bare unit forms are NOT decimal letters (no following digit):
         check("10F", 10.0); // 10 farads
         check("1H", 1.0); // 1 henry
+        assert_eq!(parse_value("10F").unwrap().unit.as_deref(), Some("F"));
+        assert_eq!(parse_value("1H").unwrap().unit.as_deref(), Some("H"));
         // Prefix multipliers still win; lowercase 'f' stays femto:
         assert!((parse_value("100nF").unwrap().si - 1e-7).abs() < 1e-20);
         assert!((parse_value("4f7").unwrap().si - 4.7e-15).abs() < 1e-30);
