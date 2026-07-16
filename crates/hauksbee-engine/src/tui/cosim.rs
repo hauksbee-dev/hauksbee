@@ -213,8 +213,12 @@ fn run_worker(
         let frame = engine.step(frame_dt);
         t += frame_dt;
 
-        // Accumulate UART, split into lines.
-        for bytes in frame.uart.values() {
+        // Accumulate UART, split into lines. Iterate in sorted-by-MCU-key order
+        // so a multi-MCU board's merged UART is deterministic run-to-run, not
+        // HashMap iteration order — matching reports/cosim.rs and frontdoor.rs.
+        let mut uart_entries: Vec<_> = frame.uart.iter().collect();
+        uart_entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (_, bytes) in uart_entries {
             if !bytes.is_empty() {
                 uart_seen = true;
             }
