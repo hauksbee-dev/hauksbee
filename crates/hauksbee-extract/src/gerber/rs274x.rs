@@ -29,7 +29,9 @@
 
 use std::io::BufReader;
 
-use gerber_types::{Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity};
+use gerber_types::{
+    Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
+};
 use gerber_types::{Circle, Polygon as GPolygon, Rectangular};
 use gerber_types::{CoordinateNumber, Coordinates, InterpolationMode};
 
@@ -38,6 +40,12 @@ use super::macros::instantiate_macro;
 
 /// Arc flattening resolution (matches drc's ARC_SEGMENTS).
 const ARC_SEGMENTS: usize = 16;
+
+/// Radius (mm) of the small disc a macro flash falls back to when its aperture
+/// macro cannot be instantiated. A fixed physical size — never scaled by the
+/// document's unit factor — so an inch-unit board gets the same 0.25 mm anchor
+/// as a millimetre one rather than a 6.35 mm blob.
+const MACRO_FALLBACK_DISC_MM: f64 = 0.25;
 
 /// One solid copper region the plotter painted, with the aperture/flash kind so
 /// the tracer can tell pads (flashes) from routing (draws) from pours.
@@ -79,6 +87,9 @@ pub fn parse_layer(text: &str) -> Result<Vec<CopperPrim>, String> {
     for cmd in doc.commands() {
         plotter.run(cmd);
     }
+    // A well-formed file closes every `%SR%` with `%SR*%`, but tolerate a block
+    // left open at end-of-file (M02 without an explicit close) by flushing it.
+    plotter.flush_step_repeat();
     Ok(plotter.out)
 }
 
@@ -182,7 +193,21 @@ struct Plotter<'a> {
     /// unsigned magnitudes and the true centre is one of the four ±I,±J
     /// candidates, chosen per RS-274X §4.5.
     single_quadrant: bool,
+    /// An open step-and-repeat (`%SR%`) block: the primitives emitted while it
+    /// is open form the base cell, replicated across the grid when it closes.
+    sr: Option<SrBlock>,
     out: Vec<CopperPrim>,
+}
+
+/// State for an open `%SRXnYnInJn*%` step-and-repeat block: the grid to tile the
+/// base cell over and the index into `out` where the base cell's primitives
+/// begin. Distances are stored in board millimetres.
+struct SrBlock {
+    start: usize,
+    repeat_x: u32,
+    repeat_y: u32,
+    step_x_mm: f64,
+    step_y_mm: f64,
 }
 
 impl<'a> Plotter<'a> {
@@ -202,6 +227,7 @@ impl<'a> Plotter<'a> {
             region_dark: true,
             dark: true,
             single_quadrant: false,
+            sr: None,
             out: Vec::new(),
         }
     }
@@ -242,7 +268,61 @@ impl<'a> Plotter<'a> {
             Command::ExtendedCode(ExtendedCode::LoadPolarity(p)) => {
                 self.dark = matches!(p, Polarity::Dark);
             }
+            Command::ExtendedCode(ExtendedCode::StepAndRepeat(sr)) => match sr {
+                StepAndRepeat::Open {
+                    repeat_x,
+                    repeat_y,
+                    distance_x,
+                    distance_y,
+                } => {
+                    // A new SR implicitly closes any open one. The primitives
+                    // drawn until the matching `%SR*%` are the base cell.
+                    self.flush_step_repeat();
+                    self.sr = Some(SrBlock {
+                        start: self.out.len(),
+                        repeat_x: (*repeat_x).max(1),
+                        repeat_y: (*repeat_y).max(1),
+                        step_x_mm: distance_x * self.to_mm,
+                        step_y_mm: distance_y * self.to_mm,
+                    });
+                }
+                StepAndRepeat::Close => self.flush_step_repeat(),
+            },
             _ => {}
+        }
+    }
+
+    /// Close the open step-and-repeat block (if any) by tiling the base cell —
+    /// the primitives appended since the block opened — across the `repeat_x` ×
+    /// `repeat_y` grid at the I/J step. The base copy at cell (0,0) is already in
+    /// `out`; only the other cells are cloned, each translated by its grid
+    /// offset. Without this the repeated copies of a panelized/arrayed layer
+    /// were silently dropped, losing every pad/track/pour but the first.
+    fn flush_step_repeat(&mut self) {
+        let Some(block) = self.sr.take() else {
+            return;
+        };
+        if block.start > self.out.len() {
+            return;
+        }
+        let base: Vec<CopperPrim> = self.out[block.start..].to_vec();
+        if base.is_empty() {
+            return;
+        }
+        for iy in 0..block.repeat_y {
+            for ix in 0..block.repeat_x {
+                if ix == 0 && iy == 0 {
+                    continue; // the base cell is already emitted in place
+                }
+                let dx = f64::from(ix) * block.step_x_mm;
+                let dy = f64::from(iy) * block.step_y_mm;
+                for prim in &base {
+                    self.out.push(CopperPrim {
+                        shape: prim.shape.translated(dx, dy),
+                        kind: prim.kind,
+                    });
+                }
+            }
         }
     }
 
@@ -377,11 +457,16 @@ impl<'a> Plotter<'a> {
                         } else {
                             // Couldn't evaluate (variables/expressions we don't
                             // support): fall back to a small disc so the flash
-                            // still anchors a pad rather than vanishing.
-                            Shape::disc(cx, cy, 0.25 * s)
+                            // still anchors a pad rather than vanishing. The
+                            // radius is a fixed physical size (mm); `cx`/`cy` are
+                            // already mm, so it must NOT be scaled by `to_mm` —
+                            // doing so bloated the anchor to 6.35 mm (0.25 inch)
+                            // on an inch-unit file, big enough to merge adjacent
+                            // copper into one net.
+                            Shape::disc(cx, cy, MACRO_FALLBACK_DISC_MM)
                         }
                     }
-                    None => Shape::disc(cx, cy, 0.25 * s),
+                    None => Shape::disc(cx, cy, MACRO_FALLBACK_DISC_MM),
                 }
             }
         };
@@ -697,6 +782,68 @@ M02*
                 }
             }
         }
+    }
+
+    #[test]
+    fn step_and_repeat_replicates_the_base_cell() {
+        // R14: a %SRX2Y1I10J0*% block flashing one pad must produce TWO pads —
+        // the base copy at (0,0) and a repeated copy 10 mm along x. The old
+        // plotter dropped every StepAndRepeat command, so the repeated copies
+        // (all copper/pads but the first) vanished from a panelized layer.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,0.500000*%
+D10*
+%SRX2Y1I10.0J0.0*%
+X0Y0D03*
+%SR*%
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
+        assert_eq!(flashes.len(), 2, "SR X2 must emit the base + 1 repeated flash");
+        let xs: Vec<f64> = flashes
+            .iter()
+            .filter_map(|p| match &p.shape {
+                Shape::Capsule(c) => Some(c.ax),
+                _ => None,
+            })
+            .collect();
+        assert!(xs.iter().any(|x| x.abs() < 1e-6), "the base flash sits at x≈0, got {xs:?}");
+        assert!(
+            xs.iter().any(|x| (x - 10.0).abs() < 1e-6),
+            "the repeated flash sits 10 mm along x, got {xs:?}"
+        );
+    }
+
+    #[test]
+    fn inch_unit_macro_fallback_disc_is_a_fixed_physical_size() {
+        // R14: when an aperture macro can't be instantiated (here a Circle whose
+        // diameter references an undefined variable), the flash falls back to a
+        // small anchor disc. Its radius is a fixed 0.25 mm — NOT scaled by the
+        // document's unit factor. On an inch board (to_mm = 25.4) the old
+        // `0.25 * to_mm` bloated it to 6.35 mm, big enough to merge nets.
+        let g = "\
+%FSLAX46Y46*%
+%MOIN*%
+%AMBADX*1,1,$1,0,0*%
+%ADD10BADX*%
+D10*
+X0Y0D03*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let flash = prims.iter().find(|p| p.kind == PrimKind::Flash).expect("a fallback flash");
+        let r = match &flash.shape {
+            Shape::Capsule(c) => c.r,
+            _ => panic!("fallback should be a disc/capsule"),
+        };
+        assert!(
+            (r - MACRO_FALLBACK_DISC_MM).abs() < 1e-9,
+            "fallback disc radius must be a fixed {MACRO_FALLBACK_DISC_MM} mm regardless of \
+             inch units, got {r} mm (0.25*25.4 = 6.35 was the bug)"
+        );
     }
 
     #[test]
