@@ -363,3 +363,125 @@ fn adaptive_gear2_rc_tracks_analytic() {
          (uniform-grid BDF2 regression gives ~1.9e-2 here)"
     );
 }
+
+/// Bug-hunt R15: a time-varying independent source that is a genuine MEMBER of
+/// a partitioned NONLINEAR island (an Isource is `is_linear()`, so it joins the
+/// island the moment it shares a node with a nonlinear device) must advance
+/// with the march. `NonlinearIsland::step` used to hardcode `time = 0.0` into
+/// its per-step Newton — behind a comment claiming every sub-source is
+/// DC-pinned, which is true only of the SYNTHESIZED boundary pins; a member
+/// source is copied verbatim with its Sin/Pulse/Pwl kind intact — freezing the
+/// member at its t = 0 value for the whole march: a silently wrong waveform on
+/// the default `Partitioning::Auto` path. (The linear islands were always
+/// correct: `linear_phase_a` evaluates their isources at `tnext`.)
+#[test]
+fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
+    use hauksbee_ir::DiodeModel;
+    let build = || {
+        let mut c = Circuit::new();
+        // Driver plus four independent RC legs behind an ideal-Vsource cut, so
+        // the partition heuristics have islands to fragment and genuinely
+        // engage the partitioned engine (same recipe as the controlled-source
+        // partition gates in tests/controlled_sources.rs).
+        let vin = c.node("in");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(2.0),
+        });
+        for k in 0..4 {
+            let leg = c.node(&format!("leg{k}"));
+            c.add(Device::Resistor {
+                name: format!("Rx{k}"),
+                a: vin,
+                b: leg,
+                ohms: 1e3,
+                tc1: None,
+            });
+            c.add(Device::Capacitor {
+                name: format!("Cx{k}"),
+                a: leg,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: Some(0.0),
+            });
+        }
+        // The island under test: a SIN current source driving a resistor in
+        // parallel with a diode. The diode makes the island nonlinear; the
+        // Isource shares node `d` with it, so the partitioner takes the source
+        // as an island MEMBER (never a cut — only ideal Vsources cut). The
+        // 1 mA..9 mA swing across 200 ohm wants 0.2 V..1.8 V, so the diode
+        // clamp is genuinely engaged over part of every cycle.
+        let d = c.node("d");
+        c.add(Device::Isource {
+            name: "IS".into(),
+            p: NodeId::GROUND,
+            n: d,
+            kind: SourceKind::Sin {
+                offset: 5e-3,
+                amplitude: 4e-3,
+                freq: 2e3,
+                delay: 0.0,
+                theta: 0.0,
+                phase: 0.0,
+            },
+        });
+        c.add(Device::Resistor {
+            name: "Rd".into(),
+            a: d,
+            b: NodeId::GROUND,
+            ohms: 200.0,
+            tc1: None,
+        });
+        c.add(Device::Diode {
+            name: "D1".into(),
+            a: d,
+            k: NodeId::GROUND,
+            model: DiodeModel::default(),
+        });
+        c
+    };
+    // Fixed dt: Off and Auto share the exact accepted grid, so the waveforms
+    // compare sample-for-sample with no interpolation slack.
+    let opts_off = SolverOptions {
+        step: StepControl::Fixed { dt: 1e-6 },
+        partitioning: Partitioning::Off,
+        ..SolverOptions::default()
+    };
+    let opts_auto = SolverOptions {
+        partitioning: Partitioning::Auto,
+        ..opts_off.clone()
+    };
+    let tstop = 1e-3; // two full SIN periods at 2 kHz
+    let c = build();
+    let off = Transient::new(opts_off).run(&c, tstop).unwrap();
+    let auto = Transient::new(opts_auto).run(&c, tstop).unwrap();
+    let w_off = off.node(&c, "d").unwrap();
+    let w_auto = auto.node(&c, "d").unwrap();
+
+    // (a) The internal source visibly ACTS under Auto. Frozen at its t = 0
+    // value (sin(0) = 0, so a constant 5 mA — exactly the DC operating point)
+    // the island would hold v(d) dead flat for the whole march; the live SIN
+    // swings it by over a volt peak-to-peak.
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for &v in w_auto.iter() {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    assert!(
+        hi - lo > 0.1,
+        "v(d) peak-to-peak under Auto is {:.3e} V: the island's internal SIN \
+         source is frozen at its t=0 value",
+        hi - lo
+    );
+    // (b) Auto agrees with the monolithic reference over the whole waveform.
+    let mut max_abs = 0.0f64;
+    for (x, y) in w_off.iter().zip(w_auto) {
+        max_abs = max_abs.max((x - y).abs());
+    }
+    assert!(
+        max_abs < 5e-3,
+        "Auto vs Off diverged on the island's internal-source waveform: {max_abs:.3e}"
+    );
+}
