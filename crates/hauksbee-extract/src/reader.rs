@@ -74,10 +74,6 @@ pub trait BoardReader: Send + Sync {
 /// The largest content prefix any builtin reader inspects for a magic string
 /// (kicad/eagle/netlist magics all sit at byte 0; this window is generous).
 const MAGIC_WINDOW: usize = 2048;
-/// The prefix IPC-D-356 record detection scans. Real fab netlists begin their
-/// `3xx` records right after a short `P`/`C` header (pic_programmer.d356: the
-/// first `317` is at byte ~48); 64 KiB is far past any realistic header.
-const IPC_WINDOW: usize = 64 * 1024;
 
 /// The first ≤512 chars of the content, lossy-decoded from the leading
 /// [`MAGIC_WINDOW`] bytes. This reproduces the legacy sniff's
@@ -162,10 +158,14 @@ impl BoardReader for Ipc356Reader {
         "ipc-d356"
     }
     fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
-        let window = &bytes[..bytes.len().min(IPC_WINDOW)];
-        String::from_utf8_lossy(window)
-            .lines()
-            .any(|l| l.starts_with("317") || l.starts_with("327") || l.starts_with("367"))
+        // Scan the WHOLE file at line starts (a cheap byte scan, no allocation).
+        // The parser reads the entire file, so detection must too: a large `C`
+        // comment / `P` parameter header can push the first `3xx` test record
+        // past any fixed window, and a windowed scan would regress that file to
+        // Unrecognized even though `from_ipc_d356` parses it fine.
+        bytes.split(|&b| b == b'\n').any(|line| {
+            line.starts_with(b"317") || line.starts_with(b"327") || line.starts_with(b"367")
+        })
     }
     fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
         ExtractedBoard::from_ipc_d356(&String::from_utf8_lossy(bytes))
@@ -272,5 +272,29 @@ impl Registry {
 impl Default for Registry {
     fn default() -> Self {
         Self::builtin()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BoardReader, Ipc356Reader};
+
+    #[test]
+    fn ipc356_detected_even_with_a_header_past_64kib() {
+        // R13: the parser reads the whole file, so detection must too. A large
+        // `C`-comment header that pushes the first test record past 64 KiB used
+        // to slip past the windowed detector and regress to Unrecognized.
+        let mut doc = String::new();
+        for i in 0..3000 {
+            doc.push_str(&format!("C  a long comment header line number {i} padding padding\n"));
+        }
+        assert!(doc.len() > 64 * 1024, "header must exceed the old window");
+        doc.push_str("317GND              R1    -1    D0472PA00X+019000Y+029450X0945Y0945R180S0\n");
+        assert!(
+            Ipc356Reader.detects(doc.as_bytes(), None),
+            "an IPC record past 64 KiB must still be detected"
+        );
+        // A file with no test record at all is still rejected.
+        assert!(!Ipc356Reader.detects(b"C only comments\nP JOB test\n", None));
     }
 }
