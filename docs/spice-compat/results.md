@@ -16,8 +16,8 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 |  |  | `V(emit)` | 2.563e-6 | 5.0e-3 | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | t=6.213e-5s | PASS |
 | bjt_switch_tail | tran | `V(c)` | 3.333e-5 | 1.0e-3 | t=2.060e-6s | PASS |
-| bsource_clamp | tran | `V(out)` | 4.190e-3 | 1.0e-2 | t=4.964e-4s | PASS |
-| bsource_opamp_subckt | tran | `V(out)` | 6.350e-3 | 1.0e-2 | t=3.014e-4s | PASS |
+| bsource_clamp | tran | `V(out)` | 1.869e-4 | 1.0e-2 | t=1.996e-3s | PASS |
+| bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 1.0e-2 | t=1.436e-3s | PASS |
 | bsource_time | tran | `V(out)` | 2.334e-4 | 1.0e-2 | t=3.654e-6s | PASS |
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
