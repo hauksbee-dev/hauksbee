@@ -108,12 +108,23 @@ pub struct RunOutcome {
     pub ambient_c: f64,
     /// Total simulated time (ms).
     pub sim_ms: f64,
-    /// Boot-coverage tracking: first time (ms) each watched (net, level-bits)
+    /// Boot-coverage tracking — first time (ms) each watched (net, level-bits)
     /// pair was seen at or above its level, i.e. when the firmware first drove
-    /// the control net to its defined level. Absent = the net never reached the
-    /// level (see `driven_nets` / `drive_direction_observable` to tell a driven-
-    /// but-below-threshold net from a genuinely undriven one).
-    pub first_reach_ms: HashMap<(String, u64), f64>,
+    /// the control net to its defined level. NEVER forgotten once set, so a later
+    /// drop cannot erase the fact that the net was reached: this is what lets the
+    /// assertion tell "never reached" (absent here) apart from "reached then
+    /// dropped" (present here, with a `boot_drop_after_cross_ms` entry). Absent =
+    /// the net never reached the level (see `driven_nets` /
+    /// `drive_direction_observable` to tell a driven-but-below-threshold net from
+    /// a genuinely undriven one).
+    pub boot_first_cross_ms: HashMap<(String, u64), f64>,
+    /// The first time (ms) each pair fell back BELOW its level AFTER first
+    /// crossing it (absent = it never dropped after crossing). With the first
+    /// cross this decides "reached by the deadline AND held continuously through
+    /// the deadline" purely from the boot window — independent of end-of-run
+    /// state, so a legitimate post-deadline release no longer fails the check and
+    /// a late analog-failed frame cannot flip the verdict.
+    pub boot_drop_after_cross_ms: HashMap<(String, u64), f64>,
     /// Nets the firmware drove to a *defined* level (HIGH or LOW) during the run,
     /// from the scheduler's `firmware_driven_nets`. Lets a below-threshold
     /// boot-coverage result say "driven but never exceeded X V" instead of
@@ -258,12 +269,18 @@ pub fn run_spec_with_lib(
         None => plans,
     };
 
-    // Small-signal AC analysis linearises about the DC operating point. With no
-    // tolerances that point is seed-independent, so compute the sweep once and
-    // share it. Toleranced values move the bias point, so each member gets its
-    // own sweep — sharing one would silently pin the AC results to nominal.
-    let shared_ac = if spec.ac.is_some() && tols.is_empty() {
-        Some(compute_ac(spec, &base, &[], lib)?)
+    // Small-signal AC analysis linearises about the DC operating point. That
+    // point is seed-independent only when NEITHER toleranced values NOR per-seed
+    // fuzz straps move the bias — then the sweep can be computed once and shared.
+    // Toleranced values move the bias (each member gets its own sweep); so do
+    // fuzz straps, which strap nets high/low per seed. Sharing one AC across
+    // seeds that strap different nets would silently pin every member's AC to the
+    // unstrapped nominal point.
+    let fuzz_straps_present = plans
+        .iter()
+        .any(|p| !fuzz_net_drives(spec, p.seed).is_empty());
+    let shared_ac = if spec.ac.is_some() && tols.is_empty() && !fuzz_straps_present {
+        Some(compute_ac(spec, &base, &[], &[], lib)?)
     } else {
         None
     };
@@ -273,7 +290,10 @@ pub fn run_spec_with_lib(
         let mut outcome = run_one(spec, &base, &thresholds, plan, lib)?;
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
-            None if spec.ac.is_some() => Some(compute_ac(spec, &base, &plan.values, lib)?),
+            None if spec.ac.is_some() => {
+                let fuzz_drives = fuzz_net_drives(spec, plan.seed);
+                Some(compute_ac(spec, &base, &plan.values, &fuzz_drives, lib)?)
+            }
             None => None,
         };
         outcomes.push(outcome);
@@ -289,6 +309,7 @@ fn compute_ac(
     spec: &Spec,
     base: &ExtractedBoard,
     sampled: &[crate::tolerance::SampledValue],
+    fuzz_drives: &[(String, f64)],
     lib: &ModelLibrary,
 ) -> Result<AcOutcome, SpecError> {
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
@@ -309,6 +330,13 @@ fn compute_ac(
     }
     for d in &spec.net_drives {
         drive_net(&mut bound, &d.net, d.volts);
+    }
+    // Per-seed fuzz straps also move the DC bias the small-signal model
+    // linearises about, so they must be applied here too — otherwise every fuzz
+    // seed's AC would linearise about the unstrapped nominal point. Applied after
+    // the spec net-drives (fuzz wins on an overlapping net), matching run_one.
+    for (net, volts) in fuzz_drives {
+        drive_net(&mut bound, net, *volts);
     }
 
     let sweep = match cfg.sweep.as_str() {
@@ -560,8 +588,8 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 /// but of a kind that is never tracked, so the guard would report a green pass
 /// without ever being evaluated:
 ///
-///   - peak current is recorded only for the device kinds
-///     `update_peak_currents` walks (resistors and diodes, by exact device
+///   - peak current is recorded only for the device kinds the scheduler's
+///     `accumulate_frame_peaks` walks (resistors and diodes, by exact device
 ///     name), so a `max_current` on a capacitor / IC / transistor package
 ///     would always take the "no current data" branch;
 ///   - junction temperature exists only for stress-monitored devices (the
@@ -572,7 +600,7 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 /// Runs post-bind (the bound circuit is what decides trackability), before the
 /// engine is built, so the spec is rejected up front rather than reported green.
 fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), SpecError> {
-    // Current tracking covers exactly what `update_peak_currents` records:
+    // Current tracking covers exactly what `accumulate_frame_peaks` records:
     // resistors and diodes, keyed by device name.
     let current_tracked: std::collections::HashSet<&str> = bound
         .circuit
@@ -844,7 +872,8 @@ fn run_one(
         .filter(|a| a.kind == "boot-coverage")
         .filter_map(|a| Some((a.net.clone()?, a.min?)))
         .collect();
-    let mut first_reach_ms: HashMap<(String, u64), f64> = HashMap::new();
+    let mut boot_first_cross_ms: HashMap<(String, u64), f64> = HashMap::new();
+    let mut boot_drop_after_cross_ms: HashMap<(String, u64), f64> = HashMap::new();
     let mut first_fault_ms: Option<f64> = None;
 
     // Hardware-trace watch list: the nets any `hwtrace` assertion's trace.toml
@@ -895,27 +924,47 @@ fn run_one(
                 t_ms: ft_ms,
             });
         }
-        // Boot-coverage: track each watched net reaching AND HOLDING its
-        // required driven level (the firmware actively driving the control net
-        // and keeping it there). `boot_coverage_update` re-arms the moment the
-        // net drops back below level, so a one-frame glitch above threshold that
-        // then collapses cannot latch a pass — first_reach_ms ends up holding
-        // the start of the run's final continuous hold, or nothing if the net is
-        // not held to the end. Skipped on a held-stale frame so a stale voltage
-        // cannot fake a reach.
+        // Boot-coverage: record each watched net's FIRST crossing of its level
+        // and its first drop back below level AFTER that crossing. The assertion
+        // decides "reached by the deadline and held continuously through it" from
+        // those two times — a one-frame glitch that collapses leaves a drop
+        // record, and a legitimate post-deadline release (drop after the
+        // deadline) still passes. Skipped on a held-stale frame so a stale
+        // voltage cannot fake a reach or a drop.
         if analog_ok {
             for (net, level) in &boot_watch {
                 let key = (net.clone(), level.to_bits());
                 if let Some(&v) = frame.net_voltages.get(net) {
-                    boot_coverage_update(&mut first_reach_ms, key, v, *level, t_ms);
+                    boot_reach_update(
+                        &mut boot_first_cross_ms,
+                        &mut boot_drop_after_cross_ms,
+                        key,
+                        v,
+                        *level,
+                        t_ms,
+                    );
                 }
             }
-            // Per-net windows for every threshold this frame has passed.
+            // Per-net windows for every threshold this frame has passed. The
+            // frame's final-chunk voltage is one sample; fold in the scheduler's
+            // per-frame min/max too, so an intra-frame excursion that has subsided
+            // by the last chunk still widens the window (the final-chunk value is
+            // itself within [min,max], so observing both extremes subsumes it).
+            let vext = engine.scheduler().frame_v_extremes();
             for &thr in thresholds {
                 if t_ms + 1e-9 >= thr {
                     for (name, &v) in &frame.net_voltages {
                         let key = (name.clone(), thr.to_bits());
-                        windows.entry(key).or_insert_with(NetWindow::new).observe(v);
+                        let w = windows.entry(key).or_insert_with(NetWindow::new);
+                        w.observe(v);
+                        if let Some(&(mn, mx)) = vext.get(name) {
+                            if mn.is_finite() {
+                                w.observe(mn);
+                            }
+                            if mx.is_finite() {
+                                w.observe(mx);
+                            }
+                        }
                     }
                 }
             }
@@ -927,8 +976,17 @@ fn run_one(
                 }
             }
 
-            // Peak current for monitored components.
-            update_peak_currents(&engine, &net_node, &mut peak_current);
+            // Peak current for monitored components. Fold the scheduler's
+            // per-frame peak (accumulated across every sub-chunk of this frame),
+            // not just the frame's final-chunk operating point — an inrush surge
+            // that peaks mid-frame and settles by the last chunk would otherwise
+            // be invisible to the over-current check.
+            for (name, &i) in engine.scheduler().frame_peak_current() {
+                let e = peak_current.entry(name.clone()).or_insert(0.0);
+                if i.is_finite() && i > *e {
+                    *e = i;
+                }
+            }
 
             // Peak steady-state junction temperature for dissipating components.
             for (reference, tj) in engine.scheduler().temp_states() {
@@ -1051,7 +1109,8 @@ fn run_one(
         protection_tripped_scoped,
         ambient_c: spec.ambient_c,
         sim_ms: engine.scheduler().sim_time * 1000.0,
-        first_reach_ms,
+        boot_first_cross_ms,
+        boot_drop_after_cross_ms,
         driven_nets,
         drive_direction_observable,
         first_fault_ms,
@@ -1075,26 +1134,28 @@ fn windows_overlap(windows: &[(f64, f64)], start_s: f64, end_s: f64) -> bool {
 
 /// Update the boot-coverage reach record for one watched net at one frame.
 ///
-/// Records the start of the current continuous "at/above level" hold (once),
-/// and RE-ARMS — forgets the reach — the instant the net drops back below
-/// level. So after the loop, `first_reach_ms[key]` is the start of the run's
-/// FINAL continuous hold (present only if the net is still held at the last
-/// frame processed); a one-frame glitch above threshold that then collapses
-/// leaves no record. This is what makes the assertion's documented "reach AND
-/// hold" contract real — previously any single crossing latched a pass forever,
-/// so firmware that pulsed the control net once and let it fall to 0 V still
-/// passed.
-fn boot_coverage_update(
-    first_reach_ms: &mut HashMap<(String, u64), f64>,
+/// Records the FIRST time the net is at/above level (`first_cross`, never
+/// forgotten) and the first time it falls back below level AFTER that crossing
+/// (`drop_after_cross`). The assertion combines these with its deadline: reached
+/// = `first_cross <= deadline`; held-through-deadline = no `drop_after_cross`
+/// at/before the deadline. Never forgetting the crossing is what lets the
+/// assertion distinguish "never reached" from "reached then dropped"; keying the
+/// hold off the deadline (not end-of-run) is what makes a legitimate
+/// post-deadline release pass and makes the verdict independent of late
+/// analog-failed frames.
+fn boot_reach_update(
+    first_cross_ms: &mut HashMap<(String, u64), f64>,
+    drop_after_cross_ms: &mut HashMap<(String, u64), f64>,
     key: (String, u64),
     v: f64,
     level: f64,
     t_ms: f64,
 ) {
     if v >= level - 1e-6 {
-        first_reach_ms.entry(key).or_insert(t_ms);
-    } else {
-        first_reach_ms.remove(&key);
+        first_cross_ms.entry(key).or_insert(t_ms);
+    } else if first_cross_ms.contains_key(&key) {
+        // A drop only counts once the net has crossed; keep the earliest.
+        drop_after_cross_ms.entry(key).or_insert(t_ms);
     }
 }
 
@@ -1711,48 +1772,6 @@ fn snapshot_peripherals(
     out
 }
 
-/// Compute per-component peak through-current from the latest node voltages.
-/// Best-effort: resistors (V/R) and diodes (Shockley). Other kinds are left to
-/// the fault monitor's overcurrent flags.
-fn update_peak_currents(
-    engine: &HauksbeeEngine,
-    _net_node: &HashMap<String, NodeId>,
-    peak: &mut HashMap<String, f64>,
-) {
-    let sched = engine.scheduler();
-    let volts = &sched.node_volts;
-    let v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
-    for dev in &sched.circuit.devices {
-        let (name, i) = match dev {
-            Device::Resistor {
-                name, a, b, ohms, ..
-            } => {
-                let i = if *ohms > 0.0 {
-                    ((v(*a) - v(*b)) / *ohms).abs()
-                } else {
-                    0.0
-                };
-                (name.clone(), i)
-            }
-            Device::Diode { name, a, k, model } => {
-                let vd = v(*a) - v(*k);
-                let vt = hauksbee_ir::thermal_voltage_c(sched.circuit.temp_c) * model.n;
-                let i = if vt > 0.0 {
-                    (model.is * (((vd / vt).clamp(-100.0, 200.0)).exp() - 1.0)).abs()
-                } else {
-                    0.0
-                };
-                (name.clone(), i)
-            }
-            _ => continue,
-        };
-        let e = peak.entry(name).or_insert(0.0);
-        if i.is_finite() && i > *e {
-            *e = i;
-        }
-    }
-}
-
 /// Remove the binder's auto-rail on `net`: drop its [`SupplyLeg`] and replace
 /// the leg's internal Vsource with an open (1 TΩ) so the net floats except for
 /// whatever the board itself feeds it.
@@ -1951,40 +1970,44 @@ mod tests {
     use super::*;
 
     // Replay a voltage series through the per-frame boot-coverage update and
-    // return the recorded reach time (start of the final continuous hold), or
-    // None if the net is not held at the end.
-    fn boot_reach(series: &[(f64, f64)], level: f64) -> Option<f64> {
+    // return (first_cross_ms, first_drop_after_cross_ms).
+    fn boot_track(series: &[(f64, f64)], level: f64) -> (Option<f64>, Option<f64>) {
         let key = ("CTRL".to_string(), level.to_bits());
-        let mut first_reach_ms: HashMap<(String, u64), f64> = HashMap::new();
+        let mut cross: HashMap<(String, u64), f64> = HashMap::new();
+        let mut drop: HashMap<(String, u64), f64> = HashMap::new();
         for &(t_ms, v) in series {
-            boot_coverage_update(&mut first_reach_ms, key.clone(), v, level, t_ms);
+            boot_reach_update(&mut cross, &mut drop, key.clone(), v, level, t_ms);
         }
-        first_reach_ms.get(&key).copied()
+        (cross.get(&key).copied(), drop.get(&key).copied())
     }
 
     #[test]
-    fn boot_coverage_requires_reach_and_hold_not_just_a_glitch() {
-        // Driven up promptly and held to the end: passes, reach time is the
-        // first crossing.
+    fn boot_reach_records_first_cross_and_first_drop() {
+        // Driven up promptly and held to the end: first cross at 5, never drops.
         assert_eq!(
-            boot_reach(&[(0.0, 0.0), (5.0, 5.0), (10.0, 5.0), (50.0, 5.0)], 3.0),
-            Some(5.0)
+            boot_track(&[(0.0, 0.0), (5.0, 5.0), (10.0, 5.0), (50.0, 5.0)], 3.0),
+            (Some(5.0), None)
         );
-        // A one-frame glitch above threshold that then collapses to 0 V for the
-        // rest of the run must NOT latch a pass (the old bug).
+        // A one-frame glitch that then collapses: cross at 5, drop at 10 — the
+        // drop record is what lets the assertion refuse a glitch as a pass.
         assert_eq!(
-            boot_reach(&[(0.0, 0.0), (5.0, 5.0), (10.0, 0.0), (50.0, 0.0)], 3.0),
-            None
+            boot_track(&[(0.0, 0.0), (5.0, 5.0), (10.0, 0.0), (50.0, 0.0)], 3.0),
+            (Some(5.0), Some(10.0))
         );
-        // Dropped then recovered and held to the end: the recorded reach is the
-        // start of the FINAL hold (so a late recovery is judged against the
-        // deadline, not the early glitch).
+        // Dropped then recovered: cross at 5, FIRST drop at 10 (the recovery does
+        // not erase that it fell — a deadline after 10 sees the break).
         assert_eq!(
-            boot_reach(&[(5.0, 5.0), (10.0, 0.0), (30.0, 5.0), (50.0, 5.0)], 3.0),
-            Some(30.0)
+            boot_track(&[(5.0, 5.0), (10.0, 0.0), (30.0, 5.0), (50.0, 5.0)], 3.0),
+            (Some(5.0), Some(10.0))
         );
-        // Never reaches: None.
-        assert_eq!(boot_reach(&[(0.0, 0.0), (50.0, 1.0)], 3.0), None);
+        // A late (post-deadline) release: cross at 5, drop at 50 — a deadline of,
+        // say, 10 ms is held through, so the assertion still passes.
+        assert_eq!(
+            boot_track(&[(5.0, 5.0), (10.0, 5.0), (50.0, 0.0)], 3.0),
+            (Some(5.0), Some(50.0))
+        );
+        // Never reaches: no cross, no drop.
+        assert_eq!(boot_track(&[(0.0, 0.0), (50.0, 1.0)], 3.0), (None, None));
     }
 
     #[test]
