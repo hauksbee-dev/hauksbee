@@ -463,6 +463,73 @@ fn opamp_unity_buffer_phase_margin_about_90() {
     assert!(pm > 80.0 && pm < 100.0, "phase margin {pm} deg (want ~90)");
 }
 
+/// R21: the op-amp reference feedthrough must be rolled off by the same
+/// bandwidth pole as the gain path (matching the transient stamp, which
+/// low-passes the WHOLE driven target vref + gain*(vp-vn)). With both inputs
+/// grounded the gain path is silent, so the output equals the pole-filtered
+/// reference. Before the fix the reference coupling was frequency-independent,
+/// leaving a spurious flat 0 dB feedthrough at high frequency (an INA/difference
+/// amp with a moving REF would read ~60 dB too high on its reference-path Bode).
+#[test]
+fn opamp_reference_feedthrough_rolls_off_with_the_bandwidth_pole() {
+    let pole_hz = 100.0;
+    let mut ckt = Circuit::new();
+    let vref = ckt.node("vref");
+    let out = ckt.node("out");
+    // Unit AC excitation on the reference node.
+    ckt.add(Device::Vsource {
+        name: "VREF".into(),
+        p: vref,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    // Both inputs grounded => gain path contributes nothing; out follows the
+    // (pole-filtered) reference. Finite pole at 100 Hz.
+    ckt.add(Device::OpAmp {
+        name: "U1".into(),
+        out,
+        inp: NodeId::GROUND,
+        inn: NodeId::GROUND,
+        reference: Some(vref),
+        gain: 1000.0,
+        pole_hz: Some(pole_hz),
+        slew: None,
+        rail_lo: -1e9,
+        rail_hi: 1e9,
+    });
+
+    let spec = AcSpec {
+        fstart: 1.0,
+        fstop: 1e5,
+        points: 50,
+        sweep: Sweep::Decade,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let bode = resp.bode(&ckt, "out");
+    let db_at = |f_target: f64| -> f64 {
+        bode.iter()
+            .min_by(|a, b| {
+                (a.0 - f_target)
+                    .abs()
+                    .partial_cmp(&(b.0 - f_target).abs())
+                    .unwrap()
+            })
+            .map(|&(_, db, _)| db)
+            .expect("bode has points")
+    };
+    // Far below the pole: unity feedthrough (~0 dB), so DC agrees with transient.
+    assert!(db_at(1.0).abs() < 0.2, "low-f reference feedthrough ~0 dB: {}", db_at(1.0));
+    // ~1 decade above the pole: -20 dB/decade => ~-20 dB (well off the 0 dB flat).
+    assert!(db_at(1000.0) < -15.0, "1 decade past pole rolls off: {} dB", db_at(1000.0));
+    // Three decades above the pole (100 kHz): ~-60 dB, nowhere near the pre-fix
+    // flat 0 dB feedthrough floor.
+    assert!(
+        db_at(1e5) < -45.0,
+        "reference feedthrough must roll off far past the pole, not stay flat: {} dB",
+        db_at(1e5)
+    );
+}
+
 // --- AC-vs-DC solver parity (fix/ac-parity) ----------------------------------
 //
 // The AC assembly was written separately from the DC/transient assembly; each

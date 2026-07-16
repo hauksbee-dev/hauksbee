@@ -1,0 +1,105 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-000000000010")
+	(paper "A4")
+	(lib_symbols
+		(symbol "MCU:IC"
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U"
+				(at 2.032 0 90)
+			)
+			(property "Value" "IC"
+				(at 0 0 90)
+			)
+			(symbol "IC_0_1"
+				(rectangle
+					(start -1.016 -2.54)
+					(end 1.016 2.54)
+				)
+			)
+			(symbol "IC_1_1"
+				(pin input line
+					(at 0 3.81 270)
+					(length 1.27)
+					(name "OE"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -3.81 90)
+					(length 1.27)
+					(name "VCC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "MCU:IC")
+		(at 100 100 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "00000000-0000-0000-0000-0000000000f1")
+		(property "Reference" "U1"
+			(at 102 100 90)
+		)
+		(property "Value" "IC"
+			(at 102 100 90)
+		)
+		(property "Footprint" ""
+			(at 100 100 90)
+		)
+		(pin "1"
+			(uuid "00000000-0000-0000-0000-0000000000e1")
+		)
+		(pin "2"
+			(uuid "00000000-0000-0000-0000-0000000000e2")
+		)
+		(instances
+			(project "no_connect_control_pin"
+				(path "/00000000-0000-0000-0000-000000000010"
+					(reference "U1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(no_connect
+		(at 100 96.19)
+		(uuid "00000000-0000-0000-0000-0000000000e9")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
