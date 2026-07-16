@@ -385,6 +385,11 @@ impl Transient {
             // when the controller has already ground down near the corner):
             // dt_min is a floor against LTE-rejection thrash, not a sampling
             // contract, and an exact landing is the whole point of the table.
+            // `bp_landing` records the truncation so the LTE accept below can
+            // keep that promise: the landing sliver's LTE says nothing about a
+            // dt-sized step, and growing from the sliver would collapse dt to
+            // ~2x the sliver right after every corner (see the accept branch).
+            let mut bp_landing = false;
             if !breakpoints.is_empty() {
                 while next_bp < breakpoints.len() {
                     let bp = breakpoints[next_bp];
@@ -398,6 +403,7 @@ impl Transient {
                     let bp = breakpoints[next_bp];
                     if t + h > bp {
                         h = bp - t;
+                        bp_landing = true;
                     }
                 }
             }
@@ -603,14 +609,30 @@ impl Transient {
                     }
                     if err <= 1.0 || h <= dt_min * 1.0001 {
                         accept = true;
-                        // Grow/shrink for next step from the error ratio.
-                        let safety = 0.9;
-                        let factor = if err > 0.0 {
-                            (safety * err.powf(-1.0 / 3.0)).clamp(0.5, 2.0)
+                        if bp_landing {
+                            // Breakpoint-truncated accept: the trial h was cut
+                            // to the sliver `bp - t`, so its LTE is measured on
+                            // the sliver and (err small) the growth factor
+                            // saturates at 2.0 — recomputing next_dt from this
+                            // h would collapse dt to ~2x the sliver and force
+                            // a geometric regrow after EVERY corner. The
+                            // controller's dt was tuned on full-size steps and
+                            // remains its honest target, so keep it (next_dt
+                            // is initialized to dt above): a corner costs
+                            // exactly one exact landing, as the truncation
+                            // comment promises. A rejected landing still
+                            // shrinks from the truncated h below — the error
+                            // there WAS measured on that h.
                         } else {
-                            2.0
-                        };
-                        next_dt = (h * factor).clamp(dt_min, dt_max);
+                            // Grow/shrink for next step from the error ratio.
+                            let safety = 0.9;
+                            let factor = if err > 0.0 {
+                                (safety * err.powf(-1.0 / 3.0)).clamp(0.5, 2.0)
+                            } else {
+                                2.0
+                            };
+                            next_dt = (h * factor).clamp(dt_min, dt_max);
+                        }
                     } else {
                         accept = false;
                         let factor = (0.9 * err.powf(-1.0 / 3.0)).clamp(0.1, 0.9);
