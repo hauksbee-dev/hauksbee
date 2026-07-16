@@ -897,6 +897,16 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // at the requested frequency. Fail loudly instead of comparing an endpoint
     // gain against the bound. (R7 #13)
     if let Some(f) = a.freq_hz {
+        // A non-finite freq_hz (a `nan`/`inf` TOML literal) slips past the band
+        // bounds because every comparison against NaN is false, so the guard
+        // below would be skipped and interp_db would clamp to the top-of-band
+        // gain and report it as if measured "at NaN Hz". Refuse up front.
+        if !f.is_finite() {
+            return (
+                false,
+                format!("ac_gain for '{net}' has a non-finite freq_hz ({f}); set a real frequency"),
+            );
+        }
         let (f_lo, f_hi) = (bode[0].0, bode[bode.len() - 1].0);
         if f < f_lo * (1.0 - 1e-9) || f > f_hi * (1.0 + 1e-9) {
             return (
@@ -1730,5 +1740,17 @@ mod tests {
         .unwrap();
         let (_, msg2) = check_ac_gain(&inband, &out);
         assert!(!msg2.contains("outside the swept band"), "in-band is measured normally: {msg2}");
+
+        // R38: a non-finite freq_hz slips past the band bounds (every NaN compare
+        // is false), so interp_db would clamp to the top-of-band gain and report
+        // it "at NaN Hz". Must refuse, not measure a frequency the author never
+        // chose.
+        let nan_freq: crate::spec::Assertion = toml::from_str(
+            "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = nan\nmax = -20.0\n",
+        )
+        .unwrap();
+        let (ok, msg3) = check_ac_gain(&nan_freq, &out);
+        assert!(!ok, "a NaN freq_hz must fail, not clamp-and-report: {msg3}");
+        assert!(msg3.contains("non-finite"), "msg names the non-finite freq cause: {msg3}");
     }
 }

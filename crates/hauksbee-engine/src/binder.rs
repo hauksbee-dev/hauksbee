@@ -3416,10 +3416,18 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric())
         .collect();
-    matches!(
-        first.as_str(),
-        "FB" | "FEEDBACK" | "SENSE" | "SNS" | "MON" | "MONITOR" | "DIV" | "TAP" | "MEAS"
-    )
+    // Match on the ROOT, not an exact token: the same intent is spelled in
+    // longer forms — "DIVIDER" (DIV), "SENSED"/"SENSING" (SENSE), "MEASURE"
+    // (MEAS), "MONITORED" (MON) — and those must still read as taps, or the net
+    // falls through and is pinned to the full rail (the failure this guard
+    // prevents). The roots are chosen so no rail-DOMAIN suffix (DIG, IO, USB,
+    // CORE, RAIL, ANALOG) starts with one.
+    // Roots, not exact tokens: "SENS" covers SENSE/SENSED/SENSING, "DIV" covers
+    // DIVIDER, "MON" covers MONITOR/MONITORED, "MEAS" covers MEASURE/MEASURED.
+    // Roots, not exact tokens: "SENS" covers SENSE/SENSED/SENSING, "DIV" covers
+    // DIVIDER, "MON" covers MONITOR/MONITORED, "MEAS" covers MEASURE/MEASURED.
+    const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
+    TAP_ROOTS.iter().any(|r| first.starts_with(r))
 }
 
 /// "-5V", "-12V_RAIL", "-5V0", "-3V3_ANALOG" -> the negative rail voltage.
@@ -4031,6 +4039,28 @@ mod rail_voltage_tests {
         assert_eq!(power_rail_voltage("+9V"), Some(9.0));
         assert_eq!(power_rail_voltage("-5V"), Some(-5.0));
         assert_eq!(power_rail_voltage("-3V3_ANALOG"), Some(-3.3));
+    }
+
+    /// R38: the tap-suffix guard matched exact tokens ("DIV","SENSE","MEAS","MON"),
+    /// so common longer spellings of the same intent — "DIVIDER", "SENSED",
+    /// "SENSING", "MEASURE", "MONITORED" — fell through and the divided tap was
+    /// resolved as a full rail (then pinned high by an ideal supply, masking the
+    /// under/over-voltage the divider exists to sense). The root now matches.
+    #[test]
+    fn longer_monitor_tap_spellings_are_not_read_as_rails() {
+        assert_eq!(power_rail_voltage("12V_DIVIDER"), None);
+        assert_eq!(power_rail_voltage("3V3_SENSED"), None);
+        assert_eq!(power_rail_voltage("5V_SENSING"), None);
+        assert_eq!(power_rail_voltage("12V_MEASURE"), None);
+        assert_eq!(power_rail_voltage("5V_MONITORED"), None);
+        // Embedded and negative mirrors of the longer spellings too.
+        assert_eq!(power_rail_voltage("VDD_1V8_DIVIDER"), None);
+        assert_eq!(power_rail_voltage("-12V_SENSED"), None);
+        // Rail-DOMAIN suffixes that merely resemble a root must still resolve as
+        // rails (none of DIG/IO/USB/CORE/ANALOG starts with a tap root).
+        assert_eq!(power_rail_voltage("+3V3_DIG"), Some(3.3));
+        assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
+        assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
     }
 }
 
