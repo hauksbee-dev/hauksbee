@@ -2952,20 +2952,28 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     ];
     // Pick the largest prefix whose scale leaves a mantissa >= 1 (so 390 pF uses
     // "p", 1.5 kΩ uses "k"). Fall back to the smallest prefix for tiny values.
-    let (scale, prefix) = PREFIXES
+    let idx = PREFIXES
         .iter()
-        .find(|(s, _)| v >= *s)
-        .copied()
-        .unwrap_or(*PREFIXES.last().unwrap());
-    let mantissa = v / scale;
+        .position(|(s, _)| v >= *s)
+        .unwrap_or(PREFIXES.len() - 1);
+    let (mut scale, mut prefix) = PREFIXES[idx];
+    let mut mantissa = v / scale;
     // 3 significant figures: more decimals for small mantissas, fewer for large.
-    let s = if mantissa >= 100.0 {
-        format!("{mantissa:.0}")
-    } else if mantissa >= 10.0 {
-        format!("{mantissa:.1}")
-    } else {
-        format!("{mantissa:.2}")
+    let decimals = |m: f64| if m >= 100.0 { 0 } else if m >= 10.0 { 1 } else { 2 };
+    // Decade carry: rounding the mantissa to its significant figures can push it
+    // to 1000 (e.g. 999.6 -> "1000"), which renders "1000 kΩ" — outside the
+    // promised [1,1000) range and inconsistent with the sibling format_engineering
+    // (tolerance.rs), which has this exact guard. Promote to the next-larger prefix
+    // so it reads "1 MΩ" instead. Only when a larger prefix exists (idx > 0).
+    let round_to = |m: f64, d: i32| {
+        let p = 10f64.powi(d);
+        (m * p).round() / p
     };
+    if idx > 0 && round_to(mantissa, decimals(mantissa)) >= 1000.0 {
+        (scale, prefix) = PREFIXES[idx - 1];
+        mantissa = v / scale;
+    }
+    let s = format!("{mantissa:.*}", decimals(mantissa) as usize);
     // Trim trailing fractional zeros for a clean read ("4.70" -> "4.7"), but
     // only when a decimal point is present, so "390" is never stripped to "39".
     let s = if s.contains('.') {
@@ -3164,6 +3172,16 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
         "-15V" | "-15.0V" => Some(-15.0),
         "-3V3" | "-3.3V" => Some(-3.3),
         _ => {
+            // A monitor/feedback/sense TAP named after the rail it watches
+            // ("12V_FB", "VCC_5V_MON", "VDD_1V8_MON", "AVCC_2V5_SENSE") is a
+            // divided tap, never a rail node — reject it up front so NO fallback
+            // (numeric, embedded supply-token, or the loose "contains 5V"/"3V3"
+            // substring branch) pins the tap to the full nominal. The per-fallback
+            // gates below are the same discipline; this catches the cases (like the
+            // supply-token substring branch) that would otherwise slip past them.
+            if name_is_rail_monitor_tap(&n) {
+                return None;
+            }
             // '-'-prefixed rails first: "-5V_ANALOG" must resolve negative and
             // never fall into the positive "contains 5V" branch through an
             // incidental VCC/VBUS token elsewhere in the name.
@@ -3269,6 +3287,30 @@ fn embedded_rail_magnitude(n: &str) -> Option<f64> {
         }
     }
     None
+}
+
+/// True when the name is a rail MONITOR / FEEDBACK / SENSE tap: a voltage token
+/// ("5V", "1V8", "3V3") immediately followed by a tap suffix ("_MON", "_FB",
+/// "_SENSE", …). Such a net is a divided TAP of the rail (it sits below the rail
+/// voltage), never the rail node itself, so NO rail resolver — numeric, embedded
+/// supply-token, or the loose substring fallback — may pin it to the full nominal
+/// with an ideal supply (that shorts the divider and masks the very under/over-
+/// voltage the tap senses). Checked once, up front, so every fallback is covered.
+fn name_is_rail_monitor_tap(n: &str) -> bool {
+    let b = n.as_bytes();
+    for i in 0..b.len() {
+        if b[i] == b'V' && i > 0 && b[i - 1].is_ascii_digit() {
+            // Skip a KiCad frac digit run after the 'V' ("1V8", "3V3").
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if is_rail_monitor_suffix(&n[j..]) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// "+15V", "+24V_RAIL", "+15V0", "+9V", or a bare "15V" -> the positive rail
@@ -3688,6 +3730,23 @@ mod fmt_tests {
         assert_eq!(fmt_eng(f64::NAN, "Ω"), "0 Ω");
     }
 
+    #[test]
+    fn decade_carry_renormalizes_to_the_next_prefix() {
+        // Round-28: a mantissa in [999.5, 1000) rounds to "1000", so fmt_eng
+        // rendered "1000 kΩ" — a mantissa outside the promised [1,1000) range and
+        // inconsistent with the sibling format_engineering. The carry must promote
+        // to the next-larger prefix ("1 MΩ"), at every decade boundary.
+        assert_eq!(fmt_eng(999_600.0, "Ω"), "1 MΩ");
+        assert_eq!(fmt_eng(999.6, "Ω"), "1 kΩ");
+        assert_eq!(fmt_eng(0.9996, "Ω"), "1 Ω");
+        // µF -> mF carry: 999.6 µF rounds up a decade.
+        assert_eq!(fmt_eng(999.6e-6, "F"), "1 mF");
+        // Values comfortably inside a decade are unaffected.
+        assert_eq!(fmt_eng(4700.0, "Ω"), "4.7 kΩ");
+        assert_eq!(fmt_eng(990.0, "Ω"), "990 Ω");
+        // The top prefix has nothing larger to carry into: a big mantissa stays.
+        assert_eq!(fmt_eng(2_200_000_000.0, "Ω"), "2200 MΩ");
+    }
 }
 
 #[cfg(test)]
@@ -3793,6 +3852,17 @@ mod rail_voltage_tests {
         // The negative mirror is gated too.
         assert_eq!(power_rail_voltage("-12V_MON"), None);
         assert_eq!(power_rail_voltage("-5V_SENSE"), None);
+        // Round-28: the supply-token-PREFIXED embedded form ("VDD_1V8_MON") must be
+        // gated too — the r27 fix only covered the digit-prefixed and negative
+        // paths, leaving embedded_rail_magnitude ungated.
+        assert_eq!(power_rail_voltage("VDD_1V8_MON"), None);
+        assert_eq!(power_rail_voltage("VCC_5V_MON"), None);
+        assert_eq!(power_rail_voltage("AVCC_2V5_SENSE"), None);
+        assert_eq!(power_rail_voltage("VOUT_1V0_FB"), None);
+        assert_eq!(power_rail_voltage("VDD_13V3_MON"), None);
+        // A genuine embedded rail (no tap suffix) still resolves.
+        assert_eq!(power_rail_voltage("VDD_1V8"), Some(1.8));
+        assert_eq!(power_rail_voltage("AVCC_2V5"), Some(2.5));
         // Genuine rails — including rail-DOMAIN suffixes — still resolve.
         assert_eq!(power_rail_voltage("12V"), Some(12.0));
         assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
