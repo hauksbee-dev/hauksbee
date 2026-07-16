@@ -1099,15 +1099,16 @@ fn run_one(
     let drive_direction_observable = !engine.scheduler().has_external_backend();
 
     // Fold the per-net first-trip times into per-(scenario, net) verdicts: a
-    // trip belongs to a window only if it first latched at or after that
-    // window's start. This lets a scenario-scoped `protection_trip` assertion
-    // ignore a trip that happened before the scenario began.
+    // trip belongs to a window only if it first latched WITHIN it — at or after
+    // the window's start AND before the next scenario begins (`end_s`). The lower
+    // bound lets a scoped `protection_trip` ignore a trip from before the scenario
+    // began; the upper bound stops a LATER scenario's trip from being attributed
+    // to this (earlier-starting) one on a shared supply net. Half-open [start, end).
     let mut protection_tripped_scoped: HashMap<(String, String), bool> = HashMap::new();
     for sw in &scenario_windows {
         for net in &sw.nets {
-            let tripped_in_window = protection_trip_t
-                .get(net)
-                .is_some_and(|&t| t + 1e-12 >= sw.start_s);
+            let tripped_in_window =
+                trip_in_window(protection_trip_t.get(net).copied(), sw.start_s, sw.end_s);
             protection_tripped_scoped.insert((sw.id.clone(), net.clone()), tripped_in_window);
         }
     }
@@ -1138,6 +1139,18 @@ fn run_one(
         sampled_values: plan.values.clone(),
         net_series,
     })
+}
+
+/// Whether a protection trip at `trip_t` (if any) latched inside a scenario
+/// window `[start_s, end_s)`. Half-open: a trip exactly at the next scenario's
+/// start belongs to that later scenario, not this one. `end_s == +∞` means the
+/// window runs to end-of-run (the last scenario and the run-wide window).
+fn trip_in_window(trip_t: Option<f64>, start_s: f64, end_s: f64) -> bool {
+    // Lenient at the start (a trip essentially at the scenario's onset counts),
+    // strict at the end (a trip at or after the next scenario's start belongs to
+    // THAT later phase, which picks it up via its own lenient start). `end_s` of
+    // +∞ leaves the upper test always true.
+    trip_t.is_some_and(|t| t + 1e-12 >= start_s && t < end_s - 1e-12)
 }
 
 /// Does `[start_s, end_s)` overlap any failed-analog window in `windows`? Used to
@@ -1177,10 +1190,15 @@ fn boot_reach_update(
 }
 
 /// A scenario's measurement window: an id (empty for run-wide), the time it
-/// begins, and the set of rails the spec's assertions reference for it.
+/// begins, the time it ends, and the set of rails the spec's assertions
+/// reference for it. `end_s` is the start of the next scenario on the timeline
+/// (`+∞` for the last scenario and for the run-wide window), so a
+/// scenario-scoped `protection_trip` verdict counts only trips that latch within
+/// this scenario's phase — a later scenario's trip must not be attributed here.
 struct ScenarioWindow {
     id: String,
     start_s: f64,
+    end_s: f64,
     nets: Vec<String>,
 }
 
@@ -1264,7 +1282,12 @@ fn attach_scenarios(
                     w.nets.push(net);
                 }
             }
-            None => windows.push(ScenarioWindow { id, start_s, nets: vec![net] }),
+            None => windows.push(ScenarioWindow {
+                id,
+                start_s,
+                end_s: f64::INFINITY,
+                nets: vec![net],
+            }),
         }
     }
 
@@ -1304,8 +1327,28 @@ fn attach_scenarios(
             None => windows.push(ScenarioWindow {
                 id: scope,
                 start_s,
+                end_s: f64::INFINITY,
                 nets: vec![net.clone()],
             }),
+        }
+    }
+
+    // Bound each scenario-scoped window at the next scenario's start on the
+    // timeline: scenarios are sequential phases, so a trip that latches during a
+    // LATER scenario must not be attributed to an earlier-starting one sharing the
+    // same supply net (protection_tripped_scoped keys by net, and an earlier
+    // start <= a later start, so without an upper bound the later trip satisfied
+    // every earlier window). The run-wide window (empty id) keeps +∞ — it
+    // deliberately spans the whole run.
+    let mut starts: Vec<f64> = spec.scenarios.iter().map(|s| s.start_ms / 1000.0).collect();
+    starts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    for w in &mut windows {
+        if !w.id.is_empty() {
+            w.end_s = starts
+                .iter()
+                .copied()
+                .find(|&st| st > w.start_s + 1e-12)
+                .unwrap_or(f64::INFINITY);
         }
     }
     Ok(windows)
@@ -2025,6 +2068,27 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scenario_scoped_trip_is_bounded_by_the_next_scenario_start() {
+        // Round-28: a scenario-scoped protection_trip window had only a lower
+        // bound, so a trip that latched during a LATER scenario on a shared supply
+        // net was attributed to every earlier-starting scenario. With the phases
+        // inrush=[0, 0.1) and steady=[0.1, +inf) sharing net BATT and the BMS
+        // latching at 0.15 s (during steady): steady must see the trip, inrush
+        // must NOT (no false RED blaming inrush; no false GREEN either).
+        let trip = Some(0.15);
+        assert!(!trip_in_window(trip, 0.0, 0.1), "inrush must not own steady's trip");
+        assert!(trip_in_window(trip, 0.1, f64::INFINITY), "steady owns its own trip");
+        // A trip before a scenario begins is excluded by the lower bound.
+        assert!(!trip_in_window(Some(0.05), 0.1, f64::INFINITY), "pre-start trip excluded");
+        // A trip exactly at the next scenario's start belongs to the later phase
+        // (half-open [start, end)).
+        assert!(!trip_in_window(Some(0.1), 0.0, 0.1), "boundary trip is the later phase's");
+        assert!(trip_in_window(Some(0.1), 0.1, f64::INFINITY));
+        // No trip at all is never in any window.
+        assert!(!trip_in_window(None, 0.0, f64::INFINITY));
+    }
 
     #[test]
     fn net_window_last_v_is_the_settled_value_not_the_peak() {

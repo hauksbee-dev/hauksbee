@@ -119,15 +119,25 @@ fn cell_says_not_fitted(s: &str) -> bool {
 /// The unit scale implied by a coordinate column HEADER (e.g. `PosX (mil)`),
 /// applied only when the cell value itself carries no unit suffix. mm→1,
 /// mil→0.0254 mm, inch→25.4 mm.
+///
+/// Matches unit WORDS (split on non-letters), not substrings: a bare
+/// `contains("mil")` fired inside "millimeter"/"millimeters" (a 39x mis-scale),
+/// and matching only the spelled-out "inch" missed the "in" abbreviation the
+/// cell parser [`parse_len`] accepts (a 25.4x mis-scale). The first recognised
+/// unit token wins; an unlabelled header stays mm (scale 1).
 fn header_unit_scale(header: &str) -> f64 {
-    let h = header.to_ascii_lowercase();
-    if h.contains("mil") {
-        0.0254
-    } else if h.contains("inch") {
-        25.4
-    } else {
-        1.0
+    for tok in header
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphabetic())
+    {
+        match tok {
+            "mil" | "mils" | "thou" => return 0.0254,
+            "in" | "inch" | "inches" => return 25.4,
+            "mm" | "millimeter" | "millimeters" | "millimetre" | "millimetres" => return 1.0,
+            _ => {}
+        }
     }
+    1.0
 }
 
 /// Parse a number that may carry a unit suffix; returns (value, had_unit) where
@@ -526,6 +536,31 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let p = parse_pnp(csv);
         assert!(!p[0].dnp, "blank DNP cell is populated");
         assert!(p[1].dnp, "DNP cell marks unpopulated");
+    }
+
+    #[test]
+    fn header_unit_scale_matches_unit_words_not_substrings() {
+        // Round-28: contains("mil") fired inside "millimeters" (a 39x shrink) and
+        // the "in" abbreviation was missed (a 25.4x error). Match whole unit words.
+        assert_eq!(header_unit_scale("PosX (millimeters)"), 1.0);
+        assert_eq!(header_unit_scale("X (mm)"), 1.0);
+        assert_eq!(header_unit_scale("X (in)"), 25.4);
+        assert_eq!(header_unit_scale("PosX (inch)"), 25.4);
+        assert_eq!(header_unit_scale("PosX (mil)"), 0.0254);
+        assert_eq!(header_unit_scale("PosX (mils)"), 0.0254);
+        // An unlabelled coordinate header stays millimetres.
+        assert_eq!(header_unit_scale("PosX"), 1.0);
+    }
+
+    #[test]
+    fn pnp_millimeter_labeled_header_is_not_rescaled_as_mils() {
+        // End-to-end: a "(millimeters)" column with bare cell values must stay in
+        // mm, not collapse ~39x. Before the fix the whole board clustered at ~0.25 mm.
+        let csv = "Ref,PosX (millimeters),PosY (millimeters),Rot\nU1,10.0,20.0,0\n";
+        let p = parse_pnp(csv);
+        assert_eq!(p.len(), 1);
+        assert!((p[0].x - 10.0).abs() < 1e-6, "x stays 10 mm, got {}", p[0].x);
+        assert!((p[0].y - 20.0).abs() < 1e-6, "y stays 20 mm, got {}", p[0].y);
     }
 
     #[test]
