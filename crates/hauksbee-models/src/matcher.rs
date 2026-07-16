@@ -37,7 +37,11 @@ impl CompiledEntry {
             .r#match
             .footprint_re
             .as_deref()
-            .map(|p| Regex::new(p))
+            // Case-INSENSITIVE like value_re/mpn_re: a rule `footprint_re = "sot-23"`
+            // must match a board footprint `Package_TO_SOT_SMD:SOT-23`. A
+            // case-sensitive compile silently skipped the entry, dropping the part
+            // to a generic fallback with no diagnostic.
+            .map(|p| Regex::new(&format!("(?i){}", p)))
             .transpose()?;
         let mpn_re = entry
             .r#match
@@ -323,7 +327,37 @@ impl MatchRules {
 
 #[cfg(test)]
 mod tests {
-    use super::pattern_constrainedness;
+    use super::{pattern_constrainedness, ComponentQuery, CompiledEntry};
+    use crate::schema::{ComponentKind, MatchRules, ModelEntry};
+
+    #[test]
+    fn footprint_re_matches_case_insensitively() {
+        // Round-26: a rule `footprint_re = "sot-23"` must fire against a board
+        // footprint `Package_TO_SOT_SMD:SOT-23`. A case-SENSITIVE compile silently
+        // skipped the entry, dropping the part to a generic fallback. Author the
+        // rule in lower case, query in the board's mixed case: it must still match.
+        let entry = ModelEntry {
+            id: "sot23-test".to_string(),
+            kind: ComponentKind::BjtNpn,
+            description: String::new(),
+            r#match: MatchRules {
+                footprint_re: Some("sot-23".to_string()),
+                ..Default::default()
+            },
+            params: Default::default(),
+            pins: Default::default(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        let compiled = CompiledEntry::compile(entry).expect("compiles");
+        let q = ComponentQuery {
+            footprint: Some("Package_TO_SOT_SMD:SOT-23".to_string()),
+            ..Default::default()
+        };
+        assert!(compiled.matches(&q), "footprint regex must match case-insensitively");
+    }
 
     #[test]
     fn exact_literal_outranks_character_class_family() {

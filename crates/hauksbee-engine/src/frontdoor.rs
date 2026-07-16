@@ -201,6 +201,16 @@ pub struct WebCosimSection {
     /// common JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boot_gates: Vec<WebBootGate>,
+    /// False when the firmware ran but produced zero GPIO toggles and no UART —
+    /// it was not meaningfully exercised, so the run cannot vouch for firmware
+    /// behaviour. Drives the headline demotion (a statically-clean board must not
+    /// read "Looks healthy" over a co-sim that proved nothing). Always serialized
+    /// (never skipped) so a consumer can rely on its presence.
+    pub firmware_exercised: bool,
+    /// True when the co-sim ran on a SUBSTITUTE chip (the board's real MCU was
+    /// swapped for an emulatable stand-in), so its behaviour may not match the
+    /// production part. Also demotes the headline. Always serialized.
+    pub substituted: bool,
 }
 
 /// One row of the web boot-state panel: a transistor gate control net and what
@@ -480,9 +490,38 @@ pub fn analyze_with_firmware(
         // total > 0 now, so the heads-up / bind-open arms of overall_headline are
         // not reached; passing false for them is correct.
         report.headline = overall_headline(report.total, report.serious, false, false);
+    } else if report.total == 0 {
+        // No serious escalation and the static board is clean — but a co-sim
+        // that proved nothing must not leave a bare "Looks healthy" headline.
+        if let Some(demoted) = cosim_caveat_headline(&cosim, &report.headline) {
+            report.headline = demoted;
+        }
     }
     report.cosim = Some(cosim);
     report
+}
+
+/// The headline a statically-clean board (`total == 0`, no serious co-sim faults)
+/// should carry once its firmware co-sim is known.
+///
+/// A co-sim that RAN yet proved nothing — firmware not meaningfully exercised,
+/// ran on a SUBSTITUTE core, or an analog window failed to converge — must not
+/// leave a bare "Looks healthy" verdict: that is the exact false comfort the
+/// co-sim honesty notes exist to prevent, and it would contradict the CLI
+/// `--plain` "worth a look" line for the same inputs. Such a run demotes to the
+/// heads-up verdict (note-level only; the badge/serious count is unchanged).
+///
+/// Returns `None` (keep the existing headline) when no caveat applies: the gate
+/// on `ran` keeps a not-run co-sim (no firmware / external backend) from
+/// demoting, and only a bare "Looks healthy" line is ever overwritten.
+fn cosim_caveat_headline(cosim: &WebCosimSection, current_headline: &str) -> Option<String> {
+    let caveat =
+        cosim.ran && (!cosim.firmware_exercised || cosim.substituted || !cosim.analog_valid);
+    if caveat && current_headline == overall_headline(0, 0, false, false) {
+        Some(overall_headline(0, 0, true, false))
+    } else {
+        None
+    }
 }
 
 /// A skipped/failed co-sim section carrying the reason as a single note-level
@@ -505,6 +544,10 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         failed_windows: Vec::new(),
         spi_framing: Vec::new(),
         boot_gates: Vec::new(),
+        // ran == false: the headline demotion is gated on `ran`, so these are the
+        // neutral, backward-compatible defaults (a not-run co-sim is not a refusal).
+        firmware_exercised: true,
+        substituted: false,
     }
 }
 
@@ -800,6 +843,7 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
         })
         .collect();
 
+    let substituted = !engine.scheduler().substitutions().is_empty();
     WebCosimSection {
         ran: true,
         seconds_simulated,
@@ -810,6 +854,8 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
         failed_windows,
         spi_framing,
         boot_gates,
+        firmware_exercised: firmware_ran,
+        substituted,
     }
 }
 
@@ -1254,6 +1300,78 @@ mod tests {
         );
     }
 
+    /// A clean co-sim section that RAN and vouched for the firmware — the
+    /// baseline the caveat logic must NOT demote.
+    fn clean_ran_section() -> WebCosimSection {
+        WebCosimSection {
+            ran: true,
+            seconds_simulated: 0.1,
+            uart_output: String::new(),
+            findings: Vec::new(),
+            gpio_nets: Vec::new(),
+            analog_valid: true,
+            failed_windows: Vec::new(),
+            spi_framing: Vec::new(),
+            boot_gates: Vec::new(),
+            firmware_exercised: true,
+            substituted: false,
+        }
+    }
+
+    #[test]
+    fn empty_cosim_demotes_looks_healthy_but_a_real_run_does_not() {
+        // Round-26: a statically-clean board whose firmware co-sim RAN yet proved
+        // nothing (no GPIO/UART, a substitute core, or a failed analog window)
+        // must not read "Looks healthy" — that is false comfort, and it disagrees
+        // with the CLI --plain "worth a look" verdict for the same inputs.
+        let healthy = overall_headline(0, 0, false, false);
+        let demoted = overall_headline(0, 0, true, false);
+        assert_ne!(healthy, demoted, "the two verdicts must be distinct");
+
+        // A clean, exercised run keeps the healthy headline.
+        assert_eq!(
+            cosim_caveat_headline(&clean_ran_section(), &healthy),
+            None,
+            "a real firmware run must not be demoted"
+        );
+
+        // Each caveat on its own demotes the bare healthy line.
+        for mutate in [
+            |s: &mut WebCosimSection| s.firmware_exercised = false,
+            |s: &mut WebCosimSection| s.substituted = true,
+            |s: &mut WebCosimSection| s.analog_valid = false,
+        ] {
+            let mut s = clean_ran_section();
+            mutate(&mut s);
+            assert_eq!(
+                cosim_caveat_headline(&s, &healthy),
+                Some(demoted.clone()),
+                "a co-sim that proved nothing must demote Looks healthy"
+            );
+        }
+
+        // A co-sim that did NOT run (no firmware / external backend) never demotes,
+        // even carrying caveat-shaped defaults.
+        let mut not_run = clean_ran_section();
+        not_run.ran = false;
+        not_run.firmware_exercised = false;
+        assert_eq!(
+            cosim_caveat_headline(&not_run, &healthy),
+            None,
+            "a not-run co-sim is not a refusal and must not demote"
+        );
+
+        // Only the bare healthy line is overwritten; an already-demoted or
+        // findings-bearing headline is left untouched.
+        let mut caveated = clean_ran_section();
+        caveated.substituted = true;
+        assert_eq!(
+            cosim_caveat_headline(&caveated, &demoted),
+            None,
+            "an already-heads-up headline is not rewritten"
+        );
+    }
+
     #[test]
     fn invalid_cosim_section_serializes_field_and_windows() {
         // A section built for a diverged run serializes analog_valid:false plus
@@ -1271,6 +1389,8 @@ mod tests {
             failed_windows: vec![WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
             spi_framing: Vec::new(),
             boot_gates: Vec::new(),
+            firmware_exercised: true,
+            substituted: false,
         };
         let json = serde_json::to_string(&section).unwrap();
         assert!(
@@ -1302,6 +1422,8 @@ mod tests {
                 net: "GATE_CTRL".to_string(),
                 state: "driven_high".to_string(),
             }],
+            firmware_exercised: true,
+            substituted: false,
         };
         let json = serde_json::to_string(&section).unwrap();
         assert!(json.contains("\"boot_gates\""), "populated boot_gates serializes: {json}");
