@@ -398,13 +398,16 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
             continue;
         }
         // Scalar change: '0<id>' / '1<id>' (x/z are skipped — undefined levels
-        // carry no honest edge information).
-        if l.len() > 1 {
-            let (val, rest) = l.split_at(1);
+        // carry no honest edge information). Split on the first CHAR, not byte 1
+        // — a body line beginning with a multibyte UTF-8 char would panic a
+        // byte-index split_at(1).
+        let mut cs = l.chars();
+        if let Some(val) = cs.next() {
+            let rest = cs.as_str();
             if rest == id {
                 match val {
-                    "0" => out.push((t, 0.0)),
-                    "1" => out.push((t, 1.0)),
+                    '0' => out.push((t, 0.0)),
+                    '1' => out.push((t, 1.0)),
                     _ => {}
                 }
             }
@@ -699,6 +702,28 @@ mod tests {
             abstol: Some(1.0),
             reltol: None,
         }
+    }
+
+    #[test]
+    fn load_vcd_survives_multibyte_body_line() {
+        // A VCD body line beginning with a multibyte UTF-8 char used to panic
+        // the parser's byte-index split_at(1) (not on a char boundary). It must
+        // skip the junk line and still read the real 0/1 edges. (round-7 #10)
+        let vcd = "$timescale 1us $end\n\
+                   $var wire 1 ! sig $end\n\
+                   $enddefinitions $end\n\
+                   #0\n0!\n#10\nµ garbage line\n1!\n";
+        let path = std::env::temp_dir()
+            .join(format!("hauksbee_vcd_multibyte_{}.vcd", std::process::id()));
+        std::fs::write(&path, vcd).unwrap();
+        let series = load_vcd(&path, None);
+        let _ = std::fs::remove_file(&path);
+        let series = series.expect("VCD with a multibyte body line must parse, not panic");
+        // Two real edges: 0 at t=0, 1 at t=10µs.
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].1, 0.0);
+        assert_eq!(series[1].1, 1.0);
+        assert!((series[1].0 - 10e-6).abs() < 1e-12, "second edge at 10µs: {}", series[1].0);
     }
 
     #[test]

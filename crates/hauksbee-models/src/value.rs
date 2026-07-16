@@ -126,8 +126,16 @@ fn normalise_comma_decimal(s: &str) -> String {
         // Length of the digit run immediately after the comma.
         let run = after_comma.chars().take_while(|c| c.is_ascii_digit()).count();
         if prev_digit && run >= 1 {
-            // 3 digits → thousands separator (drop the comma); 1-2 → decimal.
-            if run == 3 {
+            // A single comma is a thousands separator ONLY for a grouped
+            // integer: a nonzero integer part with no leading zero, a 3-digit
+            // group, and NOTHING after the group. "4,700" is 4700, but
+            // "0,047uF" is a European decimal 0.047 uF (leading-zero integer
+            // part, and a unit follows the group) — treating it as thousands
+            // fabricated 47 µF from 47 nF, a 1000x error.
+            let group_tail = &after_comma[run..]; // run digits are ASCII → byte==char
+            let int_grouped = before_comma.bytes().all(|b| b.is_ascii_digit())
+                && before_comma.as_bytes().first() != Some(&b'0');
+            if run == 3 && int_grouped && group_tail.is_empty() {
                 return format!("{}{}", before_comma, after_comma);
             }
             return format!("{}.{}", before_comma, after_comma);
@@ -496,6 +504,23 @@ mod tests {
         // Prefix multipliers still win; lowercase 'f' stays femto:
         assert!((parse_value("100nF").unwrap().si - 1e-7).abs() < 1e-20);
         assert!((parse_value("4f7").unwrap().si - 4.7e-15).abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_european_decimal_comma_vs_thousands() {
+        // A single comma with a 3-digit group is a thousands separator ONLY for
+        // a grouped integer ("4,700" = 4700). A leading-zero integer part, or a
+        // unit after the group, marks a European decimal comma — treating
+        // "0,047uF" as thousands fabricated 47 µF from 47 nF (round-7 #4).
+        check("0,047uF", 47e-9); // 0.047 µF = 47 nF, NOT 47 µF
+        check("0,022uF", 22e-9);
+        check("0,1uF", 100e-9); // 1-2 digit group already worked
+        check("4,7uF", 4.7e-6);
+        check("5,1k", 5100.0); // 5.1 kΩ
+        // Genuine thousands grouping (nonzero integer part, no unit) stays 1000x:
+        check("4,700", 4700.0);
+        check("10,000", 10000.0);
+        check("1,000,000", 1_000_000.0);
     }
 
     #[test]
