@@ -39,6 +39,24 @@ impl Shape {
         })
     }
 
+    /// This shape shifted by `(dx, dy)` board millimetres. Used to tile a
+    /// step-and-repeat base cell across its grid.
+    pub fn translated(&self, dx: f64, dy: f64) -> Shape {
+        match self {
+            Shape::Capsule(c) => Shape::Capsule(Capsule {
+                ax: c.ax + dx,
+                ay: c.ay + dy,
+                bx: c.bx + dx,
+                by: c.by + dy,
+                r: c.r,
+            }),
+            Shape::Polygon { pts, r } => Shape::Polygon {
+                pts: pts.iter().map(|(x, y)| (x + dx, y + dy)).collect(),
+                r: *r,
+            },
+        }
+    }
+
     /// Inflated AABB (minx, miny, maxx, maxy).
     pub fn bounds(&self) -> [f64; 4] {
         match self {

@@ -105,7 +105,15 @@ impl ClearanceRules {
     }
 
     pub fn add_class(&mut self, rule: NetClassRule) {
-        if rule.clearance_mm > 0.0 {
+        // Keep a class that carries ANY usable rule — an explicit clearance OR a
+        // diff-pair gap. A KiCad class routinely leaves `clearance` at 0 ("inherit
+        // board default") while still defining a `diff_pair_gap`; dropping it
+        // wholesale (the old `clearance_mm > 0.0` gate) discarded the gap AND made
+        // `assign_net` reject its nets, so a diff pair routed at its own gap was
+        // checked against the wider board default and falsely flagged. A class
+        // with clearance 0 is retained and resolves to the board default for
+        // spacing (see `clearance_for_net`) while still contributing its gap.
+        if rule.clearance_mm > 0.0 || rule.diff_pair_gap_mm.is_some_and(|g| g > 0.0) {
             self.classes.insert(rule.name.clone(), rule);
         }
     }
@@ -120,7 +128,10 @@ impl ClearanceRules {
         self.net_classes
             .get(net)
             .and_then(|class| self.classes.get(class))
-            .map(|r| r.clearance_mm)
+            // A class clearance of 0 means "inherit the board default", not a
+            // literal zero-clearance rule — resolve it to the default so a
+            // diff-pair-only class does not report a 0 mm spacing requirement.
+            .map(|r| if r.clearance_mm > 0.0 { r.clearance_mm } else { self.default_clearance_mm })
             .unwrap_or(self.default_clearance_mm)
     }
 
@@ -213,7 +224,16 @@ pub fn clearance_rules_from_kicad_pro<'a>(
     let mut default_clearance = DEFAULT_CLEARANCE_MM;
     let mut rules = ClearanceRules::default();
     for class in classes {
-        let name = class.get("name")?.as_str()?.to_string();
+        // Skip a nameless/malformed class entry rather than aborting the whole
+        // parse. The old `?` propagated None out of the function, so one bad
+        // object (e.g. in a hand-edited .kicad_pro) silently discarded EVERY
+        // class, default clearance, and diff-pair gap, dropping DRC to the bare
+        // default everywhere — a KiCad 10 board keeps its clearances only here.
+        // The sibling assignment/pattern loops already skip bad entries; match
+        // that.
+        let Some(name) = class.get("name").and_then(|x| x.as_str()).map(str::to_string) else {
+            continue;
+        };
         let clearance = class
             .get("clearance")
             .and_then(|x| x.as_f64())
