@@ -367,12 +367,40 @@ fn load_deck(
     // Second pass: parse the flattened element lines. Errors from a spliced body
     // are annotated with where the body came from and where it was instantiated.
     let mut fixups: Vec<NameFixup> = Vec::new();
+    // Case-insensitive refdes index over the FLATTENED device table: a duplicate
+    // element name (e.g. two top-level `R1`) used to be silently accepted,
+    // stamping both in parallel on a wrong netlist. Distinct subckt instances
+    // (X1.R1 vs X2.R1) carry qualified names and do not collide. (R7 #11)
+    let mut seen_refdes: HashMap<String, usize> = HashMap::new();
     for sl in &expanded {
         let before = fixups.len();
+        let before_dev = circuit.devices.len();
         parse_element(sl.lineno, &sl.text, &mut circuit, &col.models, &sl.env, &mut fixups)
             .map_err(|e| with_provenance(e, &sl.provenance))?;
         for fx in &mut fixups[before..] {
             fx.provenance = sl.provenance.clone();
+        }
+        for dev in &circuit.devices[before_dev..] {
+            let key = dev.name().to_ascii_lowercase();
+            if key.is_empty() {
+                continue;
+            }
+            if let Some(&prev) = seen_refdes.get(&key) {
+                return Err(with_provenance(
+                    SpiceError::Syntax {
+                        line: sl.lineno,
+                        msg: format!(
+                            "duplicate element name `{}` (first defined at line {prev}); \
+                             each refdes must be unique — two devices sharing a name are \
+                             silently stamped in parallel",
+                            dev.name()
+                        ),
+                        text: sl.text.clone(),
+                    },
+                    &sl.provenance,
+                ));
+            }
+            seen_refdes.insert(key, sl.lineno);
         }
     }
 
@@ -1021,6 +1049,26 @@ fn eval_value(line: usize, tok: &str, raw: &str, env: &ParamEnv) -> Result<f64, 
 /// the base nor defined here is an undefined-name error; a set that never fully
 /// resolves is a cycle. Both carry a line number.
 fn resolve_params(cards: &[ParamCard], base: &ParamEnv) -> Result<ParamEnv, SpiceError> {
+    // Refuse a parameter defined more than once (names are already lowercased,
+    // so this also catches case-differing duplicates). Otherwise which
+    // definition wins depends silently on topological resolution order —
+    // `.param x={y}` / `.param x=2` resolve to different values by luck. (R7 #12)
+    let mut first_line: HashMap<&str, usize> = HashMap::new();
+    for card in cards {
+        if let Some(&prev) = first_line.get(card.name.as_str()) {
+            return Err(SpiceError::Syntax {
+                line: card.line,
+                msg: format!(
+                    "parameter `{}` is defined more than once (first at line {prev}); \
+                     remove the duplicate — which value would win otherwise depends on \
+                     resolution order",
+                    card.name
+                ),
+                text: card.raw.clone(),
+            });
+        }
+        first_line.insert(card.name.as_str(), card.line);
+    }
     let mut env = base.clone();
     let names: HashSet<String> = cards.iter().map(|c| c.name.clone()).collect();
     let mut pending: Vec<usize> = (0..cards.len()).collect();
@@ -1744,10 +1792,14 @@ fn read_source(
         let trimmed = raw.trim_start();
         let tok = first_token(trimmed);
         if tok.eq_ignore_ascii_case(".include") || tok.eq_ignore_ascii_case(".inc") {
-            let args = parse_directive_args(&trimmed[tok.len()..]);
+            // Strip an inline comment first — `.include sub.cir ; note` must not
+            // read the comment words as extra file-path arguments.
+            let rest = strip_inline_comment(&trimmed[tok.len()..]);
+            let args = parse_directive_args(&rest);
             include_file(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
         } else if tok.eq_ignore_ascii_case(".lib") {
-            let args = parse_directive_args(&trimmed[tok.len()..]);
+            let rest = strip_inline_comment(&trimmed[tok.len()..]);
+            let args = parse_directive_args(&rest);
             lib_call(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
         } else if tok.eq_ignore_ascii_case(".endl") {
             return Err(provenanced_syntax(
@@ -2484,7 +2536,7 @@ fn parse_element(
         'I' => parse_source(line, raw, &toks, circuit, false, env),
         'D' => parse_diode(line, raw, &toks, circuit, models),
         'Q' => parse_bjt(line, raw, &toks, circuit, models),
-        'M' => parse_mosfet(line, raw, &toks, circuit, models),
+        'M' => parse_mosfet(line, raw, &toks, circuit, models, env),
         'S' => parse_switch(line, raw, &toks, circuit, models),
         'E' => parse_controlled(line, raw, &toks, circuit, true, env),
         'G' => parse_controlled(line, raw, &toks, circuit, false, env),
@@ -2526,8 +2578,9 @@ fn parse_rcl(
     let value = eval_value(line, &toks[3], raw, env)?;
     let name = toks[0].clone();
 
-    // Trailing key=value options (tc1=, ic=) — re-scan with `=` kept.
-    let kv = scan_trailing_kv(raw);
+    // Trailing key=value options (tc1=, ic=) — re-scan with `=` kept,
+    // resolving params/exprs and refusing malformed numeric values.
+    let kv = scan_trailing_kv_eval(line, raw, env)?;
 
     let device = match kind {
         RclKind::R => Device::Resistor {
@@ -2562,7 +2615,8 @@ fn parse_rcl(
     Ok(())
 }
 
-/// Collect trailing `key=value` pairs from a raw line (SPICE numbers).
+/// Collect trailing `key=value` pairs from a raw line (SPICE numbers). Used for
+/// `.options`, whose values are always plain literals (no params/exprs).
 fn scan_trailing_kv(raw: &str) -> HashMap<String, f64> {
     let mut map = HashMap::new();
     for tok in raw.split_whitespace() {
@@ -2573,6 +2627,40 @@ fn scan_trailing_kv(raw: &str) -> HashMap<String, f64> {
         }
     }
     map
+}
+
+/// Collect trailing `key=value` element options (R tc1=, C/L ic=, MOSFET W=/L=)
+/// evaluating each value through the parameter environment — so a braced
+/// `{expr}` or a bare `.param` name resolves, exactly like the main device
+/// value does. A value that looks numeric or braced but will NOT evaluate (a
+/// typo, an unresolved param/expr) is REFUSED with the line, rather than being
+/// silently dropped so the device falls back to a default (the honesty
+/// doctrine; sibling of the `.model`-card hardening). Genuine non-numeric
+/// string metadata still passes through untouched.
+fn scan_trailing_kv_eval(
+    line: usize,
+    raw: &str,
+    env: &ParamEnv,
+) -> Result<HashMap<String, f64>, SpiceError> {
+    let mut map = HashMap::new();
+    for tok in raw.split_whitespace() {
+        if let Some((k, v)) = tok.split_once('=') {
+            match eval_value(line, v, raw, env) {
+                Ok(num) => {
+                    map.insert(k.to_ascii_lowercase(), num);
+                }
+                Err(e) => {
+                    let numeric_looking = v.starts_with(|c: char| {
+                        c.is_ascii_digit() || c == '+' || c == '-' || c == '.' || c == '{'
+                    });
+                    if numeric_looking {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+    Ok(map)
 }
 
 fn parse_source(
@@ -2858,6 +2946,7 @@ fn parse_mosfet(
     toks: &[String],
     circuit: &mut Circuit,
     models: &HashMap<String, ModelCard>,
+    env: &ParamEnv,
 ) -> Result<(), SpiceError> {
     // M<name> d g s b model [L=.. W=..]
     if toks.len() < 6 {
@@ -2879,7 +2968,7 @@ fn parse_mosfet(
             model: model_name.clone(),
             text: raw.into(),
         })?;
-    let kv = scan_trailing_kv(raw);
+    let kv = scan_trailing_kv_eval(line, raw, env)?;
     let model = mosfet_from_card(card, &kv);
     circuit.add(Device::Mosfet {
         name: toks[0].clone(),
@@ -3943,6 +4032,85 @@ mod tests {
         );
     }
 
+    /// Round-7 #2: trailing element options (MOSFET W=/L=, R tc1=, C/L ic=) must
+    /// evaluate braced `{expr}` and bare `.param` names, exactly like the main
+    /// device value — they used to be scanned with a number-only parser that
+    /// silently dropped anything non-numeric, so the device fell back to a
+    /// default. A numeric-looking-but-unevaluable option is now refused.
+    #[test]
+    fn trailing_options_resolve_params_and_exprs() {
+        let mosfet_wl = |deck: &str| -> f64 {
+            let c = SpiceLoader::load(deck).unwrap();
+            c.devices
+                .iter()
+                .find_map(|d| match d {
+                    Device::Mosfet { model, .. } => Some(model.w_over_l),
+                    _ => None,
+                })
+                .expect("a MOSFET")
+        };
+        // W is a braced expr referencing a param; L is literal. Pre-fix W was
+        // dropped → w_over_l defaulted to 1/2 = 0.5; correct is 4/2 = 2.
+        let braced = "m\n.param wv=4\nM1 d g 0 0 MX W={wv} L=2\n.model MX NMOS(KP=1)\n.end\n";
+        assert!((mosfet_wl(braced) - 2.0).abs() < 1e-9, "W={{wv}} must resolve to 4");
+        // Bare param name, same expectation.
+        let bare = "m\n.param wv=4\nM1 d g 0 0 MX W=wv L=2\n.model MX NMOS(KP=1)\n.end\n";
+        assert!((mosfet_wl(bare) - 2.0).abs() < 1e-9, "W=wv must resolve to 4");
+
+        // A malformed braced option is refused, not silently dropped.
+        let bad = "m\nM1 d g 0 0 MX W={ } L=2\n.model MX NMOS(KP=1)\n.end\n";
+        assert!(
+            SpiceLoader::load(bad).is_err(),
+            "an unevaluable braced W option must be refused"
+        );
+    }
+
+    /// Round-7 #6: an inline comment on a `.include`/`.lib` line must be
+    /// stripped, not read as extra file-path arguments.
+    #[test]
+    fn include_line_inline_comment_is_stripped() {
+        // With the comment stripped, the loader tries to OPEN `sub.cir` (and
+        // fails to find it) rather than complaining about too many path args.
+        let deck = "deck\n.include sub.cir ; pull in the resistor bank\n.end\n";
+        let err = SpiceLoader::load(deck).unwrap_err().to_string();
+        assert!(
+            !err.contains("one file path"),
+            "the comment words must not be counted as extra paths: {err}"
+        );
+    }
+
+    /// Round-7 #11: a duplicate element refdes (case-insensitive) must be
+    /// refused — two devices sharing a name were silently stamped in parallel.
+    #[test]
+    fn duplicate_refdes_is_refused() {
+        let deck = "dup\nR1 a 0 1k\nR1 a 0 2k\n.end\n";
+        let err = SpiceLoader::load(deck).unwrap_err().to_string();
+        assert!(
+            err.contains("duplicate element name") && err.contains("R1"),
+            "{err}"
+        );
+        // A single R1 still loads fine.
+        assert!(SpiceLoader::load("ok\nR1 a 0 1k\n.end\n").is_ok());
+    }
+
+    /// Round-7 #12: a parameter defined twice (including case-differing) must be
+    /// refused — the winner otherwise depended silently on resolution order.
+    #[test]
+    fn duplicate_param_is_refused() {
+        let deck = "dupp\n.param val=1\n.param val=2\nR1 a 0 {val}\n.end\n";
+        let err = SpiceLoader::load(deck).unwrap_err().to_string();
+        assert!(
+            err.contains("defined more than once") && err.contains("val"),
+            "{err}"
+        );
+        // Case-differing duplicate is the same parameter under SPICE rules.
+        let deck2 = "dupp\n.param VAL=1\n.param val=2\nR1 a 0 {val}\n.end\n";
+        assert!(
+            SpiceLoader::load(deck2).is_err(),
+            "VAL and val are the same parameter and must be refused as duplicates"
+        );
+    }
+
     /// Bug-hunt: a 0-Ω resistor is a SHORT (ngspice convention), but the
     /// solver stamps conductance 1/R and skips a non-positive R — so an
     /// unclamped `ohms: 0.0` reached the stamp as an OPEN and silently broke
@@ -4267,11 +4435,17 @@ mod tests {
 
     #[test]
     fn refuses_ambiguous_control_name() {
-        // Two sources differing only in case: genuinely ambiguous under
-        // SPICE's case-insensitive names — refuse, never pick one.
+        // Two sources differing only in case are the SAME refdes under SPICE's
+        // case-insensitive names — refuse, never pick one. The duplicate-refdes
+        // check (R7 #11) now catches this at definition time, a stronger and
+        // earlier diagnosis than the downstream reference ambiguity; either way
+        // the load must fail loudly and never silently choose a source.
         let net = "amb\nVs a 0 1\nVS b 0 2\nF1 out 0 vs 2\n.end\n";
         let err = SpiceLoader::load(net).unwrap_err().to_string();
-        assert!(err.contains("ambiguous"), "{err}");
+        assert!(
+            err.contains("ambiguous") || err.contains("duplicate element name"),
+            "{err}"
+        );
     }
 
     #[test]

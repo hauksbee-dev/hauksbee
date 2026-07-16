@@ -65,7 +65,11 @@ pub struct PeripheralSnapshot {
 }
 
 /// Everything one seed's run produced, indexed for assertion evaluation.
-#[derive(Debug, Clone)]
+///
+/// `Default` yields an empty outcome (no UART, no faults, empty maps,
+/// `analog_valid: false`); real runs fill every field. Tests build a minimal
+/// outcome with `RunOutcome { <fields under test>, ..Default::default() }`.
+#[derive(Debug, Clone, Default)]
 pub struct RunOutcome {
     /// Seed index (0-based).
     pub seed: u32,
@@ -98,6 +102,10 @@ pub struct RunOutcome {
     /// happened before the scenario began. The scenario id is "" for the
     /// run-wide (unnamed) window.
     pub protection_tripped_scoped: HashMap<(String, String), bool>,
+    /// Configured ambient temperature (°C) for the run. A non-dissipating
+    /// device's junction sits here, so a `max_temp` ceiling below ambient must
+    /// fail even when no dissipation was measured.
+    pub ambient_c: f64,
     /// Total simulated time (ms).
     pub sim_ms: f64,
     /// Boot-coverage tracking: first time (ms) each watched (net, level-bits)
@@ -1035,6 +1043,7 @@ fn run_one(
         rail_windows,
         protection_tripped,
         protection_tripped_scoped,
+        ambient_c: spec.ambient_c,
         sim_ms: engine.scheduler().sim_time * 1000.0,
         first_reach_ms,
         driven_nets,

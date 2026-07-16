@@ -14,8 +14,13 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut reader = Reader::from_str(text);
     reader.config_mut().trim_text(true);
 
-    // package name -> [(pad name, dx, dy)]
-    let mut packages: HashMap<String, Vec<(String, f64, f64)>> = HashMap::new();
+    // (library name, package name) -> [(pad name, dx, dy)]. Eagle namespaces
+    // packages per <library>: two embedded libraries may each define a package
+    // named e.g. "0805" with different pads. Keying by bare package name merged
+    // them, so an element resolved to the concatenation of both libraries' pads
+    // and was emitted with doubled/mixed pins.
+    let mut packages: HashMap<(String, String), Vec<(String, f64, f64)>> = HashMap::new();
+    let mut cur_library = String::new();
     let mut cur_package: Option<String> = None;
     // elements
     struct El {
@@ -51,11 +56,16 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 };
                 match e.name().as_ref() {
                     b"eagle" => saw_eagle_root = true,
+                    b"library" => {
+                        cur_library = attrs(&e).get("name").cloned().unwrap_or_default();
+                    }
                     b"package" => {
                         let a = attrs(&e);
                         cur_package = a.get("name").cloned();
                         if let Some(name) = &cur_package {
-                            packages.entry(name.clone()).or_default();
+                            packages
+                                .entry((cur_library.clone(), name.clone()))
+                                .or_default();
                         }
                     }
                     b"pad" | b"smd" => {
@@ -67,7 +77,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                                 continue;
                             };
                             packages
-                                .entry(pkg.clone())
+                                .entry((cur_library.clone(), pkg.clone()))
                                 .or_default()
                                 .push((name.clone(), x, y));
                         }
@@ -86,7 +96,11 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                                 .trim_start_matches(['M', 'S', 'R'])
                                 .parse()
                                 .unwrap_or(0.0),
-                            mirrored: rot.starts_with('M'),
+                            // Eagle can prefix the rotation with 'S' (spin) and
+                            // 'M' (mirror) in either order — "MR90", "SMR90".
+                            // `starts_with('M')` missed the spin-prefixed
+                            // "SMR90" form, disagreeing with drc.rs (contains).
+                            mirrored: rot.contains('M'),
                             // Eagle marks a do-not-populate / assembly-variant
                             // part with populate="no" on the element. Without
                             // this every Eagle part read as populated, unlike
@@ -113,6 +127,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                 }
             }
             Ok(Event::End(e)) if e.name().as_ref() == b"package" => cur_package = None,
+            Ok(Event::End(e)) if e.name().as_ref() == b"library" => cur_library.clear(),
             Ok(Event::Eof) => break,
             Err(err) => {
                 return Err(ExtractError::Xml(err.to_string()));
@@ -172,7 +187,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             let eff_rot = if el.mirrored { -el.rot_deg } else { el.rot_deg };
             let (sin, cos) = eff_rot.to_radians().sin_cos();
             let pins = packages
-                .get(&el.package)
+                .get(&(el.library.clone(), el.package.clone()))
                 .map(|pads| {
                     pads.iter()
                         .map(|(pname, dx, dy)| {
