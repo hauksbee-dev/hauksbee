@@ -1189,10 +1189,27 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
             // containment short-test skips it (the solid outline would falsely
             // engulf every other-net pad inside the pour, since antipads and
             // thermal reliefs are not represented).
-            let layer = zone.find_value("layer").unwrap_or_default();
-            if layer.ends_with(".Cu") {
-                if let Some(poly) = zone.find("polygon").and_then(read_pts) {
-                    buckets.push_zone(&layer, poly, net, false);
+            //
+            // A zone may span SEVERAL layers via `(layers "F.Cu" "B.Cu")` (or a
+            // `*.Cu` wildcard); reading only the single `(layer ...)` dropped the
+            // outline of every multi-layer unfilled zone. Expand the declared
+            // layer set and keep the outline on each copper layer it occupies.
+            if let Some(poly) = zone.find("polygon").and_then(read_pts) {
+                let mut layers: Vec<String> = Vec::new();
+                if let Some(decl) = zone.find("layers") {
+                    for t in (0..).map_while(|i| decl.arg_value(i)) {
+                        layers.extend(expand_layers(&t, &copper_layers));
+                    }
+                }
+                if layers.is_empty() {
+                    if let Some(single) = zone.find_value("layer") {
+                        layers.extend(expand_layers(&single, &copper_layers));
+                    }
+                }
+                layers.sort();
+                layers.dedup();
+                for layer in layers {
+                    buckets.push_zone(&layer, poly.clone(), net, false);
                 }
             }
         }

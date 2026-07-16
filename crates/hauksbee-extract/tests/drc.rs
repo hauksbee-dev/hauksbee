@@ -256,6 +256,26 @@ fn via_outside_zone_is_clean() {
 }
 
 #[test]
+fn unfilled_multilayer_zone_outline_is_kept_on_every_layer() {
+    // R11: a zone declared over BOTH copper layers with `(layers "F.Cu" "B.Cu")`
+    // and no computed fill. The outline must be kept on each layer for clearance
+    // — the old code read only a single `(layer ...)`, found none, and dropped
+    // the whole zone, so a track crossing the pour boundary on B.Cu went unseen.
+    // A track on net A crossing the left outline edge (x=10) on B.Cu now shorts
+    // against the GND zone edge.
+    let items = r#"
+  (zone (net 3) (net_name "GND") (layers "F.Cu" "B.Cu")
+    (polygon (pts (xy 10 10) (xy 30 10) (xy 30 30) (xy 10 30)))
+  )
+  (segment (start 5 17) (end 15 17) (width 0.4) (layer "B.Cu") (net 1))
+"#;
+    let report = drc(items);
+    assert_short(&report, "A", "GND");
+    let f = report.shorts().next().unwrap();
+    assert_eq!(f.layer, "B.Cu", "the B.Cu outline edge was kept");
+}
+
+#[test]
 fn different_layers_do_not_short() {
     // Two overlapping tracks but on opposite copper layers: no short (they are
     // separated by the dielectric).

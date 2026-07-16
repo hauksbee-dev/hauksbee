@@ -65,6 +65,21 @@ fn routed_length_sums_segments() {
     assert!((l - 7.0).abs() < 1e-9, "3 + 4 = 7 mm, got {l}");
 }
 
+#[test]
+fn routed_length_resolves_name_only_nets() {
+    // A KiCad-10 board that references the net by name on the segment - `(net
+    // "USB_DP")` with no numeric id. arg_i64(0) is None on the string token, so
+    // the old code counted zero length for net 1. The name must resolve through
+    // the (net 1 "USB_DP") table.
+    let doc = root_of(
+        r#"(net 1 "USB_DP")
+           (segment (start 0 0) (end 3 0) (width 0.2) (layer "F.Cu") (net "USB_DP"))
+           (segment (start 3 0) (end 3 4) (width 0.2) (layer "F.Cu") (net "USB_DP"))"#,
+    );
+    let l = routed_length_mm(doc.root().unwrap(), 1);
+    assert!((l - 7.0).abs() < 1e-9, "name-only nets must resolve: got {l}");
+}
+
 // ---------------------------------------------------------------------------
 // Crystal load-cap check.
 // ---------------------------------------------------------------------------
@@ -382,6 +397,44 @@ fn antenna_keepout_ground_pour_inside_fires_high() {
           (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35))))"#;
     let r = run_keepout(&wroom_text(intruder));
     assert_eq!(r.finding_count(), 1, "ground pour in keepout must fire");
+    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
+}
+
+#[test]
+fn antenna_keepout_engulfing_pour_fires_high() {
+    // A board-wide ground plane whose fill polygon covers the whole board. Every
+    // fill vertex is OUTSIDE the small keepout rectangle (board x 41..59, y
+    // 22.25..37.25), so vertex-sampling alone reported a false all-clear. The
+    // pour still fully engulfs the antenna keepout - the exact bad-WiFi case the
+    // check exists to catch. Detected by testing the keepout corners against the
+    // fill polygon.
+    let intruder = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")
+        (filled_polygon (layer "F.Cu")
+          (pts (xy 0 0) (xy 100 0) (xy 100 100) (xy 0 100))))"#;
+    let r = run_keepout(&wroom_text(intruder));
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "a pour that engulfs the keepout must fire"
+    );
+    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
+}
+
+#[test]
+fn antenna_keepout_name_only_net_pour_fires_high() {
+    // KiCad-10 elements can reference their net by NAME only - `(net "GND")` with
+    // no leading numeric id. arg_i64(0) returns None on the string token, so the
+    // old code skipped the pour and reported a false all-clear. The name must
+    // resolve through the (net 1 "GND") table before the keepout is judged.
+    let intruder = r#"(zone (net "GND") (layers "F.Cu")
+        (filled_polygon (layer "F.Cu")
+          (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35))))"#;
+    let r = run_keepout(&wroom_text(intruder));
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "a name-only-net pour in the keepout must still fire"
+    );
     assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
 }
 
