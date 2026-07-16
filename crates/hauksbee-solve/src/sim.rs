@@ -148,6 +148,36 @@ pub fn run_op(
     let mut ws = Workspace::new(circuit);
     dc_operating_point(&mut ws, circuit, opts)?;
 
+    // Honesty gate: `dc_operating_point` may return Ok with the staged-DC
+    // relaxed surrogate (every diode replaced by 1 GΩ) when the true nonlinear
+    // DC never converges. That is the right contract for transient SEEDING
+    // (the march relaxes it to the true state), but a `.op` REPORT must only
+    // present a genuine root of the actual nonlinear circuit. Check the real
+    // KCL residual of the adopted point. The bound is a small absolute
+    // current, 1e-6 A: every genuinely converged ladder outcome (including
+    // the homotopy / gmin-ramp sub-attempts that also set `used_staged_dc`)
+    // lands at nA or below — the opt-in ResidualAccept path certifies roots
+    // at `residual_accept_tol` = 1e-9 A — while a forced-OFF forward diode
+    // leaves an amp-scale imbalance. 1e-6 A keeps three orders of headroom on
+    // each side and is far above `opts.abstol` (1e-12 A) so legitimate
+    // step-norm-terminated solves are never rejected. Do NOT reject on
+    // `used_staged_dc()` alone: most staged outcomes are true roots.
+    const OP_KCL_TOL: f64 = 1e-6;
+    let res = ws.dc_residual_inf_norm(circuit, opts);
+    if !res.is_finite() || res > OP_KCL_TOL {
+        let (worst, node) = ws.dc_residual_argmax(circuit, opts);
+        let via = if ws.used_staged_dc() {
+            " (a staged-DC relaxed surrogate was adopted; it seeds transients \
+             but is not a converged operating point)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            ".op did not converge: KCL residual {worst:.3e} A at unknown #{node} \
+             exceeds {OP_KCL_TOL:.0e} A{via}"
+        ));
+    }
+
     let node_v = |name: &str| -> Result<f64, String> {
         let id = resolve_node(circuit, name)?;
         Ok(match ws.layout.node(id) {
