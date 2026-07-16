@@ -209,7 +209,7 @@ fn evaluate_one(
                 .find(|&&(fs, fe)| ws < fe && fs < we)
             {
                 let per_seed = if outcomes.len() > 1 {
-                    format!("seed {}: ", out.seed)
+                    format!("{member} {}: ", out.seed)
                 } else {
                     String::new()
                 };
@@ -1173,6 +1173,67 @@ mod tests {
         // Explicit "" must behave identically, not a scoped-miss false RED.
         let (ok_empty, msg) = check_protection_trip(&parse("scenario = \"\"\n"), &out);
         assert!(ok_empty, "explicit empty scenario must equal unset, got: {msg}");
+    }
+
+    #[test]
+    fn corner_mode_invalid_detail_labels_the_member_a_corner_not_a_seed() {
+        // Round-30: in corners mode a member index is a corner number (a specific
+        // min/max combination), not a random fuzz seed. evaluate_one's INVALID
+        // branch hardcoded "seed {n}:" instead of the mode-aware `member`, so a
+        // held-stale corner was mislabeled — an EE told to re-run "seed 3" when the
+        // coverage banner and every other line call it "corner 3". The prefix must
+        // track the mode, matching the FAIL path.
+        use crate::runner::RunOutcome;
+        use std::collections::HashMap;
+        fn outcome(seed: u32, failed: Vec<(f64, f64)>) -> RunOutcome {
+            RunOutcome {
+                seed,
+                windows: HashMap::new(),
+                uart: HashMap::new(),
+                faults: Vec::new(),
+                toggles: HashMap::new(),
+                peak_current: HashMap::new(),
+                peak_temp_c: HashMap::new(),
+                peripherals: HashMap::new(),
+                rail_windows: HashMap::new(),
+                protection_tripped: HashMap::new(),
+                protection_tripped_scoped: HashMap::new(),
+                ambient_c: 25.0,
+                sim_ms: 100.0,
+                boot_first_cross_ms: HashMap::new(),
+                boot_drop_after_cross_ms: HashMap::new(),
+                driven_nets: Default::default(),
+                drive_direction_observable: false,
+                first_fault_ms: None,
+                ac: None,
+                analog_valid: failed.is_empty(),
+                failed_windows: failed,
+                analog_abort: false,
+                sampled_values: Vec::new(),
+                net_series: HashMap::new(),
+            }
+        }
+        // A voltage assertion reads the analog window (0..sim). Corner 3 diverged.
+        let a: crate::spec::Assertion = toml::from_str(
+            "kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\nmax = 3.4\n",
+        )
+        .unwrap();
+        let outcomes = vec![
+            outcome(0, Vec::new()),
+            outcome(3, vec![(0.0012, 0.0034)]),
+        ];
+        let res = super::evaluate_one(&a, &outcomes, Some(Mode::Corners));
+        assert!(res.invalid, "the held-stale corner must be INVALID");
+        assert!(
+            res.detail.contains("corner 3:"),
+            "the INVALID member must be labeled a corner: {}",
+            res.detail
+        );
+        assert!(
+            !res.detail.contains("seed 3:"),
+            "corner-mode member must not be called a seed: {}",
+            res.detail
+        );
     }
 
     #[test]
