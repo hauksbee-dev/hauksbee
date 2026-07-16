@@ -28,7 +28,7 @@ async fn http(addr: std::net::SocketAddr, request: &str, body: &[u8]) -> String 
 async fn spawn() -> std::net::SocketAddr {
     // Stub analyzer: proves the bytes and filename reach the callback, and
     // returns a JSON shape the real engine analyzer also returns.
-    let analyze: frontdoor::Analyzer = Arc::new(|name: &str, contents: &str| {
+    let analyze: frontdoor::Analyzer = Arc::new(|name: &str, contents: &[u8]| {
         format!(
             "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{}}}",
             contents.len()
@@ -73,6 +73,34 @@ async fn analyze_runs_the_callback_on_uploaded_bytes() {
 }
 
 #[tokio::test]
+async fn analyze_passes_binary_board_bytes_verbatim() {
+    // Regression (web bytes fix): the handler used to lossy-UTF8-decode the
+    // body before calling the analyzer, so a binary board (Altium .PcbDoc, an
+    // OLE2 container) was corrupted before it was ever parsed — each invalid
+    // byte below would have ballooned into a 3-byte U+FFFD. The exact byte
+    // count echoed back proves the raw bytes now reach the analyzer intact.
+    let addr = spawn().await;
+    let body: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0x00, 0xff, 0x42]; // OLE2 magic + junk
+    assert_ne!(
+        String::from_utf8_lossy(body).len(),
+        body.len(),
+        "the fixture must be one a lossy decode would corrupt"
+    );
+    let req = format!(
+        "POST /api/analyze HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         X-Board-Filename: board.PcbDoc\r\nContent-Type: application/octet-stream\r\n\
+         Content-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let resp = http(addr, &req, body).await;
+    assert!(resp.contains("200 OK"), "analyze should 200: {resp:.160}");
+    assert!(
+        resp.contains(&format!("\"len\":{}", body.len())),
+        "board bytes must reach the analyzer verbatim (no lossy decode): {resp}"
+    );
+}
+
+#[tokio::test]
 async fn analyze_without_filename_header_defaults_gracefully() {
     let addr = spawn().await;
     let body = b"x";
@@ -93,7 +121,7 @@ async fn analyze_without_filename_header_defaults_gracefully() {
 /// what it received (board name, board length, firmware name + length, or "none").
 async fn spawn_fw() -> std::net::SocketAddr {
     let analyze: frontdoor::FirmwareAnalyzer =
-        Arc::new(|name: &str, contents: &str, fw: Option<(&str, &[u8])>| match fw {
+        Arc::new(|name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| match fw {
             Some((fw_name, fw_bytes)) => format!(
                 "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw_name\":\"{fw_name}\",\"fw_len\":{}}}",
                 contents.len(),
@@ -192,7 +220,7 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
     std::fs::write(dir.join("assets/app-abc123.js"), "console.log(1)").unwrap();
 
     let analyze: frontdoor::FirmwareAnalyzer =
-        Arc::new(|_: &str, _: &str, _: Option<(&str, &[u8])>| "{\"ok\":true}".to_string());
+        Arc::new(|_: &str, _: &[u8], _: Option<(&str, &[u8])>| "{\"ok\":true}".to_string());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let dir_clone = dir.clone();
@@ -233,6 +261,38 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn malformed_multipart_names_the_real_cause() {
+    // Regression (swallowed multipart error): a body that never parses as
+    // multipart used to fall out of the field loop silently and get reported as
+    // the misleading "no board file in the upload". It must instead name the
+    // malformed upload, mirroring the sibling read-error arm's JSON shape.
+    let addr = spawn_fw().await;
+    let boundary = "----hauksbeetestboundary3";
+    // Declares a boundary that never appears: multer hits end-of-stream while
+    // still searching for the first boundary and errors.
+    let body = b"this is not a multipart body at all";
+    let req = format!(
+        "POST /api/analyze-with-firmware HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Type: multipart/form-data; boundary={boundary}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let resp = http(addr, &req, body).await;
+    assert!(resp.contains("200 OK"), "error is carried in the JSON body: {resp:.200}");
+    assert!(
+        resp.contains("\"ok\":false"),
+        "a malformed upload must not report ok: {resp}"
+    );
+    assert!(
+        resp.contains("malformed multipart upload"),
+        "must name the malformed upload as the cause: {resp}"
+    );
+    assert!(
+        !resp.contains("no board file in the upload"),
+        "must not hide the parse error behind the missing-board message: {resp}"
+    );
 }
 
 #[tokio::test]
