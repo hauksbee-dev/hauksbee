@@ -323,8 +323,11 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     let lint_plain = plain_netlint(&lint);
 
     // SI needs the layout text for the geometry-bearing checks; a binary board
-    // has none, so it gets the netlist-only subset (`None`).
-    let si = board.si_checks(text_view);
+    // has none, so it gets the netlist-only subset (`None`). Route through the SI
+    // chokepoint so the web report carries the trace-ampacity + input-cap-ripple
+    // findings too — the bare `si_checks` left the web "Signal integrity" section
+    // silently missing an under-width power trace the CLI `--si` flags.
+    let si = crate::checks::engine_si(&board, &lib, text_view);
     let si_plain = plain_si(&si);
 
     let sections = vec![
@@ -677,21 +680,12 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
         );
     }
     let net_volts = sched.net_voltages();
-    let mut gpio_nets: Vec<WebGpioNet> = sched
-        .stats
-        .iter()
-        .map(|(name, st)| WebGpioNet {
-            name: name.clone(),
-            volts: net_volts.get(name).copied().unwrap_or(0.0),
-            driven: st.toggles > 0,
-        })
-        .collect();
-    gpio_nets.sort_by(|a, b| {
-        b.driven
-            .cmp(&a.driven)
-            .then(a.name.cmp(&b.name))
-    });
-    gpio_nets.truncate(15);
+    // Rank by TOGGLE COUNT descending (name tiebreak), matching the CLI toggle
+    // table and the JSON activity_summary — this field is documented as "top
+    // movers first". Sorting by the driven flag then alphabetically (the old
+    // order) dropped the genuinely most-active nets whenever more than 15 nets
+    // were driven and kept quiet, alphabetically-early ones instead.
+    let gpio_nets = top_gpio_nets(&sched.stats, &net_volts, 15);
 
     let uart_output = String::from_utf8_lossy(&last_uart).trim_end().to_string();
 
@@ -767,9 +761,56 @@ pub fn analyze_with_firmware_json(
     })
 }
 
+/// The web co-sim GPIO activity table: the `limit` most-active nets, ranked by
+/// TOGGLE COUNT descending (name tiebreak) — the "top movers first" contract the
+/// CLI toggle table and JSON activity_summary also honour. Ranking by the driven
+/// flag then alphabetically (the old order) truncated away the genuinely
+/// most-active nets whenever more than `limit` nets were driven, keeping quiet
+/// alphabetically-early ones instead.
+fn top_gpio_nets(
+    stats: &std::collections::HashMap<String, crate::scheduler::NetStat>,
+    net_volts: &std::collections::HashMap<String, f64>,
+    limit: usize,
+) -> Vec<WebGpioNet> {
+    let mut ranked: Vec<_> = stats.iter().collect();
+    ranked.sort_by(|a, b| b.1.toggles.cmp(&a.1.toggles).then(a.0.cmp(b.0)));
+    ranked.truncate(limit);
+    ranked
+        .into_iter()
+        .map(|(name, st)| WebGpioNet {
+            name: name.clone(),
+            volts: net_volts.get(name).copied().unwrap_or(0.0),
+            driven: st.toggles > 0,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R15: the web GPIO table must keep the highest-TOGGLE nets and present them
+    /// activity-first, matching the CLI/JSON surfaces — not the 15 alphabetically-
+    /// earliest driven nets. A most-active net with a late-sorting name must
+    /// survive truncation.
+    #[test]
+    fn gpio_nets_ranked_by_activity_not_name() {
+        use crate::scheduler::NetStat;
+        use std::collections::HashMap;
+        let mut stats: HashMap<String, NetStat> = HashMap::new();
+        // 'ZZ_CLK' is the most active; 16 quiet-but-driven 'A##' nets sort earlier.
+        stats.insert("ZZ_CLK".to_string(), NetStat::with_toggles(9999));
+        for i in 0..16 {
+            stats.insert(format!("A{i:02}"), NetStat::with_toggles(1));
+        }
+        let net_volts: HashMap<String, f64> = HashMap::new();
+        let top = top_gpio_nets(&stats, &net_volts, 15);
+        assert_eq!(top.len(), 15);
+        assert_eq!(top[0].name, "ZZ_CLK", "the top mover must lead, not be dropped");
+        // Toggle counts are non-increasing down the ranked list.
+        // (ZZ_CLK first, then the 1-toggle nets.)
+        assert!(top.iter().all(|n| n.driven), "all 15 kept nets were driven");
+    }
 
     const SHORTED: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     const BLUEPILL: &[u8] = include_bytes!("../../../testdata/boards/stm32_bluepill_demo.kicad_pcb");

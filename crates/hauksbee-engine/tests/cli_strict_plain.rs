@@ -204,6 +204,17 @@ fn ac_all_requested_nodes_missing_is_invalid_not_valid() {
         reason.contains("/NONEXISTENT"),
         "the reason must name the missing requested node(s); got: {reason}"
     );
+    // R15: the structured `not_found_nets` field must carry the missing node too,
+    // not just the prose reason — a machine consumer reads the field. The old
+    // all-not-found early exit left it empty while the partial-sweep path
+    // populated it, defeating the field's never-silent purpose.
+    let not_found = v["ac"]["not_found_nets"]
+        .as_array()
+        .expect("not_found_nets is an array");
+    assert!(
+        not_found.iter().any(|n| n.as_str() == Some("/NONEXISTENT")),
+        "not_found_nets must list the missing requested node; got: {stdout}"
+    );
 }
 
 #[test]

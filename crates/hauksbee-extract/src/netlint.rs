@@ -957,7 +957,15 @@ fn resistor_to_rail(
         if !is_resistor(c) {
             continue;
         }
-        let ohms = parse_ohms(&c.value)?;
+        // Skip an R-ref part whose value does not parse (a DNP/NC option
+        // resistor, a bare MPN) and keep scanning — the genuine series resistor
+        // to the rail may be a LATER member. Using `?` here abandoned the whole
+        // search on the first unparseable co-located resistor, silently voiding
+        // the LED-current sanity check (the same abort-via-`?` the sub-ohm "R47"
+        // fix already guarded against).
+        let Some(ohms) = parse_ohms(&c.value) else {
+            continue;
+        };
         for op in &c.pins {
             if op.net == Some(net) {
                 continue;
