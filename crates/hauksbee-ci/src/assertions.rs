@@ -293,18 +293,7 @@ fn evaluate_one(
     // All members green. State exactly what that means: plain fuzz keeps its
     // wording; a tolerance ensemble claims sampled coverage (never proof), and
     // corners claim boundedness only for monotonic responses.
-    let detail = match (outcomes.len(), mode) {
-        (1, _) => last_detail,
-        (n, None) => format!("{last_detail} (held across {n} seeds)"),
-        (n, Some(crate::tolerance::Mode::MonteCarlo)) => format!(
-            "{last_detail} (passed {n}/{n} sampled tolerance seeds — statistical \
-             coverage, not worst-case proof)"
-        ),
-        (n, Some(crate::tolerance::Mode::Corners)) => format!(
-            "{last_detail} (held on all {n} min/max tolerance corners — bounds the \
-             worst case only where the response is monotonic in each value)"
-        ),
-    };
+    let detail = all_green_detail(outcomes.len(), mode, last_detail);
     AssertResult {
         label,
         kind,
@@ -314,6 +303,33 @@ fn evaluate_one(
         failing_seed: None,
         failing_seeds: Vec::new(),
         seeds_total: outcomes.len() as u32,
+    }
+}
+
+/// The all-members-green detail string for an assertion, worded to the ensemble
+/// mode. `members` is the total member count INCLUDING the nominal baseline
+/// (member 0), so a MonteCarlo run reports `members - 1` sampled seeds — the
+/// nominal draws no random sample and must not be counted as one (mirrors the
+/// run banner in `lib.rs`, which also subtracts the nominal).
+fn all_green_detail(
+    members: usize,
+    mode: Option<crate::tolerance::Mode>,
+    last_detail: String,
+) -> String {
+    match (members, mode) {
+        (1, _) => last_detail,
+        (n, None) => format!("{last_detail} (held across {n} seeds)"),
+        (n, Some(crate::tolerance::Mode::MonteCarlo)) => {
+            let sampled = n.saturating_sub(1);
+            format!(
+                "{last_detail} (passed all {n} members: {sampled} sampled tolerance \
+                 seed(s) + nominal — statistical coverage, not worst-case proof)"
+            )
+        }
+        (n, Some(crate::tolerance::Mode::Corners)) => format!(
+            "{last_detail} (held on all {n} min/max tolerance corners — bounds the \
+             worst case only where the response is monotonic in each value)"
+        ),
     }
 }
 
@@ -1096,7 +1112,25 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{boot_below_threshold_msg, key_belongs_to_ref};
+    use super::{all_green_detail, boot_below_threshold_msg, key_belongs_to_ref};
+    use crate::tolerance::Mode;
+
+    #[test]
+    fn montecarlo_detail_excludes_the_nominal_from_the_sampled_count() {
+        // Round-27: the all-green MonteCarlo detail said "passed {n}/{n} sampled
+        // tolerance seeds" with n = total members, counting the nominal baseline
+        // (member 0, which draws no random sample) as a sampled seed. It must
+        // report n-1 sampled seeds, agreeing with the run banner, rather than
+        // over-claiming statistical coverage by one draw.
+        let d = all_green_detail(16, Some(Mode::MonteCarlo), "voltage in range".into());
+        assert!(
+            d.contains("15 sampled tolerance seed(s) + nominal"),
+            "16 members => 15 sampled seeds, not 16: {d}"
+        );
+        assert!(!d.contains("16/16"), "must not label the nominal a sampled seed: {d}");
+        // A single-member run (no ensemble) keeps the bare detail unchanged.
+        assert_eq!(all_green_detail(1, Some(Mode::MonteCarlo), "ok".into()), "ok");
+    }
 
     // The base-ref vs per-unit-key rule: a package ref owns itself and its
     // `_q<N>` / `_s<N>` unit keys, and nothing else (no SW1/SW10 prefix bleed,

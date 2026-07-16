@@ -31,7 +31,7 @@ use hauksbee_mcu::{Mcu, PinId};
 use hauksbee_solve::{Layout, SolverOptions, Transient};
 
 use crate::behavioral::BehavioralDevice;
-use crate::binder::{gpio_of_role, BoundBoard, McuBinding};
+use crate::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::{DigitalComponent, PinEdge};
 use crate::peripherals::{
     I2cBus, PeripheralSet, RegisterMapSensor, SpiBus, SpiFramingMode, TickCtx, TimelineEvent,
@@ -2135,7 +2135,14 @@ impl Scheduler {
         let mut out = Vec::new();
         for m in &self.mcus {
             for (role, &node) in &m.binding.role_nets {
-                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                // Include promoted analog pins (Nano A0..A5 = PC0..PC5): bind_mcu
+                // stamps a real GPIO driver on these via the same apin fallback, so
+                // a firmware-driven A-pin is modelled electrically and MUST be
+                // visible to the boot-hazard panel too — else a held-high enable on
+                // an A-pin is silently omitted from the hazard report.
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
+                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
+                else {
                     continue;
                 };
                 // The firmware's most recent (and, for a held line, final) drive.
@@ -2182,7 +2189,9 @@ impl Scheduler {
                 .map(|p| (p.port, p.bit))
                 .collect();
             for (role, &node) in &m.binding.role_nets {
-                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
+                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
+                else {
                     continue;
                 };
                 if !m.last_levels.contains_key(&(port, bit)) && !configured.contains(&(port, bit)) {
@@ -2218,7 +2227,9 @@ impl Scheduler {
                 .map(|p| (p.port, p.bit))
                 .collect();
             for (role, &node) in &m.binding.role_nets {
-                let Some((port, bit)) = gpio_of_role(role, m.binding.module) else {
+                let Some((port, bit)) = gpio_of_role(role, m.binding.module)
+                    .or_else(|| apin_gpio_of_role(role, m.binding.module))
+                else {
                     continue;
                 };
                 if configured.contains(&(port, bit)) {
