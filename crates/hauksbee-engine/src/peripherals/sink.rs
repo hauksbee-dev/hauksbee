@@ -46,7 +46,7 @@ impl Thresholds {
 struct LoggedNet {
     name: String,
     node: NodeId,
-    code: char,
+    code: String,
     level: bool,
     initialized: bool,
 }
@@ -54,8 +54,31 @@ struct LoggedNet {
 /// A recorded value change: (time_ps, code, level).
 struct Change {
     t_ps: u64,
-    code: char,
+    code: String,
     level: bool,
+}
+
+/// Map a net index to a unique VCD identifier code. VCD identifier codes are
+/// strings of printable ASCII (33..=126); a single char only spans 92 usable
+/// glyphs (we exclude `"` and `$`, which delimit VCD tokens), so nets past the
+/// 92nd MUST roll over to multi-character codes. This is a bijective base-92
+/// numeral over that alphabet: indices 0..92 are one char, 92..(92+92²) are two,
+/// and so on — every index gets a distinct code, none ever collides on `!`.
+fn vcd_code(index: usize) -> String {
+    const EXCLUDED: [char; 2] = ['"', '$'];
+    let alphabet: Vec<char> = ('!'..='~').filter(|c| !EXCLUDED.contains(c)).collect();
+    let k = alphabet.len();
+    let mut n = index;
+    let mut out = Vec::new();
+    loop {
+        out.push(alphabet[n % k]);
+        n /= k;
+        if n == 0 {
+            break;
+        }
+        n -= 1; // bijective: no leading "zero" digit
+    }
+    out.iter().rev().collect()
 }
 
 /// VCD transition logger over a chosen set of nets.
@@ -73,13 +96,13 @@ impl VcdSink {
     /// Create a sink logging `nets` (name + resolved node), with default
     /// thresholds. `path` is where [`VcdSink::write`] dumps the trace.
     pub fn new(id: &str, nets: Vec<(String, NodeId)>, path: Option<PathBuf>) -> Self {
-        let mut codes = ('!'..='~').filter(|c| *c != '"' && *c != '$');
         let logged = nets
             .into_iter()
-            .map(|(name, node)| LoggedNet {
+            .enumerate()
+            .map(|(i, (name, node))| LoggedNet {
                 name,
                 node,
-                code: codes.next().unwrap_or('!'),
+                code: vcd_code(i),
                 level: false,
                 initialized: false,
             })
@@ -112,17 +135,15 @@ impl VcdSink {
 
     /// Transitions recorded for a named net.
     pub fn transitions_for(&self, net: &str) -> usize {
-        let Some(code) = self.nets.iter().find(|n| n.name == net).map(|n| n.code) else {
-            return 0;
-        };
-        // Count changes after the initial t=0 dump.
-        let first = self
+        let Some(code) = self
             .nets
             .iter()
             .find(|n| n.name == net)
-            .map(|n| n.code)
-            .unwrap();
-        let _ = first;
+            .map(|n| n.code.clone())
+        else {
+            return 0;
+        };
+        // Count changes after the initial t=0 dump.
         self.changes
             .iter()
             .filter(|c| c.code == code)
@@ -210,14 +231,14 @@ impl Peripheral for VcdSink {
                 n.initialized = true;
                 self.changes.push(Change {
                     t_ps: 0,
-                    code: n.code,
+                    code: n.code.clone(),
                     level,
                 });
             } else if level != n.level {
                 n.level = level;
                 self.changes.push(Change {
                     t_ps,
-                    code: n.code,
+                    code: n.code.clone(),
                     level,
                 });
             }
@@ -294,5 +315,29 @@ mod tests {
             3,
             "aggregate must match, not over-count the HIGH t=0 dump"
         );
+    }
+
+    #[test]
+    fn vcd_codes_stay_unique_past_the_single_char_alphabet() {
+        // The usable single-char VCD alphabet is 92 glyphs. Before the fix every
+        // net past the 92nd fell back to '!', colliding all their value changes
+        // onto the first net's identifier and corrupting the trace. Codes must
+        // stay pairwise-distinct for any count of nets.
+        const N: usize = 500; // well past 92, into the two-char range
+        let codes: Vec<String> = (0..N).map(vcd_code).collect();
+        let unique: std::collections::HashSet<&String> = codes.iter().collect();
+        assert_eq!(unique.len(), N, "every net index must get a distinct VCD code");
+        // First 92 are single-char; the 93rd rolls over to two chars.
+        assert_eq!(codes[0].len(), 1);
+        assert_eq!(codes[91].len(), 1);
+        assert_eq!(codes[92].len(), 2);
+        // And the allocator wired into a sink never reuses '!' for the 93rd net.
+        let mut c = Circuit::new();
+        let nets: Vec<(String, NodeId)> =
+            (0..100).map(|i| (format!("N{i}"), c.node(&format!("N{i}")))).collect();
+        let sink = VcdSink::new("VCD", nets, None);
+        let doc = sink.render();
+        // The 93rd net's declared code must be the two-char rollover, not '!'.
+        assert!(doc.contains(&format!("$var wire 1 {} N92 $end", vcd_code(92))));
     }
 }
