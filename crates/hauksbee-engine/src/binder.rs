@@ -1647,8 +1647,14 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
         },
         ComponentKind::AnalogSwitch => match f.as_str() {
             "a" | "com" => "com",
-            "b1" | "s0" | "no" => "s0",
-            "b2" | "s1" | "nc" => "s1",
+            // s0 is the throw that conducts when the control/select is LOW (see
+            // bind_analog_switch). By the universal SPDT convention the
+            // Normally-Closed contact is the one tied to COM at rest / control-low
+            // and Normally-Open closes on control-high — so NC → s0, NO → s1.
+            // (These were previously swapped, routing COM to the wrong throw in
+            // every control state on any board using NO/NC pin names.)
+            "b1" | "s0" | "nc" => "s0",
+            "b2" | "s1" | "no" => "s1",
             "s" | "sel" | "in" | "ctrl" => "ctrl",
             "gnd" | "vss" => "vss",
             "vcc" | "vdd" => "vcc",
@@ -3668,6 +3674,35 @@ mod digital_ro_tests {
         assert!(
             matches!(outcome, BindOutcome::Unresolved { .. }),
             "an unconnected switch path must be reported as open/unresolved, got {outcome:?}"
+        );
+    }
+
+    /// R31 (spdt-no-nc-inverted): the NO/NC pin-function tokens were mapped to
+    /// the wrong throws. s0 is the throw that conducts when the control is LOW; by
+    /// the universal SPDT convention the Normally-Closed contact conducts at rest
+    /// (control-low) and Normally-Open closes on control-high. So NC → s0 and
+    /// NO → s1 — the opposite of the old mapping, which routed COM to the wrong
+    /// throw in every control state on any board using NO/NC pin names.
+    #[test]
+    fn spdt_no_nc_map_to_the_correct_throws() {
+        assert_eq!(
+            role_from_pinfunction(ComponentKind::AnalogSwitch, "nc").as_deref(),
+            Some("s0"),
+            "NC (normally-closed) conducts at control-low = s0"
+        );
+        assert_eq!(
+            role_from_pinfunction(ComponentKind::AnalogSwitch, "no").as_deref(),
+            Some("s1"),
+            "NO (normally-open) closes on control-high = s1"
+        );
+        // The digit aliases keep their established meaning (b1/s0 = low select).
+        assert_eq!(
+            role_from_pinfunction(ComponentKind::AnalogSwitch, "b1").as_deref(),
+            Some("s0")
+        );
+        assert_eq!(
+            role_from_pinfunction(ComponentKind::AnalogSwitch, "b2").as_deref(),
+            Some("s1")
         );
     }
 }
