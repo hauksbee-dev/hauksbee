@@ -366,10 +366,13 @@ pub fn reconstruct(
     }
 
     // GND heuristic: among region-touching nets, the one with the most copper.
+    // Break count ties by lowest net id (Reverse) so the GND label is stable —
+    // iterating the HashMap keys left it dependent on iteration order when two
+    // pours tied on primitive count.
     let gnd_net = net_touches_region
         .keys()
         .copied()
-        .max_by_key(|n| net_prim_count.get(n).copied().unwrap_or(0));
+        .max_by_key(|&n| (net_prim_count.get(&n).copied().unwrap_or(0), std::cmp::Reverse(n)));
 
     // Build the Net table with names.
     let mut nets: Vec<Net> = root_to_net
@@ -783,6 +786,26 @@ mod tests {
         ];
         let (_b, stats) = reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(stats.n_nets, 2);
+    }
+
+    #[test]
+    fn gnd_label_is_deterministic_on_a_copper_count_tie() {
+        // Round-8 #14: two separate region pours with EQUAL primitive counts
+        // tie on "most copper". Iterating the HashMap keys made the GND label
+        // land on whichever tied net came first in iteration order — flaky
+        // across extractions. The tiebreak now always labels the lowest net id.
+        let layer = vec![
+            cap(0.0, 0.0, 0.0, 0.0, 1.0, PrimKind::Region),
+            cap(10.0, 0.0, 10.0, 0.0, 1.0, PrimKind::Region),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        assert_eq!(stats.n_nets, 2, "two separate pours are two nets");
+        let gnd = board.nets.iter().find(|n| n.name == "GND").expect("a GND net");
+        let min_id = board.nets.iter().map(|n| n.id).min().unwrap();
+        assert_eq!(
+            gnd.id, min_id,
+            "on a copper-count tie GND must label the lowest net id, deterministically"
+        );
     }
 
     #[test]

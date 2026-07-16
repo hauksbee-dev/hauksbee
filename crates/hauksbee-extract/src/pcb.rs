@@ -46,7 +46,10 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 table.id_of(&name);
             }
         } else if let Some(id) = first.as_i64() {
-            table.declare(id, n.arg_value(1).unwrap_or_default());
+            // Net 0 is the "no net" sentinel (empty name); never intern it.
+            if id != 0 {
+                table.declare(id, n.arg_value(1).unwrap_or_default());
+            }
         } else if let Some(name) = n.arg_value(1).filter(|s| !s.is_empty()) {
             // The id slot is present but not a valid i64 (overflow, garbage).
             // The declared name is still authoritative: never adopt the raw
@@ -115,6 +118,13 @@ fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
         // leak its digit string in as a name — resolve through the declared
         // name in the next slot instead.
         if let Some(id) = first.as_i64() {
+            // KiCad reserves net 0 (always name "") as the "no net": every
+            // unconnected / mounting / free pad carries `(net 0 "")`. Interning
+            // it would fuse all of them onto one shared node — the same hazard
+            // the v10 empty-name guard below prevents.
+            if id == 0 {
+                return None;
+            }
             return Some(id);
         }
         let name = net.arg_value(1).filter(|n| !n.is_empty())?;

@@ -653,8 +653,14 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
 /// Write one ensemble member's sampled tolerance values onto the board (the
 /// same pre-binding seam `apply_overrides` uses). Every reference was resolved
 /// against the board in `tolerance::resolve`, so lookups here cannot miss.
-/// Rust's `f64` Display never uses exponent notation, so the written value
-/// round-trips through the ordinary component-value parser.
+///
+/// The value is serialized with `{:?}` (not `{}`): `format!("{}", 1210.0)`
+/// yields "1210", which the component-value parser reads as a 4-digit imperial
+/// footprint SIZE CODE (1206, 1210, 2512, ...) and rejects — silently leaving
+/// the nominal member at its original value. `{:?}` always emits a decimal
+/// point ("1210.0"), so the size-code heuristic never fires and the value
+/// round-trips. `{:?}` is round-trippable for f64 and its scientific form (for
+/// very small values) is accepted by the same parser.
 fn apply_sampled_values(board: &mut ExtractedBoard, sampled: &[crate::tolerance::SampledValue]) {
     for sv in sampled {
         if let Some(comp) = board
@@ -662,7 +668,7 @@ fn apply_sampled_values(board: &mut ExtractedBoard, sampled: &[crate::tolerance:
             .iter_mut()
             .find(|c| c.reference == sv.reference)
         {
-            comp.value = format!("{}", sv.si);
+            comp.value = format!("{:?}", sv.si);
         }
     }
 }
@@ -1685,7 +1691,16 @@ fn snapshot_peripherals(
             "vcd_sink" => {
                 if let Some((_, path)) = vcd_targets.iter().find(|(id, _)| id == &p.id) {
                     if let Some(sink) = sched.peripherals.get::<VcdSink>(&p.id) {
-                        let _ = sink.write_to(path);
+                        // Surface a write failure (e.g. the output dir doesn't
+                        // exist) — silently dropping it left the user with no
+                        // VCD artifact and no diagnostic on a green run.
+                        if let Err(e) = sink.write_to(path) {
+                            eprintln!(
+                                "hauksbee: VCD sink '{}' failed to write {}: {e}",
+                                p.id,
+                                path.display()
+                            );
+                        }
                     }
                 }
             }

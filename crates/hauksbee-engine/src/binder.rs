@@ -3080,6 +3080,8 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
         "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" => Some(3.3),
         "+3V" | "3V" => Some(3.0),
         "+12V" | "12V" => Some(12.0),
+        "+15V" | "+15.0V" | "15V" => Some(15.0),
+        "+24V" | "+24.0V" | "24V" => Some(24.0),
         "+1V8" | "1V8" | "1.8V" => Some(1.8),
         // Negative rails (analog supplies, RS-232 drivers, op-amp VEE feeds).
         // These previously fell through every arm — the substring fallback
@@ -3099,9 +3101,17 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             // incidental VCC/VBUS token elsewhere in the name.
             if let Some(v) = negative_rail_fallback(&n) {
                 Some(v)
+            // A numeric positive rail carries its own magnitude ("+15V",
+            // "+24V", "+9V", "+15V0", "+15V_ANALOG"). This MUST run before the
+            // loose "contains 5V" branch: "+15V" contains the substring "5V"
+            // and starts with '+', so without this it was silently classified
+            // as a 5 V rail — a +15V op-amp supply solved at 5 V.
+            } else if let Some(v) = positive_rail_fallback(&n) {
+                Some(v)
             // "+5V_USB", "VCC_5V", "VDD_5V" style names: a voltage-suffixed
             // VDD carries its magnitude explicitly, unlike the bare "VDD"
-            // excluded above.
+            // excluded above. (Names with their own numeric magnitude were
+            // already handled by positive_rail_fallback above.)
             } else if n.contains("5V")
                 && (n.starts_with('+')
                     || n.contains("VCC")
@@ -3118,8 +3128,41 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
     }
 }
 
+/// "+15V", "+24V_RAIL", "+15V0", "+9V", or a bare "15V" -> the positive rail
+/// voltage. The mirror of [`negative_rail_fallback`]: an OPTIONAL leading '+',
+/// then a numeric magnitude in plain ("15V") or KiCad digit-V-digit ("5V0",
+/// "3V3") form. A name that does not start with a digit after the optional '+'
+/// (e.g. "VDD_5V", "VCC") returns None and is left to the token heuristic.
+/// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
+fn positive_rail_fallback(n: &str) -> Option<f64> {
+    let rest = n.strip_prefix('+').unwrap_or(n);
+    let int_part: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if int_part.is_empty() {
+        return None;
+    }
+    let after = &rest[int_part.len()..];
+    if !after.starts_with('V') {
+        return None;
+    }
+    let frac: String = after[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let magnitude: f64 = if frac.is_empty() {
+        int_part.parse().ok()?
+    } else {
+        format!("{}.{}", int_part.trim_end_matches('.'), frac)
+            .parse()
+            .ok()?
+    };
+    (magnitude > 0.0 && magnitude.is_finite()).then_some(magnitude)
+}
+
 /// "-5V", "-12V_RAIL", "-5V0", "-3V3_ANALOG" -> the negative rail voltage.
-/// Mirrors the '+'-prefixed positive fallback: a leading '-', then a numeric
+/// The mirror of [`positive_rail_fallback`]: a leading '-', then a numeric
 /// magnitude in plain ("12V") or KiCad digit-V-digit ("3V3", "5V0") form.
 /// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
 fn negative_rail_fallback(n: &str) -> Option<f64> {
@@ -3343,4 +3386,31 @@ mod fmt_tests {
         assert_eq!(fmt_eng(f64::NAN, "Ω"), "0 Ω");
     }
 
+}
+
+#[cfg(test)]
+mod rail_voltage_tests {
+    use super::power_rail_voltage;
+
+    /// Round-8 #1: a positive numeric rail carries its own magnitude. "+15V"
+    /// contains the substring "5V" and starts with '+', so the old loose
+    /// heuristic classified it as a 5 V rail — a +15V op-amp supply solved at
+    /// 5 V. The positive fallback now parses the true magnitude.
+    #[test]
+    fn positive_numeric_rails_keep_their_magnitude() {
+        assert_eq!(power_rail_voltage("+15V"), Some(15.0));
+        assert_eq!(power_rail_voltage("+25V"), Some(25.0));
+        assert_eq!(power_rail_voltage("+15V0"), Some(15.0));
+        assert_eq!(power_rail_voltage("+24V"), Some(24.0));
+        assert_eq!(power_rail_voltage("+9V"), Some(9.0));
+        assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
+        // The genuine 5 V rails still resolve to 5.
+        assert_eq!(power_rail_voltage("+5V"), Some(5.0));
+        assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
+        assert_eq!(power_rail_voltage("VCC_5V"), Some(5.0));
+        // Symmetry with the negative side.
+        assert_eq!(power_rail_voltage("-15V"), Some(-15.0));
+        // A voltage-less VDD token carries no magnitude of its own.
+        assert_eq!(power_rail_voltage("+15V"), Some(15.0));
+    }
 }

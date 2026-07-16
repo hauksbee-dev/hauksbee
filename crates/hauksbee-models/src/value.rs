@@ -507,6 +507,31 @@ mod tests {
     }
 
     #[test]
+    fn test_sampled_value_debug_format_round_trips_past_size_codes() {
+        // Round-8 #8: a nominal like 1210 Ω formatted with `{}` becomes "1210",
+        // which the parser reads as a 4-digit imperial footprint SIZE CODE and
+        // rejects — so `apply_sampled_values` must serialize with `{:?}`, which
+        // always emits a decimal point. Verify both halves of that reasoning.
+        for si in [1210.0_f64, 1206.0, 2512.0, 2010.0, 1812.0] {
+            let plain = format!("{si}");
+            let dbg = format!("{si:?}");
+            // `{}` collides with a size code → the parser rejects it.
+            assert!(
+                parse_value(&plain).is_none(),
+                "format!(\"{{}}\", {si}) = {plain:?} is read as a size code (that was the bug)"
+            );
+            // `{:?}` carries a decimal point → parses back to the same value.
+            let parsed = parse_value(&dbg)
+                .unwrap_or_else(|| panic!("parse_value({dbg:?}) should round-trip"));
+            assert!(
+                (parsed.si - si).abs() < 1e-6,
+                "{{:?}} round-trips: {dbg:?} -> {} (want {si})",
+                parsed.si
+            );
+        }
+    }
+
+    #[test]
     fn test_european_decimal_comma_vs_thousands() {
         // A single comma with a 3-digit group is a thousands separator ONLY for
         // a grouped integer ("4,700" = 4700). A leading-zero integer part, or a
