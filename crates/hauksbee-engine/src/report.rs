@@ -88,10 +88,16 @@ impl BindReport {
         self.non_ignored().count()
     }
 
-    /// Count of non-ignored components that resolved better than Unresolved.
+    /// Count of non-ignored components that actually resolved to a device.
+    ///
+    /// Keyed on the bind OUTCOME, not the model-match confidence: a part whose
+    /// model matched (confidence Exact/High) but was then left `Unresolved`
+    /// (e.g. an open diode whose pins are not both connected) is NOT resolved —
+    /// counting it as such overstated device coverage and made the "N of M
+    /// resolved" headline disagree with the open parts listed below it.
     pub fn resolved_count(&self) -> usize {
         self.non_ignored()
-            .filter(|r| r.confidence != Confidence::Unresolved)
+            .filter(|r| r.outcome.is_resolved())
             .count()
     }
 
@@ -264,5 +270,46 @@ fn truncate(s: &str, max: usize) -> String {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod resolved_count_tests {
+    use super::*;
+    use hauksbee_models::Confidence;
+
+    fn row(reference: &str, confidence: Confidence, outcome: BindOutcome) -> BindRow {
+        BindRow {
+            reference: reference.to_string(),
+            value: String::new(),
+            model_id: None,
+            confidence,
+            outcome,
+            warning: None,
+            guesses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolved_count_keys_on_outcome_not_model_confidence() {
+        // R24: a part whose model MATCHED (confidence Exact) but was then left
+        // Unresolved (e.g. an open diode) must NOT be counted resolved — the
+        // headline "N of M resolved" otherwise overstated coverage and disagreed
+        // with the open part listed below it.
+        let mut report = BindReport::default();
+        report.push(row("D1", Confidence::Exact, BindOutcome::Analog { device: "diode".into() }));
+        report.push(row(
+            "D2",
+            Confidence::Exact, // model matched...
+            BindOutcome::Unresolved { reason: "left open".into() }, // ...but left open
+        ));
+        report.push(row("H1", Confidence::Unresolved, BindOutcome::Skipped { reason: "hole".into() }));
+
+        assert_eq!(report.non_ignored_count(), 2, "the skipped mounting hole is ignored");
+        assert_eq!(
+            report.resolved_count(),
+            1,
+            "only the genuinely-stamped D1 counts; the open D2 does not despite its Exact match"
+        );
     }
 }

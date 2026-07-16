@@ -861,8 +861,10 @@ fn parse_ohms(v: &str) -> Option<f64> {
         .trim_end_matches('Ω')
         .trim_end_matches("OHM")
         .trim_end_matches('R');
+    // SPICE-style MEG/GIG multipliers must be matched before the single-letter
+    // K/M/R scan, or "10MEG" lands on the 'M' and misparses to None.
     // Handle "4K7" style (R/K/M as decimal point).
-    for (suffix, mult) in [("K", 1e3), ("M", 1e6), ("R", 1.0)] {
+    for (suffix, mult) in [("MEG", 1e6), ("GIG", 1e9), ("K", 1e3), ("M", 1e6), ("R", 1.0)] {
         if let Some(idx) = s.find(suffix) {
             let (a, b) = s.split_at(idx);
             let b = &b[suffix.len()..];
@@ -1152,6 +1154,17 @@ mod parse_ohms_tests {
         assert_eq!(parse_ohms("0R"), Some(0.0));
         assert_eq!(parse_ohms("4K7"), Some(4700.0));
         assert_eq!(parse_ohms("330"), Some(330.0));
+    }
+
+    #[test]
+    fn spice_meg_multiplier_parses() {
+        // R24: "10MEG" landed on the single 'M' and misparsed to None, dropping
+        // a 10 MΩ resistor from the pull-up / LED-current analyses. MEG/GIG must
+        // be matched before the single-letter scan.
+        assert_eq!(parse_ohms("10MEG"), Some(1e7));
+        assert_eq!(parse_ohms("2GIG"), Some(2e9));
+        // 4M7 single-letter decimal notation is still 4.7 MΩ.
+        assert_eq!(parse_ohms("4M7"), Some(4.7e6));
     }
 }
 
