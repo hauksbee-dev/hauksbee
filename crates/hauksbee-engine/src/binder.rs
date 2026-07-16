@@ -3156,7 +3156,19 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
                     || n.contains("VDD"))
             {
                 Some(5.0)
-            } else if n.contains("3V3") || n.contains("3.3V") {
+            // Same gate for the 3.3 V substring fallback: a bare domain-suffixed
+            // SIGNAL net (an open-drain data line "SDA_3V3", a monitor "SENSE_3V3_MON",
+            // an interrupt "IRQ_3.3V") is NOT a rail and must stay unresolved, or
+            // Pass 3 stamps an ideal 3.3 V supply onto it and pins the line high.
+            // Genuine rails still resolve: exact names hit the match arm above,
+            // token-prefixed forms (VDD_3V3) via embedded_rail_magnitude, numeric
+            // forms (+3V3_ANALOG) via positive_rail_fallback.
+            } else if (n.contains("3V3") || n.contains("3.3V"))
+                && (n.starts_with('+')
+                    || n.contains("VCC")
+                    || n.contains("VBUS")
+                    || n.contains("VDD"))
+            {
                 Some(3.3)
             } else {
                 None
@@ -3588,6 +3600,28 @@ mod rail_voltage_tests {
         assert_eq!(power_rail_voltage("VDD_13V3"), Some(13.3));
         // The genuine token-prefixed 5 V / 3.3 V rails still resolve correctly.
         assert_eq!(power_rail_voltage("VCC_5V"), Some(5.0));
+        assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
+        assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
+    }
+
+    /// R16: a bare domain-suffixed SIGNAL net that merely contains "3V3"/"3.3V"
+    /// (an open-drain I2C line "SDA_3V3", a monitor "SENSE_3V3_MON", an interrupt
+    /// "IRQ_3.3V") is not a rail and must stay unresolved — else Pass 3 stamps an
+    /// ideal 3.3 V supply onto it and pins the line high, fabricating bus data.
+    /// The 3V3 fallback is now gated on a supply token, matching the 5V branch.
+    #[test]
+    fn domain_suffixed_signal_nets_are_not_read_as_3v3_rails() {
+        assert_eq!(power_rail_voltage("SDA_3V3"), None);
+        assert_eq!(power_rail_voltage("SCL_3V3"), None);
+        assert_eq!(power_rail_voltage("SENSE_3V3_MON"), None);
+        assert_eq!(power_rail_voltage("IRQ_3.3V"), None);
+        assert_eq!(power_rail_voltage("TXD_3V3"), None);
+        // The 5 V sibling was already gated; confirm the symmetry holds.
+        assert_eq!(power_rail_voltage("SDA_5V"), None);
+        // Genuine 3.3 V rails in every accepted form still resolve.
+        assert_eq!(power_rail_voltage("3V3"), Some(3.3));
+        assert_eq!(power_rail_voltage("+3V3"), Some(3.3));
+        assert_eq!(power_rail_voltage("+3V3_ANALOG"), Some(3.3));
         assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
         assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
     }
