@@ -1155,6 +1155,18 @@ impl Assertion {
                             .into(),
                     ));
                 }
+                // The converse: a `recover_to` (recovery intent) is only evaluated
+                // by check_rail_window when `recover_within_ms` is also present
+                // (its match binds all three). Without it the recovery check is a
+                // silent no-op — accepted only because a `min`/`max` also happens
+                // to be set — so the author's recovery constraint never runs. Fail
+                // loud instead of passing a spec whose recovery clause does nothing.
+                if self.recover_to.is_some() && self.recover_within_ms.is_none() {
+                    return Err(SpecError::Invalid(
+                        "rail_window `recover_to` needs `recover_within_ms` (and `dip_below`) or it is never evaluated"
+                            .into(),
+                    ));
+                }
             }
             "protection_trip" => {
                 if self.supply_net.is_none() {
@@ -1560,5 +1572,55 @@ after_ms = nan
             matches!(&err, SpecError::Invalid(m) if m.contains("after_ms")),
             "expected an after_ms validation error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn rail_window_recover_to_without_recover_within_ms_is_rejected() {
+        // R35: check_rail_window only evaluates a recovery when all three of
+        // dip_below/recover_to/recover_within_ms are present. A spec that sets a
+        // recovery intent (dip_below + recover_to) but omits recover_within_ms
+        // used to be ACCEPTED whenever a min/max was also present — the recovery
+        // clause then silently never ran (a false GREEN on the recovery
+        // dimension). Validation must now reject the incomplete recovery spec.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+min = 3.0
+dip_below = 3.1
+recover_to = 3.3
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a recover_to with no recover_within_ms must fail, not silently no-op");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("recover_to") && m.contains("recover_within_ms")),
+            "expected a recover_to/recover_within_ms validation error, got {err:?}"
+        );
+
+        // The complete recovery spec still validates.
+        let ok = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+dip_below = 3.1
+recover_to = 3.3
+recover_within_ms = 5.0
+"#,
+        );
+        assert!(ok.validate().is_ok(), "a complete recovery spec must pass");
     }
 }
