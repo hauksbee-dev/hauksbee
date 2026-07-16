@@ -1015,8 +1015,14 @@ fn run_one(
 
             // Scenario rail windows: for each scenario window active at this time,
             // record the referenced rails' voltages into the window timeseries.
+            // Bounded [start_s, end_s): scenarios are sequential phases, so a
+            // rail_window scoped to an earlier scenario must stop sampling when the
+            // next scenario begins — otherwise a later phase's excursion bleeds
+            // into this window's min/max/dip/recovery aggregates and produces a
+            // false verdict (the same later-scenario bleed r28 fixed for
+            // protection_trip). The run-wide window keeps end_s = +∞.
             for sw in &scenario_windows {
-                if frame.t + 1e-12 >= sw.start_s {
+                if time_in_window(frame.t, sw.start_s, sw.end_s) {
                     for net in &sw.nets {
                         if let Some(&v) = frame.net_voltages.get(net) {
                             rail_windows
@@ -1146,11 +1152,18 @@ fn run_one(
 /// start belongs to that later scenario, not this one. `end_s == +∞` means the
 /// window runs to end-of-run (the last scenario and the run-wide window).
 fn trip_in_window(trip_t: Option<f64>, start_s: f64, end_s: f64) -> bool {
-    // Lenient at the start (a trip essentially at the scenario's onset counts),
-    // strict at the end (a trip at or after the next scenario's start belongs to
-    // THAT later phase, which picks it up via its own lenient start). `end_s` of
-    // +∞ leaves the upper test always true.
-    trip_t.is_some_and(|t| t + 1e-12 >= start_s && t < end_s - 1e-12)
+    trip_t.is_some_and(|t| time_in_window(t, start_s, end_s))
+}
+
+/// Whether time `t` falls in a scenario's half-open window `[start_s, end_s)`.
+/// Lenient at the start (a sample essentially at the scenario's onset counts),
+/// strict at the end (a sample at or after the next scenario's start belongs to
+/// THAT later phase, which picks it up via its own lenient start). `end_s == +∞`
+/// (the last scenario and the run-wide window) leaves the upper test always true.
+/// Shared by protection-trip scoping and rail-window sampling so both agree on
+/// exactly which phase owns a given instant.
+fn time_in_window(t: f64, start_s: f64, end_s: f64) -> bool {
+    t + 1e-12 >= start_s && t < end_s - 1e-12
 }
 
 /// Does `[start_s, end_s)` overlap any failed-analog window in `windows`? Used to
@@ -2088,6 +2101,23 @@ mod tests {
         assert!(trip_in_window(Some(0.1), 0.1, f64::INFINITY));
         // No trip at all is never in any window.
         assert!(!trip_in_window(None, 0.0, f64::INFINITY));
+    }
+
+    #[test]
+    fn rail_window_sampling_stops_at_the_next_scenario_start() {
+        // Round-29: rail_window sampling admitted frames with only the lower bound,
+        // so a scenario-scoped window kept collecting min/max/dip/recovery to
+        // end-of-run and a LATER phase's excursion bled into the earlier verdict.
+        // With inrush=[0, 0.05) and steady=[0.05, +inf): a steady-phase sample at
+        // 0.06 s must be sampled by steady, NOT by inrush.
+        assert!(time_in_window(0.02, 0.0, 0.05), "inrush samples its own phase");
+        assert!(!time_in_window(0.06, 0.0, 0.05), "steady-phase sample excluded from inrush");
+        assert!(time_in_window(0.06, 0.05, f64::INFINITY), "steady samples its own phase");
+        // The boundary sample belongs to the later phase (half-open).
+        assert!(!time_in_window(0.05, 0.0, 0.05));
+        assert!(time_in_window(0.05, 0.05, f64::INFINITY));
+        // The run-wide window (end +inf) spans everything.
+        assert!(time_in_window(9.9, 0.0, f64::INFINITY));
     }
 
     #[test]

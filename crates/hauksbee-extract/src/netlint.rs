@@ -1016,12 +1016,20 @@ fn resolves_contention(kind: &str) -> bool {
 /// wired-OR, not contention. Excluded by name so the check stays at zero false
 /// positives.
 fn is_wired_or_name(name: &str) -> bool {
-    let n = norm(name);
-    [
+    const KEYS: [&str; 11] = [
         "IRQ", "INT", "ALERT", "RDY", "READY", "BUSY", "NMI", "PG", "PGOOD", "FAULT", "NFLT",
-    ]
-    .iter()
-    .any(|k| n.contains(k))
+    ];
+    // Whole-WORD match: split on non-alphanumerics and compare each token, not the
+    // raw string. A bare `contains("INT")` fired inside SETPOINT / PRINT / MIDPOINT
+    // (and `contains("PG")` mid-word), silently suppressing the output-contention
+    // check on unrelated push-pull signal nets. Each token is compared as-is (so
+    // NMI/NFLT/PGOOD/PG match) and with an active-low leading 'N' stripped
+    // (NINT/NIRQ) and a trailing digit index stripped (IRQ2, INT_0 -> INT).
+    let n = norm(name);
+    n.split(|c: char| !c.is_ascii_alphanumeric()).any(|tok| {
+        let base = tok.trim_end_matches(|c: char| c.is_ascii_digit());
+        KEYS.contains(&base) || base.strip_prefix('N').is_some_and(|s| KEYS.contains(&s))
+    })
 }
 
 fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
@@ -1162,6 +1170,29 @@ mod parse_ohms_tests {
         assert_eq!(parse_ohms("2m2"), Some(0.0022));
         // R25 (DRIFT-4): inline tolerance annotations are tolerated.
         assert_eq!(parse_ohms("10k 1%"), Some(10_000.0));
+    }
+}
+
+#[cfg(test)]
+mod wired_or_tests {
+    use super::is_wired_or_name;
+
+    #[test]
+    fn wired_or_names_match_whole_words_not_substrings() {
+        // Round-29: substring matching suppressed the output-contention ERC on any
+        // net whose name merely CONTAINED "INT"/"PG"/etc. Genuine open-drain lines
+        // must still be recognised; unrelated push-pull signal nets must not be.
+        // Recognised (whole-word, incl. active-low N-prefix and digit index):
+        for name in ["IRQ", "EDP_IRQ", "SENSOR_INT", "INT1", "NINT", "NIRQ", "PG", "PGOOD",
+                     "PG_3V3", "ALERT_N", "NMI", "NFLT", "CPU_RDY", "BUSY0"] {
+            assert!(is_wired_or_name(name), "{name} is a wired-OR/open-drain line");
+        }
+        // NOT recognised — "INT"/"PG" only appear mid-word, so these push-pull
+        // signal nets must stay in the contention check:
+        for name in ["SETPOINT_DAC", "PRINT_HEAD", "MIDPOINT", "INTERNAL_CLK",
+                     "SPGND_SENSE", "SPRING_A"] {
+            assert!(!is_wired_or_name(name), "{name} must not be treated as wired-OR");
+        }
     }
 }
 
