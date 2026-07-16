@@ -173,8 +173,9 @@ impl RailWindow {
         total
     }
 
-    /// Recovery time (s): from the first sample below `threshold` to the last
-    /// time the rail crossed back above `recover_to` and stayed there. Returns 0
+    /// Recovery time (s): from the first sample below `threshold` to the moment
+    /// the rail returned to `recover_to` and stayed there — the FIRST sample at or
+    /// above `recover_to` past which no later sample drops back below it. Returns 0
     /// if the rail never dipped, and `+∞` if it dipped but never climbed back to
     /// `recover_to` (so a `recover_within_ms` assertion FAILS loud rather than
     /// passing on the small `window_end − t_dip` value a late dip produced).
@@ -196,14 +197,27 @@ impl RailWindow {
                 return f64::INFINITY;
             }
         }
-        // The last time the rail was still below recover_to.
+        // The last time the rail was still below recover_to (after the dip).
         let last_below = self
             .samples
             .iter()
             .filter(|(t, v)| *t >= t_dip && *v < recover_to)
             .map(|(t, _)| *t)
             .fold(t_dip, f64::max);
-        (last_below - t_dip).max(0.0)
+        // The rail does not actually REACH recover_to until the first sample after
+        // last_below: every sample past last_below is at or above recover_to by
+        // definition, so that sample is the moment it returned and stayed.
+        // Returning `last_below` itself reported recovery a full frame early — a
+        // silent false pass of `recover_within_ms` for a rail that only crosses
+        // back on the following frame. The +∞ guard above already ensured the
+        // final sample is ≥ recover_to, so such a sample always exists.
+        let recover_at = self
+            .samples
+            .iter()
+            .filter(|(t, v)| *t > last_below && *v >= recover_to)
+            .map(|(t, _)| *t)
+            .fold(f64::INFINITY, f64::min);
+        (recover_at - t_dip).max(0.0)
     }
 }
 
@@ -238,9 +252,10 @@ mod tests {
         // Below 3.0 V: samples at t=2,3,4 ms each cover a 1 ms forward interval.
         let dip = w.dip_duration_s(3.0);
         assert!((dip - 0.003).abs() < 1e-9, "dip duration {dip}");
-        // Recovery: first dip at 2 ms, last below 3.2 at 4 ms => 2 ms recovery.
+        // Recovery: first dip at 2 ms; the rail is still below 3.2 at 4 ms and
+        // only reaches 3.3 (>= recover_to) at 5 ms => 3 ms to actually recover.
         let rec = w.recovery_s(3.0, 3.2);
-        assert!((rec - 0.002).abs() < 1e-9, "recovery {rec}");
+        assert!((rec - 0.003).abs() < 1e-9, "recovery {rec}");
     }
 
     #[test]
@@ -269,7 +284,28 @@ mod tests {
             good.observe(t, v);
         }
         let rec_ok = good.recovery_s(3.0, 3.2);
-        assert!(rec_ok.is_finite() && (rec_ok - 0.002).abs() < 1e-9, "genuine recovery {rec_ok}");
+        // Dip at 2 ms, still below 3.2 at 4 ms, reaches 3.3 at 6 ms => 4 ms recovery.
+        assert!(rec_ok.is_finite() && (rec_ok - 0.004).abs() < 1e-9, "genuine recovery {rec_ok}");
+    }
+
+    #[test]
+    fn recovery_measures_to_the_recovery_instant_not_the_last_sub_recover_sample() {
+        // Round-27: recovery_s returned `last_below - t_dip`, one full frame short,
+        // because last_below is the LAST sample still BELOW recover_to — the rail
+        // does not actually reach recover_to until the next sample. That under-
+        // report is the false-pass direction for recover_within_ms. Here the rail
+        // dips at 0 ms, sits below 3.2 through 4 ms, and reaches 3.3 at 6 ms: the
+        // true recovery time is 6 ms, and a 5 ms bound must FAIL, not pass.
+        let mut w = RailWindow::new();
+        for (t, v) in [(0.000, 2.80), (0.002, 2.80), (0.004, 2.80), (0.006, 3.30)] {
+            w.observe(t, v);
+        }
+        let rec = w.recovery_s(3.0, 3.2);
+        assert!(
+            (rec - 0.006).abs() < 1e-9,
+            "recovery is the instant recover_to is reached (6 ms), got {rec}"
+        );
+        assert!(rec > 0.005, "a 5 ms recover_within_ms bound must FAIL, not false-pass");
     }
 
     #[test]

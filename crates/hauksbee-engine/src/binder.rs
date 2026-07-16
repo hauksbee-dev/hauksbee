@@ -3065,7 +3065,7 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 /// with no port pin and return `None`, so they stay pure ADC probes. Handles
 /// both the Nano module role ("a2", "a3_...") and the bare role carrying an
 /// adc index ("pc2_adc2").
-fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
+pub(crate) fn apin_gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     let r = role.to_ascii_lowercase();
     if module {
         let rest = r.strip_prefix('a')?;
@@ -3294,6 +3294,16 @@ fn positive_rail_fallback(n: &str) -> Option<f64> {
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
+    // A voltage-PREFIXED net whose suffix is a monitor/feedback/sense token
+    // ("12V_FB", "5V_MON", "3V3_SENSE") is a divided TAP of the rail, not the rail
+    // itself: it physically sits below the nominal (near Vref / a divider ratio).
+    // The voltage-SUFFIXED sibling ("SENSE_3V3_MON") is already gated out of the
+    // substring fallback; without this gate the prefix form slipped through here
+    // and Pass 3 pinned the sense node to the full rail with an ideal supply,
+    // shorting the divider and masking the very under/over-voltage it monitors.
+    if is_rail_monitor_suffix(&after[1 + frac.len()..]) {
+        return None;
+    }
     let magnitude: f64 = if frac.is_empty() {
         int_part.parse().ok()?
     } else {
@@ -3302,6 +3312,25 @@ fn positive_rail_fallback(n: &str) -> Option<f64> {
             .ok()?
     };
     (magnitude > 0.0 && magnitude.is_finite()).then_some(magnitude)
+}
+
+/// True when the text right after a rail's voltage token is a monitor / feedback
+/// / sense SUFFIX — i.e. the net is a divided TAP of the rail (it sits below the
+/// rail voltage, at Vref or a divider fraction), NOT the rail itself. Pinning
+/// such a net to the full nominal with an ideal supply defeats the divider and
+/// masks the under/over-voltage the sense line exists to reveal. Rail-DOMAIN
+/// suffixes (ANALOG, USB, CORE, RAIL, DIG, IO, …) are NOT taps and still resolve.
+/// `tail` is the remainder after the voltage token (e.g. "_FB", "_MON", "_USB").
+fn is_rail_monitor_suffix(tail: &str) -> bool {
+    let first: String = tail
+        .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    matches!(
+        first.as_str(),
+        "FB" | "FEEDBACK" | "SENSE" | "SNS" | "MON" | "MONITOR" | "DIV" | "TAP" | "MEAS"
+    )
 }
 
 /// "-5V", "-12V_RAIL", "-5V0", "-3V3_ANALOG" -> the negative rail voltage.
@@ -3326,6 +3355,11 @@ fn negative_rail_fallback(n: &str) -> Option<f64> {
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
+    // Same tap-suffix gate as the positive side: "-12V_MON" / "-5V_SENSE" is a
+    // monitor of the negative rail, not the rail node itself.
+    if is_rail_monitor_suffix(&after[1 + frac.len()..]) {
+        return None;
+    }
     let magnitude: f64 = if frac.is_empty() {
         int_part.parse().ok()?
     } else {
@@ -3740,6 +3774,34 @@ mod rail_voltage_tests {
         assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
         assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
     }
+
+    /// Round-27: the voltage-PREFIXED mirror of the suffix-signal case. A monitor
+    /// / feedback / sense TAP named after the rail it watches ("12V_FB",
+    /// "3V3_SENSE", "5V_MON") physically sits BELOW the rail voltage, yet
+    /// positive_rail_fallback resolved it as a full ideal rail — Pass 3 then pinned
+    /// the divider tap to the nominal, shorting the divider and masking the
+    /// under/over-voltage the sense line exists to reveal. Such names must stay
+    /// unresolved; rail-DOMAIN names must keep resolving.
+    #[test]
+    fn voltage_prefixed_monitor_taps_are_not_read_as_rails() {
+        assert_eq!(power_rail_voltage("12V_FB"), None);
+        assert_eq!(power_rail_voltage("3V3_SENSE"), None);
+        assert_eq!(power_rail_voltage("5V_MON"), None);
+        assert_eq!(power_rail_voltage("12V_MON"), None);
+        assert_eq!(power_rail_voltage("5V_FEEDBACK"), None);
+        assert_eq!(power_rail_voltage("12V_DIV"), None);
+        // The negative mirror is gated too.
+        assert_eq!(power_rail_voltage("-12V_MON"), None);
+        assert_eq!(power_rail_voltage("-5V_SENSE"), None);
+        // Genuine rails — including rail-DOMAIN suffixes — still resolve.
+        assert_eq!(power_rail_voltage("12V"), Some(12.0));
+        assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
+        assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
+        assert_eq!(power_rail_voltage("+3V3_ANALOG"), Some(3.3));
+        assert_eq!(power_rail_voltage("+9V"), Some(9.0));
+        assert_eq!(power_rail_voltage("-5V"), Some(-5.0));
+        assert_eq!(power_rail_voltage("-3V3_ANALOG"), Some(-3.3));
+    }
 }
 
 #[cfg(test)]
@@ -3776,7 +3838,35 @@ mod mcu_route_tests {
 
 #[cfg(test)]
 mod gpio_role_tests {
-    use super::{gpio_of_role, role_from_mcu_pinfunction_token};
+    use super::{apin_gpio_of_role, gpio_of_role, role_from_mcu_pinfunction_token};
+
+    #[test]
+    fn module_analog_pins_resolve_only_through_the_apin_fallback() {
+        // Round-27: on a module (Nano) board the analog roles are "a0".."a5", and
+        // gpio_of_role's module branch only understands the 'd' prefix — it returns
+        // None for every 'a' role. bind_mcu recovers the port pin via the apin
+        // fallback, but the three scheduler boot-hazard/boot-state reporters used
+        // gpio_of_role ALONE and silently dropped firmware-driven A-pins. They now
+        // apply the same fallback; this guards the mapping contract they rely on.
+        for role in ["a0", "a2", "a5", "a3_scl"] {
+            assert_eq!(
+                gpio_of_role(role, true),
+                None,
+                "{role}: plain gpio_of_role can't see a module analog pin"
+            );
+        }
+        // The fallback maps A0..A5 to PC0..PC5; A6/A7 stay ADC-only (no port pin).
+        assert_eq!(apin_gpio_of_role("a0", true), Some(('C', 0)));
+        assert_eq!(apin_gpio_of_role("a2", true), Some(('C', 2)));
+        assert_eq!(apin_gpio_of_role("a5", true), Some(('C', 5)));
+        assert_eq!(apin_gpio_of_role("a6", true), None, "A6 is ADC-only");
+        // The combined lookup the reporters now use resolves the A-pin.
+        let combined = |r: &str| gpio_of_role(r, true).or_else(|| apin_gpio_of_role(r, true));
+        assert_eq!(combined("a2"), Some(('C', 2)), "A2 = OE_S resolves for hazard reports");
+        // A digital "d13" role still resolves the ordinary way, unaffected.
+        assert_eq!(combined("d13"), gpio_of_role("d13", true));
+    }
+
 
     /// R11: STM32 GPIO banks run past port E — an F4/F7 in a large package has
     /// PF/PG/PH/PI. Both the pin-role stage (capped at E) and the role→(port,bit)

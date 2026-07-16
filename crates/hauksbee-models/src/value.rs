@@ -331,9 +331,22 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     // through to parse_tail's unit recognition, and lowercase 'f' stays femto.
     let bytes = s.as_bytes();
     let next_is_digit = bytes.get(1).is_some_and(u8::is_ascii_digit);
+    // For 'F' as an RKM decimal point ("4F7" = 4.7 F), make sure the digits after
+    // 'F' are a genuine fractional part and not a voltage rating attached to a
+    // bare-Farad value: "10F2V7" / "10F50V" are a 10 F supercap rated 2.7 V / 50 V,
+    // NOT 10.2 F / 10.50 F. If a 'V' immediately follows the digit run, 'F' was the
+    // Farad UNIT and the tail is a rating — fall through so parse_tail handles it,
+    // matching the prefixed "10uF2V7" path (which never reaches this branch).
+    let f_is_rkm_decimal = bytes[0] == b'F' && next_is_digit && {
+        let mut j = 1;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        !matches!(bytes.get(j), Some(b'V') | Some(b'v'))
+    };
     match bytes[0] {
         b'H' | b'h' if next_is_digit => return (1.0, Some("H"), &s[1..]),
-        b'F' if next_is_digit => return (1.0, Some("F"), &s[1..]),
+        b'F' if f_is_rkm_decimal => return (1.0, Some("F"), &s[1..]),
         _ => {}
     }
     match s.as_bytes()[0] {
@@ -528,6 +541,23 @@ mod tests {
         // Prefix multipliers still win; lowercase 'f' stays femto:
         assert!((parse_value("100nF").unwrap().si - 1e-7).abs() < 1e-20);
         assert!((parse_value("4f7").unwrap().si - 4.7e-15).abs() < 1e-30);
+    }
+
+    #[test]
+    fn bare_farad_with_attached_voltage_rating_parses_the_capacitance() {
+        // Round-27: the F-as-RKM-decimal gate fired for ANY digit after 'F', so a
+        // supercap written with an attached rating ("10F2V7" = 10 F / 2.7 V,
+        // "10F50V" = 10 F / 50 V) mis-parsed the rating as a fractional Farad and
+        // the pure-voltage filter then dropped the whole thing to None. The
+        // capacitance must survive, matching the prefixed "10uF2V7" path.
+        let p = parse_value("10F2V7").expect("10F2V7 is a 10 F supercap");
+        assert!((p.si - 10.0).abs() < 1e-9, "si is 10 F, got {}", p.si);
+        assert_eq!(p.unit.as_deref(), Some("F"));
+        let p = parse_value("10F50V").expect("10F50V is a 10 F cap");
+        assert!((p.si - 10.0).abs() < 1e-9, "si is 10 F, got {}", p.si);
+        // The genuine RKM decimal is untouched: a digit run with no trailing 'V'.
+        check("4F7", 4.7);
+        check("10F", 10.0);
     }
 
     #[test]
