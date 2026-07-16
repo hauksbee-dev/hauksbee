@@ -722,18 +722,26 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
 
 /// Parse `P2.54mm` / `P1.27mm` pitch (mm) from a footprint name.
 fn pitch_hint(p: &str) -> Option<f64> {
-    let idx = p.find('p')?;
-    let tail = &p[idx + 1..];
-    let num: String = tail
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    let v: f64 = num.parse().ok()?;
-    if (0.3..=10.0).contains(&v) {
-        Some(v)
-    } else {
-        None
+    // Match the pitch token `p<number>mm`, i.e. a 'p' IMMEDIATELY followed by a
+    // digit — not merely the first 'p' in the name. `pinheader_2x18_p2.54mm` has
+    // its first 'p' in "pinheader"; keying on that read no digits and fell back
+    // to the 2.54 mm default, so any non-2.54 header (P1.27mm, P5.08mm, ...) was
+    // silently mis-pitched. The caller already lowercased `p`.
+    let chars: Vec<char> = p.chars().collect();
+    for i in 0..chars.len() {
+        if chars[i] == 'p' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            let num: String = chars[i + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit() || **c == '.')
+                .collect();
+            if let Ok(v) = num.parse::<f64>() {
+                if (0.3..=10.0).contains(&v) {
+                    return Some(v);
+                }
+            }
+        }
     }
+    None
 }
 
 /// Pull an `NxM`-millimetre hint out of a footprint name (e.g.
@@ -774,6 +782,19 @@ mod tests {
             shape: Shape::Capsule(Capsule { ax, ay, bx, by, r }),
             kind,
         }
+    }
+
+    #[test]
+    fn pitch_hint_keys_on_the_p_before_a_digit() {
+        // Round-26: the pitch token is a 'p' IMMEDIATELY followed by a digit.
+        // Keying on the FIRST 'p' matched the 'p' in "pinheader", read no digits,
+        // and silently mis-pitched every non-2.54 header. The header's real pitch
+        // must be recovered regardless of leading p-words in the name.
+        assert_eq!(pitch_hint("pinheader_2x20_p1.27mm"), Some(1.27));
+        assert_eq!(pitch_hint("pinheader_1x40_p2.54mm"), Some(2.54));
+        assert_eq!(pitch_hint("connector_pin_socket_p5.08mm"), Some(5.08));
+        // No pitch token at all → no hint (caller applies its own default).
+        assert_eq!(pitch_hint("pinheader_generic"), None);
     }
 
     #[test]
