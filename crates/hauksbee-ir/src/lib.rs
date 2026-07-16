@@ -289,7 +289,14 @@ pub enum Device {
         roff: f64,
     },
     /// Behavioral op-amp: `out = clamp(reference + gain * (inp - inn), rails)`.
-    /// `pole_hz`, when present, applies a single AC pole to the gain path.
+    /// `pole_hz`, when present, applies a single pole to the gain path — in
+    /// `.ac` as the complex `gain / (1 + j·w/wp)`, in transient as a
+    /// first-order lag of the driven output toward the clipped ideal target
+    /// (time constant `1/(2π·pole_hz)`). `slew`, when present, additionally
+    /// rate-limits the transient output in V/µs (the datasheet unit); it has
+    /// no small-signal (`.ac`) effect, matching physics — slew is a
+    /// large-signal limit. `None`/`0`/non-finite in either field degrades to
+    /// the ideal instantaneous behavior for that mechanism.
     OpAmp {
         name: String,
         out: NodeId,
@@ -298,6 +305,9 @@ pub enum Device {
         reference: Option<NodeId>,
         gain: f64,
         pole_hz: Option<f64>,
+        /// Output slew-rate limit in V/µs; `None`/`0` = unlimited.
+        #[serde(default)]
+        slew: Option<f64>,
         rail_lo: f64,
         rail_hi: f64,
     },
@@ -968,6 +978,7 @@ impl Device {
                 reference: Some(n[3]),
                 gain: 1e5,
                 pole_hz: Some(1e6),
+                slew: None,
                 rail_lo: -5.0,
                 rail_hi: 5.0,
             },
