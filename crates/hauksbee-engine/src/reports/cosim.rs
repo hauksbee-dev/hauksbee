@@ -189,6 +189,21 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     prev[m]
 }
 
+/// Build the probe-CSV header row (`time_s` then one column per probed net).
+///
+/// Each net name is RFC-4180 escaped: a name carrying a comma/quote/newline
+/// would otherwise split the header and misalign every data column against its
+/// heading. The trailing newline is included.
+fn probe_csv_header(probes: &[String]) -> String {
+    let mut csv = String::from("time_s");
+    for net in probes {
+        csv.push(',');
+        csv.push_str(&crate::commands::sim::csv_escape(net));
+    }
+    csv.push('\n');
+    csv
+}
+
 pub fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
@@ -355,12 +370,7 @@ pub fn run_headless(
     // Write the probe CSV: header `time_s` then one column per probed net, one
     // row per chunk. Done after the run so a slow board still streams its summary.
     if let Some(path) = probe_csv {
-        let mut csv = String::from("time_s");
-        for net in probes {
-            csv.push(',');
-            csv.push_str(net);
-        }
-        csv.push('\n');
+        let mut csv = probe_csv_header(probes);
         for (t, volts) in &probe_rows {
             csv.push_str(&format!("{t:.6}"));
             for v in volts {
@@ -376,4 +386,23 @@ pub fn run_headless(
     }
 
     Ok(faults)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe_csv_header;
+
+    #[test]
+    fn probe_csv_header_escapes_net_names_with_commas() {
+        // Round-26: the probe-CSV header interpolated raw net names. A net named
+        // e.g. `V(out,ref)` carries a comma that splits the header into an extra
+        // column, so every data value lands under the wrong heading. RFC-4180
+        // quoting keeps one column per probe.
+        let header = probe_csv_header(&["CLK".to_string(), "V(out,ref)".to_string()]);
+        assert_eq!(header, "time_s,CLK,\"V(out,ref)\"\n");
+        // A plain net name is left untouched (no needless quoting).
+        assert_eq!(probe_csv_header(&["GND".to_string()]), "time_s,GND\n");
+        // No probes → just the time column.
+        assert_eq!(probe_csv_header(&[]), "time_s\n");
+    }
 }
