@@ -259,3 +259,144 @@ fn healthy_board_no_overtemp() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R6 #F10: multi-unit packages pool simultaneous dissipation for Tj. The dice
+// of a dual BJT share one package (one theta_JA path), so the temperature-
+// driving power is the SUM of the siblings' dissipation. Before the fix each
+// unit's Tj was computed from its own power alone, and a package whose pooled
+// dissipation was over the limit never faulted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a two-unit "dual" package: 1 V across two 2 Ω unit devices named
+/// `Q1_q1` / `Q1_q2` (0.5 W each when both load resistors are `load_ohms`;
+/// pass a huge second resistance to idle unit 2). Metas mirror a dual BJT:
+/// per-unit `max_power_w`, shared explicit theta_JA and Tj limit.
+fn dual_package(
+    unit2_ohms: f64,
+) -> (Circuit, Vec<DeviceMeta>) {
+    let mut circuit = Circuit::new();
+    let vp = NodeId(1);
+    circuit.add(Device::Vsource {
+        name: "V1".into(),
+        p: vp,
+        n: NodeId::GROUND,
+        kind: hauksbee_ir::SourceKind::Dc(1.0),
+    });
+    let q1 = circuit.add(Device::Resistor {
+        name: "Q1_q1".into(),
+        a: vp,
+        b: NodeId::GROUND,
+        ohms: 2.0, // 0.5 W
+        tc1: None,
+    });
+    let q2 = circuit.add(Device::Resistor {
+        name: "Q1_q2".into(),
+        a: vp,
+        b: NodeId::GROUND,
+        ohms: unit2_ohms,
+        tc1: None,
+    });
+    let ratings = Ratings {
+        // Per-UNIT rating, as the model DB documents for dual pairs
+        // (bjt.toml: ratings are "per transistor"). 0.6 W: each 0.5 W unit is
+        // individually fine, so Overpower must NOT fire even when the pooled
+        // 1.0 W exceeds it — only Tj pools.
+        max_power_w: Some(0.6),
+        theta_ja_c_per_w: Some(250.0),
+        max_junction_temp_c: Some(200.0),
+        ..Default::default()
+    };
+    let meta = |name: &str, dev| DeviceMeta {
+        reference: name.into(),
+        device: dev,
+        kind: ComponentKind::BjtNpn,
+        footprint: "Package_TO_SOT_SMD:SOT-363_SC-70-6".into(),
+        ratings: ratings.clone(),
+    };
+    let metas = vec![meta("Q1_q1", q1), meta("Q1_q2", q2)];
+    (circuit, metas)
+}
+
+/// Both units dissipating: pooled 1.0 W through the shared 250 C/W package is
+/// Tj = 25 + 250 = 275 C > 200 C — overtemperature MUST fire (each unit alone
+/// reads 150 C, which is how the bug hid). Per-unit Overpower must stay quiet
+/// (0.5 W < 0.6 W per unit), and both unit rows must report the shared Tj.
+#[test]
+fn dual_package_pools_sibling_dissipation_for_tj() {
+    let (mut circuit, metas) = dual_package(2.0);
+    let mut mon = StressMonitor::new(metas);
+    mon.ambient_c = 25.0;
+    let volts = [0.0, 1.0];
+    let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+
+    let mut all = Vec::new();
+    for _ in 0..8 {
+        all.extend(mon.evaluate(&mut circuit, &node_v, &no_branch, 0.0));
+    }
+
+    let overtemp: Vec<_> = all
+        .iter()
+        .filter(|f| f.kind == FaultKind::Overtemperature)
+        .collect();
+    assert!(
+        !overtemp.is_empty(),
+        "pooled 1.0 W in a 250 C/W package (Tj 275 C > 200 C) must fault"
+    );
+    for f in &overtemp {
+        assert!(
+            (f.value - 275.0).abs() < 1e-6,
+            "fault Tj {:.3} should be the pooled 275 C, not a single unit's 150 C",
+            f.value
+        );
+        assert!((f.limit - 200.0).abs() < 1e-9);
+    }
+    // Both junctions genuinely sit over-limit, and CI fault matching names
+    // units: each sibling raises its own (identical) fault.
+    let mut comps: Vec<&str> = overtemp.iter().map(|f| f.component.as_str()).collect();
+    comps.sort();
+    assert_eq!(comps, vec!["Q1_q1", "Q1_q2"]);
+
+    // Per-unit rows both report the shared package temperature.
+    let t1 = mon.temp_by_ref().get("Q1_q1").copied().expect("Q1_q1 Tj");
+    let t2 = mon.temp_by_ref().get("Q1_q2").copied().expect("Q1_q2 Tj");
+    assert!((t1 - 275.0).abs() < 1e-6 && (t2 - 275.0).abs() < 1e-6);
+
+    // max_power_w is per-unit: 0.5 W < 0.6 W each, so pooling must NOT have
+    // leaked into the Overpower check.
+    assert!(
+        all.iter().all(|f| f.kind != FaultKind::Overpower),
+        "per-unit Overpower must not see pooled power, got {all:?}"
+    );
+}
+
+/// One unit dissipating, its sibling idle: the pool is just that unit's own
+/// 0.5 W, Tj = 150 C < 200 C — no fault. Pooling must not inflate a package
+/// whose single active unit is within limits (the false-positive side).
+#[test]
+fn dual_package_single_active_unit_does_not_false_fire() {
+    let (mut circuit, metas) = dual_package(1e12); // unit 2 idle
+    let mut mon = StressMonitor::new(metas);
+    mon.ambient_c = 25.0;
+    let volts = [0.0, 1.0];
+    let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+
+    let mut all = Vec::new();
+    for _ in 0..8 {
+        all.extend(mon.evaluate(&mut circuit, &node_v, &no_branch, 0.0));
+    }
+    assert!(
+        all.is_empty(),
+        "0.5 W pooled (150 C < 200 C) must not fault, got {all:?}"
+    );
+    // The active unit reads the package Tj; the idle sibling shares the same
+    // package and therefore the same reported temperature.
+    let t1 = mon.temp_by_ref().get("Q1_q1").copied().expect("Q1_q1 Tj");
+    let t2 = mon.temp_by_ref().get("Q1_q2").copied().expect("Q1_q2 Tj");
+    assert!(
+        (t1 - 150.0).abs() < 1e-6 && (t2 - 150.0).abs() < 1e-6,
+        "both unit rows report the shared package Tj (got {t1:.3}, {t2:.3})"
+    );
+}
