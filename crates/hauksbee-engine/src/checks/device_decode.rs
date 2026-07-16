@@ -415,37 +415,40 @@ fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintRep
                 // the dial; use it as the nominal max for the Note-1 comparison.
                 let open_mv = divider_mv(*rpu, *rpd);
                 max_band = Some(decode_table2(open_mv));
-            }
 
-            // Flag the selector if it cannot reach the part's top band (20 V):
-            // the headline capability is unreachable. This is the hunt finding,
-            // stated honestly without needing the silk labels.
-            let reaches_20 = reachable.iter().any(|(b, _)| *b == PdVolts::V20);
-            let reaches_15 = reachable.iter().any(|(b, _)| *b == PdVolts::V15);
-            if !reachable.is_empty() && (!reaches_20 || !reaches_15) {
-                let bands: Vec<String> = reachable
-                    .iter()
-                    .map(|(b, why)| format!("{}V [{why}]", b.volts()))
-                    .collect();
-                let mut missing = Vec::new();
-                if !reaches_15 {
-                    missing.push("15V");
+                // Flag a SELECTOR that cannot reach the part's top bands: the
+                // headline capability is unreachable. This only applies to a real
+                // multi-detent selector — a plain fixed divider decodes to exactly
+                // ONE band by construction, so it can NEVER reach both 15 V and
+                // 20 V, and firing the "selector cannot reach" finding on it was
+                // a false positive on every correct fixed-voltage sink.
+                let reaches_20 = reachable.iter().any(|(b, _)| *b == PdVolts::V20);
+                let reaches_15 = reachable.iter().any(|(b, _)| *b == PdVolts::V15);
+                if !reachable.is_empty() && (!reaches_20 || !reaches_15) {
+                    let bands: Vec<String> = reachable
+                        .iter()
+                        .map(|(b, why)| format!("{}V [{why}]", b.volts()))
+                        .collect();
+                    let mut missing = Vec::new();
+                    if !reaches_15 {
+                        missing.push("15V");
+                    }
+                    if !reaches_20 {
+                        missing.push("20V");
+                    }
+                    report.findings.push(LintFinding {
+                        check: LintCheck::DeviceDecode,
+                        severity: Severity::Medium,
+                        message: format!(
+                            "{} VBUS_MAX selector on net '{max_name}' decodes (Table 2) to {{{}}}, but cannot reach {{{}}}: the divider's permanent pull-down plus switched-parallel legs cannot reproduce the datasheet's per-detent codes, so the top setting(s) are unreachable",
+                            u.reference,
+                            bands.join(", "),
+                            missing.join(", "),
+                        ),
+                        refs: vec![u.reference.clone()],
+                        nets: vec![max_name.to_string()],
+                    });
                 }
-                if !reaches_20 {
-                    missing.push("20V");
-                }
-                report.findings.push(LintFinding {
-                    check: LintCheck::DeviceDecode,
-                    severity: Severity::Medium,
-                    message: format!(
-                        "{} VBUS_MAX selector on net '{max_name}' decodes (Table 2) to {{{}}}, but cannot reach {{{}}}: the divider's permanent pull-down plus switched-parallel legs cannot reproduce the datasheet's per-detent codes, so the top setting(s) are unreachable",
-                        u.reference,
-                        bands.join(", "),
-                        missing.join(", "),
-                    ),
-                    refs: vec![u.reference.clone()],
-                    nets: vec![max_name.to_string()],
-                });
             }
         }
     }
@@ -668,6 +671,43 @@ mod tests {
         assert_eq!(med.len(), 1, "exactly one unreachable-top-band finding");
         assert!(med[0].message.contains("VBUS_MAX"));
         assert!(med[0].message.contains("20V"));
+    }
+
+    #[test]
+    fn fixed_voltage_sink_without_a_selector_is_silent() {
+        // R13: a CYPD3177 whose VBUS_MAX is a plain fixed pull-up + pull-down
+        // with NO selector switch decodes to exactly ONE band and can never
+        // reach both 15 V and 20 V by construction. The "selector cannot reach"
+        // reachability gate must NOT fire on it — it applies only to a real
+        // multi-detent selector. (This is the primary/correct EZ-PD BCR use.)
+        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 5 "+3.3V")
+  (net 21 "VBUS_max")
+  (module Package_DFN_QFN:QFN24 (layer F.Cu) (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value CYPD3177-24LQ (at 0 2) (layer F.Fab))
+    (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
+  )
+  (module R (layer F.Cu) (at 110 104)
+    (fp_text reference R11 (at 0 0) (layer F.SilkS))
+    (fp_text value 5k1 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 5 "+3.3V"))
+    (pad 2 smd rect (at 2 0) (net 21 "VBUS_max"))
+  )
+  (module R (layer F.Cu) (at 110 106)
+    (fp_text reference R12 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 21 "VBUS_max"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)"#;
+        assert_eq!(
+            decode_findings(text).of_check(LintCheck::DeviceDecode).count(),
+            0,
+            "a fixed-voltage (no-selector) CYPD3177 must not trip the selector-reachability finding"
+        );
     }
 
     // ── 4b. Clean config: VBUS_MIN low (5V band) and VBUS_MAX able to reach
