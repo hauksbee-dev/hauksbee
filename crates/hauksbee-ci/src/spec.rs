@@ -950,9 +950,15 @@ impl Spec {
         }
         for p in &self.peripherals {
             // Validate explicit net references (ref+pin is checked at attach).
-            for n in [&p.net, &p.to, &p.a, &p.wiper, &p.b, &p.net_a, &p.net_b]
-                .into_iter()
-                .flatten()
+            // cs_net is included: a typo there silently degrades exact SPI
+            // chip-select framing to the chunk-boundary heuristic at runtime
+            // (resolve_cs_pin misses the net map and returns None) with no error,
+            // so it must fail loud at load like every other net reference.
+            for n in [
+                &p.net, &p.to, &p.a, &p.wiper, &p.b, &p.net_a, &p.net_b, &p.cs_net,
+            ]
+            .into_iter()
+            .flatten()
             {
                 out.push((n.clone(), "peripheral"));
             }
@@ -1372,6 +1378,46 @@ net = "VCC"
 min = 3.0
 "#
         )
+    }
+
+    #[test]
+    fn cs_net_is_board_validated_like_every_other_net() {
+        // R32: a peripheral's cs_net was the ONE net reference check_nets never
+        // saw, so a typo ("CS1" vs the board's "SPI_CS1") loaded clean and then
+        // silently degraded exact SPI chip-select framing to the chunk-boundary
+        // heuristic at runtime, mis-decoding multi-byte transactions with no
+        // diagnostic. It must fail loud at load like supply_net / assert nets.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+
+[[peripheral]]
+id = "EE"
+type = "spi_eeprom"
+cs_net = "CS1"
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#,
+        );
+        // cs_net is now among the references check_nets validates.
+        assert!(
+            spec.referenced_nets().iter().any(|(n, _)| n == "CS1"),
+            "cs_net must be a validated net reference"
+        );
+        // A board missing CS1 (but carrying the real SPI_CS1 and VCC) is rejected.
+        let known = vec!["SPI_CS1".to_string(), "VCC".to_string()];
+        assert!(
+            spec.check_nets(&known).is_err(),
+            "a cs_net that is not on the board must fail loud, not silently degrade framing"
+        );
+        // With the correct net present it passes.
+        let known_ok = vec!["CS1".to_string(), "VCC".to_string()];
+        assert!(spec.check_nets(&known_ok).is_ok(), "the correct cs_net validates");
     }
 
     #[test]
