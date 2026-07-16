@@ -995,6 +995,67 @@ fn eval_tree(
     }
 }
 
+/// Append `.0` to every bare integer literal in an arithmetic expression so
+/// `evalexpr` evaluates it with floating-point (not integer) semantics. A SPICE
+/// numeric literal is a real number, but `evalexpr` parses a literal with no
+/// `.`/exponent as an `i64` and then does integer arithmetic — `/` truncates
+/// (`{6/4}` → 1 instead of 1.5) and `+ - *` overflow-error on large products.
+/// Identifiers (which may carry digits, e.g. `r1`) and literals already floating
+/// (`.`/`e`) are left untouched. The B-source canonicalizer applies the same
+/// rewrite; shared here because `.param` values, subckt defaults, `X`-line
+/// overrides and element `{...}` values all reach `build_operator_tree` too.
+fn float_force_literals(expr: &str) -> String {
+    let b: Vec<char> = expr.chars().collect();
+    let mut out = String::with_capacity(expr.len() + 4);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == '_' {
+            // Identifier: copy verbatim, trailing digits included, so `r1` is
+            // not split into `r` and a spuriously-forced `1.0`.
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == '_') {
+                i += 1;
+            }
+            out.extend(&b[start..i]);
+        } else if c.is_ascii_digit() || (c == '.' && i + 1 < b.len() && b[i + 1].is_ascii_digit()) {
+            let start = i;
+            let mut is_float = c == '.';
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i < b.len() && b[i] == '.' {
+                is_float = true;
+                i += 1;
+                while i < b.len() && b[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            if i < b.len() && (b[i] == 'e' || b[i] == 'E') {
+                let mut j = i + 1;
+                if j < b.len() && (b[j] == '+' || b[j] == '-') {
+                    j += 1;
+                }
+                if j < b.len() && b[j].is_ascii_digit() {
+                    is_float = true;
+                    i = j;
+                    while i < b.len() && b[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+            }
+            out.extend(&b[start..i]);
+            if !is_float {
+                out.push_str(".0");
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Evaluate a scalar right-hand side (a `.param` value, a subckt default, an
 /// `X`-line override): an arithmetic expression if `evalexpr` can parse it, else
 /// a bare suffix number. Braces are optional and stripped first.
@@ -1007,7 +1068,7 @@ fn eval_scalar(line: usize, s: &str, raw: &str, env: &ParamEnv) -> Result<f64, S
     if let Some(v) = parse_value_number(inner) {
         return Ok(v);
     }
-    match build_operator_tree::<DefaultNumericTypes>(inner) {
+    match build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner)) {
         Ok(tree) => eval_tree(&tree, env, line, raw),
         Err(_) => Err(SpiceError::BadNumber {
             line,
@@ -1023,8 +1084,8 @@ fn eval_scalar(line: usize, s: &str, raw: &str, env: &ParamEnv) -> Result<f64, S
 /// expression — element values use `{...}` for expressions by convention.
 fn eval_value(line: usize, tok: &str, raw: &str, env: &ParamEnv) -> Result<f64, SpiceError> {
     if let Some(inner) = braced_inner(tok) {
-        let tree =
-            build_operator_tree::<DefaultNumericTypes>(inner).map_err(|e| SpiceError::Syntax {
+        let tree = build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner))
+            .map_err(|e| SpiceError::Syntax {
                 line,
                 msg: format!("malformed expression `{{{inner}}}`: {e}"),
                 text: raw.into(),
@@ -1086,7 +1147,7 @@ fn resolve_params(cards: &[ParamCard], base: &ParamEnv) -> Result<ParamEnv, Spic
                 progressed = true;
                 continue;
             }
-            match build_operator_tree::<DefaultNumericTypes>(inner) {
+            match build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner)) {
                 Ok(tree) => {
                     let deps: Vec<String> = tree
                         .iter_variable_identifiers()
@@ -4260,6 +4321,38 @@ mod tests {
         assert_eq!(ohms_of("R0"), 1e-6, "0 Ω clamps to the 1e-6 short floor");
         assert_eq!(ohms_of("Rneg"), 1e-6, "negative R clamps to the short floor");
         assert_eq!(ohms_of("Rok"), 1e3, "positive R passes through unchanged");
+    }
+
+    /// R14: braced arithmetic outside a B-source must use FLOAT semantics.
+    /// `evalexpr` parses bare integer literals as i64 and does integer math, so
+    /// `{6/4}` truncated to 1 Ω (not 1.5) and `.param h={6/4}` gave 0. The
+    /// float-forcing rewrite that already guarded B-sources now covers element
+    /// values, `.param` values, subckt defaults and X-line overrides too.
+    #[test]
+    fn braced_integer_arithmetic_uses_float_semantics() {
+        let ohms_of = |deck: &str, name: &str| -> f64 {
+            let c = SpiceLoader::load(deck).unwrap();
+            c.devices
+                .iter()
+                .find_map(|d| match d {
+                    Device::Resistor { name: n, ohms, .. } if n == name => Some(*ohms),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{name} present"))
+        };
+        // Direct element value: {6/4} is 1.5 Ω, not integer-truncated 1 Ω.
+        let direct = "d\nR1 a 0 {6/4}\n.end\n";
+        assert!((ohms_of(direct, "R1") - 1.5).abs() < 1e-9, "got {}", ohms_of(direct, "R1"));
+        // Through a .param and an X-scaled override expression: 1.5 * 1000.
+        let via_param = "d\n.param h={6/4}\nR1 a 0 {h*1000}\n.end\n";
+        assert!(
+            (ohms_of(via_param, "R1") - 1500.0).abs() < 1e-6,
+            "got {}",
+            ohms_of(via_param, "R1")
+        );
+        // Identifiers carrying digits are not corrupted by the rewrite.
+        let idents = "d\n.param r2=3\nR1 a 0 {r2*2}\n.end\n";
+        assert!((ohms_of(idents, "R1") - 6.0).abs() < 1e-9, "got {}", ohms_of(idents, "R1"));
     }
 
     /// Dev-plan 04 §3.3: SPICE-convention PMOS threshold (negative VTO for

@@ -1732,6 +1732,30 @@ fn seed_sub_reactive(
                     state.xb[bank].dx1[i] = 0.0;
                 }
             }
+            // Op-amp with output dynamics (pole_hz/slew): its reactive slot is
+            // the internal drive EMF, seeded at the island's DC-point clipped
+            // ideal target — the monolithic seed arm (transient.rs), mirrored
+            // here for the same reason as the diode/BJT/MOSFET arms above. A
+            // torn-island op-amp with a finite pole or nonzero slew otherwise
+            // read a zero EMF history and its output collapsed toward 0 instead
+            // of starting at the operating point. Ideal op-amps never read the
+            // slot; the seed is harmless.
+            Device::OpAmp {
+                inp,
+                inn,
+                reference,
+                gain,
+                rail_lo,
+                rail_hi,
+                ..
+            } => {
+                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
+                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
+                    .clamp(*rail_lo, *rail_hi);
+                state.x1[i] = target;
+                state.x2[i] = target;
+                state.dx1[i] = 0.0;
+            }
             _ => {}
         }
     }
@@ -2573,6 +2597,36 @@ fn advance_sub_reactive(
                     state.xb[bank].x2[i] = q_old;
                     state.xb[bank].x1[i] = q_new;
                     state.xb[bank].dx1[i] = dq;
+                }
+            }
+            // Op-amp with output dynamics: roll the internal drive EMF forward
+            // from the frozen previous EMF and the accepted input voltages, the
+            // monolithic advance arm (transient.rs) mirrored here. Without it a
+            // torn-island op-amp's EMF slot never advanced, so `stamp_opamp`
+            // re-derived the output from a stale (never-updated) v_prev every
+            // step and the bandwidth/slew-limited output never integrated
+            // toward its target. Ideal op-amps return None and leave the slot
+            // untouched.
+            Device::OpAmp {
+                inp,
+                inn,
+                reference,
+                gain,
+                pole_hz,
+                slew,
+                rail_lo,
+                rail_hi,
+                ..
+            } => {
+                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
+                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
+                    .clamp(*rail_lo, *rail_hi);
+                if let Some((v_out, _)) =
+                    crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
+                {
+                    state.x2[i] = state.x1[i];
+                    state.x1[i] = v_out;
+                    state.dx1[i] = 0.0;
                 }
             }
             _ => {}
