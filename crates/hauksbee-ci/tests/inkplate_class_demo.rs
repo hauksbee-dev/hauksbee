@@ -131,6 +131,73 @@ for_max_ms = 1.0
     );
 }
 
+/// R17 regression: a `protection_trip` SCOPED to a scenario must be honored even
+/// when NO `rail_window` names that scenario's supply net. Previously the scoped
+/// (scenario, net) verdict map was populated only from rail_window nets, so a
+/// scoped protection_trip with no matching rail_window always failed with
+/// "nothing to trip" regardless of the real trip. Here the LiPo protection
+/// genuinely trips on the cold-boot inrush, and the ONLY assertion is the scoped
+/// protection_trip — with no rail_window at all — so it must PASS.
+#[test]
+fn scoped_protection_trip_passes_without_a_matching_rail_window() {
+    let body = format!(
+        r#"name = "R17: scoped protection_trip, no rail_window"
+board = "{board}"
+duration_ms = 60
+frame_ms = 0.2
+
+[[supply]]
+net = "+3.3V"
+kind = "battery"
+chemistry = "liion"
+cells = 1
+capacity_mah = 400
+soc = 1.0
+r_internal_ohms = 0.25
+protection_trip_a = 1.0
+protection_delay_ms = 2.0
+
+[decoupling]
+parasitics = true
+
+[[scenario]]
+id = "coldboot"
+part = "U1"
+profile = "esp32_cold_boot_inrush"
+supply_net = "+3.3V"
+start_ms = 2.0
+
+# Scoped to the scenario, and there is deliberately NO rail_window on +3.3V.
+[[assert]]
+kind = "protection_trip"
+name = "LiPo protection trips inside the coldboot window"
+supply_net = "+3.3V"
+expect_trip = true
+scenario = "coldboot"
+"#,
+        board = board().display()
+    );
+    let result = run_body("scoped_trip.toml", &body);
+    eprintln!("SCOPED-TRIP side:\n{}", result.render_human());
+    let trip = result
+        .results
+        .iter()
+        .find(|r| r.kind == "protection_trip")
+        .expect("protection_trip assertion present");
+    assert!(
+        trip.passed,
+        "a scenario-scoped protection_trip must be honored without a matching rail_window:\n  {}",
+        trip.detail
+    );
+    // And the detail must reflect a real TRIP inside the window, not the old
+    // "nothing to trip" miss.
+    assert!(
+        trip.detail.contains("TRIPPED"),
+        "the scoped trip should report a real trip: {}",
+        trip.detail
+    );
+}
+
 /// USB-SUPPLEMENTED side: same board, same cold-boot profile, stiff USB 5V/3A.
 /// The rail holds; nothing trips. This side must be fully GREEN.
 #[test]

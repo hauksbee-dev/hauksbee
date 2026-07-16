@@ -278,6 +278,22 @@ impl StressMonitor {
         self.metas.len()
     }
 
+    /// Clear all per-run tracking so a replay starts from a clean slate: the
+    /// consecutive-over-limit counters, the already-raised set (so a fault that
+    /// fired last run can fire again), the live stress fractions, and the
+    /// destroyed flags. The device metadata (`metas`) and the `destructive` /
+    /// `ambient_c` config are preserved — only the accumulated run state resets.
+    /// The circuit itself is restored separately by the scheduler (this monitor
+    /// does not own it), so clearing `destroyed` here stays consistent with a
+    /// pristine circuit only when that restore also happens.
+    pub fn reset_tracks(&mut self) {
+        for track in &mut self.tracks {
+            *track = DeviceTrack::default();
+        }
+        self.stress_by_ref.clear();
+        self.temp_by_ref.clear();
+    }
+
     /// Live stress fraction per component reference (0..1).
     pub fn stress_by_ref(&self) -> &HashMap<String, f64> {
         &self.stress_by_ref
@@ -1003,6 +1019,54 @@ mod monitor_temp_tests {
             .expect("passive continuous over-current check present");
         assert_eq!(oc.limit, 2.0);
         assert_eq!(oc.value, 3.0);
+    }
+
+    #[test]
+    fn reset_tracks_lets_a_sustained_fault_re_raise_on_replay() {
+        // R17: the monitor accumulates `raised` / `over_chunks` across a run. A
+        // replay (engine reset -> re-run the same chunks) must see the SAME
+        // fault fire again. Before reset_tracks existed, the stale `raised` flag
+        // silently swallowed the fault on the second run.
+        let mut c = Circuit::new();
+        let a = c.node("A");
+        let g = c.node("GND");
+        let id = c.add(Device::Resistor { name: "R1".into(), a, b: g, ohms: 100.0, tc1: None });
+        let meta = DeviceMeta {
+            reference: "R1".into(),
+            device: id,
+            kind: ComponentKind::Passive,
+            // 1/10 W part carrying 10 V / 100 Ω = 1 W: a 10x sustained overpower.
+            footprint: String::new(),
+            ratings: Ratings { max_power_w: Some(0.1), ..Default::default() },
+        };
+        let mut mon = StressMonitor::new(vec![meta]);
+        // 10 V across A->GND; the other node reads 0.
+        let node_v = |n: NodeId| if n == a { 10.0 } else { 0.0 };
+        let no_branch = |_: DeviceId| None;
+
+        // Drive the sustain filter to the raise point and count the fault.
+        let raise_once = |mon: &mut StressMonitor, c: &mut Circuit| -> usize {
+            let mut raises = 0;
+            for k in 0..(SUSTAIN_CHUNKS + 2) {
+                let faults = mon.evaluate(c, &node_v, &no_branch, k as f64 * 1e-3);
+                raises += faults
+                    .iter()
+                    .filter(|f| f.kind == FaultKind::Overpower && f.component == "R1")
+                    .count();
+            }
+            raises
+        };
+
+        assert_eq!(raise_once(&mut mon, &mut c), 1, "first run raises the overpower fault once");
+        assert!(mon.stress_by_ref().get("R1").copied().unwrap_or(0.0) >= 1.0, "stress pegged");
+
+        // Without a reset the fault stays latched (raised) and does not re-fire.
+        assert_eq!(raise_once(&mut mon, &mut c), 0, "latched: no re-raise without reset");
+
+        // reset_tracks clears the latch AND the live stress; the replay re-raises.
+        mon.reset_tracks();
+        assert!(mon.stress_by_ref().is_empty(), "reset clears the live stress map");
+        assert_eq!(raise_once(&mut mon, &mut c), 1, "after reset the fault re-raises on replay");
     }
 
     #[test]
