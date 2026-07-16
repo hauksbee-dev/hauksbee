@@ -73,8 +73,8 @@ use forge_sexpr::List;
 use std::collections::HashMap;
 
 use super::{
-    is_unconnected_net, norm, routed_length_mm, track_width_range, usb_pairs, SiCheck, SiFinding,
-    SiReport, SiSeverity,
+    elem_net_id, is_unconnected_net, net_name_index, norm, routed_length_mm, track_width_range,
+    usb_pairs, SiCheck, SiFinding, SiReport, SiSeverity,
 };
 use crate::ExtractedBoard;
 
@@ -740,9 +740,10 @@ struct Seg {
 /// All copper `(segment ...)` of a net as (endpoints, width). Arcs are not used
 /// for the spacing measure (the straight runs carry the coupling).
 fn net_segments(root: &List, net_id: i64) -> Vec<Seg> {
+    let by_name = net_name_index(root);
     let mut out = Vec::new();
     for seg in root.find_all("segment") {
-        if seg.find("net").and_then(|n| n.arg_i64(0)) != Some(net_id) {
+        if elem_net_id(seg, &by_name) != Some(net_id) {
             continue;
         }
         let layer = seg.find_value("layer").unwrap_or_default();

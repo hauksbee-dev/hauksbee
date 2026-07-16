@@ -24,6 +24,19 @@ pub struct Placement {
     pub rotation: f64,
     /// true = top/front, false = bottom/back.
     pub top: bool,
+    /// Marked do-not-populate by a P&P/BOM column (`DNP`/`Fitted:No`/…). The
+    /// part is on the board drawing but is not assembled, so checks that reason
+    /// about populated parts must skip it.
+    pub dnp: bool,
+}
+
+/// One reference designator's BOM enrichment: value, part number, and whether
+/// the BOM marks it do-not-populate.
+#[derive(Debug, Clone, Default)]
+pub struct BomEntry {
+    pub value: String,
+    pub mpn: String,
+    pub dnp: bool,
 }
 
 /// Split a CSV line honouring double-quotes. Good enough for fab CSVs (no
@@ -71,11 +84,14 @@ fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
             return Some(i);
         }
     }
-    // Then prefix/contains (e.g. "centerxmm" contains "centerx").
+    // Then prefix/contains (e.g. "centerxmm" contains "centerx"). A bare
+    // single-character alias ("x"/"y") must NOT latch onto an unrelated column
+    // via `contains` — "index", "maxheight", and "layer" all contain an x/y —
+    // so single-char aliases match only as a prefix ("xmm"), never mid-word.
     for a in aliases {
         if let Some(i) = normed
             .iter()
-            .position(|h| h.starts_with(a) || h.contains(a))
+            .position(|h| h.starts_with(a) || (a.len() > 1 && h.contains(a)))
         {
             return Some(i);
         }
@@ -83,12 +99,48 @@ fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
     None
 }
 
-/// Parse a number that may carry a unit suffix; returns (value, was_mil).
+/// A cell in an explicit do-not-populate column: truthy means "not assembled".
+fn cell_is_dnp(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "dnp" | "dnf" | "yes" | "y" | "true" | "1" | "x" | "noload" | "no-load" | "donotpopulate"
+    )
+}
+
+/// A cell in a "populate/fitted/assemble" column: reversed polarity — a
+/// negative value means the part is NOT assembled.
+fn cell_says_not_fitted(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "no" | "n" | "false" | "0" | "dnp" | "dnf" | "notfitted" | "no-load" | "noload"
+    )
+}
+
+/// The unit scale implied by a coordinate column HEADER (e.g. `PosX (mil)`),
+/// applied only when the cell value itself carries no unit suffix. mm→1,
+/// mil→0.0254 mm, inch→25.4 mm.
+fn header_unit_scale(header: &str) -> f64 {
+    let h = header.to_ascii_lowercase();
+    if h.contains("mil") {
+        0.0254
+    } else if h.contains("inch") {
+        25.4
+    } else {
+        1.0
+    }
+}
+
+/// Parse a number that may carry a unit suffix; returns (value, had_unit) where
+/// `had_unit` is true when the cell itself named its unit (mm/mil/inch), so a
+/// header-implied unit must not be applied on top of it.
 fn parse_len(s: &str) -> Option<(f64, bool)> {
     let t = s.trim();
     let lower = t.to_ascii_lowercase();
     let mil = lower.ends_with("mil");
     let inch = lower.ends_with("in") || lower.ends_with("\"");
+    // An explicit "mm" is a unit too: the value is already in mm and must not be
+    // re-scaled by a header unit. (Checked after mil so "…mil" isn't read as mm.)
+    let mm = !mil && lower.ends_with("mm");
     let cleaned: String = t
         .chars()
         .filter(|c| {
@@ -100,6 +152,8 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
         Some((v * 0.0254, true))
     } else if inch {
         Some((v * 25.4, true))
+    } else if mm {
+        Some((v, true))
     } else {
         Some((v, false))
     }
@@ -129,11 +183,19 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
     let y_col = find_col(&headers, &["posy", "y", "midy", "centery", "refy", "py"]);
     let rot_col = find_col(&headers, &["rot", "rotation", "angle"]);
     let side_col = find_col(&headers, &["side", "layer", "tblayer"]);
+    let dnp_col = find_col(&headers, &["dnp", "dnf", "donotpopulate", "noload"]);
+    // A "populate/fitted" column has reversed polarity; never reuse the DNP
+    // column for it (its header may also `contains("populate")`).
+    let fit_col = find_col(&headers, &["populate", "fitted", "assemble", "mount"])
+        .filter(|c| Some(*c) != dnp_col);
 
     // If we can't find a reference and both coordinates, this isn't a P&P file.
     let (Some(rc), Some(xc), Some(yc)) = (ref_col, x_col, y_col) else {
         return Vec::new();
     };
+    // A unit named in the coordinate header applies to bare (suffix-less) values.
+    let x_scale = header_unit_scale(&headers[xc]);
+    let y_scale = header_unit_scale(&headers[yc]);
 
     let mut out = Vec::new();
     for line in lines {
@@ -150,15 +212,19 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
         if reference.is_empty() {
             continue;
         }
-        let Some((x, _)) = parse_len(cells.get(xc).map(|s| s.as_str()).unwrap_or("")) else {
+        let Some((x, x_had_unit)) = parse_len(cells.get(xc).map(|s| s.as_str()).unwrap_or("")) else {
             continue;
         };
-        let Some((y, _)) = parse_len(cells.get(yc).map(|s| s.as_str()).unwrap_or("")) else {
+        let Some((y, y_had_unit)) = parse_len(cells.get(yc).map(|s| s.as_str()).unwrap_or("")) else {
             continue;
         };
+        let x = if x_had_unit { x } else { x * x_scale };
+        let y = if y_had_unit { y } else { y * y_scale };
         let rotation = get(rot_col).trim().parse().unwrap_or(0.0);
         let side_raw = get(side_col).to_ascii_lowercase();
         let top = !(side_raw.contains("bot") || side_raw.contains("back") || side_raw == "b");
+        let dnp = cell_is_dnp(get(dnp_col))
+            || (fit_col.is_some() && cell_says_not_fitted(get(fit_col)));
         out.push(Placement {
             reference,
             value: get(val_col).to_string(),
@@ -167,6 +233,7 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
             y,
             rotation,
             top,
+            dnp,
         });
     }
     out
@@ -225,15 +292,48 @@ pub fn parse_allegro_loc(text: &str) -> Vec<Placement> {
             y,
             rotation,
             top: !mirror,
+            dnp: false,
         });
     }
     out
 }
 
-/// Parse a BOM CSV into `reference -> (value, part_number)` enrichment. Handles
-/// the common "Designator/Comment" and "Reference(s)/Value/MPN" layouts; a
-/// single BOM row often lists many refs ("R1,R2,R3").
-pub fn parse_bom(text: &str) -> HashMap<String, (String, String)> {
+/// Expand a designator token that may denote a range: `R1-R5`, `R1..R5`, and
+/// the short `R1-5` form all become R1,R2,R3,R4,R5. A plain token (or anything
+/// that isn't a clean same-prefix ascending range) returns itself unchanged.
+fn expand_ref_range(tok: &str) -> Vec<String> {
+    let sep = tok
+        .find("..")
+        .map(|i| (i, i + 2))
+        .or_else(|| tok.find('-').map(|i| (i, i + 1)));
+    let Some((a, b)) = sep else {
+        return vec![tok.to_string()];
+    };
+    let split_pn = |s: &str| -> Option<(String, u32)> {
+        let p: String = s.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        let num = &s[p.len()..];
+        if num.is_empty() || !num.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        num.parse::<u32>().ok().map(|n| (p, n))
+    };
+    let (Some((lp, ln)), Some((rp, rn))) = (split_pn(&tok[..a]), split_pn(&tok[b..])) else {
+        return vec![tok.to_string()];
+    };
+    // The end prefix must be empty (short form) or match the start prefix, the
+    // range must ascend, and it must be sanely bounded.
+    if !(rp.is_empty() || rp == lp) || rn < ln || rn - ln > 10_000 {
+        return vec![tok.to_string()];
+    }
+    (ln..=rn).map(|n| format!("{lp}{n}")).collect()
+}
+
+/// Parse a BOM CSV into `reference -> BomEntry` enrichment. Handles the common
+/// "Designator/Comment" and "Reference(s)/Value/MPN" layouts; a single BOM row
+/// often lists many refs, comma/space separated and abbreviated as ranges
+/// ("R1-R5"). A DNP / "Fitted:No" column marks parts that are drawn but not
+/// assembled.
+pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
     let mut out = HashMap::new();
     let mut lines = text.lines().filter(|l| !l.trim().is_empty());
     let Some(header_line) = lines.next() else {
@@ -263,26 +363,37 @@ pub fn parse_bom(text: &str) -> HashMap<String, (String, String)> {
             "part",
         ],
     );
+    let dnp_col = find_col(&headers, &["dnp", "dnf", "donotpopulate", "noload"]);
+    let fit_col = find_col(&headers, &["fitted", "populate", "assemble", "mount"])
+        .filter(|c| Some(*c) != dnp_col);
     let Some(rc) = ref_col else {
         return out;
     };
     for line in lines {
         let cells = split_csv(line);
         let Some(refs) = cells.get(rc) else { continue };
-        let value = val_col
-            .and_then(|i| cells.get(i))
-            .cloned()
-            .unwrap_or_default();
-        let mpn = mpn_col
-            .and_then(|i| cells.get(i))
-            .cloned()
-            .unwrap_or_default();
-        for r in refs
-            .split([',', ' '])
+        let cell = |i: Option<usize>| i.and_then(|i| cells.get(i)).map(|s| s.as_str()).unwrap_or("");
+        let value = cell(val_col).to_string();
+        let mpn = cell(mpn_col).to_string();
+        let dnp = cell_is_dnp(cell(dnp_col))
+            || (fit_col.is_some() && cell_says_not_fitted(cell(fit_col)));
+        for tok in refs
+            .split([',', ' ', ';'])
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            out.insert(r.to_string(), (value.clone(), mpn.clone()));
+            for r in expand_ref_range(tok) {
+                if r.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+                    out.insert(
+                        r,
+                        BomEntry {
+                            value: value.clone(),
+                            mpn: mpn.clone(),
+                            dnp,
+                        },
+                    );
+                }
+            }
         }
     }
     out
@@ -340,7 +451,72 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let csv = "Designator,Comment,MPN\n\"R1,R2,R3\",10k,RC0402\n";
         let b = parse_bom(csv);
         assert_eq!(b.len(), 3);
-        assert_eq!(b.get("R2").unwrap().0, "10k");
-        assert_eq!(b.get("R2").unwrap().1, "RC0402");
+        assert_eq!(b.get("R2").unwrap().value, "10k");
+        assert_eq!(b.get("R2").unwrap().mpn, "RC0402");
+    }
+
+    #[test]
+    fn bom_expands_designator_ranges() {
+        // A BOM row that abbreviates ten decoupling caps as a range must enrich
+        // each one, not a single literal "C1-C10" key (PNP-4).
+        let csv = "Designator,Comment,MPN\n\"C1-C10\",100n,CL10\nR1..R3,10k,RC\n";
+        let b = parse_bom(csv);
+        assert_eq!(b.len(), 13, "C1..C10 (10) + R1..R3 (3)");
+        assert_eq!(b.get("C7").unwrap().value, "100n");
+        assert_eq!(b.get("C10").unwrap().mpn, "CL10");
+        assert_eq!(b.get("R2").unwrap().value, "10k");
+        assert!(!b.contains_key("C1-C10"), "the range key itself is gone");
+    }
+
+    #[test]
+    fn bom_dnp_column_marks_unpopulated() {
+        // A "Fitted" column with reversed polarity (No = do-not-populate) and an
+        // explicit DNP column both mark the part absent (PNP-5).
+        let csv = "Designator,Value,Fitted\nR1,10k,Yes\nR2,DNP,No\n";
+        let b = parse_bom(csv);
+        assert!(!b.get("R1").unwrap().dnp, "Fitted:Yes is populated");
+        assert!(b.get("R2").unwrap().dnp, "Fitted:No is do-not-populate");
+    }
+
+    #[test]
+    fn pnp_header_unit_scales_bare_values() {
+        // Coordinates are in mil per the column header; suffix-less cells must be
+        // scaled to mm (PNP-2). 1000 mil = 25.4 mm.
+        let csv = "Ref,PosX (mil),PosY (mil),Rot\nU1,1000,2000,0\n";
+        let p = parse_pnp(csv);
+        assert_eq!(p.len(), 1);
+        assert!((p[0].x - 25.4).abs() < 1e-6, "1000 mil = 25.4 mm, got {}", p[0].x);
+        assert!((p[0].y - 50.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pnp_cell_unit_beats_header_unit() {
+        // A cell that names its own unit wins over the header unit — no
+        // double-scaling (PNP-2 guard).
+        let csv = "Ref,PosX (mil),PosY (mil)\nU1,5.0mm,5.0mm\n";
+        let p = parse_pnp(csv);
+        assert!((p[0].x - 5.0).abs() < 1e-6, "explicit mm not re-scaled");
+    }
+
+    #[test]
+    fn pnp_bare_xy_alias_does_not_match_unrelated_column() {
+        // The X/Y columns are named just "X (mm)"/"Y (mm)" (norm "xmm"/"ymm"),
+        // which no alias matches exactly, so resolution falls to the fuzzy pass.
+        // A bare "x" alias must not `contains`-match the earlier "Index" column
+        // (PNP-3) — it must prefix-match "xmm". Were col 0 chosen for X, U1's X
+        // would parse as 1, not 12.5.
+        let csv = "Index,Ref,X (mm),Y (mm)\n1,U1,12.5,7.5\n";
+        let p = parse_pnp(csv);
+        assert_eq!(p.len(), 1);
+        assert!((p[0].x - 12.5).abs() < 1e-6, "X column chosen, not Index: got {}", p[0].x);
+        assert!((p[0].y - 7.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pnp_dnp_column_flags_placement() {
+        let csv = "Ref,PosX,PosY,DNP\nR1,1,1,\nR2,2,2,DNP\n";
+        let p = parse_pnp(csv);
+        assert!(!p[0].dnp, "blank DNP cell is populated");
+        assert!(p[1].dnp, "DNP cell marks unpopulated");
     }
 }
