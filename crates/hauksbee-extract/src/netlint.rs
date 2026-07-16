@@ -825,15 +825,18 @@ fn control_role(function: &str) -> Option<&'static str> {
         .trim_start_matches('~')
         .trim_start_matches('/')
         .replace(['~', '{', '}', '/', '#'], "");
-    // Strip a leading 'N' (nRST) and trailing '_N'/'N' active-low suffix.
+    // Strip a leading 'N' (nRST) and trailing '_N' active-low suffix.
     let core = core.trim_start_matches('N').to_string();
     let core = core.trim_end_matches("_N").to_string();
     let c = core.trim();
 
-    // Exact / canonical matches only.
+    // Exact / canonical matches only. Bare trailing-N active-low reset forms
+    // (RSTN / RESETN) are listed explicitly rather than stripped: a blanket
+    // trailing-'N' strip would maim the no-N control names (EN -> E, SHDN -> SHD),
+    // so the doc comment's "RESETN" promise is kept with dedicated arms instead.
     match c {
         "EN" | "ENABLE" | "CE" | "CEN" | "SHDN" | "SHUTDOWN" | "NSHDN" => Some("enable"),
-        "RST" | "RESET" | "MR" | "RESE" => Some("reset"), // RESE = RESET after _N strip
+        "RST" | "RESET" | "RSTN" | "RESETN" | "MR" | "RESE" => Some("reset"), // RESE = RESET after _N strip
         "CS" | "SS" | "NCS" | "NSS" | "CSB" => Some("chip-select"),
         "OE" | "NOE" => Some("output-enable"),
         _ => {
@@ -841,7 +844,7 @@ fn control_role(function: &str) -> Option<&'static str> {
             let head = c.split('_').next().unwrap_or(c);
             match head {
                 "EN" => Some("enable"),
-                "RST" | "RESET" => Some("reset"),
+                "RST" | "RESET" | "RSTN" | "RESETN" => Some("reset"),
                 _ => None,
             }
         }
@@ -1152,7 +1155,15 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
                 drivers.len(),
                 drv_desc.join(", ")
             ),
-            refs: distinct.iter().map(|s| s.to_string()).collect(),
+            refs: {
+                // `distinct` is a HashSet with Rust's randomized RandomState, so
+                // its iteration order varies run-to-run. Sort so the JSON `refs`
+                // array is byte-reproducible across runs, matching every sibling
+                // check (which builds refs from an ordered Vec).
+                let mut r: Vec<String> = distinct.iter().map(|s| s.to_string()).collect();
+                r.sort();
+                r
+            },
             nets: vec![net.name.clone()],
         });
     }
