@@ -144,10 +144,12 @@ struct PinSite {
 
 /// A named anchor sitting at a coordinate: a label, power-net pin, sheet pin,
 /// or hierarchical label. `name` is the net name it imposes. `scope` decides
-/// how far the name reaches.
+/// how far the name reaches; `kind` decides which name *wins* when one net
+/// carries several competing anchors.
 struct NamedAnchor {
     name: String,
     scope: NameScope,
+    kind: AnchorKind,
     node: usize,
 }
 
@@ -160,6 +162,40 @@ enum NameScope {
     Local,
     /// Global label or power net: unifies across the whole design.
     Global,
+}
+
+/// The schematic item behind a [`NamedAnchor`], for net-*naming* precedence
+/// only — unification reach stays with [`NameScope`]. KiCad picks a net's name
+/// from its highest-priority driver (`CONNECTION_SUBGRAPH::PRIORITY`): a
+/// global label beats a power pin, which beats a local label, which beats a
+/// hierarchical label. Collapsing these onto the two unification scopes
+/// (Power→Global, Hier→Local) let the wrong name win whenever a net carried
+/// two kinds from the same scope bucket — e.g. "+5V" outranked a global label
+/// alphabetically instead of losing to it.
+#[derive(Clone, Copy, PartialEq)]
+enum AnchorKind {
+    /// Global label (and a global bus label's promoted members).
+    Global,
+    /// Power symbol pin, or a hidden power_in pin's implicit connection.
+    Power,
+    /// Local label.
+    Local,
+    /// Hierarchical label / sheet-pin member binding.
+    Hier,
+}
+
+impl AnchorKind {
+    /// Naming precedence, highest wins. Mirrors KiCad's driver priority
+    /// (`connection_graph.h`): GLOBAL > GLOBAL_POWER_PIN > LOCAL_LABEL >
+    /// HIER_LABEL. Ties still break to the lexicographically smallest name.
+    fn prio(self) -> u8 {
+        match self {
+            AnchorKind::Global => 4,
+            AnchorKind::Power => 3,
+            AnchorKind::Local => 2,
+            AnchorKind::Hier => 1,
+        }
+    }
 }
 
 struct NetlistBuilder {
@@ -448,6 +484,7 @@ impl NetlistBuilder {
                         NamedAnchor {
                             name: name.clone(),
                             scope: NameScope::Local,
+                            kind: AnchorKind::Hier,
                             node,
                         },
                     );
@@ -558,6 +595,7 @@ impl NetlistBuilder {
                         NamedAnchor {
                             name: normalize_label(&value),
                             scope: NameScope::Global,
+                            kind: AnchorKind::Power,
                             node,
                         },
                     );
@@ -576,6 +614,7 @@ impl NetlistBuilder {
                         NamedAnchor {
                             name: normalize_label(&lp.name),
                             scope: NameScope::Global,
+                            kind: AnchorKind::Power,
                             node,
                         },
                     );
@@ -640,8 +679,50 @@ impl NetlistBuilder {
             // bus label's members and position so a sheet pin sitting on this
             // bus under a different name can map its members positionally.
             match self.expand_bus_on_sheet(sheet, &name) {
-                Some(members) => self.bus_labels.push((sheet, at, members)),
-                None => self.push_anchor(sheet, NamedAnchor { name, scope, node }),
+                Some(members) => {
+                    // A GLOBAL bus label additionally globalizes every member,
+                    // exactly as a plain global label globalizes its one net:
+                    // `D[0..7]` as a global label means each of D0..D7 connects
+                    // across the whole design. Each member gets a fresh node
+                    // anchored twice under the member's name — Local scope, so
+                    // it joins the member's own labelled net on *this* sheet,
+                    // and Global scope, so same-named members unify design-wide
+                    // through `global_by_name`. A local bus label must NOT do
+                    // this (its members are sheet-local; globalizing them would
+                    // short same-named members across unrelated sheets).
+                    if scope == NameScope::Global {
+                        for m in &members {
+                            let mnode = self.uf.make();
+                            self.push_anchor(
+                                sheet,
+                                NamedAnchor {
+                                    name: m.clone(),
+                                    scope: NameScope::Local,
+                                    kind: AnchorKind::Global,
+                                    node: mnode,
+                                },
+                            );
+                            self.push_anchor(
+                                sheet,
+                                NamedAnchor {
+                                    name: m.clone(),
+                                    scope: NameScope::Global,
+                                    kind: AnchorKind::Global,
+                                    node: mnode,
+                                },
+                            );
+                        }
+                    }
+                    self.bus_labels.push((sheet, at, members));
+                }
+                None => {
+                    // A plain label's naming rank follows its scope directly.
+                    let kind = match scope {
+                        NameScope::Global => AnchorKind::Global,
+                        NameScope::Local => AnchorKind::Local,
+                    };
+                    self.push_anchor(sheet, NamedAnchor { name, scope, kind, node });
+                }
             }
         }
     }
@@ -781,12 +862,15 @@ impl NetlistBuilder {
                 };
                 let mnode = self.uf.make();
                 // Bind the fresh node to the member's net on this sheet via a
-                // local label of the *local* (bus) member name.
+                // local label of the *local* (bus) member name. Hier kind for
+                // naming: this anchor stands in for a sheet pin / hierarchical
+                // label, which KiCad ranks below the member's own local label.
                 self.push_anchor(
                     b.sheet,
                     NamedAnchor {
                         name: local_name,
                         scope: NameScope::Local,
+                        kind: AnchorKind::Hier,
                         node: mnode,
                     },
                 );
@@ -961,17 +1045,18 @@ impl NetlistBuilder {
             root_of_pin.push((i, r));
         }
 
-        // 4. Decide each net's name.
-        //    - If any anchor on the net is global/power → use that name.
-        //    - else if any local/hier label → use that.
-        //    - else synthesize Net-(Ref-PadN) from the lowest member pin.
+        // 4. Decide each net's name, KiCad driver-priority style:
+        //    global label > power pin > local label > hierarchical label
+        //    (AnchorKind::prio; ties break to the smallest name), else
+        //    synthesize Net-(Ref-PadN) from the lowest member pin. The kind is
+        //    separate from the unification scope precisely for this step: a
+        //    power pin unifies globally yet must lose the *name* contest to a
+        //    global label, and a hierarchical label unifies locally yet must
+        //    lose it to a local label.
         let mut anchor_name_of_root: HashMap<usize, (u8, String)> = HashMap::new();
         for a in &self.anchors {
             let r = self.uf.find(a.node);
-            let prio = match a.scope {
-                NameScope::Global => 3,
-                NameScope::Local => 1,
-            };
+            let prio = a.kind.prio();
             anchor_name_of_root
                 .entry(r)
                 .and_modify(|e| {
@@ -1032,7 +1117,46 @@ impl NetlistBuilder {
         //     instances with the same reference into the first, deduping pins
         //     by number (unit-0 pins such as VCC/GND are repeated on every
         //     gate's instance and must collapse to one).
-        self.components = merge_units(std::mem::take(&mut self.components));
+        let (folded, bridged) = merge_units(std::mem::take(&mut self.components));
+        self.components = folded;
+
+        // 5c. A deduped common pin that carried two *different* net ids is one
+        //     physical pin bridging two nets: they are electrically a single
+        //     net (the layout would show one pad, one net) and must merge
+        //     across the whole netlist, not just on that pin. Union each
+        //     bridged pair and rewrite every pin onto the surviving id; the
+        //     loser then has no pins left and the `used` prune below drops it
+        //     from the net table. Winner choice is deterministic: a labelled
+        //     net beats a synthesized Net-(Ref-PadN) (KiCad names the merged
+        //     net after its driver, and a label always outranks a plain pin),
+        //     ties break to the lower id.
+        if !bridged.is_empty() {
+            let synth_ids: BTreeSet<i64> = net_id_of_root
+                .iter()
+                .filter(|(root, _)| !anchor_name_of_root.contains_key(root))
+                .map(|(_, id)| *id)
+                .collect();
+            let mut canon: HashMap<i64, i64> = HashMap::new();
+            for (a, b) in bridged {
+                let (ra, rb) = (canon_of(&canon, a), canon_of(&canon, b));
+                if ra == rb {
+                    continue;
+                }
+                // Order by (is-synthesized, id): named nets sort first, then
+                // the lower id; the smaller key survives.
+                let ka = (synth_ids.contains(&ra), ra);
+                let kb = (synth_ids.contains(&rb), rb);
+                let (win, lose) = if ka <= kb { (ra, rb) } else { (rb, ra) };
+                canon.insert(lose, win);
+            }
+            for c in &mut self.components {
+                for p in &mut c.pins {
+                    if let Some(id) = p.net {
+                        p.net = Some(canon_of(&canon, id));
+                    }
+                }
+            }
+        }
 
         // 6. Drop power/flag pseudo-components (references starting with '#')
         //    from the component list: they are not devices, only net sources,
@@ -1062,14 +1186,31 @@ impl NetlistBuilder {
     }
 }
 
+/// Follow a chain of net-id redirects (from bridged-net merging in `finish`
+/// step 5c) to the surviving id. A loser is redirected exactly once, so the
+/// chain is at most one link per bridged pair and needs no path compression.
+fn canon_of(canon: &HashMap<i64, i64>, mut id: i64) -> i64 {
+    while let Some(&next) = canon.get(&id) {
+        id = next;
+    }
+    id
+}
+
 /// Fold symbol instances that share a reference (the gates of a multi-unit
 /// part) into one component, preserving instance order and deduping pins by
 /// number. Components with an empty reference are left untouched (they cannot
 /// be meaningfully merged and should not all collapse together).
-fn merge_units(components: Vec<Component>) -> Vec<Component> {
+///
+/// Also returns every pair of *distinct* net ids found on two occurrences of
+/// one pin number. Those occurrences are the same physical pin (a unit-0
+/// common pin drawn on several gates), so the two nets are electrically one:
+/// the caller must union each pair across the whole netlist, or the short the
+/// schematic drew is silently lost.
+fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) {
     let mut order: Vec<String> = Vec::new();
     let mut by_ref: HashMap<String, Component> = HashMap::new();
     let mut anon: Vec<Component> = Vec::new();
+    let mut bridged: Vec<(i64, i64)> = Vec::new();
 
     for c in components {
         if c.reference.is_empty() {
@@ -1087,10 +1228,14 @@ fn merge_units(components: Vec<Component>) -> Vec<Component> {
                 for p in c.pins {
                     // A duplicated pin number from a unit-0 (common) pin keeps
                     // the first occurrence; if a later one carries a net while
-                    // the first did not, prefer the connected one.
+                    // the first did not, prefer the connected one. Two
+                    // occurrences on two *different* nets bridge those nets
+                    // (same physical pin): recorded for the caller to union.
                     if let Some(slot) = existing.pins.iter_mut().find(|e| e.number == p.number) {
-                        if slot.net.is_none() {
-                            slot.net = p.net;
+                        match (slot.net, p.net) {
+                            (None, other) => slot.net = other,
+                            (Some(a), Some(b)) if a != b => bridged.push((a, b)),
+                            _ => {}
                         }
                         let _ = &have;
                     } else {
@@ -1119,11 +1264,12 @@ fn merge_units(components: Vec<Component>) -> Vec<Component> {
         let mut deduped: Vec<Pin> = Vec::with_capacity(c.pins.len());
         for p in std::mem::take(&mut c.pins) {
             match seen.get(&p.number).copied() {
-                Some(idx) => {
-                    if deduped[idx].net.is_none() {
-                        deduped[idx].net = p.net;
-                    }
-                }
+                Some(idx) => match (deduped[idx].net, p.net) {
+                    (None, other) => deduped[idx].net = other,
+                    // Same physical pin on two nets: bridge them, as above.
+                    (Some(a), Some(b)) if a != b => bridged.push((a, b)),
+                    _ => {}
+                },
                 None => {
                     seen.insert(p.number.clone(), deduped.len());
                     deduped.push(p);
@@ -1132,7 +1278,7 @@ fn merge_units(components: Vec<Component>) -> Vec<Component> {
         }
         c.pins = deduped;
     }
-    out
+    (out, bridged)
 }
 
 // ---------------------------------------------------------------------------

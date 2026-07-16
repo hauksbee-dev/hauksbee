@@ -425,6 +425,101 @@ fn fixture_bus_alias_crosses_sheet() {
 }
 
 #[test]
+fn fixture_global_bus_label_globalizes_members() {
+    // A GLOBAL bus label `GB[0..1]` on both sheets must make each member a
+    // global net: the top sheet's GB0 (RA) and the child sheet's GB0 (RC) are
+    // one net even though no wire, sheet pin, or hierarchical label crosses
+    // the boundary — exactly how KiCad treats a global bus label. Before the
+    // fix the label's scope was dropped and the members stayed sheet-local.
+    let Some(b) = fixture("global_bus_top.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    assert!(
+        same_net(&b, ("RA", "1"), ("RC", "1")),
+        "global bus member GB0 must unify across sheets"
+    );
+    assert!(
+        same_net(&b, ("RB", "1"), ("RD", "1")),
+        "global bus member GB1 must unify across sheets"
+    );
+    assert!(
+        !same_net(&b, ("RA", "1"), ("RB", "1")),
+        "distinct members GB0 and GB1 must not merge"
+    );
+    // Control: a LOCAL bus label `LB[0..1]` on both sheets must NOT globalize
+    // its members — the two LB0 nets are unrelated sheet-local nets.
+    assert!(
+        !same_net(&b, ("RE", "1"), ("RF", "1")),
+        "local bus member LB0 must stay per-sheet"
+    );
+    // The bus expression itself never becomes a net.
+    assert!(b.net_by_name("GB[0..1]").is_none());
+}
+
+#[test]
+fn fixture_net_naming_priority() {
+    // One net carrying two competing anchor kinds must take the
+    // higher-priority name, per KiCad's driver precedence
+    // global > power > local > hierarchical — NOT the alphabetically
+    // smallest name of the old two-tier scheme.
+    let Some(b) = fixture("naming_priority.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    // R1's net carries both a +5V power pin and a global label "SIG".
+    // Alphabetically "+5V" < "SIG", so the old tie inside the Global tier
+    // picked the power name; the global label must win.
+    let r1 = net_of(&b, "R1", "1").expect("R1.1 connected");
+    let name = &b.nets.iter().find(|n| n.id == r1).unwrap().name;
+    assert_eq!(name, "SIG", "global label must outrank the power name");
+    assert!(b.net_by_name("+5V").is_none(), "power name must lose");
+    // R2's net carries both a local label "Z_LOCAL" and a hierarchical label
+    // "A_HIER". Alphabetically "A_HIER" wins the old Local-tier tie; the
+    // local label must win.
+    let r2 = net_of(&b, "R2", "1").expect("R2.1 connected");
+    let name = &b.nets.iter().find(|n| n.id == r2).unwrap().name;
+    assert_eq!(name, "Z_LOCAL", "local label must outrank the hier label");
+    assert!(b.net_by_name("A_HIER").is_none(), "hier name must lose");
+}
+
+#[test]
+fn fixture_multiunit_common_pin_bridges_nets() {
+    // U1 is a two-unit part whose common (unit-0) pin "5" is drawn on both
+    // gates: unit 1's copy is wired to NETA (with R1), unit 2's copy to NETB
+    // (with R2). Pin 5 is ONE physical pin, so NETA and NETB are electrically
+    // one net. Before the fix the dedup kept NETA on the pin and silently
+    // dropped the short to NETB.
+    let Some(b) = fixture("multiunit_common_pin.kicad_sch") else {
+        eprintln!("fixture missing; skipping");
+        return;
+    };
+    assert!(
+        same_net(&b, ("R1", "1"), ("R2", "1")),
+        "nets bridged by the shared common pin must merge"
+    );
+    assert!(
+        same_net(&b, ("U1", "5"), ("R1", "1")),
+        "the common pin itself sits on the merged net"
+    );
+    // Deterministic winner: both nets are labelled, so the lower id (NETA,
+    // ids being name-sorted) survives and NETB vanishes from the table.
+    let merged = net_of(&b, "R1", "1").unwrap();
+    let name = &b.nets.iter().find(|n| n.id == merged).unwrap().name;
+    assert_eq!(name, "NETA");
+    assert!(b.net_by_name("NETB").is_none(), "losing net must be pruned");
+    // Self-consistency: no pin references a net id missing from the table.
+    let ids: BTreeSet<i64> = b.nets.iter().map(|n| n.id).collect();
+    for c in &b.components {
+        for p in &c.pins {
+            if let Some(id) = p.net {
+                assert!(ids.contains(&id), "{}.{} on orphan net {id}", c.reference, p.number);
+            }
+        }
+    }
+}
+
+#[test]
 fn no_unconnected_components_in_fixtures() {
     for f in ["two_resistors.kicad_sch", "power_labels.kicad_sch"] {
         let Some(b) = fixture(f) else { continue };
