@@ -157,16 +157,18 @@ fn normalise_comma_decimal(s: &str) -> String {
         // Length of the digit run immediately after the comma.
         let run = after_comma.chars().take_while(|c| c.is_ascii_digit()).count();
         if prev_digit && run >= 1 {
-            // A single comma is a thousands separator ONLY for a grouped
-            // integer: a nonzero integer part with no leading zero, a 3-digit
-            // group, and NOTHING after the group. "4,700" is 4700, but
-            // "0,047uF" is a European decimal 0.047 uF (leading-zero integer
-            // part, and a unit follows the group) — treating it as thousands
-            // fabricated 47 µF from 47 nF, a 1000x error.
-            let group_tail = &after_comma[run..]; // run digits are ASCII → byte==char
+            // A single comma is a thousands separator for a grouped integer: a
+            // nonzero integer part with no leading zero and a 3-digit group. The
+            // presence of a trailing UNIT after the group does not change that —
+            // "4,700uF" is 4700 uF, exactly as "4,700" is 4700. The leading-zero
+            // guard (`int_grouped`) is what separates thousands from a European
+            // decimal: "0,047uF" is 0.047 uF (leading-zero integer part), while
+            // "4,700uF" is grouped. Requiring the group to be the whole string
+            // used to mis-read every unit-suffixed grouped value as a decimal, a
+            // 1000x under-count (4700 uF read as 4.7 uF).
             let int_grouped = before_comma.bytes().all(|b| b.is_ascii_digit())
                 && before_comma.as_bytes().first() != Some(&b'0');
-            if run == 3 && int_grouped && group_tail.is_empty() {
+            if run == 3 && int_grouped {
                 return format!("{}{}", before_comma, after_comma);
             }
             return format!("{}.{}", before_comma, after_comma);
@@ -632,17 +634,22 @@ mod tests {
 
     #[test]
     fn test_european_decimal_comma_vs_thousands() {
-        // A single comma with a 3-digit group is a thousands separator ONLY for
-        // a grouped integer ("4,700" = 4700). A leading-zero integer part, or a
-        // unit after the group, marks a European decimal comma — treating
-        // "0,047uF" as thousands fabricated 47 µF from 47 nF (round-7 #4).
+        // A single comma with a 3-digit group is a thousands separator for a
+        // grouped integer ("4,700" = 4700). What separates thousands from a
+        // European decimal is the LEADING-ZERO integer part, not whether a unit
+        // follows: "0,047uF" (leading zero) is 0.047 µF = 47 nF, while "4,700uF"
+        // (no leading zero) is 4700 µF (round-7 #4).
         check("0,047uF", 47e-9); // 0.047 µF = 47 nF, NOT 47 µF
         check("0,022uF", 22e-9);
         check("0,1uF", 100e-9); // 1-2 digit group already worked
         check("4,7uF", 4.7e-6);
         check("5,1k", 5100.0); // 5.1 kΩ
-        // Genuine thousands grouping (nonzero integer part, no unit) stays 1000x:
+        // Genuine thousands grouping (nonzero integer part) stays 1000x, and a
+        // trailing unit does not demote it to a decimal (R34: the old
+        // "group is the whole string" clause read "4,700uF" as 4.7 µF, 1000x low).
         check("4,700", 4700.0);
+        check("4,700uF", 4.7e-3); // 4700 µF = 4.7 mF, NOT 4.7 µF
+        check("2,200uF", 2.2e-3); // 2200 µF = 2.2 mF
         check("10,000", 10000.0);
         check("1,000,000", 1_000_000.0);
     }
