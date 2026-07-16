@@ -348,11 +348,24 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     let si = crate::checks::engine_si(&board, &lib, text_view);
     let si_plain = plain_si(&si);
 
-    let sections = vec![
+    let mut sections = vec![
         WebSection::from_plain("Copper spacing (DRC)", &drc_plain),
         WebSection::from_plain("Connectivity & wiring", &lint_plain),
         WebSection::from_plain("Signal integrity", &si_plain),
     ];
+
+    // USB-C CC compliance: the CLI text/plain/json surfaces all carry this
+    // verdict (a Serious shared-CC-pulldown fault gates `--check --strict`), but
+    // the web persona used to omit it entirely — a board with the RPi-4 fault
+    // read "Looks healthy". Fold it in so all four personas agree: a Serious
+    // verdict becomes a serious WebFinding (raising serious/total), an Info
+    // verdict becomes a heads-up (suppressing a false "Looks healthy").
+    if let Some(section) = crate::usb_c_report(&board)
+        .as_ref()
+        .and_then(usbc_web_section)
+    {
+        sections.push(section);
+    }
 
     let serious: usize = sections
         .iter()
@@ -781,6 +794,35 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
 
 /// The single line at the top of the web report.
 ///
+/// The web mirror of the USB-C CC compliance verdict, so the web persona carries
+/// the same finding the CLI text/plain/json surfaces do (a Serious shared-CC
+/// board must not read "Looks healthy" on the web). A Serious verdict becomes a
+/// serious [`WebFinding`] (which raises the section's serious/total counts); an
+/// Info verdict becomes a heads-up (which suppresses a false "Looks healthy"
+/// without gating). `None` when there is no receptacle or the verdict is Ok.
+fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSection> {
+    let (what, why, fix) = usbc.web_gloss()?;
+    let mut section = WebSection {
+        title: "USB-C CC compliance".to_string(),
+        verdict: String::new(),
+        findings: Vec::new(),
+        heads_up: Vec::new(),
+    };
+    if usbc.is_serious() {
+        section.verdict = "problem".to_string();
+        section.findings.push(WebFinding {
+            level: "serious".to_string(),
+            what,
+            why,
+            fix,
+        });
+    } else {
+        section.verdict = "note".to_string();
+        section.heads_up.push(WebHeadsUp { what, why, fix });
+    }
+    Some(section)
+}
+
 /// `has_heads_up` / `bind_open` make the headline honest: an actionable info
 /// note (e.g. the 171-ohm USB note) or an active IC open on the live circuit
 /// must override a bare "Looks healthy" even when no findings were raised.
@@ -938,6 +980,66 @@ mod tests {
             bind.critical_parts_bound.contains('/'),
             "critical_parts_bound is an M/N ratio: {}",
             bind.critical_parts_bound
+        );
+    }
+
+    #[test]
+    fn web_persona_carries_usbc_verdict_like_the_cli() {
+        // R23 (web-drops-usbc-verdict): the web report used to omit the USB-C CC
+        // compliance verdict entirely, so a board with the RPi-4 shared-CC-
+        // pulldown fault (which the CLI text/plain/json all flag SERIOUS) could
+        // read "Looks healthy" on the web. A Serious verdict must become a
+        // serious section finding that raises the counts; an Info verdict must
+        // become a heads-up that suppresses a false "Looks healthy".
+        use crate::checks::usb_c::{Attach, UsbcLevel, UsbcReport};
+
+        let serious = UsbcReport {
+            receptacles: Vec::new(),
+            shared_net: true,
+            cc1_rd_ohms: Some(5100.0),
+            cc2_rd_ohms: Some(5100.0),
+            attach: Attach::AudioAccessory,
+            powers_vbus: false,
+            has_discrete_rd: true,
+            level: UsbcLevel::Serious,
+            headline: "CC1 and CC2 are the SAME net (RPi-4 fault).".to_string(),
+        };
+        let sect = super::usbc_web_section(&serious).expect("serious verdict yields a section");
+        assert_eq!(sect.title, "USB-C CC compliance");
+        assert!(
+            sect.findings.iter().any(|f| f.level == "serious"),
+            "a Serious verdict must be a serious finding"
+        );
+        // Folded into a sections vec, it raises serious/total and denies "healthy".
+        let sections = vec![sect];
+        let serious_n: usize = sections
+            .iter()
+            .map(|s| s.findings.iter().filter(|f| f.level == "serious").count())
+            .sum();
+        let total: usize = sections.iter().map(|s| s.findings.len()).sum();
+        assert_eq!((serious_n, total), (1, 1));
+        let headline = overall_headline(total, serious_n, false, false);
+        assert!(
+            headline.to_lowercase().contains("serious")
+                && !headline.to_lowercase().contains("looks healthy"),
+            "a serious USB-C fault must reach the headline: {headline}"
+        );
+
+        // Info verdict → a heads-up, still enough to suppress "Looks healthy".
+        let info = UsbcReport {
+            level: UsbcLevel::Info,
+            has_discrete_rd: false,
+            headline: "No discrete CC pulldown visible.".to_string(),
+            ..serious
+        };
+        let isect = super::usbc_web_section(&info).expect("info verdict yields a section");
+        assert!(isect.findings.is_empty(), "Info is not a finding");
+        assert_eq!(isect.heads_up.len(), 1, "Info becomes a heads-up");
+        let has_heads_up = [isect].iter().any(|s| !s.heads_up.is_empty());
+        let h = overall_headline(0, 0, has_heads_up, false);
+        assert!(
+            !h.to_lowercase().contains("looks healthy"),
+            "an Info USB-C note must deny a false healthy verdict: {h}"
         );
     }
 
