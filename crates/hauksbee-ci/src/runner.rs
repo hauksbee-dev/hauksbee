@@ -91,6 +91,13 @@ pub struct RunOutcome {
     /// Whether each supply net's battery protection latched at any point in the
     /// run, keyed by net name.
     pub protection_tripped: HashMap<String, bool>,
+    /// Whether each supply net's protection latched *within* a given scenario
+    /// window, keyed by (scenario id, net). A trip counts for a window only if
+    /// it first latched at or after that window's start time, so a
+    /// `protection_trip` assertion scoped to a scenario ignores trips that
+    /// happened before the scenario began. The scenario id is "" for the
+    /// run-wide (unnamed) window.
+    pub protection_tripped_scoped: HashMap<(String, String), bool>,
     /// Total simulated time (ms).
     pub sim_ms: f64,
     /// Boot-coverage tracking: first time (ms) each watched (net, level-bits)
@@ -810,6 +817,10 @@ fn run_one(
     // Per-scenario rail-window timeseries and protection-trip tracking.
     let mut rail_windows: HashMap<(String, String), crate::scenarios::RailWindow> = HashMap::new();
     let mut protection_tripped: HashMap<String, bool> = HashMap::new();
+    // First simulated time (s) each supply net's protection latched, so a
+    // scenario-scoped `protection_trip` assertion can tell a pre-scenario trip
+    // apart from one that fires inside its window.
+    let mut protection_trip_t: HashMap<String, f64> = HashMap::new();
 
     // Boot-coverage watch list: every (net, required-level) a boot-coverage
     // assertion names. We record the first frame each net reaches its level.
@@ -933,6 +944,10 @@ fn run_one(
         for leg in &engine.scheduler().supplies {
             if leg.supply.protection_ever_tripped() {
                 protection_tripped.insert(leg.net_name.clone(), true);
+                // Record the first frame we saw the latch, not every frame.
+                protection_trip_t
+                    .entry(leg.net_name.clone())
+                    .or_insert(frame.t);
             } else {
                 protection_tripped
                     .entry(leg.net_name.clone())
@@ -994,6 +1009,20 @@ fn run_one(
         engine.scheduler().firmware_driven_nets().into_iter().collect();
     let drive_direction_observable = !engine.scheduler().has_external_backend();
 
+    // Fold the per-net first-trip times into per-(scenario, net) verdicts: a
+    // trip belongs to a window only if it first latched at or after that
+    // window's start. This lets a scenario-scoped `protection_trip` assertion
+    // ignore a trip that happened before the scenario began.
+    let mut protection_tripped_scoped: HashMap<(String, String), bool> = HashMap::new();
+    for sw in &scenario_windows {
+        for net in &sw.nets {
+            let tripped_in_window = protection_trip_t
+                .get(net)
+                .is_some_and(|&t| t + 1e-12 >= sw.start_s);
+            protection_tripped_scoped.insert((sw.id.clone(), net.clone()), tripped_in_window);
+        }
+    }
+
     Ok(RunOutcome {
         seed,
         windows,
@@ -1005,6 +1034,7 @@ fn run_one(
         peripherals,
         rail_windows,
         protection_tripped,
+        protection_tripped_scoped,
         sim_ms: engine.scheduler().sim_time * 1000.0,
         first_reach_ms,
         driven_nets,

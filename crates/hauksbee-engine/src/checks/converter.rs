@@ -362,16 +362,13 @@ fn rail_nominal_v(name: &str) -> Option<f64> {
             return Some(v);
         }
     }
-    // Solar / PV markers genuinely encode the high side of an MPPT buck.
-    if leaf.contains("SOLAR") || leaf.contains("PV") || leaf.contains("VBUS_IN") {
-        return Some(40.0);
-    }
-    // Bare generic regulator pin names (VIN / VOUT / BAT / DCDC_OUT) carry NO
-    // reliable voltage — they are the most common labels on ordinary non-solar
-    // designs. The old code fabricated 40 V / 13 V for them, which outranked a
-    // real "+12V" token on the OTHER rail and flipped a buck to a boost,
-    // silently skipping the ripple check on the stage. Return None so
-    // classify_topology falls through to its Buck default instead of guessing.
+    // No role-name guessing at all. An earlier version fabricated 40 V for any
+    // name CONTAINING "SOLAR"/"PV"/"VBUS_IN" (and 13 V/40 V for VIN/VOUT/BAT) —
+    // but "PV" is a substring of ordinary buck/gate-driver nets like PVDD/PVCC,
+    // and a fabricated voltage on the OUTPUT rail outranked a real "+12V" token
+    // on the input and flipped a buck to a boost (skipping the ripple check).
+    // Only explicit numeric tokens above are trustworthy; everything else is
+    // unknown, and classify_topology takes its documented Buck default.
     None
 }
 
@@ -412,5 +409,19 @@ mod tests {
         assert_eq!(classify_topology("VIN", "VOUT"), Topology::Buck);
         // A numeric token still beats a generic name on the other rail.
         assert_eq!(rail_nominal_v("+12V"), Some(12.0));
+    }
+
+    #[test]
+    fn pv_substring_names_do_not_fabricate_a_voltage() {
+        // R6: "PVDD"/"PVCC" merely CONTAIN "PV" but are ordinary non-solar
+        // gate-driver/buck nets; "VBUS_IN" is a 5 V USB input, not 40 V. The
+        // old substring guess fabricated 40 V for all of them.
+        assert_eq!(rail_nominal_v("PVDD"), None);
+        assert_eq!(rail_nominal_v("PVCC"), None);
+        assert_eq!(rail_nominal_v("SOLAR+"), None);
+        assert_eq!(rail_nominal_v("VBUS_IN"), None);
+        // The real R6 failing scenario: a PV-ish name on the OUTPUT rail vs a
+        // real numeric input must not be forced to Boost by the 40 V guess.
+        assert_eq!(classify_topology("+12V", "PVDD_OUT"), Topology::Buck);
     }
 }

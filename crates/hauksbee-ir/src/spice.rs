@@ -2394,6 +2394,22 @@ fn parse_model_card(line: usize, raw: &str) -> Result<ModelCard, SpiceError> {
         if let Some((k, v)) = tok.split_once('=') {
             if let Some(num) = parse_spice_number(v) {
                 params.insert(k.to_ascii_lowercase(), num);
+            } else if v.starts_with(|c: char| {
+                c.is_ascii_digit() || c == '+' || c == '-' || c == '.' || c == '{'
+            }) {
+                // A value that LOOKS numeric (or is a `{expr}`) but won't parse
+                // is a malformed number, not string metadata — refuse it loudly
+                // rather than silently dropping the key so downstream `get_or`
+                // fills a default (the §4.3 misparse sin the LEVEL check below
+                // also guards). Model cards don't get `{expr}` evaluation; those
+                // must be resolved before the card. Purely-alphabetic params
+                // (mfg=, type=) are legitimate metadata the stamp ignores and
+                // pass through silently, exactly as before.
+                return Err(SpiceError::Syntax {
+                    line,
+                    msg: format!(".model '{name}': unparseable value for parameter '{k}': '{v}'"),
+                    text: raw.into(),
+                });
             }
         }
     }
@@ -3894,6 +3910,37 @@ mod tests {
         }
         let ok = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=1 VTO=1)\n.end\n";
         assert!(SpiceLoader::load(ok).is_ok(), "LEVEL=1 must stay accepted");
+    }
+
+    /// Round-6 #5: a `.model` parameter whose value LOOKS numeric — a stray
+    /// sign, a bare `.`, or an unresolved `{expr}` — but does not parse used to
+    /// be SILENTLY dropped, so the stamp filled a default and the device
+    /// behaved nothing like the card said. The loader now refuses it, with the
+    /// card's line. Model cards don't get `{expr}` evaluation, so an unresolved
+    /// brace expression is exactly such a malformed number. Genuine string
+    /// metadata (mfg=, type=) still passes through untouched.
+    #[test]
+    fn unparseable_numeric_model_param_is_refused_not_dropped() {
+        // `VTO={VT0}` — an unresolved brace expression, not metadata. It looks
+        // numeric (leading `{`) but the number parser can't read it.
+        let bad = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=1 VTO={VT0})\n.end\n";
+        match SpiceLoader::load(bad).unwrap_err() {
+            SpiceError::Syntax { line, msg, .. } => {
+                assert_eq!(line, 3, "refusal must carry the .model card's line");
+                assert!(
+                    msg.contains("VTO"),
+                    "refusal must name the offending param: {msg}"
+                );
+            }
+            other => panic!("expected a line-numbered Syntax refusal, got {other:?}"),
+        }
+
+        // Alphabetic metadata params must still parse silently.
+        let ok = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=1 VTO=1 mfg=Vishay type=logic)\n.end\n";
+        assert!(
+            SpiceLoader::load(ok).is_ok(),
+            "string metadata params (mfg=, type=) must pass through, not be refused"
+        );
     }
 
     /// Bug-hunt: a 0-Ω resistor is a SHORT (ngspice convention), but the

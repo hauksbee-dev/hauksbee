@@ -597,11 +597,28 @@ pub struct AvrMcu {
 
     /// True once firmware has been loaded.
     firmware_loaded: bool,
+
+    /// Sub-cycle remainder carried across `run_micros` calls, in units of
+    /// (cycles × 1e6). When `frequency_hz` is not a multiple of the chunk rate,
+    /// integer `us·freq/1e6` drops a fraction of a cycle every chunk; carrying
+    /// it here keeps the guest cycle counter (and thus its timers/UART baud)
+    /// from drifting behind simulated time over a long run.
+    cycle_carry: u64,
 }
 
 // SAFETY: We never share AvrMcu across threads simultaneously; it is Send
 // because SharedState is Send and avr_ptr is only touched from the owning thread.
 unsafe impl Send for AvrMcu {}
+
+/// Cycles to run for `us` microseconds at `freq` Hz, carrying the sub-cycle
+/// remainder so repeated calls don't drift. `carry` is the leftover from the
+/// previous call in units of (cycles × 1e6); returns `(cycles_this_call,
+/// new_carry)` with `new_carry < 1e6`. When `freq` is a multiple of the chunk
+/// rate the carry is always 0 and this reduces to plain `us·freq/1e6`.
+fn cycle_budget(us: u64, freq: u64, carry: u64) -> (u64, u64) {
+    let total = us * freq + carry;
+    (total / 1_000_000, total % 1_000_000)
+}
 
 impl AvrMcu {
     /// Create a new, uninitialised AVR MCU.
@@ -680,6 +697,7 @@ impl AvrMcu {
             frequency_hz: frequency,
             hooked_ports: Vec::new(),
             firmware_loaded: false,
+            cycle_carry: 0,
         })
     }
 
@@ -909,8 +927,11 @@ impl Mcu for AvrMcu {
     }
 
     fn run_micros(&mut self, us: u64) -> Result<()> {
-        let freq = self.frequency_hz;
-        let cycles = us * freq / 1_000_000;
+        // Carry the sub-cycle remainder across calls so the guest cycle count
+        // tracks simulated time exactly even when freq isn't a multiple of the
+        // chunk rate (e.g. a 3.6864 MHz crystal over 100 µs chunks).
+        let (cycles, carry) = cycle_budget(us, self.frequency_hz, self.cycle_carry);
+        self.cycle_carry = carry;
         self.run_cycles(cycles)?;
         Ok(())
     }
@@ -1033,5 +1054,38 @@ impl Drop for AvrMcu {
                 let _ = Box::from_raw(self.callback_ptr as *mut Arc<Mutex<SharedState>>);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cycle_budget_tests {
+    use super::cycle_budget;
+
+    /// R6: `run_micros` must carry the sub-cycle remainder so a clock that
+    /// isn't a multiple of the chunk rate doesn't drift. 3.6864 MHz over
+    /// 100 µs chunks is 368.64 cycles/chunk; naive truncation loses 0.64
+    /// cycle every chunk (64 cycles over 10 ms).
+    #[test]
+    fn carries_sub_cycle_remainder_without_drift() {
+        let freq = 3_686_400;
+        let (mut carry, mut total) = (0u64, 0u64);
+        for _ in 0..100 {
+            let (c, nc) = cycle_budget(100, freq, carry);
+            total += c;
+            carry = nc;
+        }
+        // 100 chunks × 100 µs = 10 ms → exactly 36 864 cycles.
+        assert_eq!(total, 36_864, "carried total must be exact");
+        // Naive per-chunk truncation would be 368 × 100 = 36 800 — 64 short.
+        assert_eq!(36_864 - 368 * 100, 64, "the drift the carry eliminates");
+    }
+
+    /// A clock that IS a multiple of the chunk rate never accrues carry, so
+    /// the behavior is bit-identical to the old plain division.
+    #[test]
+    fn exact_multiple_clock_never_carries() {
+        let freq = 16_000_000; // 16 MHz -> 1600 cycles / 100 µs, no remainder
+        let (cycles, carry) = cycle_budget(100, freq, 0);
+        assert_eq!((cycles, carry), (1600, 0));
     }
 }

@@ -292,6 +292,18 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     if upper.starts_with("GIG") {
         return (1e9, Some("GIG"), &s[3..]);
     }
+    // RKM decimal-point letters for inductance ("4H7" = 4.7 H) and large
+    // capacitance ("4F7" = 4.7 F): the same middle-letter-as-decimal-point
+    // convention "R" uses for resistance (IEC 60062), multiplier ×1. Gated on a
+    // FOLLOWING digit so the bare UNIT forms ("1F", "10H", "F50V") still fall
+    // through to parse_tail's unit recognition, and lowercase 'f' stays femto.
+    let bytes = s.as_bytes();
+    let next_is_digit = bytes.get(1).is_some_and(u8::is_ascii_digit);
+    match bytes[0] {
+        b'H' | b'h' if next_is_digit => return (1.0, Some("H"), &s[1..]),
+        b'F' if next_is_digit => return (1.0, Some("F"), &s[1..]),
+        _ => {}
+    }
     match s.as_bytes()[0] {
         // Lowercase 'f' is femto; UPPERCASE 'F' is the Farad UNIT, not a
         // multiplier. Consuming 'F' as femto turned a bare-Farad value ("1F",
@@ -467,6 +479,23 @@ mod tests {
         // Bare 'F' is still the Farad unit, not a tolerance code.
         check("1F", 1.0);
         check("4k7", 4700.0); // no tolerance letter: unchanged
+    }
+
+    #[test]
+    fn test_rkm_henry_farad_decimal_letters() {
+        // RKM middle-letter-as-decimal-point for inductors (H) and large caps
+        // (F), like "2R2" for resistors (regression for round-6 F9): the
+        // trailing digit is the fractional part, not dropped.
+        check("4H7", 4.7); // 4.7 H
+        check("4F7", 4.7); // 4.7 F
+        check("1H5", 1.5); // 1.5 H
+        check("2R2", 2.2); // resistor form still works
+        // Bare unit forms are NOT decimal letters (no following digit):
+        check("10F", 10.0); // 10 farads
+        check("1H", 1.0); // 1 henry
+        // Prefix multipliers still win; lowercase 'f' stays femto:
+        assert!((parse_value("100nF").unwrap().si - 1e-7).abs() < 1e-20);
+        assert!((parse_value("4f7").unwrap().si - 4.7e-15).abs() < 1e-30);
     }
 
     #[test]
