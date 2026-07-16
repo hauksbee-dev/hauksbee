@@ -2128,6 +2128,8 @@ fn bind_opamp(
     let reference = pick(roles, &["ref", "reference", "vref"]).copied();
     let gain = model.params.get_f64("gain").unwrap_or(1e5);
     let pole_hz = model.params.get_f64("pole_hz");
+    // Datasheet slew rate in V/µs (the unit datasheets quote it in).
+    let slew = model.params.get_f64("slew");
     let rail_lo = model.params.get_f64("rail_lo").unwrap_or(0.0);
     let rail_hi = model.params.get_f64("rail_hi").unwrap_or(5.0);
     let warning = model
@@ -2157,6 +2159,7 @@ fn bind_opamp(
             reference,
             gain,
             pole_hz,
+            slew,
             rail_lo,
             rail_hi,
         });
@@ -2187,6 +2190,7 @@ fn bind_opamp(
         reference,
         gain,
         pole_hz,
+        slew,
         rail_lo,
         rail_hi,
     });

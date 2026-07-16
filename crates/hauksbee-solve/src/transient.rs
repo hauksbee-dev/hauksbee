@@ -724,6 +724,27 @@ fn seed_reactive_state(
                     state.xb[bank].dx1[i] = 0.0;
                 }
             }
+            // Op-amp with output dynamics (pole_hz/slew): its state is the
+            // internal drive EMF, seeded at the DC point's clipped ideal
+            // target — a single pole passes DC unattenuated, so the filtered
+            // EMF at the operating point IS the target. Ideal op-amps
+            // (neither field set) never read the slot; the seed is harmless.
+            Device::OpAmp {
+                inp,
+                inn,
+                reference,
+                gain,
+                rail_lo,
+                rail_hi,
+                ..
+            } => {
+                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
+                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
+                    .clamp(*rail_lo, *rail_hi);
+                state.x1[i] = target;
+                state.x2[i] = target;
+                state.dx1[i] = 0.0;
+            }
             _ => {}
         }
     }
@@ -899,6 +920,37 @@ fn advance_reactive_state(
                     state.xb[bank].x2[i] = q_old;
                     state.xb[bank].x1[i] = q_new;
                     state.xb[bank].dx1[i] = dq;
+                }
+            }
+            // Op-amp with output dynamics: roll the internal drive EMF
+            // forward through the SAME single-pole + slew update the stamp
+            // used this step (`opamp_transient_output` is shared code), from
+            // the same frozen previous EMF and the ACCEPTED input voltages.
+            // At convergence this reproduces exactly the EMF the final
+            // Newton iteration stamped. Updated here — on step acceptance
+            // only, never mid-Newton — matching the capacitor's lifecycle.
+            // Ideal op-amps (no pole, no slew) return None and leave the
+            // slot untouched.
+            Device::OpAmp {
+                inp,
+                inn,
+                reference,
+                gain,
+                pole_hz,
+                slew,
+                rail_lo,
+                rail_hi,
+                ..
+            } => {
+                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
+                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
+                    .clamp(*rail_lo, *rail_hi);
+                if let Some((v_out, _)) =
+                    crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
+                {
+                    state.x2[i] = state.x1[i];
+                    state.x1[i] = v_out;
+                    state.dx1[i] = 0.0;
                 }
             }
             _ => {}
