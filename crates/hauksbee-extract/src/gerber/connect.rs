@@ -479,7 +479,7 @@ pub fn reconstruct(
             position: Some((pl.x, pl.y, pl.rotation)),
             layer: if pl.top { "F.Cu".into() } else { "B.Cu".into() },
             properties: Vec::new(),
-            dnp: false,
+            dnp: pl.dnp,
             pins: std::mem::take(&mut comp_pads[i]),
         });
     }
@@ -839,6 +839,7 @@ mod tests {
             y: 0.0,
             rotation: 0.0,
             top: true,
+            dnp: false,
         };
         let (board, stats) = reconstruct("t", vec![layer], vec![], vec![pl]);
         assert_eq!(board.components.len(), 1);
