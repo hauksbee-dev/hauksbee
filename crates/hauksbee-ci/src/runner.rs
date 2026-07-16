@@ -887,7 +887,16 @@ fn run_one(
     // First simulated time (s) each supply net's protection latched, so a
     // scenario-scoped `protection_trip` assertion can tell a pre-scenario trip
     // apart from one that fires inside its window.
-    let mut protection_trip_t: HashMap<String, f64> = HashMap::new();
+    // Every sim-time at which a supply's protection NEWLY latched, per net. A
+    // battery BMS runs in hiccup mode — it trips, the load drops below reset so
+    // it re-arms, and it can trip again — so a supply shared across sequential
+    // scenarios may latch once per window. Recording only the first latch time
+    // (the old `or_insert`) attributed a re-trip to the earliest window and lost
+    // it in every later one. We keep the full list of latch instants and per-net
+    // edge state to detect each new latch.
+    let mut protection_trip_t: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut prot_prev_tripped: HashMap<String, bool> = HashMap::new();
+    let mut prot_prev_ever: HashMap<String, bool> = HashMap::new();
 
     // Boot-coverage watch list: every (net, required-level) a boot-coverage
     // assertion names. We record the first frame each net reaches its level.
@@ -1044,19 +1053,30 @@ fn run_one(
                 }
             }
         }
-        // Protection-trip tracking: read the sticky "ever tripped" flag so a
-        // trip that occurs and re-arms within one coarse frame is still caught.
+        // Protection-trip tracking. Record EACH new latch instant, not just the
+        // first, so a re-armed supply's second trip in a later scenario window is
+        // not lost. Two edges signal a new latch:
+        //   * the non-sticky `protection_tripped()` rising false→true (a re-trip
+        //     the sampler actually observed), and
+        //   * the sticky `protection_ever_tripped()` rising for the first time —
+        //     catching a trip+re-arm that happened entirely within one coarse
+        //     frame, which the non-sticky sample would miss (the reason the sticky
+        //     flag was read here originally).
         for leg in &engine.scheduler().supplies {
-            if leg.supply.protection_ever_tripped() {
-                protection_tripped.insert(leg.net_name.clone(), true);
-                // Record the first frame we saw the latch, not every frame.
-                protection_trip_t
-                    .entry(leg.net_name.clone())
-                    .or_insert(frame.t);
+            let net = &leg.net_name;
+            let ever = leg.supply.protection_ever_tripped();
+            let now = leg.supply.protection_tripped();
+            let prev_now = prot_prev_tripped.get(net).copied().unwrap_or(false);
+            let prev_ever = prot_prev_ever.get(net).copied().unwrap_or(false);
+            if (now && !prev_now) || (ever && !prev_ever) {
+                protection_trip_t.entry(net.clone()).or_default().push(frame.t);
+            }
+            prot_prev_tripped.insert(net.clone(), now);
+            prot_prev_ever.insert(net.clone(), ever);
+            if ever {
+                protection_tripped.insert(net.clone(), true);
             } else {
-                protection_tripped
-                    .entry(leg.net_name.clone())
-                    .or_insert(false);
+                protection_tripped.entry(net.clone()).or_insert(false);
             }
         }
 
@@ -1114,20 +1134,7 @@ fn run_one(
         engine.scheduler().firmware_driven_nets().into_iter().collect();
     let drive_direction_observable = !engine.scheduler().has_external_backend();
 
-    // Fold the per-net first-trip times into per-(scenario, net) verdicts: a
-    // trip belongs to a window only if it first latched WITHIN it — at or after
-    // the window's start AND before the next scenario begins (`end_s`). The lower
-    // bound lets a scoped `protection_trip` ignore a trip from before the scenario
-    // began; the upper bound stops a LATER scenario's trip from being attributed
-    // to this (earlier-starting) one on a shared supply net. Half-open [start, end).
-    let mut protection_tripped_scoped: HashMap<(String, String), bool> = HashMap::new();
-    for sw in &scenario_windows {
-        for net in &sw.nets {
-            let tripped_in_window =
-                trip_in_window(protection_trip_t.get(net).copied(), sw.start_s, sw.end_s);
-            protection_tripped_scoped.insert((sw.id.clone(), net.clone()), tripped_in_window);
-        }
-    }
+    let protection_tripped_scoped = scope_protection_trips(&protection_trip_t, &scenario_windows);
 
     Ok(RunOutcome {
         seed,
@@ -1163,6 +1170,37 @@ fn run_one(
 /// window runs to end-of-run (the last scenario and the run-wide window).
 fn trip_in_window(trip_t: Option<f64>, start_s: f64, end_s: f64) -> bool {
     trip_t.is_some_and(|t| time_in_window(t, start_s, end_s))
+}
+
+/// True if ANY recorded latch instant for a net falls in `[start_s, end_s)`. A
+/// re-armed (hiccup-mode) supply latches more than once, so a scenario-scoped
+/// verdict must consider every latch, not just the first — otherwise a later
+/// window's own re-trip is lost (it was attributed to the earliest window that
+/// saw the first latch).
+fn any_trip_in_window(trip_ts: Option<&Vec<f64>>, start_s: f64, end_s: f64) -> bool {
+    trip_ts.is_some_and(|ts| ts.iter().any(|&t| time_in_window(t, start_s, end_s)))
+}
+
+/// Fold the per-net latch times into per-(scenario, net) trip verdicts: a trip
+/// belongs to a window if ANY latch fell WITHIN it — at or after the window's
+/// start AND before the next scenario begins (`end_s`). The lower bound lets a
+/// scoped `protection_trip` ignore a trip from before the scenario began; the
+/// upper bound stops a LATER scenario's trip from being attributed to this
+/// (earlier-starting) one. Testing every latch (not just the first) lets a later
+/// window recover its own genuine re-trip on a re-armed supply. Half-open
+/// `[start, end)`.
+fn scope_protection_trips(
+    trip_t: &HashMap<String, Vec<f64>>,
+    windows: &[ScenarioWindow],
+) -> HashMap<(String, String), bool> {
+    let mut scoped: HashMap<(String, String), bool> = HashMap::new();
+    for sw in windows {
+        for net in &sw.nets {
+            let tripped = any_trip_in_window(trip_t.get(net), sw.start_s, sw.end_s);
+            scoped.insert((sw.id.clone(), net.clone()), tripped);
+        }
+    }
+    scoped
 }
 
 /// Whether time `t` falls in a scenario's half-open window `[start_s, end_s)`.
@@ -2111,6 +2149,53 @@ mod tests {
         assert!(trip_in_window(Some(0.1), 0.1, f64::INFINITY));
         // No trip at all is never in any window.
         assert!(!trip_in_window(None, 0.0, f64::INFINITY));
+    }
+
+    #[test]
+    fn rearmed_supply_second_trip_is_owned_by_its_own_scenario_window() {
+        // R37: a battery BMS runs in hiccup mode — it trips, the load drops below
+        // reset so it re-arms, and it can trip again. A supply shared by inrush
+        // [0, 0.1) and steady [0.1, +inf) that latches at 0.05 (inrush), re-arms,
+        // then latches again at 0.15 (steady) must have BOTH windows own their own
+        // trip. The old code recorded only the FIRST latch (0.05) and folded with
+        // `trip_in_window`, so steady saw `trip_in_window(0.05, 0.1, inf) = false`
+        // — a false GREEN over a window in which the pack demonstrably tripped.
+        let mut trip_t: HashMap<String, Vec<f64>> = HashMap::new();
+        trip_t.insert("BATT".into(), vec![0.05, 0.15]);
+        let windows = vec![
+            ScenarioWindow {
+                id: "inrush".into(),
+                start_s: 0.0,
+                end_s: 0.1,
+                nets: vec!["BATT".into()],
+            },
+            ScenarioWindow {
+                id: "steady".into(),
+                start_s: 0.1,
+                end_s: f64::INFINITY,
+                nets: vec!["BATT".into()],
+            },
+        ];
+        let scoped = scope_protection_trips(&trip_t, &windows);
+        assert_eq!(
+            scoped.get(&("steady".into(), "BATT".into())),
+            Some(&true),
+            "steady must recover its own re-trip at 0.15 (was false under first-trip-only)"
+        );
+        assert_eq!(
+            scoped.get(&("inrush".into(), "BATT".into())),
+            Some(&true),
+            "inrush still owns its first trip at 0.05"
+        );
+        // The first-latch-only view (what the old f64 map gave) loses the re-trip:
+        assert!(
+            !trip_in_window(trip_t["BATT"].first().copied(), 0.1, f64::INFINITY),
+            "the first-trip-only fold was the bug: steady wrongly saw no trip"
+        );
+        // A single-latch supply is unchanged, and no-latch is never in any window.
+        assert!(any_trip_in_window(Some(&vec![0.15]), 0.1, f64::INFINITY));
+        assert!(!any_trip_in_window(Some(&vec![0.05]), 0.1, f64::INFINITY));
+        assert!(!any_trip_in_window(None, 0.0, f64::INFINITY));
     }
 
     #[test]
