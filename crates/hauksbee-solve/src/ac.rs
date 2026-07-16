@@ -1000,7 +1000,16 @@ fn stamp_opamp_ac(
         sys.add(oi, oi, Complex64::new(gout, 0.0));
         if in_rail {
             if let Some(ri) = reference.and_then(|n| layout.node(n)) {
-                sys.add(oi, ri, Complex64::new(-gout, 0.0));
+                // The transient stamp low-passes the WHOLE driven target
+                // (vref + gain*(vp-vn)) toward the ideal, so the reference
+                // feedthrough is rolled off by the same single pole as the gain
+                // path — not held flat. Scale the reference coupling by the pole
+                // factor at UNIT gain (1 at DC, 1/(1+jw/wp) above pole_hz) so the
+                // AC stamp stays the exact transient tangent: DC agrees, and the
+                // reference->output transfer rolls off instead of leaving a
+                // spurious flat high-frequency feedthrough floor.
+                let href = opamp_ac_gain(1.0, pole_hz, w);
+                sys.add(oi, ri, -gout * href);
             }
             let gain = opamp_ac_gain(gain, pole_hz, w);
             if let Some(pi) = layout.node(inp) {
