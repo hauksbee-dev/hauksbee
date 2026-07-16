@@ -217,6 +217,13 @@ fn branch_constrainedness(branch: &str) -> u32 {
     let mut score = 0u32;
     let mut chars = branch.chars().peekable();
     let mut in_class = false;
+    // Constrainedness contributed by the most recent quantifiable atom, so a
+    // following `*` / `?` (which allow ZERO occurrences) can retract it: an
+    // optional token matches nothing and constrains nothing. Without this an
+    // optional tail like `[A-Z0-9-]*` inflated a family pattern's score above the
+    // exact `^1N4148$` override it carves out of, letting the broad entry win the
+    // same-layer specificity tie and bind the wrong (generic) params.
+    let mut last_atom: u32 = 0;
     while let Some(c) = chars.next() {
         if in_class {
             match c {
@@ -231,14 +238,21 @@ fn branch_constrainedness(branch: &str) -> u32 {
         match c {
             '\\' => match chars.next() {
                 // Escaped class: pins one position, admits several chars.
-                Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => score += 1,
+                Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => {
+                    score += 1;
+                    last_atom = 1;
+                }
                 // Escaped metacharacter: a literal.
-                Some(_) => score += 2,
+                Some(_) => {
+                    score += 2;
+                    last_atom = 2;
+                }
                 None => {}
             },
             '[' => {
                 in_class = true;
                 score += 1;
+                last_atom = 1;
             }
             '(' => {
                 // Skip inline flags: `(?i)` scores nothing, `(?i:` / `(?:`
@@ -252,19 +266,43 @@ fn branch_constrainedness(branch: &str) -> u32 {
                         }
                     }
                 }
+                // A group is not a single cancellable atom.
+                last_atom = 0;
             }
             '{' => {
-                // Repetition count `{m,n}`: contributes nothing.
+                // Repetition count `{m,n}`: contributes nothing, and consumes the
+                // atom so a following lazy `?` cannot retract it.
                 while let Some(&n) = chars.peek() {
                     chars.next();
                     if n == '}' {
                         break;
                     }
                 }
+                last_atom = 0;
             }
-            '^' | '$' => score += 1,
-            ')' | '.' | '*' | '+' | '?' => {}
-            _ => score += 2,
+            '^' | '$' => {
+                score += 1;
+                last_atom = 0;
+            }
+            // `*` and `?` make the PRECEDING atom optional (zero occurrences ok):
+            // retract what that atom added AND dock one looseness unit, so a
+            // pattern carrying an optional region is strictly LESS constrained
+            // than the same pattern without it (it matches a superset). This is
+            // what lets the exact override `^1N4148$` (14) deterministically beat
+            // the family `^1N4148[A-Z0-9-]*$` (13) it carves out of, rather than
+            // merely tie it and fall to the id tiebreak. `+` requires at least one
+            // occurrence, so it still constrains and is not retracted.
+            '*' | '?' => {
+                score = score.saturating_sub(last_atom + 1);
+                last_atom = 0;
+            }
+            ')' | '.' | '+' => {
+                last_atom = 0;
+            }
+            _ => {
+                score += 2;
+                last_atom = 2;
+            }
         }
     }
     score
@@ -388,11 +426,32 @@ mod tests {
     }
 
     #[test]
-    fn wildcards_and_quantifiers_score_nothing() {
-        assert_eq!(
-            pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
-            pattern_constrainedness("^1N4148[A-Z0-9-]$")
+    fn optional_quantifier_lowers_specificity_below_the_exact_override() {
+        // R32: an optional-quantified token (`[A-Z0-9-]*`, `a?`) matches zero
+        // characters and constrains nothing, so it must NOT inflate the score.
+        // Previously the class scored +1 and the `*` retracted nothing, so the
+        // family pattern outscored the exact `^1N4148$` override it carves out of
+        // and won the same-layer regex tie-break — silently binding the generic
+        // params. The exact literal must now win deterministically.
+        assert!(
+            pattern_constrainedness("^1N4148$")
+                > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
+            "the exact override must out-score the optional-tail family"
         );
+        // An optional region is strictly looser than the same required region.
+        assert!(
+            pattern_constrainedness("^1N4148[A-Z0-9-]$")
+                > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
+            "a required class char out-scores the same class made optional"
+        );
+        // `+` requires at least one occurrence, so it still constrains — a `+`
+        // family is not docked below its `*` sibling to nothing.
+        assert!(
+            pattern_constrainedness("^1N4148[A-Z0-9-]+$")
+                > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
+            "`+` (one-or-more) constrains more than `*` (zero-or-more)"
+        );
+        // Wildcards still score nothing.
         assert!(pattern_constrainedness("^ABC$") > pattern_constrainedness("^AB.$"));
     }
 }

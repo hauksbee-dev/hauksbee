@@ -160,17 +160,16 @@ pub fn emit(
     // pattern) gets both from one run. Placed after the validity guards so an
     // invalid/empty sweep still refuses first and writes no misleading CSV.
     if let Some(path) = csv {
-        let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
-        for net in &nodes {
-            // A net name can carry a comma; RFC-4180 escape it so the column
-            // count stays fixed (mirrors sim.rs::csv_escape).
-            let net_cell = crate::commands::sim::csv_escape(net);
-            for (f, db, ph) in resp.bode(circuit, net) {
-                out.push_str(&format!("{net_cell},{f},{db},{ph}\n"));
-            }
-        }
+        let (out, no_path) = ac_csv_body(&per_net);
         std::fs::write(path, out)?;
         eprintln!("wrote {}", path.display());
+        if !no_path.is_empty() {
+            eprintln!(
+                "  (omitted {} net(s) with no signal path from the CSV: {})",
+                no_path.len(),
+                no_path.join(", ")
+            );
+        }
     }
 
     if json {
@@ -321,4 +320,63 @@ pub fn emit(
     }
 
     Ok(())
+}
+
+/// Build the `--ac-csv` body from the per-net bode data. Returns the CSV text and
+/// the list of nets omitted because they have no signal path.
+///
+/// A net with no signal path is a full series of `AC_FLOOR_DB` (-6000 dB)
+/// sentinel rows. The JSON and text surfaces deliberately never present that
+/// floor as real data (they list such nets under `no_signal_path_nets`), so the
+/// CSV must not either — otherwise a CI tool ingesting `mag_db` reads -6000 dB as
+/// a genuine measurement. Such nets are dropped from the rows and returned so the
+/// caller can report the omission explicitly (never silent). An empty bode (a net
+/// not found in the circuit) contributes no rows, as before.
+fn ac_csv_body(per_net: &[(String, Vec<(f64, f64, f64)>)]) -> (String, Vec<String>) {
+    let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
+    let mut no_path: Vec<String> = Vec::new();
+    for (net, bode) in per_net {
+        if !bode.is_empty() && ac_is_all_sentinel(bode) {
+            no_path.push(net.clone());
+            continue;
+        }
+        // A net name can carry a comma; RFC-4180 escape it so the column count
+        // stays fixed (mirrors sim.rs::csv_escape).
+        let net_cell = crate::commands::sim::csv_escape(net);
+        for (f, db, ph) in bode {
+            out.push_str(&format!("{net_cell},{f},{db},{ph}\n"));
+        }
+    }
+    (out, no_path)
+}
+
+#[cfg(test)]
+mod ac_csv_tests {
+    use super::ac_csv_body;
+    use crate::result::AC_FLOOR_DB;
+
+    #[test]
+    fn csv_omits_no_signal_path_nets_instead_of_writing_the_floor() {
+        // R32: the CSV writer emitted every -6000 dB sentinel row verbatim, so a
+        // dead net (no drive path) landed in the file as if it were real -6000 dB
+        // data — contradicting the JSON/text "never present the floor as data"
+        // contract. The floor-only net must be omitted and reported.
+        let live: Vec<(f64, f64, f64)> = vec![(1.0, -3.0, -45.0), (10.0, -20.0, -90.0)];
+        let dead: Vec<(f64, f64, f64)> =
+            vec![(1.0, AC_FLOOR_DB, 0.0), (10.0, AC_FLOOR_DB, 0.0)];
+        let per_net = vec![("OUT".to_string(), live), ("DEAD".to_string(), dead)];
+
+        let (csv, no_path) = ac_csv_body(&per_net);
+
+        assert_eq!(no_path, vec!["DEAD".to_string()], "the dead net must be reported as omitted");
+        assert!(csv.contains("OUT,1,-3,-45"), "the live net's real rows must be present: {csv}");
+        assert!(
+            !csv.contains("DEAD"),
+            "the no-signal-path net must not appear in the CSV at all: {csv}"
+        );
+        assert!(
+            !csv.contains("-6000"),
+            "the -6000 dB floor must never be written as CSV data: {csv}"
+        );
+    }
 }
