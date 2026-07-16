@@ -223,6 +223,16 @@ unsafe impl Send for SharedState {}
 // C IRQ callback implementations
 // ---------------------------------------------------------------------------
 
+/// Replacement for simavr's default `sleep` callback. In "raw" mode simavr
+/// installs `avr_callback_sleep_raw`, which `usleep`s for the whole gap to the
+/// next cycle-timer whenever the firmware executes a SLEEP instruction — pinning
+/// the co-sim thread to REAL wall-clock time and breaking the bounded-chunk
+/// contract that `run_micros`/`run_cycles` (and the per-frame server loop) rely
+/// on. simavr's run loop advances `avr->cycle` itself (not this callback), so a
+/// no-op keeps cycle accounting exact while removing the wall-clock stall. (The
+/// QEMU backend guards the same liveness hazard with `BOOT_WINDOW_CAP_S`.)
+unsafe extern "C" fn noop_sleep(_avr: *mut ffi::avr_t, _how_long: ffi::avr_cycle_count_t) {}
+
 unsafe extern "C" fn uart_output_hook(
     _irq: *mut ffi::avr_irq_t,
     value: u32,
@@ -666,6 +676,10 @@ impl AvrMcu {
             if !debug_on {
                 (*avr).set_log(0);
             }
+            // Override simavr's default wall-clock `usleep` sleep callback with a
+            // no-op so a firmware SLEEP instruction advances simulated time
+            // without stalling the co-sim thread in real time (see `noop_sleep`).
+            (*avr).sleep = Some(noop_sleep);
             // simavr defaults the rails to 3.3V; standard Arduino-class
             // parts run at 5V and the ADC full scale follows AVcc. The
             // co-sim layer can override via set_rails().

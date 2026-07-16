@@ -36,7 +36,11 @@ pub fn emit(
     let drc_structured = DrcStructured::from_report(&drc);
     let lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
-    let si = board.si_checks(geo_text);
+    // Route through the single SI chokepoint so this aggregate surface carries
+    // the same trace-ampacity + input-cap-ripple findings as the dedicated
+    // `--si` report (the bare `si_checks` omitted them, giving `--check` a false
+    // "looks healthy" over an under-width power trace).
+    let si = crate::checks::engine_si(board, lib, geo_text);
     // USB-C CC compliance, only when the board has a USB-C receptacle.
     let usbc = crate::usb_c_report(board);
 
@@ -110,7 +114,10 @@ pub fn emit_combined_json(
     jr.drc = Some(DrcStructured::from_report(&drc));
     let lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
-    let si = board.si_checks(geo_text);
+    // Same SI chokepoint as the text path: the combined `run --json` must carry
+    // the ampacity/ripple findings too, or a machine consumer of the JSON reads
+    // a false-clean SI section.
+    let si = crate::checks::engine_si(board, lib, geo_text);
     let mut findings = lint_findings_json(&lint);
     findings.extend(si_findings_json(&si));
     jr.findings = Some(findings);

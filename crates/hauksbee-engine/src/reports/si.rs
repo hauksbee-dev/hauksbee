@@ -25,13 +25,11 @@ pub fn emit(
     // Altium geometry is not yet threaded into the SI text checks, so pass None
     // there; the connectivity-based SI checks still run on `board`.
     let geo_text = if altium_present { None } else { Some(text) };
-    let mut report = board.si_checks(geo_text);
-    // Engine-layer SI checks whose attribution needs the bound DB models: trace
-    // ampacity (current attribution + IPC-2221) and input-cap ripple (converter
-    // topology + cap ripple rating). These augment the extract-layer SI report
-    // exactly the way --lint augments its report with the strap lint.
-    crate::checks::ampacity::append_ampacity(board, lib, geo_text, &mut report);
-    crate::checks::ripple::append_ripple(board, lib, &mut report);
+    // The single SI chokepoint: extract-layer SI checks plus the engine-layer
+    // trace-ampacity + input-cap-ripple checks. Shared with `--check`, the JSON
+    // aggregate, the TUI and the web front door so every SI surface runs the
+    // identical set (the augmentation used to live only here).
+    let report = crate::checks::engine_si(board, lib, geo_text);
     match mode {
         OutputMode::Json => {
             let bound = bind_board(board, lib);

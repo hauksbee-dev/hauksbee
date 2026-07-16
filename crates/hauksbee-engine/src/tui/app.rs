@@ -91,7 +91,9 @@ pub fn build_state(
     // strap lint + MCU resource conflicts + the unchecked-strap-bearing-MCU
     // coverage note), so the TUI never prints a clean verdict over a strap-bearing
     // MCU whose BOOT0 was never examined.
-    let si = board.si_checks(Some(board_text));
+    // Route through the SI chokepoint so the TUI carries the same trace-ampacity
+    // + input-cap-ripple findings as `--si` and the other surfaces.
+    let si = crate::checks::engine_si(&board, &lib, Some(board_text));
     let si_json = si_findings_json(&si);
     let lint = crate::checks::engine_lint(&board, &lib);
     let lint_json = lint_findings_json(&lint);
