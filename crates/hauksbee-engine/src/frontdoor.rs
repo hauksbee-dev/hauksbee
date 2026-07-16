@@ -466,7 +466,22 @@ pub fn analyze_with_firmware(
         return report;
     }
 
-    report.cosim = Some(run_web_cosim(contents, fw_name, fw_bytes));
+    let cosim = run_web_cosim(contents, fw_name, fw_bytes);
+    // Fold SERIOUS co-sim faults into the top-level verdict: analyze() computed
+    // serious/total/headline from the STATIC sections only, so a destructive
+    // electrical fault the firmware co-sim produced (e.g. an overcurrent-killed
+    // MOSFET) otherwise left the badge green and the headline "Looks healthy".
+    // Only serious faults escalate the headline; benign co-sim notes stay in the
+    // co-sim card without flipping the top-line verdict.
+    let cosim_serious = cosim.findings.iter().filter(|f| f.level == "serious").count();
+    if cosim_serious > 0 {
+        report.serious += cosim_serious;
+        report.total += cosim_serious;
+        // total > 0 now, so the heads-up / bind-open arms of overall_headline are
+        // not reached; passing false for them is correct.
+        report.headline = overall_headline(report.total, report.serious, false, false);
+    }
+    report.cosim = Some(cosim);
     report
 }
 

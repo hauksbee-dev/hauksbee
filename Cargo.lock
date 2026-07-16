@@ -889,6 +889,7 @@ dependencies = [
  "forge-sexpr",
  "gerber-types",
  "gerber_parser",
+ "hauksbee-models",
  "quick-xml",
  "regex",
  "rstar",
