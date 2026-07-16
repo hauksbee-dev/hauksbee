@@ -2509,9 +2509,11 @@ fn scale_suffix(suffix: &str) -> f64 {
         1e-12
     } else if s.starts_with('f') {
         1e-15
-    } else if s.starts_with('a') {
-        1e-18
     } else {
+        // No `a`=atto branch: atto is NOT in SPICE3/ngspice's scale set
+        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit — a
+        // current source "I1 1 0 5A" must read 5 A, not 5e-18. Trailing unit
+        // letters (A/V/H/F/Ohm/S) fall through here to the identity multiplier.
         1.0
     }
 }
@@ -4511,6 +4513,15 @@ mod tests {
         assert_eq!(parse_spice_number("2.2u"), Some(2.2e-6));
         assert_eq!(parse_spice_number("1e-12"), Some(1e-12));
         assert!((parse_spice_number("4.7nF").unwrap() - 4.7e-9).abs() < 1e-20);
+        // R16: a trailing ampere unit must NOT be read as the atto scale factor.
+        // Atto is not in the SPICE3/ngspice scale set; "5A" is 5 amperes, not
+        // 5e-18. (Before the fix the `a`=1e-18 branch scaled every A-suffixed
+        // current-source value into oblivion.)
+        assert_eq!(parse_spice_number("5A"), Some(5.0));
+        assert_eq!(parse_spice_number("1.5a"), Some(1.5));
+        assert_eq!(parse_spice_number("100mA"), Some(100e-3), "m=milli, A ignored");
+        // The femto scale still works with a trailing farad unit.
+        assert!((parse_spice_number("2fF").unwrap() - 2e-15).abs() < 1e-25);
     }
 
     #[test]
