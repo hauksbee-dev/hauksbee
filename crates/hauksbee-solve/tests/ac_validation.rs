@@ -870,3 +870,107 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
     );
     assert!(vout.arg().abs() < 1e-4, "phase {} at the DC limit", vout.arg());
 }
+
+/// A voltage switch biased MID-TRANSITION is a modulator: the smooth tanh
+/// conductance has a nonzero control tangent, so with v_a != v_b an AC signal
+/// on the CONTROL node must appear at the output (the switch-as-VGA path the
+/// transient stamp captures via `gm_ctrl = vab * dgsw/dvctrl`). Regression for
+/// the AC arm stamping only the quiescent conductance and dropping the
+/// control transconductance entirely — `.ac` then reported the transfer
+/// function of a fixed resistor (output ~0 here, since the through path is
+/// AC-grounded) while transient saw the modulation. The AC answer must match
+/// the DC sensitivity d v_out / d v_ctrl (the same tangent the transient
+/// Newton stamp linearizes) to small-signal accuracy.
+#[test]
+fn vswitch_mid_transition_control_modulation_appears_in_ac() {
+    // von=2, voff=1 -> vmid=1.5, span=1. ron=100, roff=1e6: at vctrl=vmid the
+    // switch sits at gsw=sqrt(gon*goff)=1e-4 S, deep in its transition band.
+    // VA holds the through path at 5 V (AC-grounded); VINJ biases the control
+    // at vmid and carries the unit AC drive (dedicated-injection convention).
+    fn build(vctrl_dc: f64) -> Circuit {
+        let mut ckt = Circuit::new();
+        let a = ckt.node("a");
+        let out = ckt.node("out");
+        let ctrl = ckt.node("ctrl");
+        ckt.add(Device::Vsource {
+            name: "VA".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        ckt.add(Device::Vsource {
+            name: "VINJ".into(),
+            p: ctrl,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(vctrl_dc),
+        });
+        ckt.add(Device::VSwitch {
+            name: "SW1".into(),
+            a,
+            b: out,
+            ctrl_p: ctrl,
+            ctrl_n: NodeId::GROUND,
+            von: 2.0,
+            voff: 1.0,
+            ron: 100.0,
+            roff: 1e6,
+        });
+        ckt.add(Device::Resistor {
+            name: "RL".into(),
+            a: out,
+            b: NodeId::GROUND,
+            ohms: 1.0e3,
+            tc1: None,
+        });
+        ckt
+    }
+
+    let vmid = 1.5;
+    let ckt = build(vmid);
+    let spec = AcSpec {
+        fstart: 1.0,
+        fstop: 1.0,
+        points: 1,
+        sweep: Sweep::Linear,
+    };
+    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let vout_ac = resp.points[0].node(&ckt, "out").unwrap().norm();
+
+    // A fixed resistor at the quiescent conductance gives ~0 here (the through
+    // path is AC-grounded; only gmin leaks). The modulation path gives ~5.7.
+    assert!(
+        vout_ac > 1.0,
+        "control modulation path missing from .ac: |V(out)|={vout_ac} \
+         (fixed-resistor-only stamp gives ~0)"
+    );
+
+    // Transient-path cross-check: the small-signal gain the Newton tangent
+    // predicts is the DC sensitivity d v_out / d v_ctrl at the bias. Central
+    // finite difference over the FULL nonlinear DC solve.
+    let vout_dc = |vc: f64| -> f64 {
+        let mut c = build(vc);
+        let out = c.node("out");
+        let mut ws = hauksbee_solve::Workspace::new(&c);
+        hauksbee_solve::dc_operating_point(&mut ws, &c, &opts()).unwrap();
+        ws.x[ws.layout.node(out).unwrap()]
+    };
+    let d = 1e-5;
+    let gain_fd = (vout_dc(vmid + d) - vout_dc(vmid - d)) / (2.0 * d);
+    assert!(
+        (vout_ac - gain_fd.abs()).abs() / gain_fd.abs() < 1e-2,
+        "AC gain must match the transient tangent's DC sensitivity: \
+         |V(out)|={vout_ac}, finite-difference dVout/dVctrl={gain_fd}"
+    );
+
+    // Gate parity: effects.switch_ctrl_gm=false must drop the modulation path
+    // in AC exactly as it does in transient, leaving the bare conductance.
+    let mut no_gm = opts();
+    no_gm.effects.switch_ctrl_gm = false;
+    let resp = AcAnalysis::new(no_gm).run(&ckt, &spec).unwrap();
+    let vout_off = resp.points[0].node(&ckt, "out").unwrap().norm();
+    assert!(
+        vout_off < 1e-3,
+        "switch_ctrl_gm=false should stamp only the quiescent conductance: \
+         |V(out)|={vout_off}"
+    );
+}
