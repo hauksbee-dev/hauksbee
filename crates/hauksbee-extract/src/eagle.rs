@@ -47,9 +47,17 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                     e.attributes()
                         .flatten()
                         .map(|a| {
+                            // quick-xml does NOT unescape attribute values: an
+                            // `&amp;`/`&lt;`/`&#38;` in an Eagle net name, value,
+                            // or reference would be stored literally. Unescape it,
+                            // falling back to the raw bytes only on a decode error.
+                            let value = a
+                                .unescape_value()
+                                .map(|c| c.into_owned())
+                                .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
                             (
                                 String::from_utf8_lossy(a.key.as_ref()).into_owned(),
-                                String::from_utf8_lossy(&a.value).into_owned(),
+                                value,
                             )
                         })
                         .collect()
@@ -228,4 +236,23 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
 
 fn num(attrs: &HashMap<String, String>, key: &str) -> Option<f64> {
     attrs.get(key)?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract;
+
+    #[test]
+    fn attribute_xml_entities_are_unescaped() {
+        // R13: quick-xml leaves attribute values escaped. A net name carrying an
+        // entity (`&amp;`) must decode to '&', not the literal "&amp;".
+        let xml = r#"<eagle><drawing><board><signals>
+            <signal name="VBUS&amp;5"/>
+            <signal name="A&lt;B"/>
+        </signals></board></drawing></eagle>"#;
+        let board = extract(xml).unwrap();
+        let names: Vec<&str> = board.nets.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"VBUS&5"), "entity decoded: {names:?}");
+        assert!(names.contains(&"A<B"), "entity decoded: {names:?}");
+    }
 }

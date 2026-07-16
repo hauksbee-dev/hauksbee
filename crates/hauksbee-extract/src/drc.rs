@@ -1944,10 +1944,14 @@ pub mod eagle_drc {
         e.attributes()
             .flatten()
             .map(|a| {
-                (
-                    String::from_utf8_lossy(a.key.as_ref()).into_owned(),
-                    String::from_utf8_lossy(&a.value).into_owned(),
-                )
+                // Unescape XML entities in the value (quick-xml leaves them raw),
+                // consistent with the eagle.rs reader; fall back to raw bytes on
+                // a decode error.
+                let value = a
+                    .unescape_value()
+                    .map(|c| c.into_owned())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
+                (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
             })
             .collect()
     }

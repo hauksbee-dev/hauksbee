@@ -177,6 +177,14 @@ pub struct Scheduler {
     pub chunk_s: f64,
     pub opts: SolverOptions,
     pub sim_time: f64,
+    /// Sub-microsecond remainder carried between chunks. `run_micros` takes an
+    /// integer microsecond count, so a chunk whose duration is not a whole
+    /// number of microseconds (e.g. a 1.5 µs chunk, or any chunk under 0.5 µs
+    /// that would otherwise round to zero and be clamped up to 1) would drift
+    /// the firmware clock away from sim time. The truncated fraction is banked
+    /// here and folded into the next chunk so the integer microseconds handed to
+    /// the MCU sum to the true elapsed time.
+    micros_carry: f64,
     /// Per-net toggle counters and min/max, for headless stats.
     pub stats: HashMap<String, NetStat>,
     /// Net-attached / output peripherals (controls, VCD sinks), ticked each
@@ -449,6 +457,7 @@ impl Scheduler {
             chunk_s: DEFAULT_CHUNK_S,
             opts,
             sim_time: 0.0,
+            micros_carry: 0.0,
             stats: HashMap::new(),
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
@@ -1091,7 +1100,22 @@ impl Scheduler {
     }
 
     fn run_chunk(&mut self, chunk: f64, uart: &mut HashMap<String, Vec<u8>>) {
-        let micros = (chunk * 1e6).round().max(1.0) as u64;
+        // Integer microseconds for `run_micros`, carrying the sub-microsecond
+        // remainder across chunks so the firmware clock does not drift from sim
+        // time. A bare `(chunk * 1e6).round()` per chunk accumulates a rounding
+        // error every chunk (and a chunk under 0.5 µs rounds to 0, then gets
+        // clamped up to 1 µs, injecting time that never elapsed); banking the
+        // truncated fraction makes the delivered microseconds sum to the true
+        // elapsed time. Still clamped to at least 1 so a non-empty chunk always
+        // advances the core.
+        let exact = chunk * 1e6 + self.micros_carry;
+        let micros_f = exact.floor().max(1.0);
+        self.micros_carry = exact - micros_f;
+        let micros = micros_f as u64;
+        // Set when any MCU refuses to advance this chunk (see the `run_micros`
+        // Err handling below); folded into the chunk-failure accounting after
+        // the analog solve so the run refuses to report a fake-quiet chunk.
+        let mut mcu_run_failed = false;
 
         // Refresh the snapshot the edge-driven 74HC165 read chains sample on a
         // PL load (it fires inside the MCU run below, so it must reflect the
@@ -1238,7 +1262,20 @@ impl Scheduler {
             // the analog PWL side (05 §1.1). Exact on simavr, coarse on poll
             // backends (flagged by `cycle_exact`).
             let cyc_start = m.core.current_cycle();
-            let _ = m.core.run_micros(micros);
+            if let Err(e) = m.core.run_micros(micros) {
+                // The MCU backend refused to advance this chunk (a crashed core,
+                // a backend transport error, a HALT). Do NOT swallow it: the
+                // firmware side of this chunk did not run, so folding the
+                // subsequent solve as a normal quiet chunk would report a fake
+                // clean run. Flag it loudly and mark the chunk failed below so
+                // strict/CI runs abort rather than trust it (05 §3b, refuse
+                // rather than fake).
+                eprintln!(
+                    "WARNING: MCU {} refused to advance chunk at t={:.6}s ({micros} us): {e:#}",
+                    m.binding.reference, self.sim_time,
+                );
+                mcu_run_failed = true;
+            }
             let cyc_end = m.core.current_cycle();
             let cycle_exact = m.core.cycle_exact();
             let mcu_ref = m.binding.reference.clone();
@@ -1396,6 +1433,17 @@ impl Scheduler {
         let pwl_restores = self.apply_pwl_drives(chunk);
         let chunk_converged = self.solve_chunk(chunk);
         self.restore_pwl_drives(&pwl_restores);
+        // An MCU that refused to advance makes this chunk untrustworthy even if
+        // the analog march converged. `solve_chunk` records (and streaks) the
+        // chunk on an analog failure and resets the streak on convergence; fold
+        // the MCU failure into the same accounting so the failed-window and
+        // consecutive-failure surfaces see it too. Only record here when the
+        // analog side converged — otherwise `solve_chunk` already recorded this
+        // exact window and a second call would double-count it. `sim_time` has
+        // not advanced yet, so the window start matches `solve_chunk`'s.
+        if mcu_run_failed && chunk_converged {
+            self.record_failed_chunk(chunk);
+        }
 
         // 3b. Peripherals: output sinks sample the freshly-solved voltages.
         //
@@ -1806,9 +1854,11 @@ impl Scheduler {
         &self.failed_windows
     }
 
-    /// False once any chunk's analog solve failed this run: the co-sim held stale
-    /// voltages over at least one window, so it cannot be reported as a faithful
-    /// analog result. Drives `analog_valid` in coverage and the co-sim JSON.
+    /// False once any chunk this run failed to solve faithfully: either the
+    /// analog march diverged (held stale voltages over a window) or an MCU
+    /// refused to advance (`run_micros` errored), so the digital side of that
+    /// chunk never ran. Either way the co-sim cannot vouch for that window.
+    /// Drives `analog_valid` in coverage and the co-sim JSON.
     pub fn analog_valid(&self) -> bool {
         self.failed_chunks == 0
     }
@@ -1823,6 +1873,30 @@ impl Scheduler {
     /// Clear all forced node-voltage overrides.
     pub fn clear_forced_voltages(&mut self) {
         self.forced_node_volts.clear();
+    }
+
+    /// Restart the sim clock and drop every run-accumulated diagnostic so a
+    /// re-run starts clean. Zeroing only `sim_time` (as the engine's `reset`
+    /// once did) left the failed-chunk count, failed-time windows, the
+    /// consecutive-failure streak, the sub-microsecond clock carry, the running
+    /// net stats, and the per-frame peak accumulators from the PREVIOUS run in
+    /// place — so a fresh run inherited a stale `analog_valid:false`, phantom
+    /// failed windows, and a firmware clock already offset by the old carry.
+    /// These are all "since the run began" accumulators; a reset must clear
+    /// them. Board topology, bindings, and forced overrides are left intact.
+    pub fn reset_run_state(&mut self) {
+        self.sim_time = 0.0;
+        self.micros_carry = 0.0;
+        self.failed_chunks = 0;
+        self.failed_windows.clear();
+        self.consecutive_failed_chunks = 0;
+        self.max_consecutive_failed_chunks = 0;
+        for st in self.stats.values_mut() {
+            *st = Default::default();
+        }
+        self.frame_peak_current.clear();
+        self.frame_v_extremes.clear();
+        self.faults_pending.clear();
     }
 
     fn update_stats(&mut self) {
@@ -3615,6 +3689,174 @@ mod tests {
             for_pin(('C', 3)).is_empty(),
             "floating net must not be pushed (its 0 V solve is the tri-state \
              legs talking), got {calls:?}"
+        );
+    }
+
+    // ── run_micros integer-carry + failure accounting (SCHED-1 / SCHED-2) ────
+
+    /// A mock core that records every integer-microsecond count handed to
+    /// `run_micros`, and can be told to refuse the advance (return `Err`).
+    struct MicrosCore {
+        micros: Arc<Mutex<Vec<u64>>>,
+        fail: bool,
+    }
+
+    impl Mcu for MicrosCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, us: u64) -> anyhow::Result<()> {
+            self.micros
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(us);
+            if self.fail {
+                anyhow::bail!("mock core refuses to advance");
+            }
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+    }
+
+    /// Wire a bare `MicrosCore` (no drivers) onto a solvable board and return
+    /// the scheduler plus the shared micros-log handle.
+    fn sched_with_micros_core(fail: bool) -> (Scheduler, Arc<Mutex<Vec<u64>>>) {
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let micros = Arc::new(Mutex::new(Vec::new()));
+        let core = MicrosCore {
+            micros: micros.clone(),
+            fail,
+        };
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets: HashMap::new(),
+            module: false,
+        };
+        sched.mcus.push(core_with_hooks(Box::new(core), binding));
+        sched.responder_registries.push(None);
+        sched.relayout();
+        (sched, micros)
+    }
+
+    /// Regression for SCHED-1: `run_micros` takes integer microseconds, so a
+    /// chunk whose duration is a fractional number of microseconds must carry
+    /// the truncated remainder into the next chunk — otherwise the firmware
+    /// clock drifts from sim time by up to ~1 µs per chunk. Ten 1.3 µs chunks
+    /// are 13.0 µs of true time; the delivered microseconds must sum to within
+    /// one microsecond of that. The old `(chunk * 1e6).round()` per chunk
+    /// delivered 1 µs each (10 µs total) — 3 µs, ~23 %, of pure drift.
+    #[test]
+    fn fractional_microsecond_chunks_do_not_drift_the_mcu_clock() {
+        let (mut sched, micros) = sched_with_micros_core(false);
+        let mut uart = HashMap::new();
+        let chunk = 1.3e-6; // 1.3 µs — not a whole number of microseconds
+        for _ in 0..10 {
+            sched.run_chunk(chunk, &mut uart);
+        }
+        let delivered: u64 = micros.lock().unwrap_or_else(|e| e.into_inner()).iter().sum();
+        let true_us = 10.0 * 1.3; // 13.0 µs
+        assert!(
+            (delivered as f64 - true_us).abs() <= 1.0,
+            "carried integer microseconds must track true elapsed time within 1 µs: \
+             delivered {delivered} µs vs {true_us} µs true"
+        );
+        // And it must NOT be the naive per-chunk round (which loses time every
+        // chunk): 10 chunks rounding to 1 µs would deliver only 10 µs.
+        assert!(
+            delivered >= 12,
+            "per-chunk rounding without carry systematically undercounts: got {delivered} µs"
+        );
+    }
+
+    /// Regression for SCHED-2: a `run_micros` error was swallowed with
+    /// `let _ = ...`, so an MCU that refused to advance (crashed core, backend
+    /// transport error) left the chunk looking like a normal quiet run even
+    /// though the firmware side never executed. The failure must feed the same
+    /// failed-chunk / `analog_valid` surface the analog march uses, so strict
+    /// and CI consumers refuse to trust the window.
+    #[test]
+    fn mcu_refusing_to_advance_marks_the_chunk_failed() {
+        let (mut sched, _micros) = sched_with_micros_core(true);
+        assert!(sched.analog_valid(), "clean before any chunk runs");
+        let mut uart = HashMap::new();
+        sched.run_chunk(1e-4, &mut uart);
+        assert!(
+            sched.failed_chunk_count() >= 1,
+            "an MCU that errored out of run_micros must record a failed chunk, \
+             not report a fake-quiet run"
+        );
+        assert!(
+            !sched.analog_valid(),
+            "a swallowed MCU failure must flip analog_valid so CI/strict refuse it"
+        );
+        assert!(
+            !sched.failed_windows().is_empty(),
+            "the failed chunk's sim-time window must be surfaced for consumers"
+        );
+    }
+
+    /// Regression for the engine `reset` bug: a reset that zeroed only
+    /// `sim_time` left the previous run's failed-chunk count, failed windows,
+    /// consecutive streak, and clock carry in place, so a re-run inherited a
+    /// stale `analog_valid:false` and phantom failed windows. `reset_run_state`
+    /// must wipe every run-accumulated diagnostic back to a clean-run state.
+    #[test]
+    fn reset_run_state_clears_stale_failure_accounting() {
+        let (mut sched, _micros) = sched_with_micros_core(true);
+        let mut uart = HashMap::new();
+        sched.run_chunk(1e-4, &mut uart);
+        assert!(sched.failed_chunk_count() >= 1, "first run recorded a failure");
+        assert!(!sched.analog_valid(), "first run is not clean");
+
+        sched.reset_run_state();
+        assert_eq!(sched.sim_time, 0.0, "reset restarts the sim clock");
+        assert_eq!(
+            sched.failed_chunk_count(),
+            0,
+            "reset must clear the stale failed-chunk count"
+        );
+        assert!(
+            sched.failed_windows().is_empty(),
+            "reset must clear the stale failed windows"
+        );
+        assert!(
+            sched.analog_valid(),
+            "a reset scheduler must report clean until the NEXT run fails"
+        );
+        assert!(
+            !sched.analog_abort_tripped(),
+            "reset must clear the consecutive-failure streak"
         );
     }
 }
