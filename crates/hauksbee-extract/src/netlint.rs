@@ -854,33 +854,17 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 // Check 3: LED series-resistor current sanity.
 // ---------------------------------------------------------------------------
 
-/// Parse a resistor value string ("330", "1k", "4k7", "1.2K", "0R") to ohms.
+/// Parse a resistor value string ("330", "1k", "4k7", "1.2K", "0R") to ohms via
+/// the single canonical parser in `hauksbee-models`.
+///
+/// Delegated to `value::parse_value` so this copy never drifts from the SI-check
+/// copy or the canonical one again — the three hand-rolled variants had diverged
+/// on the "/footprint" qualifier, milli-`m` (a 1e9 error), and inline
+/// annotations. Accept only an ohmic magnitude (no unit, or explicit Ω).
 fn parse_ohms(v: &str) -> Option<f64> {
-    let s = v.trim().to_ascii_uppercase();
-    let s = s
-        .trim_end_matches('Ω')
-        .trim_end_matches("OHM")
-        .trim_end_matches('R');
-    // SPICE-style MEG/GIG multipliers must be matched before the single-letter
-    // K/M/R scan, or "10MEG" lands on the 'M' and misparses to None.
-    // Handle "4K7" style (R/K/M as decimal point).
-    for (suffix, mult) in [("MEG", 1e6), ("GIG", 1e9), ("K", 1e3), ("M", 1e6), ("R", 1.0)] {
-        if let Some(idx) = s.find(suffix) {
-            let (a, b) = s.split_at(idx);
-            let b = &b[suffix.len()..];
-            // Leading-suffix sub-1-ohm notation ("R47" = 0.47 Ω) leaves the
-            // integer part empty; treat it as 0 rather than failing the parse
-            // (which would abort the whole resistor search via `?` and silently
-            // skip the LED-current check on a near-dead-short).
-            let a: f64 = if a.is_empty() { 0.0 } else { a.parse().ok()? };
-            if b.is_empty() {
-                return Some(a * mult);
-            }
-            let frac: f64 = format!("0.{b}").parse().ok()?;
-            return Some((a + frac) * mult);
-        }
-    }
-    s.parse().ok()
+    hauksbee_models::value::parse_value(v)
+        .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
+        .map(|p| p.si)
 }
 
 /// Typical LED forward voltage; we use a conservative single value since colour
@@ -1165,6 +1149,19 @@ mod parse_ohms_tests {
         assert_eq!(parse_ohms("2GIG"), Some(2e9));
         // 4M7 single-letter decimal notation is still 4.7 MΩ.
         assert_eq!(parse_ohms("4M7"), Some(4.7e6));
+    }
+
+    #[test]
+    fn parse_ohms_matches_the_canonical_parser() {
+        // R25 (DRIFT-1): the "/footprint" qualifier (Olimex "2.2k/R0603") must
+        // be tolerated — net-lint dropped it and returned None, silently
+        // disabling the LED-current check for that resistor.
+        assert_eq!(parse_ohms("2.2k/R0603"), Some(2200.0));
+        assert_eq!(parse_ohms("330R/R0603"), Some(330.0));
+        // R25 (DRIFT-2): lowercase 'm' is milli, not mega.
+        assert_eq!(parse_ohms("2m2"), Some(0.0022));
+        // R25 (DRIFT-4): inline tolerance annotations are tolerated.
+        assert_eq!(parse_ohms("10k 1%"), Some(10_000.0));
     }
 }
 

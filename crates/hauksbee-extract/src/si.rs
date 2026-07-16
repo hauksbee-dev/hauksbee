@@ -298,33 +298,21 @@ fn is_unconnected_net(name: &str) -> bool {
 }
 
 /// Parse a resistor value string ("330", "1k", "4k7", "2.2k/R0603", "0R") to
-/// ohms. Tolerant of a trailing "/footprint" qualifier (Olimex writes
-/// "2.2k/R0603").
+/// ohms via the single canonical parser in `hauksbee-models`.
+///
+/// This used to be a hand-rolled parser that drifted from `value::parse_value`
+/// and from net-lint's copy — reading lowercase-`m` milliohms as MEGohms (a 1e9
+/// error), rejecting leading-`R` shunt marks ("R47") and inline annotations
+/// ("10k 1%"), and missing unicode/SPICE forms. Delegating kills that whole
+/// drift class: the canonical parser handles µ/Ω/ohm-sign glyphs, MEG/GIG,
+/// milli-`m`, the R/K/M-decimal form, "/footprint" qualifiers, chip-size codes,
+/// and trailing tolerance annotations, all in one tested place. Accept only an
+/// ohmic magnitude (no unit, or an explicit Ω) so a stray farad/volt value here
+/// still reads as "not a resistor".
 fn parse_ohms(v: &str) -> Option<f64> {
-    let s = v.split('/').next().unwrap_or(v).trim().to_ascii_uppercase();
-    // Strip both ohm glyphs: the Greek capital omega (U+03A9) AND the dedicated
-    // ohm sign (U+2126), plus the "OHM" word — a value bearing either unit must parse.
-    let s = s
-        .trim_end_matches('\u{03a9}')
-        .trim_end_matches('\u{2126}')
-        .trim_end_matches("OHM");
-    let s = s.trim();
-    // SPICE-style multi-letter multipliers (MEG/GIG) MUST be matched before the
-    // single-letter K/M/R scan, or "10MEG" lands on the 'M' and misparses to None.
-    // 4K7 / 2K2 style: R/K/M acts as the decimal point.
-    for (suffix, mult) in [("MEG", 1e6), ("GIG", 1e9), ("K", 1e3), ("M", 1e6), ("R", 1.0)] {
-        if let Some(idx) = s.find(suffix) {
-            let (a, b) = s.split_at(idx);
-            let b = &b[suffix.len()..];
-            let a: f64 = a.trim().parse().ok()?;
-            if b.is_empty() {
-                return Some(a * mult);
-            }
-            let frac: f64 = format!("0.{}", b.trim()).parse().ok()?;
-            return Some((a + frac) * mult);
-        }
-    }
-    s.parse().ok()
+    hauksbee_models::value::parse_value(v)
+        .filter(|p| matches!(p.unit.as_deref(), None | Some("Ω")))
+        .map(|p| p.si)
 }
 
 /// Parse a capacitor value string to farads. Handles "15p", "18pF", "1n", "0.1uF",
