@@ -544,8 +544,13 @@ fn fold_cosim_faults(
 /// on `ran` keeps a not-run co-sim (no firmware / external backend) from
 /// demoting, and only a bare "Looks healthy" line is ever overwritten.
 fn cosim_caveat_headline(cosim: &WebCosimSection, current_headline: &str) -> Option<String> {
-    let caveat =
-        cosim.ran && (!cosim.firmware_exercised || cosim.substituted || !cosim.analog_valid);
+    // A note-level co-sim finding (a boot held-high advisory, the analog-validity
+    // caveat) is an actionable heads-up, not a counted fault: like the static
+    // sections' `heads_up`, it must demote a bare "Looks healthy" to the heads-up
+    // verdict without touching the serious/total badge.
+    let has_note = cosim.findings.iter().any(|f| f.level == "note");
+    let caveat = cosim.ran
+        && (!cosim.firmware_exercised || cosim.substituted || !cosim.analog_valid || has_note);
     if caveat && current_headline == overall_headline(0, 0, false, false) {
         Some(overall_headline(0, 0, true, false))
     } else {
@@ -839,13 +844,19 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
         &sched.firmware_driven_nets(),
         firmware_ran,
     );
-    // Each held-high control net is a serious finding (a switched load possibly
-    // energised at power-up), pushed BEFORE the electrical faults so it leads.
+    // Each held-high control net is an ADVISORY (note-level) heads-up — the same
+    // status every CLI surface gives it: `--plain` renders it as a "worth a look"
+    // note, `--json` as a boot_control_net note, and `--strict` does not fail on
+    // it. It is a real, actionable observation (a switched load possibly energised
+    // at power-up) but not a confirmed board fault, so it must NOT fold into the
+    // web serious/total count and flip the headline to "fix the serious ones" — it
+    // demotes a bare "Looks healthy" to the heads-up verdict via
+    // `cosim_caveat_headline`. Pushed BEFORE the electrical faults so it leads.
     for net in &boot_advisory.held_high_control_nets {
         findings.insert(
             0,
             WebFinding {
-                level: "serious".to_string(),
+                level: "note".to_string(),
                 what: format!("Control net '{net}' may be energised at power-up"),
                 why: format!(
                     "'{net}' drives a transistor/relay, is driven HIGH and held from power-up, \
@@ -1498,6 +1509,41 @@ mod tests {
         assert!(
             fold_cosim_faults(0, 0, &clean_ran_section()).is_none(),
             "a fault-free co-sim must not fold into the issue count"
+        );
+    }
+
+    #[test]
+    fn boot_held_high_advisory_demotes_the_headline_not_folds_as_a_serious_fault() {
+        // R32: the web boot held-high advisory was inserted as a SERIOUS finding,
+        // so fold_cosim_faults counted it and rewrote a statically-clean board's
+        // headline to "fix the serious ones before ordering boards" — while every
+        // CLI surface treats a driven-high control net as an advisory note that
+        // exits 0. It is a real, actionable observation but not a confirmed board
+        // fault, so it must be note-level: it demotes a bare "Looks healthy" to the
+        // heads-up verdict without folding into the serious/total count.
+        let mut sect = clean_ran_section();
+        sect.findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: "Control net 'GATE_CTRL' may be energised at power-up".to_string(),
+                why: "driven HIGH and held from power-up with no safe-default resistor".to_string(),
+                fix: "confirm the polarity or add a pull to the safe level".to_string(),
+            },
+        );
+
+        // (1) The advisory does not fold as an electrical fault.
+        assert!(
+            fold_cosim_faults(0, 0, &sect).is_none(),
+            "a boot held-high advisory must not fold into the serious/total count"
+        );
+
+        // (2) It demotes the bare healthy headline to the heads-up verdict.
+        let healthy = overall_headline(0, 0, false, false);
+        assert_eq!(
+            cosim_caveat_headline(&sect, &healthy),
+            Some(overall_headline(0, 0, true, false)),
+            "a boot held-high advisory must demote Looks healthy, not escalate serious"
         );
     }
 
