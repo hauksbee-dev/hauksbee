@@ -2588,17 +2588,31 @@ fn bind_digital(
             drivers.insert(role, drv);
         }
     }
+    // Retain clones of the stamped legs so a FAILED construction can tri-state
+    // them: the Vsource+Resistor devices are already in the circuit, and dropping
+    // the driver handles does NOT remove them. Without this, an output leg starts
+    // enabled at 0 V through `ron` (~50 Ω) and, with no DigitalComponent to manage
+    // it, actively holds the output net LOW for the whole run — the opposite of
+    // the "nets will float" contract, and it can hold a downstream SRCLR/OE
+    // asserted. Mirror bind_mcu, which disables its GPIO legs until firmware
+    // enables them.
+    let leg_handles: Vec<PinDriver> = drivers.values().cloned().collect();
     match DigitalComponent::new(comp.reference.clone(), model, roles.clone(), drivers) {
         Ok(d) => digital.push(d),
         // Never silently downgrade a broken spec to a passthrough: the part is
-        // left unmodeled LOUDLY (its nets float — exactly the lore-#9 failure
-        // this message exists to surface early).
-        Err(e) => eprintln!(
-            "ERROR: {}: invalid [models.logic] for model '{}': {e}; the part is left \
-             unmodeled and its output nets will float — fix the spec (`hauksbee models \
-             lint`) or override it with --models-dir",
-            comp.reference, model.id
-        ),
+        // left unmodeled LOUDLY, with its output nets genuinely floating (the
+        // stamped legs tri-stated to `roff`), matching the message below.
+        Err(e) => {
+            for mut drv in leg_handles {
+                drv.set_enabled(circuit, false);
+            }
+            eprintln!(
+                "ERROR: {}: invalid [models.logic] for model '{}': {e}; the part is left \
+                 unmodeled and its output nets will float — fix the spec (`hauksbee models \
+                 lint`) or override it with --models-dir",
+                comp.reference, model.id
+            );
+        }
     }
 }
 

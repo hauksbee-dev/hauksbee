@@ -295,8 +295,9 @@ pub fn run_spec_with_lib(
     };
 
     let mut outcomes = Vec::with_capacity(plans.len());
+    let member_count = plans.len();
     for plan in &plans {
-        let mut outcome = run_one(spec, &base, &thresholds, plan, lib)?;
+        let mut outcome = run_one(spec, &base, &thresholds, plan, lib, member_count)?;
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
             None if spec.ac.is_some() => {
@@ -716,6 +717,7 @@ fn run_one(
     thresholds: &[f64],
     plan: &crate::tolerance::SeedPlan,
     lib: &ModelLibrary,
+    member_count: usize,
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base)?;
@@ -822,7 +824,11 @@ fn run_one(
 
     // Attach this spec's peripherals (controls, bus slaves, sinks) and their
     // timeline events to the engine's scheduler.
-    let vcd_targets = attach_peripherals(spec, &board, &net_node, engine.scheduler_mut())?;
+    // In a multi-member fuzz/tolerance ensemble, make each seed's VCD path
+    // distinct so per-seed waveforms are not all overwritten to one fixed file.
+    let vcd_seed = (member_count > 1).then_some(seed);
+    let vcd_targets =
+        attach_peripherals(spec, &board, &net_node, engine.scheduler_mut(), vcd_seed)?;
 
     // Attach declarative sensors (RegisterMapSensor) to their buses.
     attach_sensors(spec, engine.scheduler_mut())?;
@@ -1469,6 +1475,9 @@ fn attach_peripherals(
     board: &ExtractedBoard,
     net_node: &HashMap<String, NodeId>,
     sched: &mut hauksbee_engine::scheduler::Scheduler,
+    // `Some(seed)` in a multi-member ensemble: the vcd_sink path is made
+    // per-seed so N runs do not overwrite one fixed file. `None` for a single run.
+    vcd_seed: Option<u32>,
 ) -> Result<Vec<(String, std::path::PathBuf)>, SpecError> {
     use std::sync::{Arc, Mutex};
 
@@ -1610,7 +1619,19 @@ fn attach_peripherals(
                         return Err(err(format!("vcd net '{name}' not found")));
                     }
                 }
-                let path = p.vcd_path.as_ref().map(|s| spec.base_dir.join(s));
+                let path = p.vcd_path.as_ref().map(|s| {
+                    let base = spec.base_dir.join(s);
+                    // Per-seed path in an ensemble ("wave.vcd" -> "wave.seed3.vcd")
+                    // so each member's waveform is retained, not overwritten.
+                    match vcd_seed {
+                        Some(seed) => {
+                            let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("wave");
+                            let ext = base.extension().and_then(|s| s.to_str()).unwrap_or("vcd");
+                            base.with_file_name(format!("{stem}.seed{seed}.{ext}"))
+                        }
+                        None => base,
+                    }
+                });
                 if let Some(path) = &path {
                     vcd_targets.push((p.id.clone(), path.clone()));
                 }
