@@ -434,7 +434,30 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
 fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.supply_net.clone().unwrap_or_default();
     let want = a.expect_trip.unwrap_or(false);
-    let tripped = out.protection_tripped.get(&net).copied();
+    // When the assertion names a scenario, only count trips that latched inside
+    // that scenario's window — a trip from an earlier scenario must not satisfy
+    // (or violate) an assertion scoped to a later one. Unscoped assertions fall
+    // back to the run-wide "ever tripped" flag.
+    let tripped = match &a.scenario {
+        Some(scope) => {
+            match out
+                .protection_tripped_scoped
+                .get(&(scope.clone(), net.clone()))
+                .copied()
+            {
+                Some(t) => Some(t),
+                None => {
+                    return (
+                        false,
+                        format!(
+                            "{net} was not a supply net in scenario window '{scope}' (nothing to trip)"
+                        ),
+                    );
+                }
+            }
+        }
+        None => out.protection_tripped.get(&net).copied(),
+    };
     match tripped {
         Some(t) => {
             let ok = t == want;
@@ -1075,6 +1098,7 @@ mod tests {
                 peripherals: HashMap::new(),
                 rail_windows,
                 protection_tripped: HashMap::new(),
+                protection_tripped_scoped: HashMap::new(),
                 sim_ms: 100.0,
                 first_reach_ms: HashMap::new(),
                 driven_nets: Default::default(),
@@ -1109,5 +1133,77 @@ mod tests {
         good.observe(0.010, 5.0);
         let (ok2, msg2) = check_rail_window(&a, &outcome_with_window(good));
         assert!(ok2, "a 2-sample window that never dips must pass: {msg2}");
+    }
+
+    // A `protection_trip` assertion scoped to a scenario must judge only trips
+    // that latched *inside* that scenario's window. A trip that happened during
+    // an earlier scenario (still visible in the run-wide `protection_tripped`
+    // flag) must not satisfy an assertion scoped to a later window (round-6 #8).
+    #[test]
+    fn protection_trip_respects_scenario_scope() {
+        use super::check_protection_trip;
+        use crate::runner::RunOutcome;
+        use std::collections::HashMap;
+
+        // Net BATT latched at some point in the run, but only within the
+        // "inrush" window — NOT within the later "steady" window.
+        fn outcome() -> RunOutcome {
+            let mut protection_tripped = HashMap::new();
+            protection_tripped.insert("BATT".to_string(), true);
+            let mut protection_tripped_scoped = HashMap::new();
+            protection_tripped_scoped.insert(("inrush".to_string(), "BATT".to_string()), true);
+            protection_tripped_scoped.insert(("steady".to_string(), "BATT".to_string()), false);
+            RunOutcome {
+                seed: 0,
+                windows: HashMap::new(),
+                uart: HashMap::new(),
+                faults: Vec::new(),
+                toggles: HashMap::new(),
+                peak_current: HashMap::new(),
+                peak_temp_c: HashMap::new(),
+                peripherals: HashMap::new(),
+                rail_windows: HashMap::new(),
+                protection_tripped,
+                protection_tripped_scoped,
+                sim_ms: 100.0,
+                first_reach_ms: HashMap::new(),
+                driven_nets: Default::default(),
+                drive_direction_observable: false,
+                first_fault_ms: None,
+                ac: None,
+                analog_valid: true,
+                failed_windows: Vec::new(),
+                analog_abort: false,
+                sampled_values: Vec::new(),
+                net_series: HashMap::new(),
+            }
+        }
+
+        let expect_trip = |scenario: Option<&str>| -> (bool, String) {
+            let scen = scenario
+                .map(|s| format!("scenario = \"{s}\"\n"))
+                .unwrap_or_default();
+            let a: crate::spec::Assertion = toml::from_str(&format!(
+                "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nexpect_trip = true\n{scen}"
+            ))
+            .unwrap();
+            check_protection_trip(&a, &outcome())
+        };
+
+        // Unscoped: the run-wide flag shows a trip → an expect-trip passes.
+        let (ok, _) = expect_trip(None);
+        assert!(ok, "unscoped expect_trip should pass — BATT did trip run-wide");
+
+        // Scoped to the window where the trip happened → still passes.
+        let (ok_inrush, _) = expect_trip(Some("inrush"));
+        assert!(ok_inrush, "expect_trip scoped to 'inrush' should pass — that is where it latched");
+
+        // Scoped to a LATER window where no trip occurred → must FAIL, even
+        // though the run-wide flag is set. This is the round-6 #8 bug.
+        let (ok_steady, msg) = expect_trip(Some("steady"));
+        assert!(
+            !ok_steady,
+            "expect_trip scoped to 'steady' must FAIL — no trip in that window; got pass: {msg}"
+        );
     }
 }
