@@ -158,8 +158,15 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
     let lower_name = name.to_lowercase();
     for line in all_lines {
         let lower = line.to_lowercase();
-        if lower.starts_with(".subckt") && lower.contains(&lower_name) {
-            in_body = true;
+        if lower.starts_with(".subckt") {
+            // The declared name is the SECOND token — match it exactly, not as a
+            // substring of the whole line. A substring match opened the wrong
+            // body whenever this name was a substring of another subckt's name
+            // (".subckt OP" vs ".subckt OPAMP") or appeared as a port/comment.
+            let decl_name = line.split_whitespace().nth(1).map(|t| t.to_lowercase());
+            if decl_name.as_deref() == Some(lower_name.as_str()) {
+                in_body = true;
+            }
         }
         if in_body {
             raw_lines.push(line.clone());
@@ -334,6 +341,30 @@ Q2 OUT2 IN2 GND NPN_MODEL
         assert_eq!(card.kind, SpiceCardKind::Subckt);
         assert_eq!(card.ports.len(), 6);
         assert!(card.raw.contains(".ENDS"));
+    }
+
+    #[test]
+    fn subckt_body_matches_name_exactly_not_as_substring() {
+        // R11: two subckts whose names share a prefix ("OP" ⊂ "OPAMP"). The old
+        // substring match opened OP's body at the first `.subckt` line
+        // containing "op" — which was OPAMP — so OP captured OPAMP's body.
+        let src = "\
+.SUBCKT OPAMP INP INN OUT
+R1 INP OUT 1k
+.ENDS OPAMP
+.SUBCKT OP A B
+R2 A B 2k
+.ENDS OP
+";
+        let cards = parse_spice_text(src).unwrap();
+        let op = cards.iter().find(|c| c.name == "OP").expect("OP present");
+        assert!(
+            op.raw.contains("R2") && !op.raw.contains("R1"),
+            "OP must capture its own body, not OPAMP's: {:?}",
+            op.raw
+        );
+        let opamp = cards.iter().find(|c| c.name == "OPAMP").unwrap();
+        assert!(opamp.raw.contains("R1") && !opamp.raw.contains("R2"));
     }
 
     #[test]

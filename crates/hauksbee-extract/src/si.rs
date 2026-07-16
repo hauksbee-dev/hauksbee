@@ -1045,6 +1045,11 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         let own_nets: std::collections::HashSet<i64> =
             ant.pins.iter().filter_map(|p| p.net).collect();
 
+        // Resolve name-only net refs (KiCad 10 `(net "GND")`) via the board's
+        // declarations; without this every track/via/zone on such a board has
+        // `arg_i64(0) == None` and is skipped, yielding a confident false all-clear.
+        let by_name = net_name_index(root);
+
         let mut intrusions: Vec<Intrusion> = Vec::new();
         let in_box = |x: f64, y: f64| x >= bminx && x <= bmaxx && y >= bminy && y <= bmaxy;
 
@@ -1057,7 +1062,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                 if !layer.ends_with(".Cu") {
                     continue;
                 }
-                let Some(id) = seg.find("net").and_then(|n| n.arg_i64(0)) else {
+                let Some(id) = elem_net_id(seg, &by_name) else {
                     continue;
                 };
                 if own_nets.contains(&id) {
@@ -1089,7 +1094,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
 
         // 2. Vias.
         for via in root.find_all("via") {
-            let Some(id) = via.find("net").and_then(|n| n.arg_i64(0)) else {
+            let Some(id) = elem_net_id(via, &by_name) else {
                 continue;
             };
             if own_nets.contains(&id) {
@@ -1131,7 +1136,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
 
         // 4. Zone (ground / power pour) fill polygons crossing the keepout.
         for zone in root.find_all("zone") {
-            let Some(id) = zone.find("net").and_then(|n| n.arg_i64(0)) else {
+            let Some(id) = elem_net_id(zone, &by_name) else {
                 continue;
             };
             if own_nets.contains(&id) {
@@ -1153,17 +1158,41 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
             if !on_cu {
                 continue;
             }
-            // Test the filled polygon vertices against the keepout. A pour that
-            // overlaps the keepout will have fill vertices inside it (the fill is
-            // clipped to copper); sampling vertices is a sound, cheap detector.
+            // A pour intrudes the keepout in either of two ways: (a) a fill
+            // vertex lands inside the keepout (partial overlap), or (b) the pour
+            // ENGULFS the keepout — a board-wide ground plane covering the whole
+            // antenna region has ALL its fill vertices outside the small keepout
+            // rectangle, so vertex-only sampling missed it and reported a false
+            // all-clear. Also test each keepout corner against the fill polygon to
+            // catch containment (this is the exact bad-WiFi failure the check
+            // exists to catch).
+            let keepout_corners = [
+                (bminx, bminy),
+                (bmaxx, bminy),
+                (bmaxx, bmaxy),
+                (bminx, bmaxy),
+            ];
             let mut hit: Option<(f64, f64)> = None;
             for fp in zone.find_all("filled_polygon") {
                 if let Some(pts) = fp.find("pts") {
-                    for xy in pts.find_all("xy") {
-                        let (x, y) = (xy.arg_f64(0).unwrap_or(0.0), xy.arg_f64(1).unwrap_or(0.0));
+                    let fill: Vec<(f64, f64)> = pts
+                        .find_all("xy")
+                        .map(|xy| (xy.arg_f64(0).unwrap_or(0.0), xy.arg_f64(1).unwrap_or(0.0)))
+                        .collect();
+                    // (a) fill vertex inside the keepout.
+                    for &(x, y) in &fill {
                         if in_box(x, y) && point_in_poly(x, y, &poly_v) {
                             hit = Some((x, y));
                             break;
+                        }
+                    }
+                    // (b) keepout corner inside the pour (containment / engulf).
+                    if hit.is_none() && fill.len() >= 3 {
+                        for &(kx, ky) in &keepout_corners {
+                            if point_in_poly(kx, ky, &fill) {
+                                hit = Some((kx, ky));
+                                break;
+                            }
                         }
                     }
                 }
@@ -1256,11 +1285,38 @@ pub const USB_SKEW_FS_MM: f64 = 15.0;
 /// High-speed intra-pair skew limit (mm) - the tight matching budget.
 pub const USB_SKEW_HS_MM: f64 = 1.25;
 
+/// Build a net-name → id index from a board's `(net id "name")` declarations.
+/// Lets a track/via/zone that cites its net by NAME (the KiCad-10 name-only form
+/// `(net "GND")`) resolve to the numeric id, instead of being silently skipped
+/// because `arg_i64(0)` is `None` on a string token. Mirrors the resolver in
+/// `trace_current` / `drc::NetResolver`.
+fn net_name_index(root: &List) -> HashMap<String, i64> {
+    let mut by_name = HashMap::new();
+    for n in root.find_all("net") {
+        if let (Some(id), Some(name)) = (n.arg_i64(0), n.arg_value(1)) {
+            by_name.entry(name).or_insert(id);
+        }
+    }
+    by_name
+}
+
+/// The net id a `(net ...)` reference on an element resolves to: the numeric id
+/// when present, else the id of the named net from `by_name`. Returns `None`
+/// only when neither is available.
+fn elem_net_id(elem: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
+    let net = elem.find("net")?;
+    if let Some(id) = net.arg_i64(0) {
+        return Some(id);
+    }
+    by_name.get(&net.arg_value(0)?).copied()
+}
+
 /// Sum of discrete-trace (segment + arc) copper length on a net, in mm.
 pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
+    let by_name = net_name_index(root);
     let mut total = 0.0;
     for seg in root.find_all("segment") {
-        if seg.find("net").and_then(|n| n.arg_i64(0)) != Some(net_id) {
+        if elem_net_id(seg, &by_name) != Some(net_id) {
             continue;
         }
         let (Some(s), Some(e)) = (seg.find("start"), seg.find("end")) else {
@@ -1275,7 +1331,7 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
     // and the chord under-estimates by < a few percent, which is well inside the
     // skew tolerance and documented).
     for arc in root.find_all("arc") {
-        if arc.find("net").and_then(|n| n.arg_i64(0)) != Some(net_id) {
+        if elem_net_id(arc, &by_name) != Some(net_id) {
             continue;
         }
         let (Some(s), Some(e)) = (arc.find("start"), arc.find("end")) else {
@@ -1291,11 +1347,12 @@ pub fn routed_length_mm(root: &List, net_id: i64) -> f64 {
 /// Narrowest and widest discrete-track width on a net (mm), for the width/gap
 /// consistency note.
 fn track_width_range(root: &List, net_id: i64) -> Option<(f64, f64)> {
+    let by_name = net_name_index(root);
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     for kw in ["segment", "arc"] {
         for seg in root.find_all(kw) {
-            if seg.find("net").and_then(|n| n.arg_i64(0)) != Some(net_id) {
+            if elem_net_id(seg, &by_name) != Some(net_id) {
                 continue;
             }
             let w = seg.find_f64("width").unwrap_or(0.0);
