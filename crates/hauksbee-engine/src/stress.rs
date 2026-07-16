@@ -415,7 +415,7 @@ impl StressMonitor {
                             .unwrap_or(false)
                     {
                         self.tracks[i].raised.insert(chk.kind.as_str(), true);
-                        let destroyed = self.maybe_destroy(circuit, &meta);
+                        let destroyed = self.maybe_destroy(circuit, &meta, chk.kind);
                         if destroyed {
                             self.tracks[i].destroyed = true;
                         }
@@ -450,7 +450,7 @@ impl StressMonitor {
                         .unwrap_or(false)
                 {
                     self.tracks[i].raised.insert(chk.kind.as_str(), true);
-                    let destroyed = self.maybe_destroy(circuit, &meta);
+                    let destroyed = self.maybe_destroy(circuit, &meta, chk.kind);
                     if destroyed {
                         self.tracks[i].destroyed = true;
                     }
@@ -476,8 +476,11 @@ impl StressMonitor {
     }
 
     /// In destructive mode, mutate the circuit to enact the failure. Returns
-    /// whether the device was destroyed.
-    fn maybe_destroy(&self, circuit: &mut Circuit, meta: &DeviceMeta) -> bool {
+    /// whether the device was destroyed. `kind` is the tripping fault, because a
+    /// diode's destructive consequence depends on it: over-current burns the
+    /// junction OPEN, while reverse over-voltage past breakdown
+    /// (avalanche/punch-through) fails it CLOSED.
+    fn maybe_destroy(&self, circuit: &mut Circuit, meta: &DeviceMeta, kind: FaultKind) -> bool {
         if !self.destructive {
             return false;
         }
@@ -491,16 +494,22 @@ impl StressMonitor {
                 *ohms = 1e12;
                 true
             }
-            // Diode / LED: over-current burns the junction open. Replace the
-            // diode with a tiny open-circuit resistor across its nodes so the
-            // device count / layout is unchanged but it no longer conducts.
+            // Diode / LED: over-current opens the junction; reverse over-voltage
+            // shorts it. Replace the diode with a resistor across its nodes (the
+            // device count / layout is unchanged) whose value encodes which
+            // failure occurred: a near-open for over-current, a small series
+            // short for reverse breakdown.
             Device::Diode { name, a, k, .. } => {
                 let (name, a, k) = (name.clone(), *a, *k);
+                let ohms = match kind {
+                    FaultKind::Overvoltage => 1e-2, // reverse breakdown fails CLOSED
+                    _ => 1e12,                      // over-current burns OPEN
+                };
                 *dev = Device::Resistor {
                     name,
                     a,
                     b: k,
-                    ohms: 1e12,
+                    ohms,
                     tc1: None,
                 };
                 true
@@ -777,6 +786,18 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
                     surge: false,
                 });
             }
+            // Continuous current rating — the natural home for an inductor's
+            // rated / saturation current. Previously unchecked for passives, so a
+            // coil's steady-state current limit was silently unenforced (and an
+            // inductor's power_w is 0, leaving Overpower/Overtemperature dead too).
+            if let Some(imax) = r.max_current_a {
+                checks.push(Check {
+                    kind: FaultKind::Overcurrent,
+                    value: op.current_a,
+                    limit: imax,
+                    surge: false,
+                });
+            }
             // Polarized capacitor reverse bias: any reverse beyond ~0.5 V.
             if r.polarized {
                 let reverse = (-op.voltage_v).max(0.0);
@@ -921,6 +942,63 @@ mod monitor_temp_tests {
         assert!((w("R_0603_1608Metric") - 1.0 / 10.0).abs() < 1e-12);
         assert!((w("R_0805_2012Metric") - 1.0 / 8.0).abs() < 1e-12);
         assert!((w("R_1206_3216Metric") - 1.0 / 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn passive_inductor_gets_a_continuous_current_check() {
+        // R13: a passive with a continuous current rating (an inductor's
+        // rated/saturation current) must produce an Overcurrent check. It was
+        // omitted — only surge was ever checked for passives.
+        let ratings = Ratings { max_current_a: Some(2.0), ..Default::default() };
+        let meta = DeviceMeta {
+            reference: "L1".into(),
+            device: DeviceId(0),
+            kind: ComponentKind::Passive,
+            footprint: String::new(),
+            ratings,
+        };
+        let op = OperatingPoint { current_a: 3.0, voltage_v: 0.1, power_w: 0.0 };
+        let checks = build_checks(&meta, &op);
+        let oc = checks
+            .iter()
+            .find(|c| c.kind == FaultKind::Overcurrent && !c.surge)
+            .expect("passive continuous over-current check present");
+        assert_eq!(oc.limit, 2.0);
+        assert_eq!(oc.value, 3.0);
+    }
+
+    #[test]
+    fn diode_destruction_direction_depends_on_the_fault() {
+        // R13: over-current burns a diode OPEN (huge R); reverse over-voltage
+        // fails it CLOSED (a small series short). The consequence must follow the
+        // tripping fault, not be a fixed "always open".
+        let ohms_after = |kind: FaultKind| -> f64 {
+            let mut c = Circuit::new();
+            let a = c.node("A");
+            let k = c.node("K");
+            let id = c.add(Device::Diode {
+                name: "D1".into(),
+                a,
+                k,
+                model: hauksbee_ir::DiodeModel::default(),
+            });
+            let meta = DeviceMeta {
+                reference: "D1".into(),
+                device: id,
+                kind: ComponentKind::Diode,
+                footprint: String::new(),
+                ratings: Ratings::default(),
+            };
+            let mut mon = StressMonitor::new(vec![meta.clone()]);
+            mon.destructive = true;
+            assert!(mon.maybe_destroy(&mut c, &meta, kind));
+            match &c.devices[id.0 as usize] {
+                Device::Resistor { ohms, .. } => *ohms,
+                other => panic!("expected a resistor after destruction, got {other:?}"),
+            }
+        };
+        assert!(ohms_after(FaultKind::Overcurrent) > 1e9, "over-current opens");
+        assert!(ohms_after(FaultKind::Overvoltage) < 1.0, "reverse over-voltage shorts");
     }
 
     #[test]

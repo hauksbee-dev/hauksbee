@@ -248,7 +248,11 @@ fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
         return 0;
     }
     let frac = (volts / full_scale_volts).clamp(0.0, 1.0);
-    (frac * f64::from(max_count)).round() as u32
+    // Multiply by 2^n (= max_count + 1), not the top code 2^n-1, then clamp to
+    // the top code — the LSB = Vref/2^n transfer function. Multiplying by
+    // (2^n-1) systematically under-reads by up to ~1 LSB (the same fix applied
+    // to the MCP3008 model in peripherals/spi.rs).
+    ((frac * (f64::from(max_count) + 1.0)).round() as u32).min(max_count)
 }
 
 /// Render the Monitor command that delivers `count` for one channel's recipe.
@@ -1739,8 +1743,12 @@ mod tests {
         // Clamped above full scale and below zero.
         assert_eq!(adc_count(5.0, 3.3, 4095), 4095);
         assert_eq!(adc_count(-1.0, 3.3, 4095), 0);
-        // 2.0 V of 3.3 V: (2.0/3.3)*4095 = 2481.8 → 2482.
+        // 2.0 V of 3.3 V against the 2^n full scale: (2.0/3.3)*4096 = 2482.4 →
+        // 2482 (top-code clamp only bites at true full scale).
         assert_eq!(adc_count(2.0, 3.3, 4095), 2482);
+        // Near full scale the 2^n scaling reads 4095 where the old (2^n-1)
+        // scaling under-read to 4094: 3.2992/3.3 → *4096 = 4095.0 vs *4095 = 4094.
+        assert_eq!(adc_count(3.2992, 3.3, 4095), 4095);
         // Broken map (zero full scale) reads stuck-at-zero, not NaN.
         assert_eq!(adc_count(1.0, 0.0, 4095), 0);
     }

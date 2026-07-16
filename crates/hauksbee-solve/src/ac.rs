@@ -122,14 +122,23 @@ impl AcSpec {
                 let steps = (intervals * self.points as f64).ceil() as usize;
                 let ratio = base.powf(1.0 / self.points as f64);
                 let mut out = Vec::with_capacity(steps + 1);
-                for i in 0..steps {
+                // Always seed with fstart, then step. Starting the loop at i=0
+                // with the break-before-push dropped fstart entirely when fstop
+                // was within ~1e-9 of fstart (the i=0 point already trips the
+                // break), leaving a 1-point sweep starting at fstop.
+                out.push(self.fstart);
+                for i in 1..steps {
                     let f = self.fstart * ratio.powi(i as i32);
                     if f >= self.fstop * (1.0 - 1e-9) {
                         break;
                     }
                     out.push(f);
                 }
-                out.push(self.fstop);
+                // Pin the endpoint, unless it coincides with the last emitted
+                // point (a near-degenerate span where fstop ≈ fstart).
+                if self.fstop > out.last().copied().unwrap_or(0.0) * (1.0 + 1e-9) {
+                    out.push(self.fstop);
+                }
                 out
             }
         }
@@ -1095,5 +1104,34 @@ fn stamp_transconductance(
         if let Some(cn) = cn {
             sys.add(in_, cn, gm);
         }
+    }
+}
+
+#[cfg(test)]
+mod frequency_tests {
+    use super::{AcSpec, Sweep};
+
+    #[test]
+    fn decade_sweep_always_includes_fstart() {
+        let s = AcSpec { fstart: 10.0, fstop: 1e6, points: 5, sweep: Sweep::Decade };
+        let f = s.frequencies();
+        assert!((f[0] - 10.0).abs() < 1e-9, "first point is fstart: {}", f[0]);
+        assert!((f.last().unwrap() - 1e6).abs() < 1.0, "endpoint pinned to fstop");
+        assert!(f.windows(2).all(|w| w[1] > w[0]), "monotonic increasing");
+    }
+
+    #[test]
+    fn near_degenerate_span_keeps_fstart_not_fstop() {
+        // R13: fstop within ~1e-9 of fstart used to drop fstart and return a
+        // 1-point sweep starting at fstop. fstart must survive.
+        let s = AcSpec {
+            fstart: 1000.0,
+            fstop: 1000.0 * (1.0 + 1e-10),
+            points: 10,
+            sweep: Sweep::Decade,
+        };
+        let f = s.frequencies();
+        assert!(!f.is_empty(), "must not be empty");
+        assert!((f[0] - 1000.0).abs() < 1e-6, "first point is fstart, not fstop: {}", f[0]);
     }
 }
