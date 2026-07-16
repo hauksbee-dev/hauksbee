@@ -641,7 +641,7 @@ mod tests {
         });
         c.add(Device::OpAmp {
             name: "U1".into(), out: n5, inp: n1, inn: n2, reference: None,
-            gain: 1e5, pole_hz: None, rail_lo: 0.0, rail_hi: 5.0,
+            gain: 1e5, pole_hz: None, slew: None, rail_lo: 0.0, rail_hi: 5.0,
         });
         c.add(Device::Comparator {
             name: "K1".into(), out: n6, inp: n1, inn: n2,

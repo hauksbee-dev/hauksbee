@@ -32,6 +32,13 @@ pub struct IntegCoeffs {
     pub a1: f64,
     /// Two-step-back coefficient (Gear-2).
     pub a2: f64,
+    /// The step size these coefficients were built for. Carried so stamps
+    /// with an explicit time-domain update (the op-amp's single-pole/slew
+    /// output follower) can see the actual `dt` instead of reverse-deriving
+    /// it from `g` (whose relation to `dt` is rule-dependent). DC callers
+    /// pass a dummy step; every DC stamp path is gated on `ctx.dc` and never
+    /// reads it.
+    pub dt: f64,
 }
 
 impl IntegCoeffs {
@@ -54,17 +61,20 @@ impl IntegCoeffs {
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
                 a2: 0.0,
+                dt,
             },
             Integration::Trapezoidal if !first_step => IntegCoeffs {
                 g: 2.0 / dt,
                 a1: 2.0 / dt,
                 a2: 0.0,
+                dt,
             },
             Integration::Trapezoidal => IntegCoeffs {
                 // First step: backward Euler to start cleanly.
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
                 a2: 0.0,
+                dt,
             },
             Integration::Gear2 if !first_step => {
                 // Variable-step BDF2. Let h = t_n - t_{n-1} (this step),
@@ -96,12 +106,14 @@ impl IntegCoeffs {
                     g: (1.0 + 2.0 * r) / ((1.0 + r) * dt),
                     a1: (1.0 + r) / dt,
                     a2: (r * r) / ((1.0 + r) * dt),
+                    dt,
                 }
             }
             Integration::Gear2 => IntegCoeffs {
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
                 a2: 0.0,
+                dt,
             },
         }
     }
@@ -491,11 +503,14 @@ pub(crate) fn stamp_device<S: StampSink>(
             inn,
             reference,
             gain,
+            pole_hz,
+            slew,
             rail_lo,
             rail_hi,
             ..
         } => stamp_opamp(
-            ctx, *out, *inp, *inn, *reference, *gain, *rail_lo, *rail_hi, sink,
+            ctx, id, *out, *inp, *inn, *reference, *gain, *pole_hz, *slew, *rail_lo, *rail_hi,
+            sink,
         ),
         Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => stamp_comparator(
             ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, sink,
@@ -2275,19 +2290,86 @@ fn stamp_vswitch<S: StampSink>(
     }
 }
 
+/// One transient step of the op-amp's output-follower dynamics: the internal
+/// drive EMF is the previous accepted EMF relaxed toward the clipped ideal
+/// target through the single pole (exact first-order update over `dt`), then
+/// rate-limited by the slew spec. Shared verbatim by the Newton stamp (every
+/// iteration reads the SAME frozen `v_prev`, so the step's dynamics are a
+/// fixed affine map of the current inputs — no mid-Newton state mutation) and
+/// by the on-accept state advance in `transient.rs` (which persists the
+/// result as the next step's `v_prev`, exactly the capacitor's roll-forward
+/// discipline).
+///
+/// Returns `None` when NEITHER mechanism is active (`pole_hz` and `slew` both
+/// absent/zero/non-finite): the caller keeps the classic instantaneous stamp
+/// bit-identically. Otherwise `Some((v_out, dscale))` where `v_out` is the
+/// EMF to drive this step and `dscale` = ∂v_out/∂target is the factor the
+/// input-coupling tangent must be scaled by (`1-exp(-dt/τ)` through the pole,
+/// 0 when the slew clamp is pinning the output — the output is then a
+/// constant this step, like a frozen comparator rail).
+pub(crate) fn opamp_transient_output(
+    v_prev: f64,
+    target: f64,
+    pole_hz: Option<f64>,
+    slew: Option<f64>,
+    dt: f64,
+) -> Option<(f64, f64)> {
+    let pole = pole_hz.filter(|p| *p > 0.0 && p.is_finite());
+    // Slew is stored in V/µs (the datasheet unit); convert to V/s here, the
+    // only place the transient path consumes it.
+    let slew_v_per_s = slew.filter(|s| *s > 0.0 && s.is_finite()).map(|s| s * 1e6);
+    if pole.is_none() && slew_v_per_s.is_none() {
+        return None;
+    }
+    // Single pole: exact discrete step of dv/dt = (target - v)/τ over dt.
+    // (Exact, not a companion discretization: the output follower is driven
+    // by the frozen v_prev, so the closed form costs one exp and is
+    // unconditionally stable at any dt/τ.)
+    let alpha = match pole {
+        Some(p) => {
+            let tau = 1.0 / (std::f64::consts::TAU * p);
+            1.0 - (-dt / tau).exp()
+        }
+        None => 1.0,
+    };
+    let mut v_out = v_prev + (target - v_prev) * alpha;
+    let mut dscale = alpha;
+    if let Some(sr) = slew_v_per_s {
+        let dv_max = sr * dt;
+        let dv = v_out - v_prev;
+        if dv.abs() > dv_max {
+            v_out = v_prev + dv_max.copysign(dv);
+            dscale = 0.0;
+        }
+    }
+    Some((v_out, dscale))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn stamp_opamp<S: StampSink>(
     ctx: &StampCtx,
+    id: DeviceId,
     out: NodeId,
     inp: NodeId,
     inn: NodeId,
     reference: Option<NodeId>,
     gain: f64,
+    pole_hz: Option<f64>,
+    slew: Option<f64>,
     rail_lo: f64,
     rail_hi: f64,
     sink: &mut S,
 ) {
     // Behavioral: drive `out` toward clamp(gain*(vp-vn)) through a stiff
     // conductance, modeling an ideal output stage with finite open-loop gain.
+    // In TRANSIENT, when `pole_hz`/`slew` are set, the drive EMF is not the
+    // ideal target itself but the target passed through the device's
+    // single-pole + slew output dynamics (`opamp_transient_output`), anchored
+    // at the EMF persisted from the last ACCEPTED step (`ReactiveState.x1`,
+    // seeded from the DC point and rolled forward on step acceptance only —
+    // the capacitor's companion-state lifecycle). The DC operating point and
+    // the AC path are untouched: a single pole passes DC unattenuated, and
+    // slew is a large-signal (transient-only) limit.
     let gout = 1.0; // output stage conductance (1 ohm), strong source
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
@@ -2295,23 +2377,35 @@ fn stamp_opamp<S: StampSink>(
     let target = (vref + gain * (vp - vn)).clamp(rail_lo, rail_hi);
     // Linearize: out = target + gain*(d vp - d vn) within rails.
     let in_rail = target > rail_lo && target < rail_hi;
+    let dynamics = if ctx.dc {
+        None
+    } else {
+        let v_prev = ctx.state.x1[id.0 as usize];
+        opamp_transient_output(v_prev, target, pole_hz, slew, ctx.coeffs.dt)
+    };
+    // `dscale` scales every input-coupling tangent: the linearized output is
+    // v_out(op) + dscale * d(target), so the classic couplings (∂target/∂vp =
+    // gain, ∂/∂vn = -gain, ∂/∂vref = 1) each pick up the same factor. The
+    // no-dynamics path keeps dscale = 1 and emf = target: bit-identical to
+    // the classic instantaneous stamp.
+    let (emf, dscale) = dynamics.unwrap_or((target, 1.0));
     let oi = ctx.layout.node(out);
     if let Some(oi) = oi {
         sink.g(oi, oi, gout);
-        sink.i(oi, gout * target);
-        if in_rail {
+        sink.i(oi, gout * emf);
+        if in_rail && dscale != 0.0 {
             if let Some(ri) = reference.and_then(|n| ctx.layout.node(n)) {
-                sink.g(oi, ri, -gout);
-                sink.i(oi, -(gout * vref));
+                sink.g(oi, ri, -gout * dscale);
+                sink.i(oi, -(gout * dscale * vref));
             }
             // Couple output to inputs through the gain (tangent).
             if let Some(pi) = ctx.layout.node(inp) {
-                sink.g(oi, pi, -gout * gain);
-                sink.i(oi, -(gout * gain * vp));
+                sink.g(oi, pi, -gout * dscale * gain);
+                sink.i(oi, -(gout * dscale * gain * vp));
             }
             if let Some(ni) = ctx.layout.node(inn) {
-                sink.g(oi, ni, gout * gain);
-                sink.i(oi, gout * gain * vn);
+                sink.g(oi, ni, gout * dscale * gain);
+                sink.i(oi, gout * dscale * gain * vn);
             }
         }
     }

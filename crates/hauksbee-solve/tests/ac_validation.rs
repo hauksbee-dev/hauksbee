@@ -417,6 +417,7 @@ fn opamp_unity_buffer_phase_margin_about_90() {
         reference: None,
         gain: a0,
         pole_hz: None,
+        slew: None,
         rail_lo: -1e9,
         rail_hi: 1e9,
     });
