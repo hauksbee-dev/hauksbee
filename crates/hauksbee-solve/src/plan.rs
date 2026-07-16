@@ -665,7 +665,7 @@ mod tests {
             *v = -0.1 * (i as f64 + 1.0);
         }
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &c,
@@ -774,7 +774,7 @@ mod tests {
             let state = ReactiveState::new(c.devices.len());
             let opts = SolverOptions::default();
             let coeffs =
-                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
             let spdt = std::collections::HashMap::new();
             let ctx = StampCtx {
                 circuit: c,
@@ -855,7 +855,7 @@ mod tests {
         let x = vec![0.0f64; n];
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1.0, true);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1.0, 1.0, true);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &c,

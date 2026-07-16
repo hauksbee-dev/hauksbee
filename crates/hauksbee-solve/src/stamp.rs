@@ -37,7 +37,18 @@ pub struct IntegCoeffs {
 impl IntegCoeffs {
     /// Coefficients for the chosen rule at step size `dt`. `first_step` forces
     /// backward Euler where a multi-step rule lacks history.
-    pub fn for_step(method: Integration, dt: f64, first_step: bool) -> IntegCoeffs {
+    ///
+    /// `dt_prev` is the spacing of the stored history pair (x1..x2), i.e. the
+    /// previous ACCEPTED step. Only the Gear-2/BDF2 branch reads it: a
+    /// two-step rule differentiates through THREE points, and its stencil
+    /// weights depend on how far apart those points actually sit. Under the
+    /// adaptive controller the grid is non-uniform, so applying the
+    /// uniform-grid weights there silently degrades BDF2 to first order —
+    /// exactly on the stiff problems Gear-2 is chosen for. Callers on a
+    /// uniform grid (fixed step, unit tests) pass `dt_prev == dt`; a
+    /// non-positive `dt_prev` (no accepted step yet) also means "assume
+    /// uniform", which is exact because the seeded history has x2 == x1.
+    pub fn for_step(method: Integration, dt: f64, dt_prev: f64, first_step: bool) -> IntegCoeffs {
         match method {
             Integration::BackwardEuler => IntegCoeffs {
                 g: 1.0 / dt,
@@ -55,12 +66,38 @@ impl IntegCoeffs {
                 a1: 1.0 / dt,
                 a2: 0.0,
             },
-            Integration::Gear2 if !first_step => IntegCoeffs {
-                // BDF2 (uniform step): (3 x_n - 4 x_{n-1} + x_{n-2}) / (2 dt).
-                g: 1.5 / dt,
-                a1: 2.0 / dt,
-                a2: 0.5 / dt,
-            },
+            Integration::Gear2 if !first_step => {
+                // Variable-step BDF2. Let h = t_n - t_{n-1} (this step),
+                // h_prev = t_{n-1} - t_{n-2} (spacing of the stored history),
+                // and r = h / h_prev. Fitting a quadratic through
+                // (t_n, q_n), (t_{n-1}, q_{n-1}), (t_{n-2}, q_{n-2}) and
+                // differentiating at t_n gives the standard non-uniform
+                // three-point backward-difference weights (Hairer & Wanner,
+                // "Solving ODEs II", ch. III.5; the same form SPICE-family
+                // simulators use for variable-order Gear):
+                //
+                //   dq/dt |_{t_n} ≈ [ (1+2r)/(1+r) · q_n
+                //                     - (1+r)      · q_{n-1}
+                //                     + r²/(1+r)   · q_{n-2} ] / h
+                //
+                // Sanity: the weights sum to zero (a constant has zero
+                // derivative), and r = 1 collapses them to the familiar
+                // uniform stencil (3 q_n - 4 q_{n-1} + q_{n-2}) / (2h) —
+                // bit-for-bit, since (1+2r) = 3, (1+r)·h = 2h and r² = 1 are
+                // all exact and each coefficient is then a single correctly
+                // rounded division of the same real value as before (a unit
+                // test pins this identity).
+                //
+                // The companion model consumes these as
+                // dq/dt = g·q_n − (a1·q_{n-1} − a2·q_{n-2}), so a1/a2 carry
+                // the sign flip of the middle/last weights.
+                let r = if dt_prev > 0.0 { dt / dt_prev } else { 1.0 };
+                IntegCoeffs {
+                    g: (1.0 + 2.0 * r) / ((1.0 + r) * dt),
+                    a1: (1.0 + r) / dt,
+                    a2: (r * r) / ((1.0 + r) * dt),
+                }
+            }
             Integration::Gear2 => IntegCoeffs {
                 g: 1.0 / dt,
                 a1: 1.0 / dt,
@@ -2540,7 +2577,7 @@ mod diode_physics_tests {
             let mut opts = SolverOptions::default();
             opts.effects.junction_caps = junction_caps;
             let coeffs =
-                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
+                IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
             let spdt = std::collections::HashMap::new();
             let ctx = StampCtx {
                 circuit: &c,
@@ -2599,7 +2636,7 @@ mod diode_physics_tests {
         let x = vec![0.6];
         let state = ReactiveState::new(1);
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, true);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, 1e-9, true);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &c,
@@ -2665,7 +2702,7 @@ mod bjt_physics_tests {
         let mut state = ReactiveState::new(1);
         state.x1[0] = 1e-12; // nonzero history so RHS terms show too
         state.xb[0].x1[0] = -2e-12;
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &cir,
@@ -2825,7 +2862,7 @@ mod bjt_physics_tests {
         let state = ReactiveState::new(1);
         let mut opts = SolverOptions::default();
         opts.effects.temperature = false;
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &cir,
@@ -3118,7 +3155,7 @@ mod bench {
         let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.001 * (i % 7) as f64).collect();
         let state = ReactiveState::new(circuit.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &circuit,
@@ -3192,7 +3229,7 @@ mod bench {
             .collect();
         let state = ReactiveState::new(circuit.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, false);
+        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &circuit,
@@ -3321,5 +3358,125 @@ mod behavioral_fd_tests {
         // And vals is restored even on the fault path? The base value is
         // written back before the error returns, so callers can reuse it.
         assert_eq!(vals[0], -1e-15);
+    }
+}
+
+#[cfg(test)]
+mod gear2_varstep_tests {
+    use super::IntegCoeffs;
+    use crate::options::Integration;
+
+    /// R6 #F7 regression, part 1: on a UNIFORM grid (dt_prev == dt) the
+    /// variable-step BDF2 formula must reproduce the historical constants
+    /// {1.5/dt, 2/dt, 0.5/dt} BIT-FOR-BIT, so the fixed-step path and every
+    /// pinned reference waveform are untouched by the generalization. This
+    /// holds because at r = 1 each coefficient is a single correctly rounded
+    /// division of the same real value: (1+2r) = 3 and (1+r)·dt = 2·dt are
+    /// exact, and fl(3/(2·dt)) = fl(1.5/dt) since 2·dt only bumps the
+    /// exponent. Same argument for a2 = fl(1/(2·dt)) = fl(0.5/dt).
+    #[test]
+    fn uniform_grid_is_bit_identical_to_old_constants() {
+        for &dt in &[
+            1e-12, 1e-9, 3.7e-8, 1e-6, 1.0 / 3.0, 0.1, 1.0, 7.3, 1e3, 1e9,
+        ] {
+            let c = IntegCoeffs::for_step(Integration::Gear2, dt, dt, false);
+            assert_eq!(c.g.to_bits(), (1.5 / dt).to_bits(), "g at dt={dt}");
+            assert_eq!(c.a1.to_bits(), (2.0 / dt).to_bits(), "a1 at dt={dt}");
+            assert_eq!(c.a2.to_bits(), (0.5 / dt).to_bits(), "a2 at dt={dt}");
+            // "No accepted step yet" (dt_prev <= 0) must take the same r = 1
+            // path — exact, because the seeded history is flat (x2 == x1).
+            let c0 = IntegCoeffs::for_step(Integration::Gear2, dt, 0.0, false);
+            assert_eq!(c0.g.to_bits(), c.g.to_bits());
+            assert_eq!(c0.a1.to_bits(), c.a1.to_bits());
+            assert_eq!(c0.a2.to_bits(), c.a2.to_bits());
+        }
+    }
+
+    /// R6 #F7 regression, part 2: 2nd-order CONSISTENCY on a non-uniform
+    /// grid. A 2nd-order backward-difference stencil must differentiate any
+    /// quadratic exactly; the old uniform-grid coefficients fail this the
+    /// moment r != 1 (that failure IS the silent first-order degradation).
+    /// The companion form under test: dq/dt = g·q_n - (a1·q_{n-1} - a2·q_{n-2}).
+    #[test]
+    fn nonuniform_stencil_is_exact_on_quadratics() {
+        // q(t) = 2 + 3t + 5t^2, dq/dt = 3 + 10t.
+        let q = |t: f64| 2.0 + 3.0 * t + 5.0 * t * t;
+        let dq = |t: f64| 3.0 + 10.0 * t;
+        for &(h, r) in &[
+            (1e-3, 0.25),
+            (1e-3, 0.5),
+            (1e-3, 2.0),
+            (1e-3, 4.0),
+            (0.1, 1.7),
+            (1e-6, 0.33),
+        ] {
+            let h_prev = h / r;
+            let tn = 0.4_f64;
+            let (t1, t2) = (tn - h, tn - h - h_prev);
+            let c = IntegCoeffs::for_step(Integration::Gear2, h, h_prev, false);
+            let got = c.g * q(tn) - (c.a1 * q(t1) - c.a2 * q(t2));
+            let want = dq(tn);
+            assert!(
+                (got - want).abs() <= 1e-9 * want.abs().max(1.0),
+                "stencil not exact on quadratic at h={h}, r={r}: got {got}, want {want}"
+            );
+            // And the OLD uniform coefficients really do get this wrong when
+            // r != 1 — documents what the fix repairs.
+            let cu = IntegCoeffs::for_step(Integration::Gear2, h, h, false);
+            let bad = cu.g * q(tn) - (cu.a1 * q(t1) - cu.a2 * q(t2));
+            assert!(
+                (bad - want).abs() > 1e-6 * want.abs(),
+                "uniform stencil unexpectedly exact at r={r}"
+            );
+        }
+    }
+
+    /// R6 #F7 regression, part 3: ORDER OF ACCURACY under a CHANGING step.
+    /// Integrate q' = -q (exact: e^{-t}) to t = 1 on a deliberately
+    /// alternating grid h, h/2, h, h/2, ... — every single step changes size.
+    /// Each implicit BDF2 step solves g·q_n - (a1·q_{n-1} - a2·q_{n-2}) = -q_n,
+    /// i.e. q_n = (a1·q_{n-1} - a2·q_{n-2}) / (g + 1), exactly the algebra the
+    /// capacitor companion performs. Halving the base h must cut the error by
+    /// ~4x (2nd order). The pre-fix uniform coefficients on this grid converge
+    /// at ~2x (1st order) — the silent degradation this test pins.
+    #[test]
+    fn alternating_grid_converges_at_second_order() {
+        // March q' = -q with variable-step BDF2 on the alternating grid,
+        // exact-starting the one-step history with the analytic solution.
+        let march = |base_h: f64| -> f64 {
+            // History seeded ANALYTICALLY (q2 at t=0, q1 at t=base_h/2,
+            // spacing base_h/2), so the measured error is pure BDF2
+            // truncation, not a first-step warm-up artifact.
+            let mut t = base_h * 0.5;
+            let mut q2 = 1.0_f64; // e^{-0}
+            let mut q1 = (-(base_h * 0.5)).exp();
+            let mut h_prev = base_h * 0.5;
+            let mut long = true; // next step: full h
+            let mut worst = 0.0_f64;
+            while t < 1.0 - 1e-12 {
+                let h = if long { base_h } else { base_h * 0.5 };
+                let h = h.min(1.0 - t);
+                let c = IntegCoeffs::for_step(Integration::Gear2, h, h_prev, false);
+                let qn = (c.a1 * q1 - c.a2 * q2) / (c.g + 1.0);
+                t += h;
+                worst = worst.max((qn - (-t).exp()).abs());
+                q2 = q1;
+                q1 = qn;
+                h_prev = h;
+                long = !long;
+            }
+            worst
+        };
+        let e1 = march(0.02);
+        let e2 = march(0.01);
+        let e3 = march(0.005);
+        let (r12, r23) = (e1 / e2, e2 / e3);
+        // 2nd order => halving h divides the error by ~4. A 1st-order scheme
+        // gives ~2. Gate at 3.4 to leave rounding headroom while cleanly
+        // rejecting first-order behaviour.
+        assert!(
+            r12 > 3.4 && r23 > 3.4,
+            "error not ~h^2 on alternating grid: e={e1:.3e}/{e2:.3e}/{e3:.3e}, ratios {r12:.2}/{r23:.2}"
+        );
     }
 }
