@@ -36,7 +36,12 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     macro_rules! check_range {
         ($key:expr, $min:expr, $max:expr) => {
             if let Some(v) = entry.params.get_f64($key) {
-                if v < $min || v > $max {
+                // A non-finite value (NaN / ±inf) slips through `v < min || v > max`
+                // because every IEEE comparison against NaN is false — NaN is
+                // neither below-min nor above-max — so it must be rejected up front
+                // or a `nan`/`inf` TOML literal defeats the whole physical-bounds
+                // gate and propagates into the solver.
+                if !v.is_finite() || v < $min || v > $max {
                     errors.push(ValidationError {
                         id: entry.id.clone(),
                         message: format!(
@@ -131,6 +136,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             require_f64!("roff");
             check_range!("ron", 0.01, 10_000.0);
             check_range!("roff", 1e3, 1e12);
+            // On-resistance must be far below off-resistance; the two ranges
+            // overlap ([0.01,1e4] vs [1e3,1e12]), so a swapped/degenerate pair
+            // (ron=5000, roff=2000) is representable and would model a switch that
+            // conducts MORE when open — an inverted transmission gate the solver
+            // routes the wrong way. Same hazard the R35 opamp/comparator order
+            // checks close.
+            check_order!("ron", "roff");
         }
         // Digital / MCU / connector / ignore: no mandatory numeric params
         _ => {}
@@ -272,6 +284,79 @@ mod tests {
             logic: Default::default(),
         };
         assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
+    }
+
+    #[test]
+    fn nan_params_are_rejected_not_silently_accepted() {
+        // R37: every IEEE comparison against NaN is false, so `v < min || v > max`
+        // let a `nan` TOML literal slip through the physical-bounds gate and reach
+        // the solver. A NaN param must be rejected.
+        let mut p = Params::default();
+        p.set_f64("vout", f64::NAN);
+        p.set_f64("dropout_v", 0.3);
+        p.set_f64("iq_a", 1e-3);
+        let entry = ModelEntry {
+            id: "nan_vreg".into(),
+            kind: ComponentKind::Vreg,
+            description: String::new(),
+            r#match: Default::default(),
+            params: p,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        let errs = validate(&entry).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.message.contains("vout")),
+            "a NaN vout must be rejected: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn analog_switch_with_ron_above_roff_is_rejected() {
+        // R37: on-resistance must be far below off-resistance, but the two ranges
+        // overlap and there was no order check, so a swapped pair (ron=5000,
+        // roff=2000) validated — an inverted transmission gate. Must be rejected.
+        let mut p = Params::default();
+        p.set_f64("ron", 5000.0);
+        p.set_f64("roff", 2000.0);
+        let entry = ModelEntry {
+            id: "inverted_switch".into(),
+            kind: ComponentKind::AnalogSwitch,
+            description: String::new(),
+            r#match: Default::default(),
+            params: p,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        let errs = validate(&entry).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.message.contains("ron") && e.message.contains("less than")),
+            "a switch with ron >= roff must be rejected: {errs:?}"
+        );
+
+        // A well-ordered switch still validates.
+        let mut ok = Params::default();
+        ok.set_f64("ron", 5.0);
+        ok.set_f64("roff", 1e9);
+        let good = ModelEntry {
+            id: "good_switch".into(),
+            kind: ComponentKind::AnalogSwitch,
+            description: String::new(),
+            r#match: Default::default(),
+            params: ok,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        assert!(validate(&good).is_ok(), "a well-ordered analog switch must pass");
     }
 
     #[test]
