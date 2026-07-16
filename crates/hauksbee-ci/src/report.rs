@@ -33,7 +33,9 @@ pub struct CiResult {
 /// What a tolerance-ensemble run covered, for the report headline.
 #[derive(Debug, Clone)]
 pub enum EnsembleCoverage {
-    /// Random sampling: statistical evidence over the tolerance space.
+    /// Random sampling: statistical evidence over the tolerance space. `seeds`
+    /// is the number of genuinely SAMPLED seeds, excluding the nominal baseline
+    /// (member 0, which draws no random sample).
     MonteCarlo { seeds: u32, components: usize },
     /// Deterministic all-min/all-max enumeration.
     Corners { corners: u32, components: usize },
@@ -46,8 +48,9 @@ impl EnsembleCoverage {
     pub fn describe(&self) -> String {
         match self {
             EnsembleCoverage::MonteCarlo { seeds, components } => format!(
-                "tolerance ensemble: {seeds} sampled seed(s) over {components} toleranced \
-                 component(s) — statistical coverage, not worst-case proof"
+                "tolerance ensemble: nominal baseline + {seeds} sampled seed(s) over \
+                 {components} toleranced component(s) — statistical coverage, not \
+                 worst-case proof"
             ),
             EnsembleCoverage::Corners { corners, components } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) over \
@@ -356,4 +359,20 @@ fn gh_escape(s: &str) -> String {
     s.replace('%', "%25")
         .replace('\r', "%0D")
         .replace('\n', "%0A")
+}
+
+#[cfg(test)]
+mod ensemble_coverage_tests {
+    use super::EnsembleCoverage;
+
+    #[test]
+    fn monte_carlo_coverage_excludes_the_nominal_from_the_sampled_count() {
+        // `seeds` is the SAMPLED count (nominal baseline excluded). A one-member
+        // Monte-Carlo ran only the nominal → 0 sampled seeds, and the wording
+        // must say so rather than claim it sampled one.
+        let one = EnsembleCoverage::MonteCarlo { seeds: 0, components: 3 }.describe();
+        assert!(one.contains("nominal baseline + 0 sampled seed(s)"), "{one}");
+        let many = EnsembleCoverage::MonteCarlo { seeds: 31, components: 3 }.describe();
+        assert!(many.contains("nominal baseline + 31 sampled seed(s)"), "{many}");
+    }
 }
