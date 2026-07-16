@@ -453,9 +453,13 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
     // When the assertion names a scenario, only count trips that latched inside
     // that scenario's window — a trip from an earlier scenario must not satisfy
     // (or violate) an assertion scoped to a later one. Unscoped assertions fall
-    // back to the run-wide "ever tripped" flag.
-    let tripped = match &a.scenario {
+    // back to the run-wide "ever tripped" flag. An explicit empty scenario ("")
+    // means the run-wide window, same as leaving it unset (Spec::validate's
+    // documented contract) — filter it out so it takes the run-wide branch, not a
+    // scoped lookup that misses and returns a false RED. Mirrors check_rail_window.
+    let tripped = match a.scenario.as_deref().filter(|s| !s.is_empty()) {
         Some(scope) => {
+            let scope = scope.to_string();
             match out
                 .protection_tripped_scoped
                 .get(&(scope.clone(), net.clone()))
@@ -1112,8 +1116,64 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{all_green_detail, boot_below_threshold_msg, key_belongs_to_ref};
+    use super::{
+        all_green_detail, boot_below_threshold_msg, check_protection_trip, key_belongs_to_ref,
+    };
     use crate::tolerance::Mode;
+
+    #[test]
+    fn protection_trip_empty_scenario_is_run_wide_like_unset() {
+        // Round-29: Spec::validate documents an explicit scenario = "" as identical
+        // to unset (the run-wide window). check_protection_trip matched the raw
+        // Option, so Some("") took the scoped branch and missed the ("", net) key
+        // that only rail_window/declared-scenario windows populate, yielding a false
+        // RED. It must take the run-wide branch, matching the omitted-scenario form.
+        use crate::runner::RunOutcome;
+        use std::collections::HashMap;
+        fn outcome_batt_never_tripped() -> RunOutcome {
+            let mut protection_tripped = HashMap::new();
+            protection_tripped.insert("BATT".to_string(), false);
+            RunOutcome {
+                seed: 0,
+                windows: HashMap::new(),
+                uart: HashMap::new(),
+                faults: Vec::new(),
+                toggles: HashMap::new(),
+                peak_current: HashMap::new(),
+                peak_temp_c: HashMap::new(),
+                peripherals: HashMap::new(),
+                rail_windows: HashMap::new(),
+                protection_tripped,
+                protection_tripped_scoped: HashMap::new(),
+                ambient_c: 25.0,
+                sim_ms: 100.0,
+                boot_first_cross_ms: HashMap::new(),
+                boot_drop_after_cross_ms: HashMap::new(),
+                driven_nets: Default::default(),
+                drive_direction_observable: false,
+                first_fault_ms: None,
+                ac: None,
+                analog_valid: true,
+                failed_windows: Vec::new(),
+                analog_abort: false,
+                sampled_values: Vec::new(),
+                net_series: HashMap::new(),
+            }
+        }
+        let out = outcome_batt_never_tripped();
+        let parse = |scope_line: &str| -> crate::spec::Assertion {
+            toml::from_str(&format!(
+                "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nexpect_trip = false\n{scope_line}"
+            ))
+            .unwrap()
+        };
+        // Omitted scenario: reads the run-wide flag, passes (BATT never tripped).
+        let (ok_unset, _) = check_protection_trip(&parse(""), &out);
+        assert!(ok_unset, "unset scenario reads the run-wide no-trip flag");
+        // Explicit "" must behave identically, not a scoped-miss false RED.
+        let (ok_empty, msg) = check_protection_trip(&parse("scenario = \"\"\n"), &out);
+        assert!(ok_empty, "explicit empty scenario must equal unset, got: {msg}");
+    }
 
     #[test]
     fn montecarlo_detail_excludes_the_nominal_from_the_sampled_count() {

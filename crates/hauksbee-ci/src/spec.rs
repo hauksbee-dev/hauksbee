@@ -1053,6 +1053,17 @@ impl Assertion {
                         self.net.as_deref().unwrap_or("?")
                     )));
                 }
+                if self.freq_hz.is_some() && self.min_toggles.is_some() {
+                    // The two forms are mutually exclusive ("freq_hz OR
+                    // min_toggles"): check_toggle evaluates min_toggles first and
+                    // ignores freq_hz, yet the label reports the frequency form, so
+                    // a spec with both is silently evaluated as a count check while
+                    // claiming to be a ~N Hz check. Reject it rather than mislead.
+                    return Err(SpecError::Invalid(format!(
+                        "toggle assertion on '{}' sets both `freq_hz` and `min_toggles`; use one (frequency OR count)",
+                        self.net.as_deref().unwrap_or("?")
+                    )));
+                }
                 if self.after_ms.is_some() {
                     // Toggle counts accumulate from t=0 (scheduler stats), so an
                     // `after_ms` window would be silently ignored. Reject it
@@ -1361,6 +1372,40 @@ net = "VCC"
 min = 3.0
 "#
         )
+    }
+
+    #[test]
+    fn toggle_with_both_freq_and_count_is_rejected() {
+        // Round-29: check_toggle evaluates min_toggles and ignores freq_hz when
+        // both are set, yet the label reports the ~N Hz frequency form — a spec
+        // that silently checks a count while claiming a frequency. The two forms
+        // are mutually exclusive; validation must reject both-at-once up front.
+        let src = r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 0.1
+
+[[assert]]
+kind = "toggle"
+net = "D13"
+freq_hz = 5
+min_toggles = 1
+"#;
+        let err = spec_from(src)
+            .validate()
+            .expect_err("toggle with both freq_hz and min_toggles must fail");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("both") && m.contains("freq_hz")),
+            "expected a both-fields validation error, got {err:?}"
+        );
+        // Each form ALONE is still accepted.
+        for one in ["freq_hz = 5", "min_toggles = 1"] {
+            let src = format!(
+                "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=0.1\n\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\n{one}\n"
+            );
+            assert!(spec_from(&src).validate().is_ok(), "one field is valid: {one}");
+        }
     }
 
     #[test]
