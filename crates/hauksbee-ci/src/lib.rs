@@ -74,8 +74,12 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .unwrap_or(0);
         let members = outcomes.len() as u32;
         Some(match spec.ensemble_mode()? {
+            // Member 0 is the nominal baseline (it draws no random sample), so
+            // the number of genuinely SAMPLED seeds is members - 1. Reporting the
+            // full member count claimed `seeds=1` sampled something when it only
+            // ran the nominal.
             tolerance::Mode::MonteCarlo => report::EnsembleCoverage::MonteCarlo {
-                seeds: members,
+                seeds: members.saturating_sub(1),
                 components,
             },
             tolerance::Mode::Corners => report::EnsembleCoverage::Corners {
