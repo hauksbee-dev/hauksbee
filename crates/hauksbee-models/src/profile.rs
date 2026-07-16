@@ -139,8 +139,19 @@ impl LoadProfile {
                 }
                 let period = (seg.period_s + jitter(seed, i, seg.jitter_s)).max(1e-9);
                 let phase = local0.rem_euclid(period);
+                // Each period reproduces the SAME idle -> level -> idle burst,
+                // so the per-period ramp must rise from `idle` (the between-burst
+                // level), not from the frozen pre-train level. Only the FIRST
+                // period ramps from `prev_level`, for continuity with the segment
+                // that preceded the train. Anchoring every period to prev_level
+                // re-injected a phantom recurring spike whenever the preceding
+                // segment sat above idle — e.g. the esp32 cold-boot surge (1.2 A)
+                // ahead of a 240 mA/40 mA-idle WiFi burst train re-spiked to
+                // ~1.2 A at every period edge, corrupting the exact rail-dip /
+                // protection-trip analysis the profile exists to drive.
+                let from = if local0 < period { prev_level } else { idle };
                 return ramp_hold(
-                    prev_level,
+                    from,
                     seg.level_a,
                     idle,
                     seg.rise_s,
@@ -281,6 +292,40 @@ mod tests {
         let a = p.current_at(0.001 + 0.0008, 0); // inside burst 1
         let b = p.current_at(0.001 + 0.100 + 0.0008, 0); // inside burst 2
         assert!((a - b).abs() < 1e-9, "periodic bursts differ: {a} vs {b}");
+    }
+
+    #[test]
+    fn cold_boot_burst_train_ramps_from_idle_not_the_surge() {
+        // R19: esp32_cold_boot_inrush has a 1.2 A cold-boot surge (seg1) directly
+        // before a 240 mA / 40 mA-idle WiFi burst train (seg2, 100 ms period).
+        // The train starts at cursor = 0.0025 + 0.0065 = 0.009 s. Every period
+        // after the first must ramp from the 40 mA idle, NOT re-spike to the
+        // frozen 1.2 A pre-train level. Sample the SECOND period's leading edge.
+        let p = LoadProfile::by_id("esp32_cold_boot_inrush").unwrap();
+        let edge2 = p.current_at(0.109, 0); // local0 = 0.100, phase 0
+        let ramp2 = p.current_at(0.1092, 0); // 0.2 ms into period 2's ramp
+        assert!(
+            edge2 < 0.1,
+            "period-2 edge must sit near idle (0.04 A), not re-spike to 1.2 A: {edge2}"
+        );
+        assert!((edge2 - 0.040).abs() < 1e-6, "period-2 edge is the 40 mA idle: {edge2}");
+        assert!(
+            (ramp2 - 0.080).abs() < 1e-6,
+            "period-2 ramp rises idle->level (0.04 -> 0.24): {ramp2}"
+        );
+        // The burst itself is unchanged, and every period repeats identically.
+        let hold2 = p.current_at(0.114, 0); // period 2 hold
+        let hold3 = p.current_at(0.214, 0); // period 3 hold
+        assert!((hold2 - 0.240).abs() < 1e-9 && (hold3 - 0.240).abs() < 1e-9, "burst hold is 240 mA");
+        assert!(
+            (p.current_at(0.1092, 0) - p.current_at(0.2092, 0)).abs() < 1e-9,
+            "period 2 and 3 ramps are identical"
+        );
+        // First-period continuity with the surge is preserved (ramps from 1.2 A).
+        assert!(
+            (p.current_at(0.009, 0) - 1.200).abs() < 1e-9,
+            "first period ramps from the preceding surge for continuity"
+        );
     }
 
     #[test]
