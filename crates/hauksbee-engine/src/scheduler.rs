@@ -139,6 +139,13 @@ struct LiveMcu {
 /// The scheduler driving one bound board.
 pub struct Scheduler {
     pub circuit: Circuit,
+    /// The bound circuit as it stood at construction, BEFORE any destructive
+    /// fault mutated it (a blown resistor set to 1e12 Ω, a diode replaced by an
+    /// open/short). Kept so `reset_run_state` can restore a pristine circuit for
+    /// a replay: without it, a destructive run would leave the damage in place
+    /// and the next run would either mis-solve the broken topology or (with the
+    /// monitor tracks cleared) silently fail to re-raise the fault.
+    original_circuit: Circuit,
     pub net_nodes: HashMap<String, NodeId>,
     pub digital: Vec<DigitalComponent>,
     /// MCU-bit-banged 74HC595 chains, clocked from the ordered pin-edge log at
@@ -449,8 +456,12 @@ impl Scheduler {
         let n_nodes = circuit.node_count();
         let layout = Layout::new(&circuit);
         let n_branch = layout.size.saturating_sub(layout.n_nodes);
+        // Snapshot the pristine (post-bind, pre-run) circuit for destructive-mode
+        // replay restoration in `reset_run_state`.
+        let original_circuit = circuit.clone();
         let mut sched = Scheduler {
             circuit,
+            original_circuit,
             net_nodes,
             digital,
             chains,
@@ -1919,6 +1930,17 @@ impl Scheduler {
         self.frame_peak_current.clear();
         self.frame_v_extremes.clear();
         self.faults_pending.clear();
+        // The stress monitor accumulates across a run (consecutive-over-limit
+        // counters, already-raised faults, live stress, destroyed flags). Left
+        // uncleared, a replay would silently drop a fault that fired last run
+        // (still marked raised) or falsely early-trip one (over_chunks already
+        // near the sustain threshold). Clear the tracks, and in destructive mode
+        // restore the circuit the monitor damaged so the replay solves the same
+        // pristine topology it did the first time.
+        self.stress.reset_tracks();
+        if self.stress.destructive {
+            self.circuit = self.original_circuit.clone();
+        }
     }
 
     fn update_stats(&mut self) {
