@@ -1002,6 +1002,24 @@ fn route_mcu_family_str(s: &str) -> Option<McuFamilyRoute> {
         if compact.starts_with("ESP32S2") {
             return Some(McuFamilyRoute::NoPlatform { family: "ESP32-S2" });
         }
+        // The RISC-V ESP32 variants (C6/C2/H2 and the P4 app processor) are a
+        // different ISA from the original Xtensa ESP32. They MUST be caught
+        // before the generic "ESP32" catch-all below, which would otherwise
+        // mis-route them onto the Xtensa `qemu:esp32` core and silently execute
+        // RISC-V firmware on the wrong machine. No platform is wired for them
+        // yet, so they route to NoPlatform (the same honest treatment as S2).
+        if compact.starts_with("ESP32C6") {
+            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-C6" });
+        }
+        if compact.starts_with("ESP32C2") {
+            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-C2" });
+        }
+        if compact.starts_with("ESP32H2") {
+            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-H2" });
+        }
+        if compact.starts_with("ESP32P4") {
+            return Some(McuFamilyRoute::NoPlatform { family: "ESP32-P4" });
+        }
         if compact.starts_with("ESP32")
             || compact.starts_with("ESPWROOM32")
             || compact.starts_with("ESP32WROOM32")
@@ -1146,7 +1164,10 @@ fn role_from_mcu_pinfunction_token(token: &str) -> Option<String> {
     if let Some(rest) = token.strip_prefix('P') {
         let mut chars = rest.chars();
         let port = chars.next()?;
-        if !matches!(port, 'A'..='E') {
+        // STM32 (and larger AVR/other) parts expose ports well past E: an
+        // STM32F4/F7 in a 100+-pin package has GPIO banks up to port I (PF/PG/
+        // PH/PI). Capping at E silently dropped every pin on those banks.
+        if !matches!(port, 'A'..='I') {
             return None;
         }
         let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
@@ -2954,9 +2975,10 @@ pub(crate) fn gpio_of_role(role: &str, module: bool) -> Option<(char, u8)> {
     if let Some(rest) = r.strip_prefix('p') {
         let mut chars = rest.chars();
         if let Some(port_c) = chars.next() {
-            // Lettered port A-G.
+            // Lettered port A-I (STM32F4/F7 large packages reach port I; renode's
+            // PortMap and QEMU's GpioBank both expose GPIOF..GPIOI there).
             let port_upper = port_c.to_ascii_uppercase();
-            if ('A'..='G').contains(&port_upper) {
+            if ('A'..='I').contains(&port_upper) {
                 let digits: String = rest[1..]
                     .chars()
                     .take_while(|c| c.is_ascii_digit())
@@ -3125,11 +3147,72 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
                 Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") {
                 Some(3.3)
+            } else if let Some(v) = embedded_rail_magnitude(&n) {
+                // Voltage-suffixed rails whose magnitude is neither 5 V nor
+                // 3.3 V and whose name does not START with the digit —
+                // "VDD_1V8", "AVCC_2V5", "VCC_1V2", "VOUT_1V0". These fell
+                // through every arm and floated at 0 V.
+                Some(v)
             } else {
                 None
             }
         }
     }
+}
+
+/// Extract a rail magnitude from a voltage token embedded MID-name, for
+/// suffixed rails like `VDD_1V8`, `AVCC_2V5`, `VCC_1V2` whose voltage is neither
+/// the canonical 5 V nor 3.3 V and whose name does not START with the digit (so
+/// [`positive_rail_fallback`] skips it). Gated on a supply token so an arbitrary
+/// signal net that merely contains a "1V2"-like substring is not misread as a
+/// rail. Accepts both KiCad digit-V-digit ("1V8") and dotted ("1.8V") forms.
+/// Expects `n` already trimmed / uppercased (as in [`power_rail_voltage`]).
+fn embedded_rail_magnitude(n: &str) -> Option<f64> {
+    const SUPPLY_TOKENS: [&str; 11] = [
+        "VDD", "VCC", "VBUS", "VIN", "VSYS", "VBAT", "AVDD", "DVDD", "VOUT", "VREG", "VAUX",
+    ];
+    if !(n.starts_with('+') || SUPPLY_TOKENS.iter().any(|t| n.contains(t))) {
+        return None;
+    }
+    let b = n.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        // An optional dotted decimal part ("1.8V").
+        if i + 1 < b.len() && b[i] == b'.' && b[i + 1].is_ascii_digit() {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        let head = &n[start..i];
+        if i < b.len() && b[i] == b'V' {
+            // KiCad frac form: digits directly after the 'V' ("1V8" → 1.8).
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            let frac = &n[i + 1..j];
+            let mag: Option<f64> = if head.contains('.') || frac.is_empty() {
+                head.parse().ok()
+            } else {
+                format!("{head}.{frac}").parse().ok()
+            };
+            if let Some(m) = mag {
+                if m > 0.0 && m <= 60.0 && m.is_finite() {
+                    return Some(m);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// "+15V", "+24V_RAIL", "+15V0", "+9V", or a bare "15V" -> the positive rail
@@ -3416,5 +3499,81 @@ mod rail_voltage_tests {
         assert_eq!(power_rail_voltage("-15V"), Some(-15.0));
         // A voltage-less VDD token carries no magnitude of its own.
         assert_eq!(power_rail_voltage("+15V"), Some(15.0));
+    }
+
+    /// R11: voltage-SUFFIXED rails whose magnitude is neither 5 V nor 3.3 V and
+    /// whose name does not start with the digit must still resolve — they fell
+    /// through every arm and floated at 0 V.
+    #[test]
+    fn voltage_suffixed_rails_resolve() {
+        assert_eq!(power_rail_voltage("VDD_1V8"), Some(1.8));
+        assert_eq!(power_rail_voltage("VCC_1V2"), Some(1.2));
+        assert_eq!(power_rail_voltage("AVCC_2V5"), Some(2.5));
+        assert_eq!(power_rail_voltage("VOUT_1V0"), Some(1.0));
+        assert_eq!(power_rail_voltage("DVDD_0V9"), Some(0.9));
+        // Dotted form embedded in a supply-token name.
+        assert_eq!(power_rail_voltage("VDD_1.2V"), Some(1.2));
+        // A bare supply token with no magnitude still resolves to nothing (the
+        // deliberate no-guess policy): inventing a voltage would be a guess.
+        assert_eq!(power_rail_voltage("VDD"), None);
+        assert_eq!(power_rail_voltage("VEE"), None);
+        // A plain signal net (no supply token) is never read as a rail even if
+        // it happens to contain a "1V2"-looking substring.
+        assert_eq!(power_rail_voltage("SENSE_1V2_MON"), None);
+    }
+}
+
+#[cfg(test)]
+mod mcu_route_tests {
+    use super::{route_mcu_family_str, McuFamilyRoute};
+
+    /// R11: the RISC-V ESP32 variants (C6/C2/H2/P4) must NOT fall through to the
+    /// Xtensa `qemu:esp32` catch-all — that would execute RISC-V firmware on the
+    /// wrong ISA. No platform is wired yet, so they route to NoPlatform.
+    #[test]
+    fn riscv_esp32_variants_do_not_misroute_to_xtensa() {
+        for (part, fam) in [
+            ("ESP32-C6", "ESP32-C6"),
+            ("ESP32-C2", "ESP32-C2"),
+            ("ESP32-H2", "ESP32-H2"),
+            ("ESP32-P4", "ESP32-P4"),
+        ] {
+            match route_mcu_family_str(part) {
+                Some(McuFamilyRoute::NoPlatform { family }) => assert_eq!(family, fam),
+                other => panic!("{part} must be NoPlatform, got {other:?}"),
+            }
+        }
+        // The Xtensa parts still route to their cores.
+        assert!(matches!(
+            route_mcu_family_str("ESP32-C3"),
+            Some(McuFamilyRoute::Backend { backend: "qemu:esp32c3", .. })
+        ));
+        assert!(matches!(
+            route_mcu_family_str("ESP32-WROOM-32E"),
+            Some(McuFamilyRoute::Backend { backend: "qemu:esp32", .. })
+        ));
+    }
+}
+
+#[cfg(test)]
+mod gpio_role_tests {
+    use super::{gpio_of_role, role_from_mcu_pinfunction_token};
+
+    /// R11: STM32 GPIO banks run past port E — an F4/F7 in a large package has
+    /// PF/PG/PH/PI. Both the pin-role stage (capped at E) and the role→(port,bit)
+    /// stage (capped at G) silently dropped every pin on those banks.
+    #[test]
+    fn stm32_ports_past_e_map() {
+        // Pin-function → role: F/G/H/I now survive (previously capped at E).
+        assert_eq!(role_from_mcu_pinfunction_token("PF9"), Some("pf9".to_string()));
+        assert_eq!(role_from_mcu_pinfunction_token("PI15"), Some("pi15".to_string()));
+        assert_eq!(role_from_mcu_pinfunction_token("PZ0"), None);
+        // Role → (port, bit): the same banks resolve to a GPIO driver target
+        // (gpio_of_role returns the uppercase port letter).
+        assert_eq!(gpio_of_role("pa0", false), Some(('A', 0)));
+        assert_eq!(gpio_of_role("pf9", false), Some(('F', 9)));
+        assert_eq!(gpio_of_role("ph1", false), Some(('H', 1)));
+        assert_eq!(gpio_of_role("pi15", false), Some(('I', 15)));
+        assert_eq!(gpio_of_role("pz0", false), None);
     }
 }

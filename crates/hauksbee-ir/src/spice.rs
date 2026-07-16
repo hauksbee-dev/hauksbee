@@ -314,7 +314,7 @@ fn load_deck(
     // and inclusion site, appended to any error raised from it.
     let mut ctx = IncludeCtx {
         top_dir: top_dir.to_path_buf(),
-        stack: top_canon.into_iter().collect(),
+        stack: top_canon.into_iter().map(|p| (p, None)).collect(),
     };
     let mut phys: Vec<PhysLine> = Vec::new();
     read_source(text, top_dir, top_name, Rc::from(""), true, &mut ctx, &mut phys)?;
@@ -1751,8 +1751,12 @@ struct PhysLine {
 struct IncludeCtx {
     /// The top deck's directory — the second search location for every include.
     top_dir: PathBuf,
-    /// Canonicalized paths currently open on the include stack (cycle check).
-    stack: Vec<PathBuf>,
+    /// (canonical path, section) pairs currently open on the include stack, for
+    /// the cycle check. Keying on the SECTION as well as the path means two
+    /// different sections of one library file (`.lib m.lib nmos` nesting a
+    /// `.lib m.lib pmos`) are not a false cycle, while a section that re-opens
+    /// itself still is.
+    stack: Vec<(PathBuf, Option<String>)>,
 }
 
 /// Build a line-numbered [`SpiceError::Syntax`] carrying an inclusion breadcrumb.
@@ -1995,13 +1999,13 @@ fn splice_file(
     out: &mut Vec<PhysLine>,
 ) -> Result<(), SpiceError> {
     let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if ctx.stack.contains(&canon) {
-        let chain = ctx
-            .stack
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(" -> ");
+    let key = (canon.clone(), section.map(|s| s.to_string()));
+    if ctx.stack.contains(&key) {
+        let show = |(p, s): &(PathBuf, Option<String>)| match s {
+            Some(sec) => format!("{}[{}]", p.display(), sec),
+            None => p.display().to_string(),
+        };
+        let chain = ctx.stack.iter().map(show).collect::<Vec<_>>().join(" -> ");
         return Err(provenanced_syntax(
             site,
             site_raw,
@@ -2010,7 +2014,7 @@ fn splice_file(
                 "include cycle: `{}` is already open ({} -> {})",
                 display_arg,
                 chain,
-                canon.display()
+                show(&key)
             ),
         ));
     }
@@ -2035,7 +2039,7 @@ fn splice_file(
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    ctx.stack.push(canon);
+    ctx.stack.push(key);
     let r = match section {
         Some(sec) => read_section(&text, &child_dir, &child_name, sec, display_arg, child_origin, ctx, out),
         None => read_source(&text, &child_dir, &child_name, child_origin, false, ctx, out),
@@ -2066,7 +2070,9 @@ fn read_section(
         let trimmed = raw.trim_start();
         let tok = first_token(trimmed);
         if tok.eq_ignore_ascii_case(".lib") {
-            let args = parse_directive_args(&trimmed[tok.len()..]);
+            // Strip an inline comment first — `.lib nmos ; 3.3V models` must not
+            // read the comment words as extra section/file arguments.
+            let args = parse_directive_args(&strip_inline_comment(&trimmed[tok.len()..]));
             if args.len() == 1 {
                 // A section-open inside the library file.
                 if in_section {
@@ -2128,7 +2134,8 @@ fn read_section(
         }
         if tok.eq_ignore_ascii_case(".include") || tok.eq_ignore_ascii_case(".inc") {
             if in_section {
-                let args = parse_directive_args(&trimmed[tok.len()..]);
+                let args =
+                    parse_directive_args(&strip_inline_comment(&trimmed[tok.len()..]));
                 include_file(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
             }
             continue;
@@ -5115,6 +5122,52 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn lib_section_open_inline_comment_is_stripped() {
+        // R11: a `.lib fast ; comment` section-open line inside a library file
+        // must have its comment stripped before the section token is read — else
+        // the extra words make it len != 1 and the section never opens.
+        let d = TmpDir::new("libsec_cmt");
+        d.write(
+            "corner.lib",
+            "* corner library\n\
+             .lib fast ; the 3.3V fast corner\n.model MM NMOS(VTO=0.5 KP=5e-3)\n.endl\n",
+        );
+        let main = d.write("main.cir", "m\nM1 d g 0 0 MM\n.lib corner.lib fast\n.end\n");
+        let c = SpiceLoader::load_file(&main).expect("commented section-open must still open");
+        assert!(
+            c.devices.iter().any(|x| matches!(x, Device::Mosfet { .. })),
+            "the fast section's model must have been pulled"
+        );
+    }
+
+    #[test]
+    fn two_sections_from_one_lib_file_is_not_a_cycle() {
+        // R11: the include-cycle guard must key on (file, SECTION), not the file
+        // alone. Section `fast` legitimately pulls a *different* section `pmos`
+        // from the SAME library file — that is not a cycle. Path-only keying
+        // rejected it with a spurious "include cycle".
+        let d = TmpDir::new("libsec_xsec");
+        d.write(
+            "corner.lib",
+            "* corner library\n\
+             .lib fast\n.model NM NMOS(VTO=0.5)\n.lib corner.lib pmos\n.endl\n\
+             .lib pmos\n.model PM PMOS(VTO=-0.5)\n.endl\n",
+        );
+        let main = d.write(
+            "main.cir",
+            "m\nM1 d g 0 0 NM\nM2 s g 0 0 PM\n.lib corner.lib fast\n.end\n",
+        );
+        let c = SpiceLoader::load_file(&main)
+            .expect("two sections of one file must not be a false cycle");
+        let mosfets = c
+            .devices
+            .iter()
+            .filter(|x| matches!(x, Device::Mosfet { .. }))
+            .count();
+        assert_eq!(mosfets, 2, "both the fast NMOS and the nested PMOS bind");
     }
 
     #[test]
