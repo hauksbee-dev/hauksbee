@@ -302,10 +302,17 @@ fn is_unconnected_net(name: &str) -> bool {
 /// "2.2k/R0603").
 fn parse_ohms(v: &str) -> Option<f64> {
     let s = v.split('/').next().unwrap_or(v).trim().to_ascii_uppercase();
-    let s = s.trim_end_matches('Ω').trim_end_matches("OHM");
+    // Strip both ohm glyphs: the Greek capital omega (U+03A9) AND the dedicated
+    // ohm sign (U+2126), plus the "OHM" word — a value bearing either unit must parse.
+    let s = s
+        .trim_end_matches('\u{03a9}')
+        .trim_end_matches('\u{2126}')
+        .trim_end_matches("OHM");
     let s = s.trim();
+    // SPICE-style multi-letter multipliers (MEG/GIG) MUST be matched before the
+    // single-letter K/M/R scan, or "10MEG" lands on the 'M' and misparses to None.
     // 4K7 / 2K2 style: R/K/M acts as the decimal point.
-    for (suffix, mult) in [("K", 1e3), ("M", 1e6), ("R", 1.0)] {
+    for (suffix, mult) in [("MEG", 1e6), ("GIG", 1e9), ("K", 1e3), ("M", 1e6), ("R", 1.0)] {
         if let Some(idx) = s.find(suffix) {
             let (a, b) = s.split_at(idx);
             let b = &b[suffix.len()..];
@@ -330,8 +337,16 @@ fn parse_farads(v: &str) -> Option<f64> {
     if s.is_empty() {
         return None;
     }
-    // Unit suffix scales the number.
-    for (suffix, mult) in [("P", 1e-12), ("N", 1e-9), ("U", 1e-6), ("µ", 1e-6)] {
+    // Unit suffix scales the number. Recognise BOTH micro glyphs: the micro sign
+    // (U+00B5, "µ") and the Greek small-letter mu (U+03BC, "μ") — component
+    // libraries write "4.7μF" with either, and uppercasing leaves both untouched.
+    for (suffix, mult) in [
+        ("P", 1e-12),
+        ("N", 1e-9),
+        ("U", 1e-6),
+        ("\u{00b5}", 1e-6),
+        ("\u{03bc}", 1e-6),
+    ] {
         if let Some(idx) = s.find(suffix) {
             let (a, b) = s.split_at(idx);
             let b = &b[suffix.len()..];

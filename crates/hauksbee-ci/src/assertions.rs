@@ -1007,7 +1007,10 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         .peak_temp_c
         .iter()
         .filter(|(k, _)| key_belongs_to_ref(&reference, k))
-        .max_by(|a, b| a.1.total_cmp(b.1))
+        // Break temperature ties on the unit key so the reported hottest unit is
+        // stable across HashMap iteration order (reproducibility doctrine): among
+        // tied-max units the lowest key name wins deterministically.
+        .max_by(|a, b| a.1.total_cmp(b.1).then_with(|| b.0.cmp(a.0)))
         .map(|(k, v)| (k.clone(), *v));
 
     // Explicit ceiling: compare the peak junction temperature against it.
@@ -1280,6 +1283,64 @@ mod tests {
         good.observe(0.010, 5.0);
         let (ok2, msg2) = check_rail_window(&a, &outcome_with_window(good));
         assert!(ok2, "a 2-sample window that never dips must pass: {msg2}");
+    }
+
+    // R24: on a multi-unit package with TIED max temperatures, the reported
+    // hottest unit must be deterministic (lowest key), not whatever HashMap
+    // iteration order happened to surface, or two identical runs emit different
+    // report bytes (reproducibility doctrine). Verdict is unaffected.
+    #[test]
+    fn max_temp_tie_break_is_deterministic() {
+        use super::check_max_temp;
+        use crate::runner::RunOutcome;
+        use std::collections::HashMap;
+
+        fn outcome_with_tied_temps() -> RunOutcome {
+            let mut peak_temp_c = HashMap::new();
+            // Two units of SW1 at the SAME peak temperature.
+            peak_temp_c.insert("SW1_q2".to_string(), 100.0);
+            peak_temp_c.insert("SW1_q1".to_string(), 100.0);
+            peak_temp_c.insert("SW1_q3".to_string(), 100.0);
+            RunOutcome {
+                seed: 0,
+                windows: HashMap::new(),
+                uart: HashMap::new(),
+                faults: Vec::new(),
+                toggles: HashMap::new(),
+                peak_current: HashMap::new(),
+                peak_temp_c,
+                peripherals: HashMap::new(),
+                rail_windows: HashMap::new(),
+                protection_tripped: HashMap::new(),
+                protection_tripped_scoped: HashMap::new(),
+                ambient_c: 25.0,
+                sim_ms: 100.0,
+                boot_first_cross_ms: HashMap::new(),
+                boot_drop_after_cross_ms: HashMap::new(),
+                driven_nets: Default::default(),
+                drive_direction_observable: false,
+                first_fault_ms: None,
+                ac: None,
+                analog_valid: true,
+                failed_windows: Vec::new(),
+                analog_abort: false,
+                sampled_values: Vec::new(),
+                net_series: HashMap::new(),
+            }
+        }
+
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"max_temp\"\nref = \"SW1\"\ncelsius = 150.0\n").unwrap();
+        // Many independent builds must all name the SAME (lowest-key) unit.
+        for _ in 0..16 {
+            let (ok, msg) = check_max_temp(&a, &outcome_with_tied_temps());
+            assert!(ok, "100 C is under the 150 C ceiling: {msg}");
+            assert!(
+                msg.contains("SW1_q1"),
+                "the tie must resolve to the lowest key deterministically; got: {msg}"
+            );
+            assert!(!msg.contains("SW1_q2") && !msg.contains("SW1_q3"), "only one unit reported: {msg}");
+        }
     }
 
     // A `protection_trip` assertion scoped to a scenario must judge only trips

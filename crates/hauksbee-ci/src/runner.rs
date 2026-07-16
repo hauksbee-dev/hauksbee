@@ -43,6 +43,15 @@ impl NetWindow {
         self.last_v = v;
         self.samples += 1;
     }
+    /// Widen the min/max window with an intra-frame extreme WITHOUT touching
+    /// `last_v`. The settled report value must stay the last-chunk voltage
+    /// (`observe`), not the peak excursion — folding the extremes through
+    /// `observe` used to leave `last_v` reporting the max of the final frame.
+    fn fold(&mut self, v: f64) {
+        self.min_v = self.min_v.min(v);
+        self.max_v = self.max_v.max(v);
+        self.samples += 1;
+    }
 }
 
 /// One fault raised during a run.
@@ -958,11 +967,13 @@ fn run_one(
                         let w = windows.entry(key).or_insert_with(NetWindow::new);
                         w.observe(v);
                         if let Some(&(mn, mx)) = vext.get(name) {
+                            // Widen the window with the extremes but keep last_v
+                            // as the settled final-chunk value (`observe` above).
                             if mn.is_finite() {
-                                w.observe(mn);
+                                w.fold(mn);
                             }
                             if mx.is_finite() {
-                                w.observe(mx);
+                                w.fold(mx);
                             }
                         }
                     }
@@ -1993,6 +2004,20 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn net_window_last_v_is_the_settled_value_not_the_peak() {
+        // R24: the settled report value is written by observe(); folding the
+        // intra-frame extremes must widen min/max WITHOUT clobbering last_v.
+        let mut w = NetWindow::new();
+        w.observe(3.30); // settled final-chunk voltage
+        w.fold(0.0); // an intra-frame dip
+        w.fold(5.0); // an intra-frame peak
+        assert_eq!(w.last_v, 3.30, "last_v must stay the settled value");
+        assert_eq!(w.min_v, 0.0, "the dip still widens the window");
+        assert_eq!(w.max_v, 5.0, "the peak still widens the window");
+        assert_eq!(w.samples, 3);
+    }
 
     // Replay a voltage series through the per-frame boot-coverage update and
     // return (first_cross_ms, first_drop_after_cross_ms).

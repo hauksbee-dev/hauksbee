@@ -4,10 +4,16 @@
 //!
 //! This is the "drop your board, get a report" backend. It reuses the exact same
 //! analysis as the CLI (`ExtractedBoard` extraction + the DRC / lint / SI /
-//! resource checks + the plain-language [`crate::plain`] templates), so the web
-//! report and the terminal report can never disagree. The HTTP plumbing lives in
-//! `hauksbee-server`; this module is pure (bytes in, JSON string out) so it has
-//! no web dependency and is unit-testable.
+//! resource checks + the plain-language [`crate::plain`] templates).
+//!
+//! One documented divergence: the web path receives a single file's bytes and so
+//! cannot see a sibling `.kicad_pro` project file. Its DRC therefore uses the
+//! board's default/embedded clearances, whereas the CLI (`hauksbee run --drc`,
+//! given the `.kicad_pro` next to the board) applies per-netclass clearances. On
+//! a KiCad board with non-default netclass clearances the two DRC surfaces can
+//! report different violations. Everything else is byte-for-byte the same. The
+//! HTTP plumbing lives in `hauksbee-server`; this module is pure (bytes in, JSON
+//! string out) so it has no web dependency and is unit-testable.
 
 use serde::Serialize;
 
