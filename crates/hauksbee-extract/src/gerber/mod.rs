@@ -241,18 +241,20 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
     }
 
-    // Parse P&P + BOM from the CSVs. A CSV that yields placements is the P&P;
-    // the rest are tried as BOM.
+    // Parse P&P + BOM from the CSVs. Any CSV that yields placements is a P&P
+    // file — a job with separate top and bottom placement CSVs contributes both,
+    // so we EXTEND rather than keep only the first (the second is not a BOM). A
+    // CSV that yields no placements (no X/Y columns) is tried as a BOM.
     let mut placements: Vec<placement::Placement> = Vec::new();
-    let mut bom: std::collections::HashMap<String, (String, String)> =
+    let mut bom: std::collections::HashMap<String, placement::BomEntry> =
         std::collections::HashMap::new();
     for c in &csvs {
         let Ok(text) = std::fs::read_to_string(c) else {
             continue;
         };
         let pnp = placement::parse_pnp(&text);
-        if !pnp.is_empty() && placements.is_empty() {
-            placements = pnp;
+        if !pnp.is_empty() {
+            placements.extend(pnp);
         } else {
             let b = placement::parse_bom(&text);
             if !b.is_empty() {
@@ -283,16 +285,20 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
 
     let (mut board, stats) = connect::reconstruct(&name, layer_prims, holes, placements);
 
-    // Enrich components from the BOM (value / part number).
+    // Enrich components from the BOM (value / part number / do-not-populate).
     if !bom.is_empty() {
         for c in &mut board.components {
-            if let Some((value, mpn)) = bom.get(&c.reference) {
-                if !value.is_empty() {
-                    c.value = value.clone();
+            if let Some(entry) = bom.get(&c.reference) {
+                if !entry.value.is_empty() {
+                    c.value = entry.value.clone();
                 }
-                if !mpn.is_empty() {
-                    c.properties.push(("part_number".to_string(), mpn.clone()));
+                if !entry.mpn.is_empty() {
+                    c.properties
+                        .push(("part_number".to_string(), entry.mpn.clone()));
                 }
+                // A BOM marking is authoritative for populate state; never clear
+                // a DNP already established by the P&P side.
+                c.dnp = c.dnp || entry.dnp;
             }
         }
     }

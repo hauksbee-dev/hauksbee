@@ -72,31 +72,34 @@ impl Transient {
             node_voltages: vec![Vec::new(); n_nodes],
             branch_currents: Vec::new(),
         };
-        // Pre-name branch current outputs.
-        let mut branch_names = Vec::new();
-        for (_, dev) in circuit.iter() {
+        // Pre-name branch current outputs, pairing each Vsource/Inductor with the
+        // ABSOLUTE index of its branch-current unknown in `x`. Branch unknowns are
+        // NOT contiguous per device kind: `Layout` assigns one to every
+        // branch-owning device — Vsource, Inductor, VCVS, CCVS and a V-output
+        // behavioral source — interleaved in circuit order. A running offset over
+        // the Vsource/Inductor-only list therefore lands on the wrong slot as soon
+        // as a dependent voltage source precedes one of them; read each device's
+        // real index via `Layout::branch(id)` instead. (The node block can also be
+        // larger than `node_count()` — a series-resistance BJT owns private
+        // internal unknowns there — which `Layout::branch` already accounts for.)
+        let layout = crate::system::Layout::new(circuit);
+        let mut branch_outputs: Vec<usize> = Vec::new();
+        for (id, dev) in circuit.iter() {
             if matches!(dev, Device::Vsource { .. } | Device::Inductor { .. }) {
-                branch_names.push(dev.name().to_string());
+                if let Some(bi) = layout.branch(id) {
+                    wf.branch_currents.push((dev.name().to_string(), Vec::new()));
+                    branch_outputs.push(bi);
+                }
             }
         }
-        for name in &branch_names {
-            wf.branch_currents.push((name.clone(), Vec::new()));
-        }
 
-        // Branch unknowns follow the node block in layout order. The node
-        // block can be larger than the netlist's node count: a series-
-        // resistance BJT owns device-private internal unknowns there
-        // (dev-plan 04 §3.2), so the offset comes from the layout, not from
-        // `node_count()` (for internal-node-free circuits the two are equal).
-        let branch_start = crate::system::Layout::new(circuit).n_nodes;
         self.run_streaming(circuit, tstop, |s| {
             wf.time.push(s.time);
             for node in 0..n_nodes {
                 let v = if node == 0 { 0.0 } else { s.x[node - 1] };
                 wf.node_voltages[node].push(v);
             }
-            for (bi, slot) in wf.branch_currents.iter_mut().enumerate() {
-                let idx = branch_start + bi;
+            for (slot, &idx) in wf.branch_currents.iter_mut().zip(branch_outputs.iter()) {
                 slot.1.push(s.x.get(idx).copied().unwrap_or(0.0));
             }
         })?;
@@ -1329,6 +1332,56 @@ mod breakpoint_cap_tests {
             bps.len() <= MAX_BREAKPOINTS + 8,
             "pulse corners stay capped, got {} breakpoints",
             bps.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod branch_output_tests {
+    use super::Transient;
+    use crate::SolverOptions;
+    use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
+
+    /// The reported branch current of a Vsource/Inductor must be read from that
+    /// device's OWN branch unknown, not a running offset over the
+    /// Vsource/Inductor-only list. A VCVS (which also owns a branch) defined
+    /// BEFORE the inductor in device order used to shift every later branch,
+    /// so I(L1) was read from the VCVS's slot (~0 A) instead of the real
+    /// inductor current.
+    #[test]
+    fn inductor_current_correct_with_a_vcvs_ahead_of_it() {
+        let mut c = Circuit::new();
+        let inn = c.node("in");
+        let b = c.node("b");
+        let cc = c.node("c");
+        let a = c.node("a");
+        // V1 (branch), R1: 1 V through 1k into node b.
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: inn,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Resistor { name: "R1".into(), a: inn, b, ohms: 1000.0, tc1: None });
+        // A dependent voltage source (VCVS) that owns a branch, defined BEFORE L1
+        // so it interleaves ahead of the inductor's branch unknown.
+        c.add(Device::Vcvs { name: "E1".into(), p: cc, n: NodeId::GROUND, cp: a, cn: NodeId::GROUND, gain: 2.0 });
+        c.add(Device::Resistor { name: "Rc".into(), a: cc, b: NodeId::GROUND, ohms: 1000.0, tc1: None });
+        c.add(Device::Resistor { name: "Ra".into(), a, b: NodeId::GROUND, ohms: 1000.0, tc1: None });
+        // The inductor whose current we check: b -> ground.
+        c.add(Device::Inductor { name: "L1".into(), a: b, b: NodeId::GROUND, henries: 1e-3, ic: None });
+
+        let wf = Transient::new(SolverOptions::default()).run(&c, 1e-3).unwrap();
+        let (_, l1) = wf
+            .branch_currents
+            .iter()
+            .find(|(n, _)| n == "L1")
+            .expect("L1 branch current reported");
+        let i_final = l1.last().copied().unwrap();
+        // Steady state: inductor is a short, so I(L1) = V1/R1 = 1 mA (magnitude).
+        assert!(
+            (i_final.abs() - 1e-3).abs() < 5e-5,
+            "I(L1) must be ~1 mA (read from its own branch), got {i_final:e}"
         );
     }
 }
