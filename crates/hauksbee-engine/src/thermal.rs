@@ -172,7 +172,15 @@ pub fn theta_ja_from_footprint(footprint: &str, kind: ComponentKind) -> f64 {
 /// caller can fall through to a default). Values are still-air with minimal
 /// copper; they bracket the power deratings the stress monitor already uses.
 fn chip_passive_theta_ja(f_upper: &str) -> Option<f64> {
-    let t = if f_upper.contains("0201") {
+    // 01005 MUST be tested before 0402: KiCad pairs the imperial code with its
+    // metric twin, and 01005's metric code IS 0402 ("R_01005_0402Metric"), so a
+    // substring match on "0402" would give the smallest chip the 0402 theta_JA
+    // (600) — LOWER than 0201's 900, i.e. under-estimating Tj on the worst-
+    // cooling body. Smaller body = hotter, so 01005 sits ABOVE 0201. Mirrors
+    // resistor_power_from_footprint's "match the smallest package first" rule.
+    let t = if f_upper.contains("01005") {
+        1200.0
+    } else if f_upper.contains("0201") {
         900.0
     } else if f_upper.contains("0402") {
         600.0
@@ -248,6 +256,21 @@ mod tests {
         let tj = junction_temp_c(25.0, 1.0, theta);
         assert!((tj - 87.0).abs() < 1e-9);
         assert_eq!(default_tj_max("...TO-220..."), 150.0);
+    }
+
+    #[test]
+    fn chip_01005_not_mismatched_as_its_0402_metric_twin() {
+        // R12: "R_01005_0402Metric" contains "0402"; the 01005 branch must win
+        // (checked first), giving the smallest body the HIGHER theta_JA — never
+        // the 0402's 600 (which would under-estimate Tj, the unsafe direction).
+        let theta = theta_ja_from_footprint("Resistor_SMD:R_01005_0402Metric", ComponentKind::Passive);
+        assert_ne!(theta, 600.0, "must not collide with the 0402 metric twin");
+        assert!(theta > 900.0, "01005 sits above 0201's 900, got {theta}");
+        // The 0201 whose metric twin is 0603 still resolves to 0201.
+        assert_eq!(
+            theta_ja_from_footprint("Resistor_SMD:R_0201_0603Metric", ComponentKind::Passive),
+            900.0
+        );
     }
 
     #[test]
