@@ -3158,11 +3158,18 @@ fn adc_of_role(role: &str, module: bool) -> Option<u8> {
 /// the split-ground / galvanic-isolation structure this tool exists to check.
 /// Rail-default and rating heuristics keep the broad [`is_ground`]; only the
 /// pass-1 node assignment uses this.
+///
+/// `VSS` IS canonical ground: it is the IC-pin spelling of "the" ground (KiCad's
+/// `power:VSS`), not a split-ground island like the *GND families. A CMOS/logic
+/// board whose sole ground net is labelled `VSS` must still fuse onto node 0, or
+/// the reference node floats and the whole MNA solve is singular / offset. `VEE`
+/// is intentionally NOT included: on bipolar-supply analog boards it is a
+/// negative rail (e.g. -15 V), and pinning that to 0 V would be a hard fault.
 fn is_canonical_ground(name: &str) -> bool {
     let n = name.trim();
     // Hierarchical labels export as "/sheet/GND"; the leaf name decides.
     let leaf = n.rsplit('/').next().unwrap_or(n).trim();
-    leaf == "0" || leaf.eq_ignore_ascii_case("gnd")
+    leaf == "0" || leaf.eq_ignore_ascii_case("gnd") || leaf.eq_ignore_ascii_case("vss")
 }
 
 /// True for ground-family net names.
@@ -3508,6 +3515,33 @@ fn natural_ref_key(reference: &str) -> (String, u64, String) {
         .collect();
     let num = digits.parse::<u64>().unwrap_or(0);
     (prefix.to_ascii_uppercase(), num, reference.to_string())
+}
+
+#[cfg(test)]
+mod canonical_ground_tests {
+    use super::*;
+
+    #[test]
+    fn vss_is_canonical_ground_but_split_families_and_vee_are_not() {
+        // R35: a board whose sole ground is spelled VSS (KiCad power:VSS) must
+        // fuse onto node 0, or the reference node floats and the MNA solve is
+        // singular. VSS is the IC-pin spelling of "the" ground, not a split
+        // island.
+        assert!(is_canonical_ground("VSS"));
+        assert!(is_canonical_ground("vss"));
+        assert!(is_canonical_ground("/Power/VSS"));
+        // GND / 0 unchanged.
+        assert!(is_canonical_ground("GND"));
+        assert!(is_canonical_ground("0"));
+        // The deliberately-split ground families stay distinct so bridges
+        // (ferrite bead / 0 Ω link / star point) are preserved.
+        for split in ["AGND", "DGND", "PGND", "ISOGND", "CHASSIS_GND"] {
+            assert!(!is_canonical_ground(split), "{split} must stay a distinct node");
+        }
+        // VEE is a negative supply rail on bipolar-supply analog boards; pinning
+        // it to 0 V would be a hard fault, so it is NOT canonical ground.
+        assert!(!is_canonical_ground("VEE"));
+    }
 }
 
 #[cfg(test)]
