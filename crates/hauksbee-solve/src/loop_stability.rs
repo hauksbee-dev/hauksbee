@@ -27,12 +27,16 @@
 //!
 //! ## Margins
 //!
-//! - **Gain crossover frequency** `f_c`: where `|T| = 1` (0 dB), found by linear
-//!   interpolation (in log-frequency, dB) between the bracketing sweep points.
+//! - **Gain crossover frequency** `f_c`: the highest-frequency *downward* 0 dB
+//!   crossing of `|T|` (gain falling through unity as frequency increases),
+//!   found by linear interpolation (in log-frequency, dB) between the
+//!   bracketing sweep points. Non-monotonic loops can cross 0 dB several
+//!   times; the final descent through unity is the one that governs stability.
 //! - **Phase margin**: `180 deg + phase(T)` at `f_c` (how far the phase is from
 //!   -180 deg when the gain hits unity). >= 45 deg is the usual comfort bar.
-//! - **Phase crossover / gain margin** are reported too: the frequency where the
-//!   phase passes -180 deg and the gain (in dB, negated) there.
+//! - **Phase crossover / gain margin** are reported too: the lowest-frequency
+//!   -180 deg phase crossing at or above `f_c`, and the gain (in dB, negated)
+//!   there.
 
 use crate::ac::AcResponse;
 use hauksbee_ir::Circuit;
@@ -137,27 +141,42 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
         prev = ph;
     }
 
-    // Gain crossover: first point where mag_db crosses 0 going downward (or any
-    // crossing of 0 dB). Interpolate in log-f / dB.
+    // Gain crossover: the unity-gain crossover is the HIGHEST-frequency
+    // *downward* 0 dB crossing (gain going from >0 dB to <=0 dB as frequency
+    // increases). A non-monotonic loop can cross 0 dB several times (dip below,
+    // peak back above); the margin that governs stability is read at the final
+    // descent through unity, so taking the first crossing would report an
+    // optimistic phase margin. If the gain never crosses 0 dB downward (always
+    // below, always above, or only rising through it at the band edge) no
+    // crossover is reported, preserving the documented degenerate behavior.
+    // Interpolate linearly in log-f / dB between the bracketing points.
     let mut gain_crossover_hz = None;
     let mut phase_margin_deg = None;
     for i in 1..bode.len() {
         let (f0, m0) = (bode[i - 1].0, bode[i - 1].1);
         let (f1, m1) = (bode[i].0, bode[i].1);
-        if (m0 - 0.0).signum() != (m1 - 0.0).signum() && m0 != m1 {
-            let frac = m0 / (m0 - m1); // where mag hits 0
+        if m0 > 0.0 && m1 <= 0.0 {
+            let frac = m0 / (m0 - m1); // where mag hits 0 dB
             let lf = f0.log10() + frac * (f1.log10() - f0.log10());
             let fc = 10f64.powf(lf);
             let ph = phase[i - 1] + frac * (phase[i] - phase[i - 1]);
             gain_crossover_hz = Some(fc);
             phase_margin_deg = Some(180.0 + ph);
-            break;
+            // No break: keep scanning so the last (highest-frequency) downward
+            // crossing wins.
         }
     }
 
-    // Phase crossover: where unwrapped phase passes -180 deg.
-    let mut phase_crossover_hz = None;
-    let mut gain_margin_db = None;
+    // Phase crossover / gain margin: collect EVERY -180 deg crossing of the
+    // unwrapped phase (either direction), interpolating the frequency (in
+    // log-f) and the gain at each. Convention: the gain margin is read at the
+    // lowest-frequency -180 deg crossing at or above the gain crossover — the
+    // first point past unity gain where extra loop gain would push the
+    // response onto the critical point. If no crossing lies at/above the gain
+    // crossover (or the gain never crosses unity), fall back to the
+    // lowest-frequency -180 deg crossing, which matches the single-crossing
+    // behavior and errs conservative for conditionally stable loops.
+    let mut crossings: Vec<(f64, f64)> = Vec::new(); // (freq_hz, mag_db)
     for i in 1..bode.len() {
         let p0 = phase[i - 1] + 180.0;
         let p1 = phase[i] + 180.0;
@@ -168,11 +187,20 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
             let lf = f0.log10() + frac * (f1.log10() - f0.log10());
             let fp = 10f64.powf(lf);
             let m = bode[i - 1].1 + frac * (bode[i].1 - bode[i - 1].1);
-            phase_crossover_hz = Some(fp);
-            gain_margin_db = Some(-m);
-            break;
+            crossings.push((fp, m));
         }
     }
+    let chosen = match gain_crossover_hz {
+        Some(fc) => crossings
+            .iter()
+            .find(|&&(fp, _)| fp >= fc)
+            .or_else(|| crossings.first()),
+        None => crossings.first(),
+    };
+    let (phase_crossover_hz, gain_margin_db) = match chosen {
+        Some(&(fp, m)) => (Some(fp), Some(-m)),
+        None => (None, None),
+    };
 
     StabilityMargins {
         gain_crossover_hz,
@@ -218,5 +246,101 @@ mod tests {
         assert!((fc - 10_000.0).abs() / 10_000.0 < 0.05, "fc={fc}");
         let pm = m.phase_margin_deg.unwrap();
         assert!((pm - 90.0).abs() < 2.0, "pm={pm}");
+    }
+
+    #[test]
+    fn non_monotonic_gain_reads_pm_at_last_downward_crossing() {
+        // Gain crosses 0 dB three times: down (10..100 Hz), back up
+        // (100..1 kHz, e.g. a resonant peak), then finally down (10..100 kHz).
+        // The true unity-gain crossover is the LAST downward crossing; reading
+        // the first would report an optimistic ~36 deg margin instead of the
+        // real ~11.7 deg.
+        let bode = vec![
+            (1.0, 40.0, -90.0),
+            (10.0, 20.0, -120.0),
+            (100.0, -5.0, -150.0),
+            (1e3, 10.0, -160.0),
+            (1e4, 5.0, -165.0),
+            (1e5, -10.0, -175.0),
+            (1e6, -30.0, -185.0),
+        ];
+        let m = margins_from_bode(&bode);
+        // Interpolated final downward crossing: frac = 5/15 within 1e4..1e5,
+        // fc = 10^(4 + 1/3) ~ 21.54 kHz, phase ~ -168.33 deg -> PM ~ 11.67 deg.
+        let fc = m.gain_crossover_hz.unwrap();
+        assert!(
+            (fc - 21_544.0).abs() / 21_544.0 < 0.01,
+            "fc={fc}, expected ~21.5 kHz (last downward crossing), not ~46 Hz (first)"
+        );
+        let pm = m.phase_margin_deg.unwrap();
+        assert!(
+            (pm - 11.67).abs() < 0.1,
+            "pm={pm}, expected ~11.67 deg; the first crossing would give ~36 deg"
+        );
+        assert!(pm < 20.0, "the optimistic first-crossing margin must not leak through");
+    }
+
+    #[test]
+    fn multi_phase_crossing_gm_read_at_crossing_above_gain_crossover() {
+        // Phase dips through -180 deg early (1..10 Hz), recovers (10..100 Hz),
+        // and crosses again above the gain crossover (10..100 kHz). The gain
+        // margin must come from the crossing at/above the gain crossover, not
+        // the first one, which sits at 25 dB of loop gain and would report a
+        // meaningless GM of -25 dB.
+        let bode = vec![
+            (1.0, 30.0, -170.0),
+            (10.0, 20.0, -190.0),
+            (100.0, 10.0, -170.0),
+            (1e3, 8.0, -160.0),
+            (1e4, -6.0, -170.0),
+            (1e5, -20.0, -190.0),
+        ];
+        let m = margins_from_bode(&bode);
+        // Gain crossover: 8 dB -> -6 dB across 1e3..1e4, fc ~ 3.73 kHz.
+        let fc = m.gain_crossover_hz.unwrap();
+        assert!((fc - 3_727.0).abs() / 3_727.0 < 0.01, "fc={fc}");
+        // Relevant -180 deg crossing: midway (in log-f) through 1e4..1e5,
+        // fp = 10^4.5 ~ 31.6 kHz, mag = -13 dB -> GM = +13 dB.
+        let fp = m.phase_crossover_hz.unwrap();
+        assert!(
+            (fp - 31_623.0).abs() / 31_623.0 < 0.01,
+            "fp={fp}, expected ~31.6 kHz (crossing above fc), not ~3.2 Hz (first)"
+        );
+        let gm = m.gain_margin_db.unwrap();
+        assert!(
+            (gm - 13.0).abs() < 0.1,
+            "gm={gm}, expected ~13 dB; the first crossing would give -25 dB"
+        );
+    }
+
+    #[test]
+    fn monotonic_loop_margins_unchanged() {
+        // A well-behaved monotonic two-pole-style table: one downward 0 dB
+        // crossing, one -180 deg crossing above it. The fixed selection rules
+        // must reproduce exactly the same interpolated margins as the original
+        // first-crossing scan did on such tables.
+        let bode = vec![
+            (1.0, 60.0, -95.0),
+            (10.0, 40.0, -110.0),
+            (100.0, 20.0, -130.0),
+            (1e3, 5.0, -150.0),
+            (1e4, -10.0, -170.0),
+            (1e5, -25.0, -190.0),
+        ];
+        let m = margins_from_bode(&bode);
+        // Only 0 dB crossing: 5 -> -10 across 1e3..1e4, frac = 1/3.
+        let fc = m.gain_crossover_hz.unwrap();
+        let expect_fc = 10f64.powf(3.0 + 1.0 / 3.0);
+        assert!((fc - expect_fc).abs() / expect_fc < 1e-9, "fc={fc}");
+        let pm = m.phase_margin_deg.unwrap();
+        let expect_pm = 180.0 + (-150.0 + (1.0 / 3.0) * -20.0);
+        assert!((pm - expect_pm).abs() < 1e-9, "pm={pm} expected {expect_pm}");
+        // Only -180 deg crossing: -170 -> -190 across 1e4..1e5, frac = 0.5.
+        let fp = m.phase_crossover_hz.unwrap();
+        let expect_fp = 10f64.powf(4.5);
+        assert!((fp - expect_fp).abs() / expect_fp < 1e-9, "fp={fp}");
+        let gm = m.gain_margin_db.unwrap();
+        let expect_gm = -(-10.0 + 0.5 * -15.0); // 17.5 dB
+        assert!((gm - expect_gm).abs() < 1e-9, "gm={gm} expected {expect_gm}");
     }
 }
