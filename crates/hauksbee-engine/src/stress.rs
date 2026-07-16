@@ -184,6 +184,35 @@ pub fn resistor_power_from_footprint(footprint: &str) -> f64 {
     }
 }
 
+/// Strip a multi-unit stamping suffix from a device name, yielding the package
+/// reference. Multi-unit packages stamp one IR device per unit with a suffix
+/// on the reference designator: `_q<N>` (dual BJTs, opamp/comparator channels),
+/// `_s<N>` (analog-switch banks), `_e<N>` (passive-array elements). "Q1_q2"
+/// and "Q1_q1" are two dice in the one physical package "Q1".
+///
+/// This is THE unit-suffix rule: the binder uses it to apply a package's
+/// ratings to every unit, [`StressMonitor::evaluate`] uses it to pool sibling
+/// dissipation through the shared package, and hauksbee-ci mirrors it
+/// (`key_belongs_to_ref`) to aggregate per-unit keys under the bare ref. Only
+/// an all-digit tail after the marker counts, so "SW1_heater" or "U1_qspi" are
+/// left alone (and "SW1" never claims "SW10"'s units).
+pub fn strip_unit_suffix(name: &str) -> &str {
+    name.rsplit_once("_q")
+        .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+        .map(|(b, _)| b)
+        .or_else(|| {
+            name.rsplit_once("_s")
+                .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+                .map(|(b, _)| b)
+        })
+        .or_else(|| {
+            name.rsplit_once("_e")
+                .filter(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+                .map(|(b, _)| b)
+        })
+        .unwrap_or(name)
+}
+
 /// Per-device running state for the sustain filter.
 #[derive(Debug, Clone, Default)]
 struct DeviceTrack {
@@ -264,25 +293,89 @@ impl StressMonitor {
         t: f64,
     ) -> Vec<FaultEvent> {
         let mut faults = Vec::new();
+
+        // ── Pass 1: operating points, then pooled per-package dissipation ────
+        // Multi-unit packages stamp one IR device (and one meta) per unit, but
+        // the dice share ONE package: one mould compound, one leadframe, one
+        // junction→ambient path. theta_JA is a property of that shared path,
+        // so the temperature-driving power is the SUM of every live sibling's
+        // dissipation — evaluating each unit against only its own power
+        // under-reads Tj by exactly the siblings' share (a dual BJT with both
+        // halves at 0.23 W in a ~440 C/W SOT-363 really sits near 126 C, not
+        // the 76 C a single unit's power suggests) and silently missed real
+        // overtemperature faults. Group by the stripped package reference
+        // ([`strip_unit_suffix`]); a single-unit part pools to exactly its own
+        // power, so nothing changes for singletons. Destroyed units no longer
+        // dissipate and are excluded.
+        //
+        // Sampling every operating point up front (before pass 2 can mutate
+        // the circuit destructively) also means every check this chunk sees
+        // the one solved state — previously a device evaluated after an
+        // earlier device's same-chunk destruction saw mutated parameters
+        // under stale node voltages. The next chunk re-solves either way.
+        let ops: Vec<Option<OperatingPoint>> = self
+            .metas
+            .iter()
+            .enumerate()
+            .map(|(i, meta)| {
+                if self.tracks[i].destroyed {
+                    None
+                } else {
+                    Some(operating_point(circuit, meta, node_v, branch_current))
+                }
+            })
+            .collect();
+        let mut package_power: HashMap<String, f64> = HashMap::new();
+        for (i, meta) in self.metas.iter().enumerate() {
+            if let Some(op) = &ops[i] {
+                if op.power_w > 0.0 {
+                    *package_power
+                        .entry(strip_unit_suffix(&meta.reference).to_string())
+                        .or_insert(0.0) += op.power_w;
+                }
+            }
+        }
+
+        // ── Pass 2: per-device checks ────────────────────────────────────────
         // Iterate by index so we can borrow tracks mutably alongside metas.
         for i in 0..self.metas.len() {
             let meta = self.metas[i].clone();
-            if self.tracks[i].destroyed {
+            let Some(op) = &ops[i] else {
                 // Destroyed devices stay at full stress and raise nothing more.
                 self.stress_by_ref.insert(meta.reference.clone(), 1.0);
                 continue;
-            }
-            let op = operating_point(circuit, &meta, node_v, branch_current);
-            let mut checks = build_checks(&meta, &op);
+            };
+            let mut checks = build_checks(&meta, op);
 
-            // Thermal: turn this chunk's dissipation into a steady-state junction
-            // temperature and check it against the device's max Tj. Applies to
-            // any device that dissipates (op.power_w > 0). Treated as a
-            // continuous rating so a switching-edge power spike does not trip it.
-            if op.power_w > 0.0 {
+            // Thermal: turn the package's pooled dissipation into a
+            // steady-state junction temperature and check it against the
+            // device's max Tj. Treated as a continuous rating so a
+            // switching-edge power spike does not trip it.
+            //
+            // Note the deliberate asymmetry with Overpower above: max_power_w
+            // is a per-UNIT rating in the model DB (bjt.toml's dual-pair
+            // entries note "this entry models a single transistor in the
+            // pair" and comment the ratings "per transistor"), so Overpower
+            // compares each unit's own dissipation against it — pooling there
+            // would false-trip a package whose halves are individually fine.
+            // Tj is the opposite: the heat path is shared, so only the pooled
+            // figure is physical.
+            //
+            // Every unit row reports the shared package Tj (to first order the
+            // dice sit at one temperature), because per-unit keys are what the
+            // CI max_temp aggregation and the UI heat-map already consume — a
+            // synthetic package-level row would be a key no consumer looks up.
+            // Consequently each sibling raises its own Overtemperature fault
+            // on the same chunk: both junctions genuinely are over-limit, and
+            // CI's fault matching names units, not bare package refs.
+            let package_w = package_power
+                .get(strip_unit_suffix(&meta.reference))
+                .copied()
+                .unwrap_or(0.0);
+            if package_w > 0.0 {
                 let tj = crate::thermal::junction_temp_c(
                     self.ambient_c,
-                    op.power_w,
+                    package_w,
                     meta.theta_ja_c_per_w(),
                 );
                 self.temp_by_ref.insert(meta.reference.clone(), tj);
@@ -745,6 +838,13 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
         | ComponentKind::ShiftRegister
         | ComponentKind::Dac
         | ComponentKind::Adc => {
+            // These kinds get PER-PIN metas, not a package meta: an MCU or
+            // logic IC has no single through-current, but every pin it drives
+            // is stamped as a Thevenin PinDriver whose hidden Vsource's branch
+            // unknown IS that pin's source/sink current. The binder monitors
+            // each driver Vsource (reference "<ref>:<pin>", see
+            // `gather_device_meta`), so `op.current_a` here is a genuine pin
+            // current and this check fires on a real per-pin violation.
             if let Some(ipin) = r.max_pin_current_a {
                 checks.push(Check {
                     kind: FaultKind::PinOvercurrent,

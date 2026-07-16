@@ -426,3 +426,160 @@ fn dbg_led() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R6 #F2: pin-overcurrent for MCU / logic pins is wired through the PinDriver
+// legs. Before the fix, gather_device_meta admitted only whole-analog kinds,
+// so build_checks's Mcu|Digital|ShiftRegister|Dac|Adc PinOvercurrent arm was
+// unreachable dead code and MCU pin violations were silently unreported.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Monitor-level: a per-pin meta over a driver's hidden Vsource raises
+/// `pin_overcurrent` when the pin's branch current exceeds `max_pin_current_a`,
+/// and stays quiet under the limit. The Vsource operating-point arm reports the
+/// branch current — exactly the current the pin sources/sinks through its
+/// Thevenin leg.
+#[test]
+fn pin_overcurrent_fires_on_driver_leg_current() {
+    use hauksbee_engine::stress::FaultKind;
+
+    let run = |pin_amps: f64| -> Vec<hauksbee_engine::stress::FaultEvent> {
+        let mut circuit = Circuit::new();
+        let drv = NodeId(1);
+        // The shape bind_mcu stamps: hidden driver node, Vsource to ground,
+        // series resistor to the (here: omitted) net.
+        let vd = circuit.add(Device::Vsource {
+            name: "Vdrv_U1_B5".into(),
+            p: drv,
+            n: NodeId::GROUND,
+            kind: hauksbee_ir::SourceKind::Dc(5.0),
+        });
+        let meta = DeviceMeta {
+            reference: "U1:PB5".into(),
+            device: vd,
+            kind: ComponentKind::Mcu,
+            footprint: "Package_QFP:TQFP-32_7x7mm_P0.8mm".into(),
+            ratings: Ratings {
+                max_pin_current_a: Some(0.04), // ATmega-class 40 mA abs max
+                ..Default::default()
+            },
+        };
+        let mut mon = StressMonitor::new(vec![meta]);
+        let node_v = |_: NodeId| 0.0;
+        let branch = move |id: hauksbee_ir::DeviceId| -> Option<f64> {
+            if id == vd {
+                Some(pin_amps)
+            } else {
+                None
+            }
+        };
+        let mut all = Vec::new();
+        for _ in 0..8 {
+            all.extend(mon.evaluate(&mut circuit, &node_v, &branch, 0.0));
+        }
+        all
+    };
+
+    // 60 mA through a 40 mA pin: sustained pin_overcurrent, named per-pin.
+    let over = run(0.06);
+    let f = over
+        .iter()
+        .find(|f| f.kind == FaultKind::PinOvercurrent)
+        .expect("60 mA through a 40 mA-rated pin must raise pin_overcurrent");
+    assert_eq!(f.component, "U1:PB5", "fault names the offending pin");
+    assert!((f.value - 0.06).abs() < 1e-12);
+    assert!((f.limit - 0.04).abs() < 1e-12);
+
+    // 20 mA through the same pin: within rating, no fault of any kind.
+    let under = run(0.02);
+    assert!(
+        under.is_empty(),
+        "20 mA through a 40 mA-rated pin must not fault, got {under:?}"
+    );
+}
+
+/// Binder-level: binding a 74HC595 (25 mA/pin rating in the model DB) produces
+/// one per-pin DeviceMeta over each stamped output driver's Vsource — the
+/// structural half that makes the PinOvercurrent arm reachable on real boards.
+#[test]
+fn binder_gathers_per_pin_metas_for_logic_outputs() {
+    // One 74HC595 with two connected outputs (QA, QB), full control/supply
+    // wiring, each output loaded by a pulldown.
+    let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "QA")
+  (net 4 "QB")
+  (net 5 "SER")
+  (net 6 "SRCLK")
+  (net 7 "RCLK")
+  (module Package_SO:SOIC-16_3.9x9.9mm_P1.27mm (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value 74HC595 (at 0 2) (layer F.Fab))
+    (pad 15 smd rect (at 0 0) (net 3 "QA"))
+    (pad 1 smd rect (at 0 1) (net 4 "QB"))
+    (pad 14 smd rect (at 0 2) (net 5 "SER"))
+    (pad 11 smd rect (at 0 3) (net 6 "SRCLK"))
+    (pad 12 smd rect (at 0 4) (net 7 "RCLK"))
+    (pad 10 smd rect (at 0 5) (net 2 "+5V"))
+    (pad 13 smd rect (at 0 6) (net 1 "GND"))
+    (pad 16 smd rect (at 0 7) (net 2 "+5V"))
+    (pad 8 smd rect (at 0 8) (net 1 "GND"))
+  )
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 3 "QA"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 112 100)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 4 "QB"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+)
+"#;
+    let board = ExtractedBoard::from_auto(text).expect("parse board");
+    let lib = hauksbee_models::ModelLibrary::builtin();
+    let bound = bind_board(&board, &lib);
+
+    // Exactly the two connected outputs get pin metas, keyed "<ref>:<pin>".
+    let mut pin_refs: Vec<&str> = bound
+        .device_meta
+        .iter()
+        .filter(|m| m.reference.starts_with("U1:"))
+        .map(|m| m.reference.as_str())
+        .collect();
+    pin_refs.sort();
+    assert_eq!(
+        pin_refs,
+        vec!["U1:qa", "U1:qb"],
+        "one per-pin meta per stamped output driver"
+    );
+    for m in bound.device_meta.iter().filter(|m| m.reference.starts_with("U1:")) {
+        assert_eq!(m.kind, ComponentKind::ShiftRegister);
+        assert_eq!(
+            m.ratings.max_pin_current_a,
+            Some(0.025),
+            "pin meta carries the DB's 25 mA/pin rating"
+        );
+        // The monitored device is the driver's hidden Vsource, whose branch
+        // current is the pin current.
+        let dev = &bound.circuit.devices[m.device.0 as usize];
+        assert!(
+            matches!(dev, Device::Vsource { .. }),
+            "pin meta must monitor the PinDriver Vsource, got {dev:?}"
+        );
+    }
+    // No whole-package meta for the logic part: it has no single
+    // through-current an analog meta could honestly score.
+    assert!(
+        !bound.device_meta.iter().any(|m| m.reference == "U1"),
+        "no package-level meta for a logic IC"
+    );
+}
