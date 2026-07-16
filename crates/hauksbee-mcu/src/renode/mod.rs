@@ -1585,6 +1585,10 @@ impl Mcu for RenodeBackend {
             pc: 0,
             cycles: self.cycles,
             sleeping: false,
+            // Renode's poll path carries no terminal-CPU signal here;
+            // conservatively report "still running" rather than guessing.
+            done: false,
+            crashed: false,
         }
     }
 
