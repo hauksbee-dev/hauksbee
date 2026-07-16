@@ -279,11 +279,17 @@ pub fn run_headless(
         // Sort nets by activity (toggle count then range).
         let mut rows: Vec<_> = sched.stats.iter().collect();
         rows.sort_by(|a, b| {
-            b.1.toggles.cmp(&a.1.toggles).then(
-                (b.1.max_v - b.1.min_v)
-                    .partial_cmp(&(a.1.max_v - a.1.min_v))
-                    .unwrap(),
-            )
+            b.1.toggles
+                .cmp(&a.1.toggles)
+                .then(
+                    (b.1.max_v - b.1.min_v)
+                        .partial_cmp(&(a.1.max_v - a.1.min_v))
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                // Total-order tiebreak on net name so the text table agrees with
+                // the JSON activity summary (line 54); without it equal-toggle,
+                // equal-range nets order by HashMap iteration and disagree.
+                .then_with(|| a.0.cmp(b.0))
         });
         println!("\nmost active nets:");
         println!(

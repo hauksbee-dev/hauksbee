@@ -316,6 +316,135 @@ expr = "v_cell / 1000.0"
     );
 }
 
+// ── 3b. Voltage law: an inactive `only_in_state` law RELEASES its pin ────────
+
+/// Build a harness with a `pinn` node pulled to a 3.3 V rail through 10k, and a
+/// VOLTAGE law that drives `pinn` to `drive_v` ONLY in state "on". An FSM starts
+/// in "off" and moves to "on" iff `v_en > 1.5`. `en_v` sets whether the guard
+/// fires.
+fn voltage_law_harness(en_v: f64, drive_v: f64) -> Harness {
+    let mut c = Circuit::new();
+    let v33 = c.node("V33");
+    let pinn = c.node("PINN");
+    let en = c.node("EN");
+    stamp_rail(&mut c, v33, "Vv33", 3.3);
+    stamp_rail(&mut c, en, "Ven", en_v);
+    c.add(Device::Resistor {
+        name: "Rpullup".into(),
+        a: pinn,
+        b: v33,
+        ohms: 10_000.0,
+        tc1: None,
+    });
+    let toml = format!(
+        r#"
+[fsm]
+states = ["off", "on"]
+
+[[fsm.transitions]]
+from = "off"
+to = "on"
+guard = "v_en > 1.5"
+
+[[laws]]
+name = "drive_pin"
+kind = "voltage"
+a = "pinn"
+b = "gnd"
+expr = "{drive_v}"
+only_in_state = "on"
+"#
+    );
+    let model: Behavioral = toml::from_str(&toml).unwrap();
+    let mut roles = BTreeMap::new();
+    roles.insert("pinn".to_string(), pinn);
+    roles.insert("en".to_string(), en);
+    roles.insert("gnd".to_string(), NodeId::GROUND);
+    let dev = BehavioralDevice::stamp(&mut c, "U7", &model, &Params::default(), &roles, &|_| None)
+        .expect("voltage law stamps");
+    let mut h = Harness::new(c, dev);
+    h.run(20, 1e-4);
+    h
+}
+
+#[test]
+fn inactive_voltage_law_releases_the_pin_not_clamps_it() {
+    // EN low: the FSM stays in "off", so the `only_in_state = "on"` voltage law
+    // is inactive. An inactive voltage law must RELEASE its pin (tri-state the
+    // series resistor) so PINN floats up to the 3.3 V pull-up. The pre-fix code
+    // only zeroed the Vsource, leaving the stiff 1 mΩ series resistor connected —
+    // a near-short that clamped PINN to ~0 V, fighting the pull-up and looking
+    // like the part was actively grounding a pin it should have let float.
+    let h = voltage_law_harness(0.0, 1.0);
+    assert_eq!(h.dev.state(), "off", "guard false → stays off");
+    let v_pin = h.v("PINN");
+    assert!(
+        v_pin > 3.0,
+        "an inactive voltage law must release PINN to the 3.3 V pull-up, got {v_pin:.3} V \
+         (pre-fix this was clamped near 0 V through the stiff series R)"
+    );
+}
+
+#[test]
+fn active_voltage_law_still_drives_the_pin() {
+    // EN high: the FSM reaches "on", the law activates and drives PINN to 1.0 V
+    // through the stiff series resistor (winning against the 10k pull-up). This
+    // guards the other side of the release fix: re-activation restores the
+    // series resistor's on-resistance.
+    let h = voltage_law_harness(3.3, 1.0);
+    assert_eq!(h.dev.state(), "on", "guard true → reaches on");
+    let v_pin = h.v("PINN");
+    assert!(
+        (v_pin - 1.0).abs() < 0.1,
+        "an active voltage law must drive PINN to ~1.0 V, got {v_pin:.3} V"
+    );
+}
+
+#[test]
+fn malformed_fsm_guard_disables_transition_without_panicking() {
+    // A guard that fails to compile must be caught once at stamp time and simply
+    // never fire — not be silently re-parsed (and re-failing) every chunk, and
+    // certainly not panic. The device stays in its initial state.
+    let mut c = Circuit::new();
+    let en = c.node("EN");
+    let sig = c.node("SIG");
+    stamp_rail(&mut c, en, "Ven", 3.3);
+    c.add(Device::Resistor {
+        name: "Rsig_leak".into(),
+        a: sig,
+        b: NodeId::GROUND,
+        ohms: 10e6,
+        tc1: None,
+    });
+    // A pull leg keeps the device non-inert; the FSM is what we're testing.
+    let toml = r#"
+[pins.sig]
+pull_to = "en"
+pull_ohms = 100000.0
+
+[fsm]
+states = ["idle", "run"]
+
+[[fsm.transitions]]
+from = "idle"
+to = "run"
+guard = "v_en > (((1.5"
+"#;
+    let model: Behavioral = toml::from_str(toml).unwrap();
+    let mut roles = BTreeMap::new();
+    roles.insert("en".to_string(), en);
+    roles.insert("sig".to_string(), sig);
+    let dev = BehavioralDevice::stamp(&mut c, "U8", &model, &Params::default(), &roles, &|_| None)
+        .expect("a device with an FSM stamps even if a guard is malformed");
+    let mut h = Harness::new(c, dev);
+    h.run(10, 1e-4);
+    assert_eq!(
+        h.dev.state(),
+        "idle",
+        "a guard that fails to parse must never fire the transition"
+    );
+}
+
 // ── 4. Averaged converter: regulation + limits (LTC4020 ILIMIT shape) ───────
 
 /// Build a buck-boost converter charging a `r_load` from a `vin_rail` brick,

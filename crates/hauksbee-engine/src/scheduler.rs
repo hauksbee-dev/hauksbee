@@ -276,6 +276,19 @@ pub struct Scheduler {
     /// [`Scheduler::relayout`], so devices stamped later (peripheral controls,
     /// buttons) are included.
     digital_in_evidence: HashMap<u32, Vec<u32>>,
+    /// Per-frame (one `step`) accumulators that capture INTRA-frame extremes a
+    /// consumer reading only the frame's final chunk would miss. `step` runs
+    /// many sub-chunks (default 10 per 1 ms frame) each overwriting `node_volts`;
+    /// a current surge or voltage excursion that peaks mid-frame and subsides by
+    /// the last chunk is invisible in `node_voltages()`. These are reset at the
+    /// start of every `step` and folded per chunk, so the runner can read the
+    /// true per-frame peak/extreme rather than the last-chunk snapshot.
+    ///
+    /// `frame_peak_current`: reference designator -> peak |current| (A) over the
+    /// frame's chunks (resistors + diodes, matching the stress monitor's device
+    /// current). `frame_v_extremes`: net name -> (min_v, max_v) over the frame.
+    frame_peak_current: HashMap<String, f64>,
+    frame_v_extremes: HashMap<String, (f64, f64)>,
 }
 
 
@@ -455,6 +468,8 @@ impl Scheduler {
             last_chunk_edges: Vec::new(),
             last_replay_microticks: 0,
             digital_in_evidence: HashMap::new(),
+            frame_peak_current: HashMap::new(),
+            frame_v_extremes: HashMap::new(),
         };
 
         // One (initially absent) input-responder registry slot per live MCU;
@@ -1060,6 +1075,11 @@ impl Scheduler {
         }
         let chunk = dt / chunks as f64;
 
+        // Reset the per-frame extreme accumulators; run_chunk folds each chunk's
+        // settled operating point in, so the runner reads true intra-frame peaks.
+        self.frame_peak_current.clear();
+        self.frame_v_extremes.clear();
+
         for _ in 0..chunks {
             self.run_chunk(chunk, &mut uart);
         }
@@ -1486,6 +1506,7 @@ impl Scheduler {
         self.sim_time += chunk;
         if chunk_converged {
             self.update_stats();
+            self.accumulate_frame_peaks();
 
             // 6. Fault / stress monitor: evaluate every device against its ratings
             // using this chunk's solved operating point (may mutate the circuit in
@@ -1825,6 +1846,70 @@ impl Scheduler {
             }
             st.last_logic = logic;
         }
+    }
+
+    /// Fold this chunk's settled operating point into the per-frame extreme
+    /// accumulators (peak device current, per-net voltage min/max). Called once
+    /// per converged chunk so a mid-frame spike that has subsided by the frame's
+    /// last chunk is still captured. The device-current formula mirrors the
+    /// stress monitor's resistor/diode current so the peaks agree with what the
+    /// fault checks see.
+    fn accumulate_frame_peaks(&mut self) {
+        let volts = &self.node_volts;
+        let v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+        for dev in &self.circuit.devices {
+            let (name, i) = match dev {
+                Device::Resistor {
+                    name, a, b, ohms, ..
+                } => {
+                    let i = if *ohms > 0.0 {
+                        ((v(*a) - v(*b)) / *ohms).abs()
+                    } else {
+                        0.0
+                    };
+                    (name, i)
+                }
+                Device::Diode { name, a, k, model } => {
+                    let vt = hauksbee_ir::thermal_voltage_c(self.circuit.temp_c) * model.n;
+                    let i = if vt > 0.0 {
+                        (model.is_at(self.circuit.temp_c)
+                            * (((v(*a) - v(*k)) / vt).clamp(-100.0, 200.0).exp() - 1.0))
+                            .abs()
+                    } else {
+                        0.0
+                    };
+                    (name, i)
+                }
+                _ => continue,
+            };
+            if i.is_finite() {
+                let e = self.frame_peak_current.entry(name.clone()).or_insert(0.0);
+                if i > *e {
+                    *e = i;
+                }
+            }
+        }
+        for (name, &node) in &self.net_nodes {
+            let x = v(node);
+            let e = self
+                .frame_v_extremes
+                .entry(name.clone())
+                .or_insert((f64::INFINITY, f64::NEG_INFINITY));
+            e.0 = e.0.min(x);
+            e.1 = e.1.max(x);
+        }
+    }
+
+    /// Per-device peak |current| (A) over the last completed frame's sub-chunks,
+    /// keyed by reference designator. Captures intra-frame surges the final-chunk
+    /// snapshot misses.
+    pub fn frame_peak_current(&self) -> &HashMap<String, f64> {
+        &self.frame_peak_current
+    }
+
+    /// Per-net (min_v, max_v) over the last completed frame's sub-chunks.
+    pub fn frame_v_extremes(&self) -> &HashMap<String, (f64, f64)> {
+        &self.frame_v_extremes
     }
 
     /// Inject serial bytes into a named MCU's UART RX.
@@ -2992,6 +3077,67 @@ mod tests {
   )
 )
 "#;
+
+    /// A passive +5V → R1(100Ω) → MID → R2(300Ω) → GND divider, no MCU. The
+    /// binder auto-rails +5V to 5 V; MID settles at 5·300/400 = 3.75 V, so each
+    /// resistor carries 12.5 mA. Used to pin the per-frame accumulators to the
+    /// stress monitor's own device-current formula and prove they reset per step.
+    const DIVIDER_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "MID")
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 100 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 2 "+5V"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 3 "MID"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 300 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 3 "MID"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+
+    #[test]
+    fn frame_peak_accumulators_track_current_and_reset_per_step() {
+        // The peak-current and voltage windows are the aggregates #2 rewired to
+        // read from the scheduler's per-chunk accumulators instead of only the
+        // frame's final chunk. This guards the wiring and the device-current
+        // formula (must agree with the stress monitor), and — critically — that
+        // the accumulators are CLEARED at the start of each `step`, so a peak
+        // from one frame does not leak forward and inflate the next.
+        let board = hauksbee_extract::ExtractedBoard::from_auto(DIVIDER_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        sched.step(1e-3);
+
+        let r1 = sched.frame_peak_current().get("R1").copied().expect("R1 tracked");
+        let r2 = sched.frame_peak_current().get("R2").copied().expect("R2 tracked");
+        // 12.5 mA through both legs of the 100/300 divider off the 5 V rail.
+        assert!((r1 - 0.0125).abs() < 5e-4, "R1 current ~12.5 mA, got {r1:.5} A");
+        assert!((r2 - 0.0125).abs() < 5e-4, "R2 current ~12.5 mA, got {r2:.5} A");
+
+        // Per-net voltage window captured MID at ~3.75 V (min == max in steady
+        // state, and equal to the last-chunk voltage).
+        let &(mn, mx) = sched.frame_v_extremes().get("MID").expect("MID tracked");
+        let mid = sched.net_voltages().get("MID").copied().unwrap_or(0.0);
+        assert!((mn - 3.75).abs() < 0.05 && (mx - 3.75).abs() < 0.05, "MID ~3.75 V, got [{mn:.3},{mx:.3}]");
+        assert!(mn <= mid + 1e-9 && mid <= mx + 1e-9, "last-chunk MID must lie within the frame window");
+
+        // A second step must not inherit the first frame's peak — the reset makes
+        // the accumulator report this frame's current, not the running max.
+        sched.step(1e-3);
+        let r1b = sched.frame_peak_current().get("R1").copied().expect("R1 tracked");
+        assert!((r1b - 0.0125).abs() < 5e-4, "post-reset R1 current still ~12.5 mA, got {r1b:.5} A");
+    }
 
     #[cfg(feature = "avr")]
     fn rc_scheduler() -> Scheduler {
