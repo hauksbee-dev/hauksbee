@@ -295,6 +295,17 @@ fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
             continue;
         };
         if let (Ok(t), Ok(v)) = (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+            // Rust's f64 parser accepts "inf"/"-inf"/"nan": a row that looks like
+            // a sample but carries a non-finite value is a malformed capture, not
+            // a waveform. Fail loud rather than let it through to extract()/
+            // compare() where `band = reltol * cap.abs()` becomes inf/NaN and the
+            // comparison passes vacuously.
+            if !t.is_finite() || !v.is_finite() {
+                return Err(SpecError::Invalid(format!(
+                    "{}: non-finite sample ({t}, {v}) in capture — not a valid waveform",
+                    path.display()
+                )));
+            }
             out.push((t, v));
         }
     }
@@ -724,6 +735,25 @@ mod tests {
         assert_eq!(series[0].1, 0.0);
         assert_eq!(series[1].1, 1.0);
         assert!((series[1].0 - 10e-6).abs() < 1e-12, "second edge at 10µs: {}", series[1].0);
+    }
+
+    #[test]
+    fn load_csv_rejects_non_finite_samples() {
+        // Rust's f64 parser accepts "inf"/"nan", so a capture row like `1e-3,inf`
+        // used to slip through and make the feature comparison pass vacuously
+        // (band = reltol*|cap| becomes inf/NaN). load_csv must fail loud instead.
+        let csv = "0.0,1.0\n1e-4,2.0\n2e-4,inf\n3e-4,3.0\n4e-4,4.0\n\
+                   5e-4,5.0\n6e-4,6.0\n7e-4,7.0\n8e-4,8.0\n";
+        let path = std::env::temp_dir()
+            .join(format!("hauksbee_hwtrace_nonfinite_{}.csv", std::process::id()));
+        std::fs::write(&path, csv).unwrap();
+        let r = load_csv(&path);
+        let _ = std::fs::remove_file(&path);
+        let err = r.expect_err("a non-finite sample must be rejected, not accepted");
+        assert!(
+            format!("{err:?}").contains("non-finite"),
+            "error must name the non-finite sample: {err:?}"
+        );
     }
 
     #[test]

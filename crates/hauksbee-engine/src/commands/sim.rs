@@ -39,7 +39,7 @@ pub fn run(
     use hauksbee_ir::SpiceLoader;
     use hauksbee_solve::{
         default_probes, run_ac, run_dc, run_op, run_tran, write_ascii_rawfile, DcInit, Integration,
-        Probe, RawPlot, SimOutput, SolverOptions, StepControl,
+        Probe, RawPlot, SimOutput, StepControl,
     };
 
     // Read the deck. A missing file is an ordinary CLI error (exit 1) with an
@@ -168,17 +168,8 @@ pub fn run(
         }
     };
 
-    // Build solver options from the deck's tolerances.
-    let mut opts = SolverOptions::default();
-    if let Some(r) = directives.reltol {
-        opts.reltol = r;
-    }
-    if let Some(a) = directives.abstol {
-        opts.abstol = a;
-    }
-    if let Some(v) = directives.vntol {
-        opts.vntol = v;
-    }
+    // Build solver options from the deck's tolerances and `.temp`.
+    let mut opts = solver_opts_from_deck(&circuit, &directives);
 
     let output: SimOutput = match analysis {
         Analysis::Op => match run_op(&circuit, &opts, &probes) {
@@ -354,4 +345,50 @@ fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
         s.push('\n');
     }
     s
+}
+
+/// Build [`SolverOptions`] from a deck's directives: its `.options` tolerances
+/// and its `.temp` card. The loader records the deck temperature in
+/// `circuit.temp_c`; the solver reads every temperature-dependent quantity
+/// (diode/BJT saturation current, thermal voltage, resistor `tc1`) through
+/// `opts.temperature_c`, which defaults to 27 °C — so `.temp` must be copied
+/// here or every analysis silently runs at 27 °C regardless of the deck.
+fn solver_opts_from_deck(
+    circuit: &hauksbee_ir::Circuit,
+    directives: &hauksbee_ir::Directives,
+) -> hauksbee_solve::SolverOptions {
+    let mut opts = hauksbee_solve::SolverOptions::default();
+    if let Some(r) = directives.reltol {
+        opts.reltol = r;
+    }
+    if let Some(a) = directives.abstol {
+        opts.abstol = a;
+    }
+    if let Some(v) = directives.vntol {
+        opts.vntol = v;
+    }
+    opts.temperature_c = circuit.temp_c;
+    opts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::solver_opts_from_deck;
+    use hauksbee_ir::SpiceLoader;
+
+    #[test]
+    fn deck_temp_card_reaches_solver_options() {
+        // A `.temp 100` deck must run the solver at 100 °C, not the default 27.
+        let (c, d) =
+            SpiceLoader::load_with_directives("t\nV1 in 0 1\nR1 in 0 1k\n.temp 100\n.op\n.end\n")
+                .unwrap();
+        let opts = solver_opts_from_deck(&c, &d);
+        assert!((opts.temperature_c - 100.0).abs() < 1e-9, "got {}", opts.temperature_c);
+
+        // No `.temp` card → the solver default (27 °C) is preserved.
+        let (c0, d0) =
+            SpiceLoader::load_with_directives("t\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n").unwrap();
+        let opts0 = solver_opts_from_deck(&c0, &d0);
+        assert!((opts0.temperature_c - 27.0).abs() < 1e-9, "got {}", opts0.temperature_c);
+    }
 }
