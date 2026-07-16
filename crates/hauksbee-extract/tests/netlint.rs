@@ -482,3 +482,63 @@ fn output_to_connector_is_clean() {
     let r = lint(comps, nets);
     assert_eq!(count(&r, LintCheck::OutputContention), 0);
 }
+
+/// R35: the output-contention finding's `refs` were collected straight from a
+/// randomized HashSet, so `--lint --json` emitted them in a run-varying order.
+/// With six distinct drivers on one net the array must come out sorted every
+/// run (the fix sorts it). On the un-sorted base this holds only ~1/720 of runs,
+/// so running this binary a few times reliably catches the disorder.
+#[test]
+fn output_contention_refs_are_sorted_deterministically() {
+    let comps = r#"
+    (comp (ref U6) (value D) (footprint Package:SOT23))
+    (comp (ref U3) (value D) (footprint Package:SOT23))
+    (comp (ref U1) (value D) (footprint Package:SOT23))
+    (comp (ref U5) (value D) (footprint Package:SOT23))
+    (comp (ref U2) (value D) (footprint Package:SOT23))
+    (comp (ref U4) (value D) (footprint Package:SOT23))"#;
+    let nets = r#"
+    (net (code 1) (name "BUSFIGHT")
+      (node (ref U6) (pin 1) (pintype output))
+      (node (ref U3) (pin 1) (pintype output))
+      (node (ref U1) (pin 1) (pintype output))
+      (node (ref U5) (pin 1) (pintype output))
+      (node (ref U2) (pin 1) (pintype output))
+      (node (ref U4) (pin 1) (pintype output)))"#;
+    let f = lint(comps, nets)
+        .of_check(LintCheck::OutputContention)
+        .next()
+        .cloned()
+        .expect("six push-pull drivers must fire contention");
+    assert_eq!(
+        f.refs,
+        vec!["U1", "U2", "U3", "U4", "U5", "U6"],
+        "refs must be emitted in sorted order for reproducible JSON, got {:?}",
+        f.refs
+    );
+}
+
+/// R35: `control_role` promised (in its own doc/inline comments) to handle the
+/// bare trailing-N active-low reset spelling, but only stripped the "_N" form,
+/// so `RESETN` / `RSTN` normalised to themselves and matched no reset arm —
+/// silently skipping a floating active-low reset. A degree-1 RESETN pin on an
+/// active IC must now fire the High floating-control finding.
+#[test]
+fn floating_bare_trailing_n_reset_fires_high() {
+    for func in ["RESETN", "RSTN"] {
+        let comps = r#"
+    (comp (ref U3) (value MCU) (footprint Package:QFN))"#;
+        let nets = format!(
+            r#"
+    (net (code 10) (name "MCU_RST")
+      (node (ref U3) (pin 7) (pinfunction "{func}") (pintype "input")))"#
+        );
+        let r = lint(comps, &nets);
+        assert_eq!(
+            count(&r, LintCheck::FloatingControlPin),
+            1,
+            "a floating active-low reset spelled '{func}' must fire"
+        );
+        assert_eq!(r.findings[0].severity, Severity::High);
+    }
+}
