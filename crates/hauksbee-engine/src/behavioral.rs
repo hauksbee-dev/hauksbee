@@ -260,6 +260,22 @@ pub struct BehavioralDevice {
 }
 
 impl BehavioralDevice {
+    /// Remap every cached [`NodeId`] this device holds through `map`. Used when
+    /// an as-built `[[jumper]]` merges two nets after binding: the circuit's
+    /// device terminals are remapped in place, but this device also caches
+    /// node ids (its `role_nodes` and any converter leg), which would otherwise
+    /// point at the orphaned, now-unconnected node. (R8 #6)
+    pub fn remap_node(&mut self, map: impl Fn(NodeId) -> NodeId) {
+        for n in self.role_nodes.values_mut() {
+            *n = map(*n);
+        }
+        if let Some(c) = self.converter.as_mut() {
+            c.out_drv_node = map(c.out_drv_node);
+            c.out_node = map(c.out_node);
+            c.in_node = map(c.in_node);
+        }
+    }
+
     /// Wrap a user-supplied [`CustomBehavior`] as a behavioural device, stamping
     /// it onto the circuit. The scheduler then drives it each chunk exactly like
     /// a declarative device.

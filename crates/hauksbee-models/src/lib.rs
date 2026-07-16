@@ -124,9 +124,13 @@ pub enum SourceLayer {
     Builtin,
     /// An installed model pack (`~/.hauksbee/packs/<name>@<version>/`).
     Pack,
-    /// A standing user model directory (`~/.hauksbee/models`,
-    /// `~/.config/hauksbee/models`).
+    /// The legacy standing user model directory (`~/.hauksbee/models`) — where
+    /// datasheet extraction writes.
     UserDir,
+    /// The user's own config model directory (`~/.config/hauksbee/models`),
+    /// ABOVE `UserDir` so a hand-corrected model there deterministically wins
+    /// over an auto-extracted one of the same id in `~/.hauksbee/models`.
+    UserConfigDir,
     /// An explicit `--models-dir` flag.
     ModelsDirFlag,
     /// A user SPICE `.model`/`.subckt` card (always an exact name match, so
@@ -136,12 +140,13 @@ pub enum SourceLayer {
 
 impl SourceLayer {
     /// The plan-mandated priority integer: builtin=0, pack=10, user dir=20,
-    /// `--models-dir`=30, user SPICE=40.
+    /// user config dir=25, `--models-dir`=30, user SPICE=40.
     pub fn priority(self) -> u32 {
         match self {
             SourceLayer::Builtin => 0,
             SourceLayer::Pack => 10,
             SourceLayer::UserDir => 20,
+            SourceLayer::UserConfigDir => 25,
             SourceLayer::ModelsDirFlag => 30,
             SourceLayer::Spice => 40,
         }
@@ -153,6 +158,7 @@ impl SourceLayer {
             SourceLayer::Builtin => "builtin",
             SourceLayer::Pack => "pack",
             SourceLayer::UserDir => "user-dir",
+            SourceLayer::UserConfigDir => "user-config-dir",
             SourceLayer::ModelsDirFlag => "models-dir",
             SourceLayer::Spice => "spice",
         }
@@ -322,11 +328,18 @@ impl ModelLibrary {
         }
         let home = std::env::var("HOME").ok().map(PathBuf::from);
         if let Some(h) = &home {
-            for dir in [
-                h.join(".hauksbee").join("models"),
-                h.join(".config").join("hauksbee").join("models"),
+            // The two user dirs load at DISTINCT layers so `~/.config/hauksbee/
+            // models` (a hand-corrected model) deterministically overrides a
+            // same-id auto-extracted one in `~/.hauksbee/models`. Loading both
+            // at one layer left a same-id collision to be resolved silently.
+            for (dir, layer) in [
+                (h.join(".hauksbee").join("models"), SourceLayer::UserDir),
+                (
+                    h.join(".config").join("hauksbee").join("models"),
+                    SourceLayer::UserConfigDir,
+                ),
             ] {
-                for e in lib.load_dir_layer(&dir, SourceLayer::UserDir) {
+                for e in lib.load_dir_layer(&dir, layer) {
                     eprintln!("[models] user dir {}: {e}", dir.display());
                 }
             }
@@ -528,7 +541,9 @@ impl ModelLibrary {
                 SourceLayer::Builtin => "builtin",
                 SourceLayer::Pack => "pack",
                 // Both user layers keep the historical "user" string.
-                SourceLayer::UserDir | SourceLayer::ModelsDirFlag => "user",
+                SourceLayer::UserDir | SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => {
+                    "user"
+                }
                 SourceLayer::Spice => "spice",
             };
             return Resolution {
@@ -592,7 +607,19 @@ impl ModelLibrary {
         use schema::{MatchRules, ModelEntry, Params};
         use std::collections::BTreeMap;
 
-        let kind = spice_kind_from_model_type(card.model_type.as_deref());
+        // A `.subckt` is a multi-terminal macro, not a single-device kind, and
+        // an unrecognized `.model` type must not be silently claimed as a
+        // passive with Exact confidence (that shadowed the real part). Both
+        // resolve to Unresolved instead. (R8 #10)
+        let kind = match card.kind {
+            spice_input::SpiceCardKind::Subckt => None,
+            spice_input::SpiceCardKind::Model => {
+                spice_kind_from_model_type(card.model_type.as_deref())
+            }
+        };
+        let Some(kind) = kind else {
+            return Resolution::unresolved(query);
+        };
         let mut params = Params::default();
         for (k, v) in &card.params {
             params.set_f64(k.to_lowercase(), *v);
@@ -638,15 +665,20 @@ fn score_to_confidence(score: u32) -> Confidence {
     }
 }
 
-/// Infer a ComponentKind from a SPICE `.model` type string.
-fn spice_kind_from_model_type(t: Option<&str>) -> ComponentKind {
+/// Infer a [`ComponentKind`] from a SPICE `.model` type string. Returns `None`
+/// for a type the resolver cannot model — an unknown/unsupported type is NOT
+/// silently downgraded to `Passive` (that produced a wrong `Exact` match that
+/// shadowed the real part). Genuine passive model types (R/C/L) still map to
+/// `Passive`.
+fn spice_kind_from_model_type(t: Option<&str>) -> Option<ComponentKind> {
     match t.unwrap_or("").to_uppercase().as_str() {
-        "D"                       => ComponentKind::Diode,
-        "NPN"                     => ComponentKind::BjtNpn,
-        "PNP"                     => ComponentKind::BjtPnp,
-        "NMOS" | "NMOSFET"        => ComponentKind::Nmos,
-        "PMOS" | "PMOSFET"        => ComponentKind::Pmos,
-        _                         => ComponentKind::Passive, // conservative fallback
+        "D"                       => Some(ComponentKind::Diode),
+        "NPN"                     => Some(ComponentKind::BjtNpn),
+        "PNP"                     => Some(ComponentKind::BjtPnp),
+        "NMOS" | "NMOSFET"        => Some(ComponentKind::Nmos),
+        "PMOS" | "PMOSFET"        => Some(ComponentKind::Pmos),
+        "R" | "RES" | "C" | "CAP" | "L" | "IND" => Some(ComponentKind::Passive),
+        _                         => None, // unknown/unsupported: don't guess Passive
     }
 }
 
@@ -826,6 +858,69 @@ mod tests {
         let q = ComponentQuery { value: Some("BC847".to_string()), ..Default::default() };
         let res = l.resolve(&q);
         assert_eq!(res.source.as_deref(), Some("spice"));
+    }
+
+    /// Round-8 #9: `~/.config/hauksbee/models` must sit ABOVE `~/.hauksbee/
+    /// models` so a hand-corrected model there deterministically overrides an
+    /// auto-extracted same-id one. The two user dirs must be distinct layers.
+    #[test]
+    fn user_config_dir_outranks_user_dir() {
+        assert!(
+            SourceLayer::UserConfigDir.priority() > SourceLayer::UserDir.priority(),
+            "~/.config/hauksbee/models must outrank ~/.hauksbee/models"
+        );
+        assert!(
+            SourceLayer::UserConfigDir.priority() < SourceLayer::ModelsDirFlag.priority(),
+            "--models-dir still wins over the config dir"
+        );
+    }
+
+    /// Round-8 #10: a `.subckt`, and an unrecognized `.model` type, must NOT be
+    /// silently imported as a Passive with Exact confidence (that shadowed the
+    /// real part). Both resolve Unresolved; a genuine passive `.model R` still
+    /// resolves.
+    #[test]
+    fn spice_subckt_and_unknown_model_do_not_masquerade_as_passive() {
+        let subckt = SpiceCard {
+            name: "MYOPAMP".to_string(),
+            kind: spice_input::SpiceCardKind::Subckt,
+            raw: ".SUBCKT MYOPAMP INP INN VCC VEE OUT".to_string(),
+            ports: vec!["INP".into(), "INN".into(), "VCC".into(), "VEE".into(), "OUT".into()],
+            params: Default::default(),
+            model_type: None,
+        };
+        let mut l = lib();
+        l.add_spice_card(subckt);
+        let res = l.resolve(&ComponentQuery { value: Some("MYOPAMP".to_string()), ..Default::default() });
+        assert!(res.model.is_none(), "a subckt must not resolve to a Passive model");
+        assert_eq!(res.confidence, Confidence::Unresolved);
+
+        let vdmos = SpiceCard {
+            name: "M1".to_string(),
+            kind: spice_input::SpiceCardKind::Model,
+            raw: ".MODEL M1 VDMOS(...)".to_string(),
+            ports: Vec::new(),
+            params: Default::default(),
+            model_type: Some("VDMOS".to_string()),
+        };
+        let mut l2 = lib();
+        l2.add_spice_card(vdmos);
+        let res2 = l2.resolve(&ComponentQuery { value: Some("M1".to_string()), ..Default::default() });
+        assert!(res2.model.is_none(), "an unknown .model type must not resolve to Passive");
+
+        // A genuine passive .model R still resolves.
+        let rmod = SpiceCard {
+            name: "RMOD".to_string(),
+            kind: spice_input::SpiceCardKind::Model,
+            raw: ".MODEL RMOD R (...)".to_string(),
+            ports: Vec::new(),
+            params: Default::default(),
+            model_type: Some("R".to_string()),
+        };
+        let mut l3 = lib();
+        l3.add_spice_card(rmod);
+        let res3 = l3.resolve(&ComponentQuery { value: Some("RMOD".to_string()), ..Default::default() });
+        assert!(res3.model.is_some(), "a .model R is a genuine passive and must resolve");
     }
 
     #[test]

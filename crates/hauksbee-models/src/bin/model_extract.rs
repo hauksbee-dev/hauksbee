@@ -179,7 +179,7 @@ OUTPUT (TOML only, starting with [sensor]):
         part = part,
         bus = bus,
         bus_specifics = bus_specifics,
-        pdf_text = &pdf_text[..pdf_text.len().min(40_000)],
+        pdf_text = truncate_to_chars(&pdf_text, 40_000),
     )
 }
 
@@ -352,6 +352,26 @@ fn truncate_to_chars(s: &str, max: usize) -> String {
     }
 }
 
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_to_chars;
+
+    /// Round-8 #4: datasheet text was truncated with a byte-index slice, which
+    /// panics when a multibyte glyph straddles the cut. `truncate_to_chars`
+    /// cuts on char boundaries — no panic, and it never splits a char.
+    #[test]
+    fn truncates_on_char_boundaries_without_panic() {
+        // 30 multibyte chars ('µ' = 2 bytes each); a byte slice at 40 would
+        // land mid-char.
+        let s = "µ".repeat(30);
+        let out = truncate_to_chars(&s, 20);
+        assert_eq!(out.chars().count(), 20, "keeps exactly 20 chars");
+        assert!(out.chars().all(|c| c == 'µ'), "never splits a char");
+        // Shorter-than-limit input is returned whole.
+        assert_eq!(truncate_to_chars("abc", 10), "abc");
+    }
+}
+
 // ── Prompt construction ───────────────────────────────────────────────────────
 
 fn build_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
@@ -411,7 +431,7 @@ OUTPUT (TOML only, starting with [[models]]):
         part = part,
         part_lower = part.to_lowercase(),
         kind = kind,
-        pdf_text = &pdf_text[..pdf_text.len().min(40_000)],
+        pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),

@@ -109,6 +109,12 @@ pub enum SocError {
     #[error("port/bank {letter:?} has zero width; a GPIO port must have at least one bit")]
     ZeroWidthPort { letter: char },
 
+    /// A GPIO port/bank declared `width > 32`. The engine observes a bank as a
+    /// single `u32` word (edge detection shifts `1u32 << bit`), so a wider bank
+    /// would overflow the shift; refuse it at load rather than panic on poll.
+    #[error("port/bank {letter:?} width {width} exceeds 32; a GPIO bank maps onto one 32-bit word")]
+    PortTooWide { letter: char, width: u8 },
+
     /// Two GPIO ports/banks claim the same letter — the engine keys on the
     /// letter, so the second would silently shadow the first.
     #[error("duplicate GPIO port/bank letter {0:?}: port letters must be unique")]
@@ -484,6 +490,9 @@ fn validate_ports(ports: impl Iterator<Item = (char, u8)>) -> Result<(), SocErro
         if width == 0 {
             return Err(SocError::ZeroWidthPort { letter });
         }
+        if width > 32 {
+            return Err(SocError::PortTooWide { letter, width });
+        }
         if seen.contains(&letter) {
             return Err(SocError::DuplicatePortLetter(letter));
         }
@@ -690,4 +699,22 @@ fn override_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(home).join(".config/hauksbee/mcu"));
     }
     dirs
+}
+
+#[cfg(test)]
+mod width_validation_tests {
+    use super::{validate_ports, SocError};
+
+    /// Round-8 #15: a GPIO bank/port wider than 32 bits is refused at load — the
+    /// engine observes a bank as one u32 word and shifts `1u32 << bit`, so a
+    /// width of 33+ would overflow the shift on the first poll.
+    #[test]
+    fn width_over_32_is_refused() {
+        let err = validate_ports([('A', 40)].into_iter()).unwrap_err();
+        assert!(matches!(err, SocError::PortTooWide { letter: 'A', width: 40 }));
+        // 32 is the maximum legal width and must pass.
+        assert!(validate_ports([('A', 32)].into_iter()).is_ok());
+        // A normal 16-bit port still validates.
+        assert!(validate_ports([('B', 16)].into_iter()).is_ok());
+    }
 }
