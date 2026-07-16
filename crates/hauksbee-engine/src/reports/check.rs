@@ -56,6 +56,25 @@ pub fn emit(
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => {
+            // Bind-role honesty (Marco): the plain persona surface must not hide
+            // that active ICs are unmodelled — otherwise `--check --plain` reads
+            // "healthy" while firmware/analog/AC/thermal on their nets are
+            // uncovered. Text/JSON/web all carry this; plain must too.
+            // Mirrors reports/bind.rs:34-40 and frontdoor.rs:374-381.
+            let open = summary
+                .active_path_unresolved
+                .iter()
+                .filter(|u| u.active_ic)
+                .count();
+            if open > 0 {
+                let m = summary.critical_parts_total;
+                println!(
+                    "Heads-up: {open} active IC(s) are unresolved/open, so firmware/analog/AC/thermal \
+                     results on their nets would be INCOMPLETE — but the copper checks below are \
+                     unaffected. Add models with --models-dir to cover them (run --bind for the {m}-part \
+                     bind table).\n"
+                );
+            }
             println!("== Copper spacing (DRC) ==");
             print!("{}", crate::plain_drc_structured(&drc_structured).render());
             println!("\n== Connectivity / lint ==");
