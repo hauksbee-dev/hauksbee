@@ -407,6 +407,37 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
 }
 
 #[test]
+fn bare_json_strict_gates_a_shorted_board() {
+    // R24 (strict-ignored-bare-json, HIGH): the default machine command
+    // `run <board> --json --strict` used to silently ignore --strict and always
+    // exit 0, so a CI pipeline treated a shorted board as passing. It must gate
+    // (exit 2) like the text/--check paths, while plain `--json` stays exit 0.
+    let b = shorted_board();
+
+    let strict = run(&["run", b.to_str().unwrap(), "--json", "--strict"]);
+    assert_eq!(
+        strict.status.code(),
+        Some(2),
+        "bare --json --strict must exit 2 on a shorted board; got {:?}; stderr={}",
+        strict.status.code(),
+        String::from_utf8_lossy(&strict.stderr)
+    );
+    // The gating run still emits its JSON document before exiting.
+    let stdout = String::from_utf8_lossy(&strict.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json --strict still emits valid JSON");
+    assert!(v.get("drc").is_some(), "the combined JSON carries the DRC block: {stdout:.120}");
+
+    // Without --strict the same command stays exit 0 (the existing contract).
+    let lax = run(&["run", b.to_str().unwrap(), "--json"]);
+    assert_eq!(
+        lax.status.code(),
+        Some(0),
+        "bare --json without --strict must stay exit 0"
+    );
+}
+
+#[test]
 fn plain_and_strict_compose() {
     // Plain output AND a non-zero exit on the same run.
     let b = shorted_board();

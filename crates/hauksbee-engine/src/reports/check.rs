@@ -1,6 +1,6 @@
 //! `--check` / `--all`: the whole static suite (bind + DRC + lint + SI + USB-C)
-//! in ONE report, plus the bare-`--json` combined report (bind + DRC + lint + SI,
-//! no USB-C) that a `run <board> --json` with no specific selector emits.
+//! in ONE report, plus the bare-`--json` combined report (bind + DRC + lint + SI
+//! + USB-C) that a `run <board> --json` with no specific selector emits.
 
 use std::path::Path;
 
@@ -109,9 +109,10 @@ pub fn emit(
 }
 
 /// The bare-`--json` combined machine report (bind + DRC + lint/straps/resources
-/// + SI) for a `run <board> --json` with no specific report selector. Without it
-/// a bare `--json` would fall through to the TUI/websocket default and hang a
-/// piped / CI / AI caller. Distinct from [`emit`]'s JSON: no USB-C finding.
+/// + SI + USB-C) for a `run <board> --json` with no specific report selector.
+/// Without it a bare `--json` would fall through to the TUI/websocket default and
+/// hang a piped / CI / AI caller. Carries the same findings as [`emit`]'s JSON,
+/// and (under `strict`) gates with the same exit-2 contract.
 pub fn emit_combined_json(
     board_path: &Path,
     board: &ExtractedBoard,
@@ -119,6 +120,7 @@ pub fn emit_combined_json(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    strict: bool,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
@@ -134,9 +136,22 @@ pub fn emit_combined_json(
     // the ampacity/ripple findings too, or a machine consumer of the JSON reads
     // a false-clean SI section.
     let si = crate::checks::engine_si(board, lib, geo_text);
+    let usbc = crate::usb_c_report(board);
     let mut findings = lint_findings_json(&lint);
     findings.extend(si_findings_json(&si));
+    // Fold the USB-C CC verdict in too, matching `--check --json`: the default
+    // machine command must not be blind to a Serious CC fault that the explicit
+    // `--check --json` surfaces.
+    findings.extend(usbc.as_ref().and_then(usbc_finding_json));
     jr.findings = Some(findings);
     println!("{}", jr.to_json());
+    // Honour `--strict` on the default machine command: a bare
+    // `run <board> --json --strict` must gate a shorted/failing board like the
+    // text path does (it silently exited 0 before). Mirror emit()'s gate.
+    let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
+    let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
+    if strict && (drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious) {
+        std::process::exit(2);
+    }
     Ok(())
 }
