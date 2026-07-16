@@ -2026,6 +2026,7 @@ pub mod eagle_drc {
     /// A placed component instance.
     struct Element {
         name: String,
+        library: String,
         package: String,
         x: f64,
         y: f64,
@@ -2079,7 +2080,9 @@ pub mod eagle_drc {
     /// and the board's design-rule clearance.
     #[derive(Default)]
     struct Parsed {
-        packages: HashMap<String, Vec<PkgItem>>,
+        // Keyed by (library, package): Eagle namespaces packages per <library>,
+        // so same-named packages in different libraries must not merge.
+        packages: HashMap<(String, String), Vec<PkgItem>>,
         elements: Vec<Element>,
         /// signal index -> (name, geometry)
         signals: Vec<(String, Vec<SignalGeom>)>,
@@ -2133,6 +2136,7 @@ pub mod eagle_drc {
         let mut out = Parsed::default();
 
         // Parser state.
+        let mut cur_library = String::new();
         let mut cur_package: Option<String> = None;
         let mut cur_signal: Option<usize> = None;
         // The polygon currently being read (signal index, partial Polygon).
@@ -2154,10 +2158,15 @@ pub mod eagle_drc {
                                 params.insert(k.clone(), v.clone());
                             }
                         }
+                        b"library" => {
+                            cur_library = a.get("name").cloned().unwrap_or_default();
+                        }
                         b"package" => {
                             cur_package = a.get("name").cloned();
                             if let Some(n) = &cur_package {
-                                out.packages.entry(n.clone()).or_default();
+                                out.packages
+                                    .entry((cur_library.clone(), n.clone()))
+                                    .or_default();
                             }
                         }
                         b"pad" => {
@@ -2167,7 +2176,10 @@ pub mod eagle_drc {
                                     let diameter = num(&a, "diameter").unwrap_or(0.0);
                                     let (rot_deg, _) =
                                         parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"));
-                                    out.packages.entry(pkg.clone()).or_default().push(
+                                    out.packages
+                                        .entry((cur_library.clone(), pkg.clone()))
+                                        .or_default()
+                                        .push(
                                         PkgItem::Pad {
                                             name: a.get("name").cloned().unwrap_or_default(),
                                             x,
@@ -2192,8 +2204,10 @@ pub mod eagle_drc {
                                     let (rot_deg, _) =
                                         parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"));
                                     let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(1);
-                                    out.packages.entry(pkg.clone()).or_default().push(
-                                        PkgItem::Smd {
+                                    out.packages
+                                        .entry((cur_library.clone(), pkg.clone()))
+                                        .or_default()
+                                        .push(PkgItem::Smd {
                                             name: a.get("name").cloned().unwrap_or_default(),
                                             x,
                                             y,
@@ -2212,6 +2226,7 @@ pub mod eagle_drc {
                                 parse_rot(a.get("rot").map(String::as_str).unwrap_or("R0"));
                             out.elements.push(Element {
                                 name: a.get("name").cloned().unwrap_or_default(),
+                                library: a.get("library").cloned().unwrap_or_default(),
                                 package: a.get("package").cloned().unwrap_or_default(),
                                 x: num(&a, "x").unwrap_or(0.0),
                                 y: num(&a, "y").unwrap_or(0.0),
@@ -2324,6 +2339,7 @@ pub mod eagle_drc {
                     }
                 }
                 Ok(Event::End(e)) => match e.name().as_ref() {
+                    b"library" => cur_library.clear(),
                     b"package" => cur_package = None,
                     b"signal" => cur_signal = None,
                     b"polygon" => {
@@ -2817,7 +2833,10 @@ pub mod eagle_drc {
             net_owners.entry(*net).or_default().insert(el_name.clone());
         }
         for el in &parsed.elements {
-            let Some(items) = parsed.packages.get(&el.package) else {
+            let Some(items) = parsed
+                .packages
+                .get(&(el.library.clone(), el.package.clone()))
+            else {
                 continue;
             };
             for item in items {

@@ -178,6 +178,96 @@ fn eagle_mirrored_rotated_pad_uses_drc_handedness() {
     );
 }
 
+/// Round-7 #5: the spin-prefixed mirror form `SMR90` must be recognised as
+/// mirrored, exactly like `MR90`. `starts_with('M')` missed it (the string
+/// starts with 'S'); `contains('M')` — matching drc.rs — catches it.
+#[test]
+fn eagle_spin_mirrored_element_is_recognised_as_mirrored() {
+    let packages = r#"
+<package name="P">
+  <smd name="1" x="2" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>
+"#;
+    let elements = r#"
+<element name="U1" library="lib" package="P" value="" x="0" y="0" rot="SMR90"/>
+"#;
+    let signals = r#"
+<signal name="NET1">
+  <contactref element="U1" pad="1"/>
+</signal>
+"#;
+    let text = board(packages, elements, signals, default_rules());
+    let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
+    let u1 = brd.components.iter().find(|c| c.reference == "U1").expect("U1");
+    // Mirrored -> bottom copper, and mirror-then-rotate places pad 1 at (0, 2)
+    // just like MR90. Un-mirrored (the bug) would leave it on F.Cu at (0, -2).
+    assert_eq!(u1.layer, "B.Cu", "SMR90 is mirrored -> bottom side");
+    let p1 = u1.pins.iter().find(|p| p.number == "1").expect("pad 1");
+    let (x, y) = p1.position.expect("pad 1 has a position");
+    assert!(
+        (x - 0.0).abs() < 1e-6 && (y - 2.0).abs() < 1e-6,
+        "SMR90 pad expected at (0, 2), got ({x}, {y})"
+    );
+}
+
+/// Round-7 #1: Eagle namespaces packages per <library>. Two libraries each
+/// defining a package named "COMMON" (with different pads) must NOT merge — an
+/// element keyed to one library's package must get only that library's pads,
+/// not the concatenation of both.
+#[test]
+fn eagle_same_named_packages_in_different_libraries_do_not_merge() {
+    // liba::COMMON has pads 1,2; libb::COMMON has pads 3,4. C1 uses liba.
+    let text = r#"<?xml version="1.0" encoding="utf-8"?>
+<eagle version="6.6.0">
+<drawing>
+<layers>
+<layer number="1" name="Top" color="4" fill="1" visible="yes" active="yes"/>
+<layer number="16" name="Bottom" color="1" fill="1" visible="yes" active="yes"/>
+</layers>
+<board>
+<plain>
+</plain>
+<libraries>
+<library name="liba">
+<packages>
+<package name="COMMON">
+  <smd name="1" x="0" y="0" dx="0.5" dy="0.5" layer="1"/>
+  <smd name="2" x="1" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>
+</packages>
+</library>
+<library name="libb">
+<packages>
+<package name="COMMON">
+  <smd name="3" x="0" y="0" dx="0.5" dy="0.5" layer="1"/>
+  <smd name="4" x="1" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>
+</packages>
+</library>
+</libraries>
+<elements>
+<element name="C1" library="liba" package="COMMON" value="" x="0" y="0"/>
+</elements>
+<signals>
+<signal name="NET1">
+  <contactref element="C1" pad="1"/>
+</signal>
+</signals>
+</board>
+</drawing>
+</eagle>
+"#;
+    let brd = ExtractedBoard::from_eagle_brd(text).expect("eagle extraction succeeds");
+    let c1 = brd.components.iter().find(|c| c.reference == "C1").expect("C1");
+    let mut nums: Vec<&str> = c1.pins.iter().map(|p| p.number.as_str()).collect();
+    nums.sort_unstable();
+    assert_eq!(
+        nums,
+        vec!["1", "2"],
+        "C1 must carry only liba::COMMON's pads, not the merge of both libraries"
+    );
+}
+
 #[test]
 fn dispatch_recognises_eagle() {
     // A board with two crossing wires on different nets dispatches to the Eagle

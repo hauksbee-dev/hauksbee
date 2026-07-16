@@ -689,13 +689,17 @@ impl std::fmt::Display for ResolutionReport {
                 Some(m) => (m.id.as_str(), res.confidence.to_string()),
                 None    => ("UNRESOLVED", "unresolved".to_string()),
             };
+            // Truncate on CHAR boundaries — a byte slice like `&val_s[..24]`
+            // panics when a multibyte char (e.g. 'µ' in a "µF" value) straddles
+            // the cut point.
+            let clip = |s: &str, n: usize| -> String { s.chars().take(n).collect() };
             writeln!(
                 f,
                 "│ {:<8} │ {:<24} │ {:<10} │ {:<10} │",
-                &ref_s[..ref_s.len().min(8)],
-                &val_s[..val_s.len().min(24)],
-                &model_id[..model_id.len().min(10)],
-                &conf[..conf.len().min(10)],
+                clip(ref_s, 8),
+                clip(val_s, 24),
+                clip(model_id, 10),
+                clip(&conf, 10),
             )?;
         }
         writeln!(f, "└──────────┴──────────────────────────┴────────────┴────────────┘")?;
@@ -716,6 +720,22 @@ mod tests {
     #[test]
     fn builtin_loads_without_panic() {
         let _l = lib();
+    }
+
+    /// Round-7 #14: the report's Display truncates long fields to fit the table;
+    /// slicing a value string at a fixed BYTE index panics when a multibyte char
+    /// straddles it. A "µF" value longer than the 24-col cell must render, not
+    /// crash.
+    #[test]
+    fn resolution_report_display_survives_multibyte_value() {
+        // 23 ASCII + 'µ' (2 bytes) puts a char boundary across byte index 24.
+        let value = format!("{}{}", "a".repeat(23), "µF");
+        let q = ComponentQuery { value: Some(value), ..Default::default() };
+        let report = ResolutionReport {
+            resolutions: vec![Resolution::unresolved(q)],
+        };
+        let rendered = report.to_string();
+        assert!(rendered.contains("Resolution report"), "report renders: {rendered}");
     }
 
     #[test]

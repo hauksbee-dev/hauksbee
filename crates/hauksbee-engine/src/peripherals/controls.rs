@@ -505,8 +505,12 @@ impl Peripheral for Stimulus {
     }
 
     fn pre_solve(&mut self, ctx: &mut TickCtx) {
+        // Sample at the chunk END (t+dt), the same zero-order-hold instant
+        // DynamicLoad (load.rs) and VcdSink (sink.rs) use. Sampling at the
+        // chunk START put a Stimulus waveform a full chunk out of phase with
+        // every other analog source/sink sharing the timeline.
         let v = match &self.kind {
-            StimulusKind::Wave(k) => k.eval(ctx.t),
+            StimulusKind::Wave(k) => k.eval(ctx.t + ctx.dt),
             StimulusKind::Noise {
                 offset,
                 amplitude,
@@ -584,6 +588,35 @@ pub fn pwl(points: Vec<(f64, f64)>) -> SourceKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Round-7 #7: a Stimulus waveform must be sampled at the chunk END (t+dt),
+    /// the same zero-order-hold instant DynamicLoad and VcdSink use — sampling
+    /// at the chunk start put it a full chunk out of phase with every other
+    /// analog source on the timeline.
+    #[test]
+    fn stimulus_wave_samples_at_chunk_end() {
+        let mut c = Circuit::new();
+        let net = c.node("STIM");
+        // A ramp: v(t) = 10·t over [0, 1]. eval(0) = 0, eval(0.1) = 1.0.
+        let kind = StimulusKind::Wave(SourceKind::Pwl(vec![
+            PwlPoint { t: 0.0, v: 0.0 },
+            PwlPoint { t: 1.0, v: 10.0 },
+        ]));
+        let mut stim = Stimulus::voltage(&mut c, "S1", net, kind);
+        let volts = vec![0.0; c.node_count()];
+        let mut ctx = TickCtx {
+            circuit: &mut c,
+            node_volts: &volts,
+            t: 0.0,
+            dt: 0.1,
+        };
+        stim.pre_solve(&mut ctx);
+        assert!(
+            (stim.last_value - 1.0).abs() < 1e-9,
+            "stimulus must sample at chunk end (t+dt=0.1 → 1.0), got {}",
+            stim.last_value
+        );
+    }
 
     #[test]
     fn pushbutton_open_closed() {

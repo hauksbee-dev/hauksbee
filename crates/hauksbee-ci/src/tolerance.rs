@@ -276,11 +276,17 @@ pub fn build_plans(
                 ));
             }
             if n > CORNER_CAP {
+                // n can be arbitrarily large here (one tolerance per component),
+                // so 1u64 << n overflows for n >= 64 — a debug panic / wrong
+                // number in the very message that reports the cap was blown.
+                let runs = match u32::try_from(n).ok().and_then(|s| 1u64.checked_shl(s)) {
+                    Some(v) => v.to_string(),
+                    None => "more than 2^63".to_string(),
+                };
                 return Err(SpecError::Invalid(format!(
                     "corner mode enumerates 2^n combinations and {n} toleranced \
-                     components would be {} runs (cap is 2^{CORNER_CAP} = {}); \
+                     components would be {runs} runs (cap is 2^{CORNER_CAP} = {}); \
                      use mode = \"monte-carlo\" above {CORNER_CAP} components",
-                    (1u64) << n,
                     1u64 << CORNER_CAP,
                 )));
             }
@@ -515,6 +521,20 @@ mod tests {
         let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("monte-carlo"), "refusal points at monte-carlo: {msg}");
+    }
+
+    #[test]
+    fn corner_cap_refusal_does_not_overflow_at_64_tolerances() {
+        // 64+ toleranced components blow the cap; the refusal message used to
+        // compute 1u64 << n, which overflows (debug panic / wrong number in
+        // release) for n >= 64. It must refuse cleanly instead. (round-7 #15)
+        let ts: Vec<ResolvedTolerance> = (0..64)
+            .map(|i| rule(&format!("R{i}"), 1_000.0, 5.0, Distribution::Uniform))
+            .collect();
+        let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("monte-carlo"), "refusal points at monte-carlo: {msg}");
+        assert!(msg.contains("64"), "refusal names the component count: {msg}");
     }
 
     #[test]

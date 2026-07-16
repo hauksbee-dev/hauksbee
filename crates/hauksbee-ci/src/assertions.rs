@@ -696,7 +696,18 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // Concatenate the requested MCU's UART, or all MCUs if unspecified.
     let text: String = match &a.mcu {
         Some(m) => out.uart.get(m).cloned().unwrap_or_default(),
-        None => out.uart.values().cloned().collect::<Vec<_>>().join(""),
+        None => {
+            // Concatenate all MCUs in a STABLE (sorted-by-key) order — iterating
+            // a HashMap's values put the streams in nondeterministic order, so an
+            // anchored/boundary-spanning match (`^BOOT`) flaked run to run.
+            let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
+            items.sort_by(|x, y| x.0.cmp(y.0));
+            items
+                .into_iter()
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        }
     };
     let preview = text.replace(['\r', '\n'], "·");
     let preview = truncate(&preview, 60);
@@ -819,6 +830,23 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     };
     if bode.is_empty() {
         return (false, format!("net '{net}' has no AC data"));
+    }
+
+    // A requested frequency outside the swept band cannot be measured — interp_db
+    // would silently clamp to the nearest endpoint gain and report it AS IF taken
+    // at the requested frequency. Fail loudly instead of comparing an endpoint
+    // gain against the bound. (R7 #13)
+    if let Some(f) = a.freq_hz {
+        let (f_lo, f_hi) = (bode[0].0, bode[bode.len() - 1].0);
+        if f < f_lo * (1.0 - 1e-9) || f > f_hi * (1.0 + 1e-9) {
+            return (
+                false,
+                format!(
+                    "ac_gain for '{net}' requested {f} Hz is outside the swept band \
+                     {f_lo}-{f_hi} Hz; widen [ac] fstart/fstop or move the check in-band"
+                ),
+            );
+        }
     }
 
     // Pick the gain to test: at a specific frequency (log-interpolated) or the
@@ -974,15 +1002,34 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                     format!("Tj({reference}) peak {tj:.1}C{unit} (<= {limit}C)"),
                 )
             }
-            None => (
+            None => {
                 // No thermal data. The runner rejects a max_temp on a component
                 // with no thermal model at bind time (`check_trackable_assert_refs`),
                 // so here the part IS stress-monitored and simply never dissipated
-                // measurably: its junction sat at ambient, so it cannot have
-                // exceeded the ceiling. An honest pass, and say so.
-                true,
-                format!("Tj({reference}): no dissipation measured (idle/non-dissipating); skipped"),
-            ),
+                // measurably: its junction sat at AMBIENT. That is only a pass if
+                // ambient itself is within the ceiling — in a hot-ambient spec a
+                // ceiling below ambient is violated by the idle part sitting at
+                // ambient, not silently skipped.
+                if out.ambient_c <= limit + 1e-6 {
+                    (
+                        true,
+                        format!(
+                            "Tj({reference}): no dissipation measured (idle at ambient \
+                             {:.1}C <= {limit}C); skipped",
+                            out.ambient_c
+                        ),
+                    )
+                } else {
+                    (
+                        false,
+                        format!(
+                            "Tj({reference}): idle at ambient {:.1}C exceeds ceiling {limit}C \
+                             (no dissipation, but ambient alone is over-limit)",
+                            out.ambient_c
+                        ),
+                    )
+                }
+            }
         };
     }
 
@@ -1099,6 +1146,7 @@ mod tests {
                 rail_windows,
                 protection_tripped: HashMap::new(),
                 protection_tripped_scoped: HashMap::new(),
+                ambient_c: 25.0,
                 sim_ms: 100.0,
                 first_reach_ms: HashMap::new(),
                 driven_nets: Default::default(),
@@ -1165,6 +1213,7 @@ mod tests {
                 rail_windows: HashMap::new(),
                 protection_tripped,
                 protection_tripped_scoped,
+                ambient_c: 25.0,
                 sim_ms: 100.0,
                 first_reach_ms: HashMap::new(),
                 driven_nets: Default::default(),
@@ -1205,5 +1254,109 @@ mod tests {
             !ok_steady,
             "expect_trip scoped to 'steady' must FAIL — no trip in that window; got pass: {msg}"
         );
+    }
+
+    // A max_temp ceiling BELOW ambient must fail for an idle (non-dissipating)
+    // device — its junction sits at ambient, which already exceeds the ceiling.
+    // Auto-passing on "no dissipation measured" hid a hot-ambient violation
+    // (round-7 #8).
+    #[test]
+    fn max_temp_idle_device_fails_when_ambient_exceeds_ceiling() {
+        use super::check_max_temp;
+        use crate::runner::RunOutcome;
+
+        let assertion = |ceiling: f64| -> crate::spec::Assertion {
+            toml::from_str(&format!(
+                "kind = \"max_temp\"\nref = \"U3\"\ncelsius = {ceiling}\n"
+            ))
+            .unwrap()
+        };
+        // Idle device: no entry in peak_temp_c, ambient 85 C.
+        let hot = RunOutcome { ambient_c: 85.0, ..Default::default() };
+
+        let (ok, msg) = check_max_temp(&assertion(70.0), &hot);
+        assert!(
+            !ok,
+            "idle U3 at ambient 85C must fail a 70C ceiling, not auto-pass: {msg}"
+        );
+        // A ceiling above ambient still passes the idle part.
+        let (ok2, msg2) = check_max_temp(&assertion(105.0), &hot);
+        assert!(ok2, "idle U3 at ambient 85C is within a 105C ceiling: {msg2}");
+    }
+
+    // An unscoped uart assertion concatenates every MCU's output; the order must
+    // be stable (sorted by MCU key), not HashMap iteration order, or an anchored
+    // match flakes run to run (round-7 #9).
+    #[test]
+    fn uart_all_mcu_concatenation_is_order_stable() {
+        use super::check_uart;
+        use crate::runner::RunOutcome;
+
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"uart\"\nmatches = \"^BOOT\"\n").unwrap();
+
+        // Two MCUs; whichever HashMap order they land in, the sorted-by-key
+        // concatenation is deterministic ("A" before "B"), so "^BOOT" (A's
+        // output) anchors the same way every time.
+        let mut mk = |first: &str, second: &str| -> bool {
+            let mut uart = std::collections::HashMap::new();
+            uart.insert(first.to_string(), "BOOT_OK\n".to_string());
+            uart.insert(second.to_string(), "READY\n".to_string());
+            let out = RunOutcome { uart, ..Default::default() };
+            check_uart(&a, &out).0
+        };
+        // "A" holds BOOT_OK regardless of insertion order → ^BOOT always matches.
+        assert!(mk("A", "B"), "A-first: sorted haystack starts with A's BOOT_OK");
+        assert!(mk("A", "B") == mk("A", "B"), "deterministic");
+        // If B held BOOT and A held READY, sorted order puts READY first, so
+        // ^BOOT must NOT match — and must not match by luck either.
+        let mut uart2 = std::collections::HashMap::new();
+        uart2.insert("A".to_string(), "READY\n".to_string());
+        uart2.insert("B".to_string(), "BOOT_OK\n".to_string());
+        let out2 = RunOutcome { uart: uart2, ..Default::default() };
+        assert!(
+            !check_uart(&a, &out2).0,
+            "sorted order puts A's READY first, so ^BOOT anchored at start must not match"
+        );
+    }
+
+    // ac_gain at a frequency outside the swept band must fail loudly, not
+    // silently clamp to the nearest endpoint gain and report it as measured at
+    // the requested frequency (round-7 #13).
+    #[test]
+    fn ac_gain_out_of_band_frequency_is_refused() {
+        use super::check_ac_gain;
+        use crate::runner::{AcOutcome, RunOutcome};
+
+        let mut bode = std::collections::HashMap::new();
+        // Swept 10 Hz .. 100 kHz; gain -5 dB everywhere for simplicity.
+        bode.insert(
+            "OUT".to_string(),
+            vec![(10.0, -5.0, 0.0), (1_000.0, -5.0, 0.0), (100_000.0, -5.0, 0.0)],
+        );
+        let out = RunOutcome {
+            ac: Some(AcOutcome { bode, ..Default::default() }),
+            ..Default::default()
+        };
+
+        // 1 MHz is above the band: interp_db would clamp to -5 dB and pass the
+        // max=-20 bound falsely. Must fail with an out-of-band message.
+        let above: crate::spec::Assertion = toml::from_str(
+            "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1e6\nmax = -20.0\n",
+        )
+        .unwrap();
+        let (ok, msg) = check_ac_gain(&above, &out);
+        assert!(!ok, "out-of-band 1 MHz must fail, not clamp-and-pass: {msg}");
+        assert!(msg.contains("outside the swept band"), "msg names the cause: {msg}");
+
+        // An in-band frequency evaluates normally (−5 dB is within max=−20? no,
+        // −5 > −20 so it fails the bound — but for a real measured reason, not
+        // out-of-band).
+        let inband: crate::spec::Assertion = toml::from_str(
+            "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1000.0\nmax = -20.0\n",
+        )
+        .unwrap();
+        let (_, msg2) = check_ac_gain(&inband, &out);
+        assert!(!msg2.contains("outside the swept band"), "in-band is measured normally: {msg2}");
     }
 }
