@@ -477,28 +477,57 @@ pub fn analyze_with_firmware(
     }
 
     let cosim = run_web_cosim(contents, fw_name, fw_bytes);
-    // Fold SERIOUS co-sim faults into the top-level verdict: analyze() computed
-    // serious/total/headline from the STATIC sections only, so a destructive
-    // electrical fault the firmware co-sim produced (e.g. an overcurrent-killed
-    // MOSFET) otherwise left the badge green and the headline "Looks healthy".
-    // Only serious faults escalate the headline; benign co-sim notes stay in the
-    // co-sim card without flipping the top-line verdict.
-    let cosim_serious = cosim.findings.iter().filter(|f| f.level == "serious").count();
-    if cosim_serious > 0 {
-        report.serious += cosim_serious;
-        report.total += cosim_serious;
-        // total > 0 now, so the heads-up / bind-open arms of overall_headline are
-        // not reached; passing false for them is correct.
-        report.headline = overall_headline(report.total, report.serious, false, false);
+    // Fold co-sim electrical FAULTS into the top-level verdict: analyze() computed
+    // serious/total/headline from the STATIC sections only, so an electrical fault
+    // the firmware co-sim produced otherwise left the badge green and the headline
+    // "Looks healthy". A destructive fault (e.g. an overcurrent-killed MOSFET) is
+    // SERIOUS; a non-destructive over-stress (a part carrying past its continuous
+    // rating without dying) is a WARNING — but it is still an actionable issue the
+    // CLI counts ("N issues found, none serious. Worth a look.") and that --strict
+    // exits 2 on, so it must escalate the web headline too rather than sit silently
+    // in the co-sim card under a "Looks healthy" banner. Only note-level honesty
+    // caveats stay out of the count (they demote via cosim_caveat_headline below).
+    if let Some((total, serious, headline)) =
+        fold_cosim_faults(report.total, report.serious, &cosim)
+    {
+        report.total = total;
+        report.serious = serious;
+        report.headline = headline;
     } else if report.total == 0 {
-        // No serious escalation and the static board is clean — but a co-sim
-        // that proved nothing must not leave a bare "Looks healthy" headline.
+        // No fault escalation and the static board is clean — but a co-sim that
+        // proved nothing must not leave a bare "Looks healthy" headline.
         if let Some(demoted) = cosim_caveat_headline(&cosim, &report.headline) {
             report.headline = demoted;
         }
     }
     report.cosim = Some(cosim);
     report
+}
+
+/// Fold co-sim electrical FAULTS into the static verdict counts. A destructive
+/// fault is SERIOUS; a non-destructive over-stress is a WARNING — both are
+/// actionable issues (the CLI counts them and `--strict` exits 2 on them), so
+/// both raise `total`; only serious ones raise `serious`. Note-level honesty
+/// caveats are excluded (they demote separately via [`cosim_caveat_headline`]).
+///
+/// Returns the new `(total, serious, headline)` when any fault folds in, or
+/// `None` when the co-sim carried no fault-level findings (caller keeps the
+/// static counts). Because `total > 0` whenever this returns `Some`, the
+/// heads-up / bind-open arms of [`overall_headline`] are unreachable, so passing
+/// `false` for them is correct.
+fn fold_cosim_faults(
+    static_total: usize,
+    static_serious: usize,
+    cosim: &WebCosimSection,
+) -> Option<(usize, usize, String)> {
+    let serious = cosim.findings.iter().filter(|f| f.level == "serious").count();
+    let warnings = cosim.findings.iter().filter(|f| f.level == "warning").count();
+    if serious == 0 && warnings == 0 {
+        return None;
+    }
+    let total = static_total + serious + warnings;
+    let serious = static_serious + serious;
+    Some((total, serious, overall_headline(total, serious, false, false)))
 }
 
 /// The headline a statically-clean board (`total == 0`, no serious co-sim faults)
@@ -1369,6 +1398,51 @@ mod tests {
             cosim_caveat_headline(&caveated, &demoted),
             None,
             "an already-heads-up headline is not rewritten"
+        );
+    }
+
+    #[test]
+    fn warning_cosim_fault_escalates_the_headline_off_looks_healthy() {
+        // Round-27: only SERIOUS co-sim faults folded into the verdict, so a
+        // non-destructive over-stress WARNING (a part carrying past its continuous
+        // rating without dying) sat silently in the co-sim card under a bare
+        // "Looks healthy" banner — while the CLI --plain counts it ("1 issue found,
+        // none serious. Worth a look.") and --strict exits 2. A warning must
+        // escalate total (not serious), matching the CLI verdict.
+        let mut warned = clean_ran_section();
+        warned.findings.push(WebFinding {
+            level: "warning".to_string(),
+            what: "R1 carries ~200 mA past its 100 mA continuous rating.".to_string(),
+            why: "sustained over-current cooks the part over time".to_string(),
+            fix: "raise the resistor's power/current rating or reduce the load".to_string(),
+        });
+        // Statically clean board (total 0, serious 0) + one warning fault.
+        let folded = fold_cosim_faults(0, 0, &warned).expect("a warning fault folds in");
+        assert_eq!((folded.0, folded.1), (1, 0), "1 issue, none serious");
+        assert!(
+            folded.2.contains("none serious") && folded.2.contains("Worth a look"),
+            "headline matches the CLI 'worth a look' verdict, got: {}",
+            folded.2
+        );
+        assert!(!folded.2.contains("Looks healthy"), "must not read Looks healthy");
+
+        // A destructive SERIOUS fault still escalates serious, not just total.
+        let mut killed = clean_ran_section();
+        killed.findings.push(WebFinding {
+            level: "serious".to_string(),
+            what: "Q1 destroyed by over-current.".to_string(),
+            why: "the MOSFET exceeded its absolute-max drain current".to_string(),
+            fix: "add gate/current limiting".to_string(),
+        });
+        let folded = fold_cosim_faults(0, 0, &killed).expect("a serious fault folds in");
+        assert_eq!((folded.0, folded.1), (1, 1), "1 issue, 1 serious");
+        assert!(folded.2.contains("1 serious"), "serious headline, got: {}", folded.2);
+
+        // A clean run with only note-level caveats does NOT fold (returns None) —
+        // notes demote via cosim_caveat_headline, not the fault count.
+        assert!(
+            fold_cosim_faults(0, 0, &clean_ran_section()).is_none(),
+            "a fault-free co-sim must not fold into the issue count"
         );
     }
 

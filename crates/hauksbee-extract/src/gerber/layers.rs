@@ -349,7 +349,13 @@ fn protel_inner_index(n: &Name) -> Option<usize> {
 fn kicad_inner_index(n: &Name) -> Option<usize> {
     // Look for "in<k>" followed by "cu", or "inner<k>", or "signal<k>".
     for marker in ["in", "inner", "signal", "layer"] {
-        if let Some(pos) = n.full.find(marker) {
+        // Scan EVERY occurrence of the marker, not just the first: a project
+        // name that itself contains the marker (e.g. "mainboard-In2_Cu",
+        // "arduino-In1_Cu") puts a non-digit-tailed "in" ahead of the real
+        // `In<k>_Cu` token. `find` stopped at that first match and gave up,
+        // silently dropping the inner copper layer; walk all positions and take
+        // the first whose tail actually begins with a layer index.
+        for (pos, _) in n.full.match_indices(marker) {
             let tail = &n.full[pos + marker.len()..];
             let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
             if let Ok(k) = digits.parse::<usize>() {
@@ -422,6 +428,26 @@ mod tests {
         assert_eq!(role("board-F_Mask.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Silkscreen.gbr"), LayerRole::Ignored);
         assert_eq!(role("board-F_Paste.gbr"), LayerRole::Ignored);
+    }
+
+    #[test]
+    fn inner_copper_survives_a_project_name_containing_the_marker() {
+        // Round-27: a project name whose text contains "in" (or inner/signal/
+        // layer) put a non-digit-tailed marker ahead of the real `In<k>_Cu`
+        // token. `find` stopped at that first match and dropped the inner copper
+        // layer to Unknown, silently vanishing it from reconstruction. Every
+        // occurrence must be scanned so the genuine layer index is recovered.
+        assert!(
+            matches!(role("mainboard-In1_Cu.gbr"), LayerRole::Copper { index: 1, .. }),
+            "the 'in' inside 'mainboard' must not shadow the real In1 token"
+        );
+        assert!(matches!(role("mainboard-In2_Cu.gbr"), LayerRole::Copper { index: 2, .. }));
+        assert!(matches!(role("arduino-In1_Cu.gbr"), LayerRole::Copper { index: 1, .. }));
+        // A name with the marker but no real inner token stays non-copper.
+        assert_ne!(
+            role("arduino-F_Silkscreen.gbr"),
+            LayerRole::Copper { index: 1, name: String::new() }
+        );
         assert_eq!(role("board-Edge_Cuts.gbr"), LayerRole::Outline);
         assert_eq!(role("board-PTH.drl"), LayerRole::Drill);
         assert_eq!(role("board-NPTH.drl"), LayerRole::Drill);

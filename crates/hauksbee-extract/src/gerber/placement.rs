@@ -136,8 +136,16 @@ fn header_unit_scale(header: &str) -> f64 {
 fn parse_len(s: &str) -> Option<(f64, bool)> {
     let t = s.trim();
     let lower = t.to_ascii_lowercase();
-    let mil = lower.ends_with("mil");
-    let inch = lower.ends_with("in") || lower.ends_with("\"");
+    // Accept the plural "mils" and the spelled-out "inch"/"inches" too: the doc
+    // above advertises cell-named units (mm/mil/inch), but detecting inch only
+    // via the "in" abbreviation ("inch" ends in "ch") and mil only via bare "mil"
+    // ("mils" ends in "ils") let those spellings fall through as unitless and get
+    // silently re-scaled by the header unit — a 25.4x / 39x coordinate error.
+    let mil = lower.ends_with("mil") || lower.ends_with("mils");
+    let inch = lower.ends_with("in")
+        || lower.ends_with("inch")
+        || lower.ends_with("inches")
+        || lower.ends_with("\"");
     // An explicit "mm" is a unit too: the value is already in mm and must not be
     // re-scaled by a header unit. (Checked after mil so "…mil" isn't read as mm.)
     let mm = !mil && lower.ends_with("mm");
@@ -518,5 +526,22 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let p = parse_pnp(csv);
         assert!(!p[0].dnp, "blank DNP cell is populated");
         assert!(p[1].dnp, "DNP cell marks unpopulated");
+    }
+
+    #[test]
+    fn parse_len_recognizes_spelled_out_and_plural_units() {
+        // Round-27: the doc advertises cell-named units (mm/mil/inch), but the
+        // spelled-out "inch" and plural "mils" fell through as unitless and were
+        // re-scaled by the header (25.4x / 39x error). They must convert like
+        // their abbreviations and report had_unit=true so the header is ignored.
+        let (v, had) = parse_len("0.5inch").unwrap();
+        assert!((v - 12.7).abs() < 1e-9 && had, "0.5inch -> 12.7 mm, unit named");
+        let (v, had) = parse_len("10mils").unwrap();
+        assert!((v - 0.254).abs() < 1e-9 && had, "10mils -> 0.254 mm, unit named");
+        // The abbreviations still behave.
+        assert_eq!(parse_len("0.5in").unwrap(), (12.7, true));
+        assert_eq!(parse_len("10mil").unwrap(), (0.254, true));
+        // A bare number is still unitless (header unit applies).
+        assert_eq!(parse_len("5.0").unwrap(), (5.0, false));
     }
 }
