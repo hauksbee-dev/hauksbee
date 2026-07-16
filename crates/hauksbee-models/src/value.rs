@@ -93,17 +93,32 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
 /// the part numbers that would otherwise read as ~1.4 nF.
 fn is_jedec_semiconductor(v: &str) -> bool {
     let b = v.as_bytes();
-    if b.len() < 5 {
+    if b.len() < 4 {
         return false;
     }
     if !b[0].is_ascii_digit() || b[0] == b'0' {
         return false;
     }
-    if !(b[1] == b'N' || b[1] == b'n') {
+    let upper_n = b[1] == b'N';
+    if !(upper_n || b[1] == b'n') {
         return false;
     }
+    // The serial is a digit run optionally followed by a suffix letter (1N4148W,
+    // 1N914B, 1N34A) — allow the trailing letters, require the rest all-digit.
     let serial = &b[2..];
-    serial.len() >= 3 && serial.iter().all(u8::is_ascii_digit)
+    let ndigits = serial.iter().take_while(|c| c.is_ascii_digit()).count();
+    if !serial[ndigits..].iter().all(u8::is_ascii_alphabetic) {
+        return false;
+    }
+    // An UPPERCASE 'N' is the JEDEC spelling (1N34, 1N60, 1N21, 2N3904), so a
+    // 2+-digit serial there is a part number and must return None (a bare
+    // `parse_inner` would read it as the RKM nano form ~1.x nF and defeat the
+    // binder's generic-diode fallback — the R33 failure mode, previously left
+    // open for the short 2-digit germanium detectors). RKM nano values only ever
+    // use LOWERCASE 'n' ("4n7", "1n5"), so a lowercase form still needs 3+ serial
+    // digits before it is treated as a part number rather than a 1–2-digit value.
+    let min_serial = if upper_n { 2 } else { 3 };
+    ndigits >= min_serial
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
@@ -793,7 +808,19 @@ mod tests {
                 parse_value(pn)
             );
         }
+        // R38: short 2-digit-serial JEDEC diodes (germanium detectors) use the
+        // same uppercase-N spelling and must ALSO return None — they were parsed
+        // as ~1.x nF and their conducting path silently deleted.
+        for pn in ["1N34", "1N60", "1N21", "1N34A"] {
+            assert!(
+                parse_value(pn).is_none(),
+                "short JEDEC part number {pn:?} must not parse as a passive value, got {:?}",
+                parse_value(pn)
+            );
+        }
         // The short RKM nano values it must NOT reject still parse correctly.
+        // These use LOWERCASE 'n' — the discriminator that separates them from
+        // the uppercase-N JEDEC parts above.
         check("4n7", 4.7e-9);
         check("1n5", 1.5e-9);
         check("2n2", 2.2e-9);
