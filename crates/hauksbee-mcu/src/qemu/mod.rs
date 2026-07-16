@@ -1227,6 +1227,10 @@ impl Mcu for QemuBackend {
             pc: 0,
             cycles: self.cycles,
             sleeping: false,
+            // QEMU's QMP poll path carries no terminal-CPU signal here;
+            // conservatively report "still running" rather than guessing.
+            done: false,
+            crashed: false,
         }
     }
 

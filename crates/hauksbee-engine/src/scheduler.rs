@@ -3479,6 +3479,8 @@ mod tests {
                 pc: 0,
                 cycles: 0,
                 sleeping: false,
+                done: false,
+                crashed: false,
             }
         }
     }
