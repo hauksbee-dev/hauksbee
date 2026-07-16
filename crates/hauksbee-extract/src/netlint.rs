@@ -244,7 +244,14 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
             .parse()
             .ok()?
     };
-    (mag > 0.0 && mag <= 60.0 && mag.is_finite()).then_some(mag)
+    // No upper clamp. An earlier `mag <= 60.0` ceiling silently rejected any
+    // rail above 60 V and fell back to the 5 V default, so `rail_voltage("+65V")`
+    // returned 5.0 and check_led_current under-counted the drive, suppressing a
+    // genuine over-current finding. Real boards run 65 V motor rails, 100 V+ LED
+    // strings, 400 V PFC buses — the magnitude is whatever the token says as long
+    // as it is a positive, finite number. (Mirrors binder.rs::embedded_rail_magnitude,
+    // whose identical clamp was removed in the same spirit.)
+    (mag > 0.0 && mag.is_finite()).then_some(mag)
 }
 
 /// Number of DISTINCT pads that carry a net. Some extraction paths list a pad
@@ -501,10 +508,17 @@ fn parse_capacitance_uf(value: &str) -> Option<f64> {
             break;
         }
     }
-    // R-style decimal: a digit run AFTER the unit letter is the fractional part
-    // ("4u7" = 4.7 uF, "1n5" = 1.5 nF), mirroring parse_ohms' "4K7" handling.
-    // Without this the "7"/"5" was dropped and the value under-reported.
-    let frac: String = {
+    // R-style decimal: a digit run AFTER a BARE prefix letter is the fractional
+    // part ("4u7" = 4.7 uF, "1n5" = 1.5 nF), mirroring parse_ohms' "4K7" handling.
+    // This only applies when the unit is the multiplier letter standing in for the
+    // decimal point — i.e. the 'F' is ABSENT. When the unit already spells out the
+    // Farad ("1uF25V", "10nF50V"), the value is complete and the trailing digits
+    // are an attached voltage rating, not a fraction: eating them turned "1uF25V"
+    // into 1.25 uF and false-flagged a valid 0201/0402 cap on the package ceiling.
+    // (Canonical hauksbee_models::value::parse_value("1uF25V") already returns 1 uF.)
+    let frac: String = if unit.contains('f') {
+        String::new()
+    } else {
         let mut f = String::new();
         while let Some(&ch) = chars.peek() {
             if ch.is_ascii_digit() {
@@ -1353,5 +1367,34 @@ mod rail_and_cap_tests {
         assert_eq!(parse_capacitance_uf("4.7uF"), Some(4.7));
         assert_eq!(parse_capacitance_uf("10u"), Some(10.0));
         assert_eq!(parse_capacitance_uf("100nF"), Some(0.1));
+    }
+
+    #[test]
+    fn high_voltage_rails_above_sixty_volts_keep_their_magnitude() {
+        // R34: numeric_rail_magnitude clamped `mag <= 60.0` and fell back to the
+        // 5 V default above it, so rail_voltage("+65V") returned Some(5.0). That
+        // under-counted the drive in check_led_current and suppressed a genuine
+        // over-current finding on high-voltage LED strings / motor rails. Real
+        // boards run well past 60 V — the magnitude is whatever the token says.
+        assert_eq!(rail_voltage("+65V"), Some(65.0));
+        assert_eq!(rail_voltage("100V"), Some(100.0));
+        assert_eq!(rail_voltage("+400V"), Some(400.0));
+        assert_eq!(rail_voltage("48V"), Some(48.0));
+        // The 60 V boundary itself and below are unaffected.
+        assert_eq!(rail_voltage("60V"), Some(60.0));
+    }
+
+    #[test]
+    fn attached_voltage_rating_is_not_read_as_a_capacitance_fraction() {
+        // R34: the R-style-decimal frac loop ran even when the unit already
+        // spelled out the Farad ("uF"), so "1uF25V" ate the "25" rating and
+        // became 1.25 uF — false-flagging a valid 0201 (1 uF ceiling) cap on the
+        // package-ceiling check. When the 'F' is present the value is complete
+        // and trailing digits are a rating, not a fraction.
+        assert_eq!(parse_capacitance_uf("1uF25V"), Some(1.0));
+        assert_eq!(parse_capacitance_uf("10uF50V"), Some(10.0));
+        assert_eq!(parse_capacitance_uf("100nF16V"), Some(0.1));
+        // Bare-prefix R-style decimals still fold the trailing digits in.
+        assert_eq!(parse_capacitance_uf("4u7"), Some(4.7));
     }
 }

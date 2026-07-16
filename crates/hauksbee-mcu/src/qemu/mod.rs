@@ -1110,8 +1110,20 @@ impl Mcu for QemuBackend {
                     }
                     return;
                 };
-                if g.write_u32(bank.in_reg, next).is_ok() {
-                    self.in_shadow.insert(bank.letter, next);
+                match g.write_u32(bank.in_reg, next) {
+                    Ok(()) => {
+                        self.in_shadow.insert(bank.letter, next);
+                    }
+                    // Loud-drop discipline: a failed guest write means the
+                    // injection never landed. Silently swallowing the Err left
+                    // the shadow un-updated AND printed nothing, so the drop was
+                    // invisible — matching set_analog_in's "ADC injection write
+                    // failed" and the no-gdbstub branch above.
+                    Err(e) => eprintln!(
+                        "qemu: digital-input injection write failed \
+                         (port {}, reg {:#x}): {e:#}",
+                        bank.letter, bank.in_reg
+                    ),
                 }
             }
         }
