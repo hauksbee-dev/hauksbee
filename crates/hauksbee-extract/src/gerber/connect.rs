@@ -696,12 +696,19 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
     let bytes: Vec<char> = p.chars().collect();
     for i in 0..bytes.len() {
         if bytes[i] == 'x' && i > 0 && i + 1 < bytes.len() {
+            // Walk across a decimal point too, so a body dimension like
+            // "3.2x2.5mm" captures left="3.2"/right="2.5" (which then fail the
+            // u32 parse and drop out) instead of the integer fragments "2"/"2"
+            // that touch the 'x' — those parsed as a bogus 2x2 pin grid and
+            // oversized the crystal pad window. A real pin grid ("2x18") has no
+            // '.', so this does not change it.
+            let is_grid_char = |c: char| c.is_ascii_digit() || c == '.';
             let mut a = i;
-            while a > 0 && bytes[a - 1].is_ascii_digit() {
+            while a > 0 && is_grid_char(bytes[a - 1]) {
                 a -= 1;
             }
             let mut b = i + 1;
-            while b < bytes.len() && bytes[b].is_ascii_digit() {
+            while b < bytes.len() && is_grid_char(bytes[b]) {
                 b += 1;
             }
             let left: String = bytes[a..i].iter().collect();
@@ -795,6 +802,29 @@ mod tests {
         assert_eq!(pitch_hint("connector_pin_socket_p5.08mm"), Some(5.08));
         // No pitch token at all → no hint (caller applies its own default).
         assert_eq!(pitch_hint("pinheader_generic"), None);
+    }
+
+    #[test]
+    fn grid_hint_rejects_decimal_body_sizes() {
+        // R36: the digit walk stopped at the decimal point, so a body dimension
+        // like "3.2x2.5mm" captured the integer fragments "2"/"2" that touch the
+        // 'x' and returned a bogus 2x2 pin grid — oversizing the crystal pad
+        // window ~3x and letting it claim stray orphan flashes. A decimal body
+        // size must not read as a grid.
+        assert_eq!(grid_hint("crystal_smd_3225-2pin_3.2x2.5mm"), None);
+        assert_eq!(grid_hint("2.0x1.6mm"), None);
+        assert_eq!(grid_hint("5.0x3.2mm"), None);
+        // Integer "mm" body sizes were already rejected; still are.
+        assert_eq!(grid_hint("12x12mm"), None);
+        // Genuine pin grids (integer counts, no '.') still parse.
+        assert_eq!(grid_hint("2x18"), Some((2, 18)));
+        assert_eq!(grid_hint("01x02"), Some((1, 2)));
+
+        // The decimal crystal body no longer inflates the pad-search half-extent:
+        // it must take the largest-dimension path (3.2/2 + 1 = 2.6 mm), not the
+        // 2x2-grid path (~7.62 mm).
+        let he = footprint_half_extent("Crystal_SMD_3225-2Pin_3.2x2.5mm");
+        assert!(he < 4.0, "decimal crystal body half-extent must be small, got {he}");
     }
 
     #[test]
