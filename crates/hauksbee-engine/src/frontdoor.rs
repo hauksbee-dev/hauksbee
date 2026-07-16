@@ -260,9 +260,23 @@ pub struct WebReport {
 /// Run the full front-door analysis on an uploaded board file.
 ///
 /// `file_name` is used only for display and to disambiguate a `.kicad_sch` (which
-/// the extractor handles by content here too). `contents` is the file's text.
-pub fn analyze(file_name: &str, contents: &str) -> WebReport {
-    let board = match ExtractedBoard::from_auto(contents) {
+/// the extractor handles by content here too). `contents` is the file's RAW
+/// bytes: binary formats (Altium `.PcbDoc`, an OLE2 container) are sniffed and
+/// read from the bytes first, exactly like the CLI `run` path, and only a
+/// non-binary input falls back to the text sniffer over a lossy-UTF8 view
+/// (which is exact for the text formats). Decoding before this point would
+/// corrupt a binary board before it was ever parsed.
+pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
+    // Binary-first, mirroring `run`: `from_auto_bytes` claims a recognised
+    // binary board (OLE2 magic + Altium streams) or returns None so text
+    // formats keep their exact behaviour through `from_auto`.
+    let binary = ExtractedBoard::from_auto_bytes(contents);
+    let is_binary = binary.is_some();
+    let text = String::from_utf8_lossy(contents);
+    // Text view for the geometry-bearing text checks (DRC / SI). A binary board
+    // has no meaningful text: those checks get their bytes twin / None instead.
+    let text_view: Option<&str> = (!is_binary).then_some(&text);
+    let board = match binary.unwrap_or_else(|| ExtractedBoard::from_auto(&text)) {
         Ok(b) => b,
         Err(e) => {
             return WebReport {
@@ -288,8 +302,14 @@ pub fn analyze(file_name: &str, contents: &str) -> WebReport {
 
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
 
-    // DRC reads copper geometry from the raw text (gerbers/KiCad layout).
-    let drc = ExtractedBoard::drc(contents).unwrap_or_default();
+    // DRC reads copper geometry from the raw input: the bytes twin
+    // (`altium_drc`) for a binary board, the text path (gerbers/KiCad layout)
+    // for everything else.
+    let drc = if is_binary {
+        ExtractedBoard::altium_drc(contents).unwrap_or_default()
+    } else {
+        ExtractedBoard::drc(&text).unwrap_or_default()
+    };
     // Render from the grouped structure (single source of truth shared with the
     // CLI text/plain/json surfaces): duplicates collapsed, and gap==rule labelled
     // "at minimum clearance (no margin)" rather than the wrong "below the rule".
@@ -302,8 +322,9 @@ pub fn analyze(file_name: &str, contents: &str) -> WebReport {
     let lint = crate::checks::engine_lint(&board, &lib);
     let lint_plain = plain_netlint(&lint);
 
-    // SI needs the layout text for the geometry-bearing checks.
-    let si = board.si_checks(Some(contents));
+    // SI needs the layout text for the geometry-bearing checks; a binary board
+    // has none, so it gets the netlist-only subset (`None`).
+    let si = board.si_checks(text_view);
     let si_plain = plain_si(&si);
 
     let sections = vec![
@@ -394,7 +415,7 @@ pub fn analyze(file_name: &str, contents: &str) -> WebReport {
 /// whether the firmware run succeeded.
 pub fn analyze_with_firmware(
     file_name: &str,
-    contents: &str,
+    contents: &[u8],
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> WebReport {
@@ -469,15 +490,18 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 /// The actual firmware co-sim for the web path. Mirrors `run_headless` in the
 /// CLI (same fixed 1 kHz frame cadence, same fault dedup via `plain_faults`) but
 /// runs synchronously for a short fixed window so it fits a request budget.
-fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSection {
+fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSection {
     use crate::plain::plain_faults;
     use crate::stress::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
     use std::io::Write;
 
     // No MCU => firmware drives nothing. Inspect the bound board before paying for
-    // a temp file / engine build, and say so plainly.
-    let board = match ExtractedBoard::from_auto(contents) {
+    // a temp file / engine build, and say so plainly. Same binary-first routing as
+    // [`analyze`], so a binary board reaches the co-sim path uncorrupted too.
+    let board = match ExtractedBoard::from_auto_bytes(contents)
+        .unwrap_or_else(|| ExtractedBoard::from_auto(&String::from_utf8_lossy(contents)))
+    {
         Ok(b) => b,
         // Should not happen (the static analyze already succeeded), but be safe.
         Err(e) => return cosim_unavailable(format!("Could not re-read the board for co-sim: {e}.")),
@@ -528,18 +552,20 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
         return cosim_unavailable(format!("Could not write the firmware for co-sim: {e}."));
     }
 
-    let mut engine =
-        match HauksbeeEngine::from_board_file(contents, Some(tmp.path()), "web-firmware") {
-            Ok(e) => e,
-            // Architecture mismatch / corrupt firmware: the static analysis still
-            // succeeded, so report co-sim failure as a note, not a hard error.
-            Err(e) => {
-                return cosim_unavailable(format!(
-                    "The firmware could not be loaded onto this board's MCU: {e}. \
-                     (Check the firmware matches the MCU's architecture.)"
-                ))
-            }
-        };
+    // Build the engine from the board we already extracted and bound above
+    // (rather than re-extracting from text via `from_board_file`), so a binary
+    // board — which has no text form to re-parse — co-sims like any other.
+    let mut engine = match HauksbeeEngine::from_bound(bound, Some(tmp.path()), "web-firmware") {
+        Ok(e) => e,
+        // Architecture mismatch / corrupt firmware: the static analysis still
+        // succeeded, so report co-sim failure as a note, not a hard error.
+        Err(e) => {
+            return cosim_unavailable(format!(
+                "The firmware could not be loaded onto this board's MCU: {e}. \
+                 (Check the firmware matches the MCU's architecture.)"
+            ))
+        }
+    };
 
     // Short fixed window mirroring run_headless: 1 kHz frame cadence for ~0.2s.
     let seconds = 0.2;
@@ -716,8 +742,9 @@ fn overall_headline(total: usize, serious: usize, has_heads_up: bool, bind_open:
     }
 }
 
-/// Serialize an [`analyze`] result to a JSON string for the HTTP layer.
-pub fn analyze_json(file_name: &str, contents: &str) -> String {
+/// Serialize an [`analyze`] result to a JSON string for the HTTP layer. Board
+/// bytes are passed raw so binary formats (Altium `.PcbDoc`) survive intact.
+pub fn analyze_json(file_name: &str, contents: &[u8]) -> String {
     let report = analyze(file_name, contents);
     serde_json::to_string(&report).unwrap_or_else(|e| {
         format!("{{\"ok\":false,\"error\":\"failed to serialize report: {e}\"}}")
@@ -725,11 +752,12 @@ pub fn analyze_json(file_name: &str, contents: &str) -> String {
 }
 
 /// Serialize an [`analyze_with_firmware`] result to a JSON string for the HTTP
-/// layer (the `/api/analyze-with-firmware` endpoint). Firmware bytes are passed
-/// as `&[u8]` end-to-end — never lossy-decoded — so an uploaded ELF stays intact.
+/// layer (the `/api/analyze-with-firmware` endpoint). Board AND firmware bytes
+/// are passed as `&[u8]` end-to-end — never lossy-decoded — so an uploaded
+/// binary board or ELF stays intact.
 pub fn analyze_with_firmware_json(
     file_name: &str,
-    contents: &str,
+    contents: &[u8],
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> String {
@@ -743,8 +771,8 @@ pub fn analyze_with_firmware_json(
 mod tests {
     use super::*;
 
-    const SHORTED: &str = include_str!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
-    const BLUEPILL: &str = include_str!("../../../testdata/boards/stm32_bluepill_demo.kicad_pcb");
+    const SHORTED: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    const BLUEPILL: &[u8] = include_bytes!("../../../testdata/boards/stm32_bluepill_demo.kicad_pcb");
 
     #[test]
     fn from_plain_carries_heads_up_and_serializes() {
@@ -834,11 +862,11 @@ mod tests {
 
     #[test]
     fn analyze_garbage_returns_a_friendly_error() {
-        let r = analyze("nope.txt", "this is not a board file at all");
+        let r = analyze("nope.txt", b"this is not a board file at all");
         assert!(!r.ok);
         assert!(r.error.is_some());
         // The JSON wrapper still produces valid JSON.
-        let json = analyze_json("nope.txt", "garbage");
+        let json = analyze_json("nope.txt", b"garbage");
         assert!(json.contains("\"ok\":false"));
     }
 
@@ -850,8 +878,33 @@ mod tests {
         assert!(v["sections"].as_array().unwrap().len() >= 3);
     }
 
+    // A minimal binary Altium .PcbDoc (OLE2 container, two resistors sharing a
+    // MID net), the deterministic fixture the extract crate's altium tests
+    // synthesise. Binary on purpose: its bytes do NOT survive a lossy UTF-8
+    // round-trip, which is exactly what the old web path performed.
+    const ALTIUM: &[u8] = include_bytes!("../../../testdata/boards/altium_two_resistor.PcbDoc");
+
+    #[test]
+    fn binary_altium_board_survives_the_web_path() {
+        // Regression (web bytes fix): the analyze path used to lossy-UTF8-decode
+        // the upload and only ever try the TEXT sniffer, so a binary Altium
+        // board was corrupted before parse AND never routed to its reader. Raw
+        // bytes must now extract and report like any text board.
+        let r = analyze("two_resistor.PcbDoc", ALTIUM);
+        assert!(r.ok, "binary board must extract from raw bytes: {:?}", r.error);
+        assert_eq!(r.num_components, 2, "R1 and R2 survive");
+        assert!(r.num_nets > 0, "nets survive: {}", r.num_nets);
+        // The guard that proves the bytes path is what makes it work: the SAME
+        // board pushed through the lossy round-trip the old path performed is
+        // mangled (the OLE2 magic is not valid UTF-8) and fails to read.
+        let lossy = String::from_utf8_lossy(ALTIUM).into_owned();
+        assert_ne!(lossy.as_bytes(), ALTIUM, "lossy decode must corrupt the container");
+        let r2 = analyze("two_resistor.PcbDoc", lossy.as_bytes());
+        assert!(!r2.ok, "the lossy view must NOT extract — bytes-first routing is load-bearing");
+    }
+
     // Track D: web firmware drop zone.
-    const NO_MCU: &str = include_str!("../../hauksbee-ci/examples/boards/power_resistor.kicad_pcb");
+    const NO_MCU: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/power_resistor.kicad_pcb");
     const BOOT_GATE_FW: &[u8] = include_bytes!("../../../testdata/firmware/boot_gate_a/boot_gate.elf");
 
     #[test]
