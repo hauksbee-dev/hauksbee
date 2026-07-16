@@ -49,6 +49,27 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         };
     }
 
+    // Require `$lo` < `$hi` when both are present. A swapped/degenerate pair
+    // (e.g. an opamp with rail_lo=5, rail_hi=0) is otherwise accepted as valid
+    // and gives the solver an empty/inverted saturation band, silently pinning
+    // the output. Only checked when both parse — the require_f64! calls report a
+    // missing member on their own.
+    macro_rules! check_order {
+        ($lo:expr, $hi:expr) => {
+            if let (Some(lo), Some(hi)) = (entry.params.get_f64($lo), entry.params.get_f64($hi)) {
+                if lo >= hi {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "param '{}' = {} must be strictly less than '{}' = {}",
+                            $lo, lo, $hi, hi
+                        ),
+                    });
+                }
+            }
+        };
+    }
+
     match entry.kind {
         ComponentKind::Diode => {
             require_f64!("is");
@@ -92,12 +113,18 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             require_f64!("rail_lo");
             require_f64!("rail_hi");
             check_range!("gain", 1.0, 1e9);
+            check_range!("rail_lo", -60.0, 60.0);
+            check_range!("rail_hi", -60.0, 60.0);
+            check_order!("rail_lo", "rail_hi");
         }
         ComponentKind::Comparator => {
             require_f64!("out_lo");
             require_f64!("out_hi");
             require_f64!("hysteresis");
             check_range!("hysteresis", 0.0, 5.0);
+            check_range!("out_lo", -60.0, 60.0);
+            check_range!("out_hi", -60.0, 60.0);
+            check_order!("out_lo", "out_hi");
         }
         ComponentKind::AnalogSwitch => {
             require_f64!("ron");
@@ -198,5 +225,78 @@ mod tests {
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("bf")));
+    }
+
+    #[test]
+    fn opamp_with_inverted_rails_is_rejected() {
+        // R35: rail_lo/rail_hi were required but never order-checked, so a
+        // swapped pair (rail_lo=5, rail_hi=0) passed validation and handed the
+        // solver an empty saturation band. It must now fail on the ordering.
+        let mut p = Params::default();
+        p.set_f64("gain", 1e5);
+        p.set_f64("rail_lo", 5.0);
+        p.set_f64("rail_hi", 0.0);
+        let entry = ModelEntry {
+            id: "inverted_opamp".into(),
+            kind: ComponentKind::Opamp,
+            description: String::new(),
+            r#match: Default::default(),
+            params: p,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        let errs = validate(&entry).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.message.contains("rail_lo") && e.message.contains("less than")),
+            "swapped opamp rails must be rejected: {errs:?}"
+        );
+
+        // A correctly-ordered opamp still validates.
+        let mut ok = Params::default();
+        ok.set_f64("gain", 1e5);
+        ok.set_f64("rail_lo", 0.0);
+        ok.set_f64("rail_hi", 5.0);
+        let good = ModelEntry {
+            id: "good_opamp".into(),
+            kind: ComponentKind::Opamp,
+            description: String::new(),
+            r#match: Default::default(),
+            params: ok,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
+    }
+
+    #[test]
+    fn comparator_with_inverted_outputs_is_rejected() {
+        // R35: same gap on the comparator out_lo/out_hi pair.
+        let mut p = Params::default();
+        p.set_f64("out_lo", 3.3);
+        p.set_f64("out_hi", 0.0);
+        p.set_f64("hysteresis", 0.05);
+        let entry = ModelEntry {
+            id: "inverted_comp".into(),
+            kind: ComponentKind::Comparator,
+            description: String::new(),
+            r#match: Default::default(),
+            params: p,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        let errs = validate(&entry).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.message.contains("out_lo") && e.message.contains("less than")),
+            "swapped comparator outputs must be rejected: {errs:?}"
+        );
     }
 }
