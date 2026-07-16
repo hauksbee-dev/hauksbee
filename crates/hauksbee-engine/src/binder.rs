@@ -3137,10 +3137,18 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
             // as a 5 V rail — a +15V op-amp supply solved at 5 V.
             } else if let Some(v) = positive_rail_fallback(&n) {
                 Some(v)
-            // "+5V_USB", "VCC_5V", "VDD_5V" style names: a voltage-suffixed
-            // VDD carries its magnitude explicitly, unlike the bare "VDD"
-            // excluded above. (Names with their own numeric magnitude were
-            // already handled by positive_rail_fallback above.)
+            // A supply-token-prefixed rail carries its magnitude in an embedded
+            // voltage token ("VCC_5V", "VDD_3V3", "VDD_1V8", "VCC_15V",
+            // "VBUS_25V"). This precise extraction MUST run before the loose
+            // "contains 5V"/"3V3" substring heuristics below: "VCC_15V" contains
+            // the substring "5V" and "VDD_13V3" contains "3V3", so the substring
+            // branches misread them as 5 V / 3.3 V. embedded_rail_magnitude reads
+            // the whole "15V"/"13V3" digit run and returns 15.0 / 13.3.
+            } else if let Some(v) = embedded_rail_magnitude(&n) {
+                Some(v)
+            // Fallback for voltage-suffixed names embedded_rail_magnitude cannot
+            // parse a numeric token from but that still carry a "5V"/"3V3"
+            // substring next to a supply token (e.g. "VCC_5VOLTS").
             } else if n.contains("5V")
                 && (n.starts_with('+')
                     || n.contains("VCC")
@@ -3150,12 +3158,6 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
                 Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") {
                 Some(3.3)
-            } else if let Some(v) = embedded_rail_magnitude(&n) {
-                // Voltage-suffixed rails whose magnitude is neither 5 V nor
-                // 3.3 V and whose name does not START with the digit —
-                // "VDD_1V8", "AVCC_2V5", "VCC_1V2", "VOUT_1V0". These fell
-                // through every arm and floated at 0 V.
-                Some(v)
             } else {
                 None
             }
@@ -3572,6 +3574,22 @@ mod rail_voltage_tests {
         // A plain signal net (no supply token) is never read as a rail even if
         // it happens to contain a "1V2"-looking substring.
         assert_eq!(power_rail_voltage("SENSE_1V2_MON"), None);
+    }
+
+    /// R14: a supply-token-prefixed rail whose magnitude's last digits are "5V"
+    /// or "3V3" must read its FULL magnitude, not be swallowed by the loose
+    /// "contains 5V"/"3V3" substring heuristic. "VCC_15V" is a ±15 V analog
+    /// supply, not 5 V; "VDD_13V3" is 13.3 V, not 3.3 V.
+    #[test]
+    fn token_prefixed_rails_ending_in_5v_or_3v3_read_full_magnitude() {
+        assert_eq!(power_rail_voltage("VCC_15V"), Some(15.0));
+        assert_eq!(power_rail_voltage("VDD_15V"), Some(15.0));
+        assert_eq!(power_rail_voltage("VBUS_25V"), Some(25.0));
+        assert_eq!(power_rail_voltage("VDD_13V3"), Some(13.3));
+        // The genuine token-prefixed 5 V / 3.3 V rails still resolve correctly.
+        assert_eq!(power_rail_voltage("VCC_5V"), Some(5.0));
+        assert_eq!(power_rail_voltage("VDD_3V3"), Some(3.3));
+        assert_eq!(power_rail_voltage("VCC_3.3V"), Some(3.3));
     }
 }
 

@@ -419,6 +419,62 @@ fn kicad_pro_rules_apply_assignments_and_wildcard_patterns() {
     assert!((rules.effective_clearance("/USB/USB_D+", "/USB/USB_D-") - 0.11).abs() < 1e-9);
 }
 
+#[test]
+fn diff_pair_class_with_inherited_clearance_is_kept() {
+    // R14: a diff-pair class that leaves `clearance` at 0 (KiCad's "inherit the
+    // board default") must NOT be discarded. The old `clearance_mm > 0` gate
+    // dropped it wholesale — losing the diff_pair_gap AND making its nets fall
+    // back to the wider default, so the pair at its own gap was falsely flagged.
+    let pro = r#"{
+      "net_settings": {
+        "classes": [
+          {"name": "Default", "clearance": 0.2},
+          {"name": "HS", "clearance": 0.0, "diff_pair_gap": 0.1}
+        ],
+        "netclass_patterns": [
+          {"netclass": "HS", "pattern": "/USB/USB_D?"}
+        ]
+      }
+    }"#;
+    let rules = hauksbee_extract::clearance_rules_from_kicad_pro(
+        pro,
+        ["/USB/USB_D+", "/USB/USB_D-"],
+    )
+    .expect("project rules parse");
+    // The class is retained: its nets got assigned and use the diff-pair gap.
+    assert!(
+        (rules.effective_clearance("/USB/USB_D+", "/USB/USB_D-") - 0.1).abs() < 1e-9,
+        "the diff-pair gap must survive a clearance-0 class"
+    );
+    // Its clearance-0 resolves to the board default, not a literal 0.
+    assert!((rules.clearance_for_net("/USB/USB_D+") - 0.2).abs() < 1e-9);
+}
+
+#[test]
+fn one_malformed_class_does_not_discard_the_whole_ruleset() {
+    // R14: a single class object missing its "name" must be skipped, not abort
+    // the whole parse. The old `?` propagated None out of the function, so one
+    // bad entry silently dropped EVERY class and diff-pair gap, collapsing DRC
+    // to the bare default everywhere.
+    let pro = r#"{
+      "net_settings": {
+        "classes": [
+          {"clearance": 0.5},
+          {"name": "usb", "clearance": 0.2, "diff_pair_gap": 0.11}
+        ],
+        "netclass_patterns": [
+          {"netclass": "usb", "pattern": "/USB/USB_D?"}
+        ]
+      }
+    }"#;
+    let rules = hauksbee_extract::clearance_rules_from_kicad_pro(pro, ["/USB/USB_D+"])
+        .expect("a malformed class must not abort the whole parse");
+    assert!(
+        (rules.clearance_for_net("/USB/USB_D+") - 0.2).abs() < 1e-9,
+        "the well-formed usb class must survive its malformed sibling"
+    );
+}
+
 /// Wrap copper items in a 4-layer board (F/In1/In2/B) with nets A and B.
 fn board4(items: &str) -> String {
     format!(
