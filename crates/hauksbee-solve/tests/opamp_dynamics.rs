@@ -234,3 +234,103 @@ fn ac_margins_unchanged_by_slew() {
     assert_eq!(fc_a, fc_b, "slew changed the AC gain crossover");
     assert_eq!(pm_a, pm_b, "slew changed the AC phase margin");
 }
+
+/// (4) R14: an op-amp with output dynamics that lands in a torn/partitioned
+/// island must produce the SAME output as the monolith. The partitioned engine
+/// omitted the `Device::OpAmp` arm from BOTH its reactive seed and its advance,
+/// so the op-amp's internal drive EMF was never seeded to the DC operating point
+/// nor rolled forward — `stamp_opamp` re-derived the output from a frozen v_prev
+/// of 0 every step and the bandwidth-limited output collapsed toward 0 instead
+/// of tracking gain·(v+−v−). Under `Partitioning::Auto` (fragmented by extra RC
+/// legs so the partitioned engine genuinely engages) the output must match
+/// `Partitioning::Off` and must NOT sit near 0.
+#[test]
+fn partitioned_opamp_output_matches_monolith() {
+    use hauksbee_solve::Partitioning;
+    let tau = 1e-4_f64;
+    let pole_hz = 1.0 / (std::f64::consts::TAU * tau);
+    let build = || {
+        let mut c = Circuit::new();
+        let vin = c.node("in");
+        let out = c.node("out");
+        c.add(Device::Vsource {
+            name: "VIN".into(),
+            p: vin,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::OpAmp {
+            name: "U1".into(),
+            out,
+            inp: vin,
+            inn: NodeId::GROUND,
+            reference: None,
+            gain: 1.0,
+            pole_hz: Some(pole_hz),
+            slew: None,
+            rail_lo: 0.0,
+            rail_hi: 5.0,
+        });
+        c.add(Device::Resistor {
+            name: "RL".into(),
+            a: out,
+            b: NodeId::GROUND,
+            ohms: 1e6,
+            tc1: None,
+        });
+        // Independent RC legs so the partition heuristics fragment and the
+        // partitioned engine genuinely engages (the op-amp lands in its island).
+        for k in 0..4 {
+            let leg = c.node(&format!("leg{k}"));
+            c.add(Device::Resistor {
+                name: format!("Rx{k}"),
+                a: vin,
+                b: leg,
+                ohms: 1e3,
+                tc1: None,
+            });
+            c.add(Device::Capacitor {
+                name: format!("Cx{k}"),
+                a: leg,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: Some(0.0),
+            });
+        }
+        c
+    };
+    let c = build();
+    let opts_off = SolverOptions {
+        integration: Integration::Trapezoidal,
+        step: StepControl::Fixed { dt: tau / 20.0 },
+        partitioning: Partitioning::Off,
+        ..SolverOptions::default()
+    };
+    let opts_auto = SolverOptions {
+        partitioning: Partitioning::Auto,
+        ..opts_off
+    };
+    let tstop = 20.0 * tau;
+    let off = Transient::new(opts_off).run(&c, tstop).unwrap();
+    let auto = Transient::new(opts_auto).run(&c, tstop).unwrap();
+    let w_off = off.node(&c, "out").unwrap();
+    let w_auto = auto.node(&c, "out").unwrap();
+
+    // (a) The op-amp visibly tracks its DC target (~1 V). A never-seeded and
+    // never-advanced EMF would leave the output collapsed near 0 V.
+    let last_auto = *w_auto.last().unwrap();
+    assert!(
+        (last_auto - 1.0).abs() < 0.02,
+        "partitioned op-amp must settle ~1 V, got {last_auto} \
+         (near 0 V would mean the reactive seed/advance was skipped)"
+    );
+    // (b) Auto agrees with the monolith across the whole waveform.
+    let mut max_abs = 0.0f64;
+    for (x, y) in w_off.iter().zip(w_auto) {
+        max_abs = max_abs.max((x - y).abs());
+    }
+    assert!(
+        max_abs < 5e-3,
+        "partitioned vs monolithic op-amp waveform diverged: {max_abs:.3e}"
+    );
+}

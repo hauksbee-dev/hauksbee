@@ -1133,8 +1133,7 @@ impl Mcu for QemuBackend {
             );
             return;
         }
-        let frac = (volts / mailbox::ADC_FULL_SCALE_VOLTS).clamp(0.0, 1.0);
-        let count = (frac * f64::from(mailbox::ADC_MAX_COUNT)).round() as u32;
+        let count = adc_count(volts, mailbox::ADC_FULL_SCALE_VOLTS, mailbox::ADC_MAX_COUNT);
         let Some(g) = self.gdb.as_mut() else {
             if !self.adc_no_gdb_warned {
                 self.adc_no_gdb_warned = true;
@@ -1246,9 +1245,41 @@ impl Mcu for QemuBackend {
     }
 }
 
+/// Quantize a voltage to an n-bit ADC code. An n-bit converter's transfer
+/// function is round(frac * 2^n) saturated at 2^n - 1: multiply by
+/// (`max_count` + 1) then clamp to `max_count`. Multiplying by `max_count`
+/// itself (2^n - 1) systematically under-reads sub-full-scale voltages by up to
+/// ~1 LSB and only reaches the top code at exactly full scale. Kept identical to
+/// renode's `adc_count` and the engine SPI ADC path so every backend quantizes
+/// a given voltage to the same code.
+fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
+    if !(full_scale_volts > 0.0) {
+        return 0;
+    }
+    let frac = (volts / full_scale_volts).clamp(0.0, 1.0);
+    ((frac * (f64::from(max_count) + 1.0)).round() as u32).min(max_count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R14: the QEMU ADC injection must use the 2^n transfer function (like
+    /// renode and the SPI path), not 2^n-1 which under-reads by up to ~1 LSB.
+    #[test]
+    fn adc_count_uses_2n_scaling() {
+        let max = mailbox::ADC_MAX_COUNT; // 4095 (12-bit)
+        let fs = mailbox::ADC_FULL_SCALE_VOLTS;
+        assert_eq!(adc_count(0.0, fs, max), 0);
+        assert_eq!(adc_count(fs, fs, max), max, "full scale reads the top code");
+        assert_eq!(adc_count(2.0 * fs, fs, max), max, "over-range clamps to the top code");
+        // Near-full-scale: 2^n scaling rounds up to the top code where the old
+        // 2^n-1 scaling (round(0.99976*4095)) stuck one code low at 4094.
+        let near_full = fs * (f64::from(max) - 0.5) / f64::from(max);
+        assert_eq!(adc_count(near_full, fs, max), max, "the top LSB band reaches 4095");
+        // A guard against a zero/negative reference.
+        assert_eq!(adc_count(1.0, 0.0, max), 0);
+    }
 
     #[test]
     fn esp32_config_shape() {

@@ -647,7 +647,12 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // Field range check.
     if let Some(field) = &a.field {
         let Some(&v) = snap.fields.get(field) else {
-            let known: Vec<&String> = snap.fields.keys().collect();
+            // Sort the known-field list: `snap.fields` is a HashMap, so its key
+            // order varies run to run and would leak into the report/JUnit/GitHub
+            // annotation bytes, making two identical runs differ. (Mirrors the
+            // sorted-key fix on the UART concatenation below.)
+            let mut known: Vec<&String> = snap.fields.keys().collect();
+            known.sort();
             return (
                 false,
                 format!("{id} has no state field '{field}' (have: {known:?})"),
@@ -1104,6 +1109,37 @@ mod tests {
         assert!(!key_belongs_to_ref("SW1", "SW1_heater"));
         assert!(!key_belongs_to_ref("SW1", "SW1_q1a"));
         assert!(!key_belongs_to_ref("SW1", "SW2_q1"));
+    }
+
+    // R14: a `peripheral` assertion naming a missing field lists the known
+    // fields in the FAIL detail. That list must be sorted, not in HashMap
+    // iteration order, or two identical runs emit different report/JUnit bytes.
+    #[test]
+    fn missing_peripheral_field_lists_known_fields_sorted() {
+        use super::check_peripheral;
+        use crate::runner::{PeripheralSnapshot, RunOutcome};
+        use crate::spec::Assertion;
+
+        let assertion: Assertion = toml::from_str(
+            "kind = \"peripheral\"\nid = \"HTR1\"\nfield = \"nonesuch\"\nmin = 0.0\n",
+        )
+        .unwrap();
+
+        // A snapshot with several fields inserted in non-alphabetical order.
+        let mut snap = PeripheralSnapshot::default();
+        for (k, v) in [("transitions", 3.0), ("temp_c", 42.0), ("position", 1.0), ("duty", 0.5)] {
+            snap.fields.insert(k.to_string(), v);
+        }
+        let mut out = RunOutcome::default();
+        out.peripherals.insert("HTR1".to_string(), snap);
+
+        let (ok, msg) = check_peripheral(&assertion, &out);
+        assert!(!ok, "a missing field must fail");
+        // The formatted list must be the sorted order, deterministically.
+        assert!(
+            msg.contains("[\"duty\", \"position\", \"temp_c\", \"transitions\"]"),
+            "known-field list must be sorted for reproducible report bytes: {msg}"
+        );
     }
 
     // A boot-coverage net that the firmware actively drove but that never crossed

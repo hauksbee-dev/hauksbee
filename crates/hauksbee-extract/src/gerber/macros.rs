@@ -111,14 +111,19 @@ pub fn instantiate_macro(
                     continue;
                 };
                 let (hw, hh) = (w / 2.0, h / 2.0);
-                // The CenterLine primitive carries a rotation angle; the
-                // earlier axis-aligned emission silently dropped it, so a
-                // rotated rectangular pad was reconstructed axis-aligned.
-                // Rotate each corner offset, then translate by the center
-                // (matching the Polygon primitive's handling above).
+                // The CenterLine primitive carries a rotation angle that rotates
+                // it about the MACRO ORIGIN (0,0), not about its own center — the
+                // same rule the Circle/VectorLine/Outline siblings follow. So the
+                // center itself must be carried through the rotation: form the
+                // absolute corner (x+dx, y+dy) and rotate the whole point about
+                // the origin. Rotating only the corner offsets about the (kept)
+                // center reconstructed an off-origin rotated pad at the wrong
+                // location; the two agree only when the center is at the origin
+                // or the angle is zero.
                 let (sin, cos) = decimal(&l.angle, &vars).unwrap_or(0.0).to_radians().sin_cos();
                 for (dx, dy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
-                    pts.push((x + dx * cos - dy * sin, y + dx * sin + dy * cos));
+                    let (ax, ay) = (x + dx, y + dy);
+                    pts.push((ax * cos - ay * sin, ax * sin + ay * cos));
                 }
             }
             MacroContent::Outline(o) => {
@@ -476,6 +481,28 @@ mod tests {
         let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
         assert!((maxx - minx - 2.0).abs() < 1e-6, "x span {} (expected ~2 after 90° rotation)", maxx - minx);
         assert!((maxy - miny - 4.0).abs() < 1e-6, "y span {} (expected ~4 after 90° rotation)", maxy - miny);
+    }
+
+    #[test]
+    fn center_line_rotates_about_the_macro_origin_not_its_own_center() {
+        use gerber_types::{CenterLinePrimitive, MacroBoolean};
+        // A 2×2 rectangle centred OFF the origin at (3,0), rotated 90° about the
+        // macro origin. The center itself must rotate: (3,0)→(0,3), so the hull
+        // spans x∈[-1,1], y∈[2,4]. The old handler rotated only the corner
+        // offsets and kept the center at (3,0), leaving the rect at x∈[2,4],
+        // y∈[-1,1] — a pad centroid ~3 units away from where the fab put it.
+        let cl = CenterLinePrimitive {
+            exposure: MacroBoolean::Value(true),
+            dimensions: (MacroDecimal::Value(2.0), MacroDecimal::Value(2.0)),
+            center: (MacroDecimal::Value(3.0), MacroDecimal::Value(0.0)),
+            angle: MacroDecimal::Value(90.0),
+        };
+        let m = ApertureMacro { name: "CL".to_string(), content: vec![MacroContent::CenterLine(cl)] };
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!((minx + 1.0).abs() < 1e-6 && (maxx - 1.0).abs() < 1e-6, "x∈[-1,1], got [{minx},{maxx}]");
+        assert!((miny - 2.0).abs() < 1e-6 && (maxy - 4.0).abs() < 1e-6, "y∈[2,4], got [{miny},{maxy}]");
     }
 
     #[test]
