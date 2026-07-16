@@ -1268,7 +1268,14 @@ fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) 
                     // the first did not, prefer the connected one. Two
                     // occurrences on two *different* nets bridge those nets
                     // (same physical pin): recorded for the caller to union.
-                    if let Some(slot) = existing.pins.iter_mut().find(|e| e.number == p.number) {
+                    // An empty pad number is NOT a shared physical-pad identity
+                    // (mechanical/NC/graphic pins, sloppily-imported connectors).
+                    // Only genuinely-equal, NON-EMPTY numbers denote the same pad;
+                    // blanks each stay their own pin so unrelated nets never bridge.
+                    let slot = (!p.number.is_empty())
+                        .then(|| existing.pins.iter_mut().find(|e| e.number == p.number))
+                        .flatten();
+                    if let Some(slot) = slot {
                         match (slot.net, p.net) {
                             (None, other) => slot.net = other,
                             (Some(a), Some(b)) if a != b => bridged.push((a, b)),
@@ -1300,7 +1307,12 @@ fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) 
         let mut seen: HashMap<String, usize> = HashMap::new();
         let mut deduped: Vec<Pin> = Vec::with_capacity(c.pins.len());
         for p in std::mem::take(&mut c.pins) {
-            match seen.get(&p.number).copied() {
+            // Empty pad numbers are never a shared identity — only consult and
+            // record `seen` for non-empty numbers so blanks never dedup/bridge.
+            let prior = (!p.number.is_empty())
+                .then(|| seen.get(&p.number).copied())
+                .flatten();
+            match prior {
                 Some(idx) => match (deduped[idx].net, p.net) {
                     (None, other) => deduped[idx].net = other,
                     // Same physical pin on two nets: bridge them, as above.
@@ -1308,7 +1320,9 @@ fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) 
                     _ => {}
                 },
                 None => {
-                    seen.insert(p.number.clone(), deduped.len());
+                    if !p.number.is_empty() {
+                        seen.insert(p.number.clone(), deduped.len());
+                    }
                     deduped.push(p);
                 }
             }
@@ -1701,7 +1715,66 @@ fn ps_pin_number(components: &[Component], ps: &PinSite) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_bus, expand_bus_aliased, point_strictly_inside};
+    use super::{expand_bus, expand_bus_aliased, merge_units, point_strictly_inside};
+    use crate::{Component, Pin};
+
+    fn pin(number: &str, net: i64) -> Pin {
+        Pin {
+            number: number.into(),
+            net: Some(net),
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    fn comp(reference: &str, pins: Vec<Pin>) -> Component {
+        Component {
+            reference: reference.into(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins,
+        }
+    }
+
+    #[test]
+    fn empty_pin_numbers_are_never_bridged_or_dropped() {
+        // R23 (SCH-EMPTY-PINNO-BRIDGE): pins with empty pad numbers were deduped
+        // together — the second was dropped and its net silently merged onto the
+        // first. Two blank-numbered pins on two DIFFERENT nets must each survive
+        // and must NOT bridge those nets. (A lib pin with no `(number)` yields "".)
+        let c = comp("J1", vec![pin("", 1), pin("", 2)]);
+        let (out, bridged) = merge_units(vec![c]);
+        let j1 = out.iter().find(|c| c.reference == "J1").expect("J1 kept");
+        assert_eq!(
+            j1.pins.len(),
+            2,
+            "both empty-numbered pins must survive, none dropped"
+        );
+        assert!(
+            bridged.is_empty(),
+            "empty pad numbers must not bridge unrelated nets; got {bridged:?}"
+        );
+    }
+
+    #[test]
+    fn genuine_duplicate_pad_numbers_still_collapse() {
+        // The intended collapse (a real unit-0 common pin repeated on two units,
+        // one connected) must still happen for NON-empty equal numbers.
+        let mut first = pin("7", 5);
+        first.net = None; // first occurrence unconnected
+        let c = comp("U1", vec![first, pin("7", 5)]);
+        let (out, bridged) = merge_units(vec![c]);
+        let u1 = out.iter().find(|c| c.reference == "U1").expect("U1 kept");
+        assert_eq!(u1.pins.len(), 1, "equal non-empty pad numbers still collapse");
+        assert_eq!(u1.pins[0].net, Some(5), "the connected occurrence wins");
+        assert!(bridged.is_empty());
+    }
 
     #[test]
     fn vector_bus_ascending() {

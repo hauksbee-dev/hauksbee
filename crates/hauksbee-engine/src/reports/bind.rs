@@ -29,7 +29,10 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode) -> any
             if mode == OutputMode::Plain {
                 let n = summary.critical_parts_bound_n;
                 let m = summary.critical_parts_total;
-                let open = summary.active_path_unresolved.iter().filter(|u| u.active_ic).count();
+                // Same union as the web/json personas: unresolved active ICs plus
+                // resolved-but-open active ICs (a resolved MCU with all I/O pins
+                // open makes its nets just as untrustworthy).
+                let open = crate::result::coverage_open_active_refs(&summary).len();
                 println!();
                 if open > 0 {
                     println!(
