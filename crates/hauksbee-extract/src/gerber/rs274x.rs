@@ -169,8 +169,19 @@ struct Plotter<'a> {
     interp: InterpolationMode,
     /// Inside a G36 region: accumulating contour points.
     region: Option<Vec<(f64, f64)>>,
+    /// Polarity in effect when the current region OPENED. A region is a single
+    /// primitive, so its whole fill takes the polarity at G36 time; captured
+    /// here so a clear (LPC) region is dropped like a clear draw/flash, instead
+    /// of being materialized as phantom additive copper.
+    region_dark: bool,
     /// Current load polarity. Clear (LPC) primitives are skipped (see header).
     dark: bool,
+    /// Arc interpolation quadrant mode. `false` = multi-quadrant (G75, the
+    /// modern default and what KiCad emits): I/J are signed vectors to the
+    /// centre. `true` = single-quadrant (G74, legacy CAM dialects): I/J are
+    /// unsigned magnitudes and the true centre is one of the four ±I,±J
+    /// candidates, chosen per RS-274X §4.5.
+    single_quadrant: bool,
     out: Vec<CopperPrim>,
 }
 
@@ -188,7 +199,9 @@ impl<'a> Plotter<'a> {
             aperture: None,
             interp: InterpolationMode::Linear,
             region: None,
+            region_dark: true,
             dark: true,
+            single_quadrant: false,
             out: Vec::new(),
         }
     }
@@ -211,8 +224,15 @@ impl<'a> Plotter<'a> {
         match cmd {
             Command::FunctionCode(FunctionCode::GCode(g)) => match g {
                 GCode::InterpolationMode(m) => self.interp = *m,
-                GCode::RegionMode(true) => self.region = Some(Vec::new()),
+                GCode::RegionMode(true) => {
+                    // A region takes the polarity in effect when it opens.
+                    self.region_dark = self.dark;
+                    self.region = Some(Vec::new());
+                }
                 GCode::RegionMode(false) => self.close_region(),
+                GCode::QuadrantMode(m) => {
+                    self.single_quadrant = matches!(m, gerber_types::QuadrantMode::Single);
+                }
                 _ => {}
             },
             Command::FunctionCode(FunctionCode::DCode(d)) => match d {
@@ -378,6 +398,54 @@ impl<'a> Plotter<'a> {
         });
     }
 
+    /// Single-quadrant (G74) centre selection: try the four ±I,±J offsets and
+    /// return the one whose start/end radii agree best while keeping the arc
+    /// sweep within 90 degrees. `None` if no candidate has a positive radius.
+    #[allow(clippy::too_many_arguments)]
+    fn single_quadrant_center(
+        &self,
+        sx: f64,
+        sy: f64,
+        ex: f64,
+        ey: f64,
+        ox: f64,
+        oy: f64,
+        ccw: bool,
+    ) -> Option<(f64, f64)> {
+        use std::f64::consts::{FRAC_PI_2, TAU};
+        let mut best: Option<(f64, f64)> = None;
+        let mut best_score = f64::INFINITY;
+        for &(sox, soy) in &[(ox, oy), (-ox, oy), (ox, -oy), (-ox, -oy)] {
+            let (cx, cy) = (sx + sox, sy + soy);
+            let rs = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+            if rs <= f64::EPSILON {
+                continue;
+            }
+            let re = ((ex - cx).powi(2) + (ey - cy).powi(2)).sqrt();
+            let a0 = (sy - cy).atan2(sx - cx);
+            let mut a1 = (ey - cy).atan2(ex - cx);
+            if ccw {
+                while a1 <= a0 {
+                    a1 += TAU;
+                }
+            } else {
+                while a1 >= a0 {
+                    a1 -= TAU;
+                }
+            }
+            let sweep = (a1 - a0).abs();
+            // Consistent radius, and penalise a sweep past the 90-degree
+            // single-quadrant limit so the correct centre wins.
+            let score = (rs - re).abs()
+                + if sweep > FRAC_PI_2 + 1e-6 { 1e3 } else { 0.0 };
+            if score < best_score {
+                best_score = score;
+                best = Some((cx, cy));
+            }
+        }
+        best
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn push_arc(
         &mut self,
@@ -390,9 +458,18 @@ impl<'a> Plotter<'a> {
         ccw: bool,
         r: f64,
     ) {
-        let cx = sx + ox;
-        let cy = sy + oy;
-        let radius = (ox * ox + oy * oy).sqrt();
+        let (cx, cy) = if self.single_quadrant {
+            // G74: I/J are unsigned magnitudes, so the true centre is one of the
+            // four ±I,±J offsets from the start. Per RS-274X §4.5, pick the
+            // candidate whose start- and end-radius agree and whose sweep (in
+            // the requested direction) is <= 90 degrees — the single-quadrant
+            // guarantee. Fall back to the multi-quadrant formula if none fits.
+            self.single_quadrant_center(sx, sy, ex, ey, ox, oy, ccw)
+                .unwrap_or((sx + ox, sy + oy))
+        } else {
+            (sx + ox, sy + oy)
+        };
+        let radius = ((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy)).sqrt();
         if radius <= f64::EPSILON {
             self.push_capsule(sx, sy, ex, ey, r);
             return;
@@ -423,7 +500,10 @@ impl<'a> Plotter<'a> {
 
     fn close_region(&mut self) {
         if let Some(pts) = self.region.take() {
-            if pts.len() >= 3 {
+            // A clear-polarity region is a cut-out, not copper — dropping it
+            // matches the draw/flash handling and the module's polarity
+            // contract. Materializing it would union nets across a gap.
+            if self.region_dark && pts.len() >= 3 {
                 self.out.push(CopperPrim {
                     shape: Shape::Polygon { pts, r: 0.0 },
                     kind: PrimKind::Region,
@@ -532,6 +612,90 @@ M02*
             assert!((c.r - 0.5).abs() < 1e-6);
         } else {
             panic!("round flash should be a disc/capsule");
+        }
+    }
+
+    // A G36/G37 square region; body differs only by the leading %LPC*%.
+    fn region_layer(polarity: &str) -> &'static str {
+        // (returns one of the two consts below)
+        if polarity == "clear" {
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+%LPC*%
+G36*
+X0Y0D02*
+X5000000Y0D01*
+X5000000Y5000000D01*
+X0Y5000000D01*
+X0Y0D01*
+G37*
+M02*
+"
+        } else {
+            "\
+%FSLAX46Y46*%
+%MOMM*%
+G36*
+X0Y0D02*
+X5000000Y0D01*
+X5000000Y5000000D01*
+X0Y5000000D01*
+X0Y0D01*
+G37*
+M02*
+"
+        }
+    }
+
+    #[test]
+    fn clear_polarity_region_is_dropped() {
+        // R6: a region drawn under LPC (clear) is a cut-out, not copper — it
+        // must not materialize as an additive Region primitive (which would
+        // union nets across the gap). A dark region still does.
+        let dark = parse_layer(region_layer("dark")).unwrap();
+        assert!(
+            dark.iter().any(|p| p.kind == PrimKind::Region),
+            "a DARK region must materialize as copper"
+        );
+        let clear = parse_layer(region_layer("clear")).unwrap();
+        assert!(
+            !clear.iter().any(|p| p.kind == PrimKind::Region),
+            "a CLEAR (LPC) region must be dropped, not additive copper"
+        );
+    }
+
+    #[test]
+    fn single_quadrant_g74_arc_uses_correct_center() {
+        // R6: a quarter arc from (1,0) to (0,1). Under G74 the I/J offset is an
+        // unsigned magnitude (I1 J0); the true centre is the origin (radius 1).
+        // The old multi-quadrant formula used centre = start + (I,J) = (2,0),
+        // throwing every arc point up to 2 mm off its real position.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,0.100000*%
+G74*
+G03*
+D10*
+X1000000Y0D02*
+X0Y1000000I1000000J0D01*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let tracks: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Track).collect();
+        assert!(!tracks.is_empty(), "the arc should produce track segments");
+        for p in &tracks {
+            if let Shape::Capsule(c) = &p.shape {
+                for (x, y) in [(c.ax, c.ay), (c.bx, c.by)] {
+                    let radius = (x * x + y * y).sqrt();
+                    assert!(
+                        (radius - 1.0).abs() < 0.05,
+                        "arc point ({x:.3},{y:.3}) is {radius:.3} mm from the origin, \
+                         expected ~1 mm (a wrong centre puts it up to 3 mm out)"
+                    );
+                }
+            }
         }
     }
 

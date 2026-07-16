@@ -70,6 +70,7 @@ fn outcome_with(
         peripherals: HashMap::new(),
         rail_windows: HashMap::new(),
         protection_tripped: HashMap::new(),
+        protection_tripped_scoped: HashMap::new(),
         sim_ms,
         first_reach_ms: HashMap::new(),
         driven_nets: Default::default(),
