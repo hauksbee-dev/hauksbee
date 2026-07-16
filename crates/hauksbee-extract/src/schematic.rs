@@ -1359,9 +1359,36 @@ fn expand_bus_aliased(
     name: &str,
     alias: &dyn Fn(&str) -> Option<Vec<String>>,
 ) -> Option<Vec<String>> {
+    expand_bus_aliased_depth(name, alias, 0)
+}
+
+/// Largest vector-bus span we will materialize. A KiCad bus like `D[0..7]` is a
+/// handful of members; a malformed or hostile label such as `A[0..100000000]`
+/// would otherwise eagerly allocate a hundred-million-element Vec and OOM. Real
+/// EDA tools cap bus width similarly.
+const MAX_BUS_WIDTH: u64 = 4096;
+/// Bus labels nest at most a couple of levels in practice (`MEM{A[1..0] WE}`);
+/// a pathological `A{B{C{...}}}` would otherwise recurse to stack-overflow.
+const MAX_BUS_NEST_DEPTH: usize = 16;
+
+fn expand_bus_aliased_depth(
+    name: &str,
+    alias: &dyn Fn(&str) -> Option<Vec<String>>,
+    depth: usize,
+) -> Option<Vec<String>> {
+    if depth > MAX_BUS_NEST_DEPTH {
+        return None;
+    }
     // Group bus: optional prefix then `{ ... }`.
     if let Some(open) = name.find('{') {
-        if name.ends_with('}') {
+        // KiCad text markup — overbar `~{X}`, subscript `_{X}`, superscript
+        // `^{X}` — is NOT bus syntax: the char immediately before `{` is the
+        // markup marker and KiCad keeps the literal text (`~{RST}`) as the net
+        // name. Treating it as a group bus (prefix `~`, member `~.RST`) silently
+        // splits ubiquitous active-low nets like `~{RESET}` / `~{CS}`. Only a
+        // `{` that is not a markup brace opens a group bus.
+        let is_markup = open > 0 && matches!(name.as_bytes()[open - 1], b'~' | b'_' | b'^');
+        if !is_markup && name.ends_with('}') {
             let prefix = &name[..open];
             let inner = &name[open + 1..name.len() - 1];
             let mut out = Vec::new();
@@ -1369,7 +1396,7 @@ fn expand_bus_aliased(
                 // A token expands as: a nested vector/group bus, OR a bus-alias
                 // reference (`{ALIAS}` is written bare inside the group), OR a
                 // literal single member.
-                let expanded = expand_bus_aliased(tok, alias)
+                let expanded = expand_bus_aliased_depth(tok, alias, depth + 1)
                     .or_else(|| alias(tok))
                     .unwrap_or_else(|| vec![tok.to_string()]);
                 for m in expanded {
@@ -1396,6 +1423,12 @@ fn expand_bus_aliased(
     let (lo, hi) = inner.split_once("..")?;
     let lo: i64 = lo.trim().parse().ok()?;
     let hi: i64 = hi.trim().parse().ok()?;
+    // Reject an absurd span before allocating: bus widths past MAX_BUS_WIDTH are
+    // malformed, not a real bus, and materializing the range would OOM.
+    let width = hi.checked_sub(lo)?.unsigned_abs();
+    if width >= MAX_BUS_WIDTH {
+        return None;
+    }
     let range: Vec<i64> = if lo <= hi {
         (lo..=hi).collect()
     } else {
@@ -1617,6 +1650,45 @@ mod tests {
         // A '[' that does not close, or a non-numeric range, is not a vector.
         assert_eq!(expand_bus("D[0..]"), None);
         assert_eq!(expand_bus("D[x..y]"), None);
+    }
+
+    #[test]
+    fn text_markup_labels_are_not_group_buses() {
+        // KiCad text markup — overbar `~{...}`, subscript `_{...}`, superscript
+        // `^{...}` — is a single net name, NOT a group bus. Reading `~{RST}` as
+        // bus prefix `~` with member `~.RST` silently split ubiquitous active-low
+        // nets. These must be plain labels (None), keeping their literal text as
+        // the net name.
+        assert_eq!(expand_bus("~{RST}"), None);
+        assert_eq!(expand_bus("~{RESET}"), None);
+        assert_eq!(expand_bus("V_{ref}"), None);
+        assert_eq!(expand_bus("N^{2}"), None);
+        // A genuine named group bus (marker char is a normal letter) still works.
+        assert_eq!(
+            expand_bus("MEM{A B}"),
+            Some(vec!["MEM.A".into(), "MEM.B".into()])
+        );
+    }
+
+    #[test]
+    fn absurd_vector_bus_span_is_rejected_not_allocated() {
+        // A malformed / hostile range must not eagerly materialize a giant Vec
+        // (OOM). Past MAX_BUS_WIDTH the label is treated as a non-bus.
+        assert_eq!(expand_bus("A[0..100000000]"), None);
+        assert_eq!(expand_bus("A[0..4096]"), None); // width 4096 == cap: rejected
+        // A sane bus just under the cap still expands.
+        assert_eq!(expand_bus("A[0..2]"), Some(vec!["A0".into(), "A1".into(), "A2".into()]));
+    }
+
+    #[test]
+    fn deeply_nested_group_bus_does_not_stack_overflow() {
+        // A pathological brace-nested label must TERMINATE (the depth cap stops
+        // the recursion; the over-deep inner token then falls back to a literal)
+        // rather than recurse to a stack overflow. The exact members don't matter
+        // — that the call returns at all is the guarantee under test.
+        let deep = format!("{}{}", "A{".repeat(64), "}".repeat(64));
+        let out = expand_bus(&deep).expect("depth-capped expansion still terminates");
+        assert!(!out.is_empty());
     }
 
     #[test]
