@@ -474,8 +474,13 @@ impl Mcp3008 {
     }
 
     fn counts(&self, ch: usize) -> u16 {
+        // MCP3008 datasheet (DS21295) transfer function: code = 1024 * Vin/Vref,
+        // i.e. LSB = Vref/2^n = Vref/1024, with the code saturating at 2^n-1 =
+        // 1023. Multiplying the fraction by 1023 (2^n-1) systematically
+        // under-reads by up to ~1 LSB; use the 2^n full scale with a top-code
+        // clamp for the Vin==Vref edge.
         let frac = (self.channels[ch] / self.vref).clamp(0.0, 1.0);
-        (frac * 1023.0).round() as u16
+        ((frac * 1024.0).round() as u16).min(1023)
     }
 }
 
@@ -556,7 +561,31 @@ mod tests {
         let hi = bus.transfer(3 << 4); // single-ended, channel 3
         let lo = bus.transfer(0x00);
         let counts = (((hi & 0x03) as u16) << 8) | lo as u16;
-        // 2.5/5.0 * 1023 ≈ 512.
-        assert!((counts as i32 - 512).abs() <= 2, "counts {counts} not ~512");
+        // 2.5/5.0 * 1024 = 512.
+        assert!((counts as i32 - 512).abs() <= 1, "counts {counts} not ~512");
+    }
+
+    #[test]
+    fn mcp3008_uses_2n_full_scale_not_2n_minus_1() {
+        // Datasheet transfer function is code = 1024 * Vin/Vref (LSB = Vref/1024),
+        // saturating at 1023 — NOT code = 1023 * Vin/Vref which under-reads by up
+        // to ~1 LSB. Read the code directly off the converter.
+        let read = |v: f64| {
+            let mut adc = Mcp3008::new(5.0);
+            adc.set_channel(0, v);
+            let mut bus = SpiBus::new("SPI", Box::new(adc));
+            bus.transfer(0x01);
+            let hi = bus.transfer(0 << 4);
+            let lo = bus.transfer(0x00);
+            (((hi & 0x03) as u16) << 8) | lo as u16
+        };
+        // One-quarter scale: 1024 * 0.25 = 256 exactly (1023*0.25 = 255.75 → 256
+        // by rounding, so pick a fraction where the two formulas diverge).
+        // 1/1024 of Vref should read code 1 (LSB = Vref/1024).
+        assert_eq!(read(5.0 / 1024.0), 1, "one LSB (Vref/1024) must read code 1");
+        // Full scale saturates at 1023, never overflowing the 10-bit field.
+        assert_eq!(read(5.0), 1023, "Vin==Vref must saturate at 1023");
+        // Mid-scale is exact.
+        assert_eq!(read(2.5), 512, "half scale = 1024*0.5 = 512");
     }
 }

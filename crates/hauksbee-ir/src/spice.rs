@@ -3570,7 +3570,18 @@ fn rewrite_behavioral_expr(
                     b[i]
                 )));
             }
-            out.extend(b[start..i].iter());
+            // SPICE numeric literals are REAL numbers, but evalexpr parses a
+            // literal with no `.` or exponent as an integer and then does integer
+            // arithmetic — `/` truncates and `+ - *` error on overflow. Force
+            // float semantics by appending `.0` to a bare integer literal, so
+            // e.g. `3/2` evaluates to 1.5 (not 1) and large products don't
+            // overflow-error.
+            let lit = &b[start..i];
+            out.extend(lit.iter());
+            let is_float = lit.iter().any(|&c| c == '.' || c == 'e' || c == 'E');
+            if !is_float {
+                out.push_str(".0");
+            }
             continue;
         }
         if c.is_ascii_alphabetic() || c == '_' {
@@ -5328,6 +5339,36 @@ mod tests {
                 assert!(deps.is_empty());
                 let v = expr.eval(&[], 0.25).unwrap();
                 assert!((v - 0.001 * (6.28f64 * 0.25).sin()).abs() < 1e-15);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Integer-looking literals in a behavioral expression are REAL numbers, not
+    /// integers: `3/2` is 1.5 (not evalexpr's truncating 1), and a large product
+    /// does not integer-overflow-error. The loader appends `.0` to bare integer
+    /// literals so evalexpr uses float arithmetic.
+    #[test]
+    fn behavioral_integer_literals_are_real_not_truncating() {
+        let net = "b\n\
+                   B1 out 0 V={3/2}\n\
+                   B2 d 0 V={7 % 4 + 1000000 * 1000000}\n\
+                   RL out 0 1k\n\
+                   Rd d 0 1k\n\
+                   .end\n";
+        let c = SpiceLoader::load(net).unwrap();
+        match &c.devices[dev_id(&c, "B1").0 as usize] {
+            Device::Behavioral { expr, .. } => {
+                let v = expr.eval(&[], 0.0).unwrap();
+                assert!((v - 1.5).abs() < 1e-12, "3/2 must be real 1.5, got {v}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match &c.devices[dev_id(&c, "B2").0 as usize] {
+            Device::Behavioral { expr, .. } => {
+                // 7 % 4 == 3.0 (real remainder), + 1e12 with no overflow error.
+                let v = expr.eval(&[], 0.0).unwrap();
+                assert!((v - (3.0 + 1e12)).abs() < 1.0, "got {v}");
             }
             other => panic!("{other:?}"),
         }

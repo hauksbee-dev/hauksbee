@@ -237,10 +237,19 @@ pub fn run_tran(
 }
 
 /// The values a single `.dc` source visits, `start` to `stop` inclusive by
-/// `step`. The loader guarantees a nonzero step whose sign reaches `stop`, so a
-/// simple integer count is safe and float drift never overshoots the endpoint.
+/// `step`. The loader guarantees a nonzero step whose sign reaches `stop`.
+///
+/// The interval count is floored WITH a small tolerance: `(stop-start)/step` is
+/// mathematically an integer for a well-formed sweep (e.g. `0..1 step 0.1` → 10),
+/// but `step` values like 0.1 are not exactly representable in f64, so the ratio
+/// can land at `9.9999999…` and a bare `floor()` would drop the final `stop`
+/// point. Adding a relative epsilon before flooring keeps the intended endpoint.
 fn dc_sweep_values(start: f64, stop: f64, step: f64) -> Vec<f64> {
-    let n = ((stop - start) / step).floor().max(0.0) as u64;
+    let ratio = (stop - start) / step;
+    // Tolerance scaled to the magnitude of the ratio so it stays effective for
+    // large sweeps, but never large enough to invent an extra point.
+    let eps = 1e-9 * ratio.abs().max(1.0);
+    let n = (ratio + eps).floor().max(0.0) as u64;
     (0..=n).map(|i| start + step * i as f64).collect()
 }
 
@@ -420,6 +429,21 @@ mod tests {
             assert!((row[0] - vin).abs() < 1e-9, "sweep value");
             assert!((row[1] - 2.0 * vin).abs() < 1e-6, "gain-2 output");
         }
+    }
+
+    #[test]
+    fn dc_sweep_includes_endpoint_under_float_drift() {
+        // 0..1 by 0.1: the ratio (1-0)/0.1 is mathematically 10 but lands at
+        // 9.9999999… in f64, so a bare floor() dropped the final 1.0 point (10
+        // points instead of 11). The tolerance keeps the endpoint.
+        let vals = dc_sweep_values(0.0, 1.0, 0.1);
+        assert_eq!(vals.len(), 11, "must include both endpoints: {vals:?}");
+        assert!((vals.first().copied().unwrap()).abs() < 1e-12);
+        assert!((vals.last().copied().unwrap() - 1.0).abs() < 1e-9, "stop endpoint present");
+        // A non-integer number of steps must NOT gain a spurious extra point:
+        // 0..0.95 by 0.1 covers 0.0..0.9 (10 points), not 1.05.
+        let vals2 = dc_sweep_values(0.0, 0.95, 0.1);
+        assert_eq!(vals2.len(), 10, "no phantom endpoint: {vals2:?}");
     }
 
     #[test]
