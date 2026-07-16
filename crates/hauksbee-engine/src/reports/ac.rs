@@ -154,6 +154,22 @@ pub fn emit(
         }
     }
 
+    // Optional CSV of the full sweep. Written here — BEFORE the `--json` early
+    // return — so the artifact is produced on BOTH surfaces: a caller that wants
+    // structured JSON on stdout AND a CSV file on disk (a common CI/tooling
+    // pattern) gets both from one run. Placed after the validity guards so an
+    // invalid/empty sweep still refuses first and writes no misleading CSV.
+    if let Some(path) = csv {
+        let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
+        for net in &nodes {
+            for (f, db, ph) in resp.bode(circuit, net) {
+                out.push_str(&format!("{net},{f},{db},{ph}\n"));
+            }
+        }
+        std::fs::write(path, out)?;
+        eprintln!("wrote {}", path.display());
+    }
+
     if json {
         // Valid sweep: emit the structured bode per net. Skip empty/not-found
         // nets AND any individual net that is all-sentinel (no path to THIS net),
@@ -299,18 +315,6 @@ pub fn emit(
             }
             _ => println!("  phase crossover    : none in band (phase never reaches -180 deg)"),
         }
-    }
-
-    // Optional CSV of the full sweep.
-    if let Some(path) = csv {
-        let mut out = String::from("net,freq_hz,mag_db,phase_deg\n");
-        for net in &nodes {
-            for (f, db, ph) in resp.bode(circuit, net) {
-                out.push_str(&format!("{net},{f},{db},{ph}\n"));
-            }
-        }
-        std::fs::write(path, out)?;
-        eprintln!("wrote {}", path.display());
     }
 
     Ok(())

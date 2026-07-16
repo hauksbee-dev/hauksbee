@@ -286,6 +286,58 @@ fn ac_loop_cli_reports_real_one_pole_phase_margin() {
 }
 
 #[test]
+fn ac_csv_is_written_even_with_json() {
+    // R19: `--ac-csv FILE` and `--json` are orthogonal — a CI/tooling caller
+    // legitimately wants structured JSON on stdout AND a CSV artifact on disk.
+    // The CSV writer used to sit AFTER the `--json` early return, so passing both
+    // silently dropped the CSV (never written, no diagnostic, exit 0).
+    let b = ac_loop_board();
+    let models = ac_loop_models();
+    let csv_path = std::env::temp_dir().join(format!(
+        "hauksbee_ac_csv_{}_{}.csv",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&csv_path);
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--models-dir",
+        models.to_str().unwrap(),
+        "--ac",
+        "1:1e8:50",
+        "--ac-node",
+        "OUT",
+        "--ac-csv",
+        csv_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        out.status.success(),
+        "valid AC sweep must succeed; status={:?}; stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // stdout is still valid JSON (the --json surface is unaffected).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("--json must still emit parseable JSON");
+    assert_eq!(v["ac"]["valid"], serde_json::Value::Bool(true), "sweep valid: {stdout}");
+    // AND the CSV file was written with the header and at least one data row.
+    let csv = std::fs::read_to_string(&csv_path)
+        .unwrap_or_else(|e| panic!("--ac-csv must be written even with --json: {e}"));
+    assert!(csv.starts_with("net,freq_hz,mag_db,phase_deg\n"), "CSV header present: {csv:.80}");
+    assert!(
+        csv.lines().skip(1).any(|l| l.starts_with("OUT,")),
+        "CSV carries the requested net's sweep rows: {csv:.200}"
+    );
+    let _ = std::fs::remove_file(&csv_path);
+}
+
+#[test]
 fn ac_partial_json_surfaces_a_not_found_node() {
     // R12: a valid sweep that requests one REAL net (OUT) and one that doesn't
     // exist must still name the missing net in the JSON — the text path warns
