@@ -381,17 +381,27 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
     if dissipating_rows > 0 {
         return Validity::valid();
     }
-    // Zero rows. If there are unresolved active ICs ON THE LIVE CIRCUIT, the
-    // table is empty because the dissipating devices are open, not because the
-    // board runs cool. (active_ics_unresolved is keyed on connected-net ICs, so
-    // refs is always non-empty here.)
-    if summary.active_ics_unresolved() {
-        let refs: Vec<String> = summary
+    // Zero rows. If there are active ICs left OPEN on the live circuit — whether
+    // UNRESOLVED (no model) or RESOLVED-BUT-OPEN (bound but with an open/undriven
+    // pin) — the table is empty because those dissipating devices are open, not
+    // because the board runs cool. Both cases make the thermal result equally
+    // untrustworthy, so both must escalate to invalid (exit 3); testing only the
+    // unresolved case let a resolved-but-open power IC report a false "runs cool"
+    // pass. Mirrors render_banner / thermal_coverage, which OR the two.
+    if summary.active_ics_unresolved() || summary.active_open_on_live_circuit() {
+        let mut refs: Vec<String> = summary
             .active_ic_unresolved()
             .map(|u| u.reference.clone())
             .collect();
+        refs.extend(
+            summary
+                .resolved_but_open_active
+                .iter()
+                .filter(|u| u.active_ic)
+                .map(|u| u.reference.clone()),
+        );
         Validity::invalid(format!(
-            "thermal table empty: no resolved dissipating devices; unresolved driving ICs: {}",
+            "thermal table empty: no resolved dissipating devices; driving ICs open on the live circuit: {}",
             refs.join(", ")
         ))
     } else {
@@ -1394,6 +1404,33 @@ mod tests {
         let v = thermal_validity(0, &summary);
         assert!(!v.valid);
         assert!(v.reason.unwrap().contains("U2"));
+    }
+
+    #[test]
+    fn thermal_invalid_when_resolved_but_open_active_ic_leaves_empty_table() {
+        // R36: an empty thermal table with a RESOLVED-BUT-OPEN power IC (bound to
+        // a model, but open on the live circuit) used to report a false "runs
+        // cool" pass — thermal_validity only escalated the UNRESOLVED case. Both
+        // open cases make the table equally untrustworthy and must exit 3.
+        let mut report = BindReport::default();
+        report.push(row(
+            "U1",
+            BindOutcome::Mcu {
+                backend: "renode:stm32f4".into(),
+            },
+            Some("U1: all I/O pins open (undriven)"),
+        ));
+        let summary = BindSummary::from_report(&report);
+        // The distinguishing condition: unresolved is FALSE (it bound), but the
+        // part is open on the live circuit.
+        assert!(!summary.active_ics_unresolved(), "resolved MCU is not 'unresolved'");
+        assert!(summary.active_open_on_live_circuit());
+        let v = thermal_validity(0, &summary);
+        assert!(
+            !v.valid,
+            "an empty table hiding a resolved-but-open power IC must be invalid, not 'runs cool'"
+        );
+        assert!(v.reason.unwrap().contains("U1"), "the reason must name the open IC");
     }
 
     #[test]
