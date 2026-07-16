@@ -54,8 +54,19 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 })
                 .unwrap_or_default();
             let mut properties = Vec::new();
+            let mut dnp = false;
             for prop in comp.find_all("property") {
-                if let (Some(k), Some(v)) = (prop.find_value("name"), prop.find_value("value")) {
+                let key = prop.find_value("name");
+                let val = prop.find_value("value");
+                if key
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("dnp") || n.eq_ignore_ascii_case("exclude_from_board"))
+                {
+                    // KiCad emits this property (usually value-less) only for DNP
+                    // parts. Presence => DNP, unless an explicit falsey value overrides.
+                    dnp = !matches!(val.as_deref(), Some("no") | Some("false") | Some("0"));
+                }
+                if let (Some(k), Some(v)) = (key, val) {
                     properties.push((k, v));
                 }
             }
@@ -67,10 +78,10 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
                 position: None,
                 layer: String::new(),
                 properties,
-                // KiCad netlists encode DNP as a property field; not threaded
-                // here yet (the corpus's DNP-sensitive boards parse from the PCB
-                // / schematic paths, which do set this).
-                dnp: false,
+                // KiCad netlists encode DNP as a (usually value-less) property
+                // child; thread it through so DNP-aware analysis behaves the same
+                // regardless of ingestion path (PCB / schematic already do).
+                dnp,
                 pins: Vec::new(),
             });
         }
