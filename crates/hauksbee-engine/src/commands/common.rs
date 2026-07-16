@@ -52,7 +52,7 @@ pub fn serve(
         // live sim are one app). Same callback `hauksbee serve` uses, so the two
         // commands converge on one server path with a preload difference only.
         let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
-            |name: &str, contents: &str, fw: Option<(&str, &[u8])>| match fw {
+            |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| match fw {
                 Some((fw_name, fw_bytes)) => {
                     crate::analyze_with_firmware_json(name, contents, fw_name, fw_bytes)
                 }
