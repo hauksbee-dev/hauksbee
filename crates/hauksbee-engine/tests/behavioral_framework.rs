@@ -551,6 +551,114 @@ fn converter_input_limit_caps_the_draw() {
 }
 
 #[test]
+fn converter_input_limit_settles_and_conserves_energy() {
+    // Regression: the input-limit fold used to scale the FRESH setpoint by
+    // limit/iin instead of anchoring to the previous command, so a load beyond
+    // the input limit bang-banged forever between full setpoint (~14.39 V) and
+    // the throttled point (~12.24 V) — and on the full-setpoint chunks the
+    // input Isource still carried the previous under-limit current while the
+    // output delivered full power, manufacturing energy. The clamped
+    // `converter_iin()` accessor masked all of this from the test above.
+    let mut h = converter_harness(400_000.0, 2.0); // 5 A limit, load wants ~5.9 A
+    let limit = h.dev.converter_iin_limit().unwrap();
+    let mut prev = h.v("BAT");
+    for _ in 0..8 {
+        h.run(1, 5e-4);
+        let v_bat = h.v("BAT");
+        assert!(
+            (v_bat - prev).abs() < 0.05,
+            "CC operating point must settle, got a {:.3} V chunk-to-chunk swing ({prev:.3} V -> {v_bat:.3} V)",
+            (v_bat - prev).abs()
+        );
+        prev = v_bat;
+
+        // Per-chunk energy sanity: the output may never deliver more power
+        // than the input draws (eff < 1), and the draw must be truly bounded
+        // by the programmed limit — not merely clamped in the accessor.
+        let iin = h.dev.converter_iin().unwrap();
+        let p_in = h.v("PVIN") * iin;
+        let p_out = v_bat * v_bat / 2.0; // R_load = 2 ohms
+        assert!(
+            p_out <= p_in + 1e-6,
+            "output power {p_out:.2} W exceeds input power {p_in:.2} W — energy manufactured"
+        );
+        assert!(
+            iin <= limit + 0.05,
+            "input draw {iin:.3} A must be bounded by the programmed limit {limit:.3} A"
+        );
+    }
+}
+
+/// Build a light-load converter with a literal efficiency and no input limit.
+fn efficiency_harness(eff: f64) -> Harness {
+    let mut c = Circuit::new();
+    let pvin = c.node("PVIN");
+    let bat = c.node("BAT");
+    let brick = c.node("BRICK");
+    stamp_rail(&mut c, brick, "Vbrick", 20.0);
+    c.add(Device::Resistor {
+        name: "Rbrick".into(),
+        a: brick,
+        b: pvin,
+        ohms: 0.1,
+        tc1: None,
+    });
+    c.add(Device::Resistor {
+        name: "Rload".into(),
+        a: bat,
+        b: NodeId::GROUND,
+        ohms: 100.0,
+        tc1: None,
+    });
+    let toml = format!(
+        r#"
+[converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 14.4
+efficiency = {eff}
+"#
+    );
+    let model: Behavioral = toml::from_str(&toml).unwrap();
+    assert!(
+        hauksbee_models::behavioral::validate_behavioral(&model).is_empty(),
+        "efficiency {eff} is in (0,1] and must validate"
+    );
+    let mut roles = BTreeMap::new();
+    roles.insert("pvin".to_string(), pvin);
+    roles.insert("bat".to_string(), bat);
+    let dev = BehavioralDevice::stamp(&mut c, "U2", &model, &Params::default(), &roles, &|_| None)
+        .unwrap();
+    let mut h = Harness::new(c, dev);
+    h.run(40, 5e-4);
+    h
+}
+
+#[test]
+fn converter_efficiency_below_5_percent_is_honoured() {
+    // Regression: the runtime clamped efficiency to [0.05, 1.0] while
+    // validation accepts any value in (0,1], so a 2%-efficient stage passed
+    // validation but silently ran at 5%, under-reporting the reflected input
+    // draw 2.5x. Halving the efficiency must double the reflected draw.
+    let h02 = efficiency_harness(0.02);
+    let h04 = efficiency_harness(0.04);
+    let iin_02 = h02.dev.converter_iin().unwrap();
+    let iin_04 = h04.dev.converter_iin().unwrap();
+    let ratio = iin_02 / iin_04;
+    assert!(
+        (ratio - 2.0).abs() < 0.16,
+        "halving efficiency must double the input draw, got {iin_02:.3} A / {iin_04:.3} A = {ratio:.3}"
+    );
+    // And the absolute reflection is iin = Vout*Iout/(eff*Vin) at eff = 0.02.
+    let expected = (h02.v("BAT") * h02.v("BAT") / 100.0) / (0.02 * h02.v("PVIN"));
+    assert!(
+        (iin_02 - expected).abs() / expected < 0.02,
+        "2%-efficient stage must reflect {expected:.3} A, got {iin_02:.3} A"
+    );
+}
+
+#[test]
 fn program_resistor_changes_the_limit_with_no_model_edit() {
     // The load-bearing physics: a different on-board programming resistor
     // changes the input-current limit, read off the board at bind time, with no
