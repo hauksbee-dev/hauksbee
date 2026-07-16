@@ -218,7 +218,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
                         let (x, y) = p.shape.center();
                         let dia = match &p.shape {
                             geo::Shape::Capsule(c) => c.r * 2.0,
-                            geo::Shape::Polygon { .. } => 0.3,
+                            geo::Shape::Polygon { .. } | geo::Shape::MultiPolygon { .. } => 0.3,
                         };
                         holes.push(PlatedHole {
                             x,
