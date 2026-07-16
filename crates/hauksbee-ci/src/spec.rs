@@ -1167,6 +1167,21 @@ impl Assertion {
                             .into(),
                     ));
                 }
+                // Same silent-no-op class for `dip_below`: check_rail_window only
+                // reads it inside guards that require `for_max_ms` or
+                // `recover_within_ms` as a partner. A bare `dip_below` alongside a
+                // `min`/`max` (which satisfies has_check) is therefore never
+                // evaluated — the author's dip threshold does nothing. Require it
+                // to carry a partner that actually consumes it.
+                if self.dip_below.is_some()
+                    && self.for_max_ms.is_none()
+                    && self.recover_within_ms.is_none()
+                {
+                    return Err(SpecError::Invalid(
+                        "rail_window `dip_below` needs `for_max_ms` or `recover_within_ms` or it is never evaluated"
+                            .into(),
+                    ));
+                }
             }
             "protection_trip" => {
                 if self.supply_net.is_none() {
@@ -1622,5 +1637,53 @@ recover_within_ms = 5.0
 "#,
         );
         assert!(ok.validate().is_ok(), "a complete recovery spec must pass");
+    }
+
+    #[test]
+    fn rail_window_dip_below_without_a_partner_is_rejected() {
+        // R36: the dip_below sibling of the R35 recover_to gap. check_rail_window
+        // only reads dip_below inside guards that require for_max_ms or
+        // recover_within_ms, so a bare dip_below alongside a min/max (which
+        // satisfies has_check) silently does nothing — a rail at 3.1 V passes
+        // GREEN against a dip_below=3.2 the author wrote. Validation must reject
+        // the partnerless dip_below.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+min = 3.0
+dip_below = 3.2
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a dip_below with no for_max_ms/recover_within_ms must fail, not no-op");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("dip_below") && (m.contains("for_max_ms") || m.contains("recover_within_ms"))),
+            "expected a dip_below partner validation error, got {err:?}"
+        );
+
+        // dip_below WITH a for_max_ms partner still validates.
+        let ok = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+dip_below = 3.2
+for_max_ms = 2.0
+"#,
+        );
+        assert!(ok.validate().is_ok(), "dip_below with a for_max_ms partner must pass");
     }
 }
