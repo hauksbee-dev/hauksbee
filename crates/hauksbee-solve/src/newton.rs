@@ -633,13 +633,33 @@ pub fn newton_solve(
             };
         }
 
+        // Convergence is judged on the UNDAMPED Newton step (ws.x, fresh from
+        // the linear solve, against the point we linearized at): that is the
+        // true measure of how far this iterate believes it is from the root.
+        // BOTH dampers below -- the global Armijo line search and the staged
+        // per-node damping -- are PATH globalizations: they shorten the step
+        // the iteration actually walks, not the distance to the root, so
+        // convergence must never be judged on their output. Judging the damped
+        // iterate lets a small damped step masquerade as convergence (R7 #3:
+        // a line search that backtracks to the alpha=1/64 floor shrinks the
+        // measured lin_point->ws.x step 64x, which reads as "converged" at an
+        // iterate the full Newton step still wants to move far away from --
+        // precisely when the search backtracked hard because the iterate is
+        // NOT near a root). Hence these predicates are computed HERE, before
+        // either damper rewrites ws.x. On the undamped paths (no line search,
+        // branch_reg==0) nothing touches ws.x in between, so this is
+        // bit-identical to testing after.
+        let undamped_converged = converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+        let undamped_node_converged =
+            node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+
         // GLOBAL Armijo line-search (opt-in). Backtrack the full Newton step dx =
         // (ws.x - lin_point) until the trial point's nonlinear residual decreases
         // sufficiently. This REPLACES the undamped iterate with lin_point+alpha*dx;
         // the per-node staged damping below then operates on the globalized point.
-        // Convergence is still judged on the resulting step (lin_point -> ws.x), so
-        // a heavily backtracked step reads as "not yet converged" and the loop
-        // continues -- exactly what stops the traveling overshoot.
+        // Convergence was already judged above on the UNDAMPED iterate, so a
+        // heavily backtracked step still reads as "not yet converged" and the
+        // loop continues -- exactly what stops the traveling overshoot.
         if line_search {
             let dx: Vec<f64> = (0..ws.x.len()).map(|i| ws.x[i] - ws.lin_point[i]).collect();
             // Lazy-arming predictor SHADOW (census only, no behaviour): a
@@ -735,15 +755,8 @@ pub fn newton_solve(
             // re-stamped at the top of the next loop.
         }
 
-        // Convergence is judged on the UNDAMPED Newton step (ws.x vs the point we
-        // linearized at, lin_point): that is the true measure of how far the
-        // iterate is from the root. Damping (below) is a path globalization only;
-        // judging convergence on the damped iterate would let a small damped step
-        // masquerade as convergence. The normal (branch_reg==0) path damps
-        // nothing, so this is identical to the old test there.
-        let undamped_converged = converged(&ws.x, &ws.lin_point, &ws.layout, opts);
-        let undamped_node_converged =
-            node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+        // (undamped_converged / undamped_node_converged were computed above,
+        // BEFORE the line search could rewrite ws.x -- see the R7 #3 comment.)
 
         // Measure the TRUE undamped node step, then (staged path only) damp
         // ws.x in place. The returned norm is captured BEFORE the damping
@@ -2586,6 +2599,110 @@ mod staged_stall_norm_tests {
             !damped_bailed,
             "measuring the DAMPED step must not have bailed in this horizon — if it did, \
              the scripted cycle no longer distinguishes the undamped from the damped norm"
+        );
+    }
+}
+
+#[cfg(test)]
+mod line_search_convergence_tests {
+    use super::{newton_solve, Workspace};
+    use crate::options::{RobustnessLadder, SolverOptions, Strategy};
+    use crate::stamp::IntegCoeffs;
+    use crate::system::ReactiveState;
+    use hauksbee_ir::{BDep, BOutput, Circuit, CompiledExpr, Device, NodeId};
+
+    // The bug this guards (R7 #3): the Armijo line search is a PATH
+    // globalization -- it shortens the step the iteration walks, not the
+    // distance to the root -- so convergence must be judged on the UNDAMPED
+    // Newton iterate. The broken ordering rewrote ws.x to lin_point +
+    // alpha*dx BEFORE the convergence test, so a floor-backtracked step
+    // (alpha = 1/64) shrank the measured lin_point -> ws.x step 64x and
+    // passed the reltol/vntol test at an iterate that is nowhere near a root
+    // -- precisely when the search backtracked hard BECAUSE the full step
+    // kept increasing the residual.
+    //
+    // Fixture: a single node whose KCL residual is a smooth V,
+    //   F(v) = 1e-3 + 0.02*(v - 0.9997)*tanh((v - 0.9997)/1e-4),
+    // built from a 50 ohm resistor to ground plus a B-source that supplies
+    // (F(v) - v/50) as an outgoing current. Key properties:
+    //
+    // * F has NO root: min |F| = 1e-3 at the V's vertex (v = 0.9997), so ANY
+    //   "converged" claim from Newton on this board is definitionally false.
+    // * |F'| <= ~0.029 everywhere, so every full Newton step |F/F'| >= ~0.03
+    //   -- always far above the ~1e-3 step tolerance at |v| ~ 1. The solver
+    //   can never legitimately converge by a small full step; the ONLY way
+    //   to read "converged" is to measure a line-search-shrunk step.
+    // * Starting at v0 = 1.0 (just right of the vertex), the full step
+    //   dx ~ -0.05 overshoots across the vertex where the residual RISES, so
+    //   every backtracking trial alpha in {1, 1/2, ..., 1/64} fails Armijo
+    //   and the search takes the alpha = 1/64 floor step of ~7.7e-4 -- which
+    //   is below the ~1.0e-3 node tolerance. Judged on that damped step the
+    //   solver reports success at iteration 1 with |F| ~ 1e-3 (the pre-fix
+    //   failure); judged on the undamped step it keeps iterating and
+    //   correctly exhausts max_newton without converging.
+    fn rootless_v_board() -> (Circuit, NodeId) {
+        let mut c = Circuit::new();
+        let v = c.node("v");
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a: v,
+            b: NodeId::GROUND,
+            ohms: 50.0,
+            tc1: None,
+        });
+        // i(p->n) leaves node v: total KCL at v is v/50 + i_b(v) = F(v).
+        c.add(Device::Behavioral {
+            name: "BV".into(),
+            p: v,
+            n: NodeId::GROUND,
+            output: BOutput::Current,
+            expr: CompiledExpr::compile(
+                "1e-3 + 0.02*(__d0 - 0.9997)*math::tanh((__d0 - 0.9997)/1e-4) - 0.02*__d0",
+            )
+            .unwrap(),
+            deps: vec![BDep::Volt(v)],
+        });
+        (c, v)
+    }
+
+    #[test]
+    fn backtracked_line_search_step_is_not_convergence() {
+        let (c, v) = rootless_v_board();
+        let opts = SolverOptions {
+            // Arm the Armijo line search directly (the transient driver arms
+            // it the same way for any B-source board, transient.rs).
+            ladder: RobustnessLadder::none().with(Strategy::LineSearch),
+            ..SolverOptions::default()
+        };
+        let mut ws = Workspace::new(&c);
+        let i = ws.layout.node(v).expect("node v is an unknown");
+        ws.x[i] = 1.0;
+
+        // Fixture sanity: the starting residual is the designed ~1 mA (the
+        // V-shape is where we think it is). If this drifts the geometry
+        // below no longer exercises the floor-backtrack path.
+        let f_start = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(
+            (8e-4..2e-3).contains(&f_start),
+            "fixture drift: |F(1.0)| = {f_start:.3e}, expected ~1e-3"
+        );
+        ws.x[i] = 1.0;
+
+        // Per-step transient Newton (dc = false: the only path the line
+        // search arms on). No reactive elements, so the coefficients are
+        // inert.
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1e-6, 1e-6, true);
+        let state = ReactiveState::new(c.devices.len());
+        let r = newton_solve(
+            &mut ws, &c, &opts, 0.0, 1e-6, coeffs, &state, false, false, opts.gmin, 1.0,
+        );
+        let f_end = ws.dc_residual_inf_norm(&c, &opts);
+        assert!(
+            !r.converged,
+            "Newton reported convergence on a residual that has NO root: a \
+             floor-backtracked line-search step (alpha=1/64) was measured as \
+             the convergence step. iters={}, v={:.6}, |F|={:.3e}",
+            r.iters, ws.x[i], f_end
         );
     }
 }
