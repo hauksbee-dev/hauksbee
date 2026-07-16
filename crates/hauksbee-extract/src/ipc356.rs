@@ -25,8 +25,13 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             continue;
         }
         if line.starts_with('P') && line.contains("UNITS") {
-            if line.contains("CUST 1") || line.contains("MM") {
-                // CUST 1: metric, micrometres per LSB.
+            // IPC-356A units matrix: CUST 0 / inch = 1/10000 inch per LSB
+            // (the imperial default), CUST 1 / MM = micrometre per LSB, CUST 2 =
+            // 0.1 micrometre per LSB. A CUST 2 export read at the imperial scale
+            // would place every pad ~25.4x off.
+            if line.contains("CUST 2") {
+                scale = 0.0001;
+            } else if line.contains("CUST 1") || line.contains("MM") {
                 scale = 0.001;
             }
             continue;
@@ -114,13 +119,21 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     })
 }
 
-/// `X+0123450Y-0067890` anywhere after the access fields.
+/// `X+0123450Y-0067890`, located in the coordinate region past the fixed
+/// net/ref/pin/access columns. The search MUST start past column 32: an 'X' in
+/// an X-bearing net name (RXD/TXD) or reference designator (X1, a crystal)
+/// sits earlier in the record, and scanning the whole line would latch onto it
+/// and drop (or corrupt) the real coordinate.
 fn parse_xy(line: &str) -> Option<(f64, f64)> {
-    let xi = line.find('X')?;
-    let rest = &line[xi..];
+    let coord = line.get(31..)?;
+    let xi = coord.find('X')?;
+    let rest = &coord[xi..];
     let yi = rest.find('Y')?;
     let x: f64 = rest[1..yi].trim().parse().ok()?;
-    let after_y = &rest[yi + 1..];
+    // Trim the leading whitespace of the Y span too: IPC-356A allows a blank
+    // column for a positive sign (`Y 029450`), and without this trim the span
+    // scan below would stop on that leading space and read an empty number.
+    let after_y = rest[yi + 1..].trim_start();
     let end = after_y
         .find(|c: char| !(c.is_ascii_digit() || c == '+' || c == '-'))
         .unwrap_or(after_y.len());
@@ -148,6 +161,53 @@ mod tests {
             s[27 + i] = b;
         }
         String::from_utf8(s).unwrap()
+    }
+
+    /// As [`record`], but with a coordinate field placed in the coordinate
+    /// region (column 33 onward), so `parse_xy` has something to read.
+    fn record_xy(net: &str, refdes: &str, pin: &str, coord: &str) -> String {
+        let base = record(net, refdes, pin);
+        let mut s = base.as_bytes()[..32].to_vec();
+        s.extend_from_slice(coord.as_bytes());
+        String::from_utf8(s).unwrap()
+    }
+
+    #[test]
+    fn x_bearing_net_or_ref_does_not_latch_the_coordinate_scan() {
+        // R12: an 'X' in the net name (RXD) or reference designator (X1) sits in
+        // the fixed columns BEFORE the coordinate field. The scan must start past
+        // column 32, else find('X') latches onto it and the coordinate is lost.
+        for (net, refd) in [("RXD", "U1"), ("GND", "X1")] {
+            let rec = record_xy(net, refd, "1", "X+0019000Y+0029450");
+            let board = extract(&format!("{rec}\n")).unwrap();
+            let pos = board.components[0].pins[0].position;
+            let (x, y) = pos.expect("coordinate must survive an X-bearing field");
+            assert!((x - 48.26).abs() < 1e-3, "x={x}");
+            assert!((y - 74.803).abs() < 1e-3, "y={y}");
+        }
+    }
+
+    #[test]
+    fn blank_positive_sign_coordinate_parses() {
+        // IPC-356A allows a blank column for a positive sign (`X 0019000`). The
+        // Y span must be trimmed like the X span, else the leading space stops
+        // the digit scan at an empty number and both coordinates are dropped.
+        let rec = record_xy("GND", "R1", "1", "X 0019000Y 0029450");
+        let board = extract(&format!("{rec}\n")).unwrap();
+        let (x, y) = board.components[0].pins[0]
+            .position
+            .expect("blank-sign coordinate must parse");
+        assert!((x - 48.26).abs() < 1e-3 && (y - 74.803).abs() < 1e-3, "{x},{y}");
+    }
+
+    #[test]
+    fn cust2_units_scale_metric_tenth_micron() {
+        // R12: a CUST 2 metric export (0.1 µm/LSB) must not be read at the
+        // imperial 1/10000-inch scale (~25.4x too large).
+        let rec = record_xy("GND", "R1", "1", "X+0019000Y+0029450");
+        let board = extract(&format!("P  UNITS CUST 2\n{rec}\n")).unwrap();
+        let (x, _) = board.components[0].pins[0].position.unwrap();
+        assert!((x - 1.9).abs() < 1e-6, "19000 * 0.0001 mm = 1.9, got {x}");
     }
 
     #[test]

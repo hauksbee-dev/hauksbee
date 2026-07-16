@@ -979,6 +979,12 @@ pub struct AcJson {
     /// valid sweep never silently drops a net.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub no_signal_path_nets: Vec<String>,
+    /// Requested `--ac-node` names that don't exist in the circuit at all (their
+    /// bode is empty, distinct from "exists but no signal path"). Surfaced so the
+    /// JSON matches the text path's "net not found" warning instead of silently
+    /// dropping the net.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_found_nets: Vec<String>,
     /// Honest "N of M" coverage annotation, distinct from `validity`. Non-gating.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<CheckCoverage>,

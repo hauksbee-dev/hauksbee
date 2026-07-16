@@ -249,7 +249,11 @@ pub fn run_headless(
                 .collect();
             probe_rows.push((frame.t, volts));
         }
-        for bytes in frame.uart.values() {
+        // Stable (sorted-by-MCU-key) concatenation so a multi-MCU board's merged
+        // uart_output is deterministic run-to-run, not HashMap iteration order.
+        let mut uart_entries: Vec<_> = frame.uart.iter().collect();
+        uart_entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (_, bytes) in uart_entries {
             last_uart.extend_from_slice(bytes);
         }
         for f in frame.faults {
