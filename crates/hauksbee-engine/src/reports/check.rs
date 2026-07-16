@@ -59,13 +59,10 @@ pub fn emit(
             // Bind-role honesty (Marco): the plain persona surface must not hide
             // that active ICs are unmodelled — otherwise `--check --plain` reads
             // "healthy" while firmware/analog/AC/thermal on their nets are
-            // uncovered. Text/JSON/web all carry this; plain must too.
-            // Mirrors reports/bind.rs:34-40 and frontdoor.rs:374-381.
-            let open = summary
-                .active_path_unresolved
-                .iter()
-                .filter(|u| u.active_ic)
-                .count();
+            // uncovered. Text/JSON/web all carry this; plain must too. Use the
+            // SAME union the web/json personas do — unresolved active ICs PLUS
+            // resolved-but-open active ICs — so all four personas agree.
+            let open = crate::result::coverage_open_active_refs(&summary).len();
             if open > 0 {
                 let m = summary.critical_parts_total;
                 println!(

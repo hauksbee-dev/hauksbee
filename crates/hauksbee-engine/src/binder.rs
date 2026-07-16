@@ -806,6 +806,15 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
         || fp.contains("LED")
         || fp.starts_with("D_")
         || fp.contains(":D_");
+    // A value that parses only as an electrical RATING (volts/amps) is not
+    // a passive magnitude: a zener marked "5.1V" is 5.1 volts of breakdown,
+    // not 5.1 farads. Such a value must not veto the diode fallback, and it is
+    // what tells an R/C/L reference on a diode-shaped footprint apart from a
+    // real diode.
+    let val_is_passive_magnitude = parse_value(&comp.value)
+        .map(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
+        .unwrap_or(false);
+    let ref_is_passive = matches!(prefix.chars().next(), Some('R') | Some('C') | Some('L'));
     if diode_prefix || fp_is_diode {
         let v = comp.value.trim();
         let val_is_generic = v.is_empty()
@@ -814,12 +823,6 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
             || v.eq_ignore_ascii_case("1N4148")
             || v.eq_ignore_ascii_case("1N4148W")
             || v.eq_ignore_ascii_case("1N4148WS");
-        // A value that parses only as an electrical RATING (volts/amps) is not
-        // a passive magnitude: a zener marked "5.1V" is 5.1 volts of breakdown,
-        // not 5.1 farads. Such a value must not veto the diode fallback.
-        let val_is_passive_magnitude = parse_value(&comp.value)
-            .map(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
-            .unwrap_or(false);
         // Bind the fallback when the value is a generic diode token, OR the
         // footprint is a diode body and the value is not a passive magnitude.
         if val_is_generic || (fp_is_diode && !val_is_passive_magnitude) {
@@ -843,7 +846,12 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     // A part whose reference class or footprint says "diode" must never fall
     // through to the R/C/L first-letter heuristic below: "CR1" with value
     // "5.1V" used to land there via 'C' and bind as a 5.1 FARAD capacitor.
-    if diode_prefix || fp_is_diode {
+    // Exception: a genuine R/C/L *reference* on a diode-shaped *footprint*
+    // (e.g. a 10k R_MELF resistor) whose value clearly parses as a passive
+    // magnitude must not be deleted — it yields to the passive fallback below.
+    // A diode *reference* (D*, CR, VD, ZD, VR) is checked first in the OR, so it
+    // still always bails regardless of its first letter.
+    if diode_prefix || (fp_is_diode && !(ref_is_passive && val_is_passive_magnitude)) {
         return None;
     }
 
@@ -2116,7 +2124,21 @@ fn bind_vreg(
     _has_vreg: bool,
 ) -> (BindOutcome, Option<String>) {
     let out = roles.get("out").copied();
-    let vout = model.params.get_f64("vout").unwrap_or(DEFAULT_VCC);
+    // A missing `vout` must not silently fabricate a 5 V rail on a board whose
+    // regulator is actually 3.3 V (or anything else). Distinguish a present vout
+    // from the assumed default and SAY SO, matching the bind_analog_switch
+    // DEFAULT_VCC discipline below.
+    let (vout, vout_warning) = match model.params.get_f64("vout") {
+        Some(v) => (v, None),
+        None => (
+            DEFAULT_VCC,
+            Some(format!(
+                "{} ({}): vreg model has no `vout` param; regulating its output net to an \
+                 assumed {DEFAULT_VCC:.1} V — verify the regulator's actual output voltage",
+                comp.reference, comp.value,
+            )),
+        ),
+    };
     let Some(out) = out else {
         return open_warning(comp, "vreg output not connected");
     };
@@ -2136,7 +2158,7 @@ fn bind_vreg(
         BindOutcome::Behavioral {
             device: format!("vreg {vout:.1}V source"),
         },
-        None,
+        vout_warning,
     )
 }
 
@@ -3446,6 +3468,47 @@ mod digital_ro_tests {
             .expect("qa output driver stamped");
         assert_eq!(drv.ron, custom_ro, "driver must carry the model's ro, not DEFAULT_RO");
     }
+
+    /// R23 (vreg-silent-5v-default): a vreg model with no `vout` param used to
+    /// regulate silently to 5.0 V — overdriving a 3.3 V board with zero warning.
+    /// A missing `vout` must now emit a warning that names the assumed default.
+    #[test]
+    fn vreg_without_vout_param_warns_about_the_assumed_default() {
+        let mut model = make_entry(
+            "generic_ldo",
+            ComponentKind::Vreg,
+            "vreg with no vout param",
+            hauksbee_models::Params::default(),
+            std::collections::BTreeMap::new(),
+        );
+        // Ensure there is genuinely no vout param.
+        assert!(model.params.get_f64("vout").is_none());
+
+        let mut circuit = Circuit::new();
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        roles.insert("out".into(), circuit.node("VOUT"));
+
+        let (_outcome, warning) =
+            bind_vreg(&bare_comp("U9"), &model, &mut circuit, &roles, true);
+        let warning = warning.expect("a missing vout must produce a warning");
+        assert!(
+            warning.contains("vout") && warning.contains("5.0"),
+            "the warning must name the missing param and the assumed default: {warning}"
+        );
+
+        // With an explicit vout the part binds silently at that voltage.
+        model.params.set_f64("vout", 3.3);
+        let mut circuit2 = Circuit::new();
+        let mut roles2: HashMap<String, NodeId> = HashMap::new();
+        roles2.insert("out".into(), circuit2.node("VOUT"));
+        let (outcome, warning) =
+            bind_vreg(&bare_comp("U9"), &model, &mut circuit2, &roles2, true);
+        assert!(warning.is_none(), "a present vout must not warn");
+        assert!(
+            matches!(outcome, BindOutcome::Behavioral { device } if device.contains("3.3")),
+            "the source regulates to the declared 3.3 V"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3505,6 +3568,41 @@ mod crystal_fallback_tests {
         // A real 'C' capacitor still binds as a passive (no regression).
         let cap = fallback_entry(&comp("C7", "22pF")).expect("cap binds");
         assert_eq!(cap.kind, ComponentKind::Passive);
+    }
+
+    fn comp_fp(reference: &str, value: &str, footprint: &str) -> Component {
+        let mut c = comp(reference, value);
+        c.footprint = footprint.to_string();
+        c
+    }
+
+    /// R23 (MELF-passive-silent-open): a MELF-footprint resistor/cap has a
+    /// diode-shaped body, so the diode-evidence gate used to delete it (return
+    /// None -> open circuit). An R/C/L *reference* whose value is a clear passive
+    /// magnitude must fall through to the passive fallback instead.
+    #[test]
+    fn melf_footprint_resistor_binds_as_passive_not_open() {
+        let entry = fallback_entry(&comp_fp("R5", "10k", "Resistor_SMD:R_MELF_MELF0207"))
+            .expect("a 10k MELF resistor must bind, not be left open");
+        assert_eq!(entry.kind, ComponentKind::Passive);
+
+        // Same for an L on a MELF/diode-ish body.
+        let ind = fallback_entry(&comp_fp("L2", "10uH", "Inductor_SMD:L_MELF"))
+            .expect("a MELF inductor binds");
+        assert_eq!(ind.kind, ComponentKind::Passive);
+
+        // A genuine diode REFERENCE on a diode footprint still bails (or binds as
+        // a diode), never as a passive — the reference-class gate wins.
+        let cr = fallback_entry(&comp_fp("CR1", "5.1V", "Diode_SMD:D_SOD-123"));
+        assert!(
+            cr.map_or(true, |e| e.kind != ComponentKind::Passive),
+            "a CR-referenced zener must never bind as a passive"
+        );
+
+        // A footprint-only diode with a bare/generic value still binds as a diode.
+        let d = fallback_entry(&comp_fp("D9", "D", "Diode_SMD:D_SOD-123"))
+            .expect("a generic diode-footprint part binds as a diode");
+        assert_eq!(d.kind, ComponentKind::Diode);
     }
 }
 

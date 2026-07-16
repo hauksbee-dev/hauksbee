@@ -322,6 +322,18 @@ pub fn run(
     Ok(())
 }
 
+/// RFC-4180 escape a single CSV field: wrap in double quotes (doubling any
+/// internal quote) when it contains a comma, quote, or newline. A differential
+/// probe label like `V(out,ref)` carries a comma, so an unescaped header field
+/// would split into two columns and misalign every data cell that follows.
+pub(crate) fn csv_escape(field: &str) -> std::borrow::Cow<'_, str> {
+    if field.contains([',', '"', '\n', '\r']) {
+        std::borrow::Cow::Owned(format!("\"{}\"", field.replace('"', "\"\"")))
+    } else {
+        std::borrow::Cow::Borrowed(field)
+    }
+}
+
 /// Render a [`hauksbee_solve::SimOutput`] as CSV. A transient prepends a
 /// `time_s` column; an operating point is a bare header + one row.
 fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
@@ -331,7 +343,7 @@ fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
         header.push("time_s".to_string());
     }
     header.extend(o.columns.iter().cloned());
-    s.push_str(&header.join(","));
+    s.push_str(&header.iter().map(|h| csv_escape(h)).collect::<Vec<_>>().join(","));
     s.push('\n');
     for (i, row) in o.rows.iter().enumerate() {
         let mut cells = Vec::with_capacity(row.len() + 1);
@@ -373,8 +385,43 @@ fn solver_opts_from_deck(
 
 #[cfg(test)]
 mod tests {
-    use super::solver_opts_from_deck;
+    use super::{csv_escape, sim_output_to_csv, solver_opts_from_deck};
     use hauksbee_ir::SpiceLoader;
+
+    #[test]
+    fn csv_escape_quotes_fields_with_commas() {
+        // R23 (CSV-DIFF-PROBE-COMMA): a differential-probe label like V(out,ref)
+        // carries a comma; unquoted it would split into two columns.
+        assert_eq!(csv_escape("V(out,ref)"), "\"V(out,ref)\"");
+        assert_eq!(csv_escape("time_s"), "time_s"); // no comma → untouched
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\""); // quotes doubled
+    }
+
+    #[test]
+    fn differential_probe_csv_keeps_columns_aligned() {
+        // The header and every data row must have the same field count. With a
+        // differential probe V(out,ref) the unescaped header had 4 comma-fields
+        // while the row had 3, misassigning every downstream column.
+        let out = hauksbee_solve::SimOutput {
+            columns: vec!["V(out,ref)".to_string(), "I(V1)".to_string()],
+            time: Some(vec![1.0e-3]),
+            rows: vec![vec![2.5, 1.0e-4]],
+        };
+        let csv = sim_output_to_csv(&out);
+        let mut lines = csv.lines();
+        let header = lines.next().unwrap();
+        let row = lines.next().unwrap();
+        // csv-field count: commas outside quotes + 1. Compare structurally.
+        assert_eq!(
+            header, "time_s,\"V(out,ref)\",I(V1)",
+            "the diff-probe label must be quoted as one column"
+        );
+        assert_eq!(
+            row.split(',').count(),
+            3,
+            "the data row has exactly time + 2 probe columns: {row}"
+        );
+    }
 
     #[test]
     fn deck_temp_card_reaches_solver_options() {

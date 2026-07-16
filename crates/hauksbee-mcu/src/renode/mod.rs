@@ -1476,10 +1476,16 @@ impl Mcu for RenodeBackend {
             .find(|p| p.letter == pin.port)
             .cloned()
         {
-            let _ = self.monitor.command(&format!(
-                "sysbus.{} OnGPIO {} {}",
-                port.peripheral, pin.bit, high
-            ));
+            // Fail loud like set_analog_in and every other Monitor command in
+            // this backend: silently discarding the result let a rejected/failed
+            // OnGPIO masquerade as "input never changed", diverging the co-sim
+            // from the analog solve with zero diagnostic.
+            let cmd = format!("sysbus.{} OnGPIO {} {}", port.peripheral, pin.bit, high);
+            match self.monitor.command(&cmd) {
+                Ok(resp) if !monitor_failed(&resp) => {}
+                Ok(resp) => panic!("Renode digital-input drive failed ({cmd}): {resp}"),
+                Err(e) => panic!("Renode digital-input drive failed ({cmd}): {e:#}"),
+            }
         }
     }
 

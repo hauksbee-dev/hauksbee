@@ -246,15 +246,31 @@ impl BindSummary {
             "\nbind summary: {} of {} non-ignored parts resolved; critical_parts_bound: {} ({})",
             self.resolved, self.non_ignored, self.critical_parts_bound, mcu_state,
         );
-        if self.active_ics_unresolved() {
+        // Surface the same union the web/json personas do: active ICs that are
+        // unresolved OR resolved-but-open on the live circuit both make
+        // analog/AC/thermal on their nets untrustworthy, so the banner must warn
+        // on either (a resolved MCU with all I/O pins open used to slip through).
+        if self.active_ics_unresolved() || self.active_open_on_live_circuit() {
             let _ = writeln!(
                 s,
-                "WARNING: active part(s) unresolved — analog/AC/thermal results on their nets are NOT trustworthy."
+                "WARNING: active part(s) unresolved or left open on the live circuit — \
+                 analog/AC/thermal results on their nets are NOT trustworthy."
             );
         }
         if !self.active_path_unresolved.is_empty() {
             let _ = writeln!(s, "active_path_unresolved ({}):", self.active_path_unresolved.len());
             for u in &self.active_path_unresolved {
+                let _ = writeln!(s, "  {} ({}): {}", u.reference, u.value, u.consequence);
+            }
+        }
+        let open_resolved: Vec<&UnresolvedActive> = self
+            .resolved_but_open_active
+            .iter()
+            .filter(|u| u.active_ic)
+            .collect();
+        if !open_resolved.is_empty() {
+            let _ = writeln!(s, "resolved_but_open_active ({}):", open_resolved.len());
+            for u in open_resolved {
                 let _ = writeln!(s, "  {} ({}): {}", u.reference, u.value, u.consequence);
             }
         }
@@ -281,7 +297,19 @@ fn is_active_ic_ref(reference: &str) -> bool {
 /// names; that is a naming limitation, not an open circuit, and must NOT mark the
 /// part as untrustworthy on the live circuit.
 fn is_open_pin_warning(warning: &str) -> bool {
-    !warning.contains("[auto-bind]") && !warning.contains("GPIO map")
+    // Positive match on explicit open-pin markers, NOT a negative catch-all: a
+    // benign advisory on a fully-wired resolved IC (e.g. an analog switch whose
+    // VCC net is non-canonically named — "...may read as open, so verify the
+    // switch's actual supply") contains the bare word "open" but is not an
+    // open-pin condition, and must not push the part into resolved_but_open.
+    if warning.contains("[auto-bind]") || warning.contains("GPIO map") {
+        return false;
+    }
+    let w = warning.to_ascii_lowercase();
+    w.contains("undriven")
+        || w.contains("left open")
+        || w.contains("not connected")
+        || w.contains("all i/o pins open")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1129,6 +1157,79 @@ pub fn lint_fix_hint(check: LintCheck) -> Option<&'static str> {
 mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
+
+    fn active_ic(reference: &str) -> UnresolvedActive {
+        UnresolvedActive {
+            reference: reference.to_string(),
+            value: "IC".to_string(),
+            reason: "all I/O pins open".to_string(),
+            consequence: "its nets are not driven".to_string(),
+            active_ic: true,
+        }
+    }
+
+    fn summary_with(
+        active_path_unresolved: Vec<UnresolvedActive>,
+        resolved_but_open_active: Vec<UnresolvedActive>,
+    ) -> BindSummary {
+        BindSummary {
+            resolved: 1,
+            unresolved: 0,
+            non_ignored: 1,
+            critical_parts_bound: "1/1".to_string(),
+            critical_parts_bound_n: 1,
+            critical_parts_total: 1,
+            mcu_bound: true,
+            active_path_unresolved,
+            resolved_but_open_active,
+        }
+    }
+
+    #[test]
+    fn open_pin_warning_matches_only_genuine_open_conditions() {
+        // R23 (is-open-pin-warning-overbroad): a benign rail-assumption advisory
+        // on a fully-wired resolved IC contains the bare word "open" but is NOT
+        // an open-pin condition — it must not push the part to resolved_but_open.
+        let switch_advisory =
+            "U3 (SN74LVC1G3157): VCC net non-canonical, may read as open, so verify the \
+             switch's actual supply";
+        assert!(
+            !is_open_pin_warning(switch_advisory),
+            "an analog-switch VCC advisory is not an open-pin warning"
+        );
+        // Genuine open-pin warnings still match.
+        assert!(is_open_pin_warning("U1: all I/O pins open (undriven)"));
+        assert!(is_open_pin_warning("U2 output pin not connected"));
+        // The auto-bind GPIO-map note is still excluded.
+        assert!(!is_open_pin_warning(
+            "[auto-bind] U1: GPIO map cannot be derived from pin names"
+        ));
+    }
+
+    #[test]
+    fn banner_warns_on_resolved_but_open_active_ic() {
+        // R23 (check-heads-up-drops-resolved-but-open): a resolved MCU whose I/O
+        // pins are all open on the live circuit makes its nets untrustworthy, so
+        // the banner must WARN and NAME it — not just for unresolved active ICs
+        // (which the web/json personas already carry via resolved_but_open_active).
+        let s = summary_with(Vec::new(), vec![active_ic("U1")]);
+        let banner = s.render_banner();
+        assert!(
+            banner.contains("NOT trustworthy"),
+            "a resolved-but-open active IC must trigger the WARNING: {banner}"
+        );
+        assert!(
+            banner.contains("U1"),
+            "the resolved-but-open active IC must be named: {banner}"
+        );
+        // And the shared union helper the personas consume counts it.
+        assert_eq!(coverage_open_active_refs(&s), vec!["U1".to_string()]);
+
+        // A fully-clean summary stays quiet.
+        let clean = summary_with(Vec::new(), Vec::new());
+        assert!(!clean.render_banner().contains("NOT trustworthy"));
+        assert!(coverage_open_active_refs(&clean).is_empty());
+    }
 
     fn clearance(net_a: &str, net_b: &str, gap: f64, rule: f64) -> DrcFinding {
         DrcFinding {

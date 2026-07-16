@@ -1098,6 +1098,25 @@ impl UsbcReport {
         self.level == UsbcLevel::Serious
     }
 
+    /// The `(what, why, fix)` gloss the web/plain finding surfaces render, so
+    /// every persona (CLI text/plain/json AND the web report) carries the SAME
+    /// USB-C verdict. `None` for `Ok` (nothing actionable to surface). `Serious`
+    /// carries the standard split-pulldown remedy in `fix`; `Info` leaves `fix`
+    /// empty (a self-contained observation).
+    pub fn web_gloss(&self) -> Option<(String, String, String)> {
+        match self.level {
+            UsbcLevel::Ok => None,
+            UsbcLevel::Info => Some((self.headline.clone(), self.detail(), String::new())),
+            UsbcLevel::Serious => Some((
+                self.headline.clone(),
+                self.detail(),
+                "Give CC1 and CC2 each their own 5.1 kΩ pulldown to GND (never share one, never \
+                 tie them together), so a source sees a sink and applies VBUS."
+                    .to_string(),
+            )),
+        }
+    }
+
     /// One-line verdict tag.
     fn tag(&self) -> &'static str {
         match self.level {
@@ -1200,6 +1219,36 @@ mod tests {
             dnp: false,
             pins: vec![],
         }
+    }
+
+    #[test]
+    fn web_gloss_mirrors_the_cli_verdict_per_level() {
+        // R23 (web-drops-usbc-verdict): the (what, why, fix) gloss the web/plain
+        // finding surfaces consume must agree with the level — a Serious verdict
+        // carries the split-pulldown remedy, an Info verdict is a self-contained
+        // note (no fix), and an Ok verdict surfaces nothing.
+        let mut r = UsbcReport {
+            receptacles: Vec::new(),
+            shared_net: true,
+            cc1_rd_ohms: Some(5100.0),
+            cc2_rd_ohms: Some(5100.0),
+            attach: Attach::AudioAccessory,
+            powers_vbus: false,
+            has_discrete_rd: true,
+            level: UsbcLevel::Serious,
+            headline: "RPi-4 shared-CC fault".to_string(),
+        };
+        let (what, _why, fix) = r.web_gloss().expect("serious verdict has a gloss");
+        assert_eq!(what, "RPi-4 shared-CC fault");
+        assert!(fix.contains("5.1 k"), "serious carries the pulldown remedy: {fix}");
+
+        r.level = UsbcLevel::Info;
+        r.headline = "No discrete Rd visible".to_string();
+        let (_what, _why, fix) = r.web_gloss().expect("info verdict has a gloss");
+        assert!(fix.is_empty(), "an Info note is self-contained (no fix)");
+
+        r.level = UsbcLevel::Ok;
+        assert!(r.web_gloss().is_none(), "an Ok verdict surfaces nothing");
     }
 
     #[test]
