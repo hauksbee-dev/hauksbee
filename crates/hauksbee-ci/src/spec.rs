@@ -777,14 +777,19 @@ impl Spec {
                     .into(),
             ));
         }
-        if self.duration_ms <= 0.0 {
-            return Err(SpecError::Invalid("duration_ms must be positive".into()));
+        // TOML accepts `inf`/`nan` floats, so a non-finite time field must be
+        // rejected explicitly: `duration_ms = inf` passes `<= 0.0` yet makes the
+        // frame loop `t < total_s` always true — an infinite CI hang — and `nan`
+        // runs zero frames so every assertion fails "never sampled" (confusing
+        // all-RED). Check finiteness before the sign.
+        if !self.duration_ms.is_finite() || self.duration_ms <= 0.0 {
+            return Err(SpecError::Invalid("duration_ms must be a positive, finite number".into()));
         }
         // A non-positive frame_ms (a typo, or "as fine as possible") was silently
         // clamped to 1 µs downstream, running ~1000x more frames than any real
         // cadence and hanging a fast CI check with no explanation. Name it.
-        if self.frame_ms <= 0.0 {
-            return Err(SpecError::Invalid("frame_ms must be positive".into()));
+        if !self.frame_ms.is_finite() || self.frame_ms <= 0.0 {
+            return Err(SpecError::Invalid("frame_ms must be a positive, finite number".into()));
         }
         for s in &self.supplies {
             s.validate()?;
@@ -1025,6 +1030,20 @@ impl SupplySpec {
 
 impl Assertion {
     fn validate(&self) -> Result<(), SpecError> {
+        // A non-finite time window must be rejected loud: TOML accepts `nan`, and
+        // a NaN `after_ms` makes the threshold-bucket sort's `partial_cmp` return
+        // None, so its `.unwrap()` PANICS (a crash, not the crate's fail-loud
+        // SpecError). Check both window fields up front.
+        for (field, val) in [("after_ms", self.after_ms), ("deadline_ms", self.deadline_ms)] {
+            if let Some(v) = val {
+                if !v.is_finite() {
+                    return Err(SpecError::Invalid(format!(
+                        "{} assertion `{field}` must be a finite number",
+                        self.kind
+                    )));
+                }
+            }
+        }
         match self.kind.as_str() {
             "voltage" => {
                 if self.net.is_none() {
@@ -1476,6 +1495,70 @@ min_toggles = 1
         assert!(
             spec_from(&spec_src("0.1")).validate().is_ok(),
             "a positive frame_ms is a valid cadence"
+        );
+    }
+
+    #[test]
+    fn non_finite_time_fields_are_rejected() {
+        // R33: TOML accepts `inf`/`nan`. `duration_ms = inf` passed the `<= 0`
+        // check and made the frame loop `t < inf` spin forever (a silent CI hang);
+        // `nan` ran zero frames so every assertion failed "never sampled". Both
+        // duration_ms and frame_ms must reject non-finite values.
+        let base = |dur: &str, frame: &str| {
+            format!(
+                r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = {dur}
+frame_ms = {frame}
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#
+            )
+        };
+        for (dur, frame, field) in [
+            ("inf", "1", "duration_ms"),
+            ("nan", "1", "duration_ms"),
+            ("10", "inf", "frame_ms"),
+            ("10", "nan", "frame_ms"),
+        ] {
+            let err = spec_from(&base(dur, frame))
+                .validate()
+                .expect_err("a non-finite time field must fail validation");
+            assert!(
+                matches!(&err, SpecError::Invalid(m) if m.contains(field)),
+                "expected a {field} validation error for {dur}/{frame}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nan_after_ms_is_rejected_not_panicked() {
+        // R33: a NaN `after_ms` made the threshold-bucket sort's `partial_cmp`
+        // return None, so `.unwrap()` PANICKED — a crash instead of the crate's
+        // fail-loud SpecError. Assertion::validate now rejects a non-finite window.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+after_ms = nan
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a NaN after_ms must fail validation, not panic later");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("after_ms")),
+            "expected an after_ms validation error, got {err:?}"
         );
     }
 }

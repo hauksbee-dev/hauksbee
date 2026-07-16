@@ -159,7 +159,14 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     // An explicit "mm" is a unit too: the value is already in mm and must not be
     // re-scaled by a header unit. (Checked after mil so "…mil" isn't read as mm.)
     let mm = !mil && lower.ends_with("mm");
-    let cleaned: String = t
+    // Strip the trailing unit word BEFORE cleaning. The cleaner keeps 'e'/'E' for
+    // scientific notation, but the spelled-out "inches" ends in 'e' + 's', so a
+    // cell like "4.25inches" cleaned to "4.25e" and failed to parse — silently
+    // dropping the coordinate and skipping the whole placement row. A unit is
+    // trailing letters (and the inch-mark `"`); a real exponent's 'e' is never at
+    // the string end, so stripping trailing alphabetics leaves it intact.
+    let numeric = t.trim().trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '"');
+    let cleaned: String = numeric
         .chars()
         .filter(|c| {
             c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E'
@@ -573,6 +580,17 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         assert!((v - 12.7).abs() < 1e-9 && had, "0.5inch -> 12.7 mm, unit named");
         let (v, had) = parse_len("10mils").unwrap();
         assert!((v - 0.254).abs() < 1e-9 && had, "10mils -> 0.254 mm, unit named");
+        // R33: the plural "inches" spelling ends in 'e'+'s'. The numeric cleaner
+        // keeps 'e' (for scientific notation), so "4.25inches" cleaned to "4.25e"
+        // and failed to parse — parse_len returned None and the whole placement
+        // row was silently dropped. It must convert like "inch".
+        let (v, had) = parse_len("4.25inches").unwrap();
+        assert!((v - 107.95).abs() < 1e-9 && had, "4.25inches -> 107.95 mm, unit named");
+        let (v, had) = parse_len("1.5inches").unwrap();
+        assert!((v - 38.1).abs() < 1e-9 && had, "1.5inches -> 38.1 mm");
+        // A real scientific-notation exponent's 'e' is untouched (not trailing).
+        let (v, _) = parse_len("1.5e1").unwrap();
+        assert!((v - 15.0).abs() < 1e-9, "1.5e1 -> 15 (sci-notation survives)");
         // The abbreviations still behave.
         assert_eq!(parse_len("0.5in").unwrap(), (12.7, true));
         assert_eq!(parse_len("10mil").unwrap(), (0.254, true));
