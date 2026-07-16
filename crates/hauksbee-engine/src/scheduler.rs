@@ -373,6 +373,17 @@ impl Default for NetStat {
     }
 }
 
+impl NetStat {
+    /// Test constructor: a net stat carrying a given toggle count (min/max at
+    /// their empty sentinels). `last_logic` is private to this module, so a
+    /// cross-module test (e.g. the web-report activity ranking) cannot build a
+    /// `NetStat` literal directly — this exposes just enough for those tests.
+    #[cfg(test)]
+    pub(crate) fn with_toggles(toggles: u64) -> Self {
+        NetStat { toggles, ..Default::default() }
+    }
+}
+
 impl Scheduler {
     /// Build a scheduler from a bound board, instantiating MCU cores and
     /// loading firmware (one hex for all, or none).
@@ -1434,15 +1445,25 @@ impl Scheduler {
         let chunk_converged = self.solve_chunk(chunk);
         self.restore_pwl_drives(&pwl_restores);
         // An MCU that refused to advance makes this chunk untrustworthy even if
-        // the analog march converged. `solve_chunk` records (and streaks) the
-        // chunk on an analog failure and resets the streak on convergence; fold
-        // the MCU failure into the same accounting so the failed-window and
-        // consecutive-failure surfaces see it too. Only record here when the
-        // analog side converged — otherwise `solve_chunk` already recorded this
-        // exact window and a second call would double-count it. `sim_time` has
-        // not advanced yet, so the window start matches `solve_chunk`'s.
+        // the analog march converged. `solve_chunk` records an analog failure but
+        // NO LONGER resets the consecutive-failure streak on its own — the streak
+        // must reflect an MCU failure too. Fold the MCU failure into the same
+        // accounting so the failed-window and consecutive-failure surfaces see
+        // it. Only record here when the analog side converged — otherwise
+        // `solve_chunk` already recorded this exact window and a second call
+        // would double-count it. `sim_time` has not advanced yet, so the window
+        // start matches `solve_chunk`'s.
         if mcu_run_failed && chunk_converged {
             self.record_failed_chunk(chunk);
+        }
+        // The consecutive-failure streak resets ONLY on a fully-successful chunk
+        // (analog converged AND the MCU advanced). Doing this reset inside
+        // `solve_chunk` on analog convergence alone let an MCU-failed-but-analog-
+        // converged chunk zero the streak before `record_failed_chunk` bumped it
+        // back to 1, capping `max_consecutive_failed_chunks` at 1 and defeating
+        // the strict/CI abort (05 §3b) for a sustained MCU crash.
+        if chunk_converged && !mcu_run_failed {
+            self.consecutive_failed_chunks = 0;
         }
 
         // 3b. Peripherals: output sinks sample the freshly-solved voltages.
@@ -1755,10 +1776,11 @@ impl Scheduler {
         // A failed transient (either DC-recovered or held) is not a real solve of
         // this chunk. Record it so the run refuses to pass it off as quiet: the
         // failed-chunk count and window feed coverage/JSON (analog_valid:false),
-        // and the consecutive streak drives the strict/CI abort (05 §3b).
-        if converged {
-            self.consecutive_failed_chunks = 0;
-        } else {
+        // and the consecutive streak drives the strict/CI abort (05 §3b). The
+        // streak is NOT reset here on convergence: an MCU-failed chunk can still
+        // reach this point analog-converged, and only `run_chunk` — which also
+        // knows the MCU status — may reset the streak on a fully-successful chunk.
+        if !converged {
             self.record_failed_chunk(chunk);
         }
 
@@ -3823,6 +3845,30 @@ mod tests {
         assert!(
             !sched.failed_windows().is_empty(),
             "the failed chunk's sim-time window must be surfaced for consumers"
+        );
+    }
+
+    /// R15: a sustained MCU crash (run_micros Err) while the analog march keeps
+    /// converging must trip the strict/CI abort. The consecutive-failure streak
+    /// used to be reset to 0 inside solve_chunk on analog convergence — BEFORE
+    /// run_chunk re-recorded the MCU failure — so each such chunk zeroed then
+    /// bumped the streak to 1, capping max_consecutive_failed_chunks at 1 and
+    /// never reaching the abort threshold. The reset now happens only on a fully-
+    /// successful chunk (analog converged AND MCU advanced).
+    #[test]
+    fn sustained_mcu_failure_trips_the_strict_abort() {
+        let (mut sched, _micros) = sched_with_micros_core(true);
+        let mut uart = HashMap::new();
+        // The board's passive analog solve converges every chunk; only the MCU
+        // refuses to advance. Run past the abort threshold.
+        for _ in 0..STRICT_CONSECUTIVE_FAILED_ABORT {
+            sched.run_chunk(1e-4, &mut uart);
+        }
+        assert!(
+            sched.analog_abort_tripped(),
+            "an MCU crashing for {} consecutive chunks must trip the strict/CI abort, \
+             not be capped at a streak of 1",
+            STRICT_CONSECUTIVE_FAILED_ABORT
         );
     }
 

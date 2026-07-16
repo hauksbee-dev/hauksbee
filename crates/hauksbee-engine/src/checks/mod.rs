@@ -37,7 +37,7 @@ pub mod ripple;
 pub mod straps;
 pub mod usb_c;
 
-use hauksbee_extract::{ExtractedBoard, NetLintReport};
+use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
 /// The full engine-level lint: the connectivity net-lint plus the model-aware
@@ -59,6 +59,24 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(device_decode::device_decode_lint(board, lib).findings);
+    report
+}
+
+/// The full engine-level signal-integrity report: the extract-layer SI checks
+/// (`board.si_checks`) PLUS the model-aware engine-layer checks whose attribution
+/// needs the bound DB models — trace ampacity (IPC-2221) and input-cap ripple.
+/// Kept as one chokepoint so every SI surface (`--si`, `--check`, the JSON
+/// aggregate, TUI, the web front door) runs the identical set. The
+/// ampacity/ripple checks were previously appended only on the dedicated `--si`
+/// path, so `--check`, the combined `--json`, and the web report returned a
+/// false "looks healthy" over an under-width power trace or an over-ripple input
+/// cap that `--si` flagged — the SI twin of the `engine_lint` hole above.
+/// `geo_text` is the raw layout text (None for Altium, whose geometry is not yet
+/// threaded into the text-based SI checks).
+pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&str>) -> SiReport {
+    let mut report = board.si_checks(geo_text);
+    ampacity::append_ampacity(board, lib, geo_text, &mut report);
+    ripple::append_ripple(board, lib, &mut report);
     report
 }
 
