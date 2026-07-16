@@ -207,9 +207,7 @@ impl<'a> StreamReader<'a> {
         }
         let raw = &self.buf[self.pos..self.pos + len];
         self.pos += len;
-        let s = decode_altium_str(raw);
-        let s = s.trim_end_matches('\u{0}');
-        Some(parse_properties(s))
+        Some(parse_properties_bytes(raw))
     }
 
     // ── Fixed binary records ──────────────────────────────────────────────────
@@ -247,18 +245,43 @@ impl<'a> StreamReader<'a> {
     }
 }
 
-/// Parse a `|KEY=VALUE|...` Altium properties string into an uppercased-key map.
-fn parse_properties(s: &str) -> HashMap<String, String> {
+/// Parse a `|KEY=VALUE|...` Altium properties block from its RAW bytes into an
+/// uppercased-key map, decoding each value by its key. Altium writes a name
+/// field twice in one block: a CP1252 twin (`NAME=Mü` as `M\xFC`) and a UTF-8
+/// twin (`%UTF8%NAME=Mü` as `M\xC3\xBC`). Decoding the whole block as one unit
+/// failed UTF-8 on the CP1252 twin's high byte and fell back to CP1252 for
+/// everything — mojibake'ing the genuine UTF-8 twin (`M\xC3\xBC` → `MÃ¼`),
+/// which is exactly the twin `prop_str` prefers. So decode per value: a
+/// `%UTF8%` key is genuine UTF-8 (strict, lossy only as a last resort); the
+/// ANSI twin keeps the UTF-8-or-CP1252 heuristic.
+fn parse_properties_bytes(raw: &[u8]) -> HashMap<String, String> {
+    // Trim the block's trailing NUL terminator(s).
+    let mut end = raw.len();
+    while end > 0 && raw[end - 1] == 0 {
+        end -= 1;
+    }
+    let raw = &raw[..end];
+
     let mut map = HashMap::new();
-    for tok in s.split('|') {
+    for tok in raw.split(|&b| b == b'|') {
         if tok.is_empty() {
             continue;
         }
-        if let Some(eq) = tok.find('=') {
-            let key = tok[..eq].trim().to_ascii_uppercase();
-            let val = tok[eq + 1..].to_string();
-            map.insert(key, val);
-        }
+        let Some(eq) = tok.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        // Keys are ASCII; decode with the same heuristic, then uppercase.
+        let key = decode_altium_str(&tok[..eq]).trim().to_ascii_uppercase();
+        let val_bytes = &tok[eq + 1..];
+        let val = if key.starts_with("%UTF8%") {
+            match std::str::from_utf8(val_bytes) {
+                Ok(s) => s.to_string(),
+                Err(_) => String::from_utf8_lossy(val_bytes).into_owned(),
+            }
+        } else {
+            decode_altium_str(val_bytes)
+        };
+        map.insert(key, val);
     }
     map
 }
@@ -755,5 +778,27 @@ mod tests {
         assert_eq!(decode_altium_str("Nét".as_bytes()), "Nét");
         // Plain ASCII is unchanged.
         assert_eq!(decode_altium_str(b"GND"), "GND");
+    }
+
+    #[test]
+    fn utf8_twin_survives_a_cp1252_twin_in_the_same_block() {
+        // R12: a block carrying BOTH a CP1252 twin (NAME=M\xFC) and a UTF-8 twin
+        // (%UTF8%NAME=M\xC3\xBC). The CP1252 high byte makes the block invalid
+        // UTF-8; decoding it whole mojibake'd the UTF-8 twin. Per-value decoding
+        // keeps each twin correct, so prop_str's preferred %UTF8% value is "Mü".
+        let mut block: Vec<u8> = Vec::new();
+        block.extend_from_slice(b"|NAME=M");
+        block.push(0xFC); // CP1252 'ü'
+        block.extend_from_slice(b"|%UTF8%NAME=M");
+        block.extend_from_slice(&[0xC3, 0xBC]); // UTF-8 'ü'
+        block.push(0x00); // block terminator
+        let map = parse_properties_bytes(&block);
+        assert_eq!(map.get("NAME").map(String::as_str), Some("Mü"), "CP1252 twin");
+        assert_eq!(
+            map.get("%UTF8%NAME").map(String::as_str),
+            Some("Mü"),
+            "UTF-8 twin must not be mojibake'd"
+        );
+        assert_eq!(prop_str(&map, "NAME"), "Mü", "prop_str prefers the clean %UTF8% twin");
     }
 }

@@ -549,7 +549,13 @@ fn run_web_cosim(contents: &str, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSect
     let mut faults: Vec<FaultEvent> = Vec::new();
     while t < seconds {
         let frame = engine.step(frame_dt);
-        for bytes in frame.uart.values() {
+        // Concatenate per-MCU UART in a STABLE (sorted-by-MCU-key) order — plain
+        // `values()` is HashMap iteration order, so a multi-MCU board's merged
+        // uart_output would interleave nondeterministically run-to-run. Mirrors
+        // the CI runner's sorted-by-key concatenation.
+        let mut uart_entries: Vec<_> = frame.uart.iter().collect();
+        uart_entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (_, bytes) in uart_entries {
             last_uart.extend_from_slice(bytes);
         }
         for f in frame.faults {

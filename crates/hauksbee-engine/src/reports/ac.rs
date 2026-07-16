@@ -68,6 +68,7 @@ pub fn emit(
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
+                not_found_nets: Vec::new(),
                 coverage: None,
             });
             println!("{}", jr.to_json());
@@ -97,6 +98,7 @@ pub fn emit(
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
+                not_found_nets: Vec::new(),
                 coverage: None,
             });
             println!("{}", jr.to_json());
@@ -133,6 +135,7 @@ pub fn emit(
                     validity: Validity::invalid(reason),
                     nets: vec![],
                     no_signal_path_nets: vec![loop_net.to_string()],
+                    not_found_nets: Vec::new(),
                     coverage: None,
                 });
                 println!("{}", jr.to_json());
@@ -167,6 +170,15 @@ pub fn emit(
             .filter(|(_, b)| !b.is_empty() && ac_is_all_sentinel(b))
             .map(|(net, _)| net.clone())
             .collect();
+        // A requested net whose bode is EMPTY was not found in the circuit at
+        // all. It lands in neither `nets` nor `no_path`, so without surfacing it
+        // here the JSON would silently drop it while the text path warns — the
+        // exact "never silent" promise this report makes.
+        let not_found: Vec<String> = per_net
+            .iter()
+            .filter(|(_, b)| b.is_empty())
+            .map(|(net, _)| net.clone())
+            .collect();
         // Honest coverage for a partially-valid sweep: some requested nets carry
         // signal, others sit at the floor. Non-gating; mirrors `no_signal_path_nets`.
         let requested = nets.len() + no_path.len();
@@ -190,6 +202,7 @@ pub fn emit(
             validity: Validity::valid(),
             nets,
             no_signal_path_nets: no_path,
+            not_found_nets: not_found,
             coverage,
         });
         println!("{}", jr.to_json());

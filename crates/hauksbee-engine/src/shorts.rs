@@ -29,7 +29,8 @@ pub const BRIDGE_OHMS: f64 = 5e-3;
 pub struct AppliedShort {
     pub net_a: String,
     pub net_b: String,
-    /// The bridge resistor's device name in the circuit ("SHORT_<a>_<b>").
+    /// The bridge resistor's device name in the circuit
+    /// ("SHORT_<a>_<b>_n<lo>_n<hi>", the node ids disambiguating name collisions).
     pub device_name: String,
 }
 
@@ -45,11 +46,24 @@ pub fn stamp_bridge(
     if a == b {
         return None;
     }
-    let device_name = format!("SHORT_{name_a}_{name_b}");
-    // Idempotent: don't double-stamp the same bridge.
-    if circuit.devices.iter().any(|d| d.name() == device_name) {
+    // Idempotency keys on the NODE PAIR, not the concatenated name: net names
+    // routinely contain underscores, so "SHORT_{a}_{b}" is not injective over
+    // pairs — ("GPIO_1","2") and ("GPIO","1_2") both render "SHORT_GPIO_1_2",
+    // and keying on the name silently dropped the second, genuinely distinct
+    // short. The node ids are also folded into the device name so two colliding
+    // name-pairs still get unique device names in the circuit.
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    let already = circuit.devices.iter().any(|d| match d {
+        Device::Resistor { a: da, b: db, name, .. } if name.starts_with("SHORT_") => {
+            let (dl, dh) = if da <= db { (*da, *db) } else { (*db, *da) };
+            dl == lo && dh == hi
+        }
+        _ => false,
+    });
+    if already {
         return None;
     }
+    let device_name = format!("SHORT_{name_a}_{name_b}_n{}_n{}", lo.0, hi.0);
     circuit.add(Device::Resistor {
         name: device_name.clone(),
         a,
@@ -93,4 +107,33 @@ pub fn shorted_name_pairs(report: &DrcReport) -> Vec<(String, String)> {
     pairs.sort();
     pairs.dedup();
     pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn underscore_net_names_do_not_collide_into_a_dropped_short() {
+        // R12: two DISTINCT shorted pairs whose names concatenate to the same
+        // "SHORT_GPIO_1_2" string. Keyed on the node pair, both must stamp; the
+        // old name-keyed idempotency dropped the second as a false duplicate.
+        let mut c = Circuit::new();
+        let n1 = c.node("GPIO_1");
+        let n2 = c.node("2");
+        let n3 = c.node("GPIO");
+        let n4 = c.node("1_2");
+        let s1 = stamp_bridge(&mut c, n1, n2, "GPIO_1", "2");
+        let s2 = stamp_bridge(&mut c, n3, n4, "GPIO", "1_2");
+        assert!(s1.is_some() && s2.is_some(), "both distinct shorts must stamp");
+        assert_ne!(s1, s2, "the two bridges must have distinct device names");
+        let bridges = c
+            .devices
+            .iter()
+            .filter(|d| d.name().starts_with("SHORT_"))
+            .count();
+        assert_eq!(bridges, 2, "two bridge resistors present");
+        // Re-stamping the SAME node pair is still idempotent (no third bridge).
+        assert!(stamp_bridge(&mut c, n2, n1, "2", "GPIO_1").is_none());
+    }
 }

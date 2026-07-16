@@ -2545,7 +2545,10 @@ fn bind_digital(
         return;
     }
 
-    // Stamp a Thevenin driver on each connected output role.
+    // Stamp a Thevenin driver on each connected output role, honouring the
+    // model's declared output resistance (drive strength) — `DEFAULT_RO` is the
+    // fallback inside `from_params`, not an override of a specified `ro`.
+    let ro = crate::digital::LogicLevels::from_params(model).ro;
     let mut drivers = HashMap::new();
     for role in output_roles(model) {
         if let Some(&net) = roles.get(&role) {
@@ -2558,7 +2561,7 @@ fn bind_digital(
                 net,
                 &net_name,
                 &format!("{}_{role}", comp.reference),
-                DEFAULT_RO,
+                ro,
             );
             drivers.insert(role, drv);
         }
@@ -2662,7 +2665,7 @@ fn bind_nor_latches(
                 q_net,
                 &q_name,
                 &format!("{}_latch{}_q", comp.reference, gates[q_gate].idx),
-                DEFAULT_RO,
+                levels.ro,
             );
             let mut lroles: HashMap<String, NodeId> = HashMap::new();
             lroles.insert("set".to_string(), set_n);
@@ -3379,6 +3382,55 @@ mod natural_ref_key_tests {
         let addr = |r: &str| dacs.iter().find(|d| d.reference == r).unwrap().address;
         assert_eq!(addr("U2"), 0x60, "U2 is the first device");
         assert_eq!(addr("U10"), 0x61, "U10 is the second device");
+    }
+}
+
+#[cfg(test)]
+mod digital_ro_tests {
+    use super::*;
+    use hauksbee_models::{ComponentQuery, ModelLibrary};
+
+    fn bare_comp(reference: &str) -> Component {
+        Component {
+            reference: reference.to_string(),
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn digital_output_driver_honours_model_ro() {
+        // R12: a [models.logic] part's `ro` (drive strength) was parsed but never
+        // applied — every stamped Thevenin driver used DEFAULT_RO. Bind a 74HC595
+        // whose model declares a custom ro and assert the driver carries it.
+        let mut model = ModelLibrary::builtin()
+            .resolve(&ComponentQuery::new(None, Some("74HC595".to_string()), None))
+            .model
+            .expect("builtin 74HC595");
+        let custom_ro = 123.0;
+        assert_ne!(custom_ro, DEFAULT_RO, "the test value must differ from the default");
+        model.params.set_f64("ro", custom_ro);
+
+        let mut circuit = Circuit::new();
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        for r in ["srclk", "rclk", "ser", "qa", "qb"] {
+            roles.insert(r.into(), circuit.node(&r.to_uppercase()));
+        }
+        let mut digital = Vec::new();
+        bind_digital(&bare_comp("U1"), &model, &mut circuit, &roles, &mut digital);
+
+        assert_eq!(digital.len(), 1, "the 595 binds");
+        let drv = digital[0]
+            .drivers
+            .get("qa")
+            .expect("qa output driver stamped");
+        assert_eq!(drv.ron, custom_ro, "driver must carry the model's ro, not DEFAULT_RO");
     }
 }
 
