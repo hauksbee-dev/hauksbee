@@ -2721,7 +2721,10 @@ fn bind_mcu(
     mcus: &mut Vec<McuBinding>,
 ) -> Option<String> {
     let backend = mcu_backend_string(comp, model);
-    let module = model.params.0.get("module").is_some();
+    // Value-aware, not presence-aware: an explicit `module = false` (a bare chip
+    // in an SDK/extending-guide model) must NOT activate the Arduino-header pad
+    // mapping. Only `module = true` does.
+    let module = model.params.get_bool("module").unwrap_or(false);
     let derived_when_empty = if model.pins.is_empty() {
         Some(derive_mcu_pin_roles(comp))
     } else {

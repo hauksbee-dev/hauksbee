@@ -37,6 +37,9 @@ pub struct McuDemoEngine {
     mcu: Box<dyn hauksbee_mcu::Mcu + Send>,
     name: String,
     board_url: String,
+    /// Kept so `reset()` can reboot from a fresh firmware load, not just zero the
+    /// clock (the MCU core, UART buffer and LED state used to leak across reset).
+    firmware_path: std::path::PathBuf,
     sim_time: f64,
     controls: SolverControls,
     uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
@@ -51,32 +54,45 @@ impl McuDemoEngine {
         name: &str,
         board_url: &str,
     ) -> anyhow::Result<Self> {
-        use hauksbee_mcu::Mcu;
-        // Guard the firmware path before simavr sees it: a missing file segfaults
-        // the native loader (exit 139) instead of erroring.
-        hauksbee_mcu::validate_firmware_path(firmware_hex)?;
-        let mut mcu = hauksbee_mcu::AvrMcu::atmega328p_16mhz()?;
-        mcu.load_firmware(firmware_hex)?;
         let uart_rx: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
-        let sink = uart_rx.clone();
-        mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
         let led_state: std::sync::Arc<std::sync::Mutex<bool>> = Default::default();
-        let led = led_state.clone();
-        mcu.on_pin_change(Box::new(move |pin, high, _cycle| {
-            if pin.port == 'B' && pin.bit == 5 {
-                *led.lock().unwrap() = high;
-            }
-        }));
+        let mcu = Self::build_mcu(firmware_hex, &uart_rx, &led_state)?;
         Ok(McuDemoEngine {
-            mcu: Box::new(mcu),
+            mcu,
             name: name.to_string(),
             board_url: board_url.to_string(),
+            firmware_path: firmware_hex.to_path_buf(),
             sim_time: 0.0,
             controls: SolverControls::default(),
             uart_rx,
             led_state,
             adc_volts: 2.5,
         })
+    }
+
+    /// Build a fresh AvrMcu with the demo callbacks wired to the given shared
+    /// UART/LED state. Shared by `new` and `reset` so a reboot re-registers the
+    /// same callbacks against the same Arcs.
+    fn build_mcu(
+        firmware_hex: &std::path::Path,
+        uart_rx: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        led_state: &std::sync::Arc<std::sync::Mutex<bool>>,
+    ) -> anyhow::Result<Box<dyn hauksbee_mcu::Mcu + Send>> {
+        use hauksbee_mcu::Mcu;
+        // Guard the firmware path before simavr sees it: a missing file segfaults
+        // the native loader (exit 139) instead of erroring.
+        hauksbee_mcu::validate_firmware_path(firmware_hex)?;
+        let mut mcu = hauksbee_mcu::AvrMcu::atmega328p_16mhz()?;
+        mcu.load_firmware(firmware_hex)?;
+        let sink = uart_rx.clone();
+        mcu.on_uart(Box::new(move |b| sink.lock().unwrap().push(b)));
+        let led = led_state.clone();
+        mcu.on_pin_change(Box::new(move |pin, high, _cycle| {
+            if pin.port == 'B' && pin.bit == 5 {
+                *led.lock().unwrap() = high;
+            }
+        }));
+        Ok(Box::new(mcu))
     }
 }
 
@@ -128,6 +144,16 @@ impl Engine for McuDemoEngine {
     }
 
     fn reset(&mut self) {
+        // A real reboot, not just a clock rewind: rebuild the MCU core from a
+        // fresh firmware load and clear the buffered UART / LED state, so the
+        // post-reset frames reflect a fresh boot instead of leaking mid-stream
+        // execution across the reset.
+        if let Ok(mcu) = Self::build_mcu(&self.firmware_path, &self.uart_rx, &self.led_state) {
+            self.mcu = mcu;
+        }
+        self.uart_rx.lock().unwrap().clear();
+        *self.led_state.lock().unwrap() = false;
+        self.adc_volts = 2.5;
         self.sim_time = 0.0;
     }
 
