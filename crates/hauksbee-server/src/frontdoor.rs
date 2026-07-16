@@ -25,18 +25,21 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
 
-/// Analyze an uploaded board: `(file_name, contents) -> JSON report string`.
-/// Boxed so the engine can supply its `analyze_json` without the server crate
-/// depending on the engine.
-pub type Analyzer = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+/// Analyze an uploaded board: `(file_name, board_bytes) -> JSON report string`.
+/// The board is passed as raw `&[u8]` (never lossy-decoded) so a binary format
+/// (Altium `.PcbDoc`, an OLE2 container) survives intact; the analyzer's
+/// extractor sniffs binary-vs-text itself. Boxed so the engine can supply its
+/// `analyze_json` without the server crate depending on the engine.
+pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
 
-/// Analyze a board AND an optional firmware: `(board_name, board_contents,
-/// Option<(firmware_name, firmware_bytes)>) -> JSON report string`. Firmware is
-/// passed as raw `&[u8]` (never lossy-decoded) so an uploaded ELF stays intact.
-/// Parallel to [`Analyzer`] so the server crate stays engine-free and the
-/// existing `/api/analyze` path + call sites are untouched.
+/// Analyze a board AND an optional firmware: `(board_name, board_bytes,
+/// Option<(firmware_name, firmware_bytes)>) -> JSON report string`. Board and
+/// firmware are both passed as raw `&[u8]` (never lossy-decoded) so an uploaded
+/// binary board or ELF stays intact. Parallel to [`Analyzer`] so the server
+/// crate stays engine-free and the existing `/api/analyze` path + call sites
+/// are untouched.
 pub type FirmwareAnalyzer =
-    Arc<dyn Fn(&str, &str, Option<(&str, &[u8])>) -> String + Send + Sync>;
+    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
 
 /// Largest board upload accepted (32 MiB). Gerber zips and big KiCad layouts fit
 /// comfortably; this just stops a pathological upload from exhausting memory.
@@ -97,11 +100,11 @@ async fn analyze_handler(
         .unwrap_or("board")
         .to_string();
 
-    // Board files are text (KiCad/Eagle/IPC) or a zip (gerbers). The analyzer's
-    // extractor sniffs the format; we hand it a lossy-UTF8 view, which is exact
-    // for the text formats and lets the zip path still recognise its magic.
-    let contents = String::from_utf8_lossy(&body).into_owned();
-    let json = (state.analyze)(&file_name, &contents);
+    // Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
+    // container (Altium .PcbDoc). The analyzer's extractor sniffs the format
+    // from the RAW bytes; decoding here (the old lossy-UTF8 view) corrupted the
+    // binary formats before they were ever parsed.
+    let json = (state.analyze)(&file_name, &body);
 
     (
         StatusCode::OK,
@@ -124,8 +127,9 @@ async fn analyze_handler_fw(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("board")
         .to_string();
-    let contents = String::from_utf8_lossy(&body).into_owned();
-    let json = (state.analyze)(&file_name, &contents, None);
+    // Raw bytes, same as [`analyze_handler`]: a binary board must not be
+    // lossy-decoded on its way to the analyzer.
+    let json = (state.analyze)(&file_name, &body, None);
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -134,10 +138,10 @@ async fn analyze_handler_fw(
 }
 
 /// Accept a `multipart/form-data` upload with a `board` part (required) and a
-/// `firmware` part (optional). The board is decoded lossily (it is text or a
-/// zip the extractor sniffs); the firmware is passed as raw `&[u8]` — NEVER
-/// lossy-decoded, which would corrupt an ELF. Falls back to a board-only
-/// analysis when no firmware part is present.
+/// `firmware` part (optional). Both parts are passed as raw `&[u8]` — NEVER
+/// lossy-decoded, which would corrupt an ELF or a binary board (Altium
+/// .PcbDoc); the analyzer's extractor sniffs binary-vs-text itself. Falls back
+/// to a board-only analysis when no firmware part is present.
 async fn analyze_firmware_handler(
     State(state): State<Arc<FirmwareState>>,
     mut multipart: Multipart,
@@ -147,7 +151,27 @@ async fn analyze_firmware_handler(
     let mut fw_name = String::new();
     let mut fw_bytes: Option<Vec<u8>> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    loop {
+        // Distinguish "no more parts" (Ok(None), the clean end of the stream)
+        // from a malformed/truncated multipart body (Err). The old
+        // `while let Ok(Some(..))` collapsed both into "stop looping", so a
+        // corrupt upload fell through to the misleading "no board file in the
+        // upload" error below instead of naming the real cause.
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                let json = format!(
+                    "{{\"ok\":false,\"error\":\"malformed multipart upload: {}\"}}",
+                    e.to_string().replace('"', "'")
+                );
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    json,
+                );
+            }
+        };
         let part = field.name().unwrap_or("").to_string();
         let filename = field.file_name().map(|s| s.to_string());
         let data = match field.bytes().await {
@@ -202,11 +226,9 @@ async fn analyze_firmware_handler(
             );
         }
     };
-    let contents = String::from_utf8_lossy(&board_bytes).into_owned();
-
     let json = match &fw_bytes {
-        Some(bytes) => (state.analyze)(&board_name, &contents, Some((&fw_name, bytes))),
-        None => (state.analyze)(&board_name, &contents, None),
+        Some(bytes) => (state.analyze)(&board_name, &board_bytes, Some((&fw_name, bytes))),
+        None => (state.analyze)(&board_name, &board_bytes, None),
     };
 
     (
