@@ -430,6 +430,49 @@ fn free_port_triple() -> Result<(u16, u16, u16)> {
     Ok((pa, pb, pc))
 }
 
+/// Wall-time floor applied to every run window while the guest is BOOTING.
+///
+/// The esp32 boot ROM + 2nd-stage bootloader take ~1-2 s of virtual time to
+/// reach `app_main`. The engine's default co-sim chunk is 100 µs; honoring it
+/// during boot would need ~15,000 cont/stop round-trips (plus per-chunk QMP
+/// overhead) before the firmware even starts. Flooring boot chunks at 8 ms
+/// clears boot in a few hundred chunks instead. Boot-ONLY: in steady state
+/// this floor would over-advance a 100 µs chunk ~80x and desync the guest
+/// from the analog solve and the lockstep peers (R8 #5).
+const BOOT_WINDOW_FLOOR_S: f64 = 8e-3;
+
+/// Wall-time cap on boot-phase run windows, so one chunk of a misconfigured
+/// huge `dt` cannot stall the whole co-sim behind a single blocking sleep
+/// while nothing observable is happening yet. Boot-only, like the floor:
+/// post-boot a legitimately long requested chunk must run its full length,
+/// or the guest falls BEHIND sim time (the mirror image of the floor bug).
+const BOOT_WINDOW_CAP_S: f64 = 50e-3;
+
+/// Wall-clock run window for a requested virtual interval of `seconds`.
+///
+/// The guest's virtual clock runs at roughly wall rate (no icount — it breaks
+/// esp32 boot, measured; see the module notes), so the window IS the intended
+/// virtual-time advance. Two regimes:
+///
+/// - **Booting** (`boot_complete == false`): clamp to
+///   `[BOOT_WINDOW_FLOOR_S, BOOT_WINDOW_CAP_S]` so the ROM/bootloader makes
+///   real progress per chunk without any one chunk blocking the co-sim.
+/// - **Booted**: honor the request exactly. The lockstep contract is that
+///   `run_micros(us)` advances ~`us` so all domains level at each chunk
+///   boundary; any floor here would run the guest ahead of the analog solve
+///   (pin edges, UART timing, everything time-correlated desyncs — R8 #5).
+///
+/// Pure function of its inputs so the regression tests can pin the mapping
+/// without a QEMU process.
+fn run_window(seconds: f64, boot_complete: bool) -> Duration {
+    let s = if boot_complete {
+        seconds.max(0.0)
+    } else {
+        seconds.clamp(BOOT_WINDOW_FLOOR_S, BOOT_WINDOW_CAP_S)
+    };
+    Duration::from_secs_f64(s)
+}
+
 /// Espressif-QEMU-backed [`Mcu`].
 pub struct QemuBackend {
     config: QemuConfig,
@@ -451,6 +494,16 @@ pub struct QemuBackend {
     on_pin_change: Option<Box<dyn FnMut(PinId, bool, u64) + Send>>,
     on_uart: Option<Box<dyn FnMut(u8) + Send>>,
     firmware_loaded: bool,
+    /// True once the firmware has raised the mailbox [`mailbox::MAGIC`] word,
+    /// i.e. `app_main` is running. Gates the boot-only run-window floor (see
+    /// [`run_window`]): before this, every chunk is floored so the ROM +
+    /// 2nd-stage bootloader make real progress; after it, the requested chunk
+    /// time is honored exactly so the guest stays leveled with the analog
+    /// solve and the other MCUs (R8 #5). A firmware that never raises MAGIC
+    /// (unmodified vendor firmware, not mailbox-aware) keeps the floor
+    /// forever — identical to the pre-fix behaviour, and the only honest
+    /// option: without the handshake there is no boot signal to gate on.
+    boot_complete: bool,
     /// Virtual time advanced so far, in cycles-equivalent.
     cycles: u64,
     /// Resolved QOM path of the emulated I2C device at each modeled sensor
@@ -571,6 +624,7 @@ impl QemuBackend {
             on_pin_change: None,
             on_uart: None,
             firmware_loaded: true, // booted from the image
+            boot_complete: false,
             cycles: 0,
             i2c_temp_paths: HashMap::new(),
             on_i2c: None,
@@ -658,32 +712,48 @@ impl QemuBackend {
     /// Advance the guest by ~`seconds` of virtual time, then exchange state.
     ///
     /// Mechanism (no icount; see the module lockstep notes): resume the guest
-    /// (`cont`), hold a bounded wall-time window during which the esp32 machine
+    /// (`cont`), hold a wall-time window during which the esp32 machine
     /// advances its virtual clock at roughly wall rate, pause (`stop`), then read
-    /// the GPIO mailbox and drain UART. The window is the requested virtual
-    /// interval with a floor so the guest makes real progress each chunk (the
-    /// esp32 boot ROM + 2nd-stage bootloader take ~1-2 s of virtual time to reach
-    /// app_main, so the early chunks must let it run). This mirrors Renode's
-    /// `RunFor`, which also blocks for the interval, with the difference that the
-    /// pace is wall-bounded rather than instruction-counted.
+    /// the GPIO mailbox and drain UART. This mirrors Renode's `RunFor`, which
+    /// also blocks for the interval, with the difference that the pace is
+    /// wall-bounded rather than instruction-counted.
+    ///
+    /// The window is [`run_window`]-shaped: floored/capped only while BOOTING
+    /// (until the firmware raises the mailbox MAGIC), then the requested
+    /// interval exactly, so steady-state chunks stay leveled with the analog
+    /// solve and the other MCUs (R8 #5).
     fn run_seconds(&mut self, seconds: f64) -> Result<()> {
         if !self.firmware_loaded {
             bail!("no firmware image booted in the QEMU machine");
         }
         self.qmp.cont().context("qmp cont")?;
-        // Window: the requested virtual interval, floored at 8 ms so a chunk
-        // always advances the guest enough to clear boot within a reasonable
-        // number of chunks, and capped so a large step does not stall the co-sim.
-        let window_ms = ((seconds * 1000.0).max(8.0)).min(50.0) as u64;
-        std::thread::sleep(Duration::from_millis(window_ms));
+        let window = run_window(seconds, self.boot_complete);
+        std::thread::sleep(window);
         self.qmp.stop().context("qmp stop")?;
 
-        // Credit cycles from the window we ACTUALLY ran (window_ms), not the
-        // requested `seconds`: the clamp above floors/caps the real run, so
+        // Credit cycles from the window we ACTUALLY ran, not the requested
+        // `seconds`: during boot the floor/cap reshapes the real run, so
         // crediting `seconds` would systematically skew the guest cycle bracket
-        // the chunk's GPIO-edge timestamps are measured against.
+        // the chunk's GPIO-edge timestamps are measured against. Post-boot the
+        // window IS the requested interval, so credit and request agree.
+        // (Honest caveat: the guest also runs during the cont/stop QMP round
+        // trips, so the true advance is `window` plus some control latency;
+        // without icount that slack is unmeasurable and left uncredited.)
         self.cycles +=
-            ((window_ms as f64 / 1000.0) * self.config.frequency_hz as f64).round() as u64;
+            (window.as_secs_f64() * self.config.frequency_hz as f64).round() as u64;
+
+        // Boot-complete detection (one word read per chunk, only until seen):
+        // the demo firmware writes MAGIC_VALUE into the mailbox as the first
+        // thing app_main does, so its appearance is the earliest reliable
+        // "past the ROM + 2nd-stage bootloader" signal the backend can see.
+        // A failed read leaves the flag down (floor stays — the safe side).
+        if !self.boot_complete {
+            if let Ok(magic) = self.read_guest_u32(mailbox::MAGIC) {
+                if magic == mailbox::MAGIC_VALUE {
+                    self.boot_complete = true;
+                }
+            }
+        }
 
         self.poll_gpio_edges();
         // Service the mailbox bus cells while the guest is paused (05 §5.2),
@@ -937,6 +1007,13 @@ impl QemuBackend {
     /// carries no Xtensa cross-toolchain to build one).
     pub fn debug_read_u32(&mut self, addr: u32) -> Result<u32> {
         self.read_guest_u32(addr)
+    }
+
+    /// Whether the firmware has raised the mailbox MAGIC handshake, i.e. the
+    /// backend has switched from boot-floored run windows to exact ones.
+    /// Diagnostic / test-support accessor.
+    pub fn boot_complete(&self) -> bool {
+        self.boot_complete
     }
 
     /// Write a guest physical word (gdbstub `M` packet). See [`Self::debug_read_u32`].
@@ -1233,6 +1310,58 @@ mod tests {
         // mailbox stays comfortably inside the 8 KiB RTC slow memory.
         assert_eq!(SPI_REQ_DATA + BUS_DATA_MAX, SPI_RSP_SEQ);
         assert!(SPI_RSP_DATA + BUS_DATA_MAX <= BASE + 0x2000);
+    }
+
+    // ── run_window: the boot-only floor/cap (R8 #5) ──────────────────────────
+
+    /// THE BUG (R8 #5): the 8 ms floor was unconditional, so a steady-state
+    /// scheduler chunk of 100 µs advanced the guest ~8 ms — an ~80x
+    /// over-advance that desynced the QEMU MCU from the analog solve and the
+    /// lockstep peers. Post-boot, the requested interval must be honored
+    /// exactly. Before the fix this asserted 8 ms for the 100 µs case.
+    #[test]
+    fn run_window_post_boot_honors_the_requested_chunk() {
+        assert_eq!(
+            run_window(100e-6, true),
+            Duration::from_secs_f64(100e-6),
+            "a booted guest must advance the requested 100 µs, not the boot floor"
+        );
+        // The old 50 ms cap also truncated legitimately long post-boot chunks.
+        assert_eq!(
+            run_window(0.2, true),
+            Duration::from_secs_f64(0.2),
+            "a long post-boot chunk must run its full length (no cap)"
+        );
+    }
+
+    /// The floor exists so the ROM + 2nd-stage bootloader clear boot in a few
+    /// hundred chunks instead of ~15,000; it must survive for the boot phase.
+    #[test]
+    fn run_window_boot_phase_keeps_floor_and_cap() {
+        assert_eq!(
+            run_window(100e-6, false),
+            Duration::from_secs_f64(BOOT_WINDOW_FLOOR_S),
+            "boot chunks are floored so the bootloader makes real progress"
+        );
+        assert_eq!(
+            run_window(0.2, false),
+            Duration::from_secs_f64(BOOT_WINDOW_CAP_S),
+            "boot chunks are capped so one chunk cannot stall the co-sim"
+        );
+        // In-range boot request passes through unchanged.
+        assert_eq!(run_window(20e-3, false), Duration::from_secs_f64(20e-3));
+    }
+
+    /// Degenerate inputs stay sane: a zero/negative request never panics and
+    /// never sleeps (post-boot) / still gets the boot floor (booting).
+    #[test]
+    fn run_window_degenerate_inputs() {
+        assert_eq!(run_window(0.0, true), Duration::ZERO);
+        assert_eq!(run_window(-1.0, true), Duration::ZERO);
+        assert_eq!(
+            run_window(0.0, false),
+            Duration::from_secs_f64(BOOT_WINDOW_FLOOR_S)
+        );
     }
 
     #[test]
