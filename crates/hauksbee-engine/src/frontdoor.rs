@@ -966,18 +966,29 @@ pub fn analyze_with_firmware_json(
 }
 
 /// The web co-sim GPIO activity table: the `limit` most-active nets, ranked by
-/// TOGGLE COUNT descending (name tiebreak) — the "top movers first" contract the
-/// CLI toggle table and JSON activity_summary also honour. Ranking by the driven
-/// flag then alphabetically (the old order) truncated away the genuinely
-/// most-active nets whenever more than `limit` nets were driven, keeping quiet
-/// alphabetically-early ones instead.
+/// TOGGLE COUNT descending, then VOLTAGE RANGE descending, then name — the exact
+/// three-key "top movers first" contract the CLI toggle table and JSON
+/// activity_summary use (see `reports::cosim`). Ranking by the driven flag then
+/// alphabetically (the old order) truncated away the genuinely most-active nets
+/// whenever more than `limit` nets were driven; dropping the voltage-range middle
+/// key (a later regression) made the web keep a DIFFERENT subset than the CLI/JSON
+/// at the truncation boundary when nets tie on toggle count.
 fn top_gpio_nets(
     stats: &std::collections::HashMap<String, crate::scheduler::NetStat>,
     net_volts: &std::collections::HashMap<String, f64>,
     limit: usize,
 ) -> Vec<WebGpioNet> {
     let mut ranked: Vec<_> = stats.iter().collect();
-    ranked.sort_by(|a, b| b.1.toggles.cmp(&a.1.toggles).then(a.0.cmp(b.0)));
+    ranked.sort_by(|a, b| {
+        b.1.toggles
+            .cmp(&a.1.toggles)
+            .then(
+                (b.1.max_v - b.1.min_v)
+                    .partial_cmp(&(a.1.max_v - a.1.min_v))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(a.0.cmp(b.0))
+    });
     ranked.truncate(limit);
     ranked
         .into_iter()
@@ -1014,6 +1025,37 @@ mod tests {
         // Toggle counts are non-increasing down the ranked list.
         // (ZZ_CLK first, then the 1-toggle nets.)
         assert!(top.iter().all(|n| n.driven), "all 15 kept nets were driven");
+    }
+
+    #[test]
+    fn gpio_nets_tiebreak_on_voltage_range_like_cli_and_json() {
+        // Round-29: the web table dropped the voltage-range secondary sort key the
+        // CLI toggle table and JSON activity_summary use, so at the truncation
+        // boundary it kept a DIFFERENT subset of equal-toggle nets. 16 nets all
+        // toggle once; the one with the LARGEST swing must survive the take(15) and
+        // the smallest-swing (alphabetically-early) one must be the one dropped.
+        use crate::scheduler::NetStat;
+        use std::collections::HashMap;
+        let mut stats: HashMap<String, NetStat> = HashMap::new();
+        // "AAA_TINY" sorts first alphabetically but has the smallest swing.
+        stats.insert("AAA_TINY".to_string(), NetStat::with_toggles_and_range(1, 0.0, 0.1));
+        // "ZZ_BIG" sorts last alphabetically but has the largest swing.
+        stats.insert("ZZ_BIG".to_string(), NetStat::with_toggles_and_range(1, 0.0, 5.0));
+        for i in 0..14 {
+            stats.insert(format!("M{i:02}"), NetStat::with_toggles_and_range(1, 0.0, 1.0));
+        }
+        let net_volts: HashMap<String, f64> = HashMap::new();
+        let top = top_gpio_nets(&stats, &net_volts, 15);
+        assert_eq!(top.len(), 15);
+        assert_eq!(top[0].name, "ZZ_BIG", "largest voltage swing leads on a toggle tie");
+        assert!(
+            top.iter().any(|n| n.name == "ZZ_BIG"),
+            "the widest-swing net must survive truncation"
+        );
+        assert!(
+            !top.iter().any(|n| n.name == "AAA_TINY"),
+            "the smallest-swing net is the one dropped, not a big mover"
+        );
     }
 
     const SHORTED: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");

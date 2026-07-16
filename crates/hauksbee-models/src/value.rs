@@ -265,6 +265,20 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     }
     let before = &s[..i];
     let rest = &s[i..];
+    // A space between the number and a prefixed unit ("10 kΩ", "4.7 uF") is the
+    // canonical SI typeset form and common in BOM exports; skip it so the SI
+    // multiplier is still recognized (parse_suffix does not itself skip spaces,
+    // so " kOhm" left the multiplier unread and emitted the value 10^n too small).
+    // But do NOT skip a space that precedes another DIGIT ("10 5"): that is not a
+    // single value and must stay rejected, never silently fused into "10.5".
+    let rest = {
+        let trimmed = rest.trim_start();
+        if trimmed.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            rest
+        } else {
+            trimmed
+        }
+    };
 
     // --- try to parse suffix (and optional interleaved decimal part) ---------
     let (multiplier, suffix_str, after_suffix) = parse_suffix(rest);
@@ -751,6 +765,32 @@ mod tests {
         check("600@100MHz", 600.0); // ferrite bead impedance@frequency
     }
 
+    /// Round-29 (HIGH): a space BEFORE the SI multiplier ("10 kOhm") is the
+    /// canonical typeset form, but parse_suffix never skipped it, so the
+    /// multiplier was dropped and the value came out 10^n too small with the unit
+    /// silently lost. The space-AFTER form ("10k Ohm") already worked; the two
+    /// must agree.
+    #[test]
+    fn test_space_before_multiplier_keeps_the_scale() {
+        check("10 kOhm", 10_000.0);
+        check("4.7 kOhm", 4_700.0);
+        check("1 MOhm", 1_000_000.0);
+        check("10 uF", 10e-6);
+        check("2.2 nF", 2.2e-9);
+        // Space-after-multiplier still works (unchanged).
+        check("10k Ohm", 10_000.0);
+        // A bare unit after a space (no multiplier) is unaffected.
+        check("10 Ohm", 10.0);
+        // A space before another DIGIT must never be fused into a fractional value
+        // ("10 5" must not become 10.5): the digit guard keeps the space, so the
+        // magnitude stays 10 (the trailing token is ignored, as before the fix).
+        let r = parse_value("10 5");
+        assert!(
+            r.map_or(true, |v| (v.si - 10.5).abs() > 1e-9),
+            "'10 5' must not silently fuse into 10.5"
+        );
+    }
+
     /// Bug regression: a bare uppercase 'F' is the Farad unit, not the femto
     /// multiplier. "1F" (a supercap) must be 1 farad, not 1e-15.
     #[test]
@@ -807,3 +847,7 @@ mod tests {
         assert_eq!(parse_value("1F").unwrap().unit.as_deref(), Some("F"));
     }
 }
+
+
+
+

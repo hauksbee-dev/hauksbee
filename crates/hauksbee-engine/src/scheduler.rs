@@ -389,6 +389,13 @@ impl NetStat {
     pub(crate) fn with_toggles(toggles: u64) -> Self {
         NetStat { toggles, ..Default::default() }
     }
+
+    /// Test constructor with an explicit voltage range, for the activity-ranking
+    /// tie-break (equal toggles, differing swing) the web/CLI/JSON tables share.
+    #[cfg(test)]
+    pub(crate) fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
+        NetStat { toggles, min_v, max_v, ..Default::default() }
+    }
 }
 
 impl Scheduler {
@@ -799,21 +806,27 @@ impl Scheduler {
     }
 
     /// Install the live CS-framing hook for `bus` on whichever MCU actually
-    /// drives `cs_pin` (05 §2.1). Registers the hook only on the MCU whose binding
-    /// owns a GPIO driver for that pin, so a different MCU's identically-named pin
-    /// cannot spuriously frame the bus. A `None` pin (unresolved CS) installs
-    /// nothing and the bus stays on the chunk-boundary heuristic.
+    /// drives `cs_pin` (05 §2.1). Registers the hook on the SINGLE owning MCU, so a
+    /// different MCU's identically-named pin cannot spuriously frame the bus. A
+    /// `None` pin (unresolved CS) installs nothing and the bus stays on the
+    /// chunk-boundary heuristic.
+    ///
+    /// `gpio_drivers` is keyed by chip-local `(port,bit)`, so on a multi-MCU board
+    /// two MCUs can each own a driver for the SAME tuple on UNRELATED nets. Framing
+    /// every such MCU let an unrelated MCU's toggle of its like-named pin
+    /// spuriously select/deselect this bus, corrupting the decoded transaction. We
+    /// install on only the FIRST MCU owning the pin — mirroring [`pin_driving_node`]
+    /// (from which `cs_pin` was resolved), which returns the first match on the
+    /// documented "a net is driven by at most one MCU" invariant.
     fn register_cs_frame(&mut self, bus: &Arc<Mutex<SpiBus>>, cs_pin: Option<(char, u8)>) {
         let Some(pin) = cs_pin else { return };
-        for m in &mut self.mcus {
-            if m.binding.gpio_drivers.contains_key(&pin) {
-                let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
-                sh.cs_frames.push(CsFrame {
-                    pin,
-                    active_low: true,
-                    bus: bus.clone(),
-                });
-            }
+        if let Some(m) = self.mcus.iter().find(|m| m.binding.gpio_drivers.contains_key(&pin)) {
+            let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
+            sh.cs_frames.push(CsFrame {
+                pin,
+                active_low: true,
+                bus: bus.clone(),
+            });
         }
     }
 
@@ -1176,15 +1189,15 @@ impl Scheduler {
                 // that driver is enabled the pin is being DRIVEN, not read, so
                 // injecting an ADC voltage for it is contradictory (a phantom
                 // analog reading on a pin the firmware owns as an output).
-                // Promotion is detected as an enabled driver on this pin's own
-                // net; a pin never driven keeps its driver disabled and is
-                // injected normally.
-                let promoted = m
-                    .binding
-                    .gpio_drivers
-                    .values()
-                    .any(|d| d.net == node && d.enabled);
-                if promoted {
+                // Promotion is detected as THIS channel's OWN pin driver being
+                // enabled — not merely any enabled driver sharing the net. Keying
+                // on the net wrongly suppressed injection whenever a DIFFERENT
+                // pin's output driver happened to sit on the same net (e.g. an
+                // output pin wired directly to an ADC input to self-monitor it),
+                // and it could never inject an ADC-ONLY channel (A6/A7 own no
+                // driver, so they have no `adc_pin` entry and are never promoted).
+                // A pin never driven keeps its driver disabled and is injected.
+                if adc_channel_promoted(&m.binding, ch) {
                     continue;
                 }
                 let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
@@ -3167,9 +3180,70 @@ fn logic_high_for_backend(backend: &str) -> f64 {
     }
 }
 
+/// Whether ADC channel `ch` has been promoted to a GPIO OUTPUT by the firmware,
+/// meaning the scheduler must NOT inject an analog reading for it. True only when
+/// the channel's OWN pin (from `adc_pin`) carries an enabled driver. An ADC-only
+/// channel (A6/A7, no `adc_pin` entry) is never promoted, and a driver belonging
+/// to a DIFFERENT pin that merely shares the net does not count — keying on the
+/// net alone wrongly suppressed a legitimate self-monitoring ADC topology.
+fn adc_channel_promoted(binding: &McuBinding, ch: u8) -> bool {
+    binding
+        .adc_pin
+        .get(&ch)
+        .and_then(|pb| binding.gpio_drivers.get(pb))
+        .is_some_and(|d| d.enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adc_promotion_keys_on_the_channels_own_pin_not_the_net() {
+        // Round-29: the promotion test asked whether ANY enabled driver sat on the
+        // channel's net, so a DIFFERENT pin's output driver sharing the net (a
+        // legitimate self-monitoring topology) falsely suppressed ADC injection,
+        // and an ADC-only channel (A6/A7, no own pin) could be suppressed too. It
+        // must key on the channel's OWN pin driver.
+        use crate::binder::McuBinding;
+        use crate::drivers::PinDriver;
+        use hauksbee_ir::{DeviceId, NodeId};
+        let drv = |net: u32, enabled: bool| PinDriver {
+            vsource: DeviceId(0),
+            net: NodeId(net),
+            enabled,
+            roff: 1e9,
+            resistor: DeviceId(1),
+            ron: 100.0,
+        };
+        let mut gpio_drivers = HashMap::new();
+        gpio_drivers.insert(('C', 0), drv(5, false)); // ch0's OWN pin: still an input
+        gpio_drivers.insert(('C', 1), drv(5, true)); // a NEIGHBOUR driving the same net
+        let mut adc_nets = HashMap::new();
+        adc_nets.insert(0u8, NodeId(5));
+        adc_nets.insert(6u8, NodeId(5)); // A6: ADC-only, same net
+        let mut adc_pin = HashMap::new();
+        adc_pin.insert(0u8, ('C', 0)); // ch0 owns (C,0); ch6 (A6) has NO entry
+        let mut binding = McuBinding {
+            reference: "U1".to_string(),
+            backend: String::new(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets,
+            adc_pin,
+            module: true,
+        };
+        // ch0's own driver is DISABLED: not promoted, even though a neighbour on
+        // the same net IS enabled (the old net-keyed check wrongly said promoted).
+        assert!(!adc_channel_promoted(&binding, 0), "a neighbour's driver must not promote ch0");
+        // ch6 is ADC-only (no own pin): never promoted, whatever shares its net.
+        assert!(!adc_channel_promoted(&binding, 6), "an ADC-only channel is never promoted");
+        // Enable ch0's OWN driver: now it is genuinely promoted to output.
+        binding.gpio_drivers.get_mut(&('C', 0)).unwrap().enabled = true;
+        assert!(adc_channel_promoted(&binding, 0), "ch0's own enabled driver promotes it");
+    }
 
     /// A Nano module driving net CLK from A2 (PC2), with CLK feeding an RC
     /// integrator (10k into 100 nF, tau = 1 ms): the load whose response
@@ -3704,6 +3778,7 @@ mod tests {
             role_nets: HashMap::new(),
             gpio_drivers,
             adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
             module: false,
         };
         let digital_ins = Arc::new(Mutex::new(Vec::new()));
@@ -3744,6 +3819,81 @@ mod tests {
             for_pin(('C', 3)).is_empty(),
             "floating net must not be pushed (its 0 V solve is the tri-state \
              legs talking), got {calls:?}"
+        );
+    }
+
+    /// A CS net that resolves to a pin BOTH MCUs happen to have a driver for
+    /// (e.g. a shared CS rail, or two parts each exposing the same port bit)
+    /// must frame the SPI transaction on exactly ONE MCU — the first owner —
+    /// mirroring the "a net is driven by at most one MCU" invariant. The old
+    /// `for m in &mut self.mcus { if contains_key {...} }` installed a CsFrame
+    /// on EVERY sharer, so a single CS edge framed the bus twice: a spurious
+    /// double select/deselect that corrupts the transaction replay.
+    #[test]
+    fn cs_frame_installs_on_only_one_mcu_not_every_sharer_of_the_pin() {
+        struct Opaque;
+        impl crate::peripherals::spi::SpiSlave for Opaque {
+            fn transfer(&mut self, _mosi: u8) -> u8 {
+                0
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        let cs_pin = ('C', 2u8);
+        let resp_node = sched.net_nodes["RESP"];
+
+        // Two MCUs, BOTH owning a gpio driver for the same CS pin.
+        for _ in 0..2 {
+            let mut gpio_drivers = HashMap::new();
+            let drv = crate::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                resp_node,
+                "RESP",
+                "t_cs",
+                crate::drivers::DEFAULT_RO,
+            );
+            gpio_drivers.insert(cs_pin, drv);
+            let binding = McuBinding {
+                reference: "U1".into(),
+                backend: "simavr:test".into(),
+                requested_part: String::new(),
+                pad_roles: HashMap::new(),
+                role_nets: HashMap::new(),
+                gpio_drivers,
+                adc_nets: HashMap::new(),
+                adc_pin: HashMap::new(),
+                module: false,
+            };
+            let core = RecordingCore {
+                digital_ins: Arc::new(Mutex::new(Vec::new())),
+            };
+            sched.mcus.push(core_with_hooks(Box::new(core), binding));
+            sched.responder_registries.push(None);
+        }
+
+        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        sched.register_cs_frame(&bus, Some(cs_pin));
+
+        let total: usize = sched
+            .mcus
+            .iter()
+            .map(|m| m.shared.lock().unwrap_or_else(|e| e.into_inner()).cs_frames.len())
+            .sum();
+        assert_eq!(
+            total, 1,
+            "a shared CS pin must frame on exactly one MCU, not every sharer, got {total}"
         );
     }
 
@@ -3816,6 +3966,7 @@ mod tests {
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
             adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
             module: false,
         };
         sched.mcus.push(core_with_hooks(Box::new(core), binding));

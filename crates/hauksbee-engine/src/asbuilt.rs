@@ -839,6 +839,7 @@ mod tests {
             role_nets,
             gpio_drivers,
             adc_nets,
+            adc_pin: HashMap::new(),
             module: false,
         };
         let dac = DacBinding {
