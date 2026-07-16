@@ -251,9 +251,12 @@ pub struct Converter {
 /// programming resistor, the way the LTC4020 ILIMIT pin works.
 ///
 /// The part regulates the sense-resistor voltage to a threshold
-/// `v_sense_max = vprog_ref * (prog_ref_ohms / prog_ohms)` (a resistor-ratio
+/// `v_sense_max = vprog_ref * (prog_ohms / prog_ref_ohms)` (a resistor-ratio
 /// programmed threshold, clamped to `v_sense_full`), giving an input current
-/// limit `i = v_sense_max / rsense_ohms`. The resistor values are read off the
+/// limit `i = v_sense_max / rsense_ohms`. The threshold scales *linearly* with
+/// the programming resistor, matching `program_iin_limit` in the engine (which
+/// computes `vprog_ref * prog / prog_ref_ohms`); the prior doc had this ratio
+/// inverted, describing the reciprocal law. The resistor values are read off the
 /// board at bind time, so changing the board resistor changes the limit, with
 /// no model edit, which is precisely how the Reform mb2.5->3.0 fix (R8 100k ->
 /// 7.15k) lands.
