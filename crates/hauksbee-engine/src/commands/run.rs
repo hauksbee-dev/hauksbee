@@ -491,6 +491,25 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             if !gate_rows.is_empty() {
                 print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
             }
+        } else {
+            // Default text headless mode: the co-sim activity table is printed
+            // elsewhere, but the boot power-up hazard and the gate panel must
+            // surface here too — otherwise the plainest persona is the ONLY one
+            // that hides a switched load energised at reset (the --json/--plain/
+            // web surfaces all carry it). Advisory-only (no exit-code change);
+            // --strict-boot still escalates below.
+            for net in held_high_boot_nets {
+                println!(
+                    "BOOT HAZARD: control net '{net}' switches a transistor/relay and is driven \
+                     HIGH and held from the moment the board powers up, with no resistor setting \
+                     a safe default level — if a HIGH turns the load ON when it must stay OFF \
+                     until firmware enables it (a MOSFET, relay, motor driver, or igniter), it is \
+                     energised at power-up. Confirm the polarity and that this is intended."
+                );
+            }
+            if !gate_rows.is_empty() {
+                print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
+            }
         }
 
         // 0-activity refusal (Track B): warn always; under --strict this is a hard

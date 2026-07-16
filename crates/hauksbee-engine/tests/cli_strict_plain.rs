@@ -557,6 +557,35 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
     );
 }
 
+/// R25 (HB-01, HIGH): the DEFAULT text headless persona (neither --json nor
+/// --plain) must ALSO surface the boot power-up hazard — it was the only persona
+/// that hid a switched load energised at reset while --json/--plain/web all carry
+/// it. Advisory-only: exit stays 0 without --strict-boot.
+// Boots AVR .hex firmware on an ATmega board through the compiled binary, so it
+// needs the GPL-gated `avr` feature.
+#[cfg(feature = "avr")]
+#[test]
+fn default_text_headless_surfaces_the_boot_hazard() {
+    let b = board("../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    let fw = board("../../testdata/firmware/boot_gate_a/boot_gate.hex");
+    if !fw.exists() {
+        eprintln!("skipping: boot_gate_a firmware not built");
+        return;
+    }
+    let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
+    // No --json, no --plain: the plain-text default persona.
+    let out = run(&["run", b, "--firmware", fw, "--headless", "--seconds", "0.05"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("BOOT HAZARD") && stdout.contains("GATE_CTRL"),
+        "the default text persona must name the held-high boot hazard net; got:\n{stdout}"
+    );
+    assert!(
+        out.status.success(),
+        "the boot hazard is advisory-only without --strict-boot"
+    );
+}
+
 /// A clean board whose firmware only toggles a signal (no switch-driving net
 /// held high) raises NO boot advisory and is not gated by --strict-boot.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
