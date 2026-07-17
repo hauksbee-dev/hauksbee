@@ -324,13 +324,18 @@ pub struct McuSubstitution {
 }
 
 impl McuSubstitution {
-    /// A one-line warning sentence suitable for stderr or a JSON note.
+    /// A one-line warning sentence suitable for stderr or a JSON note. Always
+    /// ends with the actionable "here is how to model the real part exactly" —
+    /// adding a chip is a two-file, no-recompile recipe, so a substitution should
+    /// point the user straight at it rather than leave them stuck on a substitute.
     pub fn message(&self) -> String {
         format!(
             "co-sim: {} requested {} but it is modelled as an {} core; \
              firmware behaviour is emulated on the substitute and may differ on \
-             the real part (e.g. peripheral set, flash/RAM size, clock tree).",
-            self.reference, self.requested_part, self.modelled_core
+             the real part (e.g. peripheral set, flash/RAM size, clock tree). \
+             To model {} exactly, add a SoC descriptor + a [[models]] routing entry \
+             (two TOML files, no recompile) — see docs/extending/add-an-mcu-variant.md.",
+            self.reference, self.requested_part, self.modelled_core, self.requested_part
         )
     }
 }
