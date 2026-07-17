@@ -637,9 +637,14 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
     let thermally_tracked = |r: &str| {
         bound.device_meta.iter().any(|m| {
             m.reference == r
-                || m.reference
-                    .strip_prefix(r)
-                    .is_some_and(|s| s.starts_with("_q") || s.starts_with("_s"))
+                || m.reference.strip_prefix(r).is_some_and(|s| {
+                    // The binder stamps multi-unit packages with `_q`/`_s`/`_e`
+                    // suffixes (transistor arrays, switch banks, RESISTOR/passive
+                    // arrays respectively). `_e` was omitted, so a package-level
+                    // max_temp/max_current on a resistor array's bare ref was
+                    // wrongly rejected as "no thermal model".
+                    s.starts_with("_q") || s.starts_with("_s") || s.starts_with("_e")
+                })
         })
     };
     for a in &spec.asserts {
@@ -1566,10 +1571,13 @@ fn resolve_cs_pin(
     p: &crate::spec::PeripheralSpec,
     net_node: &HashMap<String, NodeId>,
     sched: &hauksbee_engine::scheduler::Scheduler,
-) -> Option<(char, u8)> {
+) -> Option<((char, u8), NodeId)> {
     let net = p.cs_net.as_ref()?;
     let node = net_node.get(net).copied()?;
-    sched.pin_driving_node(node)
+    // Return the CS NET NODE alongside the pin so attach_spi_bus can install the
+    // CS frame on the MCU that actually drives this net, not merely the first MCU
+    // that owns the identical chip-local (port,bit) tuple.
+    sched.pin_driving_node(node).map(|pin| (pin, node))
 }
 
 /// Attach every peripheral in the spec to the scheduler. Returns the list of
@@ -1704,14 +1712,20 @@ fn attach_peripherals(
                 sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
             }
             "spi_eeprom" => {
-                let cs_pin = resolve_cs_pin(p, net_node, sched);
+                let (cs_pin, cs_net) = match resolve_cs_pin(p, net_node, sched) {
+                    Some((pin, node)) => (Some(pin), Some(node)),
+                    None => (None, None),
+                };
                 let bus = SpiBus::new(&p.id, Box::new(Spi25Eeprom::new(p.size.unwrap_or(256))));
-                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin);
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin, cs_net);
             }
             "spi_mcp3008" => {
-                let cs_pin = resolve_cs_pin(p, net_node, sched);
+                let (cs_pin, cs_net) = match resolve_cs_pin(p, net_node, sched) {
+                    Some((pin, node)) => (Some(pin), Some(node)),
+                    None => (None, None),
+                };
                 let bus = SpiBus::new(&p.id, Box::new(Mcp3008::new(p.vref.unwrap_or(5.0))));
-                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin);
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin, cs_net);
             }
             "vcd_sink" => {
                 let names = p.nets.clone().unwrap_or_default();
@@ -1811,9 +1825,9 @@ fn attach_sensors(
                 // `heuristic`). A resolved CS pin can be threaded here the same way
                 // `attach_peripherals` does once the sensor spec grows a cs_net.
                 if let Some(controller) = &sa.controller {
-                    sched.attach_spi_bus_on(controller, arc, None);
+                    sched.attach_spi_bus_on(controller, arc, None, None);
                 } else {
-                    sched.attach_spi_bus(arc, None);
+                    sched.attach_spi_bus(arc, None, None);
                 }
             }
         }

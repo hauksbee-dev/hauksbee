@@ -747,7 +747,12 @@ impl Scheduler {
     /// boundary-spanning transaction is not truncated. `None` leaves the bus on
     /// the chunk-boundary heuristic (the pre-05-§2 behaviour), reported honestly
     /// as `heuristic` in the co-sim coverage.
-    pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>, cs_pin: Option<(char, u8)>) {
+    pub fn attach_spi_bus(
+        &mut self,
+        bus: Arc<Mutex<SpiBus>>,
+        cs_pin: Option<(char, u8)>,
+        cs_net: Option<NodeId>,
+    ) {
         bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
         for m in &mut self.mcus {
             let b = bus.clone();
@@ -764,7 +769,7 @@ impl Scheduler {
                 }
             }));
         }
-        self.register_cs_frame(&bus, cs_pin);
+        self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
     }
 
@@ -785,6 +790,7 @@ impl Scheduler {
         controller: &str,
         bus: Arc<Mutex<SpiBus>>,
         cs_pin: Option<(char, u8)>,
+        cs_net: Option<NodeId>,
     ) {
         bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
         for m in &mut self.mcus {
@@ -801,7 +807,7 @@ impl Scheduler {
             }));
         }
         self.spi_controller_map.insert(controller.to_string(), bus.clone());
-        self.register_cs_frame(&bus, cs_pin);
+        self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
     }
 
@@ -818,9 +824,28 @@ impl Scheduler {
     /// install on only the FIRST MCU owning the pin — mirroring [`pin_driving_node`]
     /// (from which `cs_pin` was resolved), which returns the first match on the
     /// documented "a net is driven by at most one MCU" invariant.
-    fn register_cs_frame(&mut self, bus: &Arc<Mutex<SpiBus>>, cs_pin: Option<(char, u8)>) {
+    fn register_cs_frame(
+        &mut self,
+        bus: &Arc<Mutex<SpiBus>>,
+        cs_pin: Option<(char, u8)>,
+        cs_net: Option<NodeId>,
+    ) {
         let Some(pin) = cs_pin else { return };
-        if let Some(m) = self.mcus.iter().find(|m| m.binding.gpio_drivers.contains_key(&pin)) {
+        // Install on the MCU that actually DRIVES the CS net — matching
+        // pin_driving_node's net-based resolution, from which `cs_pin` was derived.
+        // gpio_drivers is keyed by chip-local (port,bit), so on a multi-MCU board
+        // the SAME tuple recurs on UNRELATED nets; keying only on the tuple installed
+        // the frame on the first MCU that owns it, which need not drive the CS net,
+        // so an unrelated MCU's like-named pin spuriously framed the bus. When the CS
+        // net is known, require `drv.net == cs_net`; with no net (legacy callers) fall
+        // back to the first tuple owner.
+        let owner = self.mcus.iter().find(|m| {
+            m.binding
+                .gpio_drivers
+                .get(&pin)
+                .is_some_and(|drv| cs_net.map_or(true, |node| drv.net == node))
+        });
+        if let Some(m) = owner {
             let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
             sh.cs_frames.push(CsFrame {
                 pin,
@@ -3884,7 +3909,7 @@ mod tests {
         }
 
         let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
-        sched.register_cs_frame(&bus, Some(cs_pin));
+        sched.register_cs_frame(&bus, Some(cs_pin), None);
 
         let total: usize = sched
             .mcus
@@ -3895,6 +3920,81 @@ mod tests {
             total, 1,
             "a shared CS pin must frame on exactly one MCU, not every sharer, got {total}"
         );
+    }
+
+    #[test]
+    fn cs_frame_installs_on_the_mcu_driving_the_cs_net_not_the_first_tuple_owner() {
+        struct Opaque;
+        impl crate::peripherals::spi::SpiSlave for Opaque {
+            fn transfer(&mut self, _mosi: u8) -> u8 {
+                0
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        let cs_pin = ('C', 2u8);
+        // R44: two MCUs own the SAME chip-local (C,2) pin, but on DIFFERENT nets.
+        // MCU_0 (pushed first) drives it on an unrelated net; MCU_1 drives it on the
+        // real CS net. Keying only on the tuple installed the frame on MCU_0 (first
+        // owner). With the CS net threaded, it must land on MCU_1.
+        let unrelated_net = sched.net_nodes["RESP"];
+        let cs_net = sched.circuit.node("SPI_CS");
+
+        for (idx, net) in [unrelated_net, cs_net].into_iter().enumerate() {
+            let mut gpio_drivers = HashMap::new();
+            let net_name = sched.circuit.node_name(net).to_string();
+            let drv = crate::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                net,
+                &net_name,
+                "t_cs",
+                crate::drivers::DEFAULT_RO,
+            );
+            gpio_drivers.insert(cs_pin, drv);
+            let binding = McuBinding {
+                reference: format!("U{idx}"),
+                backend: "simavr:test".into(),
+                requested_part: String::new(),
+                pad_roles: HashMap::new(),
+                role_nets: HashMap::new(),
+                gpio_drivers,
+                adc_nets: HashMap::new(),
+                adc_pin: HashMap::new(),
+                module: false,
+            };
+            let core = RecordingCore {
+                digital_ins: Arc::new(Mutex::new(Vec::new())),
+            };
+            sched.mcus.push(core_with_hooks(Box::new(core), binding));
+            sched.responder_registries.push(None);
+        }
+
+        let bus = Arc::new(Mutex::new(SpiBus::new("U9", Box::new(Opaque))));
+        // The CS net is cs_net (MCU_1's), NOT the first tuple owner MCU_0.
+        sched.register_cs_frame(&bus, Some(cs_pin), Some(cs_net));
+
+        let frames = |m: usize| {
+            sched.mcus[m]
+                .shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cs_frames
+                .len()
+        };
+        assert_eq!(frames(0), 0, "the unrelated first tuple-owner MCU must NOT be framed");
+        assert_eq!(frames(1), 1, "the MCU that drives the CS net must be framed");
     }
 
     // ── run_micros integer-carry + failure accounting (SCHED-1 / SCHED-2) ────
