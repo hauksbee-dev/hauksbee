@@ -431,6 +431,19 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 errs.push(format!("converter: efficiency must be in (0,1], got {e}"));
             }
         }
+        // A current limit must be a positive finite number. A NEGATIVE iout_limit_a
+        // (a sign typo) is treated as a real CC threshold the output current always
+        // exceeds (iout is `.abs()`), so the loop folds v_cmd negative and clamps it
+        // to 0 V — the regulated rail silently reads 0 V for the whole run. A NaN
+        // limit silently disables the CC loop. Reject both up front, like
+        // vout_setpoint / efficiency above.
+        for (name, lim) in [("iout_limit_a", c.iout_limit_a), ("iin_limit_a", c.iin_limit_a)] {
+            if let Some(v) = lim {
+                if !v.is_finite() || v <= 0.0 {
+                    errs.push(format!("converter: {name} must be a positive finite number, got {v}"));
+                }
+            }
+        }
         if let Some(sp) = &c.iin_program {
             if sp.rsense_ohms.is_none() && sp.rsense_ref.is_none() {
                 errs.push("converter.iin_program: need rsense_ohms or rsense_ref".to_string());
@@ -589,6 +602,38 @@ v_sense_full = 0.05
             "an inf pull_ohms must be rejected: {:?}",
             validate_behavioral(&inf_pull)
         );
+    }
+
+    #[test]
+    fn converter_current_limits_must_be_positive_finite() {
+        // R46: a negative iout_limit_a (a sign typo) is treated as a real CC
+        // threshold the output current always exceeds, folding v_cmd to 0 V — the
+        // regulated rail reads 0 V for the whole run with no fault. A NaN limit
+        // silently disables the CC loop. Both must be rejected, like vout_setpoint.
+        let neg: Behavioral = toml::from_str(
+            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niout_limit_a = -1.0\n",
+        )
+        .expect("parse");
+        assert!(
+            validate_behavioral(&neg).iter().any(|e| e.contains("iout_limit_a")),
+            "a negative iout_limit_a must be rejected: {:?}",
+            validate_behavioral(&neg)
+        );
+        let nan_iin: Behavioral = toml::from_str(
+            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niin_limit_a = nan\n",
+        )
+        .expect("parse");
+        assert!(
+            validate_behavioral(&nan_iin).iter().any(|e| e.contains("iin_limit_a")),
+            "a NaN iin_limit_a must be rejected: {:?}",
+            validate_behavioral(&nan_iin)
+        );
+        // A valid positive limit still passes.
+        let ok: Behavioral = toml::from_str(
+            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niout_limit_a = 1.0\n",
+        )
+        .expect("parse");
+        assert!(validate_behavioral(&ok).is_empty(), "a positive limit must pass: {:?}", validate_behavioral(&ok));
     }
 
     #[test]

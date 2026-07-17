@@ -443,6 +443,13 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         .collect(),
                 );
             }
+            // The electrical-stress faults must reach the machine surface too: the
+            // --plain path renders them and --strict gates on them, but --json used
+            // to omit them entirely, so a CI consumer parsing the JSON saw a clean
+            // run over a board the co-sim flagged (a destroyed MOSFET, overcurrent…).
+            if !faults.is_empty() {
+                jr.findings = Some(crate::result::fault_findings_json(&faults));
+            }
             jr.cosim = cosim;
             println!("{}", jr.to_json());
         } else if cfg.plain {
