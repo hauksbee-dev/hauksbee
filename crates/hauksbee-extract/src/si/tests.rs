@@ -1050,3 +1050,17 @@ fn si_rail_voltage_resolves_numeric_rails_like_netlint() {
     assert_eq!(super::rail_voltage("5V0_EN"), None);
     assert_eq!(super::rail_voltage("12V_PG"), None);
 }
+
+#[test]
+fn si_rail_voltage_recognises_the_same_tokens_as_netlint() {
+    // R53: si.rs rail_voltage drifted from netlint's table — VCC5V/VCC5 (5V) and
+    // VPP/VDD_IO (battery/IO rails) were recognised by --lint but not --si, so the
+    // same net was a rail for the pull-up-presence check but not the mirroring
+    // rise-time audit (a --si vs --lint disagreement).
+    assert_eq!(super::rail_voltage("VCC5V"), Some(5.0));
+    assert_eq!(super::rail_voltage("VCC5"), Some(5.0));
+    assert_eq!(super::rail_voltage("VPP"), Some(3.7));
+    assert_eq!(super::rail_voltage("VDD_IO"), Some(3.7));
+    // The loose 5V fallback (with rail context) matches too.
+    assert_eq!(super::rail_voltage("VCC_5V_MCU"), Some(5.0));
+}
