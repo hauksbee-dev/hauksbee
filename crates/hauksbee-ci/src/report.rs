@@ -41,8 +41,14 @@ pub enum EnsembleCoverage {
     Corners { corners: u32, components: usize },
     /// A single pinned ensemble member (`--seed N`): the runner filtered the
     /// ensemble down to exactly this one, so the nominal-baseline / sampled-count
-    /// arithmetic doesn't apply — report the member honestly instead.
-    SingleMember { seed: u32, components: usize },
+    /// arithmetic doesn't apply — report the member honestly instead. `corners`
+    /// distinguishes a deterministic corner (corners mode) from a random draw
+    /// (Monte-Carlo), so the banner matches the mode-aware per-assertion wording.
+    SingleMember {
+        seed: u32,
+        components: usize,
+        corners: bool,
+    },
 }
 
 impl EnsembleCoverage {
@@ -61,7 +67,11 @@ impl EnsembleCoverage {
                  {components} component(s) — bounds the worst case only where the \
                  response is monotonic in each value"
             ),
-            EnsembleCoverage::SingleMember { seed, components } => format!(
+            EnsembleCoverage::SingleMember { seed, components, corners: true } => format!(
+                "single corner: corner {seed} over {components} toleranced \
+                 component(s) — one pinned deterministic corner, not full corner coverage"
+            ),
+            EnsembleCoverage::SingleMember { seed, components, corners: false } => format!(
                 "single ensemble member: seed {seed} over {components} toleranced \
                  component(s) — one pinned draw, not ensemble coverage"
             ),
@@ -389,9 +399,22 @@ mod ensemble_coverage_tests {
         // R12: `--seed N` runs exactly one member; the banner must name it and
         // NOT report "nominal baseline + 0 sampled" (the nominal didn't run) or
         // "1 corner" (over-claiming one of 2^n corners).
-        let d = EnsembleCoverage::SingleMember { seed: 7, components: 3 }.describe();
+        let d =
+            EnsembleCoverage::SingleMember { seed: 7, components: 3, corners: false }.describe();
         assert!(d.contains("seed 7"), "{d}");
         assert!(!d.contains("nominal baseline"), "must not claim the nominal ran: {d}");
         assert!(!d.contains("corner"), "must not claim corner coverage: {d}");
+    }
+
+    #[test]
+    fn single_member_in_corners_mode_names_a_corner_not_a_seed() {
+        // R41: a pinned `--seed N` in CORNERS mode is a deterministic corner, not
+        // a random draw. The banner must say "corner N" (matching the mode-aware
+        // per-assertion FAIL/INVALID wording), never "seed"/"draw".
+        let d =
+            EnsembleCoverage::SingleMember { seed: 2, components: 2, corners: true }.describe();
+        assert!(d.contains("corner 2"), "corners member must be named a corner: {d}");
+        assert!(!d.contains("seed"), "a corner must not be called a seed: {d}");
+        assert!(!d.contains("draw"), "a corner is deterministic, not a draw: {d}");
     }
 }

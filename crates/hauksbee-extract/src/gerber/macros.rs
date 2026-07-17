@@ -161,9 +161,16 @@ pub fn instantiate_macro(
                 // `%AMFOO*5,1,4294967295,...*%` from a hostile/corrupt gerber)
                 // would otherwise drive a multi-gigabyte vertex push (OOM/hang).
                 let n = nv.clamp(3, 12) as usize;
+                // An AM primitive's rotation is about the MACRO ORIGIN (0,0), not
+                // the primitive's own center — so an off-origin polygon center must
+                // itself be rotated, exactly as the Circle/CenterLine/Outline/
+                // VectorLine handlers do. Rotating only the vertex angle left the
+                // centroid at its unrotated (x,y), placing an off-origin rotated
+                // polygon pad ~|center| mm off in the wrong direction.
+                let (cx0, cy0) = (x * rot.cos() - y * rot.sin(), x * rot.sin() + y * rot.cos());
                 for k in 0..n {
                     let a = rot + k as f64 * std::f64::consts::TAU / n as f64;
-                    pts.push((x + r * a.cos(), y + r * a.sin()));
+                    pts.push((cx0 + r * a.cos(), cy0 + r * a.sin()));
                 }
             }
             // Moire/Thermal are fiducial/relief shapes, not pads we bind to.
@@ -461,6 +468,37 @@ mod tests {
         };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
         assert!(pts.len() <= 12, "vertex count must be clamped, got {}", pts.len());
+    }
+
+    #[test]
+    fn polygon_off_origin_center_rotates_about_the_macro_origin() {
+        use gerber_types::{MacroBoolean, PolygonPrimitive};
+        // R41: a hexagon centred at (3,0) rotated 45°. Per RS-274X an AM primitive
+        // rotates about the MACRO ORIGIN, so the centre moves to (3cos45, 3sin45)
+        // ~= (2.12, 2.12) — like the Circle/CenterLine/Outline siblings. The old
+        // handler rotated only the vertex angle, leaving the centroid at (3,0),
+        // ~2.1 mm off in the wrong direction (a mis-bound pad/net).
+        let poly = PolygonPrimitive {
+            exposure: MacroBoolean::Value(true),
+            vertices: MacroInteger::Value(6),
+            center: (MacroDecimal::Value(3.0), MacroDecimal::Value(0.0)),
+            diameter: MacroDecimal::Value(6.0),
+            angle: MacroDecimal::Value(45.0),
+        };
+        let m = ApertureMacro {
+            name: "HEX".to_string(),
+            content: vec![MacroContent::Polygon(poly)],
+        };
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let n = pts.len() as f64;
+        let cx: f64 = pts.iter().map(|p| p.0).sum::<f64>() / n;
+        let cy: f64 = pts.iter().map(|p| p.1).sum::<f64>() / n;
+        let want = 3.0 * std::f64::consts::FRAC_1_SQRT_2; // 3·cos45 = 3·sin45 ≈ 2.121
+        assert!(
+            (cx - want).abs() < 0.05 && (cy - want).abs() < 0.05,
+            "polygon centre must rotate about the macro origin to ({want:.3}, {want:.3}), \
+             got ({cx:.3}, {cy:.3})"
+        );
     }
 
     #[test]
