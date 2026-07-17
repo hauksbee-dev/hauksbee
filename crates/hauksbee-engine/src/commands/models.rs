@@ -61,6 +61,15 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
                     }
                 }
             }
+            // The behavioural block's own validation (converter/pin/FSM finiteness
+            // gates) must run here too, or `hauksbee models lint` prints "ok" for a
+            // model that panics the solver at sim time (e.g. vout_setpoint = nan).
+            if !entry.behavioral.is_empty() {
+                for err in hauksbee_models::behavioral::validate_behavioral(&entry.behavioral) {
+                    entry_findings += 1;
+                    println!("model '{}' [models.behavioral]: ERROR: {err}", entry.id);
+                }
+            }
             if entry_findings == 0 {
                 println!("model '{}': ok", entry.id);
             }

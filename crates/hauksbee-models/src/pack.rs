@@ -250,6 +250,57 @@ impl PackManifest {
 /// against.
 pub const HAUKSBEE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg(test)]
+mod behavioral_gate_tests {
+    use super::*;
+
+    fn write_pack(dir: &Path, model_toml: &str) {
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(
+            dir.join("pack.toml"),
+            "[pack]\nname = \"test-pack\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n\
+             min_hauksbee_version = \"0.0.0\"\nprovenance = \"hand-written\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("models").join("m.toml"), model_toml).unwrap();
+    }
+
+    // R52: validate_behavioral was never called from Pack::load, so a converter
+    // model with vout_setpoint = nan installed clean and later panicked the solver
+    // at `v_cmd.clamp(0.0, nan)`. Pack::load must now run the behavioural gate.
+    #[test]
+    fn pack_load_rejects_nonfinite_behavioral_converter() {
+        let base = std::env::temp_dir().join(format!("hb_pack_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        let bad = "[[models]]\nid = \"badconv\"\nkind = \"digital\"\n\
+            [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\n\
+            in_pin = \"in\"\nvout_setpoint = nan\nefficiency = 0.9\n";
+        let dir = base.join("bad");
+        write_pack(&dir, bad);
+        let err = Pack::load(&dir).expect_err("a nan vout_setpoint must be rejected");
+        match err {
+            PackError::ModelFileInvalid { message, .. } => {
+                assert!(
+                    message.contains("behavioral") && message.contains("vout_setpoint"),
+                    "error must name the behavioural field: {message}"
+                );
+            }
+            other => panic!("expected ModelFileInvalid, got {other:?}"),
+        }
+
+        // A well-formed converter loads fine.
+        let good = "[[models]]\nid = \"okconv\"\nkind = \"digital\"\n\
+            [models.behavioral.converter]\ntopology = \"buck\"\nout_pin = \"out\"\n\
+            in_pin = \"in\"\nvout_setpoint = 3.3\nefficiency = 0.9\n";
+        let dir = base.join("good");
+        write_pack(&dir, good);
+        assert!(Pack::load(&dir).is_ok(), "a valid behavioural converter must load");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 // ── Pack ──────────────────────────────────────────────────────────────────────
 
 /// A validated pack: manifest plus the model files it ships.
@@ -332,6 +383,31 @@ impl Pack {
                         });
                     }
                 }
+                // The behavioural block carries its own finiteness/positivity gates
+                // (converter setpoints & limits, pull/od/drive voltages & ohms,
+                // programmed sense params, FSM dwell). Without this call those gates
+                // never ran on a real installed pack — a `vout_setpoint = nan`
+                // panics the solver at `v_cmd.clamp(0.0, nan)` on a model that
+                // "validated clean". Gate it here like params and logic.
+                if !entry.behavioral.is_empty() {
+                    let errs = crate::behavioral::validate_behavioral(&entry.behavioral);
+                    if !errs.is_empty() {
+                        return Err(PackError::ModelFileInvalid {
+                            file: fname,
+                            message: format!(
+                                "model '{}' [models.behavioral]: {}",
+                                entry.id,
+                                errs.join("; ")
+                            ),
+                        });
+                    }
+                }
+                // The behavioural block carries its own finiteness/positivity gates
+                // (converter setpoints & limits, pull/od/drive voltages & ohms,
+                // programmed sense params, FSM dwell). Without this call those gates
+                // never ran on a real installed pack — a `vout_setpoint = nan`
+                // panics the solver at `v_cmd.clamp(0.0, nan)` on a model that
+                // "validated clean". Gate it here like params and logic.
             }
         }
 

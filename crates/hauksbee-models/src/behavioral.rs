@@ -418,6 +418,18 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             if tr.guard.trim().is_empty() {
                 errs.push(format!("fsm transition {i}: empty guard"));
             }
+            // The engine applies min_dwell_s as `if t_in_state < min { continue }`;
+            // a NaN makes that comparison false, silently skipping the dwell gate
+            // so the transition fires immediately instead of waiting the intended
+            // debounce/soft-start delay. Reject non-finite (and negative) like
+            // every other solver-facing float in this function.
+            if let Some(d) = tr.min_dwell_s {
+                if !d.is_finite() || d < 0.0 {
+                    errs.push(format!(
+                        "fsm transition {i}: min_dwell_s must be a non-negative finite number, got {d}"
+                    ));
+                }
+            }
         }
         for (st, pins) in &fsm.state_pins {
             if !known.contains(st.as_str()) {
@@ -573,6 +585,39 @@ mod tests {
         );
         let errs = validate_behavioral(&b);
         assert!(errs.iter().any(|e| e.contains("pull_ohms")), "{errs:?}");
+    }
+
+    #[test]
+    fn fsm_transition_nonfinite_min_dwell_is_rejected() {
+        // R52: the engine applies min_dwell_s as `if t_in_state < min { continue }`;
+        // a NaN makes that false, silently skipping the dwell gate so the
+        // transition fires immediately instead of waiting the intended delay.
+        let mut b = Behavioral::default();
+        b.fsm = Some(Fsm {
+            states: vec!["off".into(), "on".into()],
+            initial: Some("off".into()),
+            transitions: vec![Transition {
+                from: "off".into(),
+                to: "on".into(),
+                guard: "v_en > 1.0".into(),
+                min_dwell_s: Some(f64::NAN),
+            }],
+            state_pins: BTreeMap::new(),
+        });
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("min_dwell_s")),
+            "a NaN min_dwell_s must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // A finite non-negative dwell still validates clean.
+        if let Some(fsm) = &mut b.fsm {
+            fsm.transitions[0].min_dwell_s = Some(0.05);
+        }
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "a valid min_dwell_s must pass: {:?}",
+            validate_behavioral(&b)
+        );
     }
 
     #[test]
