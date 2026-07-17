@@ -2018,15 +2018,33 @@ impl Scheduler {
     }
 
     fn update_stats(&mut self) {
+        // Rail-relative logic thresholds for toggle counting. A fixed 3.0/2.0 V
+        // band (a 2.5 V midpoint) is a 5 V-rail assumption: on a 3.3 V board
+        // (every renode/qemu external MCU returns logic_high 3.3) a loaded high
+        // output settles below 3.0 V through the driver's series R, so every high
+        // sample landed in the hysteresis band, `last_logic` never established a
+        // level, and `toggles` stayed 0 — the net read as inactive in the activity
+        // table and CI min_toggles/freq asserts falsely failed. Scale the band by
+        // the board's logic-high rail (0.6/0.4·Vhigh = the original 3.0/2.0 at 5 V,
+        // unchanged there), mirroring the rail-relative digital-IN thresholds.
+        let vhigh = {
+            let m = self.mcus.iter().map(|m| m.logic_high_v).fold(0.0_f64, f64::max);
+            if m > 0.0 {
+                m
+            } else {
+                5.0
+            }
+        };
+        let (vih, vil) = (0.6 * vhigh, 0.4 * vhigh);
         for (name, &node) in &self.net_nodes {
             let v = self.node_volts.get(node.0 as usize).copied().unwrap_or(0.0);
             let st = self.stats.entry(name.clone()).or_default();
             st.min_v = st.min_v.min(v);
             st.max_v = st.max_v.max(v);
-            // Logic level with 2.5 V midpoint and 0.5 V hysteresis.
-            let logic = if v > 3.0 {
+            // Logic level with a rail-scaled midpoint and hysteresis band.
+            let logic = if v > vih {
                 Some(true)
-            } else if v < 2.0 {
+            } else if v < vil {
                 Some(false)
             } else {
                 st.last_logic
@@ -4168,6 +4186,37 @@ mod tests {
         sched.mcus.push(core_with_hooks(Box::new(core), binding));
         sched.responder_registries.push(None);
         (sched, handles)
+    }
+
+    /// Regression (R54): update_stats classified logic level with a fixed 3.0/2.0
+    /// V band (a 5 V-rail assumption). On a 3.3 V board a loaded GPIO high output
+    /// settles below 3.0 V, so every high sample landed mid-band, `last_logic`
+    /// never established a level, and `toggles` stayed 0 — a blinking net read as
+    /// inactive. The band must scale with the board's logic-high rail.
+    #[test]
+    fn toggle_counting_is_rail_relative_on_a_3v3_board() {
+        let (mut sched, _h) = sched_with_capturing_core(&[]);
+        // A 3.3 V logic rail (the external-MCU class: renode/qemu).
+        sched.mcus[0].logic_high_v = 3.3;
+
+        let node = sched.circuit.node("BLINK");
+        sched.net_nodes.insert("BLINK".to_string(), node);
+        let idx = node.0 as usize;
+        if sched.node_volts.len() <= idx {
+            sched.node_volts.resize(idx + 1, 0.0);
+        }
+
+        // A loaded 3.3 V GPIO output swings 0 V <-> 2.7 V (below the old 3.0 V
+        // high threshold). Drive high/low/high/low — three transitions.
+        for v in [2.7_f64, 0.0, 2.7, 0.0] {
+            sched.node_volts[idx] = v;
+            sched.update_stats();
+        }
+        let toggles = sched.stats.get("BLINK").map(|s| s.toggles).unwrap_or(0);
+        assert!(
+            toggles >= 3,
+            "a 3.3 V net swinging to 2.7 V must register toggles, got {toggles}"
+        );
     }
 
     /// Regression (R52): `pin_driving_node` iterated a randomized HashMap and
