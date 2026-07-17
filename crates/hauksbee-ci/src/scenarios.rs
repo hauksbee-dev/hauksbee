@@ -147,6 +147,20 @@ impl RailWindow {
         self.samples.push((t_s, v));
     }
 
+    /// Widen the window's min/max envelope with an intra-frame extreme WITHOUT
+    /// recording a timeseries sample. Each frame is solved in ~10 sub-chunks and
+    /// `observe` only sees the settled final-chunk voltage, so a load-step sag
+    /// that bottoms out mid-frame and recovers by the last chunk would leave
+    /// `min_v` blind to the excursion — a brownout-floor `rail_window` assertion
+    /// would then false-pass the very sag it exists to catch. The scheduler's
+    /// per-frame min/max is folded here so the min/max bounds match what the plain
+    /// `voltage` assertion path already sees. (The `samples` timeseries, and hence
+    /// dip_duration/recovery, still reflect settled per-frame values.)
+    pub fn fold(&mut self, v: f64) {
+        self.min_v = self.min_v.min(v);
+        self.max_v = self.max_v.max(v);
+    }
+
     /// Total time (s) the rail spent strictly below `threshold` volts, summed
     /// over the sampled window (rectangular integration on the sample grid).
     pub fn dip_duration_s(&self, threshold: f64) -> f64 {
