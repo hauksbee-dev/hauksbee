@@ -183,7 +183,17 @@ pub fn load_code(path: &Path) -> anyhow::Result<String> {
             found.ok_or_else(|| anyhow::anyhow!("no .board file found in {}", path.display()))?;
         Ok(std::fs::read_to_string(f)?)
     } else {
-        Ok(std::fs::read_to_string(path)?)
+        std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!(
+                    "no board-as-code file at '{}'. Check the path, or try a bundled example:\n  \
+                     hauksbee check-code examples/board-as-code/blinky.board",
+                    path.display()
+                )
+            } else {
+                anyhow::anyhow!("reading '{}': {e}", path.display())
+            }
+        })
     }
 }
 
