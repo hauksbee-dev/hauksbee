@@ -475,6 +475,27 @@ simulated board. That is the scope of this tool.
 
 ---
 
+## Adding your own parts & chips
+
+The stock model library will not know every part on your board — an unmodelled
+active part binds OPEN, and the report says so ("N of M critical parts modelled",
+"simulated as OPEN"). Closing that gap is deliberately data-only (no recompile,
+validated fail-loud at load):
+
+- **an analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) — one
+  `[[models]]` TOML entry: [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md).
+- **an I2C/SPI sensor** (register map) — one TOML file:
+  [`extending/add-a-sensor.md`](extending/add-a-sensor.md).
+- **a whole MCU / chip**, so its firmware co-simulates on the *exact* part rather
+  than a substitute core — a SoC descriptor + a routing entry, two TOML files:
+  [`extending/add-an-mcu-variant.md`](extending/add-an-mcu-variant.md). Run
+  `hauksbee models list --builtin` to see the chips already shipped, and copy the
+  closest one as a template. When co-sim runs on a substitute core it says so and
+  points you at this recipe.
+
+Share a bundle of any of the above as a versioned [model pack](PACKS.md)
+(`hauksbee models add <path|url>`). Full menu: [`extending/README.md`](extending/README.md).
+
 ## Where to go next
 
 - [`docs/SIMULATORS.md`](SIMULATORS.md) — install Renode and Espressif QEMU,
