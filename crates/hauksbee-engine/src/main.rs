@@ -50,9 +50,12 @@ enum Command {
     /// gerbers, Altium `.PcbDoc`, a KiCad `.net`, or Board-as-Code (`.board`,
     /// detected by extension or its DSL header) — all analysed identically.
     ///
-    /// With no flag, serves the live 2D/3D frontend on a local websocket. The
+    /// With no flag on a terminal, bare `run` opens the interactive full-screen
+    /// dashboard (TUI); piped/redirected (CI) it prints a hint. Pass `--serve` (or
+    /// use the `serve` subcommand) for the live 2D/3D websocket frontend. The
     /// `--report`/`--drc`/`--lint`/`--si`/`--resources` flags each print one
-    /// static report and exit; `--headless` runs the co-sim for `--seconds`.
+    /// static report and exit; `--headless --firmware <hex>` runs the firmware
+    /// co-sim for `--seconds`.
     ///
     /// These reports are informational and exit 0 by default, even when they
     /// list findings. Add `--strict` to FAIL (exit 2) on a real defect, or
@@ -60,8 +63,9 @@ enum Command {
     /// fault flow gate on `hauksbee-ci` or `hauksbee check-code`.
     ///
     /// Example:
-    ///   hauksbee run my_board.kicad_pcb --report
-    ///   hauksbee run my_board.kicad_pcb --drc --plain --strict
+    ///   hauksbee run board.kicad_pcb --report --plain
+    ///   hauksbee run board.kicad_pcb --drc --plain --strict
+    ///   hauksbee run board.kicad_pcb --firmware blink.hex --headless --seconds 2   # firmware co-sim
     Run(RunArgs),
 
     /// Decompile a board into editable Board-as-Code text.
@@ -111,11 +115,9 @@ enum Command {
     /// supported/refused card list is the drift-tested compatibility statement,
     /// `docs/spice-compat/compatibility.md`.
     ///
-    /// Example:
-    ///   hauksbee sim rc.cir --out rc.csv
-    ///   hauksbee sim amp.cir --tran --print V(out) I(V1)
-    ///   hauksbee sim rc.cir --ac --print V(out)   # Bode table (needs an AC source + .ac card)
-    ///   hauksbee sim rc.cir --format raw --out rc.csv   # also writes rc.raw
+    /// Example (self-contained decks bundled under examples/learn/):
+    ///   hauksbee sim examples/learn/02-mna-by-hand/divider.cir --op --print V(out)
+    ///   hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)
     Sim(SimArgs),
 
     /// Start the local web front door: a "drop your board, get a report" page.
