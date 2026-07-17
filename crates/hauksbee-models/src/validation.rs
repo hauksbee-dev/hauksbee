@@ -169,6 +169,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         ("max_pin_current_a", entry.ratings.max_pin_current_a),
         ("max_ripple_current_a", entry.ratings.max_ripple_current_a),
         ("max_junction_temp_c", entry.ratings.max_junction_temp_c),
+        // The thermal resistances are solver-facing and UNFLOORED: thermal.rs
+        // computes `Tj = ambient + power.max(0)*theta_ja`, so a negative/NaN
+        // theta drives Tj at or below ambient and the Overtemperature fault never
+        // trips (frac.max(0) = 0). Gate them like the other ratings (R52 missed
+        // these two).
+        ("theta_ja_c_per_w", entry.ratings.theta_ja_c_per_w),
+        ("theta_jc_c_per_w", entry.ratings.theta_jc_c_per_w),
     ] {
         if let Some(v) = rating {
             if !v.is_finite() || v <= 0.0 {
@@ -244,6 +251,32 @@ mod tests {
         entry.ratings.max_current_a = Some(1.0);
         entry.ratings.max_voltage_v = Some(75.0);
         assert!(validate(&entry).is_ok(), "valid ratings must pass");
+    }
+
+    #[test]
+    fn nonpositive_or_nonfinite_thermal_resistances_are_rejected() {
+        // R53: theta_ja_c_per_w / theta_jc_c_per_w are UNFLOORED solver inputs
+        // (Tj = ambient + power*theta_ja), so a negative/NaN value drives Tj at or
+        // below ambient and the Overtemperature fault never trips — a silent
+        // safety-disable the R52 ratings gate missed for these two fields.
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.ratings.theta_ja_c_per_w = Some(-50.0);
+        assert!(
+            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("theta_ja_c_per_w")),
+            "a negative theta_ja must be rejected"
+        );
+
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.ratings.theta_jc_c_per_w = Some(f64::NAN);
+        assert!(
+            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("theta_jc_c_per_w")),
+            "a NaN theta_jc must be rejected"
+        );
+
+        // A well-formed positive thermal resistance still passes.
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.ratings.theta_ja_c_per_w = Some(62.0);
+        assert!(validate(&entry).is_ok(), "a valid theta_ja must pass");
     }
 
     #[test]
