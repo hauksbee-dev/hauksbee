@@ -975,6 +975,38 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
         .collect()
 }
 
+/// Convert co-sim electrical-stress faults (overcurrent, overvoltage, a destroyed
+/// MOSFET, …) to uniform JSON findings, so the machine `--json` co-sim surface
+/// carries them like `--plain` (`plain_faults`), `--strict` (the exit gate), and
+/// the web report already do. They were silently dropped from `--json`, so a CI
+/// consumer parsing the JSON saw a clean run over a board the co-sim flagged.
+/// `plain_faults` emits one finding per fault in order, so the zip is 1:1.
+pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFinding> {
+    let plain = crate::plain::plain_faults(faults);
+    faults
+        .iter()
+        .zip(plain.findings.iter())
+        .map(|(f, pf)| JsonFinding {
+            check: "cosim".to_string(),
+            kind: f.kind.as_str().to_string(),
+            severity: match pf.level {
+                crate::plain::PlainLevel::Serious => "serious",
+                crate::plain::PlainLevel::Warning => "warning",
+                crate::plain::PlainLevel::Note => "note",
+            }
+            .to_string(),
+            nets: Vec::new(),
+            location_mm: None,
+            layer: None,
+            refs: vec![f.component.clone()],
+            actionable: true,
+            message: pf.what.clone(),
+            plain: pf.what.clone(),
+            fix: if pf.fix.is_empty() { None } else { Some(pf.fix.clone()) },
+        })
+        .collect()
+}
+
 /// The top-level `--json` document. Only the section(s) for the requested check
 /// are populated; the rest stay `None` (omitted from output). `board` + `bind`
 /// are always present so an AI always has the bind-role context (Theme F).
@@ -1167,6 +1199,44 @@ pub fn lint_fix_hint(check: LintCheck) -> Option<&'static str> {
 mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
+
+    #[test]
+    fn cosim_faults_become_json_findings() {
+        // R46: co-sim electrical-stress faults were dropped from the --json surface
+        // (only --plain rendered them and --strict gated them), so a CI consumer
+        // parsing the JSON saw a clean run over a board the co-sim flagged. The
+        // fault→JsonFinding conversion must carry a destroyed part as a serious
+        // finding, refs, and fix text.
+        use crate::stress::{FaultEvent, FaultKind};
+        let faults = vec![
+            FaultEvent {
+                component: "Q1".into(),
+                kind: FaultKind::Overcurrent,
+                value: 5.0,
+                limit: 2.0,
+                t: 0.01,
+                destroyed: true,
+            },
+            FaultEvent {
+                component: "C3".into(),
+                kind: FaultKind::Overvoltage,
+                value: 30.0,
+                limit: 16.0,
+                t: 0.02,
+                destroyed: false,
+            },
+        ];
+        let js = fault_findings_json(&faults);
+        assert_eq!(js.len(), 2, "one JSON finding per fault");
+        assert_eq!(js[0].check, "cosim");
+        assert_eq!(js[0].kind, "overcurrent");
+        assert_eq!(js[0].severity, "serious", "a destroyed part is serious");
+        assert_eq!(js[0].refs, vec!["Q1".to_string()]);
+        assert!(js[0].fix.is_some(), "the finding carries a suggested fix");
+        // A non-destructive over-voltage is a warning, not serious.
+        assert_eq!(js[1].severity, "warning");
+        assert_eq!(js[1].refs, vec!["C3".to_string()]);
+    }
 
     fn active_ic(reference: &str) -> UnresolvedActive {
         UnresolvedActive {

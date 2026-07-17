@@ -617,6 +617,42 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 ///     (MCU, connector, anything the model library could not resolve) would
 ///     always take the "no dissipation measured" branch.
 ///
+/// Add each scenario-scoped `protection_trip` assertion's `supply_net` to that
+/// scenario's window `nets`. The scoped-trip verdict map only carries
+/// (scenario, net) keys for a window's `nets`, seeded from the scenario's own
+/// supply and rail_window nets — but a protection_trip may name a BATTERY rail the
+/// scenario's load pulls current from, which is neither. Without adding it,
+/// scope_protection_trips has no key and check_protection_trip returns a false RED
+/// ("<net> was not a supply net in scenario window ... (nothing to trip)")
+/// regardless of whether the pack actually latched.
+fn merge_protection_trip_nets(windows: &mut [ScenarioWindow], asserts: &[crate::spec::Assertion]) {
+    for a in asserts {
+        if a.kind != "protection_trip" {
+            continue;
+        }
+        let (Some(net), Some(scope)) = (&a.supply_net, a.scenario.as_ref()) else {
+            continue;
+        };
+        if let Some(w) = windows.iter_mut().find(|w| &w.id == scope) {
+            if !w.nets.contains(net) {
+                w.nets.push(net.clone());
+            }
+        }
+    }
+}
+
+/// A bound device `name` belongs to the bare spec ref `r`: an exact match, or a
+/// multi-unit array unit `r_q<n>` / `r_s<n>` / `r_e<n>` (transistor / switch /
+/// passive arrays). Mirrors thermally_tracked so max_current and max_temp agree —
+/// before this, a package-level max_current on a resistor array (units RN1_e*)
+/// was rejected as untrackable while the identical max_temp was accepted.
+fn ref_or_unit_matches(r: &str, device_name: &str) -> bool {
+    device_name == r
+        || device_name
+            .strip_prefix(r)
+            .is_some_and(|s| s.starts_with("_q") || s.starts_with("_s") || s.starts_with("_e"))
+}
+
 /// Runs post-bind (the bound circuit is what decides trackability), before the
 /// engine is built, so the spec is rejected up front rather than reported green.
 fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), SpecError> {
@@ -631,6 +667,13 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
             _ => None,
         })
         .collect();
+    // A multi-unit resistor/passive array (ref RN1) stamps per-unit devices
+    // RN1_e1..RN1_e4, so `current_tracked` holds the unit names but NOT the bare
+    // "RN1". Accept a bare ref whose units are tracked, matching thermally_tracked
+    // below — otherwise a package-level max_current on an array is wrongly rejected
+    // as untrackable while the identical max_temp is accepted.
+    let is_current_tracked =
+        |r: &str| current_tracked.iter().any(|name| ref_or_unit_matches(r, name));
     // Thermal tracking covers every stress-monitored device. Multi-unit
     // packages stamp per-unit metas ("IC3906_q0"), so accept a ref whose units
     // are monitored too.
@@ -650,7 +693,7 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
     for a in &spec.asserts {
         let Some(reference) = &a.reference else { continue };
         match a.kind.as_str() {
-            "max_current" if !current_tracked.contains(reference.as_str()) => {
+            "max_current" if !is_current_tracked(reference.as_str()) => {
                 return Err(SpecError::Invalid(format!(
                     "max_current assert references '{reference}', but peak current is only \
                      measured for resistors and diodes; this component binds as a kind whose \
@@ -1399,6 +1442,16 @@ fn attach_scenarios(
         }
     }
 
+    // Merge in scenario-scoped `protection_trip` assertions' supply nets. The
+    // scoped-trip verdict map only carries (scenario, net) keys for nets in a
+    // window's `nets`, but a protection_trip's `supply_net` may be a BATTERY rail
+    // the scenario's load pulls current from — not the scenario's own (possibly
+    // downstream) supply net and not named by any rail_window. Without adding it,
+    // scope_protection_trips has no key and check_protection_trip returns a false
+    // RED ("<net> was not a supply net in scenario window ... (nothing to trip)")
+    // regardless of whether the pack actually latched.
+    merge_protection_trip_nets(&mut windows, &spec.asserts);
+
     // Bound each scenario-scoped window at the next scenario's start on the
     // timeline: scenarios are sequential phases, so a trip that latches during a
     // LATER scenario must not be attributed to an earlier-starting one sharing the
@@ -2143,6 +2196,57 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protection_trip_supply_net_is_added_to_its_scenario_window() {
+        // R46: a scenario window's `nets` was seeded only from the scenario's own
+        // supply and rail_window nets, so a protection_trip naming a BATTERY rail
+        // (that the scenario's load pulls from) had no (scenario, net) verdict key
+        // and check_protection_trip returned a false RED. The supply_net must be
+        // merged into the matching scenario window.
+        let mut windows = vec![ScenarioWindow {
+            id: "load".into(),
+            start_s: 0.1,
+            end_s: f64::INFINITY,
+            nets: vec!["VBUS".into()], // scenario's own downstream supply
+        }];
+        let assert: crate::spec::Assertion = toml::from_str(
+            "kind = \"protection_trip\"\nsupply_net = \"BATT\"\nscenario = \"load\"\nexpect_trip = true\n",
+        )
+        .expect("assertion parses");
+        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&assert));
+        assert!(
+            windows[0].nets.contains(&"BATT".to_string()),
+            "the protection_trip supply_net must be in the scenario window: {:?}",
+            windows[0].nets
+        );
+        // Idempotent: a second merge does not duplicate.
+        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&assert));
+        assert_eq!(windows[0].nets.iter().filter(|n| *n == "BATT").count(), 1);
+        // An UNSCOPED protection_trip (no scenario) is not merged into any window.
+        let unscoped: crate::spec::Assertion =
+            toml::from_str("kind = \"protection_trip\"\nsupply_net = \"OTHER\"\nexpect_trip = true\n")
+                .expect("parses");
+        merge_protection_trip_nets(&mut windows, std::slice::from_ref(&unscoped));
+        assert!(!windows[0].nets.contains(&"OTHER".to_string()));
+    }
+
+    #[test]
+    fn max_current_accepts_a_resistor_array_bare_ref() {
+        // R46: current_tracked holds a multi-unit array's per-unit device names
+        // (RN1_e1..RN1_e4), not the bare "RN1", so a package-level max_current on
+        // the array was rejected as untrackable while the identical max_temp was
+        // accepted. ref_or_unit_matches accepts the bare ref whose units are tracked.
+        assert!(ref_or_unit_matches("RN1", "RN1")); // exact
+        assert!(ref_or_unit_matches("RN1", "RN1_e1")); // passive array unit
+        assert!(ref_or_unit_matches("RN1", "RN1_e12"));
+        assert!(ref_or_unit_matches("SW1", "SW1_s0")); // switch bank unit
+        assert!(ref_or_unit_matches("Q3", "Q3_q2")); // transistor array unit
+        // Not a match: a different ref, or a non-unit suffix.
+        assert!(!ref_or_unit_matches("RN1", "RN10_e1"));
+        assert!(!ref_or_unit_matches("RN1", "RN1_heater"));
+        assert!(!ref_or_unit_matches("RN1", "RN2_e1"));
+    }
 
     #[test]
     fn scenario_scoped_trip_is_bounded_by_the_next_scenario_start() {
