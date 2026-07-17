@@ -1274,6 +1274,7 @@ mod tests {
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
+                substitutions: Vec::new(),
             }
         }
         let out = outcome_batt_never_tripped();
@@ -1336,6 +1337,7 @@ mod tests {
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
+                substitutions: Vec::new(),
             }
         }
         // A voltage assertion reads the analog window (0..sim). Corner 3 diverged.
@@ -1586,6 +1588,7 @@ mod tests {
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
+                substitutions: Vec::new(),
             }
         }
 
@@ -1652,6 +1655,7 @@ mod tests {
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
+                substitutions: Vec::new(),
             }
         }
 
@@ -1712,6 +1716,7 @@ mod tests {
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
+                substitutions: Vec::new(),
             }
         }
 

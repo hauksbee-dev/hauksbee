@@ -65,6 +65,16 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
     // if no assertion's window happened to overlap the failed span (05 §3b).
     let analog_abort = outcomes.iter().any(|o| o.analog_abort);
+    // Union of substitution messages across members (an MCU substituted once is
+    // substituted for the whole ensemble), deduped and order-stable.
+    let substitutions: Vec<String> = {
+        let mut seen = std::collections::BTreeSet::new();
+        outcomes
+            .iter()
+            .flat_map(|o| o.substitutions.iter().cloned())
+            .filter(|m| seen.insert(m.clone()))
+            .collect()
+    };
     // Coverage banner data for a tolerance ensemble: how many members ran and
     // how many components were sampled (from any outcome; the set is fixed).
     let coverage = if spec.has_tolerances() {
@@ -115,5 +125,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         elapsed: started.elapsed(),
         analog_abort,
         coverage,
+        substitutions,
     })
 }
