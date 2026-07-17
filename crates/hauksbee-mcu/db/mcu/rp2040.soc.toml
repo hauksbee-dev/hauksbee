@@ -41,6 +41,13 @@
 # - I2C/SPI: no controllers, because the RP2040 Renode peripheral set is
 #   unverified; the backend then installs no bridge rather than claim an
 #   unproven bus.
+# - GPIO drive DIRECTION: SIO GPIO_OE (output-enable, offset 0x20, 1 bit per
+#   pin) is the natural dir_bits map, but no installed Renode ships the rp2040
+#   platform to verify the SIO model reads OE back — and a dir map whose read
+#   fails masks EVERY edge to zero, which is strictly worse than the status
+#   quo. So no `dir` entry is carried: direction stays unobservable here until
+#   a Renode with the platform verifies `dir = { offset = 0x20, encoding =
+#   "dir_bits" }` (add it alongside the tests/renode_rp2040.rs smoke).
 [soc]
 backend = "renode"
 machine = "rp2040"

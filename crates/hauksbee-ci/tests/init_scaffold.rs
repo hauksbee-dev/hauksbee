@@ -16,10 +16,18 @@ fn blinky() -> PathBuf {
 }
 
 /// An STM32F103 blue pill board: its MCU binds to the external `renode:stm32f103`
-/// backend, which cannot satisfy a boot-coverage assertion the way the in-process
-/// AVR backend can.
+/// backend, whose SoC descriptor maps every port's CRL/CRH direction register —
+/// so it CAN report pin drive direction and boot-coverage scaffolds without the
+/// backend-gap note.
 fn stm32_bluepill() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/stm32_bluepill_demo.kicad_pcb")
+}
+
+/// An ESP32 devkit board: its MCU binds to the `qemu:esp32` backend, which
+/// observes GPIO through a RAM mailbox carrying LEVELS only — it cannot report
+/// pin drive direction, so boot-coverage keeps the honest backend-gap note.
+fn esp32_devkit() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/esp32_devkit_demo.kicad_pcb")
 }
 
 /// Copy `blinky.kicad_pcb` into a fresh per-test temp dir and return the copy's
@@ -93,19 +101,19 @@ fn init_generates_a_spec_the_loader_accepts() {
 
 #[test]
 fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
-    // The STM32 blue pill binds to the external `renode:stm32f103` backend, which
-    // co-sims GPIO/UART but models ADC and I2C/SPI peripheral-slave coupling as
-    // no-ops and cannot report pin drive direction (docs/MCU.md). A live
-    // boot-coverage assertion there can go RED with a misleading diagnosis on a
-    // net the firmware actually drives, so init must scaffold it commented-out
-    // with an honest note rather than as a live assertion.
-    let board = copy_board_to_tempdir(&stm32_bluepill(), "backend_gap");
+    // The ESP32 devkit binds to the `qemu:esp32` backend, whose GPIO mailbox
+    // carries pin LEVELS only — it cannot report pin drive direction, so it
+    // cannot tell a held-LOW control net from an undriven one (docs/MCU.md). A
+    // live boot-coverage assertion there can go RED with a misleading diagnosis
+    // on a net the firmware actually drives, so init must scaffold it
+    // commented-out with an honest note rather than as a live assertion.
+    let board = copy_board_to_tempdir(&esp32_devkit(), "backend_gap");
 
     // The rendered text carries the honest backend-gap note and a commented-out
     // (`# `) boot-coverage assertion, not a live one.
     let text = hauksbee_ci::init::render_spec(&board).expect("render scaffolds a spec");
     assert!(
-        text.contains("renode:stm32f103"),
+        text.contains("qemu:esp32"),
         "the note names the backend that cannot satisfy the assertion, got:\n{text}"
     );
     assert!(
@@ -126,6 +134,25 @@ fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
     assert!(
         !kinds.contains(&"boot-coverage"),
         "boot-coverage is commented out, so it must not load"
+    );
+}
+
+/// The capability flip: `renode:stm32f103` maps every port's direction
+/// register (CRL/CRH) in its SoC descriptor, so it now REPORTS pin drive
+/// direction and the scaffold treats it like the AVR backend — the same
+/// commented-out starter block (GREEN out of the box, firmware is commented
+/// too) but WITHOUT the direction-gap note that direction-blind backends get.
+#[test]
+fn init_omits_the_backend_gap_note_for_direction_mapped_renode_parts() {
+    let board = copy_board_to_tempdir(&stm32_bluepill(), "dir_mapped");
+    let text = hauksbee_ci::init::render_spec(&board).expect("render scaffolds a spec");
+    assert!(
+        !text.contains("cannot report pin drive DIRECTION"),
+        "a dir-mapped Renode part must not carry the direction-gap note, got:\n{text}"
+    );
+    assert!(
+        text.contains("# kind = \"boot-coverage\""),
+        "boot-coverage still scaffolds commented-out (firmware is commented too), got:\n{text}"
     );
 }
 

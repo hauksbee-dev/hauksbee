@@ -248,7 +248,18 @@ config is claimed for it.
 GPIO exchange mechanism: after each `RunFor` chunk the backend reads each
 port's output-data register (ODR) over the Monitor, diffs the snapshot, and
 fires per-bit edge callbacks. STM32F1 ODR offset `0x0C`, STM32F4 `0x14`, nRF52
-`0x504`, FE310 `0x0C`. GPIO input: `sysbus.<port> OnGPIO <bit> <bool>`.
+`0x4` (peripheral-relative; see `db/mcu/nrf52840.soc.toml`), FE310 `0x0C`.
+GPIO input: `sysbus.<port> OnGPIO <bit> <bool>`.
+
+GPIO drive **direction** is also observable on the dir-mapped platforms: the
+backend reads each port's direction/mode register alongside the ODR — STM32F103
+CRL/CRH, STM32F4 MODER, nRF52840 DIR, each verified against the live Renode
+model's read-back — decodes a per-pin output mask, and reports it through the
+same `pins_configured_output` surface the AVR DDR hooks feed. On those parts
+the boot-state panel and `boot-coverage` can therefore tell a **held-LOW
+output from a floating input**, just as on AVR. Platforms without a verified
+direction map (RP2040, FE310) stay honestly direction-blind: their diagnoses
+hedge ("undriven or driven LOW") instead of asserting Hi-Z.
 
 ADC injection: wired per-platform through an `AdcChannelMap` (a Monitor feed
 command or result-word write); channels with no map entry drop **loudly** rather

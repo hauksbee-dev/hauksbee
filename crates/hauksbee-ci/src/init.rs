@@ -104,19 +104,19 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         .map(|b| b.rsplit(':').next().unwrap_or(b).to_string());
 
     // Can the detected MCU's backend actually satisfy a boot-coverage assertion?
-    // The external emulator backends (`renode:` for STM32/nRF/RISC-V, `qemu:` for
-    // the ESP32 family) co-sim GPIO and UART but leave ADC injection and I2C/SPI
-    // peripheral-slave interception as no-ops (docs/MCU.md), and they cannot
-    // report pin drive *direction*, so they cannot tell a held-LOW control net
-    // from an undriven one. On such a backend a scaffolded boot-coverage assertion
-    // can go RED with a misleading diagnosis on a net the firmware actually drives
-    // (LOW, or via an unmodelled peripheral bus). The in-process AVR backend
-    // models the full stack. So scaffold the assertion live only when the backend
-    // can honour it; otherwise emit it commented-out with an honest note naming
-    // the gap, so the user opts in deliberately instead of hitting a false RED.
+    // The gate is pin drive DIRECTION: a backend that reports it can tell a
+    // held-LOW control net from an undriven one, so its boot-coverage diagnosis
+    // is trustworthy. The in-process AVR backend always reports it (DDR hooks),
+    // and a `renode:` part does once its SoC descriptor maps every GPIO port's
+    // direction register (stm32f103 CRL/CRH, stm32f4 MODER, nrf52840 DIR — see
+    // db/mcu/*.soc.toml). The `qemu:` ESP32 family and unmapped Renode parts
+    // cannot; on those a scaffolded boot-coverage assertion can go RED with a
+    // misleading diagnosis on a net the firmware actually drives LOW (or via an
+    // unmodelled peripheral bus), so the assertion is emitted commented-out with
+    // an honest note naming the gap and the user opts in deliberately.
     let boot_coverage_supported = mcu_backend
         .as_deref()
-        .map_or(true, |b| !hauksbee_engine::scheduler::backend_is_external(b));
+        .map_or(true, hauksbee_engine::scheduler::backend_reports_drive_direction);
 
     let stem = board_stem(board);
     let board_file = board
@@ -207,10 +207,12 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     if !boot_coverage_supported {
         let backend = mcu_backend.as_deref().unwrap_or("");
         let _ = writeln!(s, "#   Also note this board's MCU runs on the `{backend}` backend. It co-sims");
-        let _ = writeln!(s, "#   GPIO, UART, and I2C/SPI bus slaves (docs/MCU.md), but cannot report pin");
-        let _ = writeln!(s, "#   drive DIRECTION, so it cannot distinguish a held-LOW pin from an undriven");
-        let _ = writeln!(s, "#   one. On it, watch only a net driven by plain GPIO to a defined HIGH level.");
-        let _ = writeln!(s, "#   AVR boards can watch a held-LOW net too.");
+        let _ = writeln!(s, "#   GPIO and UART (docs/MCU.md), but its platform has no verified direction-");
+        let _ = writeln!(s, "#   register map, so it cannot report pin drive DIRECTION and cannot");
+        let _ = writeln!(s, "#   distinguish a held-LOW pin from an undriven one. On it, watch only a net");
+        let _ = writeln!(s, "#   driven by plain GPIO to a defined HIGH level. AVR boards and the");
+        let _ = writeln!(s, "#   direction-mapped Renode parts (STM32F103/F4, nRF52840) can watch a");
+        let _ = writeln!(s, "#   held-LOW net too.");
     }
     let _ = writeln!(s, "{cc}[[assert]]");
     let _ = writeln!(s, "{cc}kind = \"boot-coverage\"");
