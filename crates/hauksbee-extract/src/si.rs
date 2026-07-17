@@ -1264,7 +1264,12 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         nets.sort_unstable();
         nets.dedup();
         let any_ground = nets.iter().any(|id| is_ground(&net_name(*id)));
-        let kinds: std::collections::HashSet<&str> = intrusions.iter().map(|i| i.kind).collect();
+        // Sort+dedup the kinds (like `nets` above) before formatting: a
+        // HashSet's Debug order is randomized per process, so an unsorted set made
+        // the finding message non-byte-reproducible across runs.
+        let mut kinds: Vec<&str> = intrusions.iter().map(|i| i.kind).collect();
+        kinds.sort_unstable();
+        kinds.dedup();
         let sev = if any_ground {
             SiSeverity::High
         } else {
