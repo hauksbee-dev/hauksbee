@@ -250,9 +250,13 @@ port's output-data register (ODR) over the Monitor, diffs the snapshot, and
 fires per-bit edge callbacks. STM32F1 ODR offset `0x0C`, STM32F4 `0x14`, nRF52
 `0x504`, FE310 `0x0C`. GPIO input: `sysbus.<port> OnGPIO <bit> <bool>`.
 
-ADC injection: not yet wired for the Renode backend (platform-specific in
-Renode; the STM32F103 demo couples through GPIO). I2C and SPI peripheral
-interception: not yet wired (these are documented no-ops).
+ADC injection: wired per-platform through an `AdcChannelMap` (a Monitor feed
+command or result-word write); channels with no map entry drop **loudly** rather
+than fabricating a reading. I2C and SPI peripheral interception: wired through
+generated C# bridge peripherals (an `II2CPeripheral` / `ISPIPeripheral` per
+slave address), so a hardware-TWI/SPI sensor co-simulates on Renode exactly as it
+does on simavr — see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode`
+integration tests and `docs/MCU.md` for the per-backend capability matrix.
 
 #### Espressif QEMU — `QemuBackend` (external, ESP32 family)
 
@@ -320,7 +324,9 @@ A spec is a TOML file checked in alongside the hardware design:
 name = "power-up sanity"
 board  = "hardware/board.kicad_pcb"
 firmware = "firmware/build/app.elf"
-mcu    = "atmega328p"
+mcu    = "atmega328p"   # informational label only — nothing reads it; the MCU is
+                        # detected from the board part value + [[models]] kind="mcu"
+                        # routing (this field cannot force a backend). See docs/CI.md.
 duration_ms = 200
 
 [[supply]]

@@ -67,6 +67,17 @@ into GitHub Actions (`integrations/github-action`) or run it from KiCad
 
 ## Quick start
 
+Rather than hand-write a spec from a blank page, scaffold one from your board —
+`init` detects the supplies, MCU, and nets and emits a starter spec you edit:
+
+```bash
+hauksbee-ci init my_board.kicad_pcb   # writes a starter spec beside the board and prints its path
+# edit the scaffolded spec's [[assert]] blocks (it lands at my_board.toml), then:
+hauksbee-ci run my_board.toml
+```
+
+Or run the bundled examples straight away:
+
 ```bash
 cargo build --release -p hauksbee-ci
 

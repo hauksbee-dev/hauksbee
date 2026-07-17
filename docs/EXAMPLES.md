@@ -120,22 +120,25 @@ The non-zero exit code is `2`. Without `--strict` every report still exits `0`.
 
 ## See a board live (the 2D/3D viewer)
 
-`hauksbee run <board>` with no report flag serves the interactive viewer. The
-frontend is a build artifact and is not checked in, so build it once:
+The live 2D/3D web viewer is served by `hauksbee run <board> --serve` (or the
+`hauksbee serve` subcommand). Note: bare `hauksbee run <board>` on a terminal now
+opens the full-screen terminal dashboard (TUI) instead — pass `--serve` for the
+web frontend. The frontend is a build artifact and is not checked in, so build it
+once:
 
 ```bash
 cd frontend && bun install && bun run build && cd ..
-hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --serve
 # ...or a real, open-source product board — the SQFMI Watchy (an ESP32-S3
 # e-paper smartwatch; hardware MIT-licensed, boards/watchy.LICENSE):
-hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --serve
 ```
 
 The Watchy is the "point it at a real board" case: hauksbee extracts the circuit
 its copper implements, binds 56 of 75 parts from the stock model library, and
 says plainly which active parts it does not recognise (the TP4054 charger, the
 BMA423 IMU, the e-paper panel) rather than guessing. Add `--report` for the
-static verdict, or drop the flag for the live 2D/3D viewer.
+static verdict, or `--serve` for the live 2D/3D viewer.
 
 It prints the URL to open (`http://127.0.0.1:3001` by default; change with
 `--port`). If you run it before building the frontend, hauksbee still starts the
