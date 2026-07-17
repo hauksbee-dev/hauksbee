@@ -531,6 +531,11 @@ pub struct QemuBackend {
     adc_no_gdb_warned: bool,
     /// One-time warning flag for digital-input injection without a gdbstub.
     digital_no_gdb_warned: bool,
+    /// One-time warning flag for a GPIO port that has no bank in this SoC
+    /// descriptor (e.g. ESP32 GPIO>=32 maps to port '1', but the ESP32 SoC has a
+    /// single 32-bit bank '0'). Such pins cannot be observed or injected, so the
+    /// backend must SAY so rather than silently report the pin as never-driven.
+    unbridged_gpio_warned: bool,
 }
 
 impl QemuBackend {
@@ -636,6 +641,7 @@ impl QemuBackend {
             adc_mask_shadow: 0,
             adc_no_gdb_warned: false,
             digital_no_gdb_warned: false,
+            unbridged_gpio_warned: false,
         })
     }
 
@@ -1126,6 +1132,18 @@ impl Mcu for QemuBackend {
                     ),
                 }
             }
+        } else if !self.unbridged_gpio_warned {
+            // The addressed port has no bank in this SoC — the injection cannot
+            // land and the firmware read of this pin will never see the board
+            // level. Say so once rather than returning silently (ESP32 GPIO>=32
+            // maps to port '1', which the single-bank ESP32 SoC does not expose).
+            self.unbridged_gpio_warned = true;
+            eprintln!(
+                "qemu: DROPPING digital-input injection for port '{}' bit {}: \
+                 no such bank in the '{}' SoC descriptor — the firmware read of \
+                 this pin will see nothing (e.g. ESP32 GPIO>=32).",
+                pin.port, pin.bit, self.config.machine
+            );
         }
     }
 
@@ -1253,6 +1271,28 @@ impl Mcu for QemuBackend {
             .filter(|b| ports.contains(&b.letter))
             .map(|b| b.letter)
             .collect();
+        // Loud-drop: any requested port with no matching bank cannot be observed
+        // or injected (poll_gpio_edges / set_digital_in both key on config.banks),
+        // so a firmware drive/read of its pins is invisible and the net would be
+        // silently reported as never-driven. Say so once instead of failing quiet.
+        // (ESP32/-S3 GPIO>=32 maps to port '1', but the ESP32 SoC has one 32-bit
+        // bank '0'; those high pins need a second OUT1 mailbox bank to co-sim.)
+        if !self.unbridged_gpio_warned {
+            let unbridged: Vec<char> = ports
+                .iter()
+                .copied()
+                .filter(|p| !self.config.banks.iter().any(|b| b.letter == *p))
+                .collect();
+            if !unbridged.is_empty() {
+                self.unbridged_gpio_warned = true;
+                eprintln!(
+                    "qemu: GPIO port(s) {:?} have no bank in the '{}' SoC descriptor \
+                     (banks present: {:?}) — pins on them are NOT co-simulated; firmware \
+                     drives/reads of those pins are invisible (e.g. ESP32 GPIO>=32).",
+                    unbridged, self.config.machine, known
+                );
+            }
+        }
         self.active_ports = Some(known);
     }
 }
