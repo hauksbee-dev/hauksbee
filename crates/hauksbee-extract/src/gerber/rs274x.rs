@@ -422,7 +422,13 @@ impl<'a> Plotter<'a> {
             Some(Aperture::Circle(Circle { diameter, .. })) => diameter * self.to_mm,
             Some(Aperture::Rectangle(Rectangular { x, y, .. }))
             | Some(Aperture::Obround(Rectangular { x, y, .. })) => x.min(*y) * self.to_mm,
-            _ => 0.1 * self.to_mm, // unknown: a hairline, still connects endpoints
+            // Unknown aperture (polygon/macro/undefined): a fixed 0.1 mm hairline,
+            // enough to connect endpoints. This is a physical millimetre size and
+            // must NOT be scaled by `to_mm` — on an inch-unit file (`%MOIN%`,
+            // to_mm=25.4) `0.1 * to_mm` = 2.54 mm, a fat stroke that union-merges
+            // adjacent copper into a false short (the same unit-scaling hazard the
+            // MACRO_FALLBACK_DISC_MM constant is documented to avoid).
+            _ => 0.1,
         }
     }
 
@@ -1165,6 +1171,39 @@ M02*
             (r - MACRO_FALLBACK_DISC_MM).abs() < 1e-9,
             "fallback disc radius must be a fixed {MACRO_FALLBACK_DISC_MM} mm regardless of \
              inch units, got {r} mm (0.25*25.4 = 6.35 was the bug)"
+        );
+    }
+
+    #[test]
+    fn inch_unit_unknown_aperture_stroke_is_a_fixed_hairline() {
+        // R40: the fallback stroke width for a non-circle/rect/obround aperture was
+        // `0.1 * to_mm`. On an inch board (to_mm = 25.4) that is 2.54 mm — a fat
+        // capsule (1.27 mm radius) that union-merges adjacent copper into a false
+        // short — not the intended 0.1 mm hairline. The width is a fixed physical
+        // mm and must not be unit-scaled (same rule as MACRO_FALLBACK_DISC_MM).
+        // A polygon aperture (P) hits the unknown-aperture fallback arm.
+        let g = "\
+%FSLAX46Y46*%
+%MOIN*%
+%ADD10P,0.5X4*%
+D10*
+X0Y0D02*
+X0100000Y0D01*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let track = prims
+            .iter()
+            .find(|p| p.kind == PrimKind::Track)
+            .expect("a stroked track");
+        let r = match &track.shape {
+            Shape::Capsule(c) => c.r,
+            _ => panic!("a stroke should be a capsule"),
+        };
+        // width 0.1 mm -> radius 0.05 mm, regardless of inch units.
+        assert!(
+            (r - 0.05).abs() < 1e-9,
+            "inch-unit fallback stroke radius must be a fixed 0.05 mm, got {r} mm (0.1*25.4/2 = 1.27 was the bug)"
         );
     }
 
