@@ -931,7 +931,13 @@ fn value_is_frequency(value: &str) -> bool {
     let Some(num) = v.strip_suffix("hz") else {
         return false;
     };
-    let num = num.trim().trim_end_matches(['k', 'm', 'g']);
+    // Trim AGAIN after stripping the SI prefix: a space-separated value ("16 MHz")
+    // leaves the space between the magnitude and prefix exposed only once the 'm'
+    // is stripped ("16 mhz" -> strip "hz" -> "16 m" -> strip 'm' -> "16 "), and
+    // without this final trim the trailing space fails the all-digits check — so
+    // the extremely common "16 MHz" / "32.768 kHz" form was rejected and a
+    // C-prefixed crystal fell through to the capacitor heuristic (solve collapse).
+    let num = num.trim().trim_end_matches(['k', 'm', 'g']).trim();
     !num.is_empty() && num.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
@@ -3866,6 +3872,14 @@ mod crystal_fallback_tests {
     fn frequency_values_are_recognised() {
         for v in ["16MHz", "8Mhz", "16.000MHz", "32.768kHz", "100 Hz", "12000000Hz"] {
             assert!(value_is_frequency(v), "{v} should read as a frequency");
+        }
+        // R52: the SPACE-separated SI-prefixed form ("16 MHz") left a trailing
+        // space after the prefix was stripped and was wrongly rejected, so a
+        // C-prefixed crystal valued "16 MHz" fell through to the capacitor
+        // heuristic (a gigafarad cap that collapses the solve). The doc comment
+        // even lists "8 Mhz" as accepted. These must all read as frequencies.
+        for v in ["16 MHz", "8 Mhz", "32.768 kHz", "1 GHz", "16 mhz"] {
+            assert!(value_is_frequency(v), "{v} (space-separated) should read as a frequency");
         }
         // Real passive values, and ferrite-bead impedance@frequency values
         // (which end in "hz" but are NOT crystals) must not trip it.

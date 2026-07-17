@@ -489,7 +489,19 @@ fn passive_prefix(reference: &str) -> Option<char> {
     match first {
         'R' if !r.starts_with("RV") && !r.starts_with("RT") && !r.starts_with("RN") => Some('R'),
         'C' if !r.starts_with("CN") && !r.starts_with("CON") => Some('C'),
-        'L' => Some('L'),
+        // The 'L' arm must exclude the many non-inductor L-prefixed designators —
+        // LED (light-emitting diode), LS (loudspeaker/buzzer), LDR (photoresistor),
+        // LCD (display) — or an LED1/LS1 with a blank value fires a false
+        // "set the actual L value" placeholder finding and an LDR on a resistor
+        // footprint fires a false designator/footprint-family mismatch. Mirrors
+        // the guarded R/C arms and the file's own is_led().
+        'L' if !r.starts_with("LED")
+            && !r.starts_with("LS")
+            && !r.starts_with("LDR")
+            && !r.starts_with("LCD") =>
+        {
+            Some('L')
+        }
         _ => None,
     }
 }
@@ -1438,6 +1450,30 @@ mod wired_or_tests {
                      "SPGND_SENSE", "SPRING_A"] {
             assert!(!is_wired_or_name(name), "{name} must not be treated as wired-OR");
         }
+    }
+}
+
+#[cfg(test)]
+mod passive_prefix_tests {
+    use super::passive_prefix;
+
+    #[test]
+    fn led_speaker_ldr_lcd_are_not_inductors() {
+        // R52: the 'L' arm classified every L-prefixed designator as an inductor,
+        // so an LED/LS/LDR/LCD with a blank value fired a false "set the actual L
+        // value" placeholder finding (and an LDR on a resistor footprint fired a
+        // false designator/footprint mismatch). Only real inductors are 'L'.
+        assert_eq!(passive_prefix("LED1"), None);
+        assert_eq!(passive_prefix("LS1"), None);
+        assert_eq!(passive_prefix("LDR1"), None);
+        assert_eq!(passive_prefix("LCD1"), None);
+        // Genuine inductors still classify.
+        assert_eq!(passive_prefix("L1"), Some('L'));
+        assert_eq!(passive_prefix("L23"), Some('L'));
+        // The sibling R/C arms are unchanged.
+        assert_eq!(passive_prefix("R5"), Some('R'));
+        assert_eq!(passive_prefix("C10"), Some('C'));
+        assert_eq!(passive_prefix("RN1"), None);
     }
 }
 
