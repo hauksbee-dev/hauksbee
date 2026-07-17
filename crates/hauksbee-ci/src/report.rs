@@ -28,6 +28,10 @@ pub struct CiResult {
     /// (sampled coverage vs monotonic-only bounds), so a green ensemble can
     /// never read as a worst-case proof.
     pub coverage: Option<EnsembleCoverage>,
+    /// One message per MCU co-simulated on a SUBSTITUTE core (requested part not
+    /// modelled, run on a less-specific one). Surfaced in every report format so a
+    /// GREEN verdict never silently vouches for firmware on the wrong silicon.
+    pub substitutions: Vec<String>,
 }
 
 /// What a tolerance-ensemble run covered, for the report headline.
@@ -156,6 +160,11 @@ impl CiResult {
                  the run is INVALID for analysis (05 §3b)\n",
             );
         }
+        // Substitution honesty: a GREEN over a substitute MCU core cannot vouch
+        // for firmware behaviour on the real silicon. Say so plainly.
+        for msg in &self.substitutions {
+            out.push_str(&format!("  co-sim ran on a SUBSTITUTE chip — {msg}\n"));
+        }
         let verdict = if self.analog_invalid() {
             "INVALID (analog co-sim did not converge)"
         } else if self.passed() {
@@ -246,6 +255,14 @@ impl CiResult {
             ));
             out.push_str("    </testcase>\n");
         }
+        // Substitution honesty as a suite-level system-out note (dashboards show
+        // it alongside the results): a pass over a substitute core is qualified.
+        for msg in &self.substitutions {
+            out.push_str(&format!(
+                "    <system-out>co-sim ran on a SUBSTITUTE chip — {}</system-out>\n",
+                xml_escape(msg)
+            ));
+        }
         out.push_str("  </testsuite>\n");
         out.push_str("</testsuites>\n");
         out
@@ -276,6 +293,14 @@ impl CiResult {
                     gh_escape(&r.detail)
                 ));
             }
+        }
+        // Substitution honesty: a warning annotation (a pass over a substitute
+        // core cannot vouch for firmware on the real silicon).
+        for msg in &self.substitutions {
+            out.push_str(&format!(
+                "::warning title=hauksbee-ci SUBSTITUTE MCU::{}\n",
+                gh_escape(msg)
+            ));
         }
         // A summary line.
         if self.analog_invalid() {
@@ -416,5 +441,49 @@ mod ensemble_coverage_tests {
         assert!(d.contains("corner 2"), "corners member must be named a corner: {d}");
         assert!(!d.contains("seed"), "a corner must not be called a seed: {d}");
         assert!(!d.contains("draw"), "a corner is deterministic, not a draw: {d}");
+    }
+}
+
+#[cfg(test)]
+mod substitution_tests {
+    use super::CiResult;
+    use std::time::Duration;
+
+    // U2: the `run` binary surfaces an MCU substitution on every honesty surface;
+    // the CI report did not, so a GREEN vouched for firmware on the wrong silicon.
+    // It must now appear in the human, JUnit, and GitHub outputs.
+    #[test]
+    fn a_substituted_mcu_is_surfaced_in_every_report_format() {
+        let result = CiResult {
+            spec_name: "t".into(),
+            board: "b.kicad_pcb".into(),
+            results: Vec::new(),
+            seeds: 1,
+            elapsed: Duration::from_secs(0),
+            analog_abort: false,
+            coverage: None,
+            substitutions: vec![
+                "co-sim: U1 requested STM32F411RET6 but it is modelled as an STM32F407 core"
+                    .to_string(),
+            ],
+        };
+        let human = result.render_human();
+        assert!(
+            human.contains("SUBSTITUTE chip") && human.contains("STM32F411RET6"),
+            "human report must name the substitution: {human}"
+        );
+        let junit = result.render_junit();
+        assert!(
+            junit.contains("SUBSTITUTE chip") && junit.contains("system-out"),
+            "junit must carry the substitution note: {junit}"
+        );
+        let gh = result.render_github_annotations();
+        assert!(
+            gh.contains("SUBSTITUTE MCU") && gh.contains("::warning"),
+            "github annotations must warn on the substitution: {gh}"
+        );
+        // No substitution → none of the surfaces mention it.
+        let clean = CiResult { substitutions: Vec::new(), ..result };
+        assert!(!clean.render_human().contains("SUBSTITUTE"));
     }
 }
