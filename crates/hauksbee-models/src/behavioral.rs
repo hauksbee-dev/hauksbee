@@ -360,14 +360,17 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             ));
         }
         if let Some(r) = pin.pull_ohms {
-            if r <= 0.0 {
+            // A non-finite value (NaN/±inf) is false for every `<= 0.0` compare, so
+            // it must be rejected explicitly or a `nan` TOML literal slips the gate
+            // and reaches the solver (the R37 validation.rs hole, here too).
+            if !r.is_finite() || r <= 0.0 {
                 errs.push(format!("pin '{role}': pull_ohms must be positive, got {r}"));
             }
         }
         if pin.open_drain {
             if let Some(r) = pin.od_ohms {
-                if r <= 0.0 {
-                    errs.push(format!("pin '{role}': od_ohms must be positive"));
+                if !r.is_finite() || r <= 0.0 {
+                    errs.push(format!("pin '{role}': od_ohms must be positive, got {r}"));
                 }
             }
         }
@@ -412,14 +415,19 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         if c.in_pin.trim().is_empty() {
             errs.push("converter: in_pin is empty".to_string());
         }
-        if c.vout_setpoint <= 0.0 {
+        // Reject non-finite up front: `nan`/`inf` pass every comparison below
+        // (NaN <= 0.0 is false), then a NaN vout_setpoint reaches the engine's
+        // `v_cmd.clamp(0.0, vout_setpoint)` where a NaN max PANICS the solver on a
+        // model that "validated OK", and a NaN efficiency propagates a NaN input
+        // current into the network (R37 finiteness hardening, extended here).
+        if !c.vout_setpoint.is_finite() || c.vout_setpoint <= 0.0 {
             errs.push(format!(
-                "converter: vout_setpoint must be positive, got {}",
+                "converter: vout_setpoint must be a positive finite number, got {}",
                 c.vout_setpoint
             ));
         }
         if let Some(e) = c.efficiency {
-            if e <= 0.0 || e > 1.0 {
+            if !e.is_finite() || e <= 0.0 || e > 1.0 {
                 errs.push(format!("converter: efficiency must be in (0,1], got {e}"));
             }
         }
@@ -544,6 +552,43 @@ v_sense_full = 0.05
         });
         let errs = validate_behavioral(&b);
         assert!(errs.iter().any(|e| e.contains("sink")), "{errs:?}");
+    }
+
+    #[test]
+    fn non_finite_converter_and_pin_values_are_rejected() {
+        // R44: `nan`/`inf` are legal TOML floats and every `<= 0.0`/range compare is
+        // false for them, so they slipped the gate — then a NaN vout_setpoint reaches
+        // the engine's `v_cmd.clamp(0.0, vout_setpoint)` and PANICS (clamp with a NaN
+        // max), and a NaN efficiency propagates a NaN input current. Reject up front.
+        let nan_vout: Behavioral = toml::from_str(
+            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint = nan\n",
+        )
+        .expect("parse");
+        assert!(
+            validate_behavioral(&nan_vout).iter().any(|e| e.contains("vout_setpoint")),
+            "a NaN vout_setpoint must be rejected: {:?}",
+            validate_behavioral(&nan_vout)
+        );
+
+        let nan_eff: Behavioral = toml::from_str(
+            "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint = 5.0\nefficiency = nan\n",
+        )
+        .expect("parse");
+        assert!(
+            validate_behavioral(&nan_eff).iter().any(|e| e.contains("efficiency")),
+            "a NaN efficiency must be rejected: {:?}",
+            validate_behavioral(&nan_eff)
+        );
+
+        let inf_pull: Behavioral = toml::from_str(
+            "[pins.shphld]\npull_to = \"vsys\"\npull_ohms = inf\n",
+        )
+        .expect("parse");
+        assert!(
+            validate_behavioral(&inf_pull).iter().any(|e| e.contains("pull_ohms")),
+            "an inf pull_ohms must be rejected: {:?}",
+            validate_behavioral(&inf_pull)
+        );
     }
 
     #[test]
