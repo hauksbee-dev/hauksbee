@@ -68,7 +68,7 @@ pub fn emit(
                 println!(
                     "Heads-up: {open} active IC(s) are unresolved/open, so firmware/analog/AC/thermal \
                      results on their nets would be INCOMPLETE — but the copper checks below are \
-                     unaffected. Add models with --models-dir to cover them (run --bind for the {m}-part \
+                     unaffected. Add models with --models-dir to cover them (run --report for the {m}-part \
                      bind table).\n"
                 );
             }

@@ -3420,12 +3420,17 @@ fn is_rail_monitor_suffix(tail: &str) -> bool {
     // longer forms — "DIVIDER" (DIV), "SENSED"/"SENSING" (SENSE), "MEASURE"
     // (MEAS), "MONITORED" (MON) — and those must still read as taps, or the net
     // falls through and is pinned to the full rail (the failure this guard
-    // prevents). The roots are chosen so no rail-DOMAIN suffix (DIG, IO, USB,
-    // CORE, RAIL, ANALOG) starts with one.
-    // Roots, not exact tokens: "SENS" covers SENSE/SENSED/SENSING, "DIV" covers
-    // DIVIDER, "MON" covers MONITOR/MONITORED, "MEAS" covers MEASURE/MEASURED.
-    // Roots, not exact tokens: "SENS" covers SENSE/SENSED/SENSING, "DIV" covers
-    // DIVIDER, "MON" covers MONITOR/MONITORED, "MEAS" covers MEASURE/MEASURED.
+    // prevents).
+    //
+    // But prefix matching over-reaches onto rail-DOMAIN words that happen to
+    // share a root's letters: "SENSOR" starts with "SENS" and "FBUS" with "FB",
+    // yet "5V_SENSOR"/"3V3_FBUS" are genuine supply rails, not divided taps —
+    // classifying them as taps drops their SupplyLeg and floats the whole domain
+    // at 0 V. Those specific rail-domain words are excepted before the root test.
+    const RAIL_DOMAIN_EXCEPTIONS: [&str; 2] = ["SENSOR", "FBUS"];
+    if RAIL_DOMAIN_EXCEPTIONS.contains(&first.as_str()) {
+        return false;
+    }
     const TAP_ROOTS: [&str; 8] = ["FB", "FEEDBACK", "SENS", "MON", "DIV", "TAP", "MEAS", "SNS"];
     TAP_ROOTS.iter().any(|r| first.starts_with(r))
 }
@@ -4061,6 +4066,23 @@ mod rail_voltage_tests {
         assert_eq!(power_rail_voltage("+3V3_DIG"), Some(3.3));
         assert_eq!(power_rail_voltage("+5V_USB"), Some(5.0));
         assert_eq!(power_rail_voltage("+15V_ANALOG"), Some(15.0));
+    }
+
+    /// R39: the R38 root-prefix match over-reached — "SENSOR" starts with the
+    /// "SENS" tap root and "FBUS" with "FB", so genuine sensor/fieldbus SUPPLY
+    /// rails were misclassified as monitor taps and left floating at 0 V. Those
+    /// rail-domain words are excepted; the true tap spellings still resolve as taps.
+    #[test]
+    fn sensor_and_fieldbus_supply_rails_are_not_mistaken_for_taps() {
+        assert_eq!(power_rail_voltage("5V_SENSOR"), Some(5.0));
+        assert_eq!(power_rail_voltage("3V3_SENSOR"), Some(3.3));
+        assert_eq!(power_rail_voltage("12V_SENSOR"), Some(12.0));
+        assert_eq!(power_rail_voltage("3V3_FBUS"), Some(3.3));
+        // The genuine taps (including the longer R38 spellings) are still taps.
+        assert_eq!(power_rail_voltage("5V_SENSE"), None);
+        assert_eq!(power_rail_voltage("3V3_SENSED"), None);
+        assert_eq!(power_rail_voltage("5V_SENSING"), None);
+        assert_eq!(power_rail_voltage("12V_FB"), None);
     }
 }
 
