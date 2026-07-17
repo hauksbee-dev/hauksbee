@@ -78,9 +78,17 @@ pub fn emit(
             println!("{}", jr.to_json());
         } else {
             eprintln!("WARNING: AC result not valid — {reason}");
+            // Did-you-mean per missing node, then the discoverability pointer —
+            // matching the net-not-found pattern the co-sim / spec surfaces use.
+            for n in &nodes {
+                let near = crate::reports::cosim::nearest_nets(n, &bound.net_names, 5);
+                if !near.is_empty() {
+                    eprintln!("  '{n}': did you mean {}?", near.join(", "));
+                }
+            }
             eprintln!(
                 "  (none of the requested --ac-node nets exist in this circuit; \
-                 check the net names against the board, then re-run.)"
+                 run `--list-nets` to see every net name, then re-run.)"
             );
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
