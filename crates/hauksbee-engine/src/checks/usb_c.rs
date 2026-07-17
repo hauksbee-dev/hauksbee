@@ -1036,11 +1036,22 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
         audit.as_ref().is_some_and(|a| a.has_double_termination()),
     );
 
+    // Report the EFFECTIVE Rd (external ∥ controller-internal) of the primary
+    // receptacle — the same number the text/web renderers show via
+    // `effective_rd_ohms()`. `term.cc*_rd_ohms` is the external discrete Rd only,
+    // so on a double-terminated board the JSON scalar would read a nominal-looking
+    // 5.1k while text/web (and the very headline) report the out-of-spec ~2.55k —
+    // a cross-surface disagreement. Fall back to the external Rd when no audit ran.
+    let (cc1_rd_ohms, cc2_rd_ohms) = audit
+        .as_ref()
+        .map(|a| (a.cc1.effective_rd_ohms(), a.cc2.effective_rd_ohms()))
+        .unwrap_or((term.cc1_rd_ohms, term.cc2_rd_ohms));
+
     Some(UsbcReport {
         receptacles: audit.map(|a| a.receptacles).unwrap_or_default(),
         shared_net: term.shared_net,
-        cc1_rd_ohms: term.cc1_rd_ohms,
-        cc2_rd_ohms: term.cc2_rd_ohms,
+        cc1_rd_ohms,
+        cc2_rd_ohms,
         attach: emarked,             // report the stricter, modern-cable case
         powers_vbus: emarked.powers(),
         has_discrete_rd,
@@ -1620,6 +1631,76 @@ mod tests {
         // A Serious verdict is never DOWNGRADED by the escalation.
         let (lvl, _) = apply_double_termination(UsbcLevel::Serious, "bad".into(), true);
         assert_eq!(lvl, UsbcLevel::Serious);
+    }
+
+    #[test]
+    fn json_rd_is_the_effective_termination_on_a_double_terminated_board() {
+        // R54: usb_c_report set the JSON cc*_rd_ohms from the EXTERNAL discrete Rd
+        // only, while text/web render the EFFECTIVE Rd (external ∥ internal). On a
+        // double-terminated board (external 5.1k + nPM1300 internal 5.1k) the JSON
+        // read a nominal-looking 5100 while the effective (and the headline) is the
+        // out-of-spec ~2550 — a cross-surface disagreement. The JSON must match.
+        let pin = |number: &str, net: i64, function: &str| hauksbee_extract::Pin {
+            number: number.into(),
+            net: Some(net),
+            function: function.into(),
+            kind: String::new(),
+            position: None,
+        };
+        let board = ExtractedBoard {
+            name: "dt".into(),
+            nets: vec![
+                hauksbee_extract::Net { id: 0, name: "GND".into() },
+                hauksbee_extract::Net { id: 1, name: "CC1".into() },
+                hauksbee_extract::Net { id: 2, name: "CC2".into() },
+            ],
+            components: vec![
+                hauksbee_extract::Component {
+                    reference: "J1".into(),
+                    value: "USB-C".into(),
+                    lib_id: "Connector:USB_C_Receptacle".into(),
+                    footprint: "USB_C_Receptacle_HRO".into(),
+                    position: None,
+                    layer: String::new(),
+                    properties: vec![],
+                    dnp: false,
+                    pins: vec![pin("A5", 1, "CC1"), pin("B5", 2, "CC2")],
+                },
+                // External discrete 5.1k Rd on CC1 -> GND.
+                hauksbee_extract::Component {
+                    reference: "R1".into(),
+                    value: "5.1k".into(),
+                    lib_id: "Device:R".into(),
+                    footprint: String::new(),
+                    position: None,
+                    layer: String::new(),
+                    properties: vec![],
+                    dnp: false,
+                    pins: vec![pin("1", 1, ""), pin("2", 0, "")],
+                },
+                // nPM1300 PMIC whose CC1 provides an internal 5.1k Rd.
+                hauksbee_extract::Component {
+                    reference: "U1".into(),
+                    value: "nPM1300-QEXX".into(),
+                    lib_id: "Battery_Management:NPM1300".into(),
+                    footprint: String::new(),
+                    position: None,
+                    layer: String::new(),
+                    properties: vec![],
+                    dnp: false,
+                    pins: vec![pin("30", 1, "CC1")],
+                },
+            ],
+        };
+        let report = usb_c_report(&board).expect("a USB-C receptacle is present");
+        // External 5.1k ∥ internal 5.1k = 2550 Ω (the effective, out-of-spec value).
+        let cc1 = report.cc1_rd_ohms.expect("CC1 has a termination");
+        assert!(
+            (cc1 - 2550.0).abs() < 1.0,
+            "JSON cc1_rd_ohms must be the effective ~2550 Ω, not the external 5100: got {cc1}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&report.to_json()).unwrap();
+        assert!((v["cc1_rd_ohms"].as_f64().unwrap() - 2550.0).abs() < 1.0);
     }
 
     #[test]
