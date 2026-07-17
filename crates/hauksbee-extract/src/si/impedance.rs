@@ -422,6 +422,27 @@ fn diff_polarity(n: &str) -> Option<(String, char)> {
 fn is_single_ended_50(name: &str) -> bool {
     let n = norm(name);
     let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+    // A control/status/select qualifier means this is the antenna/RF *control*
+    // GPIO (ANT_SEL, ANT_DET, RF_EN, ANT_SW…), an ordinary logic signal — NOT the
+    // deliberate 50 ohm feed trace. The RF token would otherwise match the bare
+    // `ANT`/`RF` token these names still carry, fabricating a controlled-impedance
+    // finding on a GPIO. Exclude them to stay at zero false positives.
+    let is_control = toks.iter().any(|t| {
+        matches!(
+            *t,
+            "SEL" | "SELECT"
+                | "DET" | "DETECT"
+                | "CTRL" | "CTL" | "CONTROL"
+                | "EN" | "ENABLE"
+                | "SW" | "SWITCH"
+                | "GPIO"
+                | "DIV" | "DIVERSITY"
+                | "STAT" | "STATUS"
+        )
+    });
+    if is_control {
+        return false;
+    }
     // RF feedline conventions only. These are the nets a designer routes to a
     // deliberate 50 ohm; an ordinary digital signal is not assumed controlled.
     toks.iter().any(|t| {
@@ -789,4 +810,29 @@ fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 
     let (cx, cy) = (ax + t * dx, ay + t * dy);
     let (ex, ey) = (px - cx, py - cy);
     ex * ex + ey * ey
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_single_ended_50;
+
+    #[test]
+    fn antenna_control_gpio_is_not_a_50_ohm_line() {
+        // R49: is_single_ended_50 matched the bare `ANT` token these carry, so an
+        // antenna-diversity control GPIO was classified as a 50 ohm RF feed and
+        // judged against controlled-impedance limits — a false finding on a
+        // wireless board (which declares controlled impedance for its real feed).
+        assert!(!is_single_ended_50("ANT_SEL"), "ANT_SEL is a control GPIO");
+        assert!(!is_single_ended_50("ANT_DET"), "ANT_DET is antenna-detect status");
+        assert!(!is_single_ended_50("ANT_CTRL"), "ANT_CTRL is a control line");
+        assert!(!is_single_ended_50("ANT_EN"), "ANT_EN is an enable");
+        assert!(!is_single_ended_50("RF_SW"), "RF_SW is a switch control");
+        assert!(!is_single_ended_50("ANT_DIV_SEL"), "diversity select is control");
+        // The genuine RF feed conventions must still classify.
+        assert!(is_single_ended_50("ANT"), "the bare antenna feed is 50 ohm");
+        assert!(is_single_ended_50("ANTENNA"), "ANTENNA feed is 50 ohm");
+        assert!(is_single_ended_50("RF"), "the RF feed is 50 ohm");
+        assert!(is_single_ended_50("RF_IN"), "RF_IN feed is 50 ohm");
+        assert!(is_single_ended_50("ANT1"), "a switched antenna feed ANT1 is 50 ohm");
+    }
 }
