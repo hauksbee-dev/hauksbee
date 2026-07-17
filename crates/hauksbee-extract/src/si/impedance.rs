@@ -450,7 +450,12 @@ fn is_single_ended_50(name: &str) -> bool {
             *t,
             "RF" | "RFIN" | "RFOUT" | "RFOUTPUT" | "ANT" | "ANTENNA" | "RF_IN" | "RF_OUT"
         ) || t.starts_with("RFIO")
-            || t.starts_with("ANT")
+            // `ANT` followed by DIGITS ONLY (ANT1/ANT2, a switched antenna feed) —
+            // NOT a bare `starts_with("ANT")`, which would swallow non-RF tokens
+            // like ANTIALIAS and fabricate a controlled-impedance finding on a
+            // mixed-signal net (the module's zero-false-positive contract).
+            || t.strip_prefix("ANT")
+                .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
     })
 }
 
@@ -870,5 +875,10 @@ mod tests {
         assert!(is_single_ended_50("RF"), "the RF feed is 50 ohm");
         assert!(is_single_ended_50("RF_IN"), "RF_IN feed is 50 ohm");
         assert!(is_single_ended_50("ANT1"), "a switched antenna feed ANT1 is 50 ohm");
+        // R54: `starts_with("ANT")` swallowed non-RF tokens; only `ANT` + digits
+        // (a switched feed) or the bare `ANT`/`ANTENNA` token is an RF feed.
+        assert!(!is_single_ended_50("ANTIALIAS_IN"), "ANTIALIAS is not an antenna");
+        assert!(!is_single_ended_50("ANTI_ALIAS_OUT"), "ANTI is not an antenna");
+        assert!(is_single_ended_50("ANT2"), "a switched antenna feed ANT2 is 50 ohm");
     }
 }
