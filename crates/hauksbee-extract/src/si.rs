@@ -1057,15 +1057,26 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         let poly_v: Vec<(f64, f64)> = poly.to_vec();
         let (bminx, bminy, bmaxx, bmaxy) = poly_bounds(&poly_v);
 
-        // Nets owned by the antenna part itself are not intrusions (its own RF
-        // feed / ground pads live at its edge by design).
-        let own_nets: std::collections::HashSet<i64> =
-            ant.pins.iter().filter_map(|p| p.net).collect();
-
         // Resolve name-only net refs (KiCad 10 `(net "GND")`) via the board's
         // declarations; without this every track/via/zone on such a board has
         // `arg_i64(0) == None` and is skipped, yielding a confident false all-clear.
         let by_name = net_name_index(root);
+        let id_to_name: std::collections::HashMap<i64, &str> =
+            by_name.iter().map(|(n, &i)| (i, n.as_str())).collect();
+
+        // Nets owned by the antenna part itself are not intrusions — its own RF
+        // FEED net lives at its edge by design. But the antenna's GROUND pads are
+        // bonded to the whole board ground net, so excluding every own net would
+        // remove the board ground plane from the check and silently miss a ground
+        // pour flooding the keepout — the exact detuning case this check exists to
+        // catch. So exclude only the antenna's NON-ground own nets; a ground pour
+        // under the antenna must still register as an intrusion.
+        let own_nets: std::collections::HashSet<i64> = ant
+            .pins
+            .iter()
+            .filter_map(|p| p.net)
+            .filter(|id| id_to_name.get(id).map_or(true, |n| !is_ground(n)))
+            .collect();
 
         let mut intrusions: Vec<Intrusion> = Vec::new();
         let in_box = |x: f64, y: f64| x >= bminx && x <= bmaxx && y >= bminy && y <= bmaxy;
