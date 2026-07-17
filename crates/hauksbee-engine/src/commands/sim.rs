@@ -46,7 +46,11 @@ pub fn run(
     // actionable message, not a deck-malformed refusal.
     let text = std::fs::read_to_string(file).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!("no deck at '{}'. Check the path.", file.display())
+            anyhow::anyhow!(
+                "no deck at '{}'. Check the path, or try a bundled example:\n  \
+                 hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)",
+                file.display()
+            )
         } else {
             anyhow::anyhow!("reading '{}': {e}", file.display())
         }
