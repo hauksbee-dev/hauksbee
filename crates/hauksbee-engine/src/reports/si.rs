@@ -38,7 +38,15 @@ pub fn emit(
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => print!("{}", crate::plain_si(&report).render()),
-        OutputMode::Text => print!("{}", hauksbee_extract::render_si(&report)),
+        OutputMode::Text => {
+            print!("{}", hauksbee_extract::render_si(&report));
+            if !report.is_clean() {
+                eprintln!(
+                    "note: run the same command with --plain for a plain-language \
+                     explanation of each finding and how to fix it."
+                );
+            }
+        }
     }
     if strict && si_fails(&report) {
         std::process::exit(2);
