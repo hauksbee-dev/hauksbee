@@ -154,6 +154,34 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         _ => {}
     }
 
+    // Absolute-maximum ratings gate the engine's stress/destruction faults. A
+    // NaN, negative, or zero rating passes every kind-specific check above (which
+    // only look at `params`, never `ratings`), then silently disables the fault:
+    // the stress monitor computes `if limit > 0.0 { value/limit } else { 0.0 }`,
+    // so a NaN (NaN>0 is false) or non-positive limit yields frac 0 and the
+    // Overcurrent/Overvoltage/Overpower check never trips — an unprotected part
+    // that validated clean. Reject any present rating that is not positive-finite.
+    for (name, rating) in [
+        ("max_current_a", entry.ratings.max_current_a),
+        ("max_surge_current_a", entry.ratings.max_surge_current_a),
+        ("max_power_w", entry.ratings.max_power_w),
+        ("max_voltage_v", entry.ratings.max_voltage_v),
+        ("max_pin_current_a", entry.ratings.max_pin_current_a),
+        ("max_ripple_current_a", entry.ratings.max_ripple_current_a),
+        ("max_junction_temp_c", entry.ratings.max_junction_temp_c),
+    ] {
+        if let Some(v) = rating {
+            if !v.is_finite() || v <= 0.0 {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "rating '{name}' = {v} must be a positive finite number"
+                    ),
+                });
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -190,6 +218,32 @@ mod tests {
     fn valid_diode_passes() {
         let entry = make_diode(1e-14, 1.5, 1.0);
         assert!(validate(&entry).is_ok());
+    }
+
+    #[test]
+    fn nonpositive_or_nonfinite_ratings_are_rejected() {
+        // R52: absolute-maximum ratings gate the engine's stress faults, but a
+        // NaN/negative/zero rating passed validation and then silently disabled
+        // the fault (limit>0.0 is false → frac 0 → never trips). Reject them.
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.ratings.max_current_a = Some(f64::NAN);
+        assert!(
+            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("max_current_a")),
+            "a NaN max_current_a must be rejected"
+        );
+
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.ratings.max_voltage_v = Some(-75.0);
+        assert!(
+            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("max_voltage_v")),
+            "a negative max_voltage_v must be rejected"
+        );
+
+        // A well-formed positive rating still passes.
+        let mut entry = make_diode(1e-14, 1.5, 1.0);
+        entry.ratings.max_current_a = Some(1.0);
+        entry.ratings.max_voltage_v = Some(75.0);
+        assert!(validate(&entry).is_ok(), "valid ratings must pass");
     }
 
     #[test]
