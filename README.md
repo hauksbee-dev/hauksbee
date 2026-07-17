@@ -46,7 +46,7 @@ Point it at any PCB design and it will:
 scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
 ```
 
-**Or run it in Docker** (no local toolchain needed; the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
+**Or run it in Docker** (no local toolchain needed; the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim). The published image lands with the first public release; during private beta, build from source above:
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
@@ -55,17 +55,23 @@ docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
 
 The slim and full images and more `docker run` examples are in [`docs/DOCKER.md`](docs/DOCKER.md).
 
-**Then use it.** The friendliest path is the web front door (no terminal flags):
+**Then use it — first run, against a board that ships in this repo:**
 
 ```bash
-hauksbee serve                                       # web front door: open the page, drop a board (+ optional firmware), read the report
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report --plain   # which parts were modelled, plain bottom line
+hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --drc --plain      # the copper-short report, in plain language
+hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml                             # run a CI spec the way a pipeline would
+```
+
+**Then swap in your own board** (`my_board.kicad_pcb` is a placeholder for your file):
+
+```bash
 hauksbee run my_board.kicad_pcb                       # no flags on a terminal: a full-screen dashboard (TUI)
-hauksbee run my_board.kicad_pcb --report --plain      # which parts were modelled, with a plain bottom line
-hauksbee run my_board.kicad_pcb --drc --plain        # the copper-short report, in plain language
 hauksbee run my_board.kicad_pcb --si --plain         # signal integrity (USB/Ethernet impedance, rise times)
 hauksbee run my_board.kicad_pcb --list-nets          # list net names (for --ac-node / --ac-loop)
 hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
-hauksbee-ci run ci/power-up.toml                     # run a CI spec the way a pipeline would
+hauksbee-ci init my_board.kicad_pcb                  # scaffold a CI spec beside the board (prints the path; edit, then run)
+hauksbee serve                                       # web front door (long-running): open the page, drop a board, read the report
 ```
 
 Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).

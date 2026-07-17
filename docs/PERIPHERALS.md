@@ -172,10 +172,12 @@ inside a single `run_micros` chunk. So:
   different story: those edges alias at the chunk poll rate exactly like any
   other GPIO (see `docs/MCU.md`). Bit-banged MHz bus traffic is **not** resolved.
   This framework targets the hardware TWI/SPI peripherals.
-- The **Renode `on_i2c` / `on_spi` hooks are documented no-ops** (peripheral-bus
-  interception over the Monitor is future work). So these slaves bind to the
-  **AVR backend** today. The framework is backend-agnostic at the trait level;
-  wiring Renode is a backend task, not a device task.
+- The **Renode `on_i2c` / `on_spi` hooks are wired** through generated C#
+  bridge peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave address,
+  loaded into the running machine over the Monitor). A hardware-TWI/SPI sensor
+  therefore co-simulates on the Renode ARM/RISC-V backends the same way it does
+  on simavr — see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode`
+  integration tests. (Bit-banged masters are still the exception above.)
 
 ## Output sinks
 
@@ -276,9 +278,10 @@ max = 25
 
 ## Honest limitations
 
-- **Bus slaves are AVR-only today.** The framework is backend-agnostic, but
-  Renode's `on_i2c` / `on_spi` are no-ops, so I2C/SPI devices currently couple
-  only to the simavr backend.
+- **Bus slaves couple on every hardware-peripheral backend.** simavr (AVR TWI/
+  SPI), the Renode ARM/RISC-V backends (generated C# bridge peripherals), and the
+  QEMU ESP32 backend (RAM-mailbox bus cells) all route a slave model's traffic;
+  the framework is backend-agnostic at the trait level.
 - **Hardware peripheral, not bit-bang.** Byte-level interception means a
   software bit-banged bus master is not resolved (its edges alias at the chunk
   rate, like any GPIO). Use the firmware's TWI/SPI peripheral.
