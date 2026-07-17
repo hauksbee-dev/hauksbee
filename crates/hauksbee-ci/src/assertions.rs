@@ -46,7 +46,7 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
                 // One hwtrace assertion expands to one result per (channel,
                 // feature), so the report shows the per-feature table an EE
                 // can argue with, not a single opaque pass/fail.
-                evaluate_hwtrace(spec, a, outcomes)
+                evaluate_hwtrace(spec, a, outcomes, mode)
             } else {
                 vec![evaluate_one(a, outcomes, mode)]
             }
@@ -59,8 +59,21 @@ pub fn evaluate(spec: &Spec, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
 /// waveform, and emit one [`AssertResult`] per (channel, feature) with both
 /// values in the detail line. A feature passes only if it holds on every seed
 /// (same all-seeds rule as every other assertion kind).
-fn evaluate_hwtrace(spec: &Spec, a: &Assertion, outcomes: &[RunOutcome]) -> Vec<AssertResult> {
+fn evaluate_hwtrace(
+    spec: &Spec,
+    a: &Assertion,
+    outcomes: &[RunOutcome],
+    mode: Option<crate::tolerance::Mode>,
+) -> Vec<AssertResult> {
     use crate::hwtrace;
+
+    // In corners mode a member index is a corner number, not a random seed —
+    // label it to match evaluate_one, the coverage banner, and every sibling
+    // assertion (the round-30 fix, previously left unapplied to this path).
+    let member = match mode {
+        Some(crate::tolerance::Mode::Corners) => "corner",
+        _ => "seed",
+    };
 
     let hard_fail = |label: String, detail: String| AssertResult {
         label,
@@ -157,7 +170,7 @@ fn evaluate_hwtrace(spec: &Spec, a: &Assertion, outcomes: &[RunOutcome]) -> Vec<
                 None => (true, last_detail, Vec::new()),
                 Some((seed, d)) => {
                     let d = if outcomes.len() > 1 {
-                        format!("seed {seed}: {d}")
+                        format!("{member} {seed}: {d}")
                     } else {
                         d.clone()
                     };
@@ -246,9 +259,21 @@ fn evaluate_one(
                 .map(|(o, _)| o.seed.to_string())
                 .collect();
             let more = if failures.len() > 8 { ", …" } else { "" };
+            // The passed count must exclude held-stale (INVALID) members, not fold
+            // them into "passed": those members were SKIPPED (member_invalid) and
+            // never evaluated, so counting them green over-claims worst-case
+            // coverage on the very surface a reviewer trusts. passed = total −
+            // failed − invalid; surface the invalid count when any occurred.
+            let invalid = outcomes.iter().filter(|o| member_invalid(o)).count();
+            let passed = outcomes.len() - failures.len() - invalid;
+            let invalid_note = if invalid > 0 {
+                format!(", {invalid} invalid")
+            } else {
+                String::new()
+            };
             detail.push_str(&format!(
-                "; passed {}/{} {member}s (failing: {}{more})",
-                outcomes.len() - failures.len(),
+                "; passed {}/{} {member}s (failing: {}{more}{invalid_note})",
+                passed,
                 outcomes.len(),
                 failing.join(", "),
             ));
@@ -1903,6 +1928,14 @@ mod tests {
             res.failing_seed,
             Some(1),
             "corner 1 (the converged, trustworthy failure) must be named: {}",
+            res.detail
+        );
+        // R52: the pass-rate must NOT count the held-stale (INVALID) corner 2 as
+        // passed. Of 2 corners: 0 passed, 1 failed, 1 invalid — the base bug
+        // reported "passed 1/2" (folding the skipped INVALID member into passed).
+        assert!(
+            res.detail.contains("passed 0/2") && res.detail.contains("1 invalid"),
+            "held-stale members must not inflate the passed count: {}",
             res.detail
         );
     }
