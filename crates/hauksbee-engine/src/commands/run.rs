@@ -64,20 +64,36 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     if let Some(fw) = &cfg.firmware {
         hauksbee_mcu::validate_firmware_path(fw)?;
     }
+    // Gerber job input: a DIRECTORY of fab files, or a gerber `.zip`. This is the
+    // "hand us only the fab files" path the README and `--help` advertise — the
+    // text/Altium readers below cannot parse it, so it is reverse-extracted from
+    // copper geometry via `from_gerber`. Detected purely by the path shape.
+    let is_gerber = cfg.board.is_dir()
+        || cfg
+            .board
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+
     // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
     // would fail a UTF-8 read. Text formats (KiCad / Eagle / IPC) are recovered
-    // losslessly from these bytes. Keep the actionable not-found error.
-    let raw = std::fs::read(&cfg.board).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(
-                "no board file at '{}'. Check the path, or try a bundled example:\n  \
-                 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
-                cfg.board.display()
-            )
-        } else {
-            anyhow::anyhow!("reading '{}': {e}", cfg.board.display())
-        }
-    })?;
+    // losslessly from these bytes. Keep the actionable not-found error. (A gerber
+    // dir/zip is read by `from_gerber` below, not as one blob.)
+    let raw = if is_gerber {
+        Vec::new()
+    } else {
+        std::fs::read(&cfg.board).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!(
+                    "no board file at '{}'. Check the path, or try a bundled example:\n  \
+                     hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
+                    cfg.board.display()
+                )
+            } else {
+                anyhow::anyhow!("reading '{}': {e}", cfg.board.display())
+            }
+        })?
+    };
     // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
     // product), say so — a clean verdict on one file is misleading if the user
     // meant the whole thing. Routed through `Notes` so it stays on stderr and is
@@ -88,7 +104,11 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Binary board (Altium): auto-detected from the OLE2 magic + Altium streams,
     // exactly as the Eagle path is auto-detected from XML content. No new CLI
     // surface.
-    let altium = ExtractedBoard::from_auto_bytes(&raw).transpose()?;
+    let altium = if is_gerber {
+        None
+    } else {
+        ExtractedBoard::from_auto_bytes(&raw).transpose()?
+    };
     // Text view for the text formats and the geometry-bearing text checks.
     let mut text = if altium.is_some() {
         String::new()
@@ -109,7 +129,15 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
     // it must be loaded by path to recurse the hierarchy; everything else is
     // self-contained and sniffed from its content.
-    let board = if let Some(b) = altium.clone() {
+    let board = if is_gerber {
+        ExtractedBoard::from_gerber(&cfg.board).map_err(|e| {
+            anyhow::anyhow!(
+                "gerber extraction from '{}' failed: {e}. Point at the gerber job \
+                 folder (or a .zip of it) containing the copper/drill files — see docs/GERBER.md.",
+                cfg.board.display()
+            )
+        })?
+    } else if let Some(b) = altium.clone() {
         b
     } else if !is_board_code
         && cfg.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch")

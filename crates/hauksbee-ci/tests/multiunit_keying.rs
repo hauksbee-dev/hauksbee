@@ -57,6 +57,7 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
         analog_abort: false,
         sampled_values: Vec::new(),
         net_series: HashMap::new(),
+        substitutions: Vec::new(),
     }
 }
 
