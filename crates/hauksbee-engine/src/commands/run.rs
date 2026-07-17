@@ -488,6 +488,22 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                      is intended."
                 )));
             }
+            // Bind-coverage caveat: a co-sim over a board with unmodeled/open
+            // active ICs cannot vouch for the firmware/analog behaviour on their
+            // nets. --report and the web/JSON surfaces already say this; the
+            // headless text/plain path must too, or a clean-looking co-sim silently
+            // hides that half the board was never modelled.
+            let open = crate::result::coverage_open_active_refs(&summary);
+            if !open.is_empty() {
+                report.heads_up.push(crate::plain::HeadsUp::note(format!(
+                    "co-sim coverage: {} of {} critical parts modelled — {} active IC(s) are \
+                     unresolved or open, so firmware/analog/thermal results on their nets are \
+                     INCOMPLETE (the copper/DRC checks are unaffected). Add models with --models-dir.",
+                    summary.critical_parts_bound_n,
+                    summary.critical_parts_total,
+                    open.len()
+                )));
+            }
             println!();
             print!("{}", report.render());
             if !gate_rows.is_empty() {
@@ -511,6 +527,17 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             }
             if !gate_rows.is_empty() {
                 print!("{}", crate::checks::boot::render_boot_gate_panel(gate_rows));
+            }
+            let open = crate::result::coverage_open_active_refs(&summary);
+            if !open.is_empty() {
+                println!(
+                    "co-sim coverage: {} of {} critical parts modelled — {} active IC(s) \
+                     unresolved/open, so firmware/analog results on their nets are INCOMPLETE; \
+                     add models with --models-dir (copper/DRC checks are unaffected).",
+                    summary.critical_parts_bound_n,
+                    summary.critical_parts_total,
+                    open.len()
+                );
             }
         }
 
