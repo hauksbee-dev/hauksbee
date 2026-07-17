@@ -654,12 +654,13 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 ///   - the net is in `driven_nets` (the firmware drove it to a defined level):
 ///     it was driven, the voltage just never crossed the threshold;
 ///   - it is not driven and the backend can report drive direction (the AVR
-///     backend reads DDR, so a held-LOW pin is known driven): a net absent here
-///     is genuinely undriven / Hi-Z;
-///   - it is not driven and the backend cannot report drive direction (the
-///     external Renode/QEMU backends see drive state only through observed
-///     edges): absence is ambiguous, so we say only what is known rather than
-///     asserting Hi-Z on what might be a held-LOW pin.
+///     backend reads DDR; a Renode part with a direction-register map in its
+///     SoC descriptor reads MODER/CRL+CRH/DIR — either way a held-LOW pin is
+///     known driven): a net absent here is genuinely undriven / Hi-Z;
+///   - it is not driven and the backend cannot report drive direction (QEMU,
+///     or a Renode part without a dir map — those see drive state only through
+///     observed edges): absence is ambiguous, so we say only what is known
+///     rather than asserting Hi-Z on what might be a held-LOW pin.
 fn boot_below_threshold_msg(
     net: &str,
     level: f64,
@@ -1527,8 +1528,9 @@ mod tests {
         assert!(ok, "a deadline within the simulated window still passes");
     }
 
-    // A genuinely undriven net on a backend that can report drive direction (AVR)
-    // keeps the honest Hi-Z / undefined wording.
+    // A genuinely undriven net on a backend that can report drive direction
+    // (AVR DDR, or a dir-mapped Renode part) keeps the honest Hi-Z / undefined
+    // wording.
     #[test]
     fn undriven_on_observable_backend_says_hi_z() {
         let m = boot_below_threshold_msg("FLAG", 2.3, false, true, Some((0.0, 0.0)));
@@ -1536,9 +1538,9 @@ mod tests {
         assert!(m.contains("never driven"), "got: {m}");
     }
 
-    // On a backend that cannot report drive direction (Renode/QEMU), absence of a
-    // drive record is ambiguous, so the message must not assert Hi-Z: it names
-    // both possibilities instead.
+    // On a backend that cannot report drive direction (QEMU, or a Renode part
+    // whose descriptor has no dir map), absence of a drive record is ambiguous,
+    // so the message must not assert Hi-Z: it names both possibilities instead.
     #[test]
     fn unknown_drive_direction_does_not_assert_hi_z() {
         let m = boot_below_threshold_msg("FLAG", 2.3, false, false, Some((0.0, 0.4)));

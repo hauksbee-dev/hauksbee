@@ -87,6 +87,58 @@ fn stm32_pc13_led_toggles() {
     );
 }
 
+/// The GPIO drive-DIRECTION capability, live against Renode: with the F103
+/// descriptor's CRL/CRH dir maps, the backend reports direction as observable
+/// and distinguishes pins the firmware CONFIGURED as outputs from pins it
+/// never touched — the distinction that lets a boot-coverage check tell a
+/// held-LOW output from a floating input on an external backend.
+#[test]
+fn stm32_reports_drive_direction() {
+    stm32_or_skip!(mcu);
+
+    // Static claim first: every F103 port carries a dir map, so direction is
+    // observable regardless of which ports the engine later wires.
+    assert!(
+        mcu.drive_direction_observable(),
+        "F103 descriptor maps CRL/CRH on every port, so direction must be observable"
+    );
+
+    // Before any chunk runs, nothing has been polled: no pin may claim to be
+    // a configured output yet.
+    assert!(
+        mcu.pins_configured_output().is_empty(),
+        "no direction has been read before the first chunk"
+    );
+
+    // Boot the blinky: it configures PA5 (alive LED, held HIGH), PC13
+    // (blinker — LOW half the time), and PA9 (USART1 TX, AF output).
+    for _ in 0..6 {
+        mcu.run_micros(50_000).expect("run chunk");
+    }
+
+    let outputs = mcu.pins_configured_output();
+    let has = |port: char, bit: u8| outputs.iter().any(|p| p.port == port && p.bit == bit);
+    assert!(
+        has('A', 5),
+        "PA5 is configured as a GP output by the firmware; got {outputs:?}"
+    );
+    assert!(
+        has('C', 13),
+        "PC13 is configured as a GP output — even while driven LOW mid-blink \
+         it must read as DRIVEN, not floating; got {outputs:?}"
+    );
+    assert!(
+        has('A', 9),
+        "PA9 is the USART1 TX AF output; the F1 CRL/CRH MODE bits mark it driven"
+    );
+    // And a pin the firmware never touches stays out of the set: this is the
+    // authoritative "genuinely floating" half of the distinction.
+    assert!(
+        !has('B', 0) && !has('C', 0),
+        "pins the firmware never configured must not read as outputs; got {outputs:?}"
+    );
+}
+
 #[test]
 fn stm32_uart_command_response() {
     stm32_or_skip!(mcu);

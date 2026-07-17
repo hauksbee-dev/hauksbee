@@ -10,12 +10,20 @@
 //!      the same Monitor TCP channel the backend's ODR diffing rides.
 //!   2. The firmware is a REAL Cortex-M3 program executed by Renode: a
 //!      hand-assembled Thumb loop (built byte-by-byte below, because this repo
-//!      cannot assume an ARM cross-toolchain) that reads the ADC result word
-//!      and copies it to GPIOC ODR forever:
+//!      cannot assume an ARM cross-toolchain) that first configures every
+//!      GPIOC pin as an output (CRL/CRH = 0x33333333, GP push-pull 50 MHz —
+//!      required since the direction-aware ODR poll only reports
+//!      configured-output pins as driven, exactly like real hardware only
+//!      drives configured outputs), then reads the ADC result word and copies
+//!      it to GPIOC ODR forever:
 //!
 //!      ```text
 //!      ldr r0, =0x20004000   ; ADC result word (the injection target)
 //!      ldr r1, =0x4001100C   ; GPIOC ODR
+//!      ldr r2, =0x40011000   ; GPIOC CRL
+//!      ldr r3, =0x33333333   ; all pins: GP push-pull output, 50 MHz
+//!      str r3, [r2]          ; CRL: pins 0-7 output
+//!      str r3, [r2, #4]      ; CRH: pins 8-15 output
 //!      loop: ldr r2, [r0]
 //!            str r2, [r1]
 //!            b loop
@@ -49,32 +57,45 @@ const ADC_RESULT_WORD: u32 = 0x2000_4000;
 /// `stm32_blinky` linker script):
 ///   +0x00  initial SP        = 0x2000_2000 (unused: the loop needs no stack)
 ///   +0x04  reset vector      = 0x0800_0009 (code below, Thumb bit set)
-///   +0x08  4802      ldr r0, [pc, #8]    ; = 0x20004000  (literal at +0x14)
-//    +0x0A  4903      ldr r1, [pc, #12]   ; = 0x4001100C  (literal at +0x18)
-///   +0x0C  6802      ldr r2, [r0]        ; loop:
-///   +0x0E  600A      str r2, [r1]
-///   +0x10  E7FC      b   loop            ; (-8 from PC)
-///   +0x12  BF00      nop                 ; literal-pool alignment
-///   +0x14  0x2000_4000
-///   +0x18  0x4001_100C
+///   +0x08  4804      ldr r0, [pc, #16]   ; = 0x20004000  (literal at +0x1C)
+///   +0x0A  4905      ldr r1, [pc, #20]   ; = 0x4001100C  (literal at +0x20)
+///   +0x0C  4A05      ldr r2, [pc, #20]   ; = 0x40011000  (literal at +0x24)
+///   +0x0E  4B06      ldr r3, [pc, #24]   ; = 0x33333333  (literal at +0x28)
+///   +0x10  6013      str r3, [r2]        ; CRL: pins 0-7 GP output
+///   +0x12  6053      str r3, [r2, #4]    ; CRH: pins 8-15 GP output
+///   +0x14  6802      ldr r2, [r0]        ; loop:
+///   +0x16  600A      str r2, [r1]
+///   +0x18  E7FC      b   loop            ; (-8 from PC)
+///   +0x1A  BF00      nop                 ; literal-pool alignment
+///   +0x1C  0x2000_4000
+///   +0x20  0x4001_100C
+///   +0x24  0x4001_1000
+///   +0x28  0x3333_3333
 fn build_adc_copy_elf() -> Vec<u8> {
     const LOAD_ADDR: u32 = 0x0800_0000;
     const GPIOC_ODR: u32 = 0x4001_100C;
+    const GPIOC_CRL: u32 = 0x4001_1000;
 
     let mut payload: Vec<u8> = Vec::new();
     let w = |v: u32| v.to_le_bytes();
     let h = |v: u16| v.to_le_bytes();
     payload.extend_from_slice(&w(0x2000_2000)); // initial SP
     payload.extend_from_slice(&w(LOAD_ADDR + 0x08 + 1)); // reset (Thumb)
-    payload.extend_from_slice(&h(0x4802)); // ldr r0, [pc, #8]
-    payload.extend_from_slice(&h(0x4903)); // ldr r1, [pc, #12]
+    payload.extend_from_slice(&h(0x4804)); // ldr r0, [pc, #16]
+    payload.extend_from_slice(&h(0x4905)); // ldr r1, [pc, #20]
+    payload.extend_from_slice(&h(0x4A05)); // ldr r2, [pc, #20]
+    payload.extend_from_slice(&h(0x4B06)); // ldr r3, [pc, #24]
+    payload.extend_from_slice(&h(0x6013)); // str r3, [r2]
+    payload.extend_from_slice(&h(0x6053)); // str r3, [r2, #4]
     payload.extend_from_slice(&h(0x6802)); // ldr r2, [r0]
     payload.extend_from_slice(&h(0x600A)); // str r2, [r1]
     payload.extend_from_slice(&h(0xE7FC)); // b loop
     payload.extend_from_slice(&h(0xBF00)); // nop (align pool)
     payload.extend_from_slice(&w(ADC_RESULT_WORD));
     payload.extend_from_slice(&w(GPIOC_ODR));
-    assert_eq!(payload.len(), 0x1C);
+    payload.extend_from_slice(&w(GPIOC_CRL));
+    payload.extend_from_slice(&w(0x3333_3333));
+    assert_eq!(payload.len(), 0x2C);
 
     // ELF32 header (52 bytes) + one PT_LOAD program header (32 bytes).
     let e_entry: u32 = LOAD_ADDR + 0x08 + 1;

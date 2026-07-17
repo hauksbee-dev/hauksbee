@@ -139,11 +139,14 @@ pub struct RunOutcome {
     /// boot-coverage result say "driven but never exceeded X V" instead of
     /// falsely claiming the pin was left Hi-Z / undefined.
     pub driven_nets: std::collections::HashSet<String>,
-    /// Whether this run's backend can report pin drive *direction*. True for the
-    /// in-process AVR backend (reads DDR, so a held-LOW pin is known driven);
-    /// false for the external Renode/QEMU backends (drive state comes only from
-    /// observed edges, so absence from `driven_nets` is ambiguous, not proof of
-    /// Hi-Z). Keeps the "undriven" diagnosis from over-claiming on those backends.
+    /// Whether every MCU backend in this run can report pin drive *direction*.
+    /// True for the in-process AVR backend (reads DDR) and for Renode parts
+    /// whose SoC descriptor maps each port's direction register (STM32F103
+    /// CRL/CRH, STM32F4 MODER, nRF52840 DIR) — on those a held-LOW pin is known
+    /// driven. False for QEMU and unmapped Renode parts (drive state comes only
+    /// from observed edges, so absence from `driven_nets` is ambiguous, not
+    /// proof of Hi-Z). Keeps the "undriven" diagnosis from over-claiming on
+    /// direction-blind backends.
     pub drive_direction_observable: bool,
     /// Time (ms) of the first stress fault this run, if any.
     pub first_fault_ms: Option<f64>,
@@ -1194,12 +1197,14 @@ fn run_one(
     let peripherals = snapshot_peripherals(spec, &engine, &vcd_targets);
 
     // Drive-state metadata for the boot-coverage diagnosis: which nets the firmware
-    // actually drove to a defined level, and whether this backend can even report
-    // drive direction (only the in-process AVR backend can; the external
-    // Renode/QEMU backends see drive state only through observed edges).
+    // actually drove to a defined level, and whether the backends can report drive
+    // direction. The in-process AVR backend always can (DDR hooks); a Renode
+    // backend can once its SoC descriptor maps every polled port's direction
+    // register (MODER / CRL+CRH / DIR — see db/mcu/*.soc.toml); QEMU and
+    // unmapped Renode parts cannot, and stay conservative.
     let driven_nets: std::collections::HashSet<String> =
         engine.scheduler().firmware_driven_nets().into_iter().collect();
-    let drive_direction_observable = !engine.scheduler().has_external_backend();
+    let drive_direction_observable = engine.scheduler().drive_direction_observable();
 
     let protection_tripped_scoped = scope_protection_trips(&protection_trip_t, &scenario_windows);
 

@@ -120,6 +120,17 @@ backend and bridged/contracted on the external emulators.
 | ADC inject (`set_analog_in`) | yes | yes, per-platform `AdcChannelMap` (Monitor feed command or result-word write); unmapped channels drop LOUDLY | yes, RAM-mailbox count slots (firmware contract) |
 | I2C slave models (`on_i2c`) | yes (TWI decode) | yes (generated C# bridge peripherals) | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
 | SPI slave models (`on_spi`) | yes | yes (C# `ISPIPeripheral` bridges) | yes, RAM-mailbox bus cells (firmware contract) |
+| Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
+
+Drive direction is what lets a boot-state check tell a held-LOW output from a
+floating input. A backend reports it observable
+(`Mcu::drive_direction_observable`) only when the configured-output set is
+authoritative; on a Renode part it flips true exactly when every polled port's
+SoC descriptor carries a verified `dir = { offset, encoding }` map, and the
+ODR poll then also masks out pins not configured as outputs (an input pin's
+ODR bit is not a drive). Unmapped platforms keep the old conservative
+behavior: every ODR change reports, direction stays unobservable, and
+boot-coverage diagnoses hedge instead of asserting Hi-Z.
 
 The tiers (05-cosim-fidelity §5.1/§5.2): `simavr` runs in-process over FFI with
 cycle-accurate TWI/SPI/ADC IRQ callbacks, so interception is exact. Renode is
@@ -244,10 +255,24 @@ control and the peripheral models, so the firmware runs unmodified.
   diffs it against the previous snapshot, and synthesises per-bit edge callbacks.
   This mirrors exactly how the simavr backend's port hook detects bit edges, so
   the scheduler sees identical behaviour. ODR offsets per family: STM32F1 `0x0C`,
-  STM32F4 `0x14`, nRF52 `0x504`, FE310 `0x0C`. **RP2040 is the exception**: it is
-  not a memory-mapped GPIO port bank, so the poll targets the SIO block's
-  `GPIO_OUT` (offset `0x10` from `SIO_BASE = 0xD000_0000`), which is where the
-  driven output levels actually live (datasheet §2.3.1.7).
+  STM32F4 `0x14`, nRF52 `0x4` (peripheral-relative: Renode registers `gpio0/1`
+  at the `0x…500` register window, so the datasheet's block-relative `0x504`
+  reads as unhandled — see `db/mcu/nrf52840.soc.toml`), FE310 `0x0C`. **RP2040
+  is the exception**: it is not a memory-mapped GPIO port bank, so the poll
+  targets the SIO block's `GPIO_OUT` (offset `0x10` from `SIO_BASE =
+  0xD000_0000`), which is where the driven output levels actually live
+  (datasheet §2.3.1.7).
+
+- **GPIO drive direction (poll)**: on dir-mapped platforms the backend reads
+  each polled port's direction/mode register alongside the ODR — STM32F1
+  CRL+CRH (4-bit nibbles, MODE≠0 = output), STM32F4 MODER (2 bits/pin, `0b01`
+  = GP output), nRF52 DIR (1 bit/pin) — decodes it to a per-pin output mask,
+  masks the ODR diff with it, and surfaces it through
+  `Mcu::pins_configured_output` (the same trait surface the AVR DDR hooks
+  feed). Each map was verified against the installed Renode's peripheral model
+  read-back before shipping; a platform without a verified map carries no
+  `dir` entry and stays honestly direction-blind (a wrong map would mask real
+  edges, which is worse than the conservative status quo).
 
 - **GPIO in (push)**: `sysbus.<port> OnGPIO <bit> <bool>` drives an input pin.
 
