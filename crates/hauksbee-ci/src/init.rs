@@ -129,6 +129,12 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s, "# Every line is commented with what it does. Uncomment and tune, then run:");
     let _ = writeln!(s, "#   hauksbee-ci run {stem}.toml");
     let _ = writeln!(s, "# The board, MCU, supplies and rails below were detected from the board.");
+    let _ = writeln!(
+        s,
+        "# Full assertion catalog (docs/CI.md): voltage, uart, toggle, no_faults,\n\
+         #   max_current, max_temp, rail_window, protection_trip, boot-coverage,\n\
+         #   phase_margin, ac_gain, peripheral, hwtrace."
+    );
     let _ = writeln!(s);
     let _ = writeln!(s, "name = \"{stem} power-up\"        # label shown in reports");
     let _ = writeln!(s, "board = \"{board_file}\"          # the design file this spec checks");
@@ -200,11 +206,11 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s, "#   ELF/hex. Uncomment both the firmware line and this block together.");
     if !boot_coverage_supported {
         let backend = mcu_backend.as_deref().unwrap_or("");
-        let _ = writeln!(s, "#   Also note this board's MCU runs on the `{backend}` backend, which co-sims");
-        let _ = writeln!(s, "#   GPIO and UART but models ADC and I2C/SPI peripheral-slave coupling as");
-        let _ = writeln!(s, "#   no-ops (docs/MCU.md) and cannot report pin drive direction, so it cannot");
-        let _ = writeln!(s, "#   distinguish a held-LOW pin from an undriven one. On it, watch only a net");
-        let _ = writeln!(s, "#   driven by plain GPIO to a defined HIGH level. AVR boards model the full stack.");
+        let _ = writeln!(s, "#   Also note this board's MCU runs on the `{backend}` backend. It co-sims");
+        let _ = writeln!(s, "#   GPIO, UART, and I2C/SPI bus slaves (docs/MCU.md), but cannot report pin");
+        let _ = writeln!(s, "#   drive DIRECTION, so it cannot distinguish a held-LOW pin from an undriven");
+        let _ = writeln!(s, "#   one. On it, watch only a net driven by plain GPIO to a defined HIGH level.");
+        let _ = writeln!(s, "#   AVR boards can watch a held-LOW net too.");
     }
     let _ = writeln!(s, "{cc}[[assert]]");
     let _ = writeln!(s, "{cc}kind = \"boot-coverage\"");
@@ -244,6 +250,27 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
             let _ = writeln!(s, "# max = {}", fmt2(v * 1.05));
             let _ = writeln!(s, "# after_ms = 50                  # only sample once it has settled");
         }
+    }
+
+    // Firmware-behaviour assertions — the tool's headline pitch ("assert the UART
+    // says hello, assert the LED blinks"). Only meaningful once `firmware = ...`
+    // above points at a real image, so scaffold them COMMENTED and only when an
+    // MCU was detected; uncomment them together with the firmware line.
+    if mcu_backend.is_some() {
+        let _ = writeln!(s);
+        let _ = writeln!(s, "# uart: the firmware's serial output contains a string or matches a regex.");
+        let _ = writeln!(s, "#   (needs `firmware = ...` above — the tool boots the image and reads the UART.)");
+        let _ = writeln!(s, "# [[assert]]");
+        let _ = writeln!(s, "# kind = \"uart\"");
+        let _ = writeln!(s, "# contains = \"hello\"             # a boot banner / heartbeat your firmware prints");
+        let _ = writeln!(s);
+        let _ = writeln!(s, "# toggle: a net toggles at an expected rate — a blink / clock / PWM check.");
+        let toggle_net = boot_net.as_deref().unwrap_or("LED");
+        let _ = writeln!(s, "# [[assert]]");
+        let _ = writeln!(s, "# kind = \"toggle\"");
+        let _ = writeln!(s, "# net = \"{toggle_net}\"                  # the blinking / clocked net (edit to yours)");
+        let _ = writeln!(s, "# freq_hz = 1.0                  # expected toggle rate (Hz)");
+        let _ = writeln!(s, "# tolerance = 0.2                # +/-20%");
     }
 
     Ok(s)
