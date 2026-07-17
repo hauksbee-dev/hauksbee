@@ -404,31 +404,44 @@ fn is_connector_like(c: &Component) -> bool {
 }
 
 /// Eagle/KiCad pin-row package names like "1X10", "2X05", "1X10_OVALWAVE".
+///
+/// A pin grid is INTEGER counts with no unit. A body DIMENSION ("7x7mm",
+/// "3.9x4.9mm") is a package size, not a pin grid — and KiCad appends one to
+/// essentially every SMD IC footprint ("LQFP-48_7x7mm", "QFN-48-1EP_7x7mm"). The
+/// old code accepted any `<digit>X<digit>`, so those ICs read as connector-like
+/// and silently suppressed the floating-control / I2C-pull-up / output-contention
+/// lints on real ICs. Reject decimal and `mm`-suffixed tokens, mirroring the R36
+/// fix in [`crate::gerber::connect`]'s grid_hint.
 fn is_pin_array_package(fp: &str) -> bool {
-    let f = fp.to_ascii_uppercase();
-    // Look for a leading NxM token.
-    for sep in ['X', 'x'] {
-        if let Some(idx) = f.find(sep) {
-            let before = &f[..idx];
-            let after = &f[idx + 1..];
-            let a_ok = !before.is_empty()
-                && before
-                    .chars()
-                    .rev()
-                    .take_while(|c| c.is_ascii_digit())
-                    .count()
-                    >= 1;
-            let b_ok = after.chars().take_while(|c| c.is_ascii_digit()).count() >= 1;
-            // require the digit immediately before X (e.g. "1X10")
-            let imm = before
-                .chars()
-                .last()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false);
-            if a_ok && b_ok && imm {
-                return true;
-            }
+    let bytes: Vec<char> = fp.to_ascii_uppercase().chars().collect();
+    for i in 0..bytes.len() {
+        if bytes[i] != 'X' || i == 0 {
+            continue;
         }
+        // The numeric token immediately before / after the 'X' (digits and '.').
+        let mut a = i;
+        while a > 0 && (bytes[a - 1].is_ascii_digit() || bytes[a - 1] == '.') {
+            a -= 1;
+        }
+        let mut b = i + 1;
+        while b < bytes.len() && (bytes[b].is_ascii_digit() || bytes[b] == '.') {
+            b += 1;
+        }
+        let left: &[char] = &bytes[a..i];
+        let right: &[char] = &bytes[i + 1..b];
+        // A digit must sit immediately on each side of the 'X'.
+        if !left.last().is_some_and(|c| c.is_ascii_digit())
+            || !right.first().is_some_and(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        // Body dimension, not a pin grid: a decimal ("3.9x4.9") or a trailing "mm"
+        // unit ("7x7mm"). A real pin grid is integer counts with no unit.
+        let is_mm = bytes.get(b) == Some(&'M') && bytes.get(b + 1) == Some(&'M');
+        if left.contains(&'.') || right.contains(&'.') || is_mm {
+            continue;
+        }
+        return true;
     }
     false
 }
@@ -842,7 +855,7 @@ fn control_role(function: &str) -> Option<&'static str> {
     match c {
         "EN" | "ENABLE" | "CE" | "CEN" | "SHDN" | "SHUTDOWN" | "NSHDN" => Some("enable"),
         "RST" | "RESET" | "RSTN" | "RESETN" | "MR" | "RESE" => Some("reset"), // RESE = RESET after _N strip
-        "CS" | "SS" | "NCS" | "NSS" | "CSB" => Some("chip-select"),
+        "CS" | "SS" | "NCS" | "NSS" | "CSB" | "CSN" | "SSN" => Some("chip-select"),
         "OE" | "NOE" => Some("output-enable"),
         _ => {
             // Allow a trailing rail-name suffix on EN/RST: "EN_3V3", "RST_MCU".
@@ -1191,6 +1204,32 @@ pub fn render_netlint(report: &NetLintReport) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod pin_array_tests {
+    use super::is_pin_array_package;
+
+    #[test]
+    fn body_dimension_footprints_are_not_pin_arrays() {
+        // R45/R46: KiCad appends a body dimension ("7x7mm", "3.9x4.9mm") to nearly
+        // every SMD IC footprint. The old code read any `<digit>x<digit>` as a pin
+        // grid, so those ICs became "connector-like" and the floating-control /
+        // I2C-pull-up / output-contention lints were silently suppressed on real
+        // ICs. A body dimension (decimal, or an "mm" unit) is NOT a pin grid.
+        for fp in [
+            "MCU_ST:LQFP-48_7x7mm",
+            "Package_QFP:LQFP-64_10x10mm",
+            "Package_SO:SOIC-8_3.9x4.9mm",
+            "Package_DFN_QFN:QFN-48-1EP_7x7mm",
+        ] {
+            assert!(!is_pin_array_package(fp), "{fp} is a body size, not a pin grid");
+        }
+        // A genuine pin grid (integer counts, no unit) still reads as one.
+        for fp in ["PinHeader_1x10", "Connector_2x05", "1X10", "2X20_P2.54mm"] {
+            assert!(is_pin_array_package(fp), "{fp} is a real pin grid");
+        }
+    }
 }
 
 #[cfg(test)]
