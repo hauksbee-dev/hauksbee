@@ -367,10 +367,28 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 errs.push(format!("pin '{role}': pull_ohms must be positive, got {r}"));
             }
         }
+        // The pull/open-drain TARGET voltages are stamped verbatim as DC sources
+        // (engine behavioral.rs Dc(pull_to_volts) / Dc(od_to_volts)); a `nan`/`inf`
+        // literal poisons the whole MNA solve with no fault. A negative rail is
+        // legal, so only finiteness is checked (the sibling of the pull_ohms gate).
+        if let Some(v) = pin.pull_to_volts {
+            if !v.is_finite() {
+                errs.push(format!("pin '{role}': pull_to_volts must be finite, got {v}"));
+            }
+        }
+        // The pull/open-drain TARGET voltages are stamped verbatim as DC sources
+        // (engine behavioral.rs Dc(pull_to_volts) / Dc(od_to_volts)); a `nan`/`inf`
+        // literal poisons the whole MNA solve with no fault. A negative rail is
+        // legal, so only finiteness is checked (the sibling of the pull_ohms gate).
         if pin.open_drain {
             if let Some(r) = pin.od_ohms {
                 if !r.is_finite() || r <= 0.0 {
                     errs.push(format!("pin '{role}': od_ohms must be positive, got {r}"));
+                }
+            }
+            if let Some(v) = pin.od_to_volts {
+                if !v.is_finite() {
+                    errs.push(format!("pin '{role}': od_to_volts must be finite, got {v}"));
                 }
             }
         }
@@ -401,10 +419,38 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
                 errs.push(format!("fsm transition {i}: empty guard"));
             }
         }
-        for st in fsm.state_pins.keys() {
+        for (st, pins) in &fsm.state_pins {
             if !known.contains(st.as_str()) {
                 errs.push(format!("fsm state_pins: unknown state '{st}'"));
             }
+            // The per-state override's drive fields are stamped verbatim (engine
+            // behavioral.rs set_source_dc(drive_volts) / set_resistor_ohms(
+            // drive_ohms)) with no flooring: a non-finite drive_volts injects a
+            // NaN DC source, and a zero/negative drive_ohms stamps a non-physical
+            // (negative) source resistance that destabilises the solve. Guard both
+            // like the pull/od siblings above.
+            for (role, ov) in pins {
+                if let Some(v) = ov.drive_volts {
+                    if !v.is_finite() {
+                        errs.push(format!(
+                            "fsm state_pins '{st}.{role}': drive_volts must be finite, got {v}"
+                        ));
+                    }
+                }
+                if let Some(r) = ov.drive_ohms {
+                    if !r.is_finite() || r <= 0.0 {
+                        errs.push(format!(
+                            "fsm state_pins '{st}.{role}': drive_ohms must be positive, got {r}"
+                        ));
+                    }
+                }
+            }
+            // The per-state override's drive fields are stamped verbatim (engine
+            // behavioral.rs set_source_dc(drive_volts) / set_resistor_ohms(
+            // drive_ohms)) with no flooring: a non-finite drive_volts injects a
+            // NaN DC source, and a zero/negative drive_ohms stamps a non-physical
+            // (negative) source resistance that destabilises the solve. Guard both
+            // like the pull/od siblings above.
         }
     }
 
@@ -519,6 +565,106 @@ mod tests {
         );
         let errs = validate_behavioral(&b);
         assert!(errs.iter().any(|e| e.contains("pull_ohms")), "{errs:?}");
+    }
+
+    #[test]
+    fn nonfinite_pull_and_od_target_voltages_are_rejected() {
+        // R49: pull_to_volts / od_to_volts are stamped verbatim as DC sources, so
+        // a `nan`/`inf` literal poisons the whole MNA solve with no fault. Only
+        // finiteness is checked (a negative rail is legal), like the pull_ohms
+        // sibling. Base bug: these two voltage fields were never validated.
+        let mut b = Behavioral::default();
+        b.pins.insert(
+            "shphld".into(),
+            BehavioralPin {
+                pull_to_volts: Some(f64::NAN),
+                pull_ohms: Some(100_000.0),
+                ..Default::default()
+            },
+        );
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("pull_to_volts")),
+            "a NaN pull_to_volts must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+
+        let mut b = Behavioral::default();
+        b.pins.insert(
+            "stat".into(),
+            BehavioralPin {
+                open_drain: true,
+                od_ohms: Some(10.0),
+                od_to_volts: Some(f64::INFINITY),
+                ..Default::default()
+            },
+        );
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("od_to_volts")),
+            "an inf od_to_volts must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+
+        // A finite (even negative) rail voltage still validates clean.
+        let mut b = Behavioral::default();
+        b.pins.insert(
+            "vneg".into(),
+            BehavioralPin {
+                pull_to_volts: Some(-5.0),
+                pull_ohms: Some(1_000.0),
+                ..Default::default()
+            },
+        );
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "a finite negative rail is legal: {:?}",
+            validate_behavioral(&b)
+        );
+    }
+
+    #[test]
+    fn state_pin_drive_fields_are_validated() {
+        // R49: a per-state override's drive_volts/drive_ohms are stamped verbatim
+        // (NaN DC source / negative source resistance) with no flooring. Validate
+        // them like the pull/od siblings. Base bug: state_pins only checked names.
+        let mk = |drive_volts: Option<f64>, drive_ohms: Option<f64>| {
+            let mut sp: BTreeMap<String, BTreeMap<String, StatePinBehaviour>> = BTreeMap::new();
+            let mut pins = BTreeMap::new();
+            pins.insert(
+                "out".to_string(),
+                StatePinBehaviour { drive_volts, drive_ohms, ..Default::default() },
+            );
+            sp.insert("on".to_string(), pins);
+            Behavioral {
+                fsm: Some(Fsm {
+                    states: vec!["on".into()],
+                    initial: Some("on".into()),
+                    transitions: Vec::new(),
+                    state_pins: sp,
+                }),
+                ..Default::default()
+            }
+        };
+        // Negative source resistance.
+        let b = mk(Some(3.3), Some(-50.0));
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("drive_ohms")),
+            "negative drive_ohms must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // NaN drive voltage.
+        let b = mk(Some(f64::NAN), Some(50.0));
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("drive_volts")),
+            "NaN drive_volts must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // A well-formed push-pull override validates clean.
+        let b = mk(Some(3.3), Some(50.0));
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "a valid drive override must pass: {:?}",
+            validate_behavioral(&b)
+        );
     }
 
     #[test]

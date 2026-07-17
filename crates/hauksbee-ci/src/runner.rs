@@ -1092,10 +1092,24 @@ fn run_one(
                 if time_in_window(frame.t, sw.start_s, sw.end_s) {
                     for net in &sw.nets {
                         if let Some(&v) = frame.net_voltages.get(net) {
-                            rail_windows
+                            let w = rail_windows
                                 .entry((sw.id.clone(), net.clone()))
-                                .or_default()
-                                .observe(frame.t, v);
+                                .or_default();
+                            w.observe(frame.t, v);
+                            // Fold the scheduler's per-frame intra-frame extremes
+                            // into the min/max envelope, exactly as the plain
+                            // `voltage` assertion path above does — otherwise a sag
+                            // that recovers by the frame's last chunk is invisible
+                            // and a brownout-floor rail_window assertion false-
+                            // passes the fault it exists to catch.
+                            if let Some(&(mn, mx)) = vext.get(net) {
+                                if mn.is_finite() {
+                                    w.fold(mn);
+                                }
+                                if mx.is_finite() {
+                                    w.fold(mx);
+                                }
+                            }
                         }
                     }
                 }

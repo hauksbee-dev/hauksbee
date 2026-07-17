@@ -1743,6 +1743,50 @@ mod tests {
         );
     }
 
+    // A rail_window brownout floor must see an intra-frame sag that recovers by
+    // the frame's last chunk — the runner folds the scheduler's per-frame extremes
+    // into RailWindow.min_v/max_v, exactly like the plain voltage path. Without the
+    // fold (base bug), min_v is the settled 3.3 V and a min=3.0 floor false-passes
+    // the very sag it exists to catch (R49).
+    #[test]
+    fn rail_window_min_reflects_folded_intraframe_sag() {
+        use super::check_rail_window;
+        use crate::runner::RunOutcome;
+        use crate::scenarios::RailWindow;
+
+        // Reconstruct the window the runner builds: settled 3.3 V samples plus the
+        // scheduler's intra-frame minimum (2.9 V) folded into the envelope.
+        let mut win = RailWindow::new();
+        win.observe(0.000, 3.3);
+        win.observe(0.001, 3.3);
+        win.fold(2.9); // intra-frame sag from the load step, recovered by last chunk
+
+        let mut rail_windows = std::collections::HashMap::new();
+        rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
+        let out = RunOutcome { rail_windows, ..Default::default() };
+
+        let a: crate::spec::Assertion = toml::from_str(
+            "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n",
+        )
+        .unwrap();
+        let (ok, msg) = check_rail_window(&a, &out);
+        assert!(
+            !ok,
+            "a rail that sagged to 2.9V mid-frame must FAIL a 3.0V floor, not pass on the settled 3.3V: {msg}"
+        );
+
+        // Sanity: a window that never dipped below the floor still passes.
+        let mut win_ok = RailWindow::new();
+        win_ok.observe(0.000, 3.3);
+        win_ok.observe(0.001, 3.25);
+        win_ok.fold(3.1);
+        let mut rw2 = std::collections::HashMap::new();
+        rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
+        let out_ok = RunOutcome { rail_windows: rw2, ..Default::default() };
+        let (ok2, _msg2) = check_rail_window(&a, &out_ok);
+        assert!(ok2, "a rail that stayed above 3.0V must pass");
+    }
+
     // An unscoped uart assertion concatenates every MCU's output; the order must
     // be stable (sorted by MCU key), not HashMap iteration order, or an anchored
     // match flakes run to run (round-7 #9).
