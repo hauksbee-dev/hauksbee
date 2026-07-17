@@ -548,7 +548,7 @@ struct ReceptacleNets {
 /// excluded, exactly as in `receptacle_cc_nets`, so we never read the PMIC-side
 /// net as if it were the connector.
 fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
-    let mut out: Vec<ReceptacleNets> = Vec::new();
+    let mut out: Vec<(i32, ReceptacleNets)> = Vec::new();
     for comp in &board.components {
         let score = receptacle_score(comp);
         if score <= 0 {
@@ -577,13 +577,21 @@ fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
             // once, so we do not double-report.
             if !out
                 .iter()
-                .any(|r| r.cc1_net == rec.cc1_net && r.cc2_net == rec.cc2_net)
+                .any(|(_, r)| r.cc1_net == rec.cc1_net && r.cc2_net == rec.cc2_net)
             {
-                out.push(rec);
+                out.push((score, rec));
             }
         }
     }
-    out
+    // Primary first: order by descending receptacle_score so `receptacles[0]` is
+    // the SAME highest-scoring receptacle the scalar verdict fields derive from
+    // (via `receptacle_cc_nets`, which picks max score). A stable sort keeps
+    // board order among equal-score receptacles (the common identical-footprint
+    // case), so without differing scores nothing reorders. Without this, the
+    // detail list's first receptacle and the report's shared-net/Rd verdict could
+    // describe two different physical connectors.
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.into_iter().map(|(_, rec)| rec).collect()
 }
 
 /// Parallel resistance (ohms) of every two-pin resistor that connects `from_net`
@@ -1285,6 +1293,58 @@ mod tests {
 
         r.level = UsbcLevel::Ok;
         assert!(r.web_gloss().is_none(), "an Ok verdict surfaces nothing");
+    }
+
+    #[test]
+    fn receptacles_are_ordered_primary_first_by_score_not_board_order() {
+        // R49: the scalar verdict fields derive from the HIGHEST-scoring receptacle
+        // (receptacle_cc_nets picks max score), but the exposed `receptacles` list
+        // was board-order — so on a board whose higher-scoring receptacle came
+        // later, receptacles[0] (the "primary" the detail list and audit report)
+        // described a DIFFERENT connector than the verdict. all_receptacle_cc_nets
+        // must return the max-score receptacle first.
+        let recep = |reference: &str, fp: &str, cc1: i64, cc2: i64| hauksbee_extract::Component {
+            reference: reference.into(),
+            value: "USB-C".into(),
+            lib_id: "Connector:USB_C_Receptacle".into(),
+            footprint: fp.into(),
+            position: None,
+            layer: String::new(),
+            properties: vec![],
+            dnp: false,
+            pins: vec![
+                hauksbee_extract::Pin {
+                    number: "A5".into(),
+                    net: Some(cc1),
+                    function: "CC1".into(),
+                    kind: String::new(),
+                    position: None,
+                },
+                hauksbee_extract::Pin {
+                    number: "B5".into(),
+                    net: Some(cc2),
+                    function: "CC2".into(),
+                    kind: String::new(),
+                    position: None,
+                },
+            ],
+        };
+        // J_early (board-order first, score 100+5=105) then J_late (later, but
+        // "receptacle" in the footprint → 100+40+5=145).
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![],
+            components: vec![
+                recep("J_early", "USB_C_Plug_only", 10, 11),
+                recep("J_late", "USB_C_Receptacle_HRO", 20, 21),
+            ],
+        };
+        let ordered = all_receptacle_cc_nets(&board);
+        assert_eq!(ordered.len(), 2, "both receptacles present");
+        assert_eq!(
+            ordered[0].reference, "J_late",
+            "the higher-scoring receptacle must be primary (receptacles[0]), not the board-order-first one"
+        );
     }
 
     #[test]
