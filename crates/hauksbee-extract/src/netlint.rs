@@ -712,7 +712,11 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         // A pull-up is a resistor with one pad on this net and the other pad on
         // a power rail (not ground). Look for it.
         let mut has_pullup = false;
-        let mut active_devices = 0usize;
+        // Dedup active devices by reference: an IPC-356 both-sided through-hole
+        // access record lists a device's bus pad twice, so a raw per-entry count
+        // turned a single-device (ambiguous → skip) bus into `active_devices == 2`
+        // and fired a false "on-board master and peripheral, no pull-up" finding.
+        let mut active_refs: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut exits_to_connector = false;
 
         for (c, _p) in &mem {
@@ -730,7 +734,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             // An IC / sensor pin on the bus means the bus is used on-board.
             let r = c.reference.to_ascii_uppercase();
             if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c)) {
-                active_devices += 1;
+                active_refs.insert(c.reference.as_str());
             }
             if is_resistor(c) {
                 // Does the other pad land on a rail (named, or a structural
@@ -751,6 +755,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         if has_pullup {
             continue;
         }
+        let active_devices = active_refs.len();
 
         // Two regimes:
         //  - The bus exits to a header / connector with no on-board pull. This is
@@ -1186,6 +1191,51 @@ pub fn render_netlint(report: &NetLintReport) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod i2c_pullup_dedup_tests {
+    use crate::{Component, ExtractedBoard, LintCheck, Net, Pin};
+
+    fn sda_pin() -> Pin {
+        Pin {
+            number: "5".into(),
+            net: Some(1),
+            function: "SDA".into(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    #[test]
+    fn single_device_with_a_double_listed_pad_does_not_fire_missing_pullup() {
+        // R45: a single on-board I2C device (ambiguous → deliberate skip) whose SDA
+        // pad is double-listed (IPC-356 both-sided access record) counted as TWO
+        // active devices, escalating the skip into a false "on-board master and
+        // peripheral, no pull-up" MissingI2cPullup finding. Deduping by reference,
+        // one device stays one and the check must stay silent.
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![Net { id: 1, name: "SDA".into() }],
+            components: vec![Component {
+                reference: "U1".into(),
+                value: "SENSOR".into(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: String::new(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![sda_pin(), sda_pin()], // same pad listed twice
+            }],
+        };
+        let report = board.net_lint();
+        assert_eq!(
+            report.of_check(LintCheck::MissingI2cPullup).count(),
+            0,
+            "a single device (its pad merely double-listed) must not fire a missing-pullup finding"
+        );
+    }
 }
 
 #[cfg(test)]

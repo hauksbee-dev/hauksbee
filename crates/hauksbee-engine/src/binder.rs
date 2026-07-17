@@ -2961,7 +2961,17 @@ fn is_power_role(role: &str) -> bool {
 /// the switch, it is never one of its signal terminals.
 fn is_ctrl_role(role: &str) -> bool {
     let r = role.to_ascii_lowercase();
-    r == "ctrl" || r == "ctrl_1" || r == "in"
+    // ctrl / in / s / sel are the single-gate control spellings; ctrl_1..ctrl_N are
+    // the per-gate controls the multi-gate bilateral-switch branch drives (a quad
+    // 4066 has ctrl_1..ctrl_4). Only ctrl_1 was excluded before, so ctrl_2/3/4 could
+    // leak into the SPST fallback's throw candidates and get stamped as a switch
+    // terminal — fabricating a ~ron short from a signal net onto a control net.
+    r == "ctrl"
+        || r == "in"
+        || r == "s"
+        || r == "sel"
+        || r.strip_prefix("ctrl_")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn device_label(d: &Device) -> String {
@@ -3709,6 +3719,22 @@ mod digital_ro_tests {
     /// as a terminal and stamped a VSwitch whose `b` equalled its own `ctrl_p`:
     /// a fabricated ~ron path shorting the common signal net to the control line
     /// (and injecting the control voltage) whenever the gate went high.
+    #[test]
+    fn ctrl_role_recognises_all_multi_gate_and_select_spellings() {
+        // R45: is_ctrl_role only knew ctrl/ctrl_1/in, so the multi-gate branch's
+        // ctrl_2/ctrl_3/ctrl_4 (and the SPDT sel/s controls) leaked into the SPST
+        // fallback's throw candidates and could be stamped as a switch terminal,
+        // shorting a signal net onto a control net. Every control spelling must be
+        // excluded.
+        for r in ["ctrl", "ctrl_1", "ctrl_2", "ctrl_3", "ctrl_4", "in", "s", "sel"] {
+            assert!(is_ctrl_role(r), "{r} must be recognised as a control role");
+        }
+        // Throw terminals and power roles are NOT control roles.
+        for r in ["s0", "s1", "in_out_1a", "in_out_2b", "com", "vcc", "vss"] {
+            assert!(!is_ctrl_role(r), "{r} must NOT be treated as a control role");
+        }
+    }
+
     #[test]
     fn spst_fallback_does_not_wire_control_as_a_switch_terminal() {
         let model = make_entry(
