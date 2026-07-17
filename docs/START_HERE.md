@@ -47,6 +47,20 @@ misconceptions), analysis ([`AC_ANALYSIS.md`](AC_ANALYSIS.md),
 ([`DOCKER.md`](DOCKER.md)), positioning ([`COMPARISON.md`](COMPARISON.md)), and the
 honest [`LIMITATIONS.md`](LIMITATIONS.md).
 
+## Add your own parts & chips
+
+A part hauksbee doesn't recognise binds OPEN (the report says "N% resolved" and
+names it) — closing that gap is one small TOML file, no recompile:
+
+- an **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) →
+  [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md)
+- an I2C/SPI **sensor** → [`extending/add-a-sensor.md`](extending/add-a-sensor.md)
+- a **new MCU / chip** so its firmware co-sims *exactly* instead of on a
+  substitute core → [`extending/add-an-mcu-variant.md`](extending/add-an-mcu-variant.md)
+  (two TOML files). `hauksbee models list --builtin` shows the chips already shipped.
+
+The full menu is [`extending/README.md`](extending/README.md).
+
 ## Going deeper
 
 - [`docs/how-and-why/`](how-and-why/): the code companion explanations, how each

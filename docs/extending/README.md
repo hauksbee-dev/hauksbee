@@ -10,9 +10,10 @@ the test that proves the extension works. They assume you can read TOML and run
 
 | I want to add a… | Walkthrough | Rust required? |
 |---|---|---|
+| **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) | [add-an-analog-part.md](add-an-analog-part.md) | no — one `[[models]]` entry |
 | I2C/SPI **sensor** (register map, e.g. BME280) | [add-a-sensor.md](add-a-sensor.md) | no — one TOML file |
 | **logic IC** (gates, flip-flops, shift registers) | [add-a-logic-ic.md](add-a-logic-ic.md) | no — one TOML entry |
-| **MCU variant** (a new Renode/QEMU part) | [add-an-mcu-variant.md](add-an-mcu-variant.md) | no — one `.soc.toml`, no recompile |
+| **MCU / chip** (a new Renode/QEMU part, so its firmware co-sims exactly) | [add-an-mcu-variant.md](add-an-mcu-variant.md) | no — two TOML files, no recompile |
 | **hardware trace** (scope/LA capture as a CI gate) | [add-a-hardware-trace.md](add-a-hardware-trace.md) | no — two TOML files + the instrument export |
 | **board file format** (a new reader) | [add-a-board-format.md](add-a-board-format.md) | yes — one trait impl in a fork |
 | **device physics** (a new solver element) | [new-device-physics.md](new-device-physics.md) | yes — core change, checklist-enforced |

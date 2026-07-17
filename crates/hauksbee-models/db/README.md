@@ -142,14 +142,27 @@ Rules are tried in order; the first that matches and maps the requested pad wins
 The `model-extract` tool and the test suite enforce these sanity bounds before
 accepting a model entry:
 
-| param  | min        | max      | note                       |
-|--------|------------|----------|----------------------------|
-| is     | 1e-20      | 1e-3     | diode / BJT sat current    |
-| n      | 0.5        | 3.0      | emission coefficient       |
-| bf     | 1.0        | 2000.0   | BJT forward beta           |
-| vaf    | 1.0        | 500.0    | Early voltage (V)          |
-| vto    | -10.0      | 10.0     | MOSFET threshold (V)       |
-| kp     | 1e-6       | 1.0      | MOSFET transconductance    |
-| vout   | 0.5        | 30.0     | LDO output voltage (V)     |
-| ron    | 0.01       | 10000.0  | switch on-resistance (Ω)   |
-| roff   | 1e3        | 1e12     | switch off-resistance (Ω)  |
+These bounds are the single source of truth in `crates/hauksbee-models/src/validation.rs`
+(regenerate this table from there if they drift — `hauksbee models lint` enforces them):
+
+| param       | min    | max    | note                                  |
+|-------------|--------|--------|---------------------------------------|
+| is          | 1e-20  | 1e-3   | diode / BJT sat current               |
+| n / nf      | 0.5    | 3.0    | emission coefficient                  |
+| rs          | 0.0    | 1000.0 | diode series resistance (Ω)           |
+| cjo         | 0.0    | 1e-6   | diode junction capacitance (F)        |
+| bf          | 1.0    | 2000.0 | BJT forward beta                      |
+| vaf         | 1.0    | 500.0  | Early voltage (V)                     |
+| rb/rc/re    | 0.0    | 1e6    | BJT parasitic resistances (Ω)         |
+| vto         | -10.0  | 10.0   | MOSFET threshold (V)                  |
+| kp          | 1e-6   | 1000.0 | MOSFET transconductance (power FETs run into the tens–hundreds) |
+| lambda      | 0.0    | 1.0    | MOSFET channel-length modulation      |
+| vout        | 0.5    | 30.0   | LDO output voltage (V)                |
+| dropout_v   | 0.0    | 10.0   | LDO dropout (V)                       |
+| iq_a        | 0.0    | 1.0    | LDO quiescent current (A)             |
+| gain        | 1.0    | 1e9    | op-amp open-loop gain                 |
+| rail_lo/hi  | -60.0  | 60.0   | op-amp output rails (V, lo < hi)      |
+| out_lo/hi   | -60.0  | 60.0   | comparator output levels (V, lo < hi) |
+| hysteresis  | 0.0    | 5.0    | comparator hysteresis (V)             |
+| ron         | 0.01   | 10000.0| switch on-resistance (Ω, ron < roff)  |
+| roff        | 1e3    | 1e12   | switch off-resistance (Ω)             |
