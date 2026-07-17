@@ -2027,9 +2027,22 @@ impl Scheduler {
         // table and CI min_toggles/freq asserts falsely failed. Scale the band by
         // the board's logic-high rail (0.6/0.4·Vhigh = the original 3.0/2.0 at 5 V,
         // unchanged there), mirroring the rail-relative digital-IN thresholds.
+        // Use the LOWEST MCU rail on the board, not the highest: a single global
+        // band cannot be per-net, so on a mixed-rail board (a 5 V AVR + a 3.3 V
+        // ESP32) the max rail (5.0 → vih 3.0) reintroduces the exact undercount the
+        // rail scaling fixes — a 3.3 V net's loaded high (~2.8 V) sits in the
+        // hysteresis band and never toggles. The min rail (3.3 → vih ~2.0) counts
+        // toggles on BOTH domains: a clean 5 V push-pull edge still crosses the
+        // lower threshold cleanly (5 V logic has no stable plateau in [vil,vih]),
+        // and single-rail boards are unaffected (min == max == the one rail).
         let vhigh = {
-            let m = self.mcus.iter().map(|m| m.logic_high_v).fold(0.0_f64, f64::max);
-            if m > 0.0 {
+            let m = self
+                .mcus
+                .iter()
+                .map(|m| m.logic_high_v)
+                .filter(|v| *v > 0.0)
+                .fold(f64::INFINITY, f64::min);
+            if m.is_finite() {
                 m
             } else {
                 5.0
@@ -4216,6 +4229,55 @@ mod tests {
         assert!(
             toggles >= 3,
             "a 3.3 V net swinging to 2.7 V must register toggles, got {toggles}"
+        );
+    }
+
+    /// Regression (R55): the toggle band uses ONE global rail. On a mixed-rail
+    /// board (a 5 V AVR + a 3.3 V ESP32) taking the MAX rail (5.0 → vih 3.0)
+    /// reintroduced the R54 undercount for the 3.3 V domain. It must use the
+    /// LOWEST rail so both domains' nets toggle.
+    #[test]
+    fn toggle_counting_uses_the_min_rail_on_a_mixed_rail_board() {
+        let (mut sched, _h) = sched_with_capturing_core(&[]);
+        // MCU 0 is a 5 V AVR (simavr backend default).
+        sched.mcus[0].logic_high_v = 5.0;
+        // Add a second MCU on a 3.3 V rail (renode external backend → 3.3 V).
+        let binding = McuBinding {
+            reference: "U2".into(),
+            backend: "renode:stm32f4".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(CapturingCore::default()), binding));
+        sched.responder_registries.push(None);
+        assert!(
+            (sched.mcus[1].logic_high_v - 3.3).abs() < 1e-6,
+            "the second MCU should be on a 3.3 V rail"
+        );
+
+        let node = sched.circuit.node("BLINK33");
+        sched.net_nodes.insert("BLINK33".to_string(), node);
+        let idx = node.0 as usize;
+        if sched.node_volts.len() <= idx {
+            sched.node_volts.resize(idx + 1, 0.0);
+        }
+        // A 3.3 V-domain net whose loaded high settles at ~2.7 V (< the 3.0 V band
+        // the MAX rail would produce). It must still toggle.
+        for v in [2.7_f64, 0.0, 2.7, 0.0] {
+            sched.node_volts[idx] = v;
+            sched.update_stats();
+        }
+        let toggles = sched.stats.get("BLINK33").map(|s| s.toggles).unwrap_or(0);
+        assert!(
+            toggles >= 3,
+            "a 3.3 V net on a mixed-rail board must toggle (min-rail band), got {toggles}"
         );
     }
 
