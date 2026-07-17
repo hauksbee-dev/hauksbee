@@ -369,6 +369,13 @@ fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
         "max_current" | "max_temp" => Some((0.0, end)),
         "boot-coverage" => Some((0.0, a.deadline_ms.map(|d| d / 1000.0).unwrap_or(end))),
         "rail_window" => Some((0.0, end)),
+        // A vcd_sink's `transitions` field counts analog per-frame threshold
+        // crossings (exactly like `toggle`), so a chunk the solver failed on
+        // corrupts it and it must be INVALID, not a definite pass/fail. Digital
+        // bus-slave peripheral state (i2c/spi) is NOT analog-derived and stays
+        // un-gated; keying on the field is fail-safe (worst case an unrelated
+        // field is refused on divergence, the honest direction).
+        "peripheral" if a.field.as_deref() == Some("transitions") => Some((0.0, end)),
         _ => None,
     }
 }
@@ -1809,6 +1816,38 @@ mod tests {
         let out_ok = RunOutcome { rail_windows: rw2, ..Default::default() };
         let (ok2, _msg2) = check_rail_window(&a, &out_ok);
         assert!(ok2, "a rail that stayed above 3.0V must pass");
+    }
+
+    // A vcd_sink `transitions` field is analog-derived (per-frame threshold
+    // crossings), so its assertion window must be gated by analog validity like
+    // `toggle` — otherwise a diverged chunk silently yields a definite PASS/FAIL on
+    // held-stale edge counts instead of INVALID (R51). Digital bus-slave fields
+    // stay un-gated.
+    #[test]
+    fn peripheral_transitions_field_is_analog_gated_but_digital_state_is_not() {
+        use super::analog_eval_window;
+        use crate::runner::RunOutcome;
+
+        let out = RunOutcome { sim_ms: 100.0, ..Default::default() };
+        let transitions: crate::spec::Assertion = toml::from_str(
+            "kind = \"peripheral\"\nid = \"SINK\"\nfield = \"transitions\"\nmin = 100\n",
+        )
+        .unwrap();
+        assert_eq!(
+            analog_eval_window(&transitions, &out),
+            Some((0.0, 0.1)),
+            "a vcd_sink transitions assertion must expose an analog window so it can be INVALIDated"
+        );
+        // A digital bus-slave peripheral field is NOT analog-derived → no window.
+        let digital: crate::spec::Assertion = toml::from_str(
+            "kind = \"peripheral\"\nid = \"EE\"\nfield = \"last_addr\"\nmin = 0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            analog_eval_window(&digital, &out),
+            None,
+            "a digital peripheral field must not be analog-gated"
+        );
     }
 
     // A trustworthy definite failure on one converged ensemble member must WIN
