@@ -151,6 +151,14 @@ pub struct SpiBus {
     /// so the bit-banged responder can read it without re-locking the slave. See
     /// [`SpiSlave::spi_mode`].
     spi_mode: u8,
+    /// Whether this bus's chip-select is currently ASSERTED. On a multi-slave SPI
+    /// controller the scheduler's shared `on_spi` handler routes each byte to the
+    /// SELECTED bus (only one CS is asserted at a time), so the deselected slaves
+    /// never see traffic addressed to a sibling. A bus with a resolved CS pin
+    /// starts deselected (its CS edge selects it); a heuristic bus with no CS pin
+    /// is always considered selected (there is no CS to gate it, and it is the
+    /// only slave on the controller). See [`Scheduler::attach_spi_bus`].
+    selected: bool,
 }
 
 impl SpiBus {
@@ -162,6 +170,10 @@ impl SpiBus {
             cs_pin: None,
             backend_deselect_seen: false,
             spi_mode,
+            // A fresh bus with no CS pin yet is the single-slave / heuristic case:
+            // treat it as selected so a lone slave always receives traffic.
+            // `set_cs_pin(Some)` flips it to start deselected until its CS asserts.
+            selected: true,
         }
     }
 
@@ -180,7 +192,18 @@ impl SpiBus {
     /// Record the resolved CS pin (called by the scheduler at attach time). A
     /// resolved pin moves the bus onto exact CS-edge framing.
     pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>) {
+        // A resolved CS pin means selection is driven by the CS edge, so start
+        // DESELECTED until the firmware asserts it. A bus with no CS pin stays
+        // selected (the heuristic single-slave case).
+        self.selected = pin.is_none();
         self.cs_pin = pin;
+    }
+
+    /// Whether this bus's chip-select is currently asserted. The scheduler's
+    /// shared `on_spi` handler routes a byte to the selected bus when more than
+    /// one SPI slave is on the controller.
+    pub fn is_selected(&self) -> bool {
+        self.selected
     }
 
     /// Which framing tier this bus is actually running on, for coverage.
@@ -218,11 +241,13 @@ impl SpiBus {
     /// CS ASSERTED (active-low falling edge): begin a transaction. Interleaved in
     /// cycle order with `transfer` on the exact-framing path (05 §2.1).
     pub fn cs_assert(&mut self) {
+        self.selected = true;
         self.slave.select();
     }
 
     /// CS DEASSERTED (active-low rising edge): end the transaction.
     pub fn cs_deassert(&mut self) {
+        self.selected = false;
         self.slave.deselect();
     }
 
@@ -230,6 +255,7 @@ impl SpiBus {
     /// backend frames CS (so coverage reports `Backend`) and ends the transaction.
     pub fn note_backend_deselect(&mut self) {
         self.backend_deselect_seen = true;
+        self.selected = false;
         self.slave.deselect();
     }
 
