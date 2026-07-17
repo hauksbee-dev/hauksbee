@@ -23,17 +23,23 @@ fn truncate(s: &str, max: usize) -> String {
 /// to summarise). Reads the scheduler's per-net stats for the total toggle count
 /// and the top-N most-active nets, and the MCU binding identities for the
 /// requested part / backend / substitution flag.
+/// Whether co-sim ran against a substituted MCU core, as a BOARD-WIDE honesty
+/// flag: true iff ANY MCU's requested part was collapsed onto a less-specific
+/// modelled core. `_first_ref` is ignored on purpose — the `--json` notes loop,
+/// the `--plain` heads-up, and the web `WebCosimSection.substituted` all treat
+/// substitution board-wide, so scoping this to the first-bound MCU made the JSON
+/// field contradict its own notes[] (and the web report) whenever a NON-first
+/// MCU was the substituted one.
+fn cosim_substituted(subs: &[crate::scheduler::McuSubstitution], _first_ref: &str) -> bool {
+    !subs.is_empty()
+}
+
 pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJson> {
     let sched = engine.scheduler();
     let identities = sched.mcu_identities();
     // No live MCU => no co-sim ran (e.g. a renode/qemu board with no firmware).
     let (mcu_ref, backend, requested_part) = identities.into_iter().next()?;
-    // A substitution is recorded against this reference iff its requested part
-    // was collapsed onto a less-specific modelled core.
-    let substituted = sched
-        .substitutions()
-        .iter()
-        .any(|s| s.reference == mcu_ref);
+    let substituted = cosim_substituted(sched.substitutions(), &mcu_ref);
 
     let total_toggles: u64 = sched.stats.values().map(|s| s.toggles).sum();
 
@@ -390,7 +396,29 @@ pub fn run_headless(
 
 #[cfg(test)]
 mod tests {
-    use super::probe_csv_header;
+    use super::{cosim_substituted, probe_csv_header};
+    use crate::scheduler::McuSubstitution;
+
+    #[test]
+    fn substituted_is_board_wide_not_scoped_to_the_first_mcu() {
+        // R52: the flag was `substitutions().any(|s| s.reference == first_mcu_ref)`,
+        // so a board whose FIRST MCU bound exactly but whose SECOND MCU was
+        // substituted reported substituted=false — contradicting the same JSON's
+        // notes[] and the web report, which flag substitution board-wide.
+        let sub = |r: &str| McuSubstitution {
+            reference: r.to_string(),
+            backend: "renode:stm32f4".to_string(),
+            requested_part: "STM32F411RET6".to_string(),
+            modelled_core: "STM32F407".to_string(),
+        };
+        // First MCU is "U1" (exact); the substitution is recorded for "U2".
+        assert!(
+            cosim_substituted(&[sub("U2")], "U1"),
+            "a non-first MCU substitution must still set the board-wide flag"
+        );
+        // No substitutions → false.
+        assert!(!cosim_substituted(&[], "U1"));
+    }
 
     #[test]
     fn probe_csv_header_escapes_net_names_with_commas() {
