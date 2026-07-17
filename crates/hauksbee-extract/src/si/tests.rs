@@ -517,6 +517,31 @@ fn antenna_keepout_ground_pour_fires_even_when_module_has_a_bonded_gnd_pad() {
 }
 
 #[test]
+fn antenna_keepout_finding_kinds_are_sorted_deterministically() {
+    // R41: the intrusion `kinds` were collected into a HashSet and formatted with
+    // {:?}, so a multi-kind intrusion's message order varied run-to-run (a HashSet
+    // Debug order is randomized per process) — non-reproducible SI output. Sorting
+    // (like the sibling `nets`) makes it byte-stable. A track + via + zone on the
+    // same non-ground net inside the keepout must render as ["track", "via", "zone"].
+    let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT") (net 3 "SIG")
+        (footprint "OLIMEX_Cases-FP:ESP-WROOM-32_MODULE"
+          (at 50 50 0) (layer "F.Cu")
+          (property "Reference" "U3") (property "Value" "ESP32-WROOM-32E-N4")
+          (pad "1" smd rect (at 0 5) (net 2 "ANT")))
+        (segment (start 45 30) (end 55 30) (net 3) (layer "F.Cu"))
+        (via (at 50 30) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 3))
+        (zone (net 3) (net_name "SIG") (layers "F.Cu")
+          (filled_polygon (layer "F.Cu")
+            (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35)))))"#;
+    let r = run_keepout(text);
+    let msg = &r.findings_only().next().expect("a keepout intrusion finding").message;
+    assert!(
+        msg.contains("[\"track\", \"via\", \"zone\"]"),
+        "intrusion kinds must be sorted for reproducible output, got: {msg}"
+    );
+}
+
+#[test]
 fn antenna_keepout_engulfing_pour_fires_high() {
     // A board-wide ground plane whose fill polygon covers the whole board. Every
     // fill vertex is OUTSIDE the small keepout rectangle (board x 41..59, y
