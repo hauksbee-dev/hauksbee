@@ -331,6 +331,17 @@ fn is_resistor(c: &Component) -> bool {
     is_r_ref && connected_pads(c) == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
 }
 
+/// A resistor NETWORK / array (RN/RP/RM): several resistor elements in one
+/// package, a standard way to pull up an I2C bus (a 4-element array pulls SDA/SCL
+/// and two more signals). Not a plain two-terminal resistor, so `is_resistor`
+/// excludes it — but it IS a legitimate bus pull-up and an active-device
+/// miscount, so the I2C check must recognise it.
+fn is_resistor_array(c: &Component) -> bool {
+    let r = ref_designator(&c.reference);
+    (r.starts_with("RN") || r.starts_with("RP") || r.starts_with("RM"))
+        && connected_pads(c) >= 3
+}
+
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
 /// external pull-up on the connected bus is optional rather than missing?
 ///
@@ -365,6 +376,19 @@ fn is_led(c: &Component) -> bool {
 /// package name, because boards label headers with non-obvious refs (Adafruit's
 /// Arduino headers are `IOH`/`IOL`/`AD`/`POWER`, Eagle package `1X10`).
 fn is_connector_like(c: &Component) -> bool {
+    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector — even
+    // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
+    // that `is_pin_array_package` reads as a pin array. Without this a resistor-
+    // array I2C pull-up was classified a header (exits_to_connector) and its
+    // pull-up credit skipped.
+    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector — even
+    // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
+    // that `is_pin_array_package` reads as a pin array. Without this a resistor-
+    // array I2C pull-up was classified a header (exits_to_connector) and its
+    // pull-up credit skipped.
+    if is_resistor_array(c) {
+        return false;
+    }
     let r = c.reference.to_ascii_uppercase();
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
@@ -782,14 +806,20 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 exits_to_connector = true;
                 continue;
             }
-            // An IC / sensor pin on the bus means the bus is used on-board.
+            // An IC / sensor pin on the bus means the bus is used on-board. A
+            // resistor ARRAY is a passive pull-up, not an active device — exclude
+            // it so it does not inflate `active_devices` and manufacture the
+            // two-device "missing pull-up" case.
             let r = c.reference.to_ascii_uppercase();
-            if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c)) {
+            if r.starts_with('U')
+                || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
+            {
                 active_refs.insert(c.reference.as_str());
             }
-            if is_resistor(c) {
-                // Does the other pad land on a rail (named, or a structural
-                // local rail with a bypass cap to ground)?
+            if is_resistor(c) || is_resistor_array(c) {
+                // Does another pad land on a rail (named, or a structural local
+                // rail with a bypass cap to ground)? A resistor array whose element
+                // pulls the bus to a rail terminates it just like a discrete R.
                 for op in &c.pins {
                     if op.net == Some(net.id) {
                         continue;
