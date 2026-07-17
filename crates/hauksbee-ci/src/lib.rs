@@ -79,7 +79,15 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         // claim "nominal + 0 sampled" (the nominal did NOT run) or "1 corner" out
         // of 2^n. Report the single pinned member honestly instead.
         if let Some(seed) = cfg.seed {
-            Some(report::EnsembleCoverage::SingleMember { seed, components })
+            // A corners member is a deterministic min/max corner, not a random
+            // draw — carry the mode so the banner says "corner N", matching the
+            // mode-aware per-assertion INVALID/FAIL wording.
+            let corners = matches!(spec.ensemble_mode()?, tolerance::Mode::Corners);
+            Some(report::EnsembleCoverage::SingleMember {
+                seed,
+                components,
+                corners,
+            })
         } else {
             Some(match spec.ensemble_mode()? {
                 // Member 0 is the nominal baseline (it draws no random sample), so
