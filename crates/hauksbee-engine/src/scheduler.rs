@@ -1011,14 +1011,18 @@ impl Scheduler {
     /// SRCLK/RCLK/SER pins. Returns the first match (a net is driven by at most
     /// one MCU push-pull output in a well-formed board).
     pub fn pin_driving_node(&self, node: NodeId) -> Option<(char, u8)> {
-        for m in &self.mcus {
-            for (pin, drv) in &m.binding.gpio_drivers {
-                if drv.net == node {
-                    return Some(*pin);
-                }
-            }
-        }
-        None
+        // `gpio_drivers` is a HashMap with randomized iteration order, so when more
+        // than one of an MCU's pins sits on `node` — a legitimate self-monitoring
+        // topology, or two pins collapsed onto one net by a [[jumper]] bodge — the
+        // first match, and hence the CS-framing pin, varied run to run. Pick the
+        // lowest (port, bit) so the resolution is stable across process runs
+        // (mirrors the sorted driver maps used for deterministic frame order).
+        self.mcus
+            .iter()
+            .flat_map(|m| m.binding.gpio_drivers.iter())
+            .filter(|(_, drv)| drv.net == node)
+            .map(|(pin, _)| *pin)
+            .min()
     }
 
     /// Per-slave SPI framing tier for the co-sim coverage: `(bus id, mode)` for
@@ -4164,6 +4168,57 @@ mod tests {
         sched.mcus.push(core_with_hooks(Box::new(core), binding));
         sched.responder_registries.push(None);
         (sched, handles)
+    }
+
+    /// Regression (R52): `pin_driving_node` iterated a randomized HashMap and
+    /// returned the FIRST driver on the net, so when >1 of an MCU's pins share a
+    /// net node (a self-monitoring topology, or two pins bodge-merged) the
+    /// resolved CS-framing pin varied run-to-run. It must return a deterministic
+    /// pin — the lowest (port, bit) — regardless of HashMap iteration order.
+    #[test]
+    fn pin_driving_node_is_deterministic_when_multiple_pins_share_a_net() {
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // Six of the MCU's pins all wired to ONE shared net node, inserted in a
+        // deliberately non-sorted order so the HashMap cannot accidentally yield
+        // the minimum first.
+        let node = sched.circuit.node("SHARED_CS");
+        let mut gpio_drivers = HashMap::new();
+        for &pin in &[('D', 7), ('B', 5), ('C', 2), ('B', 4), ('D', 0), ('C', 9)] {
+            let drv = crate::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                node,
+                "SHARED_CS",
+                &format!("t_{}{}", pin.0, pin.1),
+                crate::drivers::DEFAULT_RO,
+            );
+            gpio_drivers.insert(pin, drv);
+        }
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+        sched.mcus.push(core_with_hooks(Box::new(CapturingCore::default()), binding));
+        sched.responder_registries.push(None);
+
+        // The lowest (port, bit) among the six is ('B', 4).
+        assert_eq!(
+            sched.pin_driving_node(node),
+            Some(('B', 4)),
+            "pin_driving_node must return the deterministic lowest pin on a shared net"
+        );
     }
 
     /// Regression (R47): `Mcu::on_i2c` and `set_i2c_slave_addresses` are
