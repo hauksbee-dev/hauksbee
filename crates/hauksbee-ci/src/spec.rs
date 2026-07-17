@@ -281,6 +281,18 @@ fn default_sweep() -> String {
 
 impl AcConfig {
     fn validate(&self) -> Result<(), SpecError> {
+        // TOML accepts `inf`/`nan` float literals, and every comparison against
+        // them is false, so `fstop <= fstart` and `fstart <= 0` both pass for a
+        // non-finite bound. That flows into AcSpec::frequencies() where
+        // `(fstop/fstart).log(base)` becomes inf and the step count saturates to
+        // usize::MAX — a `with_capacity` overflow panic (debug) or a bogus
+        // inf-Hz sweep (release). Reject non-finite bounds up front, matching the
+        // finiteness guards on duration_ms/frame_ms/after_ms/freq_hz.
+        if !self.fstart.is_finite() || !self.fstop.is_finite() {
+            return Err(SpecError::Invalid(
+                "[ac] fstart and fstop must be finite".into(),
+            ));
+        }
         if self.fstart <= 0.0 || self.fstop <= self.fstart {
             return Err(SpecError::Invalid("[ac] needs 0 < fstart < fstop".into()));
         }
@@ -1685,5 +1697,63 @@ for_max_ms = 2.0
 "#,
         );
         assert!(ok.validate().is_ok(), "dip_below with a for_max_ms partner must pass");
+    }
+
+    #[test]
+    fn ac_sweep_with_non_finite_bounds_is_rejected() {
+        // R39: TOML parses `inf`/`nan`, and `fstop <= fstart` is false for a
+        // non-finite bound, so it slipped through validation into
+        // AcSpec::frequencies() where the step count saturates to usize::MAX (a
+        // with_capacity overflow panic in debug, a bogus inf-Hz sweep in release).
+        for (fstart, fstop) in [("10.0", "inf"), ("nan", "100000.0"), ("inf", "100000.0")] {
+            let src = format!(
+                r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[ac]
+fstart = {fstart}
+fstop = {fstop}
+points = 20
+sweep = "dec"
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#
+            );
+            spec_from(&src)
+                .validate()
+                .expect_err(&format!("a non-finite AC bound (fstart={fstart}, fstop={fstop}) must fail"));
+        }
+        // Concretely check the message on the inf case.
+        let err = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[ac]
+fstart = 10.0
+fstop = inf
+points = 20
+sweep = "dec"
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+"#,
+        )
+        .validate()
+        .expect_err("fstop = inf must be rejected");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("finite")),
+            "expected a finiteness error, got {err:?}"
+        );
     }
 }

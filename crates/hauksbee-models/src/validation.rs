@@ -102,7 +102,13 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             require_f64!("vto");
             require_f64!("kp");
             check_range!("vto", -10.0, 10.0);
-            check_range!("kp", 1e-6, 1.0);
+            // kp = k'·(W/L) for the level-1 SPICE model. For a discrete POWER
+            // MOSFET the effective W/L is enormous, so kp legitimately runs into
+            // the tens or hundreds (the repo's own datasheet-cited db/mosfet.toml
+            // has kp up to 200 for ipa045n10n3g). A 1.0 A/V² ceiling false-flagged
+            // 6 of 8 shipped models and rejected any correctly-extracted power
+            // FET. Bound generously — still catches a nonsense hallucination.
+            check_range!("kp", 1e-6, 1000.0);
             check_range!("lambda", 0.0, 1.0);
         }
         ComponentKind::Vreg => {
@@ -284,6 +290,56 @@ mod tests {
             logic: Default::default(),
         };
         assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
+    }
+
+    #[test]
+    fn power_mosfet_kp_above_one_is_accepted() {
+        // R39: kp = k'·(W/L) legitimately reaches the tens/hundreds for discrete
+        // power MOSFETs — the repo's own db/mosfet.toml has kp up to 200. The old
+        // 1.0 A/V² ceiling false-flagged 6 of 8 shipped models and rejected any
+        // correctly-extracted power FET.
+        for kp in [4.5, 10.0, 15.0, 30.0, 200.0] {
+            let mut p = Params::default();
+            p.set_f64("vto", 2.0);
+            p.set_f64("kp", kp);
+            let entry = ModelEntry {
+                id: "power_fet".into(),
+                kind: ComponentKind::Nmos,
+                description: String::new(),
+                r#match: Default::default(),
+                params: p,
+                pins: BTreeMap::new(),
+                ratings: Default::default(),
+                straps: Vec::new(),
+                behavioral: Default::default(),
+                logic: Default::default(),
+            };
+            assert!(
+                validate(&entry).is_ok(),
+                "a power MOSFET with kp={kp} must validate: {:?}",
+                validate(&entry)
+            );
+        }
+        // An absurd kp is still rejected.
+        let mut bad = Params::default();
+        bad.set_f64("vto", 2.0);
+        bad.set_f64("kp", 5000.0);
+        let entry = ModelEntry {
+            id: "absurd_fet".into(),
+            kind: ComponentKind::Nmos,
+            description: String::new(),
+            r#match: Default::default(),
+            params: bad,
+            pins: BTreeMap::new(),
+            ratings: Default::default(),
+            straps: Vec::new(),
+            behavioral: Default::default(),
+            logic: Default::default(),
+        };
+        assert!(
+            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("kp")),
+            "kp=5000 is still out of range"
+        );
     }
 
     #[test]
