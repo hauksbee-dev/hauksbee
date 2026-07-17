@@ -924,8 +924,13 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
         findings: Vec::new(),
         heads_up: Vec::new(),
     };
+    // The verdict must be a full sentence, matching every other section (which is
+    // built via `WebSection::from_plain`, whose verdict is `PlainReport::verdict()`
+    // prose). Bare tokens like "problem"/"note" made this one folded-in section
+    // carry an incompatible string format in the same `/api/analyze` payload and
+    // rendered a lone word under the USB-C card while siblings showed sentences.
     if usbc.is_serious() {
-        section.verdict = "problem".to_string();
+        section.verdict = "1 issue found, 1 serious.".to_string();
         section.findings.push(WebFinding {
             level: "serious".to_string(),
             what,
@@ -933,7 +938,8 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
             fix,
         });
     } else {
-        section.verdict = "note".to_string();
+        section.verdict =
+            "No usb-c cc compliance failures, but 1 thing worth a look (see below).".to_string();
         section.heads_up.push(WebHeadsUp { what, why, fix });
     }
     Some(section)
@@ -1168,6 +1174,20 @@ mod tests {
             sect.findings.iter().any(|f| f.level == "serious"),
             "a Serious verdict must be a serious finding"
         );
+        // R43: the verdict must be a full sentence like every other section (built
+        // via WebSection::from_plain → PlainReport::verdict()), not a bare token —
+        // a uniform web consumer renders `section.verdict` directly, so "problem"
+        // read as a lone word under the USB-C card while siblings showed prose.
+        assert!(
+            sect.verdict.ends_with('.') && sect.verdict.contains(' '),
+            "the USB-C verdict must be a full sentence, got {:?}",
+            sect.verdict
+        );
+        assert!(
+            sect.verdict != "problem" && sect.verdict != "note",
+            "the verdict must not be a bare status token: {:?}",
+            sect.verdict
+        );
         // Folded into a sections vec, it raises serious/total and denies "healthy".
         let sections = vec![sect];
         let serious_n: usize = sections
@@ -1193,6 +1213,11 @@ mod tests {
         let isect = super::usbc_web_section(&info).expect("info verdict yields a section");
         assert!(isect.findings.is_empty(), "Info is not a finding");
         assert_eq!(isect.heads_up.len(), 1, "Info becomes a heads-up");
+        assert!(
+            isect.verdict.ends_with('.') && isect.verdict.contains(' ') && isect.verdict != "note",
+            "the Info verdict must also be a full sentence, got {:?}",
+            isect.verdict
+        );
         let has_heads_up = [isect].iter().any(|s| !s.heads_up.is_empty());
         let h = overall_headline(0, 0, has_heads_up, false);
         assert!(
