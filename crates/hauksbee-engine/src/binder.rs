@@ -1989,10 +1989,16 @@ fn bind_bjt(
         .collect();
     if !suffixes.is_empty() {
         let mut stamped = 0;
+        let mut partial: Vec<String> = Vec::new();
         for suffix in &suffixes {
             let get = |role: &str| roles.get(&format!("{role}{suffix}")).copied();
             let (Some(c), Some(b), Some(e)) = (get("collector"), get("base"), get("emitter"))
             else {
+                // A suffix is present only if >=1 of its pins is wired, so an
+                // incomplete c/b/e here is a genuine PARTIAL miswire (not an
+                // unused half). Record it so the bind report warns — matching the
+                // single-BJT open_warning and the passive-array "left open" note.
+                partial.push(suffix.trim_start_matches('_').to_string());
                 continue;
             };
             circuit.add(Device::Bjt {
@@ -2007,11 +2013,20 @@ fn bind_bjt(
         if stamped == 0 {
             return open_warning(comp, "paired BJT: no complete c/b/e group connected");
         }
+        let warning = if partial.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "{}: paired BJT unit(s) {} missing a c/b/e connection, left open",
+                comp.reference,
+                partial.join(", ")
+            ))
+        };
         return (
             BindOutcome::Analog {
                 device: format!("bjt x{stamped}"),
             },
-            None,
+            warning,
         );
     }
 
@@ -2419,13 +2434,20 @@ fn bind_analog_switch(
         let roff = model.params.get_f64("roff").unwrap_or(1e9);
         let vth = model.params.get_f64("vth").unwrap_or(1.5);
         let mut stamped = 0;
+        let mut partial: Vec<usize> = Vec::new();
         for n in 1..=4 {
-            let (Some(a), Some(b), Some(ctrl)) = (
-                roles.get(&format!("in_out_{n}a")).copied(),
-                roles.get(&format!("in_out_{n}b")).copied(),
-                roles.get(&format!("ctrl_{n}")).copied(),
-            ) else {
-                continue; // gate not (fully) wired on this board
+            let ra = roles.get(&format!("in_out_{n}a")).copied();
+            let rb = roles.get(&format!("in_out_{n}b")).copied();
+            let rc = roles.get(&format!("ctrl_{n}")).copied();
+            let (Some(a), Some(b), Some(ctrl)) = (ra, rb, rc) else {
+                // A gate with SOME but not all three terminals wired is a partial
+                // miswire; a fully-unused gate (none wired) is a normal spare and
+                // stays quiet. Warn only on the former (the passive-array
+                // discipline), instead of dropping it silently.
+                if ra.is_some() || rb.is_some() || rc.is_some() {
+                    partial.push(n);
+                }
+                continue;
             };
             circuit.add(Device::VSwitch {
                 name: format!("{}_s{n}", comp.reference),
@@ -2441,11 +2463,24 @@ fn bind_analog_switch(
             stamped += 1;
         }
         if stamped > 0 {
+            let warning = if partial.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{}: analog-switch gate(s) {} missing a connection, left open",
+                    comp.reference,
+                    partial
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            };
             return (
                 BindOutcome::Behavioral {
                     device: format!("vswitch x{stamped}"),
                 },
-                None,
+                warning,
             );
         }
     }
@@ -3866,6 +3901,44 @@ mod crystal_fallback_tests {
             dnp: false,
             pins: Vec::new(),
         }
+    }
+
+    #[test]
+    fn partially_wired_paired_bjt_unit_warns_left_open() {
+        // R53: a matched-pair BJT (BCM847BS) whose Q2 is partially wired (>=1 pin
+        // connected but not a complete c/b/e) was silently dropped with warning
+        // None, unlike a single BJT or a passive-array element which each warn
+        // "left open". A partial unit must now surface a diagnostic.
+        let model: ModelEntry =
+            toml::from_str("id = \"bcm847bs\"\nkind = \"bjt_npn\"\n[match]\nvalue_re = \"BCM847\"\n")
+                .unwrap();
+        let mut circuit = Circuit::new();
+        let (c1, b1, e1, b2) = (
+            circuit.node("C1"),
+            circuit.node("B1"),
+            circuit.node("E1"),
+            circuit.node("B2"),
+        );
+        let mut roles = HashMap::new();
+        roles.insert("collector_q1".to_string(), c1);
+        roles.insert("base_q1".to_string(), b1);
+        roles.insert("emitter_q1".to_string(), e1);
+        roles.insert("base_q2".to_string(), b2); // Q2 partial: only the base wired
+        let (outcome, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
+        assert!(matches!(outcome, BindOutcome::Analog { .. }), "Q1 still stamps");
+        let w = warning.expect("a partially-wired Q2 must warn, not drop silently");
+        assert!(
+            w.contains("left open") && w.contains("q2"),
+            "the warning must name the dropped unit: {w}"
+        );
+
+        // A fully-wired pair produces no warning.
+        let c2 = circuit.node("C2");
+        let e2 = circuit.node("E2");
+        roles.insert("collector_q2".to_string(), c2);
+        roles.insert("emitter_q2".to_string(), e2);
+        let (_o, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
+        assert!(warning.is_none(), "a fully-wired pair must not warn: {warning:?}");
     }
 
     #[test]
