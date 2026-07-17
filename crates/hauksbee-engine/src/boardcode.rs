@@ -203,6 +203,11 @@ pub struct CheckReport {
     pub faults: Vec<FaultEvent>,
     /// Number of nets that toggled during the run (activity sanity).
     pub active_nets: usize,
+    /// The non-ignored components the binder could NOT resolve to a model, as
+    /// `(reference, value)`. These are simulated as OPEN, so any firmware/analog
+    /// result on their nets is incomplete — naming them makes "N% resolved"
+    /// actionable instead of a bare number.
+    pub unresolved: Vec<(String, String)>,
 }
 
 impl CheckReport {
@@ -250,6 +255,14 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
     let component_count = board.components.len();
     let net_count = bound.net_names.len();
     let resolved_fraction = bound.report.resolved_fraction();
+    // Capture WHICH parts are unresolved before `bound` is consumed by the engine,
+    // so the report can name them (they simulate as OPEN).
+    let unresolved: Vec<(String, String)> = bound
+        .report
+        .non_ignored()
+        .filter(|r| !r.outcome.is_resolved())
+        .map(|r| (r.reference.clone(), r.value.clone()))
+        .collect();
 
     let mut engine = HauksbeeEngine::from_bound(bound, None, "/boards/check")?;
     if opts.destructive {
@@ -303,6 +316,7 @@ pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result
         simulated_seconds,
         faults,
         active_nets,
+        unresolved,
     })
 }
 
@@ -325,6 +339,24 @@ pub fn render_check_report(r: &CheckReport) -> String {
         "  {} components, {} nets, {pct}% resolved, {} active nets",
         r.component_count, r.net_count, r.active_nets,
     );
+    // Name the unresolved parts so "{pct}% resolved" is actionable: these bind to
+    // no model and simulate as OPEN, so any firmware/analog result on their nets
+    // is incomplete. Add models with --models-dir to cover them.
+    if !r.unresolved.is_empty() {
+        let _ = writeln!(
+            s,
+            "  {} unresolved (simulated as OPEN — add models with --models-dir):",
+            r.unresolved.len()
+        );
+        for (reference, value) in &r.unresolved {
+            let val = if value.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" ({value})")
+            };
+            let _ = writeln!(s, "    - {reference}{val}");
+        }
+    }
     let _ = writeln!(s, "  simulated {:.3}s", r.simulated_seconds);
     if r.faults.is_empty() {
         let _ = writeln!(s, "  no faults: circuit is within ratings.");
@@ -382,6 +414,7 @@ mod render_tests {
             simulated_seconds: 0.1,
             faults: Vec::new(),
             active_nets: 5,
+            unresolved: Vec::new(),
         }
     }
 
@@ -398,5 +431,20 @@ mod render_tests {
         // A genuinely complete board still shows 100%.
         let full = render_check_report(&report(1.0));
         assert!(full.contains("100% resolved"), "1.0 must show 100%: {full}");
+    }
+
+    #[test]
+    fn unresolved_parts_are_named_not_just_counted() {
+        // U1: "84% resolved" was a bare number — the check must NAME the parts it
+        // could not model (they simulate as OPEN), so the user knows what to add.
+        let mut r = report(0.5);
+        r.unresolved = vec![
+            ("U3".into(), "ATmega328P".into()),
+            ("Q7".into(), "2N3906".into()),
+        ];
+        let s = render_check_report(&r);
+        assert!(s.contains("U3") && s.contains("ATmega328P"), "names the MCU: {s}");
+        assert!(s.contains("Q7") && s.contains("2N3906"), "names the transistor: {s}");
+        assert!(s.contains("simulated as OPEN"), "explains the consequence: {s}");
     }
 }
