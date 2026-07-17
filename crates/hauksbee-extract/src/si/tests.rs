@@ -491,6 +491,32 @@ fn antenna_keepout_ground_pour_inside_fires_high() {
 }
 
 #[test]
+fn antenna_keepout_ground_pour_fires_even_when_module_has_a_bonded_gnd_pad() {
+    // R39: a real WROOM module bonds many pads to the board GND net. The old code
+    // built `own_nets` from ALL of the antenna's pad nets and skipped any intrusion
+    // on an own net, so with a GND pad present the board GND landed in own_nets and
+    // a ground pour flooding the keepout was silently skipped — a false all-clear on
+    // the exact detuning case. Excluding only the NON-ground own nets, a ground pour
+    // must still fire even though the module has a GND pad.
+    let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT")
+        (footprint "OLIMEX_Cases-FP:ESP-WROOM-32_MODULE"
+          (at 50 50 0) (layer "F.Cu")
+          (property "Reference" "U3") (property "Value" "ESP32-WROOM-32E-N4")
+          (pad "1" smd rect (at 0 5) (net 2 "ANT"))
+          (pad "2" smd rect (at 0 6) (net 1 "GND")))
+        (zone (net 1) (net_name "GND") (layers "F.Cu")
+          (filled_polygon (layer "F.Cu")
+            (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35)))))"#;
+    let r = run_keepout(text);
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "a ground pour in the keepout must fire even though the module has a bonded GND pad"
+    );
+    assert_eq!(r.findings_only().next().unwrap().severity, SiSeverity::High);
+}
+
+#[test]
 fn antenna_keepout_engulfing_pour_fires_high() {
     // A board-wide ground plane whose fill polygon covers the whole board. Every
     // fill vertex is OUTSIDE the small keepout rectangle (board x 41..59, y
