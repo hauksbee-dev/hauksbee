@@ -311,13 +311,19 @@ pub fn render_check_report(r: &CheckReport) -> String {
     use std::fmt::Write;
     let mut s = String::new();
     let _ = writeln!(s, "Board-as-Code check: {}", r.board_name);
+    // FLOOR the percentage: `{:.0}` rounds a fraction in [0.995, 1.0) up to "100",
+    // so a board with an unresolved (→ silently OPEN in sim) component read as
+    // "100% resolved". Only a true 1.0 shows 100; anything short floors, so a
+    // partial board can never masquerade as fully covered.
+    let pct = if r.resolved_fraction >= 1.0 {
+        100
+    } else {
+        (r.resolved_fraction * 100.0).floor() as u32
+    };
     let _ = writeln!(
         s,
-        "  {} components, {} nets, {:.0}% resolved, {} active nets",
-        r.component_count,
-        r.net_count,
-        r.resolved_fraction * 100.0,
-        r.active_nets,
+        "  {} components, {} nets, {pct}% resolved, {} active nets",
+        r.component_count, r.net_count, r.active_nets,
     );
     let _ = writeln!(s, "  simulated {:.3}s", r.simulated_seconds);
     if r.faults.is_empty() {
@@ -360,5 +366,37 @@ fn trunc(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max).collect()
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    fn report(fraction: f64) -> CheckReport {
+        CheckReport {
+            board_name: "b".into(),
+            component_count: 250,
+            net_count: 40,
+            resolved_fraction: fraction,
+            simulated_seconds: 0.1,
+            faults: Vec::new(),
+            active_nets: 5,
+        }
+    }
+
+    #[test]
+    fn partial_resolution_never_rounds_up_to_100_percent() {
+        // R44: `{:.0}` rounds a fraction in [0.995, 1.0) up to "100", so a board
+        // with one unresolved (→ silently OPEN) component read "100% resolved". A
+        // sub-1.0 fraction must floor, so only a true 1.0 shows 100%.
+        let s = render_check_report(&report(249.0 / 250.0)); // 0.996
+        assert!(
+            s.contains("99% resolved") && !s.contains("100% resolved"),
+            "0.996 must show 99%, not a rounded 100%: {s}"
+        );
+        // A genuinely complete board still shows 100%.
+        let full = render_check_report(&report(1.0));
+        assert!(full.contains("100% resolved"), "1.0 must show 100%: {full}");
     }
 }
