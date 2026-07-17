@@ -757,7 +757,10 @@ impl Spec {
         })?;
         let mut spec: Spec = toml::from_str(&text).map_err(|e| SpecError::Toml {
             file: path.display().to_string(),
-            message: e.message().to_string(),
+            // `e.to_string()` keeps the "at line N, column M" locator and the
+            // caret-annotated snippet; `e.message()` dropped both, so a hand-author
+            // with a typo got the reason but no line to jump to.
+            message: e.to_string(),
         })?;
         spec.base_dir = path
             .parent()

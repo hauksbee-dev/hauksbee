@@ -396,6 +396,43 @@ feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude
 [AC_ANALYSIS.md](AC_ANALYSIS.md#ci), since the sweep block is documented
 alongside the analysis it drives.
 
+**`rail_window`**: over a transient `[[scenario]]` window, a rail's min/max
+voltage stays within bounds and any dip below a floor recovers within a deadline
+— the brownout/inrush check.
+
+```toml
+[[assert]]
+kind = "rail_window"
+net = "VBUS"
+scenario = "load_step"    # the [[scenario]] whose window to judge over
+min = 3.0                 # brownout floor
+dip_below = 3.1           # optionally: how long it may sit below a level
+for_max_ms = 5
+recover_to = 3.2
+recover_within_ms = 20
+```
+
+**`protection_trip`**: a battery/e-fuse protection cutoff fired (or must NOT
+have fired) within a scenario window — `supply_net`, `expect_trip = true|false`,
+optional `scenario`.
+
+**`peripheral`**: a bus-slave / sensor / VCD-sink peripheral's end-of-run state,
+by `id` and `field` (e.g. a `vcd_sink`'s `transitions` count, an EEPROM's last
+address). Pairs with a `[[peripheral]]` block (below).
+
+**`hwtrace`**: compare the simulated waveform against a captured scope trace
+(features like period / rise-time / overshoot within tolerance) — `trace =
+"trace.toml"`. See [the hardware-trace docs](../testdata/hwtraces/) for the
+capture format.
+
+Beyond `[[assert]]`, a spec can also declare **`[[peripheral]]`** (attach an I2C/
+SPI slave model, a VCD waveform sink, or an ADC feed to the co-sim),
+**`[[sensor]]`** (a declarative register-map sensor defined inline), and
+**`[[scenario]]`** (a transient load profile + optional decoupling ESR/ESL that
+the `rail_window` / `protection_trip` assertions judge over). See
+[PERIPHERALS.md](PERIPHERALS.md) and the `lm75_thermostat` / `tolerance_divider`
+example specs in `crates/hauksbee-ci/examples/`.
+
 ## Output
 
 - **Human report** to stdout: each assertion `PASS`/`FAIL` with the measured
