@@ -229,6 +229,13 @@ fn rail_voltage(name: &str) -> Option<f64> {
             });
             if is_signal {
                 None
+            } else if let Some(v) = numeric_rail_magnitude(&n) {
+                // A numerically-named rail carries its own magnitude ("5V0",
+                // "+12V", "24V", "+15V0"). netlint's rail_voltage recognises these
+                // via the same grammar; si.rs must too, or a pull-up returning to a
+                // bare "5V0" rail is not seen as rail-like and the I2C rise-time
+                // audit is silently skipped (a --si vs --lint disagreement).
+                Some(v)
             } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
                 Some(3.3)
             } else if n.contains("1V8") {
@@ -240,6 +247,35 @@ fn rail_voltage(name: &str) -> Option<f64> {
             }
         }
     }
+}
+
+/// A rail whose name carries its own numeric magnitude: an optional leading '+',
+/// then digits, 'V', and optional trailing digits — plain "12V"/"24V" or the
+/// KiCad digit-V-digit "5V0" form. The name must be ENTIRELY consumed by the
+/// grammar, so a rail-named signal net ("5V_DET") does NOT match. Mirrors
+/// netlint's `numeric_rail_magnitude`.
+fn numeric_rail_magnitude(n: &str) -> Option<f64> {
+    let rest = n.strip_prefix('+').unwrap_or(n);
+    let int_part: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if int_part.is_empty() {
+        return None;
+    }
+    let after = rest[int_part.len()..].strip_prefix('V')?;
+    let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !after[frac.len()..].is_empty() {
+        return None;
+    }
+    let mag: f64 = if frac.is_empty() {
+        int_part.parse().ok()?
+    } else {
+        format!("{}.{}", int_part.trim_end_matches('.'), frac)
+            .parse()
+            .ok()?
+    };
+    (mag > 0.0 && mag.is_finite()).then_some(mag)
 }
 
 /// Distinct pad numbers that carry a net. Counts *distinct* pad numbers, not raw
