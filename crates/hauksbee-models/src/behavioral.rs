@@ -454,6 +454,24 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             if sp.prog_ref_ohms <= 0.0 {
                 errs.push("converter.iin_program: prog_ref_ohms must be positive".to_string());
             }
+            // `vprog_ref` and `v_sense_full` gate the programmed input-current
+            // limit the same way iout_limit_a/iin_limit_a gate the literal one:
+            // the engine computes `v_sense = (vprog_ref*prog/prog_ref).min(
+            // v_sense_full).max(0.0)` and `i_limit = v_sense/rsense`. A negative
+            // or zero value for either (a sign typo) drives v_sense — and hence
+            // the limit — to 0, so update_converter folds v_cmd to 0 and the
+            // regulated rail silently reads 0 V for the whole run with no fault.
+            // Reject both up front, like the literal limits above.
+            for (name, v) in [
+                ("vprog_ref", sp.vprog_ref),
+                ("v_sense_full", sp.v_sense_full),
+            ] {
+                if !v.is_finite() || v <= 0.0 {
+                    errs.push(format!(
+                        "converter.iin_program: {name} must be a positive finite number, got {v}"
+                    ));
+                }
+            }
         }
     }
 
@@ -547,6 +565,62 @@ v_sense_full = 0.05
         assert!(
             validate_behavioral(&b).is_empty(),
             "{:?}",
+            validate_behavioral(&b)
+        );
+    }
+
+    #[test]
+    fn iin_program_rejects_nonpositive_vsense_full_and_vprog_ref() {
+        // A sign-typo v_sense_full (or vprog_ref) drives the programmed
+        // input-current limit to 0, so update_converter folds v_cmd to 0 and the
+        // regulated rail silently reads 0 V for the whole run with no fault. It
+        // must be rejected at validation, like the literal iout_limit_a/
+        // iin_limit_a limits. Base bug: only prog_ref_ohms was validated.
+        let base = |v_sense_full: f64, vprog_ref: f64| {
+            format!(
+                r#"
+[converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 14.4
+efficiency = 0.92
+
+[converter.iin_program]
+rsense_ref = "R49"
+prog_ref = "R8"
+vprog_ref = {vprog_ref}
+prog_ref_ohms = 100000.0
+v_sense_full = {v_sense_full}
+"#
+            )
+        };
+        // Sign-typo v_sense_full.
+        let b: Behavioral = toml::from_str(&base(-0.05, 1.19)).expect("parse");
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("v_sense_full")),
+            "negative v_sense_full must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // Zero v_sense_full.
+        let b: Behavioral = toml::from_str(&base(0.0, 1.19)).expect("parse");
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("v_sense_full")),
+            "zero v_sense_full must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // Sign-typo vprog_ref.
+        let b: Behavioral = toml::from_str(&base(0.05, -1.19)).expect("parse");
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("vprog_ref")),
+            "negative vprog_ref must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // The legitimate positive pair still validates clean.
+        let b: Behavioral = toml::from_str(&base(0.05, 1.19)).expect("parse");
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "valid programmed limits must pass: {:?}",
             validate_behavioral(&b)
         );
     }

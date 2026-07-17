@@ -754,6 +754,15 @@ fn i2c_role(name: &str) -> Option<&'static str> {
     }
 }
 
+/// True if a net leaf name carries an explicit I2C fast-mode tag as a whole
+/// token (`FM` or `FAST`). Tokenised like [`i2c_role`] so a bus that merely
+/// embeds the letters (`FMC_SDA`, `CONFIRM_SCL`) is NOT misread as fast-mode.
+fn is_fast_mode_name(name: &str) -> bool {
+    let n = norm(name);
+    n.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|t| t == "FM" || t == "FAST")
+}
+
 fn is_connector_like(c: &Component) -> bool {
     let r = c.reference.to_ascii_uppercase();
     let lib = c.lib_id.to_ascii_lowercase();
@@ -854,7 +863,12 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
         let t_r = i2c_rise_time_ns(r, c_bus);
 
         // Conservative: judge against STANDARD mode unless the name says fast.
-        let fast = norm(&net.name).contains("FM") || norm(&net.name).contains("FAST");
+        // Whole-token match, not raw `contains`: a bare substring test fires on
+        // any leaf that merely embeds the letters (e.g. `FMC_SDA`, the FPGA
+        // Mezzanine Connector I2C bus, contains "FM" inside the token "FMC"),
+        // misclassifying a standard-mode bus as fast and tightening the limit
+        // 3.3x — a false positive. Mirror i2c_role's tokenise-and-compare.
+        let fast = is_fast_mode_name(&net.name);
         let limit = if fast { T_R_FAST_NS } else { T_R_STANDARD_NS };
 
         if t_r > limit {

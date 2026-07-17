@@ -1006,3 +1006,17 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
     let (_pf, devices) = super::bus_capacitance_pf(&board, 1, None);
     assert_eq!(devices, 1, "a doubly-listed pad must count as one device, not two");
 }
+
+#[test]
+fn fast_mode_name_is_whole_token_not_substring() {
+    // R48: `contains("FM")`/`contains("FAST")` over-matched — an FPGA Mezzanine
+    // Connector I2C bus `FMC_SDA` embeds "FM" inside the token "FMC", so a
+    // standard-mode bus was judged against the 3.3x-tighter fast-mode limit,
+    // firing a false rise-time finding. Only a whole `FM`/`FAST` token selects
+    // fast mode.
+    assert!(super::is_fast_mode_name("I2C_FM_SDA"), "explicit FM token is fast-mode");
+    assert!(super::is_fast_mode_name("SDA_FAST"), "explicit FAST token is fast-mode");
+    assert!(!super::is_fast_mode_name("FMC_SDA"), "FMC (mezzanine connector) is NOT fast-mode");
+    assert!(!super::is_fast_mode_name("CONFIRM_SCL"), "CONFIRM must not match FM");
+    assert!(!super::is_fast_mode_name("SDA"), "a plain SDA bus defaults to standard mode");
+}
