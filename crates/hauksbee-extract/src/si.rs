@@ -201,13 +201,19 @@ fn is_ground(name: &str) -> bool {
 /// know the high level of). `None` for non-rail nets.
 fn rail_voltage(name: &str) -> Option<f64> {
     let n = norm(name);
+    // Table kept in lockstep with netlint's rail_voltage: the --si I2C checks are
+    // meant to MIRROR the --lint pull-up-presence check, so a token netlint reads
+    // as a rail (VCC5V/VCC5, VPP/VDD_IO) but si.rs does not would classify the same
+    // net differently across the two reports (a --si vs --lint disagreement).
     match n.as_str() {
-        "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" | "+5V0" => Some(5.0),
+        "+5V" | "5V" | "VCC" | "VDD" | "+VCC" | "VBUS" | "+5V0" | "VCC5V" | "VCC5" => Some(5.0),
         "+3V3" | "3V3" | "+3.3V" | "3.3V" | "VCC3V3" | "VDD3V3" | "VDD3P3" | "+3V3A" => Some(3.3),
         "+3V" | "3V" | "+3V0" | "3V0" => Some(3.0),
         "+1V8" | "1V8" | "1.8V" | "VDD1V8" => Some(1.8),
         "+2V8" | "2V8" => Some(2.8),
-        "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VDDIO" | "VIO" => Some(3.7),
+        "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VPP" | "VDDIO" | "VDD_IO" | "VIO" => {
+            Some(3.7)
+        }
         _ => {
             // Reject rail-named SIGNAL nets: a `3V3_EN` / `1V8_PG` enable or
             // power-good net is not the rail, so a resistor tapping it must not
@@ -236,6 +242,11 @@ fn rail_voltage(name: &str) -> Option<f64> {
                 // bare "5V0" rail is not seen as rail-like and the I2C rise-time
                 // audit is silently skipped (a --si vs --lint disagreement).
                 Some(v)
+            } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
+                // Loose 5V rail, but only with rail context (+/VCC/VBUS) so a
+                // signal net that merely embeds "5V" is not misread — mirrors
+                // netlint's guarded 5V fallback.
+                Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
                 Some(3.3)
             } else if n.contains("1V8") {
