@@ -882,9 +882,13 @@ impl Spec {
         // Tolerance-ensemble structural checks (board-independent; pattern
         // matching against real components happens in the runner).
         for t in &self.tolerances {
-            if !(t.percent > 0.0 && t.percent.is_finite()) {
+            // Upper bound < 100: the min corner is `nominal * (1 - percent/100)`,
+            // so percent == 100 stamps a 0-value part (dead short / open) and
+            // percent > 100 a NEGATIVE component value, both solved as an ordinary
+            // pass/fail over a physically-impossible circuit rather than rejected.
+            if !(t.percent > 0.0 && t.percent < 100.0 && t.percent.is_finite()) {
                 return Err(SpecError::Invalid(format!(
-                    "[[tolerance]] on '{}': percent must be a positive number, got {}",
+                    "[[tolerance]] on '{}': percent must be in (0, 100), got {}",
                     t.reference, t.percent
                 )));
             }
@@ -894,9 +898,9 @@ impl Spec {
         }
         for ov in &self.overrides {
             if let Some(p) = ov.tolerance {
-                if !(p > 0.0 && p.is_finite()) {
+                if !(p > 0.0 && p < 100.0 && p.is_finite()) {
                     return Err(SpecError::Invalid(format!(
-                        "override on '{}': tolerance must be a positive percentage, got {p}",
+                        "override on '{}': tolerance must be a percentage in (0, 100), got {p}",
                         ov.reference
                     )));
                 }
@@ -1458,6 +1462,27 @@ net = "VCC"
 min = 3.0
 "#
         )
+    }
+
+    #[test]
+    fn tolerance_percent_must_be_below_100() {
+        // R55: percent >= 100 makes the min corner `nominal*(1-percent/100)` a
+        // zero or NEGATIVE component value, stamped and solved as a physically
+        // impossible circuit. It must be rejected up front.
+        let spec = |p: &str| {
+            spec_from(&format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                 [[tolerance]]\nref = \"R1\"\npercent = {p}\n\
+                 [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n"
+            ))
+        };
+        for bad in ["100", "120", "250"] {
+            let err = spec(bad).validate().unwrap_err().to_string();
+            assert!(err.contains("percent"), "percent {bad} must be rejected: {err}");
+        }
+        // A realistic tolerance still validates.
+        assert!(spec("5").validate().is_ok(), "5% must pass");
+        assert!(spec("50").validate().is_ok(), "50% must pass");
     }
 
     #[test]
