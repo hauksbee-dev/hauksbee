@@ -963,3 +963,46 @@ fn controlled_impedance_ethernet_pair_targets_100_ohm() {
         f.message
     );
 }
+
+// ---------------------------------------------------------------------------
+// R45: pad-dedup in I2C bus-capacitance and pull-up counting.
+// ---------------------------------------------------------------------------
+
+/// A component with one SDA pad listed `copies` times on net 1 (an IPC-356
+/// both-sided through-hole access record lists the same pad more than once).
+fn double_listed_board(reference: &str, value: &str, copies: usize) -> ExtractedBoard {
+    let pins = (0..copies)
+        .map(|_| crate::Pin {
+            number: "5".into(),
+            net: Some(1),
+            function: "SDA".into(),
+            kind: String::new(),
+            position: None,
+        })
+        .collect();
+    ExtractedBoard {
+        name: "b".into(),
+        nets: vec![crate::Net { id: 1, name: "SDA".into() }],
+        components: vec![crate::Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins,
+        }],
+    }
+}
+
+#[test]
+fn bus_capacitance_dedups_a_double_listed_pad() {
+    // R45: counting raw net_members double-counted a both-sided through-hole pad's
+    // pin capacitance (2 devices instead of 1), inflating the I2C rise time enough
+    // to fire a spurious fast-mode finding. Dedup by (ref, pad number).
+    let board = double_listed_board("U1", "SENSOR", 2);
+    let (_pf, devices) = super::bus_capacitance_pf(&board, 1, None);
+    assert_eq!(devices, 1, "a doubly-listed pad must count as one device, not two");
+}

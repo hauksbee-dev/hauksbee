@@ -807,12 +807,20 @@ fn bus_capacitance_pf(
     net_id: i64,
     trace_len_mm: Option<f64>,
 ) -> (f64, usize) {
+    // Dedup by (reference, pad number): an IPC-356 both-sided through-hole access
+    // record lists the same pad twice, and counting raw net_members double-counts
+    // its pin capacitance (8 devices / 80 pF instead of 4 / 40 pF), inflating the
+    // I2C rise time enough to fire a false fast-mode finding. Same discipline as
+    // `connected_pads`.
+    let mut seen: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
     let mut devices = 0usize;
-    for (c, _p) in board.net_members(net_id) {
+    for (c, p) in board.net_members(net_id) {
         if is_resistor(c) || is_connector_like(c) {
             continue;
         }
-        devices += 1;
+        if seen.insert((c.reference.as_str(), p.number.as_str())) {
+            devices += 1;
+        }
     }
     let c_dev = devices as f64 * C_PIN_PF;
     let c_trace = trace_len_mm.unwrap_or(0.0) * 1.0; // 1.0 pF/mm, documented.

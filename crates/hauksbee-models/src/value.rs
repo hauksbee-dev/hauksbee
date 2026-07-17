@@ -77,13 +77,14 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     if is_jedec_semiconductor(v) {
         return None;
     }
-    // A value expressed purely in volts ("5V1", "3V3", "12V") is not an R/C/L
-    // magnitude — it is a zener/TVS breakdown or a rating. parse_inner would
-    // read "5V1" as 5.0 V (silently dropping the ".1") and, worse, returning
-    // Some() defeats the signal-diode fallback in the binder (which keys off
-    // parse_value() == None for non-passive values), leaving the part open.
-    // Return None so the diode/reference-class fallbacks handle it.
-    parse_inner(v).filter(|p| p.unit.as_deref() != Some("V"))
+    // A value expressed purely in volts ("5V1", "3V3", "12V") OR amperes ("5A",
+    // "500mA") is a RATING, not an R/C/L magnitude. Returning Some() for it defeats
+    // the callers that key off `parse_value() == None` for non-passive values — the
+    // signal-diode fallback (leaving the part open) and the connector-Ignore
+    // classification (binder.rs excludes BOTH V and A). It also lets a leading
+    // current token be mis-picked as the magnitude ("2A_22u" → 2 F instead of 22 uF).
+    // Filter both so V and A are treated identically everywhere.
+    parse_inner(v).filter(|p| !matches!(p.unit.as_deref(), Some("V") | Some("A")))
 }
 
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
@@ -921,6 +922,18 @@ mod tests {
             assert!(
                 parse_value(v).is_none(),
                 "pure-voltage value {v:?} must not parse as a magnitude"
+            );
+        }
+        // R45: a pure-CURRENT rating ("5A", "500mA") is likewise NOT an R/C/L
+        // magnitude — the binder excludes both V and A as non-passive, so a
+        // current-rated power connector ("J1 = 5A") must key off parse_value()==None
+        // just like a "12V" one, and a leading current token must not be mis-picked
+        // as the magnitude ("2A_22u" → 2 F). Filter A the same as V.
+        for v in ["5A", "500mA", "1A", "10A", "2.5A"] {
+            assert!(
+                parse_value(v).is_none(),
+                "pure-current rating {v:?} must not parse as a magnitude, got {:?}",
+                parse_value(v)
             );
         }
         // A capacitance with a voltage RATING annotation still parses (unit F).
