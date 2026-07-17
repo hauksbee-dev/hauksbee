@@ -68,7 +68,7 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
     let mut adc = Mcp3008::new(3.3);
     adc.set_channel(0, ch0_volts);
     let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(adc))));
-    engine.scheduler_mut().attach_spi_bus(bus.clone(), None);
+    engine.scheduler_mut().attach_spi_bus(bus.clone(), None, None);
 
     let frame_dt = 5e-3_f64;
     let n = (ms as f64 / 1000.0 / frame_dt).round() as usize;
