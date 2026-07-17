@@ -302,10 +302,18 @@ fn branch_constrainedness(branch: &str) -> u32 {
                     // and falling to the id order. A single-branch group (`(AB)`) is
                     // NOT an alternation and is not docked, so `(AB)` == `AB`.
                     let is_alt = split_top_level_alternation(&body).len() > 1;
-                    score += body_score.saturating_sub(if is_alt { 1 } else { 0 });
+                    let group_add = body_score.saturating_sub(if is_alt { 1 } else { 0 });
+                    score += group_add;
+                    // Make the group's WHOLE contribution the retractable atom, so a
+                    // following `*`/`?` cancels the entire group (plus the usual dock
+                    // unit), not just one unit. An optional group `(W)?` matches zero
+                    // chars; leaving last_atom=0 let `^1N4148(W)?$` (group +2, `?`
+                    // docked only 1 → net +1) out-score the exact `^1N4148$` override
+                    // — the same inversion R32/R42 close for `[..]*` and `(A|B)`.
+                    last_atom = group_add;
+                } else {
+                    last_atom = 0;
                 }
-                // A group is not a single cancellable atom.
-                last_atom = 0;
                 i = k; // the loop's `i += 1` steps past the matching ')'
             }
             '{' => {
@@ -508,6 +516,28 @@ mod tests {
         assert_eq!(
             pattern_constrainedness("^AB$|^ABCD$"),
             pattern_constrainedness("^AB$")
+        );
+    }
+
+    #[test]
+    fn optional_group_does_not_defeat_the_exact_override() {
+        // R44: a quantified single-branch group `(W)?` matches zero chars, so the
+        // `?` must retract the WHOLE group. Before, the group added 2 and the `?`
+        // docked only 1, so `^1N4148(W)?$` (15) out-scored the exact `^1N4148$` (14)
+        // override it carves out of — the inversion regex_specificity prevents.
+        assert!(
+            pattern_constrainedness("^1N4148$")
+                > pattern_constrainedness("^1N4148(W)?$"),
+            "the exact override must out-score the optional-group family"
+        );
+        // A REQUIRED group still counts (no quantifier): `(W)` == the bare literal.
+        assert_eq!(
+            pattern_constrainedness("^1N4148W$"),
+            pattern_constrainedness("^1N4148(W)$")
+        );
+        // An optional grouped ALTERNATION is also fully retracted by the `?`.
+        assert!(
+            pattern_constrainedness("^ABC$") > pattern_constrainedness("^ABC(D|E)?$")
         );
     }
 }

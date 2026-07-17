@@ -1022,6 +1022,11 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     let passive = classify_attach(term, Rp::Default, Cable::Passive).attach;
     let emarked = classify_attach(term, Rp::Default, Cable::emarked()).attach;
     let (level, headline) = usbc_verdict(term.shared_net, has_discrete_rd, passive, emarked);
+    let (level, headline) = apply_double_termination(
+        level,
+        headline,
+        audit.as_ref().is_some_and(|a| a.has_double_termination()),
+    );
 
     Some(UsbcReport {
         receptacles: audit.map(|a| a.receptacles).unwrap_or_default(),
@@ -1034,6 +1039,33 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
         level,
         headline,
     })
+}
+
+/// Escalate a would-be-Ok verdict to Info when the CC net is double-terminated.
+///
+/// The base verdict is derived only from the EXTERNAL Rd. A CC net that carries
+/// both an external discrete Rd AND a controller's internal Rd (e.g. nPM1300) is
+/// double-terminated: the effective Rd (~2.55k for two parallel 5.1k) is out of
+/// the 5.1k spec, dragging CC voltage out of range and making the source
+/// mis-detect current. That audit was computed but never influenced the verdict,
+/// so the defect graded Ok — invisible to `--json`, the web report, and `--strict`.
+/// Surfacing it as Info reaches every persona (web_gloss returns a section for
+/// Info) and denies a false "looks healthy". A Serious verdict is NOT downgraded.
+fn apply_double_termination(
+    level: UsbcLevel,
+    headline: String,
+    double_terminated: bool,
+) -> (UsbcLevel, String) {
+    if matches!(level, UsbcLevel::Ok) && double_terminated {
+        (
+            UsbcLevel::Info,
+            "CC net is double-terminated: an external Rd plus a controller's internal Rd put the \
+             effective Rd out of the 5.1k spec (CC voltage / current-advertisement out of range)."
+                .to_string(),
+        )
+    } else {
+        (level, headline)
+    }
 }
 
 /// The verdict decision, factored out as a pure function over the two cable
@@ -1509,6 +1541,25 @@ mod tests {
         let (lvl, msg) = usbc_verdict(false, true, Nothing, Nothing);
         assert_eq!(lvl, UsbcLevel::Serious);
         assert!(!msg.contains("Raspberry Pi 4"), "{msg}");
+    }
+
+    #[test]
+    fn double_termination_escalates_ok_to_info_and_reaches_every_surface() {
+        // R44: the double-termination audit was computed but never influenced the
+        // verdict, so an out-of-spec board (external Rd + a PMIC internal Rd) graded
+        // Ok — invisible to --json/--web/--strict and top-lined "looks healthy". A
+        // would-be-Ok verdict must escalate to Info (which web_gloss surfaces and
+        // which denies "healthy").
+        let (lvl, msg) = apply_double_termination(UsbcLevel::Ok, "healthy".into(), true);
+        assert_eq!(lvl, UsbcLevel::Info, "double-terminated Ok must become Info");
+        assert!(msg.contains("double-terminated"), "the headline must name the defect: {msg}");
+        // No double-termination → verdict untouched.
+        let (lvl, msg) = apply_double_termination(UsbcLevel::Ok, "healthy".into(), false);
+        assert_eq!(lvl, UsbcLevel::Ok);
+        assert_eq!(msg, "healthy");
+        // A Serious verdict is never DOWNGRADED by the escalation.
+        let (lvl, _) = apply_double_termination(UsbcLevel::Serious, "bad".into(), true);
+        assert_eq!(lvl, UsbcLevel::Serious);
     }
 
     #[test]

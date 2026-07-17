@@ -1032,8 +1032,13 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
     key == reference
         || key.strip_prefix(reference).is_some_and(|s| {
+            // `_q`/`_s`/`_e` are the binder's multi-unit suffixes (transistor,
+            // switch, and resistor/passive arrays). `_e` was omitted, so a
+            // package-level safety assert on a resistor array (`ref="RN1"`) could
+            // never catch an overheating `RN1_e2` element.
             s.strip_prefix("_q")
                 .or_else(|| s.strip_prefix("_s"))
+                .or_else(|| s.strip_prefix("_e"))
                 .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
         })
 }
@@ -1289,6 +1294,13 @@ mod tests {
         assert!(key_belongs_to_ref("SW1", "SW1_q1"));
         assert!(key_belongs_to_ref("SW1", "SW1_q12"));
         assert!(key_belongs_to_ref("SW1", "SW1_s0"));
+        // R44: `_e` is the binder's suffix for resistor/passive ARRAY units (RN1_e1),
+        // and it was omitted — so a package-level safety assert on an array's bare
+        // ref could never match its overheating element.
+        assert!(key_belongs_to_ref("RN1", "RN1_e1"));
+        assert!(key_belongs_to_ref("RN1", "RN1_e12"));
+        assert!(!key_belongs_to_ref("RN1", "RN1_e1a"));
+        assert!(!key_belongs_to_ref("RN1", "RN10_e1"));
         assert!(!key_belongs_to_ref("SW1", "SW10"));
         assert!(!key_belongs_to_ref("SW1", "SW10_q1"));
         assert!(!key_belongs_to_ref("SW1", "SW1_heater"));
