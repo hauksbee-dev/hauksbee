@@ -727,15 +727,39 @@ impl Scheduler {
     /// firmware's TWI activity and readable for assertions (EEPROM contents,
     /// sensor temperature).
     pub fn attach_i2c_bus(&mut self, bus: Arc<Mutex<I2cBus>>) {
-        let addresses = bus.lock().unwrap_or_else(|e| e.into_inner()).addresses();
+        self.i2c_buses.push(bus);
+        // The AVR core's `on_i2c` closure and `set_i2c_slave_addresses` are
+        // SINGLE-SLOT replacers, so a per-bus closure meant a second attach
+        // silently overwrote the first bus's dispatcher AND dropped its addresses
+        // from the TWI filter — the first bus went dead. Rebuild a MULTIPLEXING
+        // dispatcher and the address UNION from the full bus list on every attach
+        // (the last attach installs the complete handler). Each 7-bit address is
+        // owned by at most one bus, so route by address and dispatch only to the
+        // owner — never touching a sibling bus's state.
+        let all: Vec<Arc<Mutex<I2cBus>>> = self.i2c_buses.clone();
+        let addresses: Vec<u8> = all
+            .iter()
+            .flat_map(|b| b.lock().unwrap_or_else(|e| e.into_inner()).addresses())
+            .collect();
         for m in &mut self.mcus {
             m.core.set_i2c_slave_addresses(&addresses);
-            let b = bus.clone();
+            let buses = all.clone();
             m.core.on_i2c(Box::new(move |ev| {
-                b.lock().unwrap_or_else(|e| e.into_inner()).dispatch(ev)
+                let addr = match ev {
+                    hauksbee_mcu::I2cEvent::Start { addr, .. }
+                    | hauksbee_mcu::I2cEvent::Write { addr, .. }
+                    | hauksbee_mcu::I2cEvent::Read { addr }
+                    | hauksbee_mcu::I2cEvent::Stop { addr } => addr,
+                };
+                for b in &buses {
+                    let mut bus = b.lock().unwrap_or_else(|e| e.into_inner());
+                    if bus.addresses().contains(&addr) {
+                        return bus.dispatch(ev);
+                    }
+                }
+                None
             }));
         }
-        self.i2c_buses.push(bus);
     }
 
     /// Attach a SPI bus and register it as every live MCU's `on_spi` handler.
@@ -754,23 +778,20 @@ impl Scheduler {
         cs_net: Option<NodeId>,
     ) {
         bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
-        for m in &mut self.mcus {
-            let b = bus.clone();
-            m.core.on_spi(Box::new(move |ev| {
-                let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
-                if ev.deselect {
-                    // A backend-surfaced CS deassert (Renode hardware-NSS
-                    // FinishTransmission): the backend frames CS itself, so record
-                    // that (coverage reports `backend`) and end the transaction.
-                    guard.note_backend_deselect();
-                    0xFF
-                } else {
-                    guard.transfer(ev.mosi)
-                }
-            }));
-        }
         self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
+        // Rebuild a MULTIPLEXING `on_spi` across ALL attached buses. `on_spi` is a
+        // single-slot replacer on the AVR core, so a per-bus closure meant a second
+        // attach silently overwrote the first bus's transfer path — every byte then
+        // went to the last-attached slave regardless of which chip-select was
+        // asserted. Route each byte to the bus whose CS is currently asserted
+        // (`is_selected`); a lone bus is always routed to, preserving the
+        // single-slave path exactly (including before its first CS edge).
+        let all: Vec<Arc<Mutex<SpiBus>>> = self.spi_buses.clone();
+        for m in &mut self.mcus {
+            let buses = all.clone();
+            m.core.on_spi(Box::new(move |ev| dispatch_spi(&buses, ev)));
+        }
     }
 
     /// Attach a SPI bus to a specific named SPI controller.
@@ -810,6 +831,8 @@ impl Scheduler {
         self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
     }
+
+    // (dispatch_spi is a free fn below.)
 
     /// Install the live CS-framing hook for `bus` on whichever MCU actually
     /// drives `cs_pin` (05 §2.1). Registers the hook on the SINGLE owning MCU, so a
@@ -2726,6 +2749,39 @@ pub struct StepResult {
 /// For the QEMU backend the firmware path is the merged flash image, which QEMU
 /// boots from at spawn; there is no separate load step (the trait's
 /// `load_firmware` is a no-op for QEMU).
+/// Route one SPI byte to the correct bus among all attached slaves (05 §2.3).
+///
+/// A single bus is always the target — this is the single-slave path and it must
+/// stay byte-for-byte identical to the pre-multiplexing behaviour, even before
+/// the bus has seen its first CS edge. With two or more buses, dispatch to the
+/// first bus whose CS is currently asserted (`is_selected`); if none is selected
+/// (all deasserted between transactions) the bus is idle and MISO floats high
+/// (`0xFF`). At most one bus lock is held at a time, preserving the
+/// McuShared→SpiBus lock order.
+fn dispatch_spi(buses: &[std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>], ev: hauksbee_mcu::SpiEvent) -> u8 {
+    let apply = |bus: &std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>| -> u8 {
+        let mut g = bus.lock().unwrap_or_else(|e| e.into_inner());
+        if ev.deselect {
+            // A backend-surfaced CS deassert (Renode hardware-NSS
+            // FinishTransmission): the backend frames CS itself, so record that
+            // (coverage reports `backend`) and end the transaction.
+            g.note_backend_deselect();
+            0xFF
+        } else {
+            g.transfer(ev.mosi)
+        }
+    };
+    if buses.len() == 1 {
+        return apply(&buses[0]);
+    }
+    for b in buses {
+        if b.lock().unwrap_or_else(|e| e.into_inner()).is_selected() {
+            return apply(b);
+        }
+    }
+    0xFF
+}
+
 fn instantiate_mcu(
     binding: &McuBinding,
     firmware: Option<&std::path::Path>,
@@ -3995,6 +4051,258 @@ mod tests {
         };
         assert_eq!(frames(0), 0, "the unrelated first tuple-owner MCU must NOT be framed");
         assert_eq!(frames(1), 1, "the MCU that drives the CS net must be framed");
+    }
+
+    // ── Multi-bus on_i2c / on_spi dispatch (R47) ─────────────────────────────
+
+    /// A mock core that CAPTURES the callbacks the scheduler installs (instead
+    /// of discarding them like [`RecordingCore`]), so a test can drive them
+    /// exactly the way firmware traffic would. Mirrors the AVR core's
+    /// single-slot semantics: each `on_*` call REPLACES the stored callback,
+    /// and `set_i2c_slave_addresses` replaces the recorded filter — which is
+    /// precisely the overwrite behavior the multi-bus dispatch must survive.
+    #[derive(Default)]
+    struct CapturingCore {
+        i2c_cb: Arc<Mutex<Option<Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>>>>,
+        spi_cb: Arc<Mutex<Option<Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>>>>,
+        pin_cb: Arc<Mutex<Option<Box<dyn FnMut(PinId, bool, u64) + Send>>>>,
+        i2c_addrs: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Mcu for CapturingCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {
+            *self.pin_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        }
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {
+            *self.i2c_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        }
+        fn on_spi(&mut self, cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {
+            *self.spi_cb.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+        }
+        fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
+            *self.i2c_addrs.lock().unwrap_or_else(|e| e.into_inner()) = addresses.to_vec();
+        }
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+    }
+
+    /// Wire one `CapturingCore` MCU (with GPIO drivers for the given pins, on
+    /// per-pin fresh nets) onto a solvable board. Returns the scheduler plus
+    /// the captured-callback handles.
+    fn sched_with_capturing_core(
+        pins: &[(char, u8)],
+    ) -> (Scheduler, CapturingCore) {
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut gpio_drivers = HashMap::new();
+        for &pin in pins {
+            let name = format!("CS_{}{}", pin.0, pin.1);
+            let node = sched.circuit.node(&name);
+            let drv = crate::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                node,
+                &name,
+                &format!("t_{}{}", pin.0, pin.1),
+                crate::drivers::DEFAULT_RO,
+            );
+            gpio_drivers.insert(pin, drv);
+        }
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+        let core = CapturingCore::default();
+        let handles = CapturingCore {
+            i2c_cb: core.i2c_cb.clone(),
+            spi_cb: core.spi_cb.clone(),
+            pin_cb: core.pin_cb.clone(),
+            i2c_addrs: core.i2c_addrs.clone(),
+        };
+        sched.mcus.push(core_with_hooks(Box::new(core), binding));
+        sched.responder_registries.push(None);
+        (sched, handles)
+    }
+
+    /// Regression (R47): `Mcu::on_i2c` and `set_i2c_slave_addresses` are
+    /// SINGLE-SLOT on the core, so the old per-bus closure meant a second
+    /// `attach_i2c_bus` silently disconnected the first bus — its slave never
+    /// saw firmware traffic and its addresses vanished from the TWI filter.
+    /// The dispatcher must route each event by its 7-bit address to the bus
+    /// that owns it, and the filter must be the union across attached buses.
+    #[test]
+    fn attach_two_i2c_buses_routes_firmware_bytes_by_address() {
+        use crate::peripherals::i2c::Eeprom24c;
+        use hauksbee_mcu::I2cEvent as E;
+
+        let (mut sched, h) = sched_with_capturing_core(&[]);
+        let bus1 = Arc::new(Mutex::new(
+            I2cBus::new("U2").with_slave(Box::new(Eeprom24c::new(0x50, 64))),
+        ));
+        let bus2 = Arc::new(Mutex::new(
+            I2cBus::new("U3").with_slave(Box::new(Eeprom24c::new(0x48, 64))),
+        ));
+        sched.attach_i2c_bus(bus1.clone());
+        sched.attach_i2c_bus(bus2.clone());
+
+        // TWI address filter: the LAST install (the one the core keeps) must
+        // carry BOTH buses' addresses, not just the last-attached bus's.
+        let addrs = h.i2c_addrs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            addrs.contains(&0x50) && addrs.contains(&0x48),
+            "TWI filter must be the union of all attached buses' addresses, got {addrs:#04x?}"
+        );
+
+        // Firmware writes 0xAB at word address 0 of the FIRST bus's EEPROM.
+        let mut slot = h.i2c_cb.lock().unwrap_or_else(|e| e.into_inner());
+        let cb = slot.as_mut().expect("on_i2c handler installed");
+        cb(E::Start { addr: 0x50, read: false });
+        cb(E::Write { addr: 0x50, data: 0x00 });
+        cb(E::Write { addr: 0x50, data: 0x00 });
+        cb(E::Write { addr: 0x50, data: 0xAB });
+        cb(E::Stop { addr: 0x50 });
+        // ... and reads it back (repeated START read).
+        cb(E::Start { addr: 0x50, read: false });
+        cb(E::Write { addr: 0x50, data: 0x00 });
+        cb(E::Write { addr: 0x50, data: 0x00 });
+        cb(E::Start { addr: 0x50, read: true });
+        let read_back = cb(E::Read { addr: 0x50 });
+        cb(E::Stop { addr: 0x50 });
+        drop(slot);
+
+        let b1 = bus1.lock().unwrap_or_else(|e| e.into_inner());
+        let b2 = bus2.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            b1.slave::<Eeprom24c>(0x50).expect("eeprom@0x50").contents()[0],
+            0xAB,
+            "the FIRST-attached bus must receive firmware dispatch for its address"
+        );
+        assert_eq!(
+            read_back,
+            Some(0xAB),
+            "a firmware READ from the first bus's slave must answer"
+        );
+        assert!(
+            b2.slave::<Eeprom24c>(0x48).expect("eeprom@0x48").contents().iter().all(|&b| b == 0xFF),
+            "the second bus's slave must be untouched by traffic addressed to the first"
+        );
+    }
+
+    /// Regression (R47): `Mcu::on_spi` is SINGLE-SLOT, so the old per-bus
+    /// closure meant a second `attach_spi_bus` silently disconnected the
+    /// first — every firmware byte went to the LAST-attached slave regardless
+    /// of which chip-select was asserted. The dispatcher must forward each
+    /// byte to the bus whose CS is currently asserted (per its cs_frame).
+    #[test]
+    fn attach_two_spi_buses_routes_bytes_to_the_cs_selected_bus() {
+        struct RecSlave {
+            got: Arc<Mutex<Vec<u8>>>,
+            miso: u8,
+        }
+        impl crate::peripherals::spi::SpiSlave for RecSlave {
+            fn transfer(&mut self, mosi: u8) -> u8 {
+                self.got.lock().unwrap_or_else(|e| e.into_inner()).push(mosi);
+                self.miso
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let cs1 = ('C', 0u8);
+        let cs2 = ('C', 1u8);
+        let (mut sched, h) = sched_with_capturing_core(&[cs1, cs2]);
+        let got1 = Arc::new(Mutex::new(Vec::new()));
+        let got2 = Arc::new(Mutex::new(Vec::new()));
+        let bus1 = Arc::new(Mutex::new(SpiBus::new(
+            "U2",
+            Box::new(RecSlave { got: got1.clone(), miso: 0x5A }),
+        )));
+        let bus2 = Arc::new(Mutex::new(SpiBus::new(
+            "U3",
+            Box::new(RecSlave { got: got2.clone(), miso: 0xA5 }),
+        )));
+        sched.attach_spi_bus(bus1, Some(cs1), None);
+        sched.attach_spi_bus(bus2, Some(cs2), None);
+
+        let edge = |pin: (char, u8), high: bool| {
+            let mut slot = h.pin_cb.lock().unwrap_or_else(|e| e.into_inner());
+            (slot.as_mut().expect("on_pin_change installed"))(
+                PinId { port: pin.0, bit: pin.1 },
+                high,
+                0,
+            );
+        };
+        let xfer = |mosi: u8| -> u8 {
+            let mut slot = h.spi_cb.lock().unwrap_or_else(|e| e.into_inner());
+            (slot.as_mut().expect("on_spi handler installed"))(hauksbee_mcu::SpiEvent {
+                mosi,
+                deselect: false,
+                cycle: 0,
+            })
+        };
+        let bytes = |g: &Arc<Mutex<Vec<u8>>>| g.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+        // Firmware asserts the FIRST slave's CS (active-low falling edge) and
+        // clocks a byte: it must reach slave 1, not slave 2, and slave 1's
+        // MISO byte must come back.
+        edge(cs1, false);
+        let miso = xfer(0x42);
+        assert_eq!(
+            bytes(&got1),
+            vec![0x42],
+            "the byte must reach the FIRST bus's slave (its CS is asserted)"
+        );
+        assert!(
+            bytes(&got2).is_empty(),
+            "the deselected second slave must see no traffic, got {:02x?}",
+            bytes(&got2)
+        );
+        assert_eq!(miso, 0x5A, "MISO must come from the selected (first) slave");
+
+        // Deselect the first, select the second: bytes now route to slave 2.
+        edge(cs1, true);
+        edge(cs2, false);
+        let miso = xfer(0x99);
+        assert_eq!(bytes(&got2), vec![0x99], "byte must follow the newly asserted CS");
+        assert_eq!(bytes(&got1), vec![0x42], "the deselected first slave must see nothing more");
+        assert_eq!(miso, 0xA5, "MISO must come from the selected (second) slave");
     }
 
     // ── run_micros integer-carry + failure accounting (SCHED-1 / SCHED-2) ────
