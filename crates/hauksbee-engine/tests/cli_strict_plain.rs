@@ -404,6 +404,13 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
         stdout.contains("copper checks below are unaffected"),
         "the heads-up must keep the copper verdict trustworthy; got:\n{stdout}"
     );
+    // R39: the heads-up must point at a REAL flag. It used to say "run --bind",
+    // but the bind table is produced by `--report` — following "--bind" errors
+    // with clap's "unexpected argument". The guidance must name --report.
+    assert!(
+        stdout.contains("--report") && !stdout.contains("--bind"),
+        "the bind-table heads-up must reference the real --report flag, not --bind; got:\n{stdout}"
+    );
 }
 
 #[test]
