@@ -196,9 +196,11 @@ fn rail_voltage(name: &str) -> Option<f64> {
                 Some(v)
             } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
                 Some(5.0)
-            } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
+            } else if (n.contains("3V3") || n.contains("3.3V") || n.contains("3P3"))
+                && !has_signal_role_token(&n)
+            {
                 Some(3.3)
-            } else if n.contains("1V8") {
+            } else if n.contains("1V8") && !has_signal_role_token(&n) {
                 Some(1.8)
             } else if n == "VBAT"
                 || n.ends_with("/VBAT")
@@ -211,6 +213,30 @@ fn rail_voltage(name: &str) -> Option<f64> {
             }
         }
     }
+}
+
+/// True when a rail-named net carries an enable/status/monitor/select token,
+/// making it a SIGNAL net (`3V3_EN`, `1V8_PG`, `3V3_SEL`, `3V3_DET`), not the
+/// rail itself. The `numeric_rail_magnitude` full-consumption guard catches
+/// these for the pure `<digits>V<digits>` grammar, but the loose `contains`
+/// fallbacks (3V3/1V8) need the same protection or a divider tapping such a
+/// sense net is miscounted as a pull-up and a genuine finding is suppressed.
+fn has_signal_role_token(n: &str) -> bool {
+    n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
+        matches!(
+            t,
+            "EN" | "ENABLE"
+                | "PG" | "PGOOD" | "POWERGOOD" | "GOOD"
+                | "SEL" | "SELECT"
+                | "DET" | "DETECT"
+                | "MON" | "MONITOR"
+                | "STAT" | "STATUS"
+                | "FLT" | "FAULT"
+                | "INT" | "IRQ"
+                | "RST" | "RESET"
+                | "CTRL" | "CTL"
+        )
+    })
 }
 
 /// A rail whose name carries its own numeric magnitude: an optional leading
@@ -1449,11 +1475,24 @@ mod rail_and_cap_tests {
         assert_eq!(rail_voltage("5V_DETECT"), None);
         assert_eq!(rail_voltage("12V_PG"), None);
         assert_eq!(rail_voltage("24V_MON"), None);
+        // R50: the 5V branch had a rail-context guard but the 3V3/1V8 loose
+        // `contains` fallbacks did not, so a `3V3_EN` / `1V8_PG` signal net (which
+        // fails the numeric-rail full-consumption check and drops to the fallback)
+        // still read as a rail — suppressing a genuine missing-pull-up finding
+        // when a divider tapped it. The signal-role token must disqualify them.
+        assert_eq!(rail_voltage("3V3_EN"), None);
+        assert_eq!(rail_voltage("1V8_EN"), None);
+        assert_eq!(rail_voltage("3V3_PG"), None);
+        assert_eq!(rail_voltage("3V3_SEL"), None);
+        assert_eq!(rail_voltage("1V8_PGOOD"), None);
         // Genuine numeric rails (whole name consumed) still resolve.
         assert_eq!(rail_voltage("5V"), Some(5.0));
         assert_eq!(rail_voltage("3V3"), Some(3.3));
         assert_eq!(rail_voltage("+12V"), Some(12.0));
         assert_eq!(rail_voltage("15V0"), Some(15.0));
+        // A rail name that EMBEDS 3V3 without a signal role is still a rail.
+        assert_eq!(rail_voltage("MCU_3V3"), Some(3.3));
+        assert_eq!(rail_voltage("VCC_3V3"), Some(3.3));
     }
 
     #[test]

@@ -1020,3 +1020,18 @@ fn fast_mode_name_is_whole_token_not_substring() {
     assert!(!super::is_fast_mode_name("CONFIRM_SCL"), "CONFIRM must not match FM");
     assert!(!super::is_fast_mode_name("SDA"), "a plain SDA bus defaults to standard mode");
 }
+
+#[test]
+fn si_rail_voltage_rejects_signal_named_rails() {
+    // R50: the loose 3V3/1V8 `contains` fallbacks in si.rs rail_voltage (a
+    // duplicate of netlint's) had no signal-role guard, so a `3V3_EN` enable net
+    // read as a 3.3V rail — miscounting a resistor tapping it as an I2C pull-up
+    // and suppressing a genuine MissingI2cPullup finding.
+    assert_eq!(super::rail_voltage("3V3_EN"), None);
+    assert_eq!(super::rail_voltage("1V8_PG"), None);
+    assert_eq!(super::rail_voltage("3V3_SEL"), None);
+    // Genuine rails still resolve.
+    assert_eq!(super::rail_voltage("3V3"), Some(3.3));
+    assert_eq!(super::rail_voltage("+1V8"), Some(1.8));
+    assert_eq!(super::rail_voltage("MCU_3V3"), Some(3.3));
+}
