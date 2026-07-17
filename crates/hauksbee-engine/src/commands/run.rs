@@ -139,12 +139,7 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let mut nets: Vec<String> = bound.net_names.clone();
         nets.sort();
         if cfg.json {
-            let body = nets
-                .iter()
-                .map(|n| format!("{n:?}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            println!("[{body}]");
+            println!("{}", list_nets_json(&nets));
         } else {
             eprintln!("{} net(s):", nets.len());
             for n in &nets {
@@ -644,6 +639,16 @@ fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
     !quiet && !json && stdout_is_tty
 }
 
+/// The `--list-nets --json` array, serialized through serde_json rather than
+/// Rust `Debug`. The two agree on the common escapes but diverge on control
+/// characters — Debug emits variable-length brace-hex, whereas JSON mandates a
+/// fixed four-hex-digit escape — so a net name carrying a control char from a
+/// malformed/adversarial netlist would make the hand-`Debug`-assembled array a
+/// document no JSON parser accepts. This is pure so it is unit-testable.
+fn list_nets_json(nets: &[String]) -> String {
+    serde_json::to_string(nets).unwrap_or_else(|_| "[]".into())
+}
+
 /// The single gate every chatty informational note routes through, so `--quiet`
 /// (and JSON / non-TTY suppression) is honoured uniformly and future notes
 /// inherit the behaviour by going through here instead of a bare `eprintln!`.
@@ -740,6 +745,31 @@ fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
     eprintln!("  If they are part of the same product, check each one separately.");
 }
 
+
+#[cfg(test)]
+mod list_nets_json_tests {
+    use super::list_nets_json;
+
+    #[test]
+    fn control_char_net_names_emit_valid_json() {
+        // R51: the array was hand-assembled with `format!("{n:?}")`, so a net name
+        // carrying a control char (e.g. U+0007 from a malformed netlist) produced
+        // `\u{7}` — valid Rust Debug but invalid JSON. serde_json must emit a
+        // document every JSON parser accepts.
+        let nets = vec![
+            "GND".to_string(),
+            "bell\u{7}x".to_string(),
+            "esc\u{1b}end".to_string(),
+            "nét".to_string(),
+        ];
+        let out = list_nets_json(&nets);
+        // The output must round-trip through a strict JSON parser back to the
+        // original names — the base bug's `\u{7}` form fails to parse here.
+        let parsed: Vec<String> =
+            serde_json::from_str(&out).expect("list-nets --json must be valid JSON");
+        assert_eq!(parsed, nets);
+    }
+}
 
 #[cfg(test)]
 mod notes_gate_tests {

@@ -1035,3 +1035,18 @@ fn si_rail_voltage_rejects_signal_named_rails() {
     assert_eq!(super::rail_voltage("+1V8"), Some(1.8));
     assert_eq!(super::rail_voltage("MCU_3V3"), Some(3.3));
 }
+
+#[test]
+fn si_rail_voltage_resolves_numeric_rails_like_netlint() {
+    // R51: si.rs rail_voltage handled bare "3V0" but not "5V0" and lacked
+    // netlint's numeric_rail_magnitude, so a pull-up returning to a bare "5V0" /
+    // "+12V" / "24V" rail was not seen as rail-like and the I2C rise-time audit
+    // was silently skipped — a --si vs --lint disagreement.
+    assert_eq!(super::rail_voltage("5V0"), Some(5.0));
+    assert_eq!(super::rail_voltage("+12V"), Some(12.0));
+    assert_eq!(super::rail_voltage("24V"), Some(24.0));
+    assert_eq!(super::rail_voltage("+15V0"), Some(15.0));
+    // The numeric grammar must still reject signal-tagged names.
+    assert_eq!(super::rail_voltage("5V0_EN"), None);
+    assert_eq!(super::rail_voltage("12V_PG"), None);
+}
