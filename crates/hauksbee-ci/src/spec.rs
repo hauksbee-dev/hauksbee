@@ -453,10 +453,10 @@ impl PeripheralSpec {
                 KINDS.join("|")
             )));
         }
-        // Net-attached controls and sinks need an attachment.
+        // Net-attached controls need an attachment.
         let needs_net = matches!(
             self.kind.as_str(),
-            "pushbutton" | "toggle" | "potentiometer" | "encoder" | "stimulus" | "vcd_sink"
+            "pushbutton" | "toggle" | "potentiometer" | "encoder" | "stimulus"
         );
         if needs_net
             && self.net.is_none()
@@ -467,6 +467,16 @@ impl PeripheralSpec {
             return Err(SpecError::Invalid(format!(
                 "peripheral '{}' ({}) needs a `net`, a `ref`+`pin`, or `nets`",
                 self.id, self.kind
+            )));
+        }
+        // A vcd_sink logs the signals named in `nets` — and the runtime reads
+        // ONLY `p.nets` (never `net`/`ref`/`net_a`). A singular `net = "CLK"` (the
+        // natural mistake, since every other control uses `net`) would validate
+        // here and then log an EMPTY waveform with no diagnostic. Require `nets`.
+        if self.kind == "vcd_sink" && self.nets.as_ref().map_or(true, |n| n.is_empty()) {
+            return Err(SpecError::Invalid(format!(
+                "peripheral '{}' (vcd_sink) needs `nets = [...]` (the signals to log); a singular `net` is not read by the sink",
+                self.id
             )));
         }
         Ok(())
@@ -1709,6 +1719,31 @@ for_max_ms = 2.0
 "#,
         );
         assert!(ok.validate().is_ok(), "dip_below with a for_max_ms partner must pass");
+    }
+
+    #[test]
+    fn vcd_sink_with_singular_net_is_rejected() {
+        // R42: attach_peripherals reads a vcd_sink's logged signals ONLY from
+        // `p.nets`. A singular `net = "CLK"` (the natural mistake — every other
+        // control uses `net`) validated clean and then logged an EMPTY waveform
+        // with no diagnostic. vcd_sink must require `nets`.
+        let assert_block =
+            "\n[[assert]]\nkind=\"voltage\"\nnet=\"VCC\"\nmin=3.0\n";
+        let bad = spec_from(&format!(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnet=\"CLK\"\nvcd_path=\"w.vcd\"\n{assert_block}"
+        ));
+        let err = bad
+            .validate()
+            .expect_err("a vcd_sink with a singular `net` must fail, not log an empty VCD");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("nets")),
+            "the error must point the user at `nets`, got {err:?}"
+        );
+        // The correct plural `nets` form validates.
+        let ok = spec_from(&format!(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnets=[\"CLK\"]\nvcd_path=\"w.vcd\"\n{assert_block}"
+        ));
+        assert!(ok.validate().is_ok(), "a vcd_sink with `nets = [...]` must pass: {:?}", ok.validate());
     }
 
     #[test]

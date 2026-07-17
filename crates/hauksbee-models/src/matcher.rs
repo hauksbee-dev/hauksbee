@@ -214,69 +214,104 @@ fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
 /// Constrainedness of a single alternation-free branch (see
 /// [`pattern_constrainedness`] for the character weights).
 fn branch_constrainedness(branch: &str) -> u32 {
+    let cs: Vec<char> = branch.chars().collect();
     let mut score = 0u32;
-    let mut chars = branch.chars().peekable();
-    let mut in_class = false;
-    // Constrainedness contributed by the most recent quantifiable atom, so a
-    // following `*` / `?` (which allow ZERO occurrences) can retract it: an
-    // optional token matches nothing and constrains nothing. Without this an
-    // optional tail like `[A-Z0-9-]*` inflated a family pattern's score above the
-    // exact `^1N4148$` override it carves out of, letting the broad entry win the
-    // same-layer specificity tie and bind the wrong (generic) params.
     let mut last_atom: u32 = 0;
-    while let Some(c) = chars.next() {
-        if in_class {
-            match c {
-                '\\' => {
-                    chars.next();
+    let mut i = 0;
+    while i < cs.len() {
+        match cs[i] {
+            '\\' => {
+                i += 1;
+                match cs.get(i) {
+                    Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => {
+                        score += 1;
+                        last_atom = 1;
+                    }
+                    Some(_) => {
+                        score += 2;
+                        last_atom = 2;
+                    }
+                    None => {}
                 }
-                ']' => in_class = false,
-                _ => {}
             }
-            continue;
-        }
-        match c {
-            '\\' => match chars.next() {
-                // Escaped class: pins one position, admits several chars.
-                Some('d' | 'D' | 'w' | 'W' | 's' | 'S') => {
-                    score += 1;
-                    last_atom = 1;
-                }
-                // Escaped metacharacter: a literal.
-                Some(_) => {
-                    score += 2;
-                    last_atom = 2;
-                }
-                None => {}
-            },
             '[' => {
-                in_class = true;
                 score += 1;
                 last_atom = 1;
+                i += 1;
+                while i < cs.len() {
+                    match cs[i] {
+                        '\\' => i += 1,
+                        ']' => break,
+                        _ => {}
+                    }
+                    i += 1;
+                }
             }
             '(' => {
-                // Skip inline flags: `(?i)` scores nothing, `(?i:` / `(?:`
-                // fall through so the group body is scored normally.
-                if chars.peek() == Some(&'?') {
-                    chars.next();
-                    while let Some(&n) = chars.peek() {
-                        chars.next();
-                        if n == ':' || n == ')' {
-                            break;
-                        }
+                // Inline flags `(?i)` score nothing; a capturing `(...)` or
+                // non-capturing `(?:...)` group is scored by RECURSING on its body
+                // via [`pattern_constrainedness`], which splits the body's
+                // top-level `|` and takes the LOOSEST (min) arm. This is the whole
+                // point of the docstring ("an alternation is only as specific as
+                // its loosest arm"): the earlier char scanner never split a
+                // group-nested alternation, so each internal `|` and every arm's
+                // literals were summed, inflating a grouped-alternation family far
+                // above the exact override it carves out of and inverting the
+                // same-layer tie-break.
+                let mut body_start = i + 1;
+                let mut flags_only = false;
+                if cs.get(body_start) == Some(&'?') {
+                    let mut j = body_start + 1;
+                    while j < cs.len() && cs[j] != ':' && cs[j] != ')' {
+                        j += 1;
                     }
+                    if cs.get(j) == Some(&')') {
+                        flags_only = true;
+                    }
+                    body_start = j + 1; // past the ':' (or past ')' when flags-only)
+                }
+                // Find the matching ')' (skip classes and escapes).
+                let mut depth = 1i32;
+                let mut k = i + 1;
+                let mut in_cls = false;
+                while k < cs.len() {
+                    match cs[k] {
+                        '\\' => k += 1,
+                        '[' if !in_cls => in_cls = true,
+                        ']' if in_cls => in_cls = false,
+                        '(' if !in_cls => depth += 1,
+                        ')' if !in_cls => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                if !flags_only && body_start < k {
+                    let body: String = cs[body_start..k].iter().collect();
+                    let body_score = pattern_constrainedness(&body);
+                    // A grouped ALTERNATION matches a superset of any single arm,
+                    // so it is strictly LOOSER than the exact override that pins one
+                    // arm — dock one looseness unit below the loosest arm, exactly
+                    // as `*`/`?` dock an optional region. This lets a dedicated
+                    // exact override (`^ZZ904$`) deterministically beat the family
+                    // (`^(ZZ901|…|ZZ905)$`) it carves out of, instead of merely tying
+                    // and falling to the id order. A single-branch group (`(AB)`) is
+                    // NOT an alternation and is not docked, so `(AB)` == `AB`.
+                    let is_alt = split_top_level_alternation(&body).len() > 1;
+                    score += body_score.saturating_sub(if is_alt { 1 } else { 0 });
                 }
                 // A group is not a single cancellable atom.
                 last_atom = 0;
+                i = k; // the loop's `i += 1` steps past the matching ')'
             }
             '{' => {
-                // Repetition count `{m,n}`: contributes nothing, and consumes the
-                // atom so a following lazy `?` cannot retract it.
-                while let Some(&n) = chars.peek() {
-                    chars.next();
-                    if n == '}' {
-                        break;
-                    }
+                i += 1;
+                while i < cs.len() && cs[i] != '}' {
+                    i += 1;
                 }
                 last_atom = 0;
             }
@@ -284,14 +319,6 @@ fn branch_constrainedness(branch: &str) -> u32 {
                 score += 1;
                 last_atom = 0;
             }
-            // `*` and `?` make the PRECEDING atom optional (zero occurrences ok):
-            // retract what that atom added AND dock one looseness unit, so a
-            // pattern carrying an optional region is strictly LESS constrained
-            // than the same pattern without it (it matches a superset). This is
-            // what lets the exact override `^1N4148$` (14) deterministically beat
-            // the family `^1N4148[A-Z0-9-]*$` (13) it carves out of, rather than
-            // merely tie it and fall to the id tiebreak. `+` requires at least one
-            // occurrence, so it still constrains and is not retracted.
             '*' | '?' => {
                 score = score.saturating_sub(last_atom + 1);
                 last_atom = 0;
@@ -304,6 +331,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                 last_atom = 2;
             }
         }
+        i += 1;
     }
     score
 }
@@ -453,5 +481,33 @@ mod tests {
         );
         // Wildcards still score nothing.
         assert!(pattern_constrainedness("^ABC$") > pattern_constrainedness("^AB.$"));
+    }
+
+    #[test]
+    fn grouped_alternation_does_not_defeat_the_exact_override() {
+        // R42: an alternation nested inside a group `(A|B|C)` was never split, so
+        // each internal `|` and every arm's literals were summed — inflating a
+        // grouped-alternation FAMILY far above the exact override it carves out of,
+        // so the broad family won the same-layer regex tie-break and bound the
+        // wrong params. The group is now scored as its loosest arm, docked one unit
+        // (it matches a superset of any single arm), so the exact override wins.
+        assert!(
+            pattern_constrainedness("^ZZ904$")
+                > pattern_constrainedness("^(ZZ901|ZZ902|ZZ903|ZZ904|ZZ905)$"),
+            "the exact override must out-score the grouped-alternation family"
+        );
+        // The gross inflation is gone: the family no longer exceeds the exact.
+        assert!(
+            pattern_constrainedness("^(BC846|BC847|BC848)$")
+                < pattern_constrainedness("^BC847$"),
+            "a grouped family must not out-score the exact arm it carves out of"
+        );
+        // A single-branch group is NOT an alternation and is not docked.
+        assert_eq!(pattern_constrainedness("(AB)"), pattern_constrainedness("AB"));
+        // A top-level alternation is still scored as its loosest arm (no group).
+        assert_eq!(
+            pattern_constrainedness("^AB$|^ABCD$"),
+            pattern_constrainedness("^AB$")
+        );
     }
 }
