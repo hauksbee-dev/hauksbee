@@ -542,3 +542,27 @@ fn floating_bare_trailing_n_reset_fires_high() {
         assert_eq!(r.findings[0].severity, Severity::High);
     }
 }
+
+/// R46: control_role listed active-low reset (RSTN/RESETN) but not the equally
+/// common active-low chip-select CSN/SSN (the nRF24L01 SPI select pin name), so a
+/// floating CSN input was silently unflagged while an identically-structured RSTN
+/// on the same net fired. Both must fire.
+#[test]
+fn floating_active_low_chip_select_fires_high() {
+    for func in ["CSN", "SSN"] {
+        let comps = r#"
+    (comp (ref U4) (value NRF24L01) (footprint Package:QFN))"#;
+        let nets = format!(
+            r#"
+    (net (code 11) (name "SPI_CS")
+      (node (ref U4) (pin 8) (pinfunction "{func}") (pintype "input")))"#
+        );
+        let r = lint(comps, &nets);
+        assert_eq!(
+            count(&r, LintCheck::FloatingControlPin),
+            1,
+            "a floating active-low chip-select spelled '{func}' must fire"
+        );
+        assert_eq!(r.findings[0].severity, Severity::High);
+    }
+}
