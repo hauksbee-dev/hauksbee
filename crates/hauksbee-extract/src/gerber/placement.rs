@@ -396,7 +396,12 @@ pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
             "partno",
             "part",
         ],
-    );
+    )
+    // "part" is also a REFDES alias, so a two-column "Part,Value" BOM would resolve
+    // both ref_col and mpn_col to the same column and every row's mpn would become
+    // the reference designator. Exclude the already-chosen ref column, mirroring
+    // how fit_col excludes dnp_col.
+    .filter(|c| Some(*c) != ref_col);
     let dnp_col = find_col(&headers, &["dnp", "dnf", "donotpopulate", "noload"]);
     let fit_col = find_col(&headers, &["fitted", "populate", "assemble", "mount"])
         .filter(|c| Some(*c) != dnp_col);
@@ -530,6 +535,21 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let b = parse_bom(csv);
         assert!(!b.get("R1").unwrap().dnp, "Fitted:Yes is populated");
         assert!(b.get("R2").unwrap().dnp, "Fitted:No is do-not-populate");
+    }
+
+    #[test]
+    fn bom_part_header_does_not_pollute_mpn_with_the_refdes() {
+        // R42: "part" is an alias for BOTH the refdes and MPN columns. A
+        // two-column "Part,Value" BOM resolved both to the same column, so every
+        // row's mpn became the reference designator (e.g. "R1") instead of an
+        // actual part number. mpn_col must exclude the already-chosen ref column.
+        let b = parse_bom("Part,Value\nR1,10k\nC2,100n\n");
+        assert_eq!(b.get("R1").unwrap().value, "10k");
+        assert!(b.get("R1").unwrap().mpn.is_empty(), "mpn must be empty, not the refdes 'R1'");
+        assert!(b.get("C2").unwrap().mpn.is_empty(), "mpn must be empty, not the refdes 'C2'");
+        // A real separate MPN column is still read.
+        let b2 = parse_bom("Part,Value,MPN\nR1,10k,RC0402\n");
+        assert_eq!(b2.get("R1").unwrap().mpn, "RC0402");
     }
 
     #[test]

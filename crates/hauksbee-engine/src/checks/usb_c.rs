@@ -855,10 +855,14 @@ fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::Hash
 fn is_dc_bridge(comp: &hauksbee_extract::Component) -> bool {
     let r = comp.reference.to_ascii_uppercase();
     let v = comp.value.to_ascii_uppercase();
-    // 0 Ω resistor.
+    // 0 Ω resistor. Accept the R-as-decimal-point markings too: "0R", "0R0",
+    // "0.0R" (IEC 60062) all mean 0 Ω but only "0R"/"0"/"0.0" were recognised —
+    // "0R0"/"0.0R" (R mid-string / trailing) fell through, so a CC bridge marked
+    // "0R0" was not unioned. Normalise 'R' to a decimal point and parse.
     if is_resistor(comp) {
-        let v0 = v.trim_end_matches('R').trim_end_matches("OHM").trim();
-        if v0 == "0" || v == "0R" || v == "0" || v == "0OHM" || v == "0.0" {
+        let v0 = v.trim_end_matches("OHM").replace('R', ".");
+        let v0 = v0.trim_end_matches('.').trim();
+        if v0.parse::<f64>().map(|o| o == 0.0).unwrap_or(false) {
             return true;
         }
     }
@@ -1266,6 +1270,15 @@ mod tests {
         // A 0-ohm resistor still bridges; a 5.1k Rd does not.
         assert!(is_dc_bridge(&bridge_part("R5", "0R", "Device:R")));
         assert!(!is_dc_bridge(&bridge_part("R6", "5.1k", "Device:R")));
+        // R42: the R-as-decimal-point zero markings "0R0" and "0.0R" (IEC 60062)
+        // are 0 Ω too — they fell through the old literal list, so a CC bridge
+        // labelled "0R0" was not unioned and the termination read as absent.
+        assert!(is_dc_bridge(&bridge_part("R7", "0R0", "Device:R")));
+        assert!(is_dc_bridge(&bridge_part("R8", "0.0R", "Device:R")));
+        assert!(is_dc_bridge(&bridge_part("R9", "0.0", "Device:R")));
+        // A genuine non-zero R-notation resistor is still not a bridge.
+        assert!(!is_dc_bridge(&bridge_part("R10", "4R7", "Device:R")));
+        assert!(!is_dc_bridge(&bridge_part("R11", "0R1", "Device:R")));
     }
 
     // --- Spec constants (Tables 4-20, 4-21, 4-22) ---------------------------
