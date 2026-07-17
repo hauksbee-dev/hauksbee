@@ -655,7 +655,7 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
             message: format!(
-                "{} vs target {:.0} ohm {} ({:+.0}%, within +-{:.0}%) - ok [{}]",
+                "{} vs target {:.0} ohm {} ({:+.1}%, within +-{:.0}%) - ok [{}]",
                 detail,
                 target,
                 class.label(),
@@ -678,7 +678,7 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: sev,
             message: format!(
-                "{} vs target {:.0} ohm {}: {:+.0}% deviation exceeds +-{:.0}% tolerance [{}]",
+                "{} vs target {:.0} ohm {}: {:+.1}% deviation exceeds +-{:.0}% tolerance [{}]",
                 detail,
                 target,
                 class.label(),
@@ -814,7 +814,43 @@ fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 
 
 #[cfg(test)]
 mod tests {
-    use super::is_single_ended_50;
+    use super::{is_single_ended_50, judge, ImpedanceClass, Stackup, StackupSource};
+    use crate::si::SiReport;
+
+    #[test]
+    fn out_of_band_finding_deviation_does_not_read_equal_to_the_tolerance() {
+        // R50: judge() decides in_band on the unrounded deviation (<= 15%) but the
+        // finding message rounded deviation to whole percent, so a 15.4% deviation
+        // rendered "+15% deviation exceeds +-15% tolerance" — the number shown
+        // equalled the limit it claimed to break. Higher display precision must
+        // make the deviation read as genuinely greater than the tolerance.
+        let stackup = Stackup {
+            h_microstrip_mm: 0.2,
+            t_cu_mm: 0.035,
+            er: 4.3,
+            source: StackupSource::Board,
+            impedance_controlled: true,
+        };
+        // 57.72 ohm vs 50 ohm target = +15.44% deviation (out of band).
+        let mut report = SiReport::default();
+        judge(
+            &mut report,
+            &stackup,
+            ImpedanceClass::SingleEnded50,
+            57.72,
+            "TESTNET: W~0.200 mm microstrip -> Z0 ~ 58 ohm",
+            vec!["TESTNET".into()],
+        );
+        let msg = &report.findings[0].message;
+        assert!(
+            msg.contains("15.4%"),
+            "the true deviation must be shown to sub-percent precision: {msg}"
+        );
+        assert!(
+            !msg.contains("+15% deviation exceeds +-15%"),
+            "the message must not render deviation equal to the tolerance: {msg}"
+        );
+    }
 
     #[test]
     fn antenna_control_gpio_is_not_a_50_ohm_line() {

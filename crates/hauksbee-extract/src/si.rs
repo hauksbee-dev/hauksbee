@@ -209,7 +209,27 @@ fn rail_voltage(name: &str) -> Option<f64> {
         "+2V8" | "2V8" => Some(2.8),
         "VBAT" | "VBATT" | "VSYS" | "VIN" | "+VBAT" | "VDDIO" | "VIO" => Some(3.7),
         _ => {
-            if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
+            // Reject rail-named SIGNAL nets: a `3V3_EN` / `1V8_PG` enable or
+            // power-good net is not the rail, so a resistor tapping it must not
+            // count as an I2C pull-up (mirrors netlint's has_signal_role_token).
+            let is_signal = n.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| {
+                matches!(
+                    t,
+                    "EN" | "ENABLE"
+                        | "PG" | "PGOOD" | "POWERGOOD" | "GOOD"
+                        | "SEL" | "SELECT"
+                        | "DET" | "DETECT"
+                        | "MON" | "MONITOR"
+                        | "STAT" | "STATUS"
+                        | "FLT" | "FAULT"
+                        | "INT" | "IRQ"
+                        | "RST" | "RESET"
+                        | "CTRL" | "CTL"
+                )
+            });
+            if is_signal {
+                None
+            } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
                 Some(3.3)
             } else if n.contains("1V8") {
                 Some(1.8)
@@ -598,7 +618,7 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
                             severity: sev,
                             message: format!(
                                 "{} ({}): board presents CL ~ {:.1} pF (C1={:.0}p, C2={:.0}p, +{:.0}p stray) \
-                                 but the crystal specs CL = {:.0} pF [{}]; deviation {:.1} pF exceeds {:.0} pF",
+                                 but the crystal specs CL = {:.0} pF [{}]; deviation {:.2} pF exceeds {:.0} pF",
                                 xtal.reference, xtal.value, cl, c1, c2, CSTRAY_PF, spec, cite, dev,
                                 CL_TOLERANCE_PF
                             ),
