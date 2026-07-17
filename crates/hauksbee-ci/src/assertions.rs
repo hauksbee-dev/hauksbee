@@ -122,31 +122,19 @@ fn evaluate_hwtrace(
         };
         for f in &ch.features {
             let label = format!("hwtrace {} {}", ch.net, f.kind);
-            if let Some(out) = stale {
-                let (fs, fe) = out.failed_windows[0];
-                results.push(AssertResult {
-                    label,
-                    kind: "hwtrace".to_string(),
-                    passed: false,
-                    invalid: true,
-                    detail: format!(
-                        "INVALID: the analog solve failed within {:.2}-{:.2} ms of the run; \
-                         the simulated waveform contains held-stale samples, so no feature \
-                         comparison against the capture can be trusted (05 §3b).",
-                        fs * 1e3,
-                        fe * 1e3
-                    ),
-                    failing_seed: Some(out.seed),
-                    failing_seeds: vec![out.seed],
-                    seeds_total: outcomes.len() as u32,
-                });
-                continue;
-            }
 
-            // Per-seed comparison; the feature must hold on every seed.
+            // Per-seed comparison; the feature must hold on every EVALUABLE seed.
+            // A member whose analog solve diverged (non-empty failed_windows) has
+            // held-stale net_series, so SKIP it — its comparison is untrustworthy.
+            // FAIL > INVALID (round-50): a converged member's real disagreement with
+            // the capture must beat a diverged sibling's INVALID, so we only fall
+            // back to INVALID (below) when no converged member fails.
             let mut last_detail = String::new();
             let mut failures: Vec<(u32, String)> = Vec::new();
             for out in outcomes {
+                if !out.failed_windows.is_empty() {
+                    continue;
+                }
                 let Some(sim) = out.net_series.get(&ch.net) else {
                     failures.push((
                         out.seed,
@@ -163,6 +151,31 @@ fn evaluate_hwtrace(
                     last_detail = r.detail;
                 } else {
                     failures.push((out.seed, r.detail));
+                }
+            }
+
+            // No trustworthy (converged) failure, but a member diverged → INVALID
+            // > PASS: a run with a held-stale window must not masquerade as a pass.
+            if failures.is_empty() {
+                if let Some(out) = stale {
+                    let (fs, fe) = out.failed_windows[0];
+                    results.push(AssertResult {
+                        label,
+                        kind: "hwtrace".to_string(),
+                        passed: false,
+                        invalid: true,
+                        detail: format!(
+                            "INVALID: the analog solve failed within {:.2}-{:.2} ms of the run; \
+                             the simulated waveform contains held-stale samples, so no feature \
+                             comparison against the capture can be trusted (05 §3b).",
+                            fs * 1e3,
+                            fe * 1e3
+                        ),
+                        failing_seed: Some(out.seed),
+                        failing_seeds: vec![out.seed],
+                        seeds_total: outcomes.len() as u32,
+                    });
+                    continue;
                 }
             }
 
@@ -1841,6 +1854,84 @@ mod tests {
         let out_ok = RunOutcome { rail_windows: rw2, ..Default::default() };
         let (ok2, _msg2) = check_rail_window(&a, &out_ok);
         assert!(ok2, "a rail that stayed above 3.0V must pass");
+    }
+
+    // hwtrace ensemble: a converged member's real feature mismatch must beat a
+    // diverged sibling's INVALID (the R50 FAIL>INVALID doctrine, applied to the
+    // hwtrace path). Base bug: any diverged member forced every feature to INVALID.
+    #[test]
+    fn hwtrace_converged_mismatch_beats_a_diverged_sibling_invalid() {
+        use super::evaluate_hwtrace;
+        use crate::runner::RunOutcome;
+
+        // A square wave 0<->5V of the given period over 1 s at 1 kSa/s.
+        fn square(period_s: f64) -> Vec<(f64, f64)> {
+            let mut s = Vec::new();
+            let mut t = 0.0_f64;
+            while t <= 1.0 {
+                let v = if (t / period_s).fract() >= 0.5 { 4.9 } else { 0.05 };
+                s.push((t, v));
+                t += 0.001;
+            }
+            s
+        }
+
+        let dir = std::env::temp_dir().join(format!("hb_hwtrace_prec_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Captured waveform: 200 ms period.
+        let mut csv = String::from("time_s,volts\n");
+        for (t, v) in square(0.2) {
+            csv.push_str(&format!("{t:.4},{v:.3}\n"));
+        }
+        std::fs::write(dir.join("d.csv"), csv).unwrap();
+        std::fs::write(
+            dir.join("trace.toml"),
+            "[trace]\nboard = \"x\"\nscenario = \"prec\"\nprovenance = \"synthetic\"\n\
+             instrument = \"in-test\"\n[[channel]]\nnet = \"D\"\nfile = \"d.csv\"\n\
+             [[channel.feature]]\nkind = \"period\"\nreltol = 0.10\n",
+        )
+        .unwrap();
+
+        let mut spec: crate::spec::Spec = toml::from_str(
+            "board = \"x.kicad_pcb\"\nduration_ms = 1000\n\
+             [[assert]]\nkind = \"hwtrace\"\ntrace = \"trace.toml\"\n",
+        )
+        .unwrap();
+        spec.base_dir = dir.clone();
+        let a = spec.asserts[0].clone();
+
+        // Corner 0 converged, but its sim period (500 ms) disagrees with the 200 ms
+        // capture — a trustworthy FAIL. Corner 1 diverged (a failed window).
+        let mut ns0 = std::collections::HashMap::new();
+        ns0.insert("D".to_string(), square(0.5));
+        let corner0 = RunOutcome { seed: 0, net_series: ns0, sim_ms: 1000.0, ..Default::default() };
+        let mut ns1 = std::collections::HashMap::new();
+        ns1.insert("D".to_string(), square(0.2));
+        let corner1 = RunOutcome {
+            seed: 1,
+            net_series: ns1,
+            sim_ms: 1000.0,
+            failed_windows: vec![(0.4, 0.5)],
+            ..Default::default()
+        };
+
+        let results = evaluate_hwtrace(
+            &spec,
+            &a,
+            &[corner0, corner1],
+            Some(crate::tolerance::Mode::Corners),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let r = results.iter().find(|r| r.kind == "hwtrace").expect("a hwtrace result");
+        assert!(
+            !r.invalid,
+            "a converged corner's real mismatch must FAIL, not be masked INVALID: {}",
+            r.detail
+        );
+        assert!(!r.passed, "the feature genuinely disagrees: {}", r.detail);
+        assert_eq!(r.failing_seed, Some(0), "corner 0 (the converged failure) must be named: {}", r.detail);
     }
 
     // A vcd_sink `transitions` field is analog-derived (per-frame threshold
