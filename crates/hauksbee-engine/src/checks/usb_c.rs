@@ -868,7 +868,16 @@ fn is_dc_bridge(comp: &hauksbee_extract::Component) -> bool {
     // "0R0"/"0.0R" (R mid-string / trailing) fell through, so a CC bridge marked
     // "0R0" was not unioned. Normalise 'R' to a decimal point and parse.
     if is_resistor(comp) {
-        let v0 = v.trim_end_matches("OHM").replace('R', ".");
+        // Strip every ohm spelling before parsing: the ASCII singular "OHM" was
+        // handled but the unicode sign "Ω" and the plural "OHMS" were not, so a
+        // 0 Ω bridge marked "0Ω" / "0 Ohms" parsed as non-zero and the CC net was
+        // never unioned (the double-termination note went silent). Order matters:
+        // strip the longer "OHMS" before "OHM".
+        let v0 = v
+            .trim_end_matches('Ω')
+            .trim_end_matches("OHMS")
+            .trim_end_matches("OHM")
+            .replace('R', ".");
         let v0 = v0.trim_end_matches('.').trim();
         if v0.parse::<f64>().map(|o| o == 0.0).unwrap_or(false) {
             return true;
@@ -1382,6 +1391,15 @@ mod tests {
         // A genuine non-zero R-notation resistor is still not a bridge.
         assert!(!is_dc_bridge(&bridge_part("R10", "4R7", "Device:R")));
         assert!(!is_dc_bridge(&bridge_part("R11", "0R1", "Device:R")));
+        // R55: the unicode ohm sign and the plural "Ohms" are real KiCad value
+        // spellings; a 0 Ω bridge marked "0Ω" / "0 Ohms" was not recognised, so a
+        // double-terminated CC net went silent. Strip every ohm spelling.
+        assert!(is_dc_bridge(&bridge_part("R12", "0Ω", "Device:R")));
+        assert!(is_dc_bridge(&bridge_part("R13", "0 Ω", "Device:R")));
+        assert!(is_dc_bridge(&bridge_part("R14", "0 Ohms", "Device:R")));
+        assert!(is_dc_bridge(&bridge_part("R15", "0OHMS", "Device:R")));
+        // A non-zero ohm value in these spellings is still not a bridge.
+        assert!(!is_dc_bridge(&bridge_part("R16", "5.1kΩ", "Device:R")));
     }
 
     // --- Spec constants (Tables 4-20, 4-21, 4-22) ---------------------------
