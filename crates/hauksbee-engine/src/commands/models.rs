@@ -206,9 +206,13 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
             println!("  {spec}");
         }
         println!(
-            "  (a <part>.soc.toml in $HAUKSBEE_MCU_DIR or ~/.config/hauksbee/mcu\n   \
-             overrides the built-in of the same part; for the full model db as\n   \
-             it applies to a board, use `hauksbee models resolve <board>`)"
+            "\n  To add a new MCU (so a board's part co-simulates exactly instead of on a\n  \
+             substitute core): drop a <part>.soc.toml in $HAUKSBEE_MCU_DIR or\n  \
+             ~/.config/hauksbee/mcu (it overrides the built-in of the same part), plus a\n  \
+             [[models]] kind=\"mcu\" routing entry mapping your board's part value to it — two\n  \
+             TOML files, no recompile. Copy the closest built-in above as a template; the\n  \
+             full recipe is docs/extending/add-an-mcu-variant.md.\n  \
+             For the model db as it applies to a board, use `hauksbee models resolve <board>`."
         );
         println!();
     }
