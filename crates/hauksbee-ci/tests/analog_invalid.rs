@@ -84,6 +84,7 @@ fn outcome_with(
         analog_abort,
         sampled_values: Vec::new(),
         net_series: HashMap::new(),
+        substitutions: Vec::new(),
     }
 }
 
@@ -96,6 +97,7 @@ fn ci_result(results: Vec<hauksbee_ci::assertions::AssertResult>, analog_abort: 
         elapsed: Duration::from_secs(0),
         analog_abort,
         coverage: None,
+        substitutions: Vec::new(),
     }
 }
 

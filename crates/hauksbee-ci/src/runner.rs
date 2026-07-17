@@ -174,6 +174,11 @@ pub struct RunOutcome {
     /// assertions — recording every net's series unconditionally would cost
     /// memory on long runs for nothing.
     pub net_series: HashMap<String, Vec<(f64, f64)>>,
+    /// One message per MCU whose requested part was co-simulated on a substitute
+    /// core (e.g. an STM32F411 run on an STM32F407 model). The `run` binary
+    /// surfaces this on every honesty surface; the CI report must too, or a GREEN
+    /// verdict silently vouches for firmware behaviour on the wrong silicon.
+    pub substitutions: Vec<String>,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -1223,6 +1228,12 @@ fn run_one(
         analog_abort,
         sampled_values: plan.values.clone(),
         net_series,
+        substitutions: engine
+            .scheduler()
+            .substitutions()
+            .iter()
+            .map(|s| s.message())
+            .collect(),
     })
 }
 
