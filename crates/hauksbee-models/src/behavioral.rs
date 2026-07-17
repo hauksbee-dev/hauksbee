@@ -497,8 +497,16 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             if sp.prog_ohms.is_none() && sp.prog_ref.is_none() {
                 errs.push("converter.iin_program: need prog_ohms or prog_ref".to_string());
             }
-            if sp.prog_ref_ohms <= 0.0 {
-                errs.push("converter.iin_program: prog_ref_ohms must be positive".to_string());
+            if !sp.prog_ref_ohms.is_finite() || sp.prog_ref_ohms <= 0.0 {
+                // A non-finite prog_ref_ohms (an `inf` overflow typo) passes a bare
+                // `<= 0.0` test but the engine's `prog_ref.max(1.0)` yields inf, so
+                // `v_sense = vprog_ref*prog/inf = 0` zeroes the input-current limit
+                // and folds the regulated rail to 0 V for the whole run — the same
+                // silent-zero the sibling gates below prevent. Reject non-finite too.
+                errs.push(format!(
+                    "converter.iin_program: prog_ref_ohms must be a positive finite number, got {}",
+                    sp.prog_ref_ohms
+                ));
             }
             // `vprog_ref` and `v_sense_full` gate the programmed input-current
             // limit the same way iout_limit_a/iin_limit_a gate the literal one:
@@ -767,6 +775,46 @@ v_sense_full = {v_sense_full}
         assert!(
             validate_behavioral(&b).is_empty(),
             "valid programmed limits must pass: {:?}",
+            validate_behavioral(&b)
+        );
+    }
+
+    #[test]
+    fn iin_program_rejects_nonfinite_prog_ref_ohms() {
+        // R50: prog_ref_ohms was validated with only `<= 0.0`, so an `inf`
+        // overflow typo passed. The engine's prog_ref.max(1.0)=inf then yields
+        // v_sense = vprog_ref*prog/inf = 0, zeroing the input-current limit and
+        // folding the regulated rail to 0 V for the whole run with no fault.
+        let spec = |prog_ref_ohms: &str| {
+            format!(
+                r#"
+[converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 14.4
+efficiency = 0.92
+
+[converter.iin_program]
+rsense_ref = "R49"
+prog_ref = "R8"
+vprog_ref = 1.19
+prog_ref_ohms = {prog_ref_ohms}
+v_sense_full = 0.05
+"#
+            )
+        };
+        let b: Behavioral = toml::from_str(&spec("inf")).expect("parse");
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("prog_ref_ohms")),
+            "an inf prog_ref_ohms must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // A finite positive value still validates clean.
+        let b: Behavioral = toml::from_str(&spec("100000.0")).expect("parse");
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "a finite positive prog_ref_ohms must pass: {:?}",
             validate_behavioral(&b)
         );
     }
