@@ -128,6 +128,32 @@ fn i2c_with_named_rail_pullup_is_clean() {
     );
 }
 
+/// A resistor NETWORK / array (RN) pull-up terminates the bus: no finding.
+#[test]
+fn i2c_resistor_array_pullup_is_clean() {
+    // R55: is_resistor excludes RN refs and >2-pad parts, so a resistor-array
+    // pull-up (a standard I2C termination) was invisible and a false "missing
+    // pull-up" fired on a correctly-terminated bus — and RN1 was also miscounted
+    // as an active device.
+    let comps = r#"
+    (comp (ref U1) (value MCU) (footprint Package:QFN))
+    (comp (ref U2) (value SENSOR) (footprint Package:SON))
+    (comp (ref RN1) (value 2k2) (footprint Resistor_SMD:R_Array_Convex_4x0603))"#;
+    let nets = r#"
+    (net (code 1) (name "+3V3")
+      (node (ref RN1) (pin 1)) (node (ref RN1) (pin 3)))
+    (net (code 2) (name "SDA")
+      (node (ref U1) (pin 1)) (node (ref U2) (pin 1)) (node (ref RN1) (pin 2)))
+    (net (code 3) (name "SCL")
+      (node (ref U1) (pin 2)) (node (ref U2) (pin 2)) (node (ref RN1) (pin 4)))"#;
+    let r = lint(comps, nets);
+    assert_eq!(
+        count(&r, LintCheck::MissingI2cPullup),
+        0,
+        "resistor-array pull-up should be clean"
+    );
+}
+
 /// An on-board bus with no pull-up anywhere fires at medium.
 #[test]
 fn i2c_without_pullup_on_board_fires_medium() {

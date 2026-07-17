@@ -509,6 +509,28 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             if sp.prog_ohms.is_none() && sp.prog_ref.is_none() {
                 errs.push("converter.iin_program: need prog_ohms or prog_ref".to_string());
             }
+            // The literal shunt / program resistances are the missing siblings of
+            // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
+            // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
+            // limit balloons to ~50 kA — the over-current fold-back can never
+            // engage and the converter is silently unprotected. Reject non-positive.
+            for (name, v) in [
+                ("rsense_ohms", sp.rsense_ohms),
+                ("prog_ohms", sp.prog_ohms),
+            ] {
+                if let Some(v) = v {
+                    if !v.is_finite() || v <= 0.0 {
+                        errs.push(format!(
+                            "converter.iin_program: {name} must be a positive finite number, got {v}"
+                        ));
+                    }
+                }
+            }
+            // The literal shunt / program resistances are the missing siblings of
+            // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
+            // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
+            // limit balloons to ~50 kA — the over-current fold-back can never
+            // engage and the converter is silently unprotected. Reject non-positive.
             if !sp.prog_ref_ohms.is_finite() || sp.prog_ref_ohms <= 0.0 {
                 // A non-finite prog_ref_ohms (an `inf` overflow typo) passes a bare
                 // `<= 0.0` test but the engine's `prog_ref.max(1.0)` yields inf, so
@@ -860,6 +882,52 @@ v_sense_full = 0.05
         assert!(
             validate_behavioral(&b).is_empty(),
             "a finite positive prog_ref_ohms must pass: {:?}",
+            validate_behavioral(&b)
+        );
+    }
+
+    #[test]
+    fn iin_program_rejects_nonpositive_rsense_and_prog_ohms() {
+        // R55: the literal shunt/program resistances escaped the positive-finite
+        // gate that validates every sibling. The engine floors rsense with
+        // `.max(1e-6)`, so a sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the
+        // input-current limit balloons to ~50 kA — the fold-back never engages.
+        let spec = |extra: &str| {
+            format!(
+                r#"
+[converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 14.4
+efficiency = 0.92
+
+[converter.iin_program]
+prog_ref = "R8"
+vprog_ref = 1.19
+prog_ref_ohms = 100000.0
+v_sense_full = 0.05
+{extra}
+"#
+            )
+        };
+        let b: Behavioral = toml::from_str(&spec("rsense_ohms = -0.005")).expect("parse");
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("rsense_ohms")),
+            "a negative rsense_ohms must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        let b: Behavioral = toml::from_str(&spec("rsense_ohms = 0.005\nprog_ohms = 0.0")).expect("parse");
+        assert!(
+            validate_behavioral(&b).iter().any(|e| e.contains("prog_ohms")),
+            "a zero prog_ohms must be rejected: {:?}",
+            validate_behavioral(&b)
+        );
+        // A valid literal shunt still passes.
+        let b: Behavioral = toml::from_str(&spec("rsense_ohms = 0.005")).expect("parse");
+        assert!(
+            validate_behavioral(&b).is_empty(),
+            "a valid rsense_ohms must pass: {:?}",
             validate_behavioral(&b)
         );
     }
