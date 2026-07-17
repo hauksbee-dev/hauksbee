@@ -1001,10 +1001,34 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
 fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let reference = a.reference.clone().unwrap_or_default();
     let limit = a.amps.unwrap_or(0.0);
-    match out.peak_current.get(&reference) {
-        Some(&peak) => {
+    // Aggregate over the package's units, exactly like `check_max_temp`:
+    // `peak_current` is keyed by the stamped device name, which for a multi-unit
+    // package (a resistor array `RN1` stamps `RN1_e1..RN1_e4`) is the per-unit
+    // form, never the bare `RN1` the assertion names. A bare exact `.get(&ref)`
+    // would always miss and drop into the None branch, so a max_current safety
+    // assert on any multi-unit package could NEVER pass. `check_trackable_
+    // assert_refs` already greenlights a bare ref whose units are tracked, so
+    // the consumer here MUST match those unit keys too (`key_belongs_to_ref`).
+    let peak = out
+        .peak_current
+        .iter()
+        .filter(|(k, _)| key_belongs_to_ref(&reference, k))
+        // Highest-current entry; ties broken on the unit key so the reported
+        // unit is stable across HashMap iteration order (reproducibility).
+        .max_by(|a, b| a.1.total_cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(k, v)| (k.clone(), *v));
+    match peak {
+        Some((key, peak)) => {
             let ok = peak <= limit + 1e-9;
-            (ok, format!("I({reference}) peak {peak:.4}A (<= {limit}A)"))
+            let unit = if key != reference {
+                format!(" (peak unit {key})")
+            } else {
+                String::new()
+            };
+            (
+                ok,
+                format!("I({reference}) peak {peak:.4}A (<= {limit}A){unit}"),
+            )
         }
         None => (
             // No current data. The runner rejects a max_current on an untracked
@@ -1676,6 +1700,47 @@ mod tests {
         // A ceiling above ambient still passes the idle part.
         let (ok2, msg2) = check_max_temp(&assertion(105.0), &hot);
         assert!(ok2, "idle U3 at ambient 85C is within a 105C ceiling: {msg2}");
+    }
+
+    // A max_current assert on a multi-unit package (resistor/diode array) names
+    // the bare ref `RN1`, but peak_current is keyed by the per-unit device names
+    // `RN1_e1..RN1_e4`. An exact `.get("RN1")` always misses and drops into the
+    // "no current data" fail branch, so the assert could NEVER pass no matter
+    // how low the real current is (R48). The consumer must aggregate over units
+    // via key_belongs_to_ref, exactly like check_max_temp.
+    #[test]
+    fn max_current_aggregates_over_multiunit_package_keys() {
+        use super::check_max_current;
+        use crate::runner::RunOutcome;
+
+        let assertion = |amps: f64| -> crate::spec::Assertion {
+            toml::from_str(&format!(
+                "kind = \"max_current\"\nref = \"RN1\"\namps = {amps}\n"
+            ))
+            .unwrap()
+        };
+        // A 4-element resistor array: no bare "RN1" key, only per-unit `_e` keys.
+        let mut peak_current = std::collections::HashMap::new();
+        peak_current.insert("RN1_e1".to_string(), 0.10);
+        peak_current.insert("RN1_e2".to_string(), 0.12);
+        peak_current.insert("RN1_e3".to_string(), 0.08);
+        peak_current.insert("RN1_e4".to_string(), 0.11);
+        let out = RunOutcome { peak_current, ..Default::default() };
+
+        // Within a 0.5 A limit (peak unit is 0.12 A): must PASS. Base bug always
+        // reported "no current data … cannot be reported green" here.
+        let (ok, msg) = check_max_current(&assertion(0.5), &out);
+        assert!(
+            ok,
+            "a resistor array within its current limit must pass, not miss its unit keys: {msg}"
+        );
+        assert!(msg.contains("RN1_e2"), "message must name the peak unit: {msg}");
+        // And it must still be able to FAIL when a unit exceeds the limit.
+        let (ok_over, msg_over) = check_max_current(&assertion(0.10), &out);
+        assert!(
+            !ok_over,
+            "the hottest-current unit (0.12 A) must trip a 0.10 A limit: {msg_over}"
+        );
     }
 
     // An unscoped uart assertion concatenates every MCU's output; the order must

@@ -1189,10 +1189,19 @@ impl Scheduler {
         // error every chunk (and a chunk under 0.5 µs rounds to 0, then gets
         // clamped up to 1 µs, injecting time that never elapsed); banking the
         // truncated fraction makes the delivered microseconds sum to the true
-        // elapsed time. Still clamped to at least 1 so a non-empty chunk always
-        // advances the core.
+        // elapsed time.
+        //
+        // Do NOT clamp the floored value up to 1: a persistent sub-1 µs chunk
+        // (e.g. a fine `fixed_dt = 0.5e-6`) never reaches a whole banked
+        // microsecond, so a `.max(1.0)` would deliver 1 µs every chunk while
+        // banking unrepayable negative debt — the firmware clock races ahead of
+        // sim time without bound. Instead the core advances 0 µs on a sub-µs
+        // chunk and rolls forward once the banked fraction accrues a full
+        // microsecond, which keeps `micros_carry` in [0, 1) and the delivered
+        // microseconds tracking true elapsed time exactly. `run_micros(0)` is a
+        // no-op, and a normal-size chunk (floor ≥ 1) is unaffected.
         let exact = chunk * 1e6 + self.micros_carry;
-        let micros_f = exact.floor().max(1.0);
+        let micros_f = exact.floor();
         self.micros_carry = exact - micros_f;
         let micros = micros_f as u64;
         // Set when any MCU refuses to advance this chunk (see the `run_micros`
@@ -4410,6 +4419,36 @@ mod tests {
         assert!(
             delivered >= 12,
             "per-chunk rounding without carry systematically undercounts: got {delivered} µs"
+        );
+    }
+
+    /// Regression for SCHED-1b: a PERSISTENTLY sub-microsecond chunk (a fine
+    /// `fixed_dt = 0.5e-6`) must not race the firmware clock ahead of sim time.
+    /// The old `.floor().max(1.0)` delivered 1 µs every chunk while sim time
+    /// advanced only 0.5 µs, banking unrepayable negative debt — an unbounded 2x
+    /// drift. Twenty 0.5 µs chunks are 10.0 µs of true time; the delivered
+    /// microseconds must sum to within one microsecond of that, NOT the 20 µs
+    /// the min-1 clamp would inject.
+    #[test]
+    fn sub_microsecond_chunks_do_not_race_the_mcu_clock_ahead() {
+        let (mut sched, micros) = sched_with_micros_core(false);
+        let mut uart = HashMap::new();
+        let chunk = 0.5e-6; // 0.5 µs — persistently under one microsecond
+        for _ in 0..20 {
+            sched.run_chunk(chunk, &mut uart);
+        }
+        let delivered: u64 = micros.lock().unwrap_or_else(|e| e.into_inner()).iter().sum();
+        let true_us = 20.0 * 0.5; // 10.0 µs
+        assert!(
+            (delivered as f64 - true_us).abs() <= 1.0,
+            "sub-µs chunks must not inject time the sim never elapsed: \
+             delivered {delivered} µs vs {true_us} µs true"
+        );
+        // The old min-1 clamp delivered one microsecond per chunk (20 µs total)
+        // — double the true elapsed time. Guard against that regression.
+        assert!(
+            delivered <= 11,
+            "min-1 clamp races the firmware clock ahead: got {delivered} µs for {true_us} µs true"
         );
     }
 
