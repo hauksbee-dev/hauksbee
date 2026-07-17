@@ -193,54 +193,29 @@ fn evaluate_one(
         _ => "seed",
     };
 
-    // Analog-validity gate (05 §3b, "refuse rather than fake"): if this assertion
-    // reads the analog transient operating point AND its evaluation window
-    // overlaps a chunk the solver failed on, the samples there were held-stale.
-    // We can honestly neither pass nor fail it, so report a distinct INVALID
-    // outcome. This fires per-window (not per consecutive-abort), so an
-    // intermittent divergence below the abort threshold still refuses instead of
-    // reporting a fake result. Checked before pass/fail so a window with no valid
-    // samples cannot masquerade as either.
-    for out in outcomes {
-        if let Some((ws, we)) = analog_eval_window(a, out) {
-            if let Some(&(fs, fe)) = out
-                .failed_windows
-                .iter()
-                .find(|&&(fs, fe)| ws < fe && fs < we)
-            {
-                let per_seed = if outcomes.len() > 1 {
-                    format!("{member} {}: ", out.seed)
-                } else {
-                    String::new()
-                };
-                return AssertResult {
-                    label,
-                    kind,
-                    passed: false,
-                    invalid: true,
-                    detail: format!(
-                        "{per_seed}INVALID: the analog solve failed within this \
-                         assertion's window ({:.2}-{:.2} ms overlaps its \
-                         {:.2}-{:.2} ms evaluation span); those voltages are \
-                         held-stale, so the result cannot be trusted (05 §3b).",
-                        fs * 1e3,
-                        fe * 1e3,
-                        ws * 1e3,
-                        we * 1e3,
-                    ),
-                    failing_seed: Some(out.seed),
-                    failing_seeds: vec![out.seed],
-                    seeds_total: outcomes.len() as u32,
-                };
-            }
-        }
-    }
+    // Is this member's analog evaluation window held-stale — i.e. does it overlap
+    // a chunk the solver failed on? Such a member's samples cannot be trusted, so
+    // its pass/fail is meaningless (05 §3b, "refuse rather than fake").
+    let member_invalid = |out: &RunOutcome| -> bool {
+        analog_eval_window(a, out)
+            .is_some_and(|(ws, we)| out.failed_windows.iter().any(|&(fs, fe)| ws < fe && fs < we))
+    };
 
-    // Evaluate every ensemble member, so the result carries the pass-rate and
-    // the full failing-seed list, not just the first red.
+    // Precedence is FAIL > INVALID > PASS. Evaluate every ensemble member so the
+    // result carries the pass-rate and the full failing-seed list — but SKIP a
+    // member whose own window is analog-invalid: its held-stale samples are not a
+    // trustworthy fail or pass. A member that fails on a fully-converged solve is a
+    // real, disproving failure and is decisive under the all-seeds rule, even if a
+    // DIFFERENT member diverged — so we must evaluate trustworthy failures before
+    // letting a diverged sibling refuse the whole assertion (otherwise a genuine
+    // brownout on one corner is silently downgraded to INVALID by an unrelated
+    // convergence hiccup on another).
     let mut last_detail = String::new();
     let mut failures: Vec<(&RunOutcome, String)> = Vec::new();
     for out in outcomes {
+        if member_invalid(out) {
+            continue;
+        }
         let (ok, detail) = check_seed(a, out);
         if ok {
             last_detail = detail;
@@ -288,6 +263,46 @@ fn evaluate_one(
             failing_seeds: failures.iter().map(|(o, _)| o.seed).collect(),
             seeds_total: outcomes.len() as u32,
         };
+    }
+
+    // No trustworthy failure. INVALID > PASS: if any member's evaluation window
+    // was held-stale (analog divergence), we can neither honestly pass nor fail —
+    // report a distinct INVALID rather than let a window with no valid samples
+    // masquerade as a pass. This fires per-window (not per consecutive-abort), so
+    // an intermittent divergence below the abort threshold still refuses.
+    for out in outcomes {
+        if let Some((ws, we)) = analog_eval_window(a, out) {
+            if let Some(&(fs, fe)) = out
+                .failed_windows
+                .iter()
+                .find(|&&(fs, fe)| ws < fe && fs < we)
+            {
+                let per_seed = if outcomes.len() > 1 {
+                    format!("{member} {}: ", out.seed)
+                } else {
+                    String::new()
+                };
+                return AssertResult {
+                    label,
+                    kind,
+                    passed: false,
+                    invalid: true,
+                    detail: format!(
+                        "{per_seed}INVALID: the analog solve failed within this \
+                         assertion's window ({:.2}-{:.2} ms overlaps its \
+                         {:.2}-{:.2} ms evaluation span); those voltages are \
+                         held-stale, so the result cannot be trusted (05 §3b).",
+                        fs * 1e3,
+                        fe * 1e3,
+                        ws * 1e3,
+                        we * 1e3,
+                    ),
+                    failing_seed: Some(out.seed),
+                    failing_seeds: vec![out.seed],
+                    seeds_total: outcomes.len() as u32,
+                };
+            }
+        }
     }
 
     // All members green. State exactly what that means: plain fuzz keeps its
@@ -1242,9 +1257,18 @@ mod tests {
         use crate::runner::RunOutcome;
         use std::collections::HashMap;
         fn outcome(seed: u32, failed: Vec<(f64, f64)>) -> RunOutcome {
+            // A clean, in-band VOUT window so a converged corner PASSES this
+            // assertion. (R50: FAIL now beats INVALID, so the converged member must
+            // not itself fail — the INVALID must come purely from the diverged
+            // corner's held-stale window, which is what this test exercises.)
+            let mut windows = HashMap::new();
+            windows.insert(
+                ("VOUT".to_string(), 0.0f64.to_bits()),
+                crate::runner::NetWindow { min_v: 3.3, max_v: 3.35, last_v: 3.32, samples: 10 },
+            );
             RunOutcome {
                 seed,
-                windows: HashMap::new(),
+                windows,
                 uart: HashMap::new(),
                 faults: Vec::new(),
                 toggles: HashMap::new(),
@@ -1785,6 +1809,63 @@ mod tests {
         let out_ok = RunOutcome { rail_windows: rw2, ..Default::default() };
         let (ok2, _msg2) = check_rail_window(&a, &out_ok);
         assert!(ok2, "a rail that stayed above 3.0V must pass");
+    }
+
+    // A trustworthy definite failure on one converged ensemble member must WIN
+    // over an unrelated analog divergence on another member (FAIL > INVALID).
+    // Base bug: the INVALID gate ran first, so a diverged sibling silently
+    // downgraded a real brownout on a fully-converged corner to INVALID (R50).
+    #[test]
+    fn definite_failure_on_a_converged_member_beats_invalid_on_a_diverged_one() {
+        use super::evaluate_one;
+        use crate::runner::{NetWindow, RunOutcome};
+
+        let win = |min_v: f64| {
+            let mut w = std::collections::HashMap::new();
+            w.insert(
+                ("VOUT".to_string(), 0.0f64.to_bits()),
+                NetWindow { min_v, max_v: 3.4, last_v: 3.3, samples: 10 },
+            );
+            w
+        };
+        // Corner 1: converged cleanly (no failed windows), VOUT sagged to 2.0 V —
+        // a real, trustworthy brownout (RED).
+        let corner1 = RunOutcome {
+            seed: 1,
+            windows: win(2.0),
+            sim_ms: 100.0,
+            failed_windows: Vec::new(),
+            ..Default::default()
+        };
+        // Corner 2: a stiff transient diverged, leaving an overlapping failed
+        // window; its samples are held-stale (not trustworthy either way).
+        let corner2 = RunOutcome {
+            seed: 2,
+            windows: win(3.3),
+            sim_ms: 100.0,
+            failed_windows: vec![(0.010, 0.020)],
+            ..Default::default()
+        };
+
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\n").unwrap();
+        let res = evaluate_one(
+            &a,
+            &[corner1, corner2],
+            Some(crate::tolerance::Mode::Corners),
+        );
+        assert!(
+            !res.invalid,
+            "a real brownout on the converged corner must be reported, not masked as INVALID: {}",
+            res.detail
+        );
+        assert!(!res.passed, "the assertion is definitively false: {}", res.detail);
+        assert_eq!(
+            res.failing_seed,
+            Some(1),
+            "corner 1 (the converged, trustworthy failure) must be named: {}",
+            res.detail
+        );
     }
 
     // An unscoped uart assertion concatenates every MCU's output; the order must
