@@ -861,6 +861,40 @@ impl Spec {
                 )));
             }
         }
+        // A `peripheral` assertion's `id` must name a declared [[peripheral]] or
+        // [[sensor]] — otherwise a typo fails only after a full co-sim runs (or
+        // silently reads nothing), the same class the scenario-scope check closes.
+        for a in &self.asserts {
+            if a.kind != "peripheral" {
+                continue;
+            }
+            let Some(id) = a.id.as_deref() else {
+                return Err(SpecError::Invalid(format!(
+                    "{} assertion '{}' needs an `id` naming the [[peripheral]] / [[sensor]] to read",
+                    a.kind,
+                    a.label()
+                )));
+            };
+            let known: Vec<&str> = self
+                .peripherals
+                .iter()
+                .map(|p| p.id.as_str())
+                .chain(self.sensors.iter().map(|s| s.id.as_str()))
+                .collect();
+            if !known.contains(&id) {
+                let hint = if known.is_empty() {
+                    "the spec declares no [[peripheral]] or [[sensor]] blocks".to_string()
+                } else {
+                    format!("declared ids: {}", known.join(", "))
+                };
+                return Err(SpecError::Invalid(format!(
+                    "{} assertion '{}' reads id '{id}', but no [[peripheral]] or [[sensor]] \
+                     declares it ({hint})",
+                    a.kind,
+                    a.label()
+                )));
+            }
+        }
         for s in &self.sensors {
             s.validate()?;
         }
@@ -1787,6 +1821,10 @@ board = "board.kicad_pcb"
 duration_ms = 10
 frame_ms = 1.0
 
+[[peripheral]]
+id = "EE1"
+type = "i2c_eeprom"
+
 [[assert]]
 kind = "peripheral"
 id = "EE1"
@@ -1804,14 +1842,32 @@ min = 5
         );
 
         // Each form alone still validates.
-        let bytes_only = spec_from(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nbytes=\"48 69\"\n",
-        );
+        let decl = "[[peripheral]]\nid=\"EE1\"\ntype=\"i2c_eeprom\"\n\n";
+        let bytes_only = spec_from(&format!(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n{decl}[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nbytes=\"48 69\"\n",
+        ));
         assert!(bytes_only.validate().is_ok(), "bytes-only peripheral must pass");
-        let field_only = spec_from(
-            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nfield=\"writes\"\nmin=5\n",
-        );
+        let field_only = spec_from(&format!(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n{decl}[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nfield=\"writes\"\nmin=5\n",
+        ));
         assert!(field_only.validate().is_ok(), "field-only peripheral must pass");
+    }
+
+    #[test]
+    fn peripheral_assertion_with_unknown_id_is_rejected_at_load() {
+        // U2: a peripheral assertion whose `id` names no declared [[peripheral]]/
+        // [[sensor]] used to fail only after a full co-sim (or read nothing). It
+        // must be caught at load, naming the declared ids.
+        let spec = spec_from(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n\
+             [[peripheral]]\nid=\"EE1\"\ntype=\"i2c_eeprom\"\n\n\
+             [[assert]]\nkind=\"peripheral\"\nid=\"TYPO\"\nfield=\"writes\"\nmin=1\n",
+        );
+        let err = spec.validate().expect_err("an unknown peripheral id must be rejected");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("TYPO") && m.contains("EE1")),
+            "the error must name the bad id and the declared ids: {err:?}"
+        );
     }
 
     #[test]
