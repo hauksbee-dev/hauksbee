@@ -1167,6 +1167,19 @@ impl Scheduler {
             .any(|m| backend_is_external(&m.binding.backend))
     }
 
+    /// True when EVERY live MCU core can observe pin drive direction
+    /// ([`Mcu::drive_direction_observable`]): the in-process AVR core (DDR
+    /// hooks), and any Renode core whose SoC descriptor carries a verified
+    /// direction-register map for each polled port. Conservative AND across
+    /// cores: one direction-blind MCU makes the whole run's configured-output
+    /// picture untrustworthy, so a boot-state check must then hedge ("undriven
+    /// OR held LOW") rather than assert Hi-Z. Vacuously true with no MCUs
+    /// (there is no pin whose direction could be misread), matching the old
+    /// `!has_external_backend()` proxy this replaces.
+    pub fn drive_direction_observable(&self) -> bool {
+        self.mcus.iter().all(|m| m.core.drive_direction_observable())
+    }
+
     /// Advance the co-sim by `dt` seconds in fixed chunks.
     pub fn step(&mut self, dt: f64) -> StepResult {
         let mut uart: HashMap<String, Vec<u8>> = HashMap::new();
@@ -3103,6 +3116,29 @@ fn resolve_renode_config(part: &str) -> anyhow::Result<hauksbee_mcu::RenodeConfi
     }
 }
 
+/// Whether a backend STRING names a core that can report pin drive direction,
+/// decided from static data (no emulator is spawned). The scaffold-time
+/// companion of [`Scheduler::drive_direction_observable`], for callers (like
+/// `hauksbee-ci init`) that reason about a board before any co-sim runs:
+///   - `simavr:*` — true, the in-process core reads DDR;
+///   - `renode:<part>` — true iff the part's SoC descriptor resolves and every
+///     GPIO port carries a direction-register map (`dir = {...}`, verified
+///     per-part; see `db/mcu/*.soc.toml`);
+///   - anything else (QEMU, unknown futures) — false, fail-safe.
+pub fn backend_reports_drive_direction(backend: &str) -> bool {
+    if !backend_is_external(backend) {
+        return true;
+    }
+    #[cfg(feature = "renode")]
+    if let Some(part) = backend.strip_prefix("renode:") {
+        return match resolve_renode_config(part) {
+            Ok(cfg) => !cfg.ports.is_empty() && cfg.ports.iter().all(|p| p.dir.is_some()),
+            Err(_) => false,
+        };
+    }
+    false
+}
+
 #[cfg(not(feature = "renode"))]
 fn instantiate_renode(_part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
     anyhow::bail!(
@@ -4561,6 +4597,96 @@ mod tests {
         sched.responder_registries.push(None);
         sched.relayout();
         (sched, micros)
+    }
+
+    /// Trait-level mock whose only interesting property is whether it claims
+    /// pin drive direction is observable, for proving the scheduler's
+    /// conservative-AND aggregation without any emulator backend.
+    struct DirCore {
+        observable: bool,
+    }
+
+    impl Mcu for DirCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn drive_direction_observable(&self) -> bool {
+            self.observable
+        }
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+    }
+
+    /// `Scheduler::drive_direction_observable` is the conservative AND across
+    /// live cores: vacuously true with no MCUs (matching the old
+    /// `!has_external_backend()` proxy), true while every core reports
+    /// direction, and false the moment ONE direction-blind core joins — a
+    /// boot-state check must then hedge rather than assert Hi-Z.
+    #[test]
+    fn drive_direction_observable_ands_across_cores() {
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let binding = |reference: &str| McuBinding {
+            reference: reference.into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+
+        assert!(
+            sched.drive_direction_observable(),
+            "no MCUs: vacuously observable (no pin whose direction could be misread)"
+        );
+
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(DirCore { observable: true }), binding("U1")));
+        sched.responder_registries.push(None);
+        assert!(
+            sched.drive_direction_observable(),
+            "one direction-reporting core keeps the run observable"
+        );
+
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(DirCore { observable: false }), binding("U2")));
+        sched.responder_registries.push(None);
+        assert!(
+            !sched.drive_direction_observable(),
+            "one direction-blind core must make the whole run unobservable"
+        );
     }
 
     /// Regression for SCHED-1: `run_micros` takes integer microseconds, so a

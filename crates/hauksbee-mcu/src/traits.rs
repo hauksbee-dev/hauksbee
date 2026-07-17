@@ -269,6 +269,23 @@ pub trait Mcu {
         Vec::new()
     }
 
+    /// Whether this backend can actually observe pin drive DIRECTION, i.e.
+    /// whether an empty [`Mcu::pins_configured_output`] means "no pin is an
+    /// output" (trustworthy) rather than "I cannot tell" (the conservative
+    /// default). A boot-state check uses this to decide whether it may assert
+    /// Hi-Z on a pin absent from the configured-output set, or must hedge
+    /// ("undriven OR held LOW").
+    ///
+    /// Default false: a backend that does not override
+    /// [`Mcu::pins_configured_output`] returns an empty set, and claiming that
+    /// empty set is authoritative would let a held-LOW output masquerade as
+    /// floating. The AVR backend overrides true (it reads DDR); the Renode
+    /// backend overrides true exactly when every polled port carries a
+    /// direction-register descriptor (see `renode::DirMap`).
+    fn drive_direction_observable(&self) -> bool {
+        false
+    }
+
     /// Hint which 7-bit I2C slave addresses are attached to the MCU-facing bus.
     ///
     /// Push-style backends can ignore this. Backends that need to register

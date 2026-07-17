@@ -1006,6 +1006,13 @@ impl Mcu for AvrMcu {
         out
     }
 
+    fn drive_direction_observable(&self) -> bool {
+        // The DDR hooks record the live data-direction register per port, so an
+        // absent pin in `pins_configured_output` genuinely means "not an
+        // output" — a held-LOW output can never masquerade as floating here.
+        true
+    }
+
     fn set_analog_in(&mut self, channel: u8, volts: f64) {
         let millivolts = (volts * 1000.0).round() as u32;
         unsafe {

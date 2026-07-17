@@ -3,6 +3,11 @@
 # ODR FOOTGUN: STM32F4 GPIO ODR is at offset 0x14 (the F1 puts it at 0x0C — see
 # stm32f103.soc.toml). This single differing offset is exactly the data that
 # belongs in a reviewed descriptor rather than scattered through the backend.
+#
+# DIRECTION: MODER at offset 0x00, 2 bits per pin, 0b01 = general-purpose
+# output. Verified against the installed Renode 1.16.1: STM32_GPIOPort reads
+# MODER back as written (WriteDoubleWord 0x0 0x55 -> ReadDoubleWord 0x0 =
+# 0x55), so each port carries a dir map and drive direction is observable.
 [soc]
 backend = "renode"
 machine = "f4disco"
@@ -18,26 +23,31 @@ letter = "A"
 peripheral = "gpioPortA"
 odr_offset = 0x14
 width = 16
+dir = { offset = 0x00, encoding = "moder" }
 [[soc.ports]]
 letter = "B"
 peripheral = "gpioPortB"
 odr_offset = 0x14
 width = 16
+dir = { offset = 0x00, encoding = "moder" }
 [[soc.ports]]
 letter = "C"
 peripheral = "gpioPortC"
 odr_offset = 0x14
 width = 16
+dir = { offset = 0x00, encoding = "moder" }
 [[soc.ports]]
 letter = "D"
 peripheral = "gpioPortD"
 odr_offset = 0x14
 width = 16
+dir = { offset = 0x00, encoding = "moder" }
 [[soc.ports]]
 letter = "E"
 peripheral = "gpioPortE"
 odr_offset = 0x14
 width = 16
+dir = { offset = 0x00, encoding = "moder" }
 
 [soc.i2c]
 controllers = ["i2c1"]

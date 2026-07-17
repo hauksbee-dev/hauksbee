@@ -1,8 +1,20 @@
 # nRF52840: two 32-bit GPIO ports (gpio0/gpio1), uart0, 64 MHz.
 #
-# The nRF GPIO OUT register is at offset 0x504 (not an STM32-style 0x0C/0x14),
-# and the ports are 32-bit rather than 16 — another instance of the per-part
-# register data that belongs in a descriptor.
+# OFFSET FOOTGUN (corrected 2026-07): the nRF datasheet puts OUT at 0x504 and
+# DIR at 0x514 from the GPIO *block base* (0x50000000 for P0), but Renode's
+# nrf52840.repl registers gpio0/gpio1 at 0x50000500/0x50000800 — the register
+# window, not the block base — and `sysbus.gpio0 ReadDoubleWord` takes offsets
+# relative to that registration point. Verified against the installed Renode
+# 1.16.1: reads at 0x504/0x514 log "Unhandled read from offset 0x504/0x514"
+# and return 0 (so the previous odr_offset = 0x504 always read 0 and no GPIO
+# edge could ever fire), while OUT at 0x004 and DIR at 0x014 read back as
+# written. Peripheral-relative offsets are therefore datasheet-offset minus
+# 0x500.
+#
+# DIRECTION: DIR at peripheral offset 0x014, 1 bit per pin, 1 = output
+# (dir_bits encoding). Renode's NRF52840_GPIO keeps DIR coherent with the
+# PIN_CNF[n].DIR writes Zephyr-style firmware uses, so reading DIR reflects
+# either configuration path.
 [soc]
 backend = "renode"
 machine = "nrf52"
@@ -16,13 +28,15 @@ mcu_label = "nRF52840 (ARM Cortex-M4)"
 [[soc.ports]]
 letter = "0"
 peripheral = "gpio0"
-odr_offset = 0x504
+odr_offset = 0x4
 width = 32
+dir = { offset = 0x14, encoding = "dir_bits" }
 [[soc.ports]]
 letter = "1"
 peripheral = "gpio1"
-odr_offset = 0x504
+odr_offset = 0x4
 width = 32
+dir = { offset = 0x14, encoding = "dir_bits" }
 
 # No I2C/SPI controllers wired for this part.
 [soc.i2c]

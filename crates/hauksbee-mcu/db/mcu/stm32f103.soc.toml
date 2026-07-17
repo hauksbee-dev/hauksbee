@@ -5,6 +5,13 @@
 # STM32F1 GPIO output-data register is at offset 0x0C. The F4 family puts it at
 # 0x14 — read the wrong offset and you observe the wrong register. Compare
 # stm32f4_discovery.soc.toml, which sets odr_offset = 0x14.
+#
+# DIRECTION: the F1 has no MODER; direction lives in CRL (pins 0-7, offset
+# 0x00) and CRH (pins 8-15, offset 0x04), 4 bits per pin, where the low 2 MODE
+# bits != 0b00 mean output (GP or AF — the F1 encodes AF outputs here too).
+# Verified against the installed Renode 1.16.1: STM32F1GPIOPort reads CRL/CRH
+# back as written. The stm32f1_crl_crh encoding reads CRL at `offset` and CRH
+# at `offset + 4`.
 [soc]
 backend = "renode"
 machine = "f103"
@@ -20,36 +27,43 @@ letter = "A"
 peripheral = "gpioPortA"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 [[soc.ports]]
 letter = "B"
 peripheral = "gpioPortB"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 [[soc.ports]]
 letter = "C"
 peripheral = "gpioPortC"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 [[soc.ports]]
 letter = "D"
 peripheral = "gpioPortD"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 [[soc.ports]]
 letter = "E"
 peripheral = "gpioPortE"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 [[soc.ports]]
 letter = "F"
 peripheral = "gpioPortF"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 [[soc.ports]]
 letter = "G"
 peripheral = "gpioPortG"
 odr_offset = 0x0C
 width = 16
+dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 
 [soc.i2c]
 # The STM32F103 thermostat firmware uses i2c1.

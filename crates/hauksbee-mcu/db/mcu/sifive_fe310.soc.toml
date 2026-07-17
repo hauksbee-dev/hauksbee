@@ -1,6 +1,14 @@
 # SiFive FE310 (HiFive1) RISC-V: one 32-bit GPIO port, uart0, 16 MHz.
 # The FE310 GPIO output value register (`port`) is at offset 0x0C.
 #
+# No `dir` map: the FE310 GPIO output-enable (`output_en`) sits at offset 0x08
+# in the datasheet, but a Monitor register probe against the installed Renode
+# 1.16.1 SiFive_GPIO model hung on the 0x08 access rather than reading back, so
+# the read-back path is unverified. A dir map whose read fails would mask every
+# edge to zero — strictly worse than the status quo — so direction stays
+# unobservable on this part until `dir = { offset = 0x08, encoding =
+# "dir_bits" }` is verified against a live machine.
+#
 # BRING-UP FOOTGUN (why post_load_setup exists): the FE310 Zephyr shell demo's
 # ELF entry does not point at the bring-up code. The upstream Renode resc sets PC
 # to `vinit` and tags the PRCI clock registers so the HFROSC/PLL config reads as

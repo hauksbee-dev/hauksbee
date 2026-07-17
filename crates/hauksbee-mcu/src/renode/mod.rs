@@ -70,6 +70,81 @@ pub struct PortMap {
     pub odr_offset: u32,
     /// Number of bits in this port (usually 16 on STM32, 32 on nRF52).
     pub width: u8,
+    /// Where and how to read this port's DIRECTION/MODE register, if the
+    /// platform model supports reading it back. `None` keeps the old
+    /// conservative behavior: every ODR bit change is reported as a drive and
+    /// direction stays unobservable ([`Mcu::drive_direction_observable`] false).
+    ///
+    /// A WRONG dir map silently corrupts the co-sim worse than no map (a mask
+    /// that reads as 0 suppresses every edge), so a descriptor only carries one
+    /// once the register offset AND the Renode model's read-back are verified
+    /// against a live machine — see the per-part notes in `db/mcu/*.soc.toml`.
+    #[serde(default)]
+    pub dir: Option<DirMap>,
+}
+
+/// How a port's direction/mode register is read and decoded to a per-pin
+/// "configured as output" mask. Families differ enough that the encoding is an
+/// enum, not a bit-width parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirMap {
+    /// Byte offset of the direction/mode register within the peripheral (for
+    /// [`DirEncoding::Stm32f1CrlCrh`] this is CRL; CRH is read at `offset + 4`).
+    pub offset: u32,
+    /// How the register value maps to an output mask.
+    pub encoding: DirEncoding,
+}
+
+/// Per-family decoding of a direction/mode register into a "1 = configured as
+/// output" pin mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirEncoding {
+    /// STM32F4/L4/F7-style MODER: 2 bits per pin, `0b01` = general-purpose
+    /// output. AF mode (`0b10`) is deliberately NOT counted: an AF pin may be
+    /// an input function, and the boot-state consumers of this mask reason
+    /// about firmware GPIO drives.
+    Moder,
+    /// STM32F1-style CRL/CRH: 4 bits per pin, CRL at `offset` covers pins 0-7,
+    /// CRH at `offset + 4` covers pins 8-15. The low 2 bits of each nibble are
+    /// MODE; any non-`0b00` MODE is an output (GP or AF, push-pull or
+    /// open-drain — the F1 encodes AF *outputs* here, unlike MODER).
+    Stm32f1CrlCrh,
+    /// One bit per pin, 1 = output (nRF52 `DIR`, RP2040 SIO `GPIO_OE`).
+    DirBits,
+}
+
+/// Decode a direction/mode register read into a "1 = output" pin mask.
+/// `low` is the word at `DirMap::offset`; `high` is the word at `offset + 4`
+/// (only meaningful for [`DirEncoding::Stm32f1CrlCrh`], pass 0 otherwise).
+/// Bits at or above `width` are cleared so a narrow bank never reports
+/// phantom pins.
+fn decode_dir_mask(encoding: DirEncoding, low: u32, high: u32, width: u8) -> u32 {
+    let mut mask = 0u32;
+    match encoding {
+        DirEncoding::Moder => {
+            for pin in 0..16u32 {
+                if (low >> (2 * pin)) & 0b11 == 0b01 {
+                    mask |= 1 << pin;
+                }
+            }
+        }
+        DirEncoding::Stm32f1CrlCrh => {
+            for pin in 0..8u32 {
+                if (low >> (4 * pin)) & 0b11 != 0 {
+                    mask |= 1 << pin;
+                }
+                if (high >> (4 * pin)) & 0b11 != 0 {
+                    mask |= 1 << (pin + 8);
+                }
+            }
+        }
+        DirEncoding::DirBits => mask = low,
+    }
+    if width < 32 {
+        mask &= (1u32 << width) - 1;
+    }
+    mask
 }
 
 /// How a modeled ADC voltage is delivered into the Renode machine for one
@@ -710,6 +785,23 @@ fn handle_spi_stream(
     }
 }
 
+/// Whether every port the backend will poll carries a direction-register map.
+/// `active` is the engine's wired-ports hint (`None` = every configured port
+/// is polled). This is the whole `drive_direction_observable` rule for the
+/// Renode backend, factored out so it is testable without spawning a process.
+fn dir_covers_ports(config: &RenodeConfig, active: Option<&[char]>) -> bool {
+    let covered = |letter: char| {
+        config
+            .ports
+            .iter()
+            .any(|p| p.letter == letter && p.dir.is_some())
+    };
+    match active {
+        Some(active) => active.iter().all(|&l| covered(l)),
+        None => config.ports.iter().all(|p| p.dir.is_some()),
+    }
+}
+
 /// Renode-backed [`Mcu`].
 pub struct RenodeBackend {
     config: RenodeConfig,
@@ -719,8 +811,15 @@ pub struct RenodeBackend {
     uart: Option<UartSocket>,
     _process: RenodeProcess,
 
-    /// Last-read ODR per port letter, for edge synthesis.
+    /// Last-read ODR per port letter, for edge synthesis. For a port with a
+    /// dir map this stores the *output-masked* value (ODR & dir), so the diff
+    /// basis matches what is reported.
     last_odr: HashMap<char, u32>,
+    /// Last decoded "configured as output" mask per port letter, from that
+    /// port's direction register (see [`DirMap`]). Only ports with a dir map
+    /// get entries. Cached at each poll so the `&self` trait surface
+    /// (`pins_configured_output`) can report it without a Monitor round-trip.
+    last_dir: HashMap<char, u32>,
     /// If set, only these port letters are polled each chunk (the ports the
     /// engine actually wired). `None` means poll every configured port.
     active_ports: Option<Vec<char>>,
@@ -828,6 +927,7 @@ impl RenodeBackend {
             uart,
             _process: process,
             last_odr,
+            last_dir: HashMap::new(),
             active_ports: None,
             on_pin_change: None,
             on_uart: None,
@@ -862,10 +962,43 @@ impl RenodeBackend {
         }
     }
 
+    /// Read one port's direction/mode register and decode it to a "1 = output"
+    /// mask, updating the `last_dir` cache. `None` when the port has no dir
+    /// map. A failed Monitor read falls back to the cached mask (same
+    /// discipline as `read_odr`), so a transient hiccup never reads as a mass
+    /// pin release.
+    fn read_dir(&mut self, port: &PortMap) -> Option<u32> {
+        let dir = port.dir?;
+        let read_word = |monitor: &mut Monitor, offset: u32| -> Option<u32> {
+            let cmd = format!("sysbus.{} ReadDoubleWord 0x{:X}", port.peripheral, offset);
+            monitor.command(&cmd).ok().and_then(|r| parse_hex_or_dec(&r))
+        };
+        let low = read_word(&mut self.monitor, dir.offset);
+        let high = match dir.encoding {
+            DirEncoding::Stm32f1CrlCrh => read_word(&mut self.monitor, dir.offset + 4),
+            _ => Some(0),
+        };
+        let mask = match (low, high) {
+            (Some(l), Some(h)) => decode_dir_mask(dir.encoding, l, h, port.width),
+            // Read failure: hold the previous mask rather than decoding
+            // half-read garbage into a phantom release/drive.
+            _ => *self.last_dir.get(&port.letter).unwrap_or(&0),
+        };
+        self.last_dir.insert(port.letter, mask);
+        Some(mask)
+    }
+
     /// Poll the relevant ports' ODRs, diff against the snapshot, fire edges.
     ///
     /// If the engine has hinted which ports are wired (`active_ports`), only
     /// those are queried; otherwise every configured port is polled.
+    ///
+    /// For a port with a dir map, the ODR is masked by the decoded
+    /// output-direction mask before diffing: an ODR bit on a pin the firmware
+    /// has NOT configured as an output is not a drive (on STM32/nRF it is
+    /// meaningless until the pin becomes an output), so it must not synthesize
+    /// a driven-level edge. Ports without a dir map keep the old behavior —
+    /// every ODR change is reported, and direction stays unobservable.
     fn poll_gpio_edges(&mut self) {
         let ports: Vec<PortMap> = match &self.active_ports {
             Some(active) => self
@@ -883,7 +1016,11 @@ impl RenodeBackend {
         // (05 §1.1). Snapshot before the mutable-callback borrow.
         let cyc = self.cycles;
         for port in &ports {
-            let new = self.read_odr(port);
+            let dir_mask = self.read_dir(port);
+            let odr = self.read_odr(port);
+            // Only a configured-output pin's ODR bit is a drive; a port with no
+            // dir map reports every ODR bit (mask all-ones), the old behavior.
+            let new = odr & dir_mask.unwrap_or(!0);
             let prev = *self.last_odr.get(&port.letter).unwrap_or(&0);
             if new != prev {
                 let changed = new ^ prev;
@@ -1614,6 +1751,37 @@ impl Mcu for RenodeBackend {
         self.active_ports = Some(known);
     }
 
+    fn pins_configured_output(&self) -> Vec<PinId> {
+        // From the per-poll direction-register cache. Latest direction wins
+        // (the mask IS the current register value), matching the AVR DDR
+        // semantics: a pin released back to input drops out of the set. Ports
+        // without a dir map contribute nothing — conservative, and consistent
+        // with `drive_direction_observable` reporting false for them.
+        let mut out = Vec::new();
+        for port in &self.config.ports {
+            let Some(&mask) = self.last_dir.get(&port.letter) else {
+                continue;
+            };
+            for bit in 0..port.width {
+                if (mask >> bit) & 1 != 0 {
+                    out.push(PinId {
+                        port: port.letter,
+                        bit,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    fn drive_direction_observable(&self) -> bool {
+        // True once every port this backend polls carries a verified dir map:
+        // then an empty configured-output set is authoritative ("nothing is an
+        // output"), not "cannot tell". If the engine hinted the wired ports,
+        // only those must be covered; otherwise every configured port must be.
+        dir_covers_ports(&self.config, self.active_ports.as_deref())
+    }
+
     fn set_i2c_slave_addresses(&mut self, addresses: &[u8]) {
         self.i2c_slave_addresses = addresses.to_vec();
         self.i2c_slave_addresses.sort_unstable();
@@ -1739,6 +1907,122 @@ mod tests {
         assert_eq!(c.uart.as_deref(), Some("sysbus.usart1"));
         // Stock platforms model no ADC → no injection map, loud-drop path.
         assert!(c.adc_channels.is_empty());
+        // Direction: every F1 port maps CRL/CRH at offset 0x00 (CRH read at
+        // offset + 4 by the encoding), verified against Renode 1.16.1's
+        // STM32F1GPIOPort read-back.
+        for p in &c.ports {
+            assert_eq!(
+                p.dir,
+                Some(DirMap {
+                    offset: 0x00,
+                    encoding: DirEncoding::Stm32f1CrlCrh
+                }),
+                "port {} must carry the F1 CRL/CRH dir map",
+                p.letter
+            );
+        }
+    }
+
+    /// The per-family direction decoders, pinned against the reference-manual
+    /// encodings the shipped descriptors rely on.
+    #[test]
+    fn dir_mask_decoding() {
+        // MODER (F4/L4/F7): 2 bits/pin, 0b01 = GP output. Pin0 input (00),
+        // pin1 output (01), pin2 AF (10, NOT counted), pin3 analog (11, not
+        // counted), pin12 output.
+        let moder = 0b01 << 2 | 0b10 << 4 | 0b11 << 6 | 0b01 << 24;
+        assert_eq!(
+            decode_dir_mask(DirEncoding::Moder, moder, 0, 16),
+            (1 << 1) | (1 << 12)
+        );
+        // The blinky-style PA5 output: MODER5 = 0b01.
+        assert_eq!(decode_dir_mask(DirEncoding::Moder, 0b01 << 10, 0, 16), 1 << 5);
+
+        // STM32F1 CRL/CRH: 4 bits/pin nibbles; MODE (low 2 bits) != 0 means
+        // output, in any CNF. 0x3 = GP push-pull 50 MHz, 0xB = AF push-pull
+        // (MODE=11 → output), 0x4 = floating input (MODE=00).
+        let crl = 0x3 | (0x4 << 4) | (0xB << 8); // pin0 out, pin1 in, pin2 AF out
+        let crh = 0x3 << 20; // pin13 out (the blue-pill LED nibble)
+        assert_eq!(
+            decode_dir_mask(DirEncoding::Stm32f1CrlCrh, crl, crh, 16),
+            (1 << 0) | (1 << 2) | (1 << 13)
+        );
+        // All-input reset value decodes to no outputs.
+        assert_eq!(decode_dir_mask(DirEncoding::Stm32f1CrlCrh, 0, 0, 16), 0);
+
+        // DirBits (nRF52 DIR / RP2040 GPIO_OE): identity, clipped to width.
+        assert_eq!(decode_dir_mask(DirEncoding::DirBits, 0x2001, 0, 32), 0x2001);
+        assert_eq!(
+            decode_dir_mask(DirEncoding::DirBits, 0xFFFF_FFFF, 0, 30),
+            0x3FFF_FFFF,
+            "bits at/above the bank width are phantom pins and must be cleared"
+        );
+    }
+
+    /// The shipped descriptors' direction maps and the corrected nRF OUT
+    /// offset (peripheral-relative 0x4, NOT the datasheet block-relative
+    /// 0x504 that Renode's registration point makes an unhandled read).
+    #[test]
+    fn dir_map_descriptor_shape() {
+        let f4 = RenodeConfig::stm32f4_discovery();
+        for p in &f4.ports {
+            assert_eq!(
+                p.dir,
+                Some(DirMap {
+                    offset: 0x00,
+                    encoding: DirEncoding::Moder
+                }),
+                "F4 port {} must carry the MODER dir map",
+                p.letter
+            );
+        }
+
+        let nrf = RenodeConfig::nrf52840();
+        for p in &nrf.ports {
+            assert_eq!(
+                p.odr_offset, 0x4,
+                "nRF OUT is peripheral-relative 0x4 (gpio0/1 are registered at \
+                 the 0x…500 register window, so 0x504 reads as unhandled → 0)"
+            );
+            assert_eq!(
+                p.dir,
+                Some(DirMap {
+                    offset: 0x14,
+                    encoding: DirEncoding::DirBits
+                }),
+                "nRF port {} must carry the DIR dir map",
+                p.letter
+            );
+        }
+
+        // Unverified platforms carry NO dir map: a wrong one would mask every
+        // edge to zero, so absence (conservative, direction unobservable) is
+        // the required state until a live Renode verifies the register.
+        for c in [RenodeConfig::rp2040(), RenodeConfig::sifive_fe310()] {
+            for p in &c.ports {
+                assert_eq!(p.dir, None, "unverified platform must not claim a dir map");
+            }
+        }
+    }
+
+    /// `drive_direction_observable` follows dir-map coverage of the polled
+    /// ports (via [`dir_covers_ports`], the exact function the backend calls):
+    /// full coverage → true, an uncovered active port → false, and the
+    /// active-ports hint narrows which ports must be covered.
+    #[test]
+    fn dir_observability_follows_port_coverage() {
+        let f103 = RenodeConfig::stm32f103();
+        assert!(dir_covers_ports(&f103, None));
+        assert!(dir_covers_ports(&f103, Some(&['A', 'C'])));
+        let rp = RenodeConfig::rp2040();
+        assert!(!dir_covers_ports(&rp, None));
+        assert!(!dir_covers_ports(&rp, Some(&['0'])));
+        // A mixed config: coverage decided per polled port.
+        let mut mixed = RenodeConfig::stm32f4_discovery();
+        mixed.ports[1].dir = None; // strip port B's map
+        assert!(!dir_covers_ports(&mixed, None));
+        assert!(dir_covers_ports(&mixed, Some(&['A', 'C'])));
+        assert!(!dir_covers_ports(&mixed, Some(&['A', 'B'])));
     }
 
     #[test]
