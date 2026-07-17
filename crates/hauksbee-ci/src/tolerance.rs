@@ -203,12 +203,24 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
         }
     }
 
-    // Overrides with a tolerance: nominal is the override's own value. Applied
-    // last, so they win over any [[tolerance]] pattern covering the same ref.
+    // Overrides with a tolerance: applied last, so they win over any [[tolerance]]
+    // pattern covering the same ref. The nominal must be the ref's EFFECTIVE board
+    // value — the LAST override on that ref (apply_overrides is last-wins) — not
+    // the value of whichever (possibly earlier) override carries the tolerance
+    // field. Otherwise duplicate overrides on one ref spread the ensemble around a
+    // stale nominal while the board runs the last override's value.
+    let mut last_value: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for ov in &spec.overrides {
+        last_value.insert(ov.reference.as_str(), ov.value.as_str());
+    }
     for ov in &spec.overrides {
         let Some(percent) = ov.tolerance else { continue };
         let dist = Distribution::parse(ov.distribution.as_deref().unwrap_or("uniform"))?;
-        let nominal = parse_nominal(&ov.reference, &ov.value)?;
+        let eff_value = last_value
+            .get(ov.reference.as_str())
+            .copied()
+            .unwrap_or(ov.value.as_str());
+        let nominal = parse_nominal(&ov.reference, eff_value)?;
         by_ref.insert(
             ov.reference.clone(),
             ResolvedTolerance {
@@ -472,6 +484,30 @@ mod tests {
             percent,
             distribution: dist,
         }
+    }
+
+    #[test]
+    fn duplicate_override_spreads_around_the_last_value() {
+        // R55: apply_overrides is last-wins (the board runs the LAST override's
+        // value), but resolve() keyed the ensemble nominal off whichever override
+        // carried the tolerance field. Two overrides on R1 — the first with a
+        // tolerance, the second setting the real value — must spread around the
+        // LAST value, not the earlier one.
+        let spec: Spec = toml::from_str(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+             [[override]]\nref = \"R1\"\nvalue = \"10k\"\ntolerance = 5\n\
+             [[override]]\nref = \"R1\"\nvalue = \"12k\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        )
+        .unwrap();
+        let board = ExtractedBoard { name: "b".into(), nets: vec![], components: vec![] };
+        let resolved = resolve(&spec, &board).unwrap();
+        let r1 = resolved.iter().find(|r| r.reference == "R1").expect("R1 resolved");
+        assert!(
+            (r1.nominal_si - 12_000.0).abs() < 1.0,
+            "must spread around the last override (12k), got {}",
+            r1.nominal_si
+        );
     }
 
     #[test]
