@@ -129,7 +129,7 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
     // it must be loaded by path to recurse the hierarchy; everything else is
     // self-contained and sniffed from its content.
-    let board = if is_gerber {
+    let mut board = if is_gerber {
         ExtractedBoard::from_gerber(&cfg.board).map_err(|e| {
             anyhow::anyhow!(
                 "gerber extraction from '{}' failed: {e}. Point at the gerber job \
@@ -146,6 +146,15 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     } else {
         ExtractedBoard::from_auto(&text)?
     };
+    // Fall back to the source file stem when the layout carries no title-block
+    // name, so every downstream identifier (the JSON `board` field, report
+    // headers) is usable instead of blank — gerber, DSL, and many real boards
+    // ship no title.
+    if board.name.trim().is_empty() {
+        if let Some(stem) = cfg.board.file_stem().and_then(|s| s.to_str()) {
+            board.name = stem.to_string();
+        }
+    }
     // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
     // < ~/.config/hauksbee/models (user) < --models-dir (highest). A custom
     // behavioural part dropped in any of these loads with no recompile.

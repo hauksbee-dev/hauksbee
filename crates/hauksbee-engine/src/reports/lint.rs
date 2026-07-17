@@ -92,7 +92,18 @@ pub fn emit_resources(
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => print!("{}", crate::plain_netlint(&report).render()),
-        OutputMode::Text => print!("{}", hauksbee_extract::render_netlint(&report)),
+        OutputMode::Text => {
+            print!("{}", hauksbee_extract::render_netlint(&report));
+            // Route a novice from the expert text (bare severity + jargon) to the
+            // already-built plain-language what/why/fix. Only when there is
+            // something to explain, and only to stderr so pipes stay clean.
+            if !report.findings.is_empty() {
+                eprintln!(
+                    "note: run the same command with --plain for a plain-language \
+                     explanation of each finding and how to fix it."
+                );
+            }
+        }
     }
     if strict && lint_fails(&report) {
         std::process::exit(2);
