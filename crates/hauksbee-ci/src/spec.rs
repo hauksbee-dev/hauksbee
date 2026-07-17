@@ -1142,6 +1142,18 @@ impl Assertion {
                         self.id.as_deref().unwrap_or("?")
                     )));
                 }
+                // The `bytes` and `field` forms are mutually exclusive:
+                // check_peripheral evaluates `bytes` first and RETURNS, so a
+                // spec that sets both silently drops the field/min/max constraint
+                // (and label() reports only the bytes check) — a false green if
+                // the field bound is violated. Reject it, like toggle's
+                // freq_hz+min_toggles rejection above.
+                if self.bytes.is_some() && self.field.is_some() {
+                    return Err(SpecError::Invalid(format!(
+                        "peripheral assertion on '{}' sets both `bytes` and `field`; use one (EEPROM-bytes OR a field range) — a combined spec silently drops the field check",
+                        self.id.as_deref().unwrap_or("?")
+                    )));
+                }
             }
             "rail_window" => {
                 if self.net.is_none() {
@@ -1697,6 +1709,46 @@ for_max_ms = 2.0
 "#,
         );
         assert!(ok.validate().is_ok(), "dip_below with a for_max_ms partner must pass");
+    }
+
+    #[test]
+    fn peripheral_with_both_bytes_and_field_is_rejected() {
+        // R40: check_peripheral evaluates `bytes` first and RETURNS, so a spec
+        // that sets both `bytes` and a `field`+min/max silently drops the field
+        // constraint — a false green if the field bound is violated. The dual spec
+        // must be rejected, like toggle's freq_hz+min_toggles.
+        let spec = spec_from(
+            r#"
+name = "t"
+board = "board.kicad_pcb"
+duration_ms = 10
+frame_ms = 1.0
+
+[[assert]]
+kind = "peripheral"
+id = "EE1"
+bytes = "48 69"
+field = "writes"
+min = 5
+"#,
+        );
+        let err = spec
+            .validate()
+            .expect_err("a peripheral with both bytes and field must fail, not silently drop field");
+        assert!(
+            matches!(&err, SpecError::Invalid(m) if m.contains("bytes") && m.contains("field")),
+            "expected a bytes/field mutual-exclusion error, got {err:?}"
+        );
+
+        // Each form alone still validates.
+        let bytes_only = spec_from(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nbytes=\"48 69\"\n",
+        );
+        assert!(bytes_only.validate().is_ok(), "bytes-only peripheral must pass");
+        let field_only = spec_from(
+            "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nfield=\"writes\"\nmin=5\n",
+        );
+        assert!(field_only.validate().is_ok(), "field-only peripheral must pass");
     }
 
     #[test]

@@ -2481,14 +2481,25 @@ fn bind_analog_switch(
     let ron = model.params.get_f64("ron").unwrap_or(50.0);
     let roff = model.params.get_f64("roff").unwrap_or(1e9);
     let vth = model.params.get_f64("vth").unwrap_or(1.5);
+    // The `s0` / NC throw conducts when the control is LOW (role_from_pinfunction
+    // maps nc->s0 with exactly this contract, and the true-SPDT branch honours it).
+    // The default control-HIGH polarity below would invert it — modelling the
+    // contact open exactly when the real one is closed. When `b` is the s0 net,
+    // sense the inverted control (vss - ctrl) so com<->s0 closes on control LOW.
+    let b_is_control_low = pick(roles, &["s0"]).copied() == Some(b);
+    let (cp, cn, von, voff) = if b_is_control_low {
+        (ctrl_n, ctrl, -vth + 0.1, -vth - 0.1)
+    } else {
+        (ctrl, ctrl_n, vth + 0.1, vth - 0.1)
+    };
     circuit.add(Device::VSwitch {
         name: comp.reference.clone(),
         a,
         b,
-        ctrl_p: ctrl,
-        ctrl_n,
-        von: vth + 0.1,
-        voff: vth - 0.1,
+        ctrl_p: cp,
+        ctrl_n: cn,
+        von,
+        voff,
         ron,
         roff,
     });
@@ -3728,6 +3739,51 @@ mod digital_ro_tests {
         assert!(
             matches!(outcome, BindOutcome::Unresolved { .. }),
             "an unconnected switch path must be reported as open/unresolved, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn spst_fallback_s0_throw_conducts_on_control_low() {
+        // R40: the s0 / NC throw conducts when the control is LOW (role_from_pinfunction
+        // maps nc->s0 with this contract). The SPST fallback used the default
+        // control-HIGH polarity, inverting it — the modeled com<->s0 contact was
+        // OPEN exactly when the real one is CLOSED. A partially-wired 3157
+        // (com + s0 + ctrl, s1 floating) must stamp a VSwitch whose sense is
+        // inverted so it closes on control LOW.
+        let model = make_entry(
+            "generic_analog_switch",
+            ComponentKind::AnalogSwitch,
+            "NC SPST: com + s0 + ctrl",
+            hauksbee_models::Params::default(),
+            std::collections::BTreeMap::new(),
+        );
+        let mut circuit = Circuit::new();
+        let gate = circuit.node("GATE");
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        roles.insert("com".into(), circuit.node("SIG"));
+        roles.insert("s0".into(), circuit.node("OUT"));
+        roles.insert("ctrl".into(), gate);
+        let power_nets: HashMap<String, f64> = HashMap::new();
+
+        let _ = bind_analog_switch(&bare_comp("U8"), &model, &mut circuit, &roles, &power_nets);
+
+        let (cp, cn, von, voff) = circuit
+            .devices
+            .iter()
+            .find_map(|d| match d {
+                Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } => {
+                    Some((*ctrl_p, *ctrl_n, *von, *voff))
+                }
+                _ => None,
+            })
+            .expect("a VSwitch for the com<->s0 throw");
+        // Inverted sense: ctrl_p is the vss/ground reference and ctrl_n is the gate,
+        // with negative thresholds — the switch closes when V(gate) is LOW.
+        assert_eq!(cp, NodeId::GROUND, "s0 throw senses (vss - ctrl): ctrl_p is vss");
+        assert_eq!(cn, gate, "ctrl_n is the control net");
+        assert!(
+            von < 0.0 && voff < von,
+            "control-low polarity requires negative thresholds, got von={von} voff={voff}"
         );
     }
 
