@@ -286,6 +286,42 @@ pub trait Mcu {
         false
     }
 
+    // ---- Co-sim coverage honesty ----
+
+    /// ADC channels whose [`Mcu::set_analog_in`] injections were DROPPED because
+    /// this backend has no injection recipe for them (e.g. a Renode platform with
+    /// no `AdcChannelMap`). The scheduler reads this after a run to surface a
+    /// coverage warning on every report surface — a dropped injection means the
+    /// firmware never saw the modeled voltage, so results on that pin are
+    /// meaningless and must never read as a healthy co-sim.
+    ///
+    /// Default empty: backends that deliver every injection (simavr) report no
+    /// drops. Sorted ascending so the reported order is deterministic.
+    fn adc_dropped_channels(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Whether this backend can actually host engine-provided I2C slave models —
+    /// i.e. whether [`Mcu::on_i2c`] wires the callback to something the firmware's
+    /// bus traffic reaches. False means a bound I2C peripheral is silently never
+    /// exercised (the Renode backend with an empty `i2c_controllers` list), which
+    /// the scheduler records and surfaces as a coverage warning.
+    ///
+    /// Default true: the in-process AVR core intercepts TWI natively, and the
+    /// QEMU backend serves the RAM-mailbox path plus its machine's own emulated
+    /// devices (its remaining gaps are surfaced by the CI-level QEMU warnings).
+    fn i2c_bus_modeled(&self) -> bool {
+        true
+    }
+
+    /// Whether this backend can host engine-provided SPI slave models on the
+    /// given controller (`None` = the backend's default/first controller, the
+    /// [`Mcu::on_spi`] path). False means a bound SPI peripheral is silently
+    /// never exercised; see [`Mcu::i2c_bus_modeled`].
+    fn spi_bus_modeled(&self, _controller: Option<&str>) -> bool {
+        true
+    }
+
     /// Hint which 7-bit I2C slave addresses are attached to the MCU-facing bus.
     ///
     /// Push-style backends can ignore this. Backends that need to register

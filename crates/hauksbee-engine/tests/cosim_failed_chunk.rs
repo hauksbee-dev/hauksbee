@@ -93,6 +93,25 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
                 mode: mode.as_str().to_string(),
             })
             .collect(),
+        adc_dropped: sched
+            .adc_dropped()
+            .into_iter()
+            .map(|d| hauksbee_engine::result::CosimAdcDrop {
+                mcu_ref: d.mcu_ref,
+                channel: d.channel,
+                net: d.net,
+                parts: d.parts,
+            })
+            .collect(),
+        unexercised_buses: sched
+            .unexercised_buses()
+            .iter()
+            .map(|b| hauksbee_engine::result::CosimUnexercisedBus {
+                id: b.id.clone(),
+                bus: b.bus.to_string(),
+                controller: b.controller.clone(),
+            })
+            .collect(),
     }
 }
 

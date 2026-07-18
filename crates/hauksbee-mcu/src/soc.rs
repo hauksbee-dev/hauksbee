@@ -137,9 +137,16 @@ pub enum SocError {
     BadSpec(String),
 
     /// No descriptor was found for a `backend:part` spec (not in any override
-    /// directory, not among the built-ins).
-    #[error("no SoC descriptor found for {spec:?} (searched {searched} and the built-ins)")]
-    NotFound { spec: String, searched: String },
+    /// directory, not among the built-ins). `hint` carries the did-you-mean
+    /// suggestion and the built-in list, pre-formatted by [`SocConfig::resolve`]
+    /// so every wrapper (the scheduler's `anyhow` context included) shows the
+    /// user the valid part tokens instead of a dead end.
+    #[error("no SoC descriptor found for {spec:?} (searched {searched} and the built-ins).{hint}")]
+    NotFound {
+        spec: String,
+        searched: String,
+        hint: String,
+    },
 
     /// A descriptor file existed but could not be read.
     #[error("reading SoC descriptor {path}: {source}")]
@@ -604,6 +611,15 @@ impl SocConfig {
         // up front so "reonde:stm32f103" is an UnknownBackend, not a NotFound.
         let expected = Backend::parse(backend_tok)?;
 
+        // An EXPLICITLY-set override dir that does not exist is a silent
+        // fallback trap: every descriptor the user thinks they installed is
+        // skipped and the built-in loads instead. Warn loudly (the
+        // auto-discovered ~/.config dir is legitimately absent on most
+        // machines and stays quiet).
+        if let Some(msg) = missing_env_dir_warning() {
+            eprintln!("WARNING: {msg}");
+        }
+
         // (1)+(2): override directories, highest priority first.
         for dir in override_dirs() {
             let path = dir.join(format!("{part}.soc.toml"));
@@ -644,6 +660,14 @@ impl SocConfig {
         if let Some((_, src)) = EMBEDDED.iter().find(|(k, _)| *k == spec) {
             // The embedded key IS the full `backend:part` spec, so the declared
             // backend matches `expected` by construction; no re-check needed.
+            //
+            // Fell through to the built-in even though an override dir HAS
+            // other descriptors: hint at the exact filename the resolver
+            // expected, so a mis-named file (`stm32f103-mine.soc.toml`) is a
+            // one-line diagnosis rather than a silent built-in fallback.
+            for msg in builtin_fallback_hints(part, &override_dirs()) {
+                eprintln!("note: {msg}");
+            }
             return Self::from_soc_toml(src);
         }
 
@@ -659,6 +683,7 @@ impl SocConfig {
             } else {
                 searched
             },
+            hint: not_found_hint(spec, &Self::builtin_specs()),
         })
     }
 
@@ -699,6 +724,247 @@ fn override_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from(home).join(".config/hauksbee/mcu"));
     }
     dirs
+}
+
+/// The warning for a SET-but-missing `$HAUKSBEE_MCU_DIR`, or `None` when the
+/// variable is unset/empty or the directory exists. Only the EXPLICIT env var
+/// warns: the auto-discovered `~/.config/hauksbee/mcu` dir is legitimately
+/// absent on most machines and must stay silent. Split from the eprintln so
+/// the wording is unit-testable ([`env_dir_missing_warning`] is the pure core).
+fn missing_env_dir_warning() -> Option<String> {
+    let d = std::env::var_os("HAUKSBEE_MCU_DIR")?;
+    if d.is_empty() {
+        return None;
+    }
+    env_dir_missing_warning(&PathBuf::from(d))
+}
+
+/// Pure core of [`missing_env_dir_warning`]: warn iff `dir` is not a directory.
+fn env_dir_missing_warning(dir: &std::path::Path) -> Option<String> {
+    if dir.is_dir() {
+        return None;
+    }
+    Some(format!(
+        "HAUKSBEE_MCU_DIR is set to '{}' but that directory does not exist — \
+         MCU descriptor overrides will NOT load and the embedded built-ins \
+         will be used instead",
+        dir.display()
+    ))
+}
+
+/// When resolution is about to fall through to a BUILT-IN even though an
+/// override directory contains other `*.soc.toml` descriptors, produce one
+/// hint per such directory naming the exact filename the resolver expected
+/// (`<part>.soc.toml`). This catches the mis-named-file trap: the user
+/// installed a descriptor, the resolver never looked at it, and the built-in
+/// silently won. Directories with no descriptors (or that don't exist) stay
+/// silent — nothing there was plausibly meant to override.
+fn builtin_fallback_hints(part: &str, dirs: &[PathBuf]) -> Vec<String> {
+    let mut hints = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut others: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".soc.toml"))
+            .collect();
+        others.sort();
+        if !others.is_empty() {
+            hints.push(format!(
+                "using the built-in '{part}' descriptor: {} contains [{}] but not \
+                 '{part}.soc.toml' (the exact filename the resolver looks for)",
+                dir.display(),
+                others.join(", ")
+            ));
+        }
+    }
+    hints
+}
+
+/// Build the [`SocError::NotFound`] hint: a nearest-match did-you-mean over the
+/// built-in specs plus the full valid list, so an unknown part token is a
+/// one-step fix rather than a dead end.
+fn not_found_hint(spec: &str, builtins: &[&'static str]) -> String {
+    let mut hint = String::new();
+    if let Some(near) = nearest_builtin(spec, builtins) {
+        hint.push_str(&format!(" Did you mean \"{near}\"?"));
+    }
+    hint.push_str(&format!(
+        " Available built-ins: {}. Run `hauksbee models list --builtin` to \
+         list them, or add a `<part>.soc.toml` descriptor in $HAUKSBEE_MCU_DIR \
+         or ~/.config/hauksbee/mcu (docs/extending/add-an-mcu-variant.md).",
+        builtins.join(", ")
+    ));
+    hint
+}
+
+/// The built-in spec closest to `spec`, or `None` when nothing is plausibly
+/// close. Comparison is on the `part` half; a same-backend candidate is
+/// preferred. Ranking is longest-common-prefix first, then edit distance —
+/// LCP-first is what makes `stm32f407` suggest `stm32f4_discovery` (LCP 7)
+/// over `stm32f103` (LCP 5, despite the smaller edit distance), mirroring how
+/// a human reads part families.
+fn nearest_builtin(spec: &str, builtins: &[&'static str]) -> Option<&'static str> {
+    let (backend, part) = spec.split_once(':').unwrap_or(("", spec));
+    let part = part.to_ascii_lowercase();
+    // Key = (usize::MAX - lcp, dist, backend_penalty): tuple order makes a
+    // bigger LCP compare smaller, so `<` picks it first.
+    let mut best: Option<(usize, usize, usize, &'static str)> = None;
+    for cand in builtins {
+        let (cb, cp) = cand.split_once(':').unwrap_or(("", cand));
+        let cp = cp.to_ascii_lowercase();
+        let lcp = part
+            .chars()
+            .zip(cp.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let dist = levenshtein(&part, &cp);
+        // Plausibility gate: share a meaningful family prefix, or be within a
+        // small edit distance. Without it every garbage token gets a random
+        // "did you mean".
+        if lcp < 4 && dist > part.len().max(3) / 2 {
+            continue;
+        }
+        let backend_penalty = usize::from(backend != cb);
+        // Order: bigger LCP wins, then smaller distance, then same backend.
+        let key = (usize::MAX - lcp, dist, backend_penalty);
+        if best.map_or(true, |(a, b, c, _)| key < (a, b, c)) {
+            best = Some((key.0, key.1, key.2, cand));
+        }
+    }
+    best.map(|(_, _, _, c)| c)
+}
+
+/// Classic Levenshtein edit distance (the same helper the engine's net
+/// did-you-mean uses; duplicated locally because hauksbee-mcu sits below the
+/// engine in the crate graph).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (n, m) = (a.len(), b.len());
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+    let mut prev: Vec<usize> = (0..=m).collect();
+    let mut cur = vec![0usize; m + 1];
+    for i in 1..=n {
+        cur[0] = i;
+        for j in 1..=m {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[m]
+}
+
+#[cfg(test)]
+mod not_found_honesty_tests {
+    use super::{
+        builtin_fallback_hints, env_dir_missing_warning, nearest_builtin, not_found_hint,
+        SocConfig, SocError,
+    };
+
+    // U3 finding 4: an unknown part token must name the valid built-ins and
+    // offer a nearest match, never a bare "not found" dead end.
+    #[test]
+    fn unknown_part_suggests_nearest_builtin_and_lists_them_all() {
+        let builtins = SocConfig::builtin_specs();
+        let hint = not_found_hint("renode:stm32f407", &builtins);
+        assert!(
+            hint.contains("Did you mean \"renode:stm32f4_discovery\"?"),
+            "stm32f407 must suggest the F4 Discovery descriptor: {hint}"
+        );
+        for b in &builtins {
+            assert!(hint.contains(b), "hint must list every built-in ({b}): {hint}");
+        }
+        assert!(
+            hint.contains("hauksbee models list --builtin"),
+            "hint must point at the listing command: {hint}"
+        );
+    }
+
+    #[test]
+    fn nearest_builtin_prefers_family_prefix_over_raw_edit_distance() {
+        let builtins = SocConfig::builtin_specs();
+        // LCP-first: stm32f4_discovery (LCP 7) beats stm32f103 (LCP 5) even
+        // though f103 is fewer edits away from f407.
+        assert_eq!(
+            nearest_builtin("renode:stm32f407", &builtins),
+            Some("renode:stm32f4_discovery")
+        );
+        // A near-typo of an exact name still resolves.
+        assert_eq!(
+            nearest_builtin("renode:nrf52480", &builtins),
+            Some("renode:nrf52840")
+        );
+        // Garbage gets NO suggestion rather than a random one.
+        assert_eq!(nearest_builtin("renode:zzz9", &builtins), None);
+    }
+
+    #[test]
+    fn resolve_error_display_carries_the_hint() {
+        // End-to-end: the real resolve() error Display (what the scheduler
+        // wraps verbatim into its anyhow context) must carry the suggestion.
+        let err = SocConfig::resolve("renode:stm32f407").unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(err, SocError::NotFound { .. }), "{msg}");
+        assert!(msg.contains("renode:stm32f4_discovery"), "{msg}");
+        assert!(msg.contains("hauksbee models list --builtin"), "{msg}");
+    }
+
+    // U3 finding 5: a SET-but-missing $HAUKSBEE_MCU_DIR warns; an existing one
+    // does not (pure-core test, no env mutation).
+    #[test]
+    fn missing_explicit_override_dir_warns_and_existing_one_does_not() {
+        let tmp = std::env::temp_dir().join(format!(
+            "hauksbee-soc-test-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let w = env_dir_missing_warning(&tmp).expect("a missing dir must warn");
+        assert!(w.contains("HAUKSBEE_MCU_DIR") && w.contains("does not exist"), "{w}");
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert!(env_dir_missing_warning(&tmp).is_none(), "an existing dir must not warn");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // U3 finding 5: falling through to a built-in while the override dir holds
+    // OTHER descriptors hints at the exact expected filename.
+    #[test]
+    fn builtin_fallback_names_the_expected_descriptor_filename() {
+        let tmp = std::env::temp_dir().join(format!(
+            "hauksbee-soc-test-fallback-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("stm32f103-mine.soc.toml"), "x").unwrap();
+        let hints = builtin_fallback_hints("stm32f103", &[tmp.clone()]);
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert!(
+            hints[0].contains("stm32f103.soc.toml")
+                && hints[0].contains("stm32f103-mine.soc.toml"),
+            "hint must name both the expected filename and what IS there: {}",
+            hints[0]
+        );
+        // An empty dir produces no hint (nothing there was meant to override).
+        let empty = tmp.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(builtin_fallback_hints("stm32f103", &[empty]).is_empty());
+        // A missing dir produces no hint either.
+        assert!(builtin_fallback_hints(
+            "stm32f103",
+            &[tmp.join("no-such-subdir")]
+        )
+        .is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 #[cfg(test)]

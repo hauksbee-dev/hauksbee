@@ -451,6 +451,31 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                     ),
                 });
             }
+            // Co-sim coverage honesty (U3): dropped ADC injections and
+            // never-exercised bus peripherals are silent-garbage modes; they
+            // ride the same Coverage note channel analog_valid uses, in
+            // addition to the structured CosimJson fields, so a consumer that
+            // only filters notes still sees them.
+            for d in engine.scheduler().adc_dropped() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: d.message(),
+                });
+            }
+            for b in engine.scheduler().unexercised_buses() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: b.message(),
+                });
+            }
+            for w in crate::reports::cosim::heuristic_framing_warnings(
+                &engine.scheduler().spi_framing_modes(),
+            ) {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: format!("co-sim: {w}"),
+                });
+            }
             for net in held_high_boot_nets {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::BootControlNet,
@@ -508,6 +533,20 @@ pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                      those windows held stale voltages and cannot be trusted (analog_valid is \
                      false); rerun with --json to see the exact failed windows"
                 )));
+            }
+            // Co-sim coverage honesty (U3): the same dropped-ADC / unexercised-bus
+            // / heuristic-framing warnings the JSON notes carry, as plain
+            // heads-ups so the verdict reads "no failures, but N worth a look".
+            for d in engine.scheduler().adc_dropped() {
+                report.heads_up.push(crate::plain::HeadsUp::note(d.message()));
+            }
+            for b in engine.scheduler().unexercised_buses() {
+                report.heads_up.push(crate::plain::HeadsUp::note(b.message()));
+            }
+            for w in crate::reports::cosim::heuristic_framing_warnings(
+                &engine.scheduler().spi_framing_modes(),
+            ) {
+                report.heads_up.push(crate::plain::HeadsUp::note(w));
             }
             // Boot-safety heads-up: control nets the firmware switches ON and
             // holds from power-up, with no resistor setting a safe default. The
