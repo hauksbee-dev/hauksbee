@@ -429,9 +429,13 @@ Beyond `[[assert]]`, a spec can also declare **`[[peripheral]]`** (attach an I2C
 SPI slave model, a VCD waveform sink, or an ADC feed to the co-sim),
 **`[[sensor]]`** (a declarative register-map sensor defined inline), and
 **`[[scenario]]`** (a transient load profile + optional decoupling ESR/ESL that
-the `rail_window` / `protection_trip` assertions judge over). See
-[PERIPHERALS.md](PERIPHERALS.md) and the `lm75_thermostat` / `tolerance_divider`
-example specs in `crates/hauksbee-ci/examples/`.
+the `rail_window` / `protection_trip` assertions judge over). The field
+reference for each block is in [PERIPHERALS.md](PERIPHERALS.md) (peripheral /
+sensor) and [TRANSIENTS.md](TRANSIENTS.md) (scenario). For a runnable
+`[[sensor]]` example see `lm75_thermostat.toml` in
+`crates/hauksbee-ci/examples/`; `[[peripheral]]` and `[[scenario]]` blocks are
+exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
+`tests/spec_and_assertions.rs` (copy-paste-able TOML fixtures).
 
 ## Output
 
