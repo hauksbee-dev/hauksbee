@@ -65,6 +65,64 @@ to net renaming). On a clean round-trip it also preserves placement. This is
 verified on stormduino, pic_programmer, microwave and the full 3443-component
 Tarski InputSystem board (`forge-codegen` test `dsl_roundtrip`).
 
+## Authoring a board from scratch
+
+You do not have to start from a decompiled board. The DSL is small enough to
+hand-write. [`examples/board-as-code/starter.board`](../examples/board-as-code/starter.board)
+is a complete, hand-authored three-part board — a 2-pin header driving an LED
+through a series resistor — written from nothing and richly commented. Build one
+up the same way:
+
+1. **Header + `fn main`.** Every file starts with `board version <N>` (N is any
+   integer tag) and one `fn main { ... }` block that holds the whole board.
+2. **Declare the nets.** List every net with `net "<name>"` before you wire a
+   pad to it — wiring a pad to an undeclared net is a load error, so the net
+   list is also your connectivity contract.
+3. **Add components.** Each `comp` has a reference, a footprint `lib "<lib_id>"`,
+   a `val`, a `layer`, and an `at X Y rot` placement, then a `{ ... }` body of
+   pads. A footprint `lib_id` is a KiCad `Library:Footprint` name (e.g.
+   `Resistor_SMD:R_0805_2012Metric`) — the same strings KiCad's footprint chooser
+   shows; the recompiler passes them straight to the `.kicad_pcb`.
+4. **Wire the pads.** Each `pad` carries its number, kind, shape, position
+   (relative to the comp origin), size, copper `layers`, and the `net "<name>"`
+   it connects to (or `nonet` for an unconnected pad). A `thru_hole` /
+   `np_thru_hole` pad also needs a `drill <D>`.
+5. **Check it.** `hauksbee check-code starter.board` recompiles, binds, and
+   simulates it — the fastest way to see "100% resolved" and a clean report (or
+   find out which pad you mis-wired).
+
+```bash
+hauksbee check-code examples/board-as-code/starter.board --seconds 0.01
+#   Board-as-Code check:
+#     3 components, 3 nets, 100% resolved, 0 active nets
+#     no faults: circuit is within ratings.
+```
+
+## Statement & field reference
+
+One statement per line, inside `fn main` (or an `fn <block>` you instantiate).
+`[...]` marks an optional field.
+
+| statement | form | notes |
+|---|---|---|
+| board header | `board version <N>` | required first line; `N` is an integer tag |
+| board outline | `board size <W> <H>` or `board outline <X0> <Y0> <X1> <Y1>` | optional; constrains re-layout |
+| net | `net "<name>"` | declare before wiring; a pad's `net` must name a declared net |
+| component | `comp <REF> lib "<lib_id>" val "<value>" [layer "<layer>"] at <X> <Y> [rot <deg>] {` | `layer` defaults `F.Cu`, `rot` defaults `0`; body ends with `}` |
+| pad | `pad "<num>" <kind> <shape> at <x> <y> size <w> <h> [drill <D>] layers [<L> ...] (net "<name>" \| nonet)` | `x`/`y` are relative to the comp origin |
+| clearance | `space <mm>` (in a comp body) or `space fn <block> <mm>` (in `fn main`) | hard minimum clear distance for the placer |
+| edge constraint | `pin <REF> edge <left\|right\|top\|bottom>` | holds a part against a board edge |
+| lock | `lock <REF>` | freezes a part at its coordinates as a keep-out |
+
+Closed token sets:
+
+- **pad `kind`:** `smd`, `thru_hole`, `np_thru_hole`, `connect` (a `thru_hole` /
+  `np_thru_hole` pad needs a `drill`).
+- **pad `shape`:** `rect`, `roundrect`, `circle`, `oval`, `trapezoid` (the
+  KiCad pad shapes; omitted defaults to `rect`).
+- **`layers`:** KiCad layer names in `[ ]`, e.g. `[F.Cu F.Paste F.Mask]` for a
+  top SMD pad, `[F.Cu B.Cu]` for a through-hole pad.
+
 ## Worked example: decompile and recompile
 
 ```bash

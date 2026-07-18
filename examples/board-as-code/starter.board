@@ -1,0 +1,43 @@
+# Board-as-Code (hauksbee board DSL v1)
+#
+# A hand-authored starter board — written from scratch, NOT decompiled. Three
+# parts: a 2-pin power header feeds an LED through a series resistor. Copy this
+# file, edit it, and run `hauksbee check-code starter.board` to simulate it.
+#
+# The shape of the language:
+#   board version <N>              — one header line; N is any integer tag
+#   fn main { ... }                — the top-level board; declares nets + parts
+#     net "<name>"                 — declare a net before you wire pads to it
+#     comp <REF> lib "<lib_id>" val "<value>" layer "<layer>" at <X> <Y> rot <deg> {
+#       pad "<num>" <kind> <shape> at <x> <y> size <w> <h> layers [<layers>] net "<net>"
+#     }
+# Coordinates are millimetres. A comp's `at` is its origin on the board; a pad's
+# `at` is relative to that origin. Wire a pad to a net with `net "<name>"`, or
+# leave it unconnected with `nonet`.
+
+board version 1
+
+fn main {
+    # Declare every net first. Wiring a pad to an undeclared net is an error.
+    net "+5V"
+    net "GND"
+    net "LED_A"                    # anode side of the LED, after the resistor
+
+    # A 2-pin header: the board's power in. thru_hole pads need a `drill`.
+    comp J1 lib "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical" val "PWR" layer "F.Cu" at 10 10 rot 0 {
+        pad "1" thru_hole circle at 0 0 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "+5V"
+        pad "2" thru_hole circle at 0 2.54 size 1.7 1.7 drill 1.0 layers [F.Cu B.Cu] net "GND"
+    }
+
+    # Series resistor: +5V -> LED_A. An 0805 SMD part, two roundrect pads.
+    comp R1 lib "Resistor_SMD:R_0805_2012Metric" val "330" layer "F.Cu" at 20 10 rot 0 {
+        pad "1" smd roundrect at -0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "+5V"
+        pad "2" smd roundrect at 0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "LED_A"
+    }
+
+    # LED: LED_A -> GND. Pad 2 is the anode, pad 1 the cathode (KiCad convention).
+    comp D1 lib "LED_SMD:LED_0805_2012Metric" val "LED" layer "F.Cu" at 30 10 rot 0 {
+        pad "2" smd roundrect at -0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "LED_A"
+        pad "1" smd roundrect at 0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "GND"
+    }
+}
