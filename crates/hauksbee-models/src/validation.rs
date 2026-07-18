@@ -154,6 +154,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         _ => {}
     }
 
+    check_required_pins(entry, &mut errors);
+
     // Absolute-maximum ratings gate the engine's stress/destruction faults. A
     // NaN, negative, or zero rating passes every kind-specific check above (which
     // only look at `params`, never `ratings`), then silently disables the fault:
@@ -196,6 +198,89 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     }
 }
 
+/// When an entry supplies an explicit `[models.pins]` map, verify it carries the
+/// signal roles the binder needs for that kind. A role typo (`"1" = "anmode"`)
+/// otherwise passes every check above, then binds the part OPEN at run time with
+/// a misleading "pin not connected" message — the exact trap a first-time part
+/// author hits. This checks only that each REQUIRED role is PRESENT (under any
+/// binder-accepted alias / channel suffix); it never flags EXTRA pins, so a
+/// legitimately-declared power/NC pin (an op-amp's `vcc`/`vee`) is fine. An
+/// empty pins map is the footprint/pin-rules inference path and is left alone.
+fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
+    if entry.pins.is_empty() {
+        return;
+    }
+    // A behavioral part (converter/FSM/DAC power IC) references its pins from the
+    // [models.behavioral] block by arbitrary datasheet names (e.g. an LTC4020's
+    // `bat`/`pvin`), NOT through the simple analog binder — so the canonical
+    // anchor roles do not apply. Leave it alone.
+    if !entry.behavioral.is_empty() {
+        return;
+    }
+    // Each inner slice is one required role; the model satisfies it by mapping
+    // some pin to ANY name in the slice, after normalization. Names are the
+    // binder's accepted aliases (see bind_diode/bjt/mosfet/vreg/opamp/comparator
+    // in hauksbee-engine). analog_switch is deliberately EXCLUDED: it binds
+    // SPST (`in_out_a`/`in_out_b`) and SPDT (`com`/`s0`/`s1`) forms with too
+    // varied a vocabulary to anchor-check without false positives.
+    let required: &[&[&str]] = match entry.kind {
+        ComponentKind::Diode => &[&["anode", "a", "p"], &["cathode", "k", "n"]],
+        ComponentKind::BjtNpn | ComponentKind::BjtPnp => {
+            &[&["collector", "c"], &["base", "b"], &["emitter", "e"]]
+        }
+        ComponentKind::Nmos | ComponentKind::Pmos => {
+            &[&["drain", "d"], &["gate", "g"], &["source", "s"]]
+        }
+        ComponentKind::Vreg => &[&["out"]],
+        ComponentKind::Opamp | ComponentKind::Comparator => &[
+            &["out"],
+            &["in_plus", "inp", "in+"],
+            &["in_minus", "inn", "in-"],
+        ],
+        // Kinds whose pin vocabulary is open or handled elsewhere (analog_switch,
+        // digital, mcu, dac, adc, shift_register, connector, passive, ignore).
+        _ => return,
+    };
+
+    // Normalize each declared role: lowercase, strip a trailing channel suffix
+    // (`_a`..`_d` or `_q<N>`), then a trailing digit run + underscore. This
+    // folds the binder's channel variants onto the base role: `out_1`->`out`,
+    // `d1`/`d2`->`d` (dual MOSFET), `collector_q2`->`collector`.
+    let normalize = |role: &str| -> String {
+        let mut r = role.to_ascii_lowercase();
+        for sfx in ["_a", "_b", "_c", "_d"] {
+            if let Some(base) = r.strip_suffix(sfx) {
+                r = base.to_string();
+                break;
+            }
+        }
+        if let Some(idx) = r.rfind("_q") {
+            if idx + 2 < r.len() && r[idx + 2..].chars().all(|c| c.is_ascii_digit()) {
+                r = r[..idx].to_string();
+            }
+        }
+        r = r.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
+        r.trim_end_matches('_').to_string()
+    };
+    let declared: std::collections::HashSet<String> =
+        entry.pins.values().map(|role| normalize(role)).collect();
+
+    for role_family in required {
+        if !role_family.iter().any(|name| declared.contains(*name)) {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!(
+                    "[models.pins] declares no '{}' pin (a {:?} needs it); \
+                     the part would bind OPEN. Accepted role names: {}",
+                    role_family[0],
+                    entry.kind,
+                    role_family.join(" / ")
+                ),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +310,48 @@ mod tests {
     fn valid_diode_passes() {
         let entry = make_diode(1e-14, 1.5, 1.0);
         assert!(validate(&entry).is_ok());
+    }
+
+    #[test]
+    fn typoed_pin_role_is_caught_but_extra_pins_are_allowed() {
+        // U3: a required signal role missing from an explicit [models.pins] map
+        // (typically a typo) used to pass lint clean, then bind the part OPEN at
+        // run time with a misleading "not connected" message. It must fail lint.
+        let mut d = make_diode(1e-14, 1.5, 1.0);
+        d.pins = BTreeMap::from([("1".into(), "anmode".into()), ("2".into(), "cathode".into())]);
+        let errs = validate(&d).unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.message.contains("anode")),
+            "a typo'd anode must be caught, got: {errs:?}"
+        );
+
+        // A correct map (any accepted alias) passes, and EXTRA pins never flag.
+        let mut ok = make_diode(1e-14, 1.5, 1.0);
+        ok.pins = BTreeMap::from([
+            ("1".into(), "a".into()),
+            ("2".into(), "k".into()),
+            ("3".into(), "case".into()), // an extra thermal/NC pad is fine
+        ]);
+        assert!(validate(&ok).is_ok(), "aliases + an extra pin must pass: {:?}", validate(&ok));
+
+        // An empty pins map (the footprint/pin-rules inference path) is left alone.
+        let inferred = make_diode(1e-14, 1.5, 1.0);
+        assert!(inferred.pins.is_empty() && validate(&inferred).is_ok());
+
+        // Channel suffixes fold onto the base role: a dual op-amp wired _a/_b,
+        // and a numbered dual MOSFET (d1/g1/s1), both satisfy the anchors.
+        let mut op = make_diode(1e-14, 1.5, 1.0);
+        op.kind = ComponentKind::Opamp;
+        op.params = Params::default();
+        op.params.set_f64("gain", 1e5);
+        op.params.set_f64("rail_lo", 0.0);
+        op.params.set_f64("rail_hi", 12.0);
+        op.pins = BTreeMap::from([
+            ("1".into(), "out_a".into()),
+            ("2".into(), "in_minus_a".into()),
+            ("3".into(), "in_plus_a".into()),
+        ]);
+        assert!(validate(&op).is_ok(), "suffixed opamp channel must pass: {:?}", validate(&op));
     }
 
     #[test]

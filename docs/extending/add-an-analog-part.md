@@ -94,8 +94,9 @@ The role strings are consumed verbatim by the binder — use these canonical nam
 - **bjt:** `base`, `emitter`, `collector`
 - **mosfet:** `gate`, `source`, `drain`
 - **vreg:** `in`, `out`, `gnd` — `out` is the regulated net the model sources
-- **opamp:** `out`, `in_plus`, `in_minus` (append `_a`/`_b`/`_1`/`_2` per unit on a
-  multi-op-amp package)
+- **opamp:** `out`, `in_plus`, `in_minus` (append `_a`/`_b`/`_c`/`_d` per unit on a
+  multi-op-amp package — the binder recognises the letter suffixes only, up to
+  four channels; a single-channel part uses the bare roles)
 - **comparator:** `out`, `in_plus`, `in_minus`
 - **analog_switch:** `com`, `s0`, `s1`, `ctrl`
 
@@ -110,10 +111,14 @@ numbers, or read the closest entry in `crates/hauksbee-models/db/*.toml`.
 hauksbee models lint my-parts.toml
 #    → "model 'mcp1700': ok"
 
-# 2. Prove it actually binds against your board (the resolve report shows which
-#    part each component resolved to, and names anything still OPEN):
+# 2. Prove it actually binds against your board. `run --report --plain` performs
+#    the full bind and NAMES anything still simulated as OPEN (the surface that
+#    proves your pins connected):
 hauksbee run my_board.kicad_pcb --report --plain --models-dir .
-#    (or: hauksbee models resolve my_board.kicad_pcb --models-dir .)
+#    `models resolve` is complementary — it shows which model entry each part
+#    MATCHED and from which priority layer, but it does not exercise pin binding,
+#    so it will not tell you a pin role is wrong:
+#    hauksbee models resolve my_board.kicad_pcb --models-dir .
 ```
 
 `--models-dir .` layers your file above the built-in DB for this run. To install
