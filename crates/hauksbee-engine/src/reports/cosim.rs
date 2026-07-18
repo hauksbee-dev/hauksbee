@@ -100,7 +100,47 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
                 mode: mode.as_str().to_string(),
             })
             .collect(),
+        adc_dropped: sched
+            .adc_dropped()
+            .into_iter()
+            .map(|d| crate::result::CosimAdcDrop {
+                mcu_ref: d.mcu_ref,
+                channel: d.channel,
+                net: d.net,
+                parts: d.parts,
+            })
+            .collect(),
+        unexercised_buses: sched
+            .unexercised_buses()
+            .iter()
+            .map(|b| crate::result::CosimUnexercisedBus {
+                id: b.id.clone(),
+                bus: b.bus.to_string(),
+                controller: b.controller.clone(),
+            })
+            .collect(),
     })
+}
+
+/// One canonical warning per HEURISTIC-framed SPI bus (05 §2 / U3 finding 3),
+/// shared by the default-text summary, the `--plain` heads-ups, and the
+/// `--json` coverage notes so every surface names the same failure modes.
+/// Exact/backend-framed buses produce nothing — their boundaries are real.
+pub fn heuristic_framing_warnings(
+    framing: &[(String, crate::peripherals::SpiFramingMode)],
+) -> Vec<String> {
+    framing
+        .iter()
+        .filter(|(_, mode)| mode.as_str() == "heuristic")
+        .map(|(bus, _)| {
+            format!(
+                "SPI bus '{bus}' ran on HEURISTIC transaction framing (no chip-select \
+                 edge available): boundaries are guessed at chunk edges — two \
+                 transactions in one chunk merge, and one spanning a boundary is \
+                 truncated. Wire cs_net for exact framing."
+            )
+        })
+        .collect()
 }
 
 /// Trim, drop empties, and de-duplicate probe net names while preserving the
@@ -349,6 +389,34 @@ pub fn run_headless(
             }
         }
 
+        // Co-sim coverage honesty (U3): a degraded external co-sim must be
+        // impossible to miss in the default text output, mirroring the
+        // analog_valid line above. Dropped ADC injections and never-exercised
+        // bus peripherals are the two silent-garbage modes.
+        for d in sched.adc_dropped() {
+            println!("\nWARNING: {}", d.message());
+        }
+        for b in sched.unexercised_buses() {
+            println!("\nWARNING: {}", b.message());
+        }
+        // Per-bus SPI transaction-framing tier (05 §2). `heuristic` is the
+        // documented actively-wrong tier (merges two transactions in a chunk;
+        // truncates a boundary-spanning one), so it gets the canonical loud
+        // caveat; exact/backend framing is real and stated plainly.
+        let framing = sched.spi_framing_modes();
+        if !framing.is_empty() {
+            println!("\nSPI transaction framing:");
+            for (bus, mode) in &framing {
+                let mode = mode.as_str();
+                if mode != "heuristic" {
+                    println!("  {bus}: {mode} (real chip-select framing)");
+                }
+            }
+            for w in heuristic_framing_warnings(&framing) {
+                println!("  WARNING: {w}");
+            }
+        }
+
         if !last_uart.is_empty() {
             let s = String::from_utf8_lossy(&last_uart);
             println!(
@@ -396,8 +464,32 @@ pub fn run_headless(
 
 #[cfg(test)]
 mod tests {
-    use super::{cosim_substituted, probe_csv_header};
+    use super::{cosim_substituted, heuristic_framing_warnings, probe_csv_header};
     use crate::scheduler::McuSubstitution;
+
+    // U3 finding 3: the heuristic framing tier — documented as actively wrong
+    // (merges/truncates transactions) — must produce the canonical warning the
+    // text summary, --plain heads-ups, and --json notes all share; the real
+    // tiers (exact/backend) must produce none.
+    #[test]
+    fn only_heuristic_framed_buses_produce_the_canonical_warning() {
+        use crate::peripherals::SpiFramingMode;
+        let framing = vec![
+            ("ADC1".to_string(), SpiFramingMode::Heuristic),
+            ("FLASH1".to_string(), SpiFramingMode::Exact),
+            ("IMU1".to_string(), SpiFramingMode::Backend),
+        ];
+        let warnings = heuristic_framing_warnings(&framing);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("ADC1")
+                && warnings[0].contains("HEURISTIC")
+                && warnings[0].contains("cs_net"),
+            "{}",
+            warnings[0]
+        );
+        assert!(heuristic_framing_warnings(&[]).is_empty());
+    }
 
     #[test]
     fn substituted_is_board_wide_not_scoped_to_the_first_mcu() {

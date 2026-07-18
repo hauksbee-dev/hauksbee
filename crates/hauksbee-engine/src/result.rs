@@ -566,6 +566,40 @@ pub struct CosimJson {
     /// the web co-sim section so the CLI JSON carries the same coverage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spi_framing: Vec<CosimSpiFraming>,
+    /// ADC channels whose per-chunk injections the MCU backend DROPPED because
+    /// the platform carries no injection map (U3 finding 1). Non-empty means
+    /// the analog solve drove these nets but the firmware NEVER received a
+    /// sample — analog readings on those pins are meaningless, and this run
+    /// cannot vouch for them. Empty (and omitted) on full coverage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adc_dropped: Vec<CosimAdcDrop>,
+    /// Bus peripherals (I2C/SPI slave models) bound on a platform whose MCU
+    /// backend models no matching bus controller (U3 finding 2): the firmware
+    /// never exercised them, so their state is the power-on default. Empty
+    /// (and omitted) when every bound bus device sits on a modeled controller.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unexercised_buses: Vec<CosimUnexercisedBus>,
+}
+
+/// One dropped ADC injection channel (see [`CosimJson::adc_dropped`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct CosimAdcDrop {
+    pub mcu_ref: String,
+    pub channel: u8,
+    pub net: String,
+    /// Nearby part names on the net (best-effort, may be empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
+}
+
+/// One never-exercised bus peripheral (see [`CosimJson::unexercised_buses`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct CosimUnexercisedBus {
+    pub id: String,
+    /// `"I2C"` or `"SPI"`.
+    pub bus: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
 }
 
 /// One SPI bus's framing tier (see [`CosimJson::spi_framing`]).

@@ -58,6 +58,9 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
         sampled_values: Vec::new(),
         net_series: HashMap::new(),
         substitutions: Vec::new(),
+        coverage_warnings: Vec::new(),
+        unexercised_bus_ids: Default::default(),
+        spi_framing: Default::default(),
     }
 }
 
