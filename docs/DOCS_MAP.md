@@ -34,6 +34,7 @@ is `docs/START_HERE.md`, and the repo-root `README.md` leads with it.
 | `MCU.md` | MCU co-sim backends and supported chips | USER | `docs/` (stay) |
 | `MODELS.md` | Device models: built-in, SPICE, datasheet extraction | USER | `docs/` (stay) |
 | `ORACLES.md` | Using ground-truth oracles (`--oracle`): kicad-cli, ngspice detection | USER | `docs/` (stay) |
+| `PACKS.md` | Model-pack format: bundle + share + pin model/sensor/logic data | USER | `docs/` (stay) |
 | `PERIPHERALS.md` | Runtime peripherals (buttons, pots, I2C/SPI slaves) | USER | `docs/` (stay) |
 | `RESOURCE_CONFLICTS.md` | MCU internal resource-conflict check | USER | `docs/` (stay) |
 | `SCHEMATICS.md` | Schematic (`.kicad_sch`) extraction | USER | `docs/` (stay) |
@@ -58,12 +59,15 @@ is `docs/START_HERE.md`, and the repo-root `README.md` leads with it.
 |---|---|---|---|
 | `docs/dev-plans/` | Design plans 00-09, perf notes, `research/` (dossiers, maps, the saga) | RECORD (already scoped) | stay |
 | `docs/how-and-why/` | Code companion explanations (per-crate how-and-why) | USER (already scoped) | stay |
+| `docs/extending/` | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack | USER (already scoped) | stay |
+| `docs/learn/` | First-principles course (10 chapters: netlist → MNA → Newton → co-sim → checks → extending) | USER (already scoped) | stay |
+| `docs/teach/` | Teaching material derived from the course | USER (already scoped) | stay |
 | `docs/spice-compat/` | SPICE compatibility statement (`compatibility.md`, the enforced supported/refused card list) + ngspice cross-check results (`results.md`) | USER (already scoped) | stay |
 | `docs/hunts/` | Bug-hunt working directory: per-board narratives, briefs, results, report assets | RECORD (already scoped) | stay |
 | `docs/assets/*` | Images embedded by docs | n/a | stay |
 
 ## Counts
 
-- USER PATH: 23 top-level docs.
+- USER PATH: 24 top-level docs.
 - PROJECT RECORD: 9 top-level docs moved to `docs/record/`, plus the `docs/hunts/`
   working directory and `docs/dev-plans/` (both stay in place, already scoped).

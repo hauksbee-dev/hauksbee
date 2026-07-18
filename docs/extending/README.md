@@ -48,6 +48,11 @@ validation rule, that rule exists because its absence once corrupted a result.
   from which priority layer. The debugging surface for model and pack authors.
 - `hauksbee models add | list | remove` — pack management
   ([make-a-model-pack.md](make-a-model-pack.md)).
+- `model-extract` — auto-draft a model TOML from a PDF datasheet via an LLM, as a
+  starting point you then lint and correct. It is a separate binary (not a
+  `hauksbee` subcommand) and is not installed on PATH; run it from a checkout:
+  `cargo run -p hauksbee-models --bin model-extract -- <datasheet.pdf>`. See
+  [../MODELS.md](../MODELS.md#pointing-hauksbee-at-a-datasheet) for the workflow.
 
 ## Deeper references
 

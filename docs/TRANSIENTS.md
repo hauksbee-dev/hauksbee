@@ -325,6 +325,31 @@ trusted. It passing is what makes the brownout meaningful.
 
 ---
 
+## Scriptable waveforms: `--probe`
+
+A transient run's shape is often what you want to inspect, not just a pass/fail.
+`--probe` records named nets' node voltages every co-sim chunk of a `--headless`
+run and writes them to a CSV, so you can plot or post-process the waveform with
+no UI:
+
+```bash
+hauksbee run board.kicad_pcb --firmware fw.hex --headless --seconds 2 \
+  --probe +5V,GATE --probe D13 --probe-csv out.csv
+```
+
+- `--probe` takes a comma-separated net list and is repeatable; an unknown net is
+  a loud error (with near-matches) before the run starts, so a typo never yields
+  a silently-empty column.
+- `--probe-csv` sets the output path. The header is `time_s` followed by one
+  column per probed net, one row per chunk — feed it straight to a plotting
+  script, a notebook, or a diff against a golden capture.
+
+This is the headless, scriptable counterpart to watching a net in the TUI, and
+pairs with the scenario runner above: probe the rail while a `[[scenario]]` load
+step runs to capture the exact sag profile behind a `rail_window` verdict.
+
+---
+
 ## Stretch: tolerance corner sweep (design sketch)
 
 Not yet implemented. The sketch:
