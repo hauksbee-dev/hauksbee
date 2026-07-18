@@ -36,6 +36,22 @@ pub fn emit(
         .run(circuit, &spec)
         .map_err(|e| anyhow::anyhow!("AC analysis: {e}"))?;
 
+    // Injection-point honesty: with no dedicated AC source the sweep drives EVERY
+    // independent source (the power rails included), so the Bode is a superposition
+    // of all stimuli, not a single-input transfer function. On an extracted board
+    // there is usually no VINJ, so warn — a user reading a "transfer function" off
+    // this would be measuring the wrong thing. (SPICE decks with explicit `AC`
+    // stimulus set their own drive and are exempt: that IS a chosen injection.)
+    if !json && !hauksbee_solve::has_dedicated_ac_source(circuit) {
+        eprintln!(
+            "NOTE: no dedicated AC injection source — the sweep drove every independent \n\
+             source (power rails included), so this Bode is a superposition, not a \n\
+             single-input transfer function. To measure a real transfer function, name \n\
+             the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop with \n\
+             board-as-code: docs/BOARD_AS_CODE.md), then re-run --ac."
+        );
+    }
+
     // Collect the bode rows once so both the validity check and the renderers
     // read the SAME data (one structured result, no forked logic).
     let summary = BindSummary::from_report(&bound.report);

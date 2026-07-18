@@ -64,7 +64,7 @@ mod stamp;
 mod system;
 mod transient;
 
-pub use ac::{AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
+pub use ac::{has_dedicated_ac_source, AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
 pub use cmatrix::ComplexSystem;
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};

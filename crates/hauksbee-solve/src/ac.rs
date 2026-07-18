@@ -720,7 +720,12 @@ fn stamp_ac(
     }
 }
 
-fn has_dedicated_ac_source(circuit: &Circuit) -> bool {
+/// Whether the circuit carries a dedicated AC injection source (a `Vsource` /
+/// `Isource` named `VINJ`/`VLOOP`/`VAC`/`IINJ`/`ILOOP`/`IAC`, or a `_VINJ`-style
+/// suffix). When false, [`AcAnalysis::run`] drives EVERY independent source with
+/// unit AC — a superposition, not a single-input transfer function — so the
+/// caller should warn that the sweep has no chosen injection point.
+pub fn has_dedicated_ac_source(circuit: &Circuit) -> bool {
     circuit.iter().any(|(_, dev)| match dev {
         Device::Vsource { name, .. } | Device::Isource { name, .. } => {
             is_dedicated_ac_source(name)
