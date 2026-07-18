@@ -1082,12 +1082,98 @@ impl Spec {
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
         match self.kind.as_str() {
-            "ideal" | "bench" | "wall" | "usb" | "battery" => Ok(()),
-            other => Err(SpecError::Invalid(format!(
-                "supply on net '{}': unknown kind '{}' (expected ideal|bench|wall|usb|battery)",
-                self.net, other
-            ))),
+            "ideal" | "bench" | "wall" | "usb" | "battery" => {}
+            other => {
+                return Err(SpecError::Invalid(format!(
+                    "supply on net '{}': unknown kind '{}' (expected ideal|bench|wall|usb|battery)",
+                    self.net, other
+                )))
+            }
         }
+
+        // Numeric fields flow straight into the behavioral PowerSupply, where a
+        // non-finite volts poisons every node it touches, a `soc` outside 0..1
+        // reads a bogus point off the OCV curve, and `cells = 0` silently
+        // collapses the pack to 0 V. TOML accepts `nan`/`inf`, so guard the
+        // range here at load — fail-loud — rather than shipping garbage into a
+        // run. Errors name the field and net so a spec typo is obvious.
+        let net = &self.net;
+        let finite = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
+            match v {
+                Some(x) if !x.is_finite() => Err(SpecError::Invalid(format!(
+                    "supply on '{net}': `{field}` must be a finite number"
+                ))),
+                _ => Ok(()),
+            }
+        };
+        let positive = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
+            match v {
+                Some(x) if !x.is_finite() || x <= 0.0 => Err(SpecError::Invalid(format!(
+                    "supply on '{net}': `{field}` must be a positive number"
+                ))),
+                _ => Ok(()),
+            }
+        };
+        let non_negative = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
+            match v {
+                Some(x) if !x.is_finite() || x < 0.0 => Err(SpecError::Invalid(format!(
+                    "supply on '{net}': `{field}` must be zero or positive"
+                ))),
+                _ => Ok(()),
+            }
+        };
+
+        finite("volts", self.volts)?; // a rail may be negative (e.g. -12 V), only non-finite is illegal
+        positive("current_limit_a", self.current_limit_a)?;
+        non_negative("r_out_ohms", self.r_out_ohms)?;
+        non_negative("ripple_vpp", self.ripple_vpp)?;
+        positive("ripple_hz", self.ripple_hz)?;
+        positive("capacity_mah", self.capacity_mah)?;
+        non_negative("r_internal_ohms", self.r_internal_ohms)?;
+        positive("protection_trip_a", self.protection_trip_a)?;
+        non_negative("protection_delay_ms", self.protection_delay_ms)?;
+        positive("protection_reset_a", self.protection_reset_a)?;
+
+        if let Some(soc) = self.soc {
+            if !soc.is_finite() || !(0.0..=1.0).contains(&soc) {
+                return Err(SpecError::Invalid(format!(
+                    "supply on '{net}': `soc` must be a state-of-charge fraction in 0..1"
+                )));
+            }
+        }
+        if let Some(cells) = self.cells {
+            if cells == 0 {
+                return Err(SpecError::Invalid(format!(
+                    "supply on '{net}': `cells` must be at least 1"
+                )));
+            }
+        }
+
+        // The `usb` / `chemistry` enum tokens are mapped (and rejected) in
+        // build_supply at run time; validate them here too so a typo fails at
+        // load like every other spec error, not only once a run starts.
+        if let Some(usb) = &self.usb {
+            match usb.as_str() {
+                "5v0.5a" | "5v_0.5a" | "5v1.5a" | "5v_1.5a" | "5v3a" | "5v_3a" => {}
+                other => {
+                    return Err(SpecError::Invalid(format!(
+                        "supply on '{net}': unknown usb profile '{other}' (expected 5v0.5a|5v1.5a|5v3a)"
+                    )))
+                }
+            }
+        }
+        if let Some(chem) = &self.chemistry {
+            match chem.as_str() {
+                "liion" | "lipo" | "alkaline" | "nimh" | "lifepo4" | "lfp" => {}
+                other => {
+                    return Err(SpecError::Invalid(format!(
+                        "supply on '{net}': unknown chemistry '{other}' (expected liion|alkaline|nimh|lifepo4)"
+                    )))
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1520,6 +1606,58 @@ min = 3.0
         // A realistic tolerance still validates.
         assert!(spec("5").validate().is_ok(), "5% must pass");
         assert!(spec("50").validate().is_ok(), "50% must pass");
+    }
+
+    #[test]
+    fn supply_fields_are_range_validated_at_load() {
+        // U2: SupplySpec::validate checked only `kind`, so every numeric field
+        // and the usb/chemistry enum tokens flowed into build_supply unchecked.
+        // A non-finite volts, a soc outside 0..1, cells = 0, or a typo'd token
+        // must fail loud at LOAD, not silently corrupt a run (or crash at run
+        // time only, after load reported the spec clean).
+        let supply = |body: &str| {
+            spec_from(&format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                 [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n\
+                 [[supply]]\nnet = \"VCC\"\n{body}\n"
+            ))
+        };
+        let cases = [
+            ("kind = \"ideal\"\nvolts = nan", "volts"),
+            ("kind = \"bench\"\ncurrent_limit_a = -1.0", "current_limit_a"),
+            ("kind = \"bench\"\ncurrent_limit_a = 0.0", "current_limit_a"),
+            ("kind = \"wall\"\nripple_hz = inf", "ripple_hz"),
+            ("kind = \"battery\"\nsoc = 5.0", "soc"),
+            ("kind = \"battery\"\nsoc = -0.1", "soc"),
+            ("kind = \"battery\"\ncells = 0", "cells"),
+            ("kind = \"battery\"\ncapacity_mah = 0.0", "capacity_mah"),
+            ("kind = \"battery\"\nprotection_trip_a = 0.0", "protection_trip_a"),
+            ("kind = \"usb\"\nusb = \"5v9a\"", "usb profile"),
+            ("kind = \"battery\"\nchemistry = \"unobtainium\"", "chemistry"),
+        ];
+        for (body, needle) in cases {
+            let err = supply(body).validate().unwrap_err().to_string();
+            assert!(
+                err.contains(needle),
+                "supply spec `{body}` must be rejected naming `{needle}`, got: {err}"
+            );
+        }
+        // A fully-specified, in-range battery leg still validates.
+        assert!(
+            supply(
+                "kind = \"battery\"\nchemistry = \"liion\"\ncells = 3\n\
+                 capacity_mah = 2200\nsoc = 0.8\nvolts = 11.1\n\
+                 protection_trip_a = 5.0\nprotection_delay_ms = 100"
+            )
+            .validate()
+            .is_ok(),
+            "a realistic battery leg must pass"
+        );
+        // A negative RAIL is legal (e.g. a -12 V ideal supply); only non-finite is not.
+        assert!(
+            supply("kind = \"ideal\"\nvolts = -12.0").validate().is_ok(),
+            "a negative ideal rail must pass"
+        );
     }
 
     #[test]
