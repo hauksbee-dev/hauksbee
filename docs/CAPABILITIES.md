@@ -262,12 +262,31 @@ direction map (RP2040, FE310) stay honestly direction-blind: their diagnoses
 hedge ("undriven or driven LOW") instead of asserting Hi-Z.
 
 ADC injection: wired per-platform through an `AdcChannelMap` (a Monitor feed
-command or result-word write); channels with no map entry drop **loudly** rather
-than fabricating a reading. I2C and SPI peripheral interception: wired through
-generated C# bridge peripherals (an `II2CPeripheral` / `ISPIPeripheral` per
-slave address), so a hardware-TWI/SPI sensor co-simulates on Renode exactly as it
-does on simavr — see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode`
-integration tests and `docs/MCU.md` for the per-backend capability matrix.
+command or result-word write). **No shipped Renode platform carries a map**:
+the stock STM32F103/F4/nRF52840 Renode 1.16.1 platform descriptions model no
+ADC peripheral at all (verified live), and shipping a wrong-layout model or an
+invented RAM word would be fake fidelity. An unmapped channel's injections are
+therefore DROPPED — and, since the U3 honesty round, that drop is surfaced on
+**every** report surface (`hauksbee run` text, `--plain`, `--json`
+`CosimJson.adc_dropped` + coverage notes, and all hauksbee-ci report formats),
+naming the channel, MCU, and net. A board that knows its counts' landing spot
+adds `[[soc.adc]]` to its own descriptor (no recompile).
+
+I2C and SPI peripheral interception: wired through generated C# bridge
+peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave address), so a
+hardware-TWI/SPI sensor co-simulates on Renode exactly as it does on simavr —
+see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode` integration
+tests. Controllers by platform: STM32F103 (`i2c1`, `spi1`), STM32F4 Discovery
+(`i2c1`, `spi1-3`), nRF52840 (`twi0`/`twi1`, `spi2` — names live-verified with
+bridge registration; an end-to-end nRF sensor round-trip awaits an nRF bus
+firmware fixture). FE310 and RP2040 model no bus controllers; a sensor bound
+on such a platform is recorded as **unexercised** and surfaced on every report
+surface, and a hauksbee-ci `peripheral` assertion against it **fails** rather
+than green-passing on the slave's power-on defaults. The per-SPI-bus
+transaction-framing tier (exact / backend / heuristic) is likewise printed in
+the run summary, flagged as a `--plain` heads-up and `--json` note when
+heuristic, and attached to each CI peripheral assertion's detail. See
+`docs/MCU.md` ("ADC / bus coverage by platform") for the full matrix.
 
 #### Espressif QEMU — `QemuBackend` (external, ESP32 family)
 
