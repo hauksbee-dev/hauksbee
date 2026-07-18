@@ -254,6 +254,45 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         }
     }
 
+    // Transient / brownout on-ramp: scaffold a [[profile]] + [[scenario]] +
+    // rail_window whenever a supply rail was detected. This is the ONLY place a
+    // user discovers dynamic analysis from `hauksbee run` — there is no `run
+    // --transient` flag; brownout/inrush lives here in the spec. Commented so
+    // the starter stays GREEN on no_faults alone; the user opts in and tunes the
+    // load profile to their board. See docs/TRANSIENTS.md.
+    if let Some((rail, _)) = supplies.first() {
+        let _ = writeln!(s);
+        let _ = writeln!(s, "# rail_window: does the rail stay up under a dynamic load step (a WiFi");
+        let _ = writeln!(s, "# burst, a motor kick, an inrush)? This is the transient/brownout check —");
+        let _ = writeln!(s, "# there is NO `run --transient` flag; it lives here. A [[profile]] shapes");
+        let _ = writeln!(s, "# the load current, a [[scenario]] attaches it to a supply net, and the");
+        let _ = writeln!(s, "# rail_window assert bounds the rail while it runs. See docs/TRANSIENTS.md.");
+        let _ = writeln!(s, "# [[profile]]");
+        let _ = writeln!(s, "# id = \"load_step\"");
+        let _ = writeln!(s, "# [[profile.segment]]");
+        let _ = writeln!(s, "# level_a = 0.05                 # baseline current (A)");
+        let _ = writeln!(s, "# rise_s = 0.001");
+        let _ = writeln!(s, "# duration_s = 0.0");
+        let _ = writeln!(s, "# [[profile.segment]]");
+        let _ = writeln!(s, "# level_a = 0.5                  # the step / burst current (A) — tune to your load");
+        let _ = writeln!(s, "# rise_s = 0.0005");
+        let _ = writeln!(s, "# duration_s = 0.010");
+        let _ = writeln!(s, "# period_s = 0.100");
+        let _ = writeln!(s, "# idle_a = 0.05");
+        let _ = writeln!(s, "#");
+        let _ = writeln!(s, "# [[scenario]]");
+        let _ = writeln!(s, "# id = \"step\"");
+        let _ = writeln!(s, "# profile = \"load_step\"");
+        let _ = writeln!(s, "# supply_net = \"{rail}\"          # detected rail the load hangs off");
+        let _ = writeln!(s, "# start_ms = 1.0");
+        let _ = writeln!(s, "#");
+        let _ = writeln!(s, "# [[assert]]");
+        let _ = writeln!(s, "# kind = \"rail_window\"");
+        let _ = writeln!(s, "# scenario = \"step\"");
+        let _ = writeln!(s, "# net = \"{rail}\"");
+        let _ = writeln!(s, "# min = {}                    # the rail must never sag below this (V)", fmt2(vref * 0.9));
+    }
+
     // Firmware-behaviour assertions — the tool's headline pitch ("assert the UART
     // says hello, assert the LED blinks"). Only meaningful once `firmware = ...`
     // above points at a real image, so scaffold them COMMENTED and only when an
