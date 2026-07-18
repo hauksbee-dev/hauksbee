@@ -30,6 +30,7 @@ is `docs/START_HERE.md`, and the repo-root `README.md` leads with it.
 | `DOCKER.md` | Container images and how to run them | USER | `docs/` (stay) |
 | `EXAMPLES.md` | Install, first run, runnable examples index | USER | `docs/` (stay) |
 | `GERBER.md` | Gerber + pick-and-place reverse extraction | USER | `docs/` (stay) |
+| `JSON_OUTPUT.md` | The `--json` output schema: top-level verdict + every section | USER | `docs/` (stay) |
 | `LIMITATIONS.md` | Honest limitations, triage and closure | USER | `docs/` (stay) |
 | `MCU.md` | MCU co-sim backends and supported chips | USER | `docs/` (stay) |
 | `MODELS.md` | Device models: built-in, SPICE, datasheet extraction | USER | `docs/` (stay) |
@@ -68,6 +69,6 @@ is `docs/START_HERE.md`, and the repo-root `README.md` leads with it.
 
 ## Counts
 
-- USER PATH: 24 top-level docs.
+- USER PATH: 25 top-level docs.
 - PROJECT RECORD: 9 top-level docs moved to `docs/record/`, plus the `docs/hunts/`
   working directory and `docs/dev-plans/` (both stay in place, already scoped).

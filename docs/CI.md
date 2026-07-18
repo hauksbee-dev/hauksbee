@@ -448,6 +448,10 @@ exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
 - **GitHub annotations**: when `GITHUB_ACTIONS` is set, `::error` / `::notice`
   workflow commands are emitted so failures show inline in the Checks UI.
 
+For a machine-readable single-board result outside the assertion runner,
+`hauksbee run <board> --json` emits a documented object with a top-level
+`ok`/`verdict`/`serious_count` rollup — see [JSON_OUTPUT.md](JSON_OUTPUT.md).
+
 ## Worked example: the Tarski power-up brownout
 
 This is the bug that motivated the whole project, turned into a regression test.
