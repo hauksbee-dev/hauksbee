@@ -439,6 +439,10 @@ exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
 - **GitHub annotations**: when `GITHUB_ACTIONS` is set, `::error` / `::notice`
   workflow commands are emitted so failures show inline in the Checks UI.
 
+For a machine-readable single-board result outside the assertion runner,
+`hauksbee run <board> --json` emits a documented object with a top-level
+`ok`/`verdict`/`serious_count` rollup — see [JSON_OUTPUT.md](JSON_OUTPUT.md).
+
 ## Boot-coverage: watching the firmware define a Hi-Z control net
 
 There is a class of fault the *netlist alone cannot adjudicate*. A control net
