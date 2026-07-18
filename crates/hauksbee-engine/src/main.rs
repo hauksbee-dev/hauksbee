@@ -118,6 +118,7 @@ enum Command {
     /// Example (self-contained decks bundled under examples/learn/):
     ///   hauksbee sim examples/learn/02-mna-by-hand/divider.cir --op --print V(out)
     ///   hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)
+    ///   hauksbee sim examples/learn/02-mna-by-hand/rc_lowpass_ac.cir --ac --print V(out)
     Sim(SimArgs),
 
     /// Start the local web front door: a "drop your board, get a report" page.
