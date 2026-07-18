@@ -22,7 +22,8 @@ The loop, in three CLI verbs:
 
 | File | What it is |
 |---|---|
-| `blinky.board` | The small ATmega328P demo board (`crates/hauksbee-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real example to read. |
+| `starter.board` | A **hand-authored** three-part board (a 2-pin header → resistor → LED), written from scratch, not decompiled — the smallest thing to copy when authoring your own. Richly commented; `check-code` it directly. See the [authoring-from-scratch walkthrough](../../docs/BOARD_AS_CODE.md#authoring-a-board-from-scratch). |
+| `blinky.board` | The small ATmega328P demo board (`crates/hauksbee-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real *decompiled* example to read. |
 | `stormduino.board` | A real corpus Arduino-class board (`board-corpus/stormduino`) decompiled. 51 components, 4 repeat-detected blocks. Shows how the decompiler factors repeated hardware into `fn` blocks. |
 | `tarski_miswire_repair.rs` (in `crates/hauksbee-engine/examples/`) | The headline demo: the Tarski inhibitory-synapse miswire, repaired as a code edit, run through simulation. See below. |
 

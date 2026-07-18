@@ -256,6 +256,27 @@ min = 15
 max = 25
 ```
 
+The `field` name is per peripheral `type` — each exposes its own state keys.
+The full vocabulary (matched exactly; an unknown field errors at load):
+
+| peripheral `type` | `field` keys | meaning |
+|---|---|---|
+| `pushbutton` | `pressed` | 1 while held, else 0 |
+| `toggle` | `closed` | 1 when closed, else 0 |
+| `potentiometer` | `position` | wiper fraction 0..1 |
+| `encoder` | `detents`, `a`, `b` | accumulated detents; the two quadrature line levels |
+| `stimulus` | `value` | the last driven value |
+| `vcd_sink` | `transitions`, `nets` | edge count captured; number of nets watched |
+| `load` | `current_a`, `peak_a` | instantaneous and peak sink current |
+| `i2c_eeprom` | `size`, `ptr`, `page_size` | byte capacity; current address pointer; page size |
+| `i2c_lm75` | `temp_c`, `pointer` | configured temperature; register pointer |
+| `spi_eeprom` | `size`, `wel` | byte capacity; write-enable-latch state |
+| `spi_mcp3008` | `vref`, `ch0`..`ch7` | reference voltage; per-channel input voltage |
+
+(For `i2c_eeprom` / `spi_eeprom` contents, prefer the `bytes = "..."` form above
+over a `field`.) The keys are produced by each peripheral's `state()` in
+`crates/hauksbee-engine/src/peripherals/`.
+
 ## Proofs (integration tests)
 
 1. **I2C temperature sensor co-sim** -

@@ -8,6 +8,13 @@ load, so a typo is caught by `hauksbee models lint` before it ever reaches a run
 When a part on your board is *not* modelled, hauksbee binds it OPEN and says so
 ("N% resolved", "simulated as OPEN") — this is how you close that gap.
 
+> **Shortcut:** to auto-draft this entry from a PDF datasheet instead of writing
+> it by hand, run the extractor and then lint/correct its output:
+> `cargo run -p hauksbee-models --bin model-extract -- part.pdf`
+> (see [../MODELS.md](../MODELS.md#pointing-hauksbee-at-a-datasheet)). The
+> hand-written path below is still worth reading — it is what you edit the draft
+> into, and what `hauksbee models lint` checks.
+
 ## The shape of a model entry
 
 Every entry is one `[[models]]` block with four parts: an `id`, a `[models.match]`
