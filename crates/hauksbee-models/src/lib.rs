@@ -103,6 +103,9 @@ pub enum ModelError {
     #[error("pin-rule error in '{file}': {message}")]
     PinRules { file: String, message: String },
 
+    #[error("directory does not exist: {dir}")]
+    MissingDir { dir: String },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -440,6 +443,14 @@ impl ModelLibrary {
     pub fn load_dir_layer(&mut self, dir: &Path, layer: SourceLayer) -> Vec<ModelError> {
         let mut errors = Vec::new();
         if !dir.exists() {
+            // The auto-discovered `~/.hauksbee` / `~/.config` dirs legitimately
+            // may not exist — skip them silently. But `--models-dir` (and the CI
+            // equivalent) is an EXPLICIT user-typed path: a missing one is a
+            // typo that would otherwise load zero models with no signal, so the
+            // user's whole custom set silently never applies. Report it.
+            if layer == SourceLayer::ModelsDirFlag {
+                errors.push(ModelError::MissingDir { dir: dir.display().to_string() });
+            }
             return errors;
         }
         let entries = match std::fs::read_dir(dir) {
@@ -924,6 +935,27 @@ mod tests {
             SourceLayer::UserConfigDir.priority() < SourceLayer::ModelsDirFlag.priority(),
             "--models-dir still wins over the config dir"
         );
+    }
+
+    /// U3: an explicit `--models-dir` pointing at a nonexistent path is a
+    /// user typo — it must produce a loud error (so the CLI's eprintln fires),
+    /// not silently load zero models. The auto-discovered user dirs, by
+    /// contrast, may legitimately be absent and must stay silent.
+    #[test]
+    fn missing_models_dir_flag_reports_but_auto_dirs_stay_silent() {
+        let mut l = lib();
+        let missing = Path::new("/nonexistent/hauksbee/models/typo");
+        let flag_errs = l.load_dir_layer(missing, SourceLayer::ModelsDirFlag);
+        assert!(
+            flag_errs.iter().any(|e| matches!(e, ModelError::MissingDir { .. })),
+            "an explicit --models-dir typo must report MissingDir, got: {flag_errs:?}"
+        );
+        for auto in [SourceLayer::UserDir, SourceLayer::UserConfigDir] {
+            assert!(
+                l.load_dir_layer(missing, auto).is_empty(),
+                "an absent auto-discovered dir ({auto:?}) must stay silent"
+            );
+        }
     }
 
     /// Round-8 #10: a `.subckt`, and an unrecognized `.model` type, must NOT be
