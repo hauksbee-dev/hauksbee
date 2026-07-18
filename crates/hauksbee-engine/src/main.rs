@@ -290,6 +290,12 @@ struct ModelsResolveArgs {
         .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal", "usb_c"])
         .multiple(false)
 ))]
+#[command(after_help = "\
+TRANSIENT / BROWNOUT analysis (a rail sagging under a load step, WiFi burst, or \
+inrush) is not a `run` flag: it is a dynamic scenario judged by an assertion. \
+Scaffold one with `hauksbee-ci init <board>` (it emits a [[scenario]] + \
+rail_window stub when a supply is detected) and see docs/TRANSIENTS.md. For \
+scriptable waveforms from a headless run, use --probe/--probe-csv.")]
 struct RunArgs {
     /// Board file to load (.kicad_pcb, .kicad_sch, .brd, .d356, or gerbers).
     #[arg(value_name = "BOARD")]
