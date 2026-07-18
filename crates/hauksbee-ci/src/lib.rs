@@ -75,6 +75,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .filter(|m| seen.insert(m.clone()))
             .collect()
     };
+    // Union of co-sim coverage warnings (dropped ADC channels, unexercised bus
+    // peripherals) across members, deduped and order-stable — same discipline
+    // as substitutions: a hole in ONE member is a hole in the ensemble.
+    let coverage_warnings: Vec<String> = {
+        let mut seen = std::collections::BTreeSet::new();
+        outcomes
+            .iter()
+            .flat_map(|o| o.coverage_warnings.iter().cloned())
+            .filter(|m| seen.insert(m.clone()))
+            .collect()
+    };
     // Coverage banner data for a tolerance ensemble: how many members ran and
     // how many components were sampled (from any outcome; the set is fixed).
     let coverage = if spec.has_tolerances() {
@@ -126,5 +137,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         analog_abort,
         coverage,
         substitutions,
+        coverage_warnings,
     })
 }

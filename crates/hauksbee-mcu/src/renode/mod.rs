@@ -1113,7 +1113,17 @@ impl RenodeBackend {
         for controller in &self.config.i2c_controllers {
             for &addr in &self.i2c_slave_addresses {
                 let class_name = format!("HauksbeeI2CBridge_{addr:02X}");
-                let device_name = format!("hauksbee_i2c_{addr:02x}");
+                // The device name must be unique per (controller, address):
+                // Renode's Monitor namespace is machine-global, so a name
+                // keyed only on the address collides the moment a platform
+                // has TWO controllers (nRF52840 twi0+twi1 — caught live by
+                // tests/renode_nrf52840_bus.rs; the single-controller STM32
+                // platforms never exposed it).
+                let sanitized: String = controller
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                let device_name = format!("hauksbee_i2c_{sanitized}_{addr:02x}");
                 let repl = format!("{device_name}: I2C.{class_name} @ {controller} 0x{addr:02X}");
                 let resp = self.monitor.command(&format!(
                     "machine LoadPlatformDescriptionFromString \"{repl}\""
@@ -1786,6 +1796,29 @@ impl Mcu for RenodeBackend {
         self.i2c_slave_addresses = addresses.to_vec();
         self.i2c_slave_addresses.sort_unstable();
         self.i2c_slave_addresses.dedup();
+    }
+
+    fn adc_dropped_channels(&self) -> Vec<u8> {
+        // Exactly the channels the loud-drop path in `set_analog_in` recorded:
+        // injections the scheduler pushed that this platform had no
+        // `AdcChannelMap` for. Sorted so every report surface names them in a
+        // deterministic order.
+        let mut chans: Vec<u8> = self.adc_unmapped_warned.iter().copied().collect();
+        chans.sort_unstable();
+        chans
+    }
+
+    fn i2c_bus_modeled(&self) -> bool {
+        // Mirrors `install_i2c_bridge`'s early return exactly: with no
+        // configured controller the bridge is never installed and a bound I2C
+        // slave receives no transactions.
+        !self.config.i2c_controllers.is_empty()
+    }
+
+    fn spi_bus_modeled(&self, _controller: Option<&str>) -> bool {
+        // Mirrors `on_spi` / `install_spi_bridge_for`: with an empty controller
+        // list neither path installs a bridge, named controller or not.
+        !self.config.spi_controllers.is_empty()
     }
 }
 

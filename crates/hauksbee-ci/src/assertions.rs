@@ -716,8 +716,39 @@ fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
 
 fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let id = a.id.clone().unwrap_or_default();
+    // Unexercised-bus refusal (U3 finding 2): this peripheral was bound on a
+    // platform that models no matching bus controller, so the firmware never
+    // sent it a single transaction. Its snapshot is the slave's POWER-ON
+    // DEFAULT state — asserting on that could green-pass (an LM75 default
+    // temp is in-range for most specs), which is exactly the false green this
+    // check exists to prevent. FAIL loudly before any field/bytes check.
+    if out.unexercised_bus_ids.contains(&id) {
+        return (
+            false,
+            format!(
+                "peripheral '{id}' was bound but NEVER exercised: this MCU platform \
+                 models no matching bus controller, so the firmware's bus traffic \
+                 never reached it and its state is the power-on default. A pass \
+                 here would vouch for a co-sim path that never ran — add the bus \
+                 controller to the SoC descriptor (docs/MCU.md) or drop this \
+                 assertion."
+            ),
+        );
+    }
     let Some(snap) = out.peripherals.get(&id) else {
         return (false, format!("peripheral '{id}' not found in run"));
+    };
+    // SPI framing-tier flag (U3 finding 3): a heuristic-framed bus guesses
+    // transaction boundaries at chunk edges (merges/truncates transactions),
+    // so any verdict about this peripheral carries that caveat in its detail —
+    // in the report itself, not a code comment.
+    let framing_flag = match out.spi_framing.get(&id).map(String::as_str) {
+        Some("heuristic") => {
+            " [SPI framing: HEURISTIC — transaction boundaries guessed at chunk \
+             edges; two transactions in one chunk merge and a boundary-spanning \
+             one is truncated. Wire cs_net for exact framing]"
+        }
+        _ => "",
     };
 
     // Byte-contains check (EEPROM contents).
@@ -732,7 +763,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         return (
             found,
             format!(
-                "{id} memory {} bytes {spec_bytes} ({ascii:?})",
+                "{id} memory {} bytes {spec_bytes} ({ascii:?}){framing_flag}",
                 if found {
                     "contains"
                 } else {
@@ -766,7 +797,10 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             ok &= v <= hi + 1e-9;
             parts.push(format!("<= {hi}"));
         }
-        return (ok, format!("{id}.{field} = {v} ({})", parts.join(", ")));
+        return (
+            ok,
+            format!("{id}.{field} = {v} ({}){framing_flag}", parts.join(", ")),
+        );
     }
 
     (false, format!("peripheral '{id}' assertion incomplete"))
@@ -1276,6 +1310,9 @@ mod tests {
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
+                coverage_warnings: Vec::new(),
+                unexercised_bus_ids: std::collections::HashSet::new(),
+                spi_framing: HashMap::new(),
             }
         }
         let out = outcome_batt_never_tripped();
@@ -1339,6 +1376,9 @@ mod tests {
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
+                coverage_warnings: Vec::new(),
+                unexercised_bus_ids: std::collections::HashSet::new(),
+                spi_framing: HashMap::new(),
             }
         }
         // A voltage assertion reads the analog window (0..sim). Corner 3 diverged.
@@ -1432,6 +1472,75 @@ mod tests {
         assert!(
             msg.contains("[\"duty\", \"position\", \"temp_c\", \"transitions\"]"),
             "known-field list must be sorted for reproducible report bytes: {msg}"
+        );
+    }
+
+    // U3 finding 2: a `peripheral` assertion against a bus device the platform
+    // never exercised (no matching controller modeled) must FAIL loudly — the
+    // snapshot is the slave's power-on default, and a default LM75 temperature
+    // sits inside most spec windows, so evaluating it would be a false green.
+    #[test]
+    fn peripheral_assertion_on_an_unexercised_bus_fails_loudly() {
+        use super::check_peripheral;
+        use crate::runner::{PeripheralSnapshot, RunOutcome};
+        use crate::spec::Assertion;
+
+        let assertion: Assertion = toml::from_str(
+            "kind = \"peripheral\"\nid = \"TEMP1\"\nfield = \"temp_c\"\nmin = 20.0\nmax = 30.0\n",
+        )
+        .unwrap();
+
+        // The slave's default state WOULD pass the window — that is the trap.
+        let mut snap = PeripheralSnapshot::default();
+        snap.fields.insert("temp_c".to_string(), 25.0);
+        let mut out = RunOutcome::default();
+        out.peripherals.insert("TEMP1".to_string(), snap);
+
+        // Exercised bus: passes normally.
+        let (ok, _) = check_peripheral(&assertion, &out);
+        assert!(ok, "sanity: the default state passes when the bus ran");
+
+        // Unexercised bus: the same snapshot must now FAIL with the honest
+        // never-exercised wording, not green-pass on the default.
+        out.unexercised_bus_ids.insert("TEMP1".to_string());
+        let (ok, msg) = check_peripheral(&assertion, &out);
+        assert!(!ok, "an unexercised bus peripheral must fail: {msg}");
+        assert!(
+            msg.contains("NEVER exercised") && msg.contains("power-on default"),
+            "the failure must say WHY the verdict is refused: {msg}"
+        );
+    }
+
+    // U3 finding 3: a heuristic-framed SPI bus must be flagged in the
+    // assertion's own detail line (the surface a reviewer reads), pass or fail.
+    #[test]
+    fn peripheral_assertion_on_a_heuristic_framed_bus_is_flagged() {
+        use super::check_peripheral;
+        use crate::runner::{PeripheralSnapshot, RunOutcome};
+        use crate::spec::Assertion;
+
+        let assertion: Assertion = toml::from_str(
+            "kind = \"peripheral\"\nid = \"ADC1\"\nfield = \"transitions\"\nmin = 1.0\n",
+        )
+        .unwrap();
+        let mut snap = PeripheralSnapshot::default();
+        snap.fields.insert("transitions".to_string(), 5.0);
+        let mut out = RunOutcome::default();
+        out.peripherals.insert("ADC1".to_string(), snap);
+
+        // Exact framing: no flag.
+        out.spi_framing.insert("ADC1".to_string(), "exact".to_string());
+        let (ok, msg) = check_peripheral(&assertion, &out);
+        assert!(ok);
+        assert!(!msg.contains("HEURISTIC"), "exact framing must not be flagged: {msg}");
+
+        // Heuristic framing: the detail carries the caveat even on a pass.
+        out.spi_framing.insert("ADC1".to_string(), "heuristic".to_string());
+        let (ok, msg) = check_peripheral(&assertion, &out);
+        assert!(ok, "framing tier qualifies, it does not fail: {msg}");
+        assert!(
+            msg.contains("HEURISTIC") && msg.contains("cs_net"),
+            "a heuristic-framed assertion must be flagged in its detail: {msg}"
         );
     }
 
@@ -1591,6 +1700,9 @@ mod tests {
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
+                coverage_warnings: Vec::new(),
+                unexercised_bus_ids: std::collections::HashSet::new(),
+                spi_framing: HashMap::new(),
             }
         }
 
@@ -1658,6 +1770,9 @@ mod tests {
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
+                coverage_warnings: Vec::new(),
+                unexercised_bus_ids: std::collections::HashSet::new(),
+                spi_framing: HashMap::new(),
             }
         }
 
@@ -1719,6 +1834,9 @@ mod tests {
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
+                coverage_warnings: Vec::new(),
+                unexercised_bus_ids: std::collections::HashSet::new(),
+                spi_framing: HashMap::new(),
             }
         }
 

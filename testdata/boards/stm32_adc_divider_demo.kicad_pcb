@@ -1,0 +1,77 @@
+(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+3V3")
+  (net 3 "PA5_OUT")
+  (net 4 "LED_A")
+  (net 5 "PC13_LED")
+  (net 6 "TEMP_SENSE")
+
+  ; The blue pill demo board PLUS an analog input: a 10k/10k divider from +3V3
+  ; feeds TEMP_SENSE into PA0 (LQFP-48 pin 10, role pa0_adc0 -> engine ADC
+  ; channel 0). The scheduler pushes the solved TEMP_SENSE voltage into the
+  ; core every chunk; the stock Renode STM32F103 platform models NO ADC, so
+  ; the backend records the injection as DROPPED — this board is the live
+  ; fixture for the co-sim ADC-coverage honesty surfaces (U3 finding 1).
+  (module Package_QFP:LQFP-48_7x7mm_P0.5mm (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value STM32F103C8T6 (at 0 2) (layer F.Fab))
+    (pad 1  smd rect (at -3 0) (net 5 "PC13_LED"))
+    (pad 8  smd rect (at -3 1) (net 1 "GND"))
+    (pad 9  smd rect (at -3 2) (net 2 "+3V3"))
+    (pad 10 smd rect (at 3 -1) (net 6 "TEMP_SENSE"))
+    (pad 15 smd rect (at 3 0) (net 3 "PA5_OUT"))
+    (pad 23 smd rect (at 3 1) (net 1 "GND"))
+    (pad 24 smd rect (at 3 2) (net 2 "+3V3"))
+    (pad 30 smd rect (at 3 3) (net 0 ""))
+    (pad 31 smd rect (at 3 4) (net 0 ""))
+    (pad 35 smd rect (at -3 3) (net 1 "GND"))
+    (pad 36 smd rect (at -3 4) (net 2 "+3V3"))
+    (pad 44 smd rect (at -3 5) (net 1 "GND"))
+    (pad 48 smd rect (at -3 6) (net 2 "+3V3"))
+  )
+
+  ; PA5 -> 330R -> LED anode (the observable analog path from the base demo).
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 330 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 3 "PA5_OUT"))
+    (pad 2 thru_hole circle (at 2 0) (net 4 "LED_A"))
+  )
+
+  (module LED_THT:LED_D5.0mm (layer F.Cu)
+    (at 112 100)
+    (fp_text reference D1 (at 0 0) (layer F.SilkS))
+    (fp_text value RED_LED (at 0 2) (layer F.Fab))
+    (pad A thru_hole circle (at 0 0) (net 4 "LED_A"))
+    (pad K thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+
+  ; PC13 -> 4k7 pulldown so the blink net sits at a clean logic level.
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 105 110)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 4k7 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 5 "PC13_LED"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+
+  ; +3V3 -> 10k -> TEMP_SENSE -> 10k -> GND: the divider that puts ~1.65 V on
+  ; the ADC net, standing in for an analog sensor output (an LM35-style part).
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 95 110)
+    (fp_text reference R3 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 2 "+3V3"))
+    (pad 2 thru_hole circle (at 2 0) (net 6 "TEMP_SENSE"))
+  )
+  (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
+    (at 95 112)
+    (fp_text reference R4 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (net 6 "TEMP_SENSE"))
+    (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
+  )
+)

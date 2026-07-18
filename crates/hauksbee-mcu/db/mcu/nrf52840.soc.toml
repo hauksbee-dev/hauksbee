@@ -38,8 +38,24 @@ odr_offset = 0x4
 width = 32
 dir = { offset = 0x14, encoding = "dir_bits" }
 
-# No I2C/SPI controllers wired for this part.
+# BUS CONTROLLERS (verified against the installed Renode 1.16.1): the stock
+# nrf52840.repl models `twi0`/`twi1` (I2C.NRF52840_I2C, 0x40003000/0x40004000)
+# and `spi2` (SPI.NRF52840_SPI, 0x40023000). These names were confirmed live
+# via `peripherals` on a booted nrf52840 machine, and the Hauksbee I2C/SPI
+# bridge peripherals register on them (tests/renode_nrf52840_bus.rs). Renode
+# models the pre-EasyDMA TWI/SPI register interfaces here — firmware driving
+# the TWIM/SPIM (EasyDMA) registers hits parts of the block the model does
+# not implement, so an end-to-end sensor round-trip is proven only for
+# TWI/SPI-style drivers. Everything the repl does NOT model stays unlisted,
+# so a bound sensor on a missing controller gets the loud unexercised-bus
+# coverage warning instead of a silent no-op.
 [soc.i2c]
-controllers = []
+controllers = ["twi0", "twi1"]
 [soc.spi]
-controllers = []
+controllers = ["spi2"]
+
+# No [[soc.adc]] injection map: the stock Renode 1.16.1 nrf52840.repl models
+# no ADC/SAADC peripheral at all (verified live — `peripherals` lists none),
+# and inventing a RAM result word would be a firmware contract, not the real
+# converter. ADC injections on this platform are therefore DROPPED and
+# surfaced as a co-sim coverage warning on every report surface.

@@ -182,6 +182,24 @@ pub struct RunOutcome {
     /// surfaces this on every honesty surface; the CI report must too, or a GREEN
     /// verdict silently vouches for firmware behaviour on the wrong silicon.
     pub substitutions: Vec<String>,
+    /// Co-sim coverage warnings (U3): one message per dropped-ADC channel (the
+    /// platform had no injection map, so the firmware never received the
+    /// solved voltage) and per never-exercised bus peripheral (no matching
+    /// controller modeled). Same channel discipline as `substitutions`: the
+    /// report surfaces every entry, or a GREEN silently vouches for co-sim
+    /// paths that never ran.
+    pub coverage_warnings: Vec<String>,
+    /// Ids of bus peripherals that were bound but NEVER exercised (their
+    /// platform models no matching bus controller). A `peripheral` assertion
+    /// against one of these ids FAILS loudly instead of green-passing on the
+    /// slave's power-on default state.
+    pub unexercised_bus_ids: std::collections::HashSet<String>,
+    /// Per-SPI-bus transaction-framing tier, keyed by bus/peripheral id:
+    /// "exact", "backend", or "heuristic". A `peripheral` assertion against a
+    /// heuristic-framed bus is flagged in its result detail, because the
+    /// heuristic tier is documented actively wrong (merges two transactions in
+    /// one chunk; truncates a boundary-spanning one).
+    pub spi_framing: HashMap<String, String>,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -1238,6 +1256,33 @@ fn run_one(
             .substitutions()
             .iter()
             .map(|s| s.message())
+            .collect(),
+        // Co-sim coverage honesty (U3): the same canonical messages the run
+        // binary's surfaces emit, so the CI report names identical facts.
+        coverage_warnings: engine
+            .scheduler()
+            .adc_dropped()
+            .iter()
+            .map(|d| d.message())
+            .chain(
+                engine
+                    .scheduler()
+                    .unexercised_buses()
+                    .iter()
+                    .map(|b| b.message()),
+            )
+            .collect(),
+        unexercised_bus_ids: engine
+            .scheduler()
+            .unexercised_buses()
+            .iter()
+            .map(|b| b.id.clone())
+            .collect(),
+        spi_framing: engine
+            .scheduler()
+            .spi_framing_modes()
+            .into_iter()
+            .map(|(bus, mode)| (bus, mode.as_str().to_string()))
             .collect(),
     })
 }
