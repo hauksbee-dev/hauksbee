@@ -32,6 +32,12 @@ pub struct CiResult {
     /// modelled, run on a less-specific one). Surfaced in every report format so a
     /// GREEN verdict never silently vouches for firmware on the wrong silicon.
     pub substitutions: Vec<String>,
+    /// Co-sim coverage warnings (U3): dropped ADC injections (the firmware never
+    /// received the solved voltage) and never-exercised bus peripherals (no
+    /// matching controller modeled). Surfaced in every report format, exactly
+    /// like `substitutions` — a GREEN over an un-run co-sim path must be
+    /// qualified everywhere a pipeline reads.
+    pub coverage_warnings: Vec<String>,
 }
 
 /// What a tolerance-ensemble run covered, for the report headline.
@@ -165,6 +171,11 @@ impl CiResult {
         for msg in &self.substitutions {
             out.push_str(&format!("  co-sim ran on a SUBSTITUTE chip — {msg}\n"));
         }
+        // Coverage honesty: a GREEN over a co-sim path that never ran (dropped
+        // ADC injection, unexercised bus device) must be qualified plainly.
+        for msg in &self.coverage_warnings {
+            out.push_str(&format!("  co-sim COVERAGE HOLE — {msg}\n"));
+        }
         let verdict = if self.analog_invalid() {
             "INVALID (analog co-sim did not converge)"
         } else if self.passed() {
@@ -263,6 +274,14 @@ impl CiResult {
                 xml_escape(msg)
             ));
         }
+        // Coverage honesty: dropped-ADC / unexercised-bus warnings ride the same
+        // suite-level channel so the JUnit surface carries the qualification too.
+        for msg in &self.coverage_warnings {
+            out.push_str(&format!(
+                "    <system-out>co-sim COVERAGE HOLE — {}</system-out>\n",
+                xml_escape(msg)
+            ));
+        }
         out.push_str("  </testsuite>\n");
         out.push_str("</testsuites>\n");
         out
@@ -299,6 +318,13 @@ impl CiResult {
         for msg in &self.substitutions {
             out.push_str(&format!(
                 "::warning title=hauksbee-ci SUBSTITUTE MCU::{}\n",
+                gh_escape(msg)
+            ));
+        }
+        // Coverage honesty: a warning annotation per co-sim coverage hole.
+        for msg in &self.coverage_warnings {
+            out.push_str(&format!(
+                "::warning title=hauksbee-ci COSIM COVERAGE HOLE::{}\n",
                 gh_escape(msg)
             ));
         }
@@ -466,6 +492,7 @@ mod substitution_tests {
                 "co-sim: U1 requested STM32F411RET6 but it is modelled as an STM32F407 core"
                     .to_string(),
             ],
+            coverage_warnings: Vec::new(),
         };
         let human = result.render_human();
         assert!(
@@ -485,5 +512,46 @@ mod substitution_tests {
         // No substitution → none of the surfaces mention it.
         let clean = CiResult { substitutions: Vec::new(), ..result };
         assert!(!clean.render_human().contains("SUBSTITUTE"));
+    }
+
+    // U3: co-sim coverage holes (dropped ADC injection, unexercised bus device)
+    // must reach every report format, exactly like substitutions do.
+    #[test]
+    fn a_cosim_coverage_hole_is_surfaced_in_every_report_format() {
+        let result = CiResult {
+            spec_name: "t".into(),
+            board: "b.kicad_pcb".into(),
+            results: Vec::new(),
+            seeds: 1,
+            elapsed: Duration::from_secs(0),
+            analog_abort: false,
+            coverage: None,
+            substitutions: Vec::new(),
+            coverage_warnings: vec![
+                "co-sim: ADC channel 0 on U1 (net 'TEMP_SENSE') was driven by the \
+                 analog solve but this platform has no ADC injection map"
+                    .to_string(),
+            ],
+        };
+        let human = result.render_human();
+        assert!(
+            human.contains("COVERAGE HOLE") && human.contains("TEMP_SENSE"),
+            "human report must carry the coverage hole: {human}"
+        );
+        let junit = result.render_junit();
+        assert!(
+            junit.contains("COVERAGE HOLE") && junit.contains("system-out"),
+            "junit must carry the coverage hole: {junit}"
+        );
+        let gh = result.render_github_annotations();
+        assert!(
+            gh.contains("COSIM COVERAGE HOLE") && gh.contains("::warning"),
+            "github annotations must warn on the coverage hole: {gh}"
+        );
+        // No hole → no mention on any surface.
+        let clean = CiResult { coverage_warnings: Vec::new(), ..result };
+        assert!(!clean.render_human().contains("COVERAGE HOLE"));
+        assert!(!clean.render_junit().contains("COVERAGE HOLE"));
+        assert!(!clean.render_github_annotations().contains("COVERAGE HOLE"));
     }
 }

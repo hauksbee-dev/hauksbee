@@ -209,6 +209,14 @@ pub struct Scheduler {
     /// asked for a more specific part than the emulator core models. Surfaced as
     /// a co-sim warning + JSON note; never gates an exit code on its own.
     substitutions: Vec<McuSubstitution>,
+    /// Bus peripherals (I2C/SPI slave models) attached on a board whose live
+    /// MCU backends model NO matching bus controller — the firmware's bus
+    /// traffic can never reach them, so they sit at their power-on defaults for
+    /// the whole run. Recorded at attach time (mirroring `substitutions`) and
+    /// surfaced as a co-sim coverage warning on every report surface; a CI
+    /// `peripheral` assertion against one of these FAILS rather than passing on
+    /// the slave's untouched default state (U3 finding 2).
+    unexercised_buses: Vec<UnexercisedBus>,
     /// MCU-bit-banged 74HC165 read chains, resolved at GPIO-output edge
     /// granularity inside the owning MCU's run loop via its synchronous input
     /// responder (the read-direction analogue of `chains`). Wrapped in
@@ -321,6 +329,78 @@ pub struct McuSubstitution {
     pub requested_part: String,
     /// Human label of the core that was actually modelled (e.g. `"STM32F407"`).
     pub modelled_core: String,
+}
+
+/// A bus peripheral bound on a platform that models no matching bus controller
+/// (U3 finding 2). The device is on the board, but the emulated MCU has no
+/// controller the bridge could attach to, so the firmware never talks to it —
+/// a silent no-op unless surfaced.
+#[derive(Debug, Clone)]
+pub struct UnexercisedBus {
+    /// The peripheral/bus id (the same id `peripheral` assertions target).
+    pub id: String,
+    /// `"I2C"` or `"SPI"`.
+    pub bus: &'static str,
+    /// The named SPI controller it was bound to, when the spec named one.
+    pub controller: Option<String>,
+}
+
+impl UnexercisedBus {
+    /// The one-line warning every surface (text, --plain, --json note, CI
+    /// report) emits for this device, so they all name the same facts.
+    pub fn message(&self) -> String {
+        let on = match &self.controller {
+            Some(c) => format!(" (bound to controller '{c}')"),
+            None => String::new(),
+        };
+        format!(
+            "co-sim: {} device '{}'{on} is on the board but this MCU platform \
+             models no {} controller — the firmware's bus traffic can never \
+             reach it, so it was NEVER exercised and its behaviour is \
+             unverified (its state is the power-on default). Add [soc.{}] \
+             controllers to the SoC descriptor to enable it (docs/MCU.md).",
+            self.bus,
+            self.id,
+            self.bus,
+            self.bus.to_ascii_lowercase(),
+        )
+    }
+}
+
+/// One ADC channel whose per-chunk injections the MCU backend DROPPED because
+/// the platform has no injection map (U3 finding 1). The analog solve drove
+/// the net; the firmware never received a single sample.
+#[derive(Debug, Clone)]
+pub struct AdcDrop {
+    /// The MCU reference designator (e.g. `"U1"`).
+    pub mcu_ref: String,
+    /// The engine ADC channel index.
+    pub channel: u8,
+    /// The board net wired to the channel.
+    pub net: String,
+    /// Up to a few reference designators of the parts attached to the net
+    /// (the analog source the firmware was supposed to read). Best-effort.
+    pub parts: Vec<String>,
+}
+
+impl AdcDrop {
+    /// The one-line warning every surface emits for this channel; same
+    /// shared-wording discipline as [`UnexercisedBus::message`].
+    pub fn message(&self) -> String {
+        let parts = if self.parts.is_empty() {
+            String::new()
+        } else {
+            format!(", parts {}", self.parts.join("/"))
+        };
+        format!(
+            "co-sim: ADC channel {} on {} (net '{}'{parts}) was driven by the \
+             analog solve but this platform has no ADC injection map — the \
+             firmware NEVER received it, so analog readings on that pin are \
+             meaningless. Add an [[soc.adc]] injection recipe to the SoC \
+             descriptor to enable it (docs/MCU.md).",
+            self.channel, self.mcu_ref, self.net,
+        )
+    }
 }
 
 impl McuSubstitution {
@@ -498,6 +578,7 @@ impl Scheduler {
             spi_buses: Vec::new(),
             spi_controller_map: HashMap::new(),
             substitutions,
+            unexercised_buses: Vec::new(),
             hc165_chains: Vec::new(),
             responder_registries: Vec::new(),
             input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
@@ -717,6 +798,89 @@ impl Scheduler {
         &self.substitutions
     }
 
+    /// Bus peripherals attached on a platform that models no matching bus
+    /// controller (U3 finding 2) — never exercised, recorded at attach time.
+    pub fn unexercised_buses(&self) -> &[UnexercisedBus] {
+        &self.unexercised_buses
+    }
+
+    /// ADC channels whose injections the MCU backends DROPPED (no injection
+    /// map), resolved to their board nets and nearby parts (U3 finding 1).
+    /// Populated by the run itself (a drop is recorded when the scheduler's
+    /// per-chunk push hits the backend's unmapped path), so query it after
+    /// the co-sim, deterministic ordering by (mcu, channel).
+    pub fn adc_dropped(&self) -> Vec<AdcDrop> {
+        let node_names: HashMap<u32, &String> = self
+            .net_nodes
+            .iter()
+            .map(|(name, node)| (node.0, name))
+            .collect();
+        let mut out = Vec::new();
+        for m in &self.mcus {
+            for ch in m.core.adc_dropped_channels() {
+                let Some(&node) = m.binding.adc_nets.get(&ch) else {
+                    continue;
+                };
+                let net = node_names
+                    .get(&node.0)
+                    .map(|s| (*s).clone())
+                    .unwrap_or_else(|| format!("node {}", node.0));
+                // Best-effort part naming: the devices on the net, excluding
+                // MCU pin legs (the same exclusion the digital-in evidence
+                // index applies), deduped by name and capped for readability.
+                let mut parts: Vec<String> = self
+                    .digital_in_evidence
+                    .get(&node.0)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|&di| self.circuit.devices.get(di as usize))
+                    .map(|d| d.name().to_string())
+                    .collect();
+                parts.sort();
+                parts.dedup();
+                parts.truncate(3);
+                out.push(AdcDrop {
+                    mcu_ref: m.binding.reference.clone(),
+                    channel: ch,
+                    net,
+                    parts,
+                });
+            }
+        }
+        out.sort_by(|a, b| a.mcu_ref.cmp(&b.mcu_ref).then(a.channel.cmp(&b.channel)));
+        out
+    }
+
+    /// Record `bus`/`id` as unexercised when NO live MCU backend models a
+    /// matching controller, and warn on stderr immediately (the same at-build
+    /// loudness as a chip substitution). A board with no live MCUs stays
+    /// silent: nothing co-simulates there at all, which the zero-activity /
+    /// no-cosim surfaces already report.
+    fn record_bus_if_unexercised(
+        &mut self,
+        id: &str,
+        bus: &'static str,
+        controller: Option<&str>,
+    ) {
+        if self.mcus.is_empty() {
+            return;
+        }
+        let modeled = self.mcus.iter().any(|m| match bus {
+            "I2C" => m.core.i2c_bus_modeled(),
+            _ => m.core.spi_bus_modeled(controller),
+        });
+        if modeled {
+            return;
+        }
+        let entry = UnexercisedBus {
+            id: id.to_string(),
+            bus,
+            controller: controller.map(str::to_string),
+        };
+        eprintln!("WARNING: {}", entry.message());
+        self.unexercised_buses.push(entry);
+    }
+
     /// Whether any MCU produced at least one GPIO output edge — i.e. the firmware
     /// actually configured and drove a pin. This is the honest "the firmware did
     /// something" signal: unlike net `toggles` it survives a pin that is driven
@@ -732,6 +896,15 @@ impl Scheduler {
     /// firmware's TWI activity and readable for assertions (EEPROM contents,
     /// sensor temperature).
     pub fn attach_i2c_bus(&mut self, bus: Arc<Mutex<I2cBus>>) {
+        // Coverage honesty (U3 finding 2): a slave bound on a platform whose
+        // backend models no I2C controller receives no traffic, ever. Record
+        // it so every report surface says so instead of a silent green.
+        let id = {
+            use crate::peripherals::Peripheral as _;
+            let g = bus.lock().unwrap_or_else(|e| e.into_inner());
+            g.id().to_string()
+        };
+        self.record_bus_if_unexercised(&id, "I2C", None);
         self.i2c_buses.push(bus);
         // The AVR core's `on_i2c` closure and `set_i2c_slave_addresses` are
         // SINGLE-SLOT replacers, so a per-bus closure meant a second attach
@@ -782,6 +955,8 @@ impl Scheduler {
         cs_pin: Option<(char, u8)>,
         cs_net: Option<NodeId>,
     ) {
+        let id = bus.lock().unwrap_or_else(|e| e.into_inner()).id().to_string();
+        self.record_bus_if_unexercised(&id, "SPI", None);
         bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
         self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
@@ -818,6 +993,8 @@ impl Scheduler {
         cs_pin: Option<(char, u8)>,
         cs_net: Option<NodeId>,
     ) {
+        let id = bus.lock().unwrap_or_else(|e| e.into_inner()).id().to_string();
+        self.record_bus_if_unexercised(&id, "SPI", Some(controller));
         bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
         for m in &mut self.mcus {
             let b = bus.clone();
@@ -4319,6 +4496,160 @@ mod tests {
         assert!(
             toggles >= 3,
             "a 3.3 V net on a mixed-rail board must toggle (min-rail band), got {toggles}"
+        );
+    }
+
+    /// A mock core for the co-sim coverage honesty tests (U3): reports NO
+    /// modeled bus controllers and a dropped ADC channel 0 — the shape of a
+    /// Renode platform whose descriptor carries empty controller lists and no
+    /// `[[soc.adc]]` map.
+    struct BusBlindCore;
+
+    impl Mcu for BusBlindCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            64_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+        fn i2c_bus_modeled(&self) -> bool {
+            false
+        }
+        fn spi_bus_modeled(&self, _controller: Option<&str>) -> bool {
+            false
+        }
+        fn adc_dropped_channels(&self) -> Vec<u8> {
+            vec![0]
+        }
+    }
+
+    /// A scheduler whose single live MCU is a [`BusBlindCore`], with ADC
+    /// channel 0 bound to the named net.
+    fn sched_with_bus_blind_core(adc_net: &str) -> Scheduler {
+        let board =
+            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched =
+            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let node = sched.circuit.node(adc_net);
+        sched.net_nodes.insert(adc_net.to_string(), node);
+        let mut adc_nets = HashMap::new();
+        adc_nets.insert(0u8, node);
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "renode:nrf52840".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets,
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+        sched.mcus.push(core_with_hooks(Box::new(BusBlindCore), binding));
+        sched.responder_registries.push(None);
+        sched
+    }
+
+    // U3 finding 2: a bus slave attached on a platform whose backend models no
+    // matching controller must be RECORDED as unexercised — the raw fact every
+    // report surface (text, --plain, --json note, CI) is built from.
+    #[test]
+    fn bus_slaves_on_an_unmodeled_controller_are_recorded_as_unexercised() {
+        let mut sched = sched_with_bus_blind_core("TEMP_SENSE");
+        assert!(sched.unexercised_buses().is_empty());
+
+        let i2c = Arc::new(Mutex::new(
+            I2cBus::new("TEMP1").with_slave(Box::new(crate::Lm75::new(0x48, 25.0))),
+        ));
+        sched.attach_i2c_bus(i2c);
+        let spi = Arc::new(Mutex::new(SpiBus::new(
+            "FLASH1",
+            Box::new(crate::Spi25Eeprom::new(256)),
+        )));
+        sched.attach_spi_bus(spi, None, None);
+        let spi2 = Arc::new(Mutex::new(SpiBus::new(
+            "IMU1",
+            Box::new(crate::Spi25Eeprom::new(256)),
+        )));
+        sched.attach_spi_bus_on("spi9", spi2, None, None);
+
+        let rec = sched.unexercised_buses();
+        assert_eq!(rec.len(), 3, "all three bound slaves are unexercised: {rec:?}");
+        assert_eq!((rec[0].id.as_str(), rec[0].bus), ("TEMP1", "I2C"));
+        assert_eq!((rec[1].id.as_str(), rec[1].bus), ("FLASH1", "SPI"));
+        assert_eq!(rec[2].controller.as_deref(), Some("spi9"));
+        // The canonical message names the device and says it never ran.
+        let msg = rec[0].message();
+        assert!(
+            msg.contains("TEMP1")
+                && msg.contains("NEVER exercised")
+                && msg.contains("models no I2C controller"),
+            "{msg}"
+        );
+    }
+
+    // The negative: a core that DOES model its buses records nothing (the
+    // capturing core keeps the trait defaults, the AVR/QEMU shape).
+    #[test]
+    fn bus_slaves_on_a_modeled_controller_are_not_recorded() {
+        let (mut sched, _h) = sched_with_capturing_core(&[]);
+        let i2c = Arc::new(Mutex::new(
+            I2cBus::new("TEMP1").with_slave(Box::new(crate::Lm75::new(0x48, 25.0))),
+        ));
+        sched.attach_i2c_bus(i2c);
+        let spi = Arc::new(Mutex::new(SpiBus::new(
+            "FLASH1",
+            Box::new(crate::Spi25Eeprom::new(256)),
+        )));
+        sched.attach_spi_bus(spi, None, None);
+        assert!(
+            sched.unexercised_buses().is_empty(),
+            "modeled buses must not be flagged"
+        );
+    }
+
+    // U3 finding 1: a backend-reported dropped ADC channel resolves to its
+    // board net and MCU, and the canonical message says the firmware never
+    // received the injection.
+    #[test]
+    fn dropped_adc_channels_resolve_to_their_net_and_warn() {
+        let sched = sched_with_bus_blind_core("TEMP_SENSE");
+        let drops = sched.adc_dropped();
+        assert_eq!(drops.len(), 1, "{drops:?}");
+        assert_eq!(drops[0].mcu_ref, "U1");
+        assert_eq!(drops[0].channel, 0);
+        assert_eq!(drops[0].net, "TEMP_SENSE");
+        let msg = drops[0].message();
+        assert!(
+            msg.contains("ADC channel 0")
+                && msg.contains("TEMP_SENSE")
+                && msg.contains("NEVER received")
+                && msg.contains("[[soc.adc]]"),
+            "{msg}"
         );
     }
 
