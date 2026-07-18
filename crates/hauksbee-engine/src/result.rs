@@ -640,6 +640,11 @@ pub struct DrcShort {
     pub loc_mm: [f64; 2],
     /// Always "serious" for a short; carried for the uniform finding shape.
     pub severity: String,
+    /// Human one-line description, mirroring `JsonFinding.plain` so every
+    /// `--json` finding category reads uniformly (SI/lint already carry it).
+    pub plain: String,
+    /// Suggested remediation, mirroring `JsonFinding.fix`.
+    pub fix: String,
 }
 
 /// A group of clearance findings that share (net_a, net_b, layer, root cause),
@@ -661,6 +666,11 @@ pub struct DrcGroup {
     pub min_gap_mm: f64,
     /// The clearance rule for this pair (mm).
     pub rule_mm: f64,
+    /// Human one-line description (`self.label()`), serialized so `--json`
+    /// consumers get the same text the human/`--plain` renderers show.
+    pub plain: String,
+    /// Suggested remediation, mirroring `JsonFinding.fix`.
+    pub fix: String,
 }
 
 impl DrcGroup {
@@ -754,6 +764,13 @@ impl DrcStructured {
                     gap_mm: f.gap_mm,
                     loc_mm: [f.x, f.y],
                     severity: short_severity.to_string(),
+                    plain: format!(
+                        "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
+                        f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
+                    ),
+                    fix: "separate the two nets' copper — widen the gap or reroute so \
+                          the trace/pad spacing clears the clearance rule"
+                        .to_string(),
                 }),
                 ViolationKind::Clearance => {
                     // A finding is "below" the rule when its gap is under it;
@@ -784,7 +801,7 @@ impl DrcStructured {
         let mut at_limit = Vec::new();
         for ((net_a, net_b, layer), (count, below_count, min_gap, rule)) in groups {
             let any_below = below_count > 0;
-            let group = DrcGroup {
+            let mut group = DrcGroup {
                 net_a,
                 net_b,
                 layer,
@@ -793,6 +810,18 @@ impl DrcStructured {
                 at_limit: !any_below,
                 min_gap_mm: if min_gap.is_finite() { min_gap } else { rule },
                 rule_mm: rule,
+                plain: String::new(),
+                fix: String::new(),
+            };
+            group.plain = group.label();
+            group.fix = if any_below {
+                "increase spacing or route clearance so the gap meets the \
+                 clearance rule"
+                    .to_string()
+            } else {
+                "no margin — widen the spacing above the rule for manufacturing \
+                 tolerance"
+                    .to_string()
             };
             if any_below {
                 violations.push(group);
@@ -1138,9 +1167,74 @@ impl JsonReport {
         }
     }
 
-    /// Serialize to a pretty JSON string (stable, non-interactive output).
+    /// A top-level machine verdict computed from the populated sections, so a CI
+    /// consumer can read pass/fail without re-deriving it from every finding.
+    /// Returns `(ok, verdict, serious_count, actionable_count)` where `verdict`
+    /// is `"pass"` | `"fail"` | `"invalid"`:
+    ///   - `fail` — at least one serious finding (a DRC short, a co-sim stress
+    ///     fault, a serious lint/SI finding);
+    ///   - `invalid` — nothing serious, but an analysis that ran could not be
+    ///     judged (AC or thermal reported `valid:false`);
+    ///   - `pass` — otherwise.
+    /// Mirrors the run's own exit gate: DRC shorts are ignored when the board is
+    /// newer than the validated copper extraction (`version_warning` set), the
+    /// same carve-out the CI gate makes.
+    pub fn verdict(&self) -> (bool, &'static str, usize, usize) {
+        let mut serious = 0usize;
+        let mut actionable = 0usize;
+        if let Some(findings) = &self.findings {
+            for f in findings {
+                if f.severity == "serious" {
+                    serious += 1;
+                }
+                if f.actionable {
+                    actionable += 1;
+                }
+            }
+        }
+        if let Some(drc) = &self.drc {
+            if drc.version_warning.is_none() {
+                serious += drc.shorts.len();
+                actionable += drc.shorts.len();
+            }
+            actionable += drc.violations.len();
+        }
+        let invalid = self.ac.as_ref().is_some_and(|a| !a.validity.valid)
+            || self.thermal.as_ref().is_some_and(|t| !t.validity.valid);
+        let verdict = if serious > 0 {
+            "fail"
+        } else if invalid {
+            "invalid"
+        } else {
+            "pass"
+        };
+        (verdict == "pass", verdict, serious, actionable)
+    }
+
+    /// Serialize to a pretty JSON string (stable, non-interactive output). The
+    /// top-level object is prefixed with the machine verdict (`ok`, `verdict`,
+    /// `serious_count`, `actionable_count`) computed by [`Self::verdict`], so a
+    /// success document shares the `{"ok": ...}` shape with the hard-error
+    /// envelope and a CI consumer never has to re-derive pass/fail.
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self)
+        let (ok, verdict, serious, actionable) = self.verdict();
+        let mut value = match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => {
+                return serde_json::to_string_pretty(self)
+                    .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"))
+            }
+        };
+        // Insert the rollup at the front so it reads first. serde_json::Map
+        // preserves insertion order under the `preserve_order` feature; without
+        // it the keys are present regardless of position, which is what matters.
+        let mut out = serde_json::Map::new();
+        out.insert("ok".into(), serde_json::json!(ok));
+        out.insert("verdict".into(), serde_json::json!(verdict));
+        out.insert("serious_count".into(), serde_json::json!(serious));
+        out.insert("actionable_count".into(), serde_json::json!(actionable));
+        out.append(&mut value);
+        serde_json::to_string_pretty(&serde_json::Value::Object(out))
             .unwrap_or_else(|e| format!("{{\"error\":\"failed to serialize: {e}\"}}"))
     }
 }
@@ -1270,6 +1364,81 @@ mod tests {
         // A non-destructive over-voltage is a warning, not serious.
         assert_eq!(js[1].severity, "warning");
         assert_eq!(js[1].refs, vec!["C3".to_string()]);
+    }
+
+    #[test]
+    fn json_report_carries_a_top_level_verdict() {
+        // U3: --json success had no top-level pass/fail, so a CI consumer had to
+        // re-derive it from every finding (asymmetric with the {"ok":false}
+        // error envelope). to_json now prefixes ok/verdict/serious_count.
+        use crate::stress::{FaultEvent, FaultKind};
+        let bind = summary_with(Vec::new(), Vec::new());
+
+        // A clean report → pass.
+        let clean = JsonReport::new("b", bind.clone());
+        let (ok, verdict, serious, _) = clean.verdict();
+        assert!(ok && verdict == "pass" && serious == 0);
+        let txt = clean.to_json();
+        assert!(txt.contains("\"ok\": true") && txt.contains("\"verdict\": \"pass\""), "{txt}");
+
+        // A serious co-sim fault → fail, counted.
+        let mut failed = JsonReport::new("b", bind.clone());
+        failed.findings = Some(fault_findings_json(&[FaultEvent {
+            component: "Q1".into(),
+            kind: FaultKind::Overcurrent,
+            value: 5.0,
+            limit: 2.0,
+            t: 0.01,
+            destroyed: true,
+        }]));
+        let (ok, verdict, serious, actionable) = failed.verdict();
+        assert!(!ok && verdict == "fail" && serious == 1 && actionable >= 1);
+        assert!(failed.to_json().contains("\"verdict\": \"fail\""));
+
+        // An invalid AC sweep with nothing serious → invalid, not pass.
+        let mut invalid = JsonReport::new("b", bind);
+        invalid.ac = Some(AcJson {
+            validity: Validity { valid: false, reason: Some("no signal path".into()) },
+            nets: Vec::new(),
+            no_signal_path_nets: Vec::new(),
+            not_found_nets: Vec::new(),
+            coverage: None,
+        });
+        assert_eq!(invalid.verdict().1, "invalid");
+    }
+
+    #[test]
+    fn drc_json_findings_carry_plain_and_fix() {
+        // U3: DRC serialized as DrcShort/DrcGroup with no `plain`/`fix`, unlike
+        // SI/lint findings — so a --json consumer got remediation for every
+        // finding category except shorts/clearance. Both now carry them.
+        let short = DrcShort {
+            net_a: "GND".into(),
+            net_b: "VCC".into(),
+            layer: "F.Cu".into(),
+            gap_mm: 0.0,
+            loc_mm: [1.0, 2.0],
+            severity: "serious".into(),
+            plain: "GND shorts VCC on F.Cu at (1.00, 2.00) mm (gap 0.000 mm)".into(),
+            fix: "separate the two nets' copper".into(),
+        };
+        let js = serde_json::to_string(&short).unwrap();
+        assert!(js.contains("\"plain\"") && js.contains("\"fix\""), "{js}");
+
+        let mut group = DrcGroup {
+            net_a: "A".into(),
+            net_b: "B".into(),
+            layer: "F.Cu".into(),
+            count: 3,
+            below_count: 3,
+            at_limit: false,
+            min_gap_mm: 0.1,
+            rule_mm: 0.2,
+            plain: String::new(),
+            fix: String::new(),
+        };
+        group.plain = group.label();
+        assert!(!group.plain.is_empty(), "group plain must be the human label");
     }
 
     fn active_ic(reference: &str) -> UnresolvedActive {
