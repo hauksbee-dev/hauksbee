@@ -254,13 +254,14 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
               {/* accepted formats */}
               <div className="mt-6 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
                 KiCad <code>.kicad_pcb</code> <code>.kicad_sch</code> · Eagle <code>.brd</code> ·
-                Altium <code>.PcbDoc</code> · IPC <code>.d356</code> · gerber <code>.zip</code>
+                Altium <code>.PcbDoc</code> · IPC <code>.d356</code> · gerber <code>.zip</code> ·
+                board-as-code <code>.board</code>
               </div>
             </label>
             <input
               id="board-file"
               type="file"
-              accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt"
+              accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt,.board"
               className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleBoard(f) }}
             />

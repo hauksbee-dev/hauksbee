@@ -44,7 +44,7 @@ pub fn run(port: u16) -> anyhow::Result<()> {
             crate::commands::common::warn_if_dist_stale(&static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
             println!("      http://{bound}\n");
-            println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / gerber zip) to get a");
+            println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / .board / gerber zip) to get a");
             println!("  plain-language report. Optionally drop firmware (.elf / .hex) to run a");
             println!("  short co-sim. Nothing leaves your machine. Ctrl-C to stop.\n");
         } else {
