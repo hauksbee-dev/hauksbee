@@ -6,7 +6,7 @@
  * full Watchy firmware (sqfmi/Watchy, Arduino + GxEPD2) does the same thing this
  * does for the reset line, but pulls in WiFi/BT/RTC/SPI display stacks that the
  * Espressif QEMU fork does not model and that do not mirror GPIO to the RAM
- * mailbox the backend needs to observe a pin (see docs/MCU.md). So this firmware
+ * mailbox the backend needs to observe a pin (see docs/cosim/MCU.md). So this firmware
  * reproduces ONLY the load-bearing operation the documented fault is about, on
  * the same GPIO the real board uses, and maintains the mailbox so the engine can
  * watch it:
