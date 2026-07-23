@@ -56,13 +56,21 @@ pub struct RunConfig {
     pub asbuilt: Option<std::path::PathBuf>,
 }
 
-pub fn run(cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Validate `--firmware` up front, before any heavy work or the TUI takes over
     // the terminal. The native emulator loaders segfault (exit 139) on a missing
     // file instead of erroring; this turns a one-character typo into a clean,
     // actionable message naming the absolute path that was tried.
     if let Some(fw) = &cfg.firmware {
-        hauksbee_mcu::validate_firmware_path(fw)?;
+        // A PlatformIO project directory, a built .pio tree, or a zip of either
+        // resolves to its compiled image first; a bare .elf/.hex passes through.
+        if let Some(resolved) = crate::firmware_input::resolve_firmware_cli(fw)? {
+            if !quiet {
+                eprintln!("  firmware: {}", resolved.note);
+            }
+            cfg.firmware = Some(resolved.path);
+        }
+        hauksbee_mcu::validate_firmware_path(cfg.firmware.as_deref().expect("just set"))?;
     }
     // Gerber job input: a DIRECTORY of fab files, or a gerber `.zip`. This is the
     // "hand us only the fab files" path the README and `--help` advertise — the

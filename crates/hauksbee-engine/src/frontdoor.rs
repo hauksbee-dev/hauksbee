@@ -513,7 +513,32 @@ pub fn analyze_with_firmware(
         return report;
     }
 
-    let cosim = run_web_cosim(contents, fw_name, fw_bytes);
+    // The firmware part may be a zip (a built tree, or a whole PlatformIO
+    // project) rather than a bare image — resolve it first. A resolution
+    // failure is a co-sim-tier problem, not a board problem: the static report
+    // stands, with the reason in the co-sim card.
+    let resolved = match crate::firmware_input::resolve_firmware_bytes(fw_name, fw_bytes) {
+        Ok(r) => r,
+        Err(msg) => {
+            report.cosim = Some(cosim_unavailable(msg));
+            return report;
+        }
+    };
+    let mut cosim = run_web_cosim(contents, &resolved.name, &resolved.bytes);
+    if let Some(note) = &resolved.note {
+        // Say which image actually ran when it came out of an archive/build,
+        // so a wrong-env surprise is diagnosable from the report itself.
+        cosim.findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: format!("Firmware resolved from '{fw_name}'."),
+                why: note.clone(),
+                fix: "Upload the exact .elf/.hex directly if this is not the image you meant."
+                    .to_string(),
+            },
+        );
+    }
     // Fold co-sim electrical FAULTS into the top-level verdict: analyze() computed
     // serious/total/headline from the STATIC sections only, so an electrical fault
     // the firmware co-sim produced otherwise left the badge green and the headline
