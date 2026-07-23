@@ -302,8 +302,10 @@ struct RunArgs {
     #[arg(value_name = "BOARD")]
     board: PathBuf,
 
-    /// Firmware image to co-simulate on the board's MCU (e.g. an AVR .hex/.elf).
-    #[arg(long, value_name = "HEX")]
+    /// Firmware to co-simulate on the board's MCU: a compiled .elf/.hex, a
+    /// PlatformIO project directory (built with your own `pio run`), or a zip
+    /// of either (the built image inside is found automatically).
+    #[arg(long, value_name = "FIRMWARE")]
     firmware: Option<PathBuf>,
 
     /// As-built overlay (.asbuilt.toml): the declarative physical delta between
