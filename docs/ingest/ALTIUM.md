@@ -193,7 +193,7 @@ five cross-validated boards stay at 100% partition agreement.
 
 - **Allegro / OrCAD / other binary EDA are out of scope.** This module reads
   Altium `.PcbDoc` only. Cadence Allegro `.brd` (a different binary format) is
-  still ingested only via its gerbers (`docs/GERBER.md`), not natively.
+  still ingested only via its gerbers (`docs/ingest/GERBER.md`), not natively.
 
 - **Record types not yet handled:** `Fills6` (copper fills), `Dimensions6`,
   `Rules6` (so the DRC uses the default 0.2 mm clearance, not the board's own

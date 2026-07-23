@@ -20,7 +20,7 @@
 //! net). Second, the real Watchy v1.5 board under the Espressif QEMU ESP32
 //! backend (the e-paper RES# net, GPIO9), also two-sided. The mechanism is
 //! backend-agnostic across simavr (AVR), Renode (STM32/nRF/RISC-V) and the
-//! Espressif QEMU fork (ESP32/ESP32-C3); see docs/MCU.md for the matrix. The
+//! Espressif QEMU fork (ESP32/ESP32-C3); see docs/cosim/MCU.md for the matrix. The
 //! ESP32 tests skip cleanly when the deterministic fork is absent.
 
 use std::path::PathBuf;

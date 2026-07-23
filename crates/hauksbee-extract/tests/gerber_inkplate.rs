@@ -12,7 +12,7 @@
 //!     reader fix this drill yielded ZERO holes, so the two layers never stitched.
 //!
 //! There is NO pick-and-place in the published gerber set, so components cannot
-//! be bound (documented limit in docs/GERBER.md: "no P&P -> nets and geometry
+//! be bound (documented limit in docs/ingest/GERBER.md: "no P&P -> nets and geometry
 //! reconstruct from copper alone, but components cannot be bound"). This test
 //! therefore asserts the connectivity reconstruction (nets, drill stitching,
 //! per-net copper), not component binding.

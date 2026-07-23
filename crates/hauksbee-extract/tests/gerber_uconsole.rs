@@ -9,7 +9,7 @@
 //! block) that the upstream parser rejects until normalised, a *gerber-format*
 //! drill film (holes drawn as flashes, not Excellon), Allegro role-named
 //! layers (`top`/`gnd02`/`pwr04`/`gnd05`/`bottom`), and a `!`-delimited
-//! pick-and-place in mils. See docs/GERBER.md.
+//! pick-and-place in mils. See docs/ingest/GERBER.md.
 //!
 //! Skipped when the corpus is absent; required under `HAUKSBEE_REQUIRE_CORPUS=1`.
 

@@ -77,7 +77,7 @@ kind = "no_faults"
 
 Commit an edit to `myboard.kicad_sch` and the hook runs this check before the
 commit is recorded. See `crates/hauksbee-ci/examples/pic_programmer_schematic.toml`
-for a complete, runnable example, and `docs/CI.md` (Schematic-stage CI) for the
+for a complete, runnable example, and `docs/ci/CI.md` (Schematic-stage CI) for the
 agreement guarantee with the layout-stage check.
 
 ## Testing without git

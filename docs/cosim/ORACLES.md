@@ -1,6 +1,6 @@
 # Oracles: cross-checking hauksbee against ground-truth tools
 
-> For the full capability map of hauksbee — including which layers use oracles, which run firmware, and which are commodity vs. differentiated — see [`docs/CAPABILITIES.md`](CAPABILITIES.md).
+> For the full capability map of hauksbee — including which layers use oracles, which run firmware, and which are commodity vs. differentiated — see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
 
 hauksbee does its own DRC, analog solve and co-sim from the layout. To keep it
 honest we cross-check its results against independent, authoritative tools we call
@@ -87,7 +87,7 @@ needed.
 
 For the solver, the oracle is **ngspice**: hauksbee's transient/AC results are
 cross-checked against ngspice to fractions of a percent, and every speed claim is
-gated behind one of these accuracy checks (see `docs/COMPARISON.md`). ngspice is a
+gated behind one of these accuracy checks (see `docs/about/COMPARISON.md`). ngspice is a
 small, BSD-licensed CLI and is invoked the same way — detected, used for
 validation, not bundled or required at runtime.
 
@@ -99,7 +99,7 @@ on a TCP socket, not a linked library. hauksbee detects whichever is installed
 and uses it on demand; tests skip cleanly when neither is present.
 
 Install instructions, the discovery order, and env-var overrides are in
-[`docs/SIMULATORS.md`](SIMULATORS.md). The one-command installer is
+[`docs/cosim/SIMULATORS.md`](SIMULATORS.md). The one-command installer is
 `scripts/install-sims.sh`.
 
 ## Adding oracles

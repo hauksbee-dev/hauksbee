@@ -19,9 +19,9 @@ without giving up the speed that made it many times faster than ngspice.
 
 ```
 .kicad_pcb ──forge-sexpr/model──▶ typed board
-.kicad_sch ──forge-sexpr────────▶ derived netlist   (see docs/SCHEMATICS.md)
+.kicad_sch ──forge-sexpr────────▶ derived netlist   (see docs/ingest/SCHEMATICS.md)
 .brd / .d356 ───────────────────▶ typed board
-gerber + drill + P&P ───────────▶ reconstructed board (see docs/GERBER.md)
+gerber + drill + P&P ───────────▶ reconstructed board (see docs/ingest/GERBER.md)
         │
         ▼
 hauksbee-extract: pads ⇒ nets ⇒ connectivity graph ⇒ component instances
@@ -37,7 +37,7 @@ hauksbee-ir: Circuit IR — devices, nodes, parameters, parasitics (optional)
 hauksbee-solve: partitioned hybrid solver           hauksbee-mcu: MCU backends
    linear subcircuits → state-space exp.    ◀───▶    AVR/STM32/ESP32/nRF/RISC-V
    nonlinear islands  → MNA + Newton                 pin/ADC/UART/I2C hooks
-   digital            → event queue                  lockstep co-sim (docs/MCU.md)
+   digital            → event queue                  lockstep co-sim (docs/cosim/MCU.md)
         │
         ▼
 hauksbee-server: websocket protocol (frames, probes, controls)
@@ -72,14 +72,14 @@ remain available for digital ICs and for speed toggles.
 
 The static checks and the dynamic analyses each have their own write-up:
 
-- **DRC / copper shorts**: [SHORTS.md](SHORTS.md).
-- **Connectivity lint, strap-pins, resource conflicts**: [RESOURCE_CONFLICTS.md](RESOURCE_CONFLICTS.md).
-- **Signal integrity** (crystal load caps, decoupling, antenna keepout, USB skew, and controlled-impedance from trace geometry + stackup, a quasi-static closed-form estimate, not a field solve): [SI_CHECKS.md](SI_CHECKS.md).
-- **Transients and brownouts**: [TRANSIENTS.md](TRANSIENTS.md).
-- **AC / small-signal** (Bode, phase margin, gain crossover; averaged small-signal about the DC operating point, not cycle-by-cycle switching): [AC_ANALYSIS.md](AC_ANALYSIS.md).
-- **Steady-state thermal** (per-device junction temperature `Tj = Tambient + P * theta_JA`, not a board thermal field solve): [THERMAL.md](THERMAL.md).
+- **DRC / copper shorts**: [SHORTS.md](../checks/SHORTS.md).
+- **Connectivity lint, strap-pins, resource conflicts**: [RESOURCE_CONFLICTS.md](../checks/RESOURCE_CONFLICTS.md).
+- **Signal integrity** (crystal load caps, decoupling, antenna keepout, USB skew, and controlled-impedance from trace geometry + stackup, a quasi-static closed-form estimate, not a field solve): [SI_CHECKS.md](../checks/SI_CHECKS.md).
+- **Transients and brownouts**: [TRANSIENTS.md](../checks/TRANSIENTS.md).
+- **AC / small-signal** (Bode, phase margin, gain crossover; averaged small-signal about the DC operating point, not cycle-by-cycle switching): [AC_ANALYSIS.md](../analysis/AC_ANALYSIS.md).
+- **Steady-state thermal** (per-device junction temperature `Tj = Tambient + P * theta_JA`, not a board thermal field solve): [THERMAL.md](../checks/THERMAL.md).
 
-Each report runs from `hauksbee run <board> --drc/--lint/--si/--resources/--thermal` or `--ac`. They are informational and exit 0 by default; add `--plain` (alias `--explain`) for a non-engineer verdict, or `--strict` (alias `--fail-on-findings`) to fail a pipeline directly. For the full assertion flow, including `phase_margin` / `ac_gain` / `max_temp`, see [CI.md](CI.md). Runnable examples, including the `hauksbee serve` web front door, are in [EXAMPLES.md](EXAMPLES.md).
+Each report runs from `hauksbee run <board> --drc/--lint/--si/--resources/--thermal` or `--ac`. They are informational and exit 0 by default; add `--plain` (alias `--explain`) for a non-engineer verdict, or `--strict` (alias `--fail-on-findings`) to fail a pipeline directly. For the full assertion flow, including `phase_margin` / `ac_gain` / `max_temp`, see [CI.md](../ci/CI.md). Runnable examples, including the `hauksbee serve` web front door, are in [EXAMPLES.md](../ci/EXAMPLES.md).
 
 ## Repos
 

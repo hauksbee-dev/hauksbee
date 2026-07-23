@@ -19,7 +19,7 @@
 //! SPR/SPI2X prescaler sets and is not bounded by the analog chunk rate. A
 //! *bit-banged* SPI master (software-toggled SCK/MOSI on GPIO) is bounded by
 //! the chunk poll rate exactly like any GPIO and is out of scope here, matching
-//! the limitation documented for I2C and in docs/MCU.md. These slaves bind to
+//! the limitation documented for I2C and in docs/cosim/MCU.md. These slaves bind to
 //! both the AVR backend (simavr SPI IRQ) and the Renode backend (the C# SPI
 //! bridge in `hauksbee-mcu/src/renode`), routing every reply byte through
 //! `on_spi` either way.

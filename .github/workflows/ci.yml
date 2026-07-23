@@ -14,7 +14,7 @@
 # ignores those paths and the check passes with zero system dependencies. If
 # `avr` leaks in, build.rs panics ("the avr co-sim feature needs a system
 # libsimavr") and this job fails — telling us the "MIT-clean" release would in
-# fact be GPL-encumbered. See docs/release-and-licensing.md.
+# fact be GPL-encumbered. See docs/about/release-and-licensing.md.
 #
 # Expected GREEN: the feature graph is clean (hauksbee-server gates its AvrMcu
 # usage on `avr`; every hauksbee-* path dependency uses default-features =
@@ -61,6 +61,6 @@ jobs:
           if ! cargo check --workspace --no-default-features --features renode,qemu; then
             echo "::error title=GPL-free shape broken::--no-default-features --features renode,qemu failed."
             echo "Either it stopped compiling, or it pulled in the GPL avr/libsimavr backend." >&2
-            echo "See docs/release-and-licensing.md." >&2
+            echo "See docs/about/release-and-licensing.md." >&2
             exit 1
           fi

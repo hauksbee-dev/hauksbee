@@ -9,7 +9,7 @@ hauksbee-ci run <spec.toml>            # exit 0 = GREEN, 1 = RED, 2 = bad spec
 hauksbee-ci run <spec.toml> --junit results.xml
 ```
 
-Full spec reference: [`docs/CI.md`](../../docs/CI.md). Wire it into GitHub
+Full spec reference: [`docs/ci/CI.md`](../../docs/ci/CI.md). Wire it into GitHub
 Actions via [`integrations/github-action`](../../integrations/github-action) or
 run it from any pipeline with [`scripts/ci.sh`](../../scripts/ci.sh).
 

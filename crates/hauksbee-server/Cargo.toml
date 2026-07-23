@@ -9,7 +9,7 @@ license.workspace = true
 # demo server binary keeps its AVR demo engine out of the box. The `avr`
 # feature statically links GPL-3.0 libsimavr; a `--no-default-features
 # --features renode,qemu` build of the workspace is the MIT-clean release
-# shape (see docs/release-and-licensing.md). Only `McuDemoEngine` (and the
+# shape (see docs/about/release-and-licensing.md). Only `McuDemoEngine` (and the
 # demo `hauksbee-server` binary) need `avr`; the Engine trait, Server,
 # frontdoor, and protocol are backend-agnostic.
 default = ["avr", "renode", "qemu"]

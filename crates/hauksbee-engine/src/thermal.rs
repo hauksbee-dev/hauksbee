@@ -14,7 +14,7 @@
 //! number: it assumes the part has reached thermal equilibrium (steady state),
 //! that all dissipated power leaves through one lumped path to a fixed ambient,
 //! and that neighbours do not heat each other. See the "limits" note at the
-//! bottom and `docs/THERMAL.md` for what this does and does not capture.
+//! bottom and `docs/checks/THERMAL.md` for what this does and does not capture.
 //!
 //! ## theta_JA defaults by package class
 //!

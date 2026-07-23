@@ -27,7 +27,7 @@
 //! Defaults are looked up from package / dielectric class. They are **opt-in**:
 //! the binder stamps ideal capacitors unless decoupling parasitics are requested
 //! (a scenario flag or per-part DB metadata). The defaults table is small and
-//! cited; see [`EsrEsl::for_class`] and `docs/TRANSIENTS.md`.
+//! cited; see [`EsrEsl::for_class`] and `docs/checks/TRANSIENTS.md`.
 
 use hauksbee_ir::{Circuit, Device, NodeId};
 

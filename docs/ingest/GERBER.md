@@ -1,7 +1,7 @@
 # Gerber + Pick-and-Place Reverse Extraction
 
 Hauksbee normally extracts a board from native CAD (a `.kicad_pcb` carries every
-pad's net; see `docs/SCHEMATICS.md`). But a large tier of real hardware ships
+pad's net; see `docs/ingest/SCHEMATICS.md`). But a large tier of real hardware ships
 only *manufacturing* files: RS-274X copper gerbers, an Excellon (or gerber)
 drill, a pick-and-place CSV, sometimes a BOM, and no CAD at all. The uConsole,
 Inkplate, and a long tail of famous boards live here.

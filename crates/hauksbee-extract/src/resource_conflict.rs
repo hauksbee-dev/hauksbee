@@ -493,7 +493,7 @@ fn infer_target(
     // R/C ladder -> jack), while the series-bridge-only + rail-skip + no-MCU
     // constraints keep it from wandering onto an unrelated trace. (Verified: on
     // the clean RP2040 corpus boards no pin resolves to a spurious function at
-    // this depth - see the calibration in docs/RESOURCE_CONFLICTS.md.)
+    // this depth - see the calibration in docs/checks/RESOURCE_CONFLICTS.md.)
     if seen.contains(&net_id) || depth > 6 {
         return None;
     }

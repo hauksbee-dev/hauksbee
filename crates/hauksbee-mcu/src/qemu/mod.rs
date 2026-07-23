@@ -15,7 +15,7 @@
 //! and timers modelled, and publishes native macOS-arm64 / Linux binaries. So
 //! the ESP32 path is a separate, backend-pluggable QEMU backend rather than a
 //! Renode config. (The RISC-V ESP32-C3 also has a Renode-less story here; see
-//! docs/MCU.md for the per-part status.)
+//! docs/cosim/MCU.md for the per-part status.)
 //!
 //! # Lockstep mechanism (chosen empirically)
 //!
@@ -29,7 +29,7 @@
 //!
 //! The theoretically ideal primitive is `-icount shift=N`, which makes virtual
 //! time a deterministic function of executed instructions and gives bit-exact
-//! reproducibility (this is how the Renode-vs-QEMU note in docs/MCU.md framed
+//! reproducibility (this is how the Renode-vs-QEMU note in docs/cosim/MCU.md framed
 //! it). We TESTED it against the Espressif fork's `esp32` machine and it does not
 //! work: with `-icount` at any shift (4/6/8/auto), with or without `sleep=off`,
 //! the Xtensa esp32 machine produces ZERO UART output in a 15 s wall window,
@@ -80,7 +80,7 @@
 //! synthesis is otherwise byte-for-byte the Renode ODR-poll. The real GPIO
 //! `gpio_set_level` writes still happen in the firmware; the mailbox is only the
 //! observation path the emulator's gpio model lacks. See the limitations section
-//! in docs/MCU.md.
+//! in docs/cosim/MCU.md.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 

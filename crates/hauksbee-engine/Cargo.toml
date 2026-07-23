@@ -12,7 +12,7 @@ description = "Integration heart: binds an extracted board to models and co-simu
 # GPL-free (no libsimavr link) — this only holds because every hauksbee-* path
 # dependency here sets `default-features = false` and each feature forwards
 # explicitly (cargo cannot un-default a dependency from the command line).
-# See docs/release-and-licensing.md.
+# See docs/about/release-and-licensing.md.
 default = ["avr", "renode", "qemu"]
 avr = ["hauksbee-mcu/avr", "hauksbee-server/avr"]
 renode = ["hauksbee-mcu/renode", "hauksbee-server/renode"]

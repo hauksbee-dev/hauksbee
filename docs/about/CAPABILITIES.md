@@ -52,7 +52,7 @@ assertions) after finding them.
 
 Pair with `--oracle` to cross-check hauksbee's DRC result against
 `kicad-cli pcb drc` in one command. The oracle is detected from an existing
-KiCad install; it is not bundled. See [`docs/ORACLES.md`](ORACLES.md).
+KiCad install; it is not bundled. See [`docs/cosim/ORACLES.md`](../cosim/ORACLES.md).
 
 ### `--lint`
 
@@ -74,7 +74,7 @@ Connectivity and design-file quality check. Covers:
 Signal-integrity and physics static check. Includes a controlled-impedance
 estimate for USB and Ethernet traces derived from trace geometry and stackup
 (quasi-static closed-form, not a field solve), stub detection, and series
-termination checks. See [`docs/SI_CHECKS.md`](SI_CHECKS.md).
+termination checks. See [`docs/checks/SI_CHECKS.md`](../checks/SI_CHECKS.md).
 
 ### `--ampacity`
 
@@ -95,7 +95,7 @@ Small-signal AC frequency sweep. Linearises about the DC operating point and
 produces a Bode table (magnitude dB + phase) for one or more output nets. Use
 `--ac-loop <net>` to extract gain crossover and phase margin for a feedback
 loop. Outputs to terminal or to CSV with `--ac-csv`. Full details in
-[`docs/AC_ANALYSIS.md`](AC_ANALYSIS.md).
+[`docs/analysis/AC_ANALYSIS.md`](../analysis/AC_ANALYSIS.md).
 
 ---
 
@@ -113,7 +113,7 @@ hauksbee cross-checks its own results against independent authoritative tools:
 
 Oracles confirm hauksbee is right, they are not how hauksbee runs. The MCU
 simulator backends (Renode, Espressif QEMU) follow the same detect-don't-bundle
-pattern. Full rationale and install instructions: [`docs/ORACLES.md`](ORACLES.md).
+pattern. Full rationale and install instructions: [`docs/cosim/ORACLES.md`](../cosim/ORACLES.md).
 
 ---
 
@@ -184,7 +184,7 @@ For a deadline-gated, *named* pass/fail check on a specific net, use the
 `boot-coverage` assertion in `hauksbee-ci` (`boot_gate_pass.toml` /
 `boot_gate_fail.toml`). The held-high warning is exactly how the
 `explosion33/RocketryIgniter` power-up ignition fault surfaces from one command
-(see [`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)).
+(see [`hunts/HUNT_2026-06-30.md`](../hunts/HUNT_2026-06-30.md)).
 
 ### The `Mcu` trait and three backends
 
@@ -229,7 +229,7 @@ terminal. Links no GPL code; a `--no-default-features --features renode,qemu`
 build is GPL-free.
 
 Shipped named configs and proven support status (from `crates/hauksbee-mcu/src/renode/mod.rs`
-and [`docs/MCU.md`](MCU.md)):
+and [`docs/cosim/MCU.md`](../cosim/MCU.md)):
 
 | Config constructor | Platform | Proven on this branch |
 |---|---|---|
@@ -286,7 +286,7 @@ than green-passing on the slave's power-on defaults. The per-SPI-bus
 transaction-framing tier (exact / backend / heuristic) is likewise printed in
 the run summary, flagged as a `--plain` heads-up and `--json` note when
 heuristic, and attached to each CI peripheral assertion's detail. See
-`docs/MCU.md` ("ADC / bus coverage by platform") for the full matrix.
+`docs/cosim/MCU.md` ("ADC / bus coverage by platform") for the full matrix.
 
 #### Espressif QEMU — `QemuBackend` (external, ESP32 family)
 
@@ -326,7 +326,7 @@ scripts/install-sims.sh --check  # verify hauksbee will find them
 Full discovery order, env-var overrides (`HAUKSBEE_RENODE`,
 `HAUKSBEE_QEMU_XTENSA`, `HAUKSBEE_QEMU_RISCV32`, `HAUKSBEE_QEMU_DIR`), macOS
 Gatekeeper steps, and manual install instructions are in
-[`docs/SIMULATORS.md`](SIMULATORS.md).
+[`docs/cosim/SIMULATORS.md`](../cosim/SIMULATORS.md).
 
 Integration tests skip cleanly when the simulator is absent rather than
 failing.
@@ -356,7 +356,7 @@ board  = "hardware/board.kicad_pcb"
 firmware = "firmware/build/app.elf"
 mcu    = "atmega328p"   # informational label only — nothing reads it; the MCU is
                         # detected from the board part value + [[models]] kind="mcu"
-                        # routing (this field cannot force a backend). See docs/CI.md.
+                        # routing (this field cannot force a backend). See docs/ci/CI.md.
 duration_ms = 200
 
 [[supply]]
@@ -451,9 +451,9 @@ Three commands form the edit–simulate loop:
 ## Input formats
 
 `hauksbee run` and `hauksbee-ci` accept `.kicad_pcb`, `.kicad_sch`,
-`.brd` (Eagle), `.PcbDoc` (Altium — see [`docs/ALTIUM.md`](ALTIUM.md)),
+`.brd` (Eagle), `.PcbDoc` (Altium — see [`docs/ingest/ALTIUM.md`](../ingest/ALTIUM.md)),
 `.d356` (IPC-D-356 netlist), or a directory of gerbers
-(reverse-extracted from copper geometry alone — see [`docs/GERBER.md`](GERBER.md)).
+(reverse-extracted from copper geometry alone — see [`docs/ingest/GERBER.md`](../ingest/GERBER.md)).
 
 ---
 
@@ -513,27 +513,27 @@ active part binds OPEN, and the report says so ("N of M critical parts modelled"
 validated fail-loud at load):
 
 - **an analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) — one
-  `[[models]]` TOML entry: [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md).
+  `[[models]]` TOML entry: [`extending/add-an-analog-part.md`](../extending/add-an-analog-part.md).
 - **an I2C/SPI sensor** (register map) — one TOML file:
-  [`extending/add-a-sensor.md`](extending/add-a-sensor.md).
+  [`extending/add-a-sensor.md`](../extending/add-a-sensor.md).
 - **a whole MCU / chip**, so its firmware co-simulates on the *exact* part rather
   than a substitute core — a SoC descriptor + a routing entry, two TOML files:
-  [`extending/add-an-mcu-variant.md`](extending/add-an-mcu-variant.md). Run
+  [`extending/add-an-mcu-variant.md`](../extending/add-an-mcu-variant.md). Run
   `hauksbee models list --builtin` to see the chips already shipped, and copy the
   closest one as a template. When co-sim runs on a substitute core it says so and
   points you at this recipe.
 
-Share a bundle of any of the above as a versioned [model pack](PACKS.md)
-(`hauksbee models add <path|url>`). Full menu: [`extending/README.md`](extending/README.md).
+Share a bundle of any of the above as a versioned [model pack](../models/PACKS.md)
+(`hauksbee models add <path|url>`). Full menu: [`extending/README.md`](../extending/README.md).
 
 ## Where to go next
 
-- [`docs/SIMULATORS.md`](SIMULATORS.md) — install Renode and Espressif QEMU,
+- [`docs/cosim/SIMULATORS.md`](../cosim/SIMULATORS.md) — install Renode and Espressif QEMU,
   discovery order, env-var overrides
-- [`docs/ORACLES.md`](ORACLES.md) — the DRC and analog oracles
-- [`docs/MCU.md`](MCU.md) — full co-simulation architecture, per-board recipes,
+- [`docs/cosim/ORACLES.md`](../cosim/ORACLES.md) — the DRC and analog oracles
+- [`docs/cosim/MCU.md`](../cosim/MCU.md) — full co-simulation architecture, per-board recipes,
   proven integration test results
-- [`docs/CI.md`](CI.md) — GitHub Action, KiCad plugin, pre-commit hook
-- [`docs/EXAMPLES.md`](EXAMPLES.md) — runnable examples
-- [`docs/AC_ANALYSIS.md`](AC_ANALYSIS.md) — AC sweep and loop-stability details
-- [`docs/THERMAL.md`](THERMAL.md) — thermal analysis details
+- [`docs/ci/CI.md`](../ci/CI.md) — GitHub Action, KiCad plugin, pre-commit hook
+- [`docs/ci/EXAMPLES.md`](../ci/EXAMPLES.md) — runnable examples
+- [`docs/analysis/AC_ANALYSIS.md`](../analysis/AC_ANALYSIS.md) — AC sweep and loop-stability details
+- [`docs/checks/THERMAL.md`](../checks/THERMAL.md) — thermal analysis details

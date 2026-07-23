@@ -232,7 +232,7 @@ fn rp2040_minimal_exact_nets() {
 }
 
 /// The full sweep of boards that `kicad-cli` can round-trip, small to large.
-/// Every board listed in `docs/GERBER.md`'s accuracy table is gated here, so
+/// Every board listed in `docs/ingest/GERBER.md`'s accuracy table is gated here, so
 /// the documented numbers are reproducible (run `HAUKSBEE_REQUIRE_CORPUS=1
 /// cargo test --test gerber_closedloop -- --nocapture`). KiCad-10-format demos
 /// (pic_programmer / stickhub) are skipped, not failed: the installed CLI 9.x
