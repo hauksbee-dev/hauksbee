@@ -422,6 +422,31 @@ are proven through QEMU above.
   patch that would remove the requirement are in
   [`hunts/esp32-qemu-i2c-status.md`](hunts/esp32-qemu-i2c-status.md).
 
+## What `--firmware` accepts (and the web drop zone too)
+
+The loaders boot one compiled image, but you don't have to dig it out yourself.
+Firmware input resolves in three tiers:
+
+1. **A compiled `.elf` or `.hex`**: passes through untouched. This is always the
+   most explicit option; for PlatformIO the image lives at
+   `.pio/build/<env>/firmware.elf`, for ESP-IDF/CMake under `build/`.
+2. **A zip archive** (web upload or `--firmware fw.zip`): searched for built
+   images. A `.pio/build/<env>/firmware.elf` outranks a stray `.elf`, which
+   outranks a `.hex`; the newest entry wins a tie, and the report says exactly
+   which image ran.
+3. **A PlatformIO project** (a directory on the CLI, or a zip that carries a
+   `platformio.ini` but no built image): built with *your own* `pio run`
+   (detect-don't-bundle, like the Renode/ngspice oracles). The env comes from
+   `default_envs`, falling back to the newest built artifact. A missing `pio`
+   or a failing build is a plain, actionable error, never a silent fallback.
+   A CLI project directory is always rebuilt (`pio run` is incremental); a zip
+   prefers an image it already contains, so an upload never kicks off a
+   toolchain download you didn't ask for.
+
+One caveat, stated plainly: building a project executes its build scripts
+(`extra_scripts` in `platformio.ini` is arbitrary code). That is the nature of
+building software; only hand hauksbee projects you would build yourself.
+
 ## Recipes
 
 ### STM32F103 blue pill (the proven demo)

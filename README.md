@@ -16,7 +16,7 @@ No other tool does this from the layout. Schematic simulators never see the boar
 
 ## What it does
 
-The fastest way in needs no terminal at all: run `hauksbee serve`, open the page it prints, drop a board on it, and read a plain-language report with a 2D map of the parts. Everything below is the same engine, from the command line.
+The fastest way in needs no terminal at all: run `hauksbee serve`, open the page it prints, drop a board on it (optionally with firmware), and read a plain-language report with a 2D map of the parts. The web page is the quick look; the checked-in `.toml` spec (below) is the repeatable check a pipeline gates on, and assertions run only there. Everything is the same engine, from the command line.
 
 Point it at any PCB design and it will:
 
@@ -103,9 +103,12 @@ hauksbee run my_board.kicad_pcb --firmware build/app.hex --report --plain   # on
 ```
 
 The MCU is detected from the board (an ESP32-S3 boots Espressif QEMU, an
-ATmega328P libsimavr, an STM32/nRF52 Renode); `.elf` and `.hex` are both
-accepted. If a needed emulator isn't installed, hauksbee tells you the one
-command to get it (`hauksbee install esp-qemu`, or `scripts/install-sims.sh`).
+ATmega328P libsimavr, an STM32/nRF52 Renode). `--firmware` takes a compiled
+`.elf`/`.hex`, a PlatformIO project directory (built with your own `pio run`),
+or a zip of either: the built image inside is found automatically, so you never
+have to know it lives at `.pio/build/<env>/firmware.elf`. The web drop zone
+accepts the same. If a needed emulator isn't installed, hauksbee tells you the
+one command to get it (`hauksbee install esp-qemu`, or `scripts/install-sims.sh`).
 
 **As a repeatable check** — a `.toml` spec captures the board, the firmware, how
 the board is powered, and the assertions that must hold, so a pipeline can gate
