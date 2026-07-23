@@ -41,9 +41,13 @@ pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
 pub type FirmwareAnalyzer =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
 
-/// Largest board upload accepted (32 MiB). Gerber zips and big KiCad layouts fit
-/// comfortably; this just stops a pathological upload from exhausting memory.
-const MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
+/// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
+/// timid cap (the 3,443-component Tarski InputSystem .kicad_pcb is 44 MiB), and
+/// the server is localhost-only, so the limit exists solely to stop a
+/// pathological upload from exhausting memory. When it does trip, axum answers
+/// with a plain-text 413 ("Failed to buffer the request body"), which is why
+/// the frontend reads error bodies as text, not JSON.
+const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 struct FrontDoorState {
     analyze: Analyzer,
