@@ -145,7 +145,11 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
 
   return (
     <div
-      className="landing min-h-screen overflow-y-auto"
+      // h-screen (not min-h-screen): #root is height:100% + overflow:hidden for
+      // the full-screen live viewer, so a min-h container grows past the clipped
+      // viewport and the report below the fold becomes unreachable. A fixed
+      // viewport-height container makes overflow-y-auto actually scroll.
+      className="landing h-screen overflow-y-auto"
       style={{
         background: 'radial-gradient(130% 90% at 50% -20%, #13151c 0%, var(--canvas) 55%)',
         color: 'var(--silk)',
