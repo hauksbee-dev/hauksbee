@@ -287,14 +287,18 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
                 {firmwareFile ? (
                   <>Firmware: <strong>{firmwareFile.name}</strong> — click to change</>
                 ) : (
-                  <>Add firmware (<code>.elf</code> / <code>.hex</code>) to co-simulate it on the board&rsquo;s MCU</>
+                  <>
+                    Add firmware (<code>.elf</code> / <code>.hex</code>, or a zipped PlatformIO
+                    project — e.g. <code>.pio/build/&lt;env&gt;/firmware.elf</code>) to co-simulate
+                    it on the board&rsquo;s MCU
+                  </>
                 )}
               </span>
             </label>
             <input
               id="firmware-file"
               type="file"
-              accept=".elf,.hex"
+              accept=".elf,.hex,.zip"
               className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFirmware(f) }}
             />

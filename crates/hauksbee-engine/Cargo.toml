@@ -43,6 +43,7 @@ forge-codegen = { workspace = true }
 forge-sexpr.workspace = true
 tempfile = { workspace = true }
 tokio = { version = "1.52.3", features = ["full"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 toml = "0.8"
 # Watch mode (`hauksbee watch`): cross-platform filesystem notifications. Default
 # features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
