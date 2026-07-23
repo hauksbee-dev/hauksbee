@@ -307,6 +307,43 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     let binary = ExtractedBoard::from_auto_bytes(contents);
     let is_binary = binary.is_some();
     let text = String::from_utf8_lossy(contents);
+    // Board-as-Code (`hauksbee to-code` output, usually `*.board`) is a DSL,
+    // not a CAD format, so the extractor cannot sniff it. Compile it to KiCad
+    // board text first — the same route CLI `run` takes — so the web drop zone
+    // accepts every file `run` does. The emitted text then flows through the
+    // untouched text path below (parse, DRC, SI) as if a `.kicad_pcb` was
+    // uploaded.
+    let is_board_code = !is_binary
+        && (std::path::Path::new(file_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            == Some("board")
+            || crate::commands::common::is_board_code_header(&text));
+    let text: std::borrow::Cow<'_, str> = if is_board_code {
+        match crate::boardcode::code_to_board_text(&text) {
+            Ok(t) => std::borrow::Cow::Owned(t),
+            Err(e) => {
+                return WebReport {
+                    ok: false,
+                    error: Some(format!("Could not compile this Board-as-Code file: {e}.")),
+                    board_name: String::new(),
+                    file_name: file_name.to_string(),
+                    num_components: 0,
+                    num_nets: 0,
+                    headline: "Could not read the file.".to_string(),
+                    serious: 0,
+                    total: 0,
+                    sections: Vec::new(),
+                    components: Vec::new(),
+                    bind: None,
+                    notes: Vec::new(),
+                    cosim: None,
+                };
+            }
+        }
+    } else {
+        text
+    };
     // Text view for the geometry-bearing text checks (DRC / SI). A binary board
     // has no meaningful text: those checks get their bytes twin / None instead.
     let text_view: Option<&str> = (!is_binary).then_some(&text);
@@ -316,7 +353,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
             return WebReport {
                 ok: false,
                 error: Some(format!(
-                    "Could not read this board file: {e}. Supported: KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC-D-356 .d356, or a gerber zip."
+                    "Could not read this board file: {e}. Supported: KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC-D-356 .d356, Board-as-Code .board, or a gerber zip."
                 )),
                 board_name: String::new(),
                 file_name: file_name.to_string(),
@@ -1260,6 +1297,44 @@ mod tests {
         // The JSON wrapper still produces valid JSON.
         let json = analyze_json("nope.txt", b"garbage");
         assert!(json.contains("\"ok\":false"));
+    }
+
+    #[test]
+    fn analyze_board_as_code_compiles_and_binds() {
+        // The web drop zone must accept every file `run` does: a `.board`
+        // Board-as-Code source is compiled to KiCad board text before the
+        // normal text path, instead of dying with "unrecognized board format".
+        let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "ANODE_NET"
+    net "CATHODE_NET"
+    comp D1 lib "Diode_SMD:D_SOD-323" val "1N4148" layer "F.Cu" at 0 0 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "CATHODE_NET"
+        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "ANODE_NET"
+    }
+    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 5 0 rot 0 {
+        pad "1" smd rect at 5 0 size 1 1 layers [F.Cu] net "ANODE_NET"
+        pad "2" smd rect at 6 0 size 1 1 layers [F.Cu] net "CATHODE_NET"
+    }
+}
+"#;
+        let r = analyze("tarski.board", dsl);
+        assert!(r.ok, "a .board upload must analyze: {:?}", r.error);
+        assert_eq!(r.num_components, 2, "D1 and R1 survive the compile");
+        assert!(r.num_nets >= 2, "both nets survive: {}", r.num_nets);
+        // Sniffed by header too: the extension is not load-bearing.
+        let r2 = analyze("exported.txt", dsl);
+        assert!(r2.ok, "header sniff works without the extension: {:?}", r2.error);
+        // A broken DSL fails with the compile error, not the format-sniffer one.
+        let r3 = analyze("broken.board", b"# Board-as-Code (hauksbee board DSL v1)\nfn main { comp }");
+        assert!(!r3.ok);
+        assert!(
+            r3.error.as_deref().unwrap_or("").contains("Board-as-Code"),
+            "the error names the DSL compile step: {:?}",
+            r3.error
+        );
     }
 
     #[test]
