@@ -6,7 +6,7 @@
 //! formulas (IPC-2141 / Wheeler-Hammerstad era). This is **not** a field solve:
 //! it is the same arithmetic the published online calculators (chemandy,
 //! Polar's IPC-2141 form, the National Semiconductor differential form) use, and
-//! it carries the same few-percent error band. See `docs/SI_CHECKS.md`.
+//! it carries the same few-percent error band. See `docs/checks/SI_CHECKS.md`.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/si.md.
 //!
 //! ## What it computes

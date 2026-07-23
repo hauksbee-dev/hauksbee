@@ -25,7 +25,7 @@
 //! to the transfer function (it scales out). The reported response is the ratio
 //! of the output phasor to the swept stimulus, so it is dimensionless gain.
 //!
-//! Honest limits, documented in `docs/AC_ANALYSIS.md`: this linearizes about a
+//! Honest limits, documented in `docs/analysis/AC_ANALYSIS.md`: this linearizes about a
 //! single DC operating point, so it sees the *averaged* small-signal behaviour,
 //! not switching-level (cycle-by-cycle) dynamics, and it says nothing about
 //! large-signal stability. Behavioral comparators have no small-signal input

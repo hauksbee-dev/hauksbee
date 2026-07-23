@@ -24,7 +24,7 @@
 //! because the bytes are consumed inside a single `run_micros` call. A
 //! *bit-banged* I2C master (GPIO toggling SCL/SDA in software) is a different
 //! story: those edges alias at the chunk poll rate exactly like any other GPIO
-//! (see docs/MCU.md), so this framework targets the hardware TWI peripheral.
+//! (see docs/cosim/MCU.md), so this framework targets the hardware TWI peripheral.
 //! For Renode the `on_i2c` hook is a documented no-op, so these slaves bind to
 //! the AVR backend today.
 

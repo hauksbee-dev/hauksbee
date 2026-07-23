@@ -410,7 +410,7 @@ fn fixture_hierarchical_bus() {
 #[test]
 fn fixture_bus_alias_crosses_sheet() {
     // End-to-end exercise of a bus-alias *reference* across a sheet boundary
-    // (the gap docs/SCHEMATICS.md previously recorded as untested). Both sheets
+    // (the gap docs/ingest/SCHEMATICS.md previously recorded as untested). Both sheets
     // define `(bus_alias "ADDR" (members "A[1..0]"))`. The parent sheet pin and
     // the child hierarchical label are both written `MEM{ADDR}`, which must
     // expand through the alias to the qualified members `MEM.A1`, `MEM.A0`. The

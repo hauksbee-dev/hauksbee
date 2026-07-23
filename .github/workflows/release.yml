@@ -40,7 +40,7 @@
 # regression that drags `avr` back into the graph panics in
 # hauksbee-mcu/build.rs BEFORE any GPL code is linked. A red release on a tag
 # means such a regression landed — fix the feature graph, never weaken the
-# guard. Details: docs/release-and-licensing.md.
+# guard. Details: docs/about/release-and-licensing.md.
 # ============================================================================
 #
 # aarch64-linux mechanism: we build NATIVELY on GitHub's `ubuntu-24.04-arm`
@@ -150,7 +150,7 @@ jobs:
                --out dist; then
             echo "::error title=GPL guard tripped::The renode+qemu build pulled in the avr backend (libsimavr, GPL-3.0)."
             echo "Refusing to build a GPL-encumbered binary and label it MIT-clean." >&2
-            echo "A feature-graph regression re-enabled avr; see docs/release-and-licensing.md §2." >&2
+            echo "A feature-graph regression re-enabled avr; see docs/about/release-and-licensing.md §2." >&2
             exit 1
           fi
 

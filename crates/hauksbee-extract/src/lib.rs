@@ -13,12 +13,12 @@
 //!   The schematic carries no nets, so connectivity is *derived* geometrically
 //!   the way eeschema derives it (wires, pins, junctions, labels, power
 //!   symbols, hierarchy). This is the "simulate before there's a layout" path;
-//!   see `docs/SCHEMATICS.md`.
+//!   see `docs/ingest/SCHEMATICS.md`.
 //! - [`ExtractedBoard::from_eagle_brd`] / [`ExtractedBoard::from_ipc_d356`] —
 //!   other EDA formats.
 //! - [`ExtractedBoard::from_altium_pcb`] — Altium Designer `.PcbDoc` (binary
 //!   OLE2). This unlocks the professional / enterprise / regulated tier; see
-//!   `docs/ALTIUM.md`.
+//!   `docs/ingest/ALTIUM.md`.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/README.md (the
 //! crate tour) and docs/how-and-why/hauksbee-extract/netlist.md (the
@@ -216,7 +216,7 @@ impl ExtractedBoard {
     /// nets, components and pads (with their net assignment) straight out of the
     /// `Nets6` / `Components6` / `Pads6` record streams. The layout carries full
     /// net connectivity, so the board file alone fully describes the circuit,
-    /// the same way a `.kicad_pcb` does. See [`altium`] and `docs/ALTIUM.md`.
+    /// the same way a `.kicad_pcb` does. See [`altium`] and `docs/ingest/ALTIUM.md`.
     pub fn from_altium_pcb(bytes: &[u8]) -> Result<Self, ExtractError> {
         altium::extract(bytes)
     }

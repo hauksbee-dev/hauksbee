@@ -2,7 +2,7 @@
 //!
 //! `testdata/datasheets/LTC4020_codex_extracted.toml` is the verbatim output of
 //! a REAL `model-extract --kind charger` run of codex against the LTC4020
-//! datasheet content (see docs/MODELS.md "Live extraction"). This test loads it
+//! datasheet content (see docs/models/MODELS.md "Live extraction"). This test loads it
 //! offline and asserts the agreement points against the hand-written model, so
 //! the live result is captured and regression-locked without needing codex in
 //! CI. The live run itself is the `#[ignore]`d test in the model-extract binary.

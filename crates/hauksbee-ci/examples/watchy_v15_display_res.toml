@@ -12,7 +12,7 @@
 # watchy_display_init) that drives GPIO9 (DISPLAY_RES) HIGH at boot and holds it,
 # the load-bearing operation Watchy issue #14 is about, while maintaining the RAM
 # mailbox so the ESP32 QEMU backend can observe the GPIO9 edge (real third-party
-# firmware does not mirror GPIO; see docs/MCU.md). boot-coverage watches whether
+# firmware does not mirror GPIO; see docs/cosim/MCU.md). boot-coverage watches whether
 # the firmware brings RES to its required HIGH state in time.
 
 name = "boot-coverage: Watchy v1.5 e-paper RES# driven HIGH at boot (reduced firmware)"

@@ -78,7 +78,7 @@ case "$OS" in
   Linux)  PLATFORM=linux ;;
   *)
     err "Unsupported OS: $OS"
-    err "Windows users: see docs/SIMULATORS.md for manual install instructions."
+    err "Windows users: see docs/cosim/SIMULATORS.md for manual install instructions."
     exit 1
     ;;
 esac

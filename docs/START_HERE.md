@@ -19,33 +19,33 @@ hauksbee serve                                          # web front door: drop a
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
 ```
 
-Full walkthrough, more example boards, and captured sessions: [`docs/EXAMPLES.md`](EXAMPLES.md).
+Full walkthrough, more example boards, and captured sessions: [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md).
 
 ## Your next four reads
 
-1. [`docs/EXAMPLES.md`](EXAMPLES.md): get it running. Install, the first useful
+1. [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md): get it running. Install, the first useful
    result in a minute, and every runnable example and script.
-2. [`docs/CI.md`](CI.md): the point of the tool. Boot the board headless on every
+2. [`docs/ci/CI.md`](ci/CI.md): the point of the tool. Boot the board headless on every
    commit and assert on it, with a GitHub Action, JUnit output, and exit codes.
-3. [`docs/MCU.md`](MCU.md): MCU co-simulation. Which chips are supported (AVR,
+3. [`docs/cosim/MCU.md`](cosim/MCU.md): MCU co-simulation. Which chips are supported (AVR,
    STM32, ESP32/-C3, nRF52840, RISC-V) and how firmware couples to the analog solve.
-4. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the mental model. How a board file
+4. [`docs/about/ARCHITECTURE.md`](about/ARCHITECTURE.md): the mental model. How a board file
    becomes an extracted circuit, a bound model set, a partitioned solve, and a
    co-simulation.
 
 From there, the rest of `docs/` covers each capability in depth: the authoritative
-scope document ([`CAPABILITIES.md`](CAPABILITIES.md), every layer plus the common
-misconceptions), analysis ([`AC_ANALYSIS.md`](AC_ANALYSIS.md),
-[`THERMAL.md`](THERMAL.md), [`TRANSIENTS.md`](TRANSIENTS.md)), checks
-([`SHORTS.md`](SHORTS.md), [`SI_CHECKS.md`](SI_CHECKS.md),
-[`RESOURCE_CONFLICTS.md`](RESOURCE_CONFLICTS.md),
-[`DEVICE_DECODE.md`](DEVICE_DECODE.md)), ingest ([`SCHEMATICS.md`](SCHEMATICS.md),
-[`GERBER.md`](GERBER.md), [`ALTIUM.md`](ALTIUM.md),
-[`BOARD_AS_CODE.md`](BOARD_AS_CODE.md)), models ([`MODELS.md`](MODELS.md),
-[`PERIPHERALS.md`](PERIPHERALS.md)), backends and cross-checking
-([`SIMULATORS.md`](SIMULATORS.md), [`ORACLES.md`](ORACLES.md)), deployment
-([`DOCKER.md`](DOCKER.md)), positioning ([`COMPARISON.md`](COMPARISON.md)), and the
-honest [`LIMITATIONS.md`](LIMITATIONS.md).
+scope document ([`CAPABILITIES.md`](about/CAPABILITIES.md), every layer plus the common
+misconceptions), analysis ([`AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md),
+[`THERMAL.md`](checks/THERMAL.md), [`TRANSIENTS.md`](checks/TRANSIENTS.md)), checks
+([`SHORTS.md`](checks/SHORTS.md), [`SI_CHECKS.md`](checks/SI_CHECKS.md),
+[`RESOURCE_CONFLICTS.md`](checks/RESOURCE_CONFLICTS.md),
+[`DEVICE_DECODE.md`](checks/DEVICE_DECODE.md)), ingest ([`SCHEMATICS.md`](ingest/SCHEMATICS.md),
+[`GERBER.md`](ingest/GERBER.md), [`ALTIUM.md`](ingest/ALTIUM.md),
+[`BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md)), models ([`MODELS.md`](models/MODELS.md),
+[`PERIPHERALS.md`](cosim/PERIPHERALS.md)), backends and cross-checking
+([`SIMULATORS.md`](cosim/SIMULATORS.md), [`ORACLES.md`](cosim/ORACLES.md)), deployment
+([`DOCKER.md`](ci/DOCKER.md)), positioning ([`COMPARISON.md`](about/COMPARISON.md)), and the
+honest [`LIMITATIONS.md`](about/LIMITATIONS.md).
 
 ## Add your own parts & chips
 

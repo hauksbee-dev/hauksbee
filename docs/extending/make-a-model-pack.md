@@ -3,7 +3,7 @@
 **Goal.** Bundle model data — `[[models]]` entries, including sensor and logic
 specs — into a versioned pack you can share as a git repo or tarball, install
 with `hauksbee models add`, and debug with `hauksbee models resolve`. The
-format reference is [docs/PACKS.md](../PACKS.md); this is the narrative
+format reference is [docs/models/PACKS.md](../models/PACKS.md); this is the narrative
 version: build one from scratch and run the whole lifecycle. The
 implementation is `crates/hauksbee-models/src/pack.rs` (format + store) and
 `crates/hauksbee-engine/src/commands/models.rs` (CLI).
@@ -173,4 +173,4 @@ at the `pack` layer.
 
 Build the contents first: [add-a-sensor.md](add-a-sensor.md),
 [add-a-logic-ic.md](add-a-logic-ic.md). Format reference:
-[docs/PACKS.md](../PACKS.md).
+[docs/models/PACKS.md](../models/PACKS.md).

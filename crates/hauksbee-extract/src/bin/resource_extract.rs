@@ -530,7 +530,7 @@ id = "rp2040_extracted"
     fn live_rp2040_extraction_agrees() {
         let pdf = repo("../../testdata/datasheets/rp2040-datasheet.pdf");
         if !pdf.exists() {
-            eprintln!("RP2040 datasheet not at {pdf:?}; download it (see docs/RESOURCE_CONFLICTS.md). Skipping.");
+            eprintln!("RP2040 datasheet not at {pdf:?}; download it (see docs/checks/RESOURCE_CONFLICTS.md). Skipping.");
             return;
         }
         if !which("codex") && std::env::var("HAUKSBEE_EXTRACT_MOCK_REPLY").is_err() {

@@ -170,7 +170,7 @@ inside a single `run_micros` chunk. So:
   the analog chunk rate, because the bytes never cross a chunk boundary.
 - A **bit-banged** master (software toggling SCL/SDA or SCK/MOSI on GPIO) is a
   different story: those edges alias at the chunk poll rate exactly like any
-  other GPIO (see `docs/MCU.md`). Bit-banged MHz bus traffic is **not** resolved.
+  other GPIO (see `docs/cosim/MCU.md`). Bit-banged MHz bus traffic is **not** resolved.
   This framework targets the hardware TWI/SPI peripherals.
 - The **Renode `on_i2c` / `on_spi` hooks are wired** through generated C#
   bridge peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave address,

@@ -5,7 +5,7 @@
 //! uses, then reads the detected supplies (the binder's supply legs), the
 //! detected MCU, and the board's rail-looking nets straight off the bound board.
 //! Every generated line carries a short comment naming what it does, cribbed
-//! from docs/CI.md, so the file teaches its own format as the user edits it.
+//! from docs/ci/CI.md, so the file teaches its own format as the user edits it.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -131,7 +131,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s, "# The board, MCU, supplies and rails below were detected from the board.");
     let _ = writeln!(
         s,
-        "# Full assertion catalog (docs/CI.md): voltage, uart, toggle, no_faults,\n\
+        "# Full assertion catalog (docs/ci/CI.md): voltage, uart, toggle, no_faults,\n\
          #   max_current, max_temp, rail_window, protection_trip, boot-coverage,\n\
          #   phase_margin, ac_gain, peripheral, hwtrace."
     );
@@ -207,7 +207,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     if !boot_coverage_supported {
         let backend = mcu_backend.as_deref().unwrap_or("");
         let _ = writeln!(s, "#   Also note this board's MCU runs on the `{backend}` backend. It co-sims");
-        let _ = writeln!(s, "#   GPIO and UART (docs/MCU.md), but its platform has no verified direction-");
+        let _ = writeln!(s, "#   GPIO and UART (docs/cosim/MCU.md), but its platform has no verified direction-");
         let _ = writeln!(s, "#   register map, so it cannot report pin drive DIRECTION and cannot");
         let _ = writeln!(s, "#   distinguish a held-LOW pin from an undriven one. On it, watch only a net");
         let _ = writeln!(s, "#   driven by plain GPIO to a defined HIGH level. AVR boards and the");
@@ -259,14 +259,14 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     // user discovers dynamic analysis from `hauksbee run` — there is no `run
     // --transient` flag; brownout/inrush lives here in the spec. Commented so
     // the starter stays GREEN on no_faults alone; the user opts in and tunes the
-    // load profile to their board. See docs/TRANSIENTS.md.
+    // load profile to their board. See docs/checks/TRANSIENTS.md.
     if let Some((rail, _)) = supplies.first() {
         let _ = writeln!(s);
         let _ = writeln!(s, "# rail_window: does the rail stay up under a dynamic load step (a WiFi");
         let _ = writeln!(s, "# burst, a motor kick, an inrush)? This is the transient/brownout check —");
         let _ = writeln!(s, "# there is NO `run --transient` flag; it lives here. A [[profile]] shapes");
         let _ = writeln!(s, "# the load current, a [[scenario]] attaches it to a supply net, and the");
-        let _ = writeln!(s, "# rail_window assert bounds the rail while it runs. See docs/TRANSIENTS.md.");
+        let _ = writeln!(s, "# rail_window assert bounds the rail while it runs. See docs/checks/TRANSIENTS.md.");
         let _ = writeln!(s, "# [[profile]]");
         let _ = writeln!(s, "# id = \"load_step\"");
         let _ = writeln!(s, "# [[profile.segment]]");

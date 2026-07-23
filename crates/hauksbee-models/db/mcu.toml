@@ -209,7 +209,7 @@ note = "BOOT0 low boots main flash; high enters the system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ESP32 family. The classic ESP32 and ESP32-C3 co-simulate through the
-# Espressif-QEMU backend (`backend = "qemu:..."`, see docs/MCU.md); with no
+# Espressif-QEMU backend (`backend = "qemu:..."`, see docs/cosim/MCU.md); with no
 # firmware given the scheduler leaves the MCU out and the board solves as a
 # passive circuit, so extraction/report and the strap lint work regardless.
 #

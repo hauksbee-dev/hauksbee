@@ -103,7 +103,7 @@ fn init_generates_a_spec_the_loader_accepts() {
 fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
     // The ESP32 devkit binds to the `qemu:esp32` backend, whose GPIO mailbox
     // carries pin LEVELS only — it cannot report pin drive direction, so it
-    // cannot tell a held-LOW control net from an undriven one (docs/MCU.md). A
+    // cannot tell a held-LOW control net from an undriven one (docs/cosim/MCU.md). A
     // live boot-coverage assertion there can go RED with a misleading diagnosis
     // on a net the firmware actually drives, so init must scaffold it
     // commented-out with an honest note rather than as a live assertion.

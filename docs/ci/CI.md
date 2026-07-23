@@ -373,7 +373,7 @@ amps = 0.02
 (`Tj = Tambient + P * theta_JA`) stays below a ceiling. Omit `celsius` to check
 against the device's own max junction temperature (from the model DB, or the
 per-package-class default). The ambient is set once per spec with the top-level
-`ambient_c` key (default 25 C). See [THERMAL.md](THERMAL.md) for the model.
+`ambient_c` key (default 25 C). See [THERMAL.md](../checks/THERMAL.md) for the model.
 
 ```toml
 ambient_c = 70          # top-level: hot-enclosure ambient for the whole run
@@ -402,7 +402,7 @@ See [the boot-coverage section](#boot-coverage-watching-the-firmware-define-a-hi
 gates, driven by an `[ac]` sweep block on the spec. `phase_margin` bounds the
 feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude
 (dB) at a frequency. The spec format and worked assertions live in
-[AC_ANALYSIS.md](AC_ANALYSIS.md#ci), since the sweep block is documented
+[AC_ANALYSIS.md](../analysis/AC_ANALYSIS.md#ci), since the sweep block is documented
 alongside the analysis it drives.
 
 **`rail_window`**: over a transient `[[scenario]]` window, a rail's min/max
@@ -431,7 +431,7 @@ address). Pairs with a `[[peripheral]]` block (below).
 
 **`hwtrace`**: compare the simulated waveform against a captured scope trace
 (features like period / rise-time / overshoot within tolerance) — `trace =
-"trace.toml"`. See [the hardware-trace docs](../testdata/hwtraces/) for the
+"trace.toml"`. See [the hardware-trace docs](../../testdata/hwtraces) for the
 capture format.
 
 Beyond `[[assert]]`, a spec can also declare **`[[peripheral]]`** (attach an I2C/
@@ -439,8 +439,8 @@ SPI slave model, a VCD waveform sink, or an ADC feed to the co-sim),
 **`[[sensor]]`** (a declarative register-map sensor defined inline), and
 **`[[scenario]]`** (a transient load profile + optional decoupling ESR/ESL that
 the `rail_window` / `protection_trip` assertions judge over). The field
-reference for each block is in [PERIPHERALS.md](PERIPHERALS.md) (peripheral /
-sensor) and [TRANSIENTS.md](TRANSIENTS.md) (scenario). For a runnable
+reference for each block is in [PERIPHERALS.md](../cosim/PERIPHERALS.md) (peripheral /
+sensor) and [TRANSIENTS.md](../checks/TRANSIENTS.md) (scenario). For a runnable
 `[[sensor]]` example see `lm75_thermostat.toml` in
 `crates/hauksbee-ci/examples/`; `[[peripheral]]` and `[[scenario]]` blocks are
 exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
@@ -459,7 +459,7 @@ exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
 
 For a machine-readable single-board result outside the assertion runner,
 `hauksbee run <board> --json` emits a documented object with a top-level
-`ok`/`verdict`/`serious_count` rollup — see [JSON_OUTPUT.md](JSON_OUTPUT.md).
+`ok`/`verdict`/`serious_count` rollup — see [JSON_OUTPUT.md](../analysis/JSON_OUTPUT.md).
 
 ## Worked example: the Tarski power-up brownout
 
@@ -603,7 +603,7 @@ assertion, two firmwares, opposite verdicts. Pinned as an integration test,
 This proof uses the **AVR (simavr)** backend, one of hauksbee's **three** co-sim
 backends; the mechanism is backend-agnostic and now runs on all three. Besides
 AVR, the **Renode** backend co-sims STM32, **nRF52**, and SiFive RISC-V, and the
-**QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see `docs/MCU.md` for the
+**QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see `docs/cosim/MCU.md` for the
 full matrix). nRF52 is turnkey today: `hauksbee run` boots the bundled
 `testdata/firmware/renode_demos/nrf52840-zephyr_shell.board` +
 `nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through Renode.
@@ -620,7 +620,7 @@ Renode (STM32/nRF52 ODR poll) that read is direct; on the ESP32 QEMU model,
 which does not expose GPIO output read-back, the firmware must mirror its output
 word to the RAM mailbox the backend reads (the bundled ESP32 demo does). Edges
 faster than the chunk alias on the poll bridge either way, so match the firmware
-switching rate to the chunk size (see `docs/MCU.md` limitations).
+switching rate to the chunk size (see `docs/cosim/MCU.md` limitations).
 
 ## Schematic-stage CI
 
@@ -628,7 +628,7 @@ switching rate to the chunk size (see `docs/MCU.md` limitations).
 `.kicad_sch` and hauksbee-ci runs the same headless co-simulation against the
 schematic, with no PCB in existence yet. The netlist is derived geometrically
 from the schematic the way eeschema derives it (wires, pins, junctions, labels,
-power symbols, hierarchy); see `docs/SCHEMATICS.md`. Everything else in this
+power symbols, hierarchy); see `docs/ingest/SCHEMATICS.md`. Everything else in this
 document, supplies, drives, fuzzing, every assertion kind, works unchanged.
 
 This is where the most expensive hardware bugs are cheapest to catch. They are
@@ -751,7 +751,7 @@ only handles the spec path and the binary does the rest.
   instantiation fails with a clear install message rather than degrading to a
   different core. `hauksbee doctor --backends` reports which backends this build
   can actually locate. GPIO edges are sampled once per co-sim chunk, so signals
-  faster than the chunk alias (see `docs/MCU.md`).
+  faster than the chunk alias (see `docs/cosim/MCU.md`).
 - `max_current` peak tracking covers resistors and diodes directly; other
   component kinds are covered by the `no_faults` stress monitor rather than a
   numeric ceiling.
@@ -772,7 +772,7 @@ only handles the spec path and the binary does the rest.
 - Bus membership in schematics is not yet modelled, so a design that carries
   nets over buses extracts those nets split into their members (it never
   over-connects). Cross-validated corpus projects without buses match their
-  layout net-for-net; see `docs/SCHEMATICS.md`.
+  layout net-for-net; see `docs/ingest/SCHEMATICS.md`.
 - The flagship brownout fixture is a trimmed cell of the full Tarski board, so
   the regression runs in milliseconds. The full 3,442-component board extracts
   in ~0.3 s but is heavier to co-simulate; trim to the subcircuit a given check

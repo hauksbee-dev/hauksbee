@@ -104,17 +104,17 @@ without the hand-modeling:
   continuous; partitioning can be forced off for ground truth.
 - Strict lossless parsing that caught real corruption in KiCad's own demo
   corpus (royalblue54L_feather, missing paren ×349).
-- Gerber + pick-and-place reverse extraction (`docs/GERBER.md`): ingests boards
+- Gerber + pick-and-place reverse extraction (`docs/ingest/GERBER.md`): ingests boards
   that ship only manufacturing files (uConsole, Inkplate 6), reconstructing nets
   and copper from fab data. No other tool in this table ingests a PCB at all,
   let alone a CAD-less one; the gerber path widens "any board" to boards with no
   CAD. Validated closed-loop at 99.0-100% net-partition agreement over located
   pads.
-- Multi-architecture firmware co-sim (`docs/MCU.md`): AVR, STM32, and ESP32 +
+- Multi-architecture firmware co-sim (`docs/cosim/MCU.md`): AVR, STM32, and ESP32 +
   ESP32-C3 proven end-to-end (firmware drives a net through the solved circuit);
   nRF52840 and SiFive FE310 RISC-V proven to UART boot through the same lockstep
   trait, with the GPIO-current bridge not yet exercised on those two (see the
-  per-architecture proof status in `docs/MCU.md`).
+  per-architecture proof status in `docs/cosim/MCU.md`).
   Wokwi and Proteus emulate more part numbers, but from their own non-PCB inputs;
   hauksbee's breadth is across CPU architectures co-simulated against a circuit
   extracted from the real layout.

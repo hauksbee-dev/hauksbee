@@ -31,7 +31,7 @@
 //!     ground), so the pin voltage is computable.
 //! If the divider cannot be resolved to concrete resistor values, the check stays
 //! SILENT. A check that cannot resolve the divider does not fire. (See
-//! `docs/DEVICE_DECODE.md` and `docs/LIMITATIONS.md`.)
+//! `docs/checks/DEVICE_DECODE.md` and `docs/about/LIMITATIONS.md`.)
 //!
 //! ## CYPD3177 seed (the hunt this reproduces)
 //!

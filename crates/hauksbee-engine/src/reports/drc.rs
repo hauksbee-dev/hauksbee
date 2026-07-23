@@ -148,7 +148,7 @@ fn find_kicad_cli() -> Option<(String, String)> {
 fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> String {
     let Some((cli, ver)) = find_kicad_cli() else {
         return "\noracle: no kicad-cli found (PATH or /Applications). Install KiCad to \
-                cross-check geometric DRC; see docs/ORACLES.md.\n"
+                cross-check geometric DRC; see docs/cosim/ORACLES.md.\n"
             .to_string();
     };
     let tmp = std::env::temp_dir().join(format!(

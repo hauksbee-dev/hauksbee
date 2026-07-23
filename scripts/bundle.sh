@@ -33,7 +33,7 @@
 # GPL-3.0 — so a default bundle is GPL-encumbered. Pass
 # `--no-default-features --features renode,qemu` for the MIT-clean shape (no
 # libsimavr link; verified avr-free). See the release.yml header and
-# docs/release-and-licensing.md for the licensing decision and the GPL guard.
+# docs/about/release-and-licensing.md for the licensing decision and the GPL guard.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"

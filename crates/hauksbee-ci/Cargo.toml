@@ -8,7 +8,7 @@ description = "CI for hardware: run a board+firmware spec headless, assert on ra
 [features]
 # Mirror the engine's MCU backend features so `cargo build -p hauksbee-ci
 # --no-default-features --features renode,qemu` (the MIT-clean release shape;
-# see docs/release-and-licensing.md) resolves against THIS package. All on by
+# see docs/about/release-and-licensing.md) resolves against THIS package. All on by
 # default, matching the engine. `avr` pulls in GPL-3.0 libsimavr.
 default = ["avr", "renode", "qemu"]
 avr = ["hauksbee-engine/avr", "hauksbee-server/avr"]

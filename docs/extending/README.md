@@ -27,7 +27,7 @@ The rows above are ordered from cheapest to most invasive
 1. **Data.** Model TOML, sensor specs, logic specs, SoC descriptors. No
    recompile; validated fail-loud at load.
 2. **Packs.** Versioned bundles of (1) you can share and pin
-   ([docs/PACKS.md](../PACKS.md)).
+   ([docs/models/PACKS.md](../models/PACKS.md)).
 3. **Plugins-by-trait.** Board readers (and I2C/SPI peripherals) implement a
    small stable trait in a fork. One registration line, no core edits.
 4. **Core.** New `Device` variants and stamps. Rust, deliberately — and guarded
@@ -52,14 +52,14 @@ validation rule, that rule exists because its absence once corrupted a result.
   starting point you then lint and correct. It is a separate binary (not a
   `hauksbee` subcommand) and is not installed on PATH; run it from a checkout:
   `cargo run -p hauksbee-models --bin model-extract -- <datasheet.pdf>`. See
-  [../MODELS.md](../MODELS.md#pointing-hauksbee-at-a-datasheet) for the workflow.
+  [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet) for the workflow.
 
 ## Deeper references
 
-- [docs/MODELS.md](../MODELS.md) — the model database and matching.
-- [docs/PACKS.md](../PACKS.md) — the pack format reference.
-- [docs/PERIPHERALS.md](../PERIPHERALS.md) — the peripheral layer sensors plug into.
-- [docs/MCU.md](../MCU.md) — the co-sim backends SoC descriptors configure.
+- [docs/models/MODELS.md](../models/MODELS.md) — the model database and matching.
+- [docs/models/PACKS.md](../models/PACKS.md) — the pack format reference.
+- [docs/cosim/PERIPHERALS.md](../cosim/PERIPHERALS.md) — the peripheral layer sensors plug into.
+- [docs/cosim/MCU.md](../cosim/MCU.md) — the co-sim backends SoC descriptors configure.
 - `docs/dev-plans/06-extensibility-sdk.md` — the design plan behind all of this.
 - `docs/dev-plans/04-spice-compat.md` §1 — the six-touchpoint hazard table for
   device physics.

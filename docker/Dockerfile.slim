@@ -135,5 +135,5 @@ WORKDIR /work
 
 # No fixed ENTRYPOINT: both binaries are on PATH, so the command names the tool,
 # e.g. `docker run hauksbee:slim hauksbee run board.kicad_pcb --report` or
-# `... hauksbee-ci run spec.toml`. Mount your repo at /work (see docs/DOCKER.md).
+# `... hauksbee-ci run spec.toml`. Mount your repo at /work (see docs/ci/DOCKER.md).
 CMD ["hauksbee-ci", "--help"]

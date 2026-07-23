@@ -416,11 +416,11 @@ are proven through QEMU above.
   16-gigafarad capacitor that made the solve singular and drove **every** net to
   0 V / "never driven". If you see board-wide all-zero co-sim voltages, confirm
   you are on a build with `39128bb`+ and check `--report` for any passive with an
-  absurd capacitance. See [`LIMITATIONS.md`](LIMITATIONS.md) Fixed #4.
+  absurd capacitance. See [`LIMITATIONS.md`](../about/LIMITATIONS.md) Fixed #4.
 - **ESP32 GPIO needs the firmware mailbox** (stock third-party firmware is
   GPIO-invisible). The exact, empirically-validated reason and the QEMU-fork
   patch that would remove the requirement are in
-  [`hunts/esp32-qemu-i2c-status.md`](hunts/esp32-qemu-i2c-status.md).
+  [`hunts/esp32-qemu-i2c-status.md`](../hunts/esp32-qemu-i2c-status.md).
 
 ## What `--firmware` accepts (and the web drop zone too)
 

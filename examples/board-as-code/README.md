@@ -4,7 +4,7 @@ A PCB is a program that draws itself. hauksbee makes that program executable and
 editable: decompile a real `.kicad_pcb` into readable text, edit the text
 (change a value, fix a wiring swap, add a part), recompile it back into a
 coherent board, and run the edit straight through simulation to see whether the
-fix worked. See [`docs/BOARD_AS_CODE.md`](../../docs/BOARD_AS_CODE.md) for the
+fix worked. See [`docs/ingest/BOARD_AS_CODE.md`](../../docs/ingest/BOARD_AS_CODE.md) for the
 full DSL reference.
 
 The loop, in three CLI verbs:
@@ -22,7 +22,7 @@ The loop, in three CLI verbs:
 
 | File | What it is |
 |---|---|
-| `starter.board` | A **hand-authored** three-part board (a 2-pin header → resistor → LED), written from scratch, not decompiled — the smallest thing to copy when authoring your own. Richly commented; `check-code` it directly. See the [authoring-from-scratch walkthrough](../../docs/BOARD_AS_CODE.md#authoring-a-board-from-scratch). |
+| `starter.board` | A **hand-authored** three-part board (a 2-pin header → resistor → LED), written from scratch, not decompiled — the smallest thing to copy when authoring your own. Richly commented; `check-code` it directly. See the [authoring-from-scratch walkthrough](../../docs/ingest/BOARD_AS_CODE.md#authoring-a-board-from-scratch). |
 | `blinky.board` | The small ATmega328P demo board (`crates/hauksbee-ci/examples/boards/blinky.kicad_pcb`) decompiled to the DSL. 5 components, the smallest real *decompiled* example to read. |
 | `stormduino.board` | A real corpus Arduino-class board (`board-corpus/stormduino`) decompiled. 51 components, 4 repeat-detected blocks. Shows how the decompiler factors repeated hardware into `fn` blocks. |
 | `tarski_miswire_repair.rs` (in `crates/hauksbee-engine/examples/`) | The headline demo: the Tarski inhibitory-synapse miswire, repaired as a code edit, run through simulation. See below. |
