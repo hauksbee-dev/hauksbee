@@ -21,6 +21,15 @@ This is not lint and it is not a DRC. It is the board, alive, under assertions:
 the analogue rails, the firmware's serial output, the blink frequency, the
 stress ratings, all checked the way a test suite checks a function.
 
+**Where the web page fits.** `hauksbee serve`'s drop-a-board page is the quick
+look: one board, one optional firmware image, one plain-language report. The
+TOML spec on this page is the *repeatable* check: it pins down how the board is
+powered, which firmware boots, and what must hold, so a pipeline can run it on
+every commit. Assertions exist only in specs and run only through
+`hauksbee-ci`; the browser never evaluates them. When a quick look turns into
+something you want to keep true, `hauksbee-ci init <board>` turns the board
+into a starter spec.
+
 ### The static-check corpus gates (a separate, complementary layer)
 
 The bring-up CI above runs *firmware on a board under assertions*. The static
