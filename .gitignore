@@ -7,7 +7,7 @@ dist/
 testdata/firmware/stm32_blinky/blinky.bin
 
 # The RP2040 reference manual is 5.3 MB - too large to commit. The resource-extract
-# live test downloads it on demand (see docs/RESOURCE_CONFLICTS.md); the small
+# live test downloads it on demand (see docs/checks/RESOURCE_CONFLICTS.md); the small
 # machine-extracted result it produces is committed at
 # testdata/resource/rp2040_pwm_extracted.toml as the offline fixture.
 testdata/datasheets/rp2040-datasheet.pdf
