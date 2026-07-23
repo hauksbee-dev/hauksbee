@@ -24,7 +24,7 @@
 //! an explicit "unknown -> info, never a fire" path, so a missing datasheet
 //! constant produces silence (or an informational note), never a confident
 //! false positive. Severity thresholds are set from physics and the corpus
-//! distribution, documented per check below and in `docs/SI_CHECKS.md`.
+//! distribution, documented per check below and in `docs/checks/SI_CHECKS.md`.
 //!
 //! The module is split between a pure-physics layer (the `cl_parallel`,
 //! `i2c_rise_time_ns`, `routed_length_mm` helpers, all hand-checked in the unit

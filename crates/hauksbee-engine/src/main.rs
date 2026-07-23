@@ -295,7 +295,7 @@ struct ModelsResolveArgs {
 TRANSIENT / BROWNOUT analysis (a rail sagging under a load step, WiFi burst, or \
 inrush) is not a `run` flag: it is a dynamic scenario judged by an assertion. \
 Scaffold one with `hauksbee-ci init <board>` (it emits a [[scenario]] + \
-rail_window stub when a supply is detected) and see docs/TRANSIENTS.md. For \
+rail_window stub when a supply is detected) and see docs/checks/TRANSIENTS.md. For \
 scriptable waveforms from a headless run, use --probe/--probe-csv.")]
 struct RunArgs {
     /// Board file to load (.kicad_pcb, .kicad_sch, .brd, .d356, or gerbers).
@@ -412,7 +412,7 @@ struct RunArgs {
     /// oracle) and print whether they agree, so a copper finding is self-confirming
     /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
     /// in a standard install location (newest version preferred); KiCad is NOT
-    /// bundled (see `docs/ORACLES.md`). No-op unless paired with `--drc`.
+    /// bundled (see `docs/cosim/ORACLES.md`). No-op unless paired with `--drc`.
     #[arg(long, help_heading = "Advanced / analyses")]
     oracle: bool,
 
@@ -460,7 +460,7 @@ struct RunArgs {
 
     /// Measure loop stability at this break/output net: report gain crossover
     /// and phase margin. Use with `--ac`. The net is the far side of a loop
-    /// broken by an injection `Vsource` (see docs/AC_ANALYSIS.md).
+    /// broken by an injection `Vsource` (see docs/analysis/AC_ANALYSIS.md).
     #[arg(long = "ac-loop", value_name = "NET", help_heading = "Advanced / analyses")]
     ac_loop: Option<String>,
 

@@ -1,74 +1,93 @@
-# Docs map: user path vs project record
+# Docs map
 
-`docs/` mixes two audiences: docs a new adopter needs to get value from the tool
-(**USER PATH**), and the project's evidence trail, war stories, and internal
-conventions (**PROJECT RECORD**). This map classifies every doc and records where
-it lives after the START_HERE split.
+`docs/` serves two audiences: a new adopter following the user path, and the
+project record (evidence trail, war stories, internal plans). The entry point is
+[`START_HERE.md`](START_HERE.md); this file is the full classification. There is
+no generated index (no mdbook `SUMMARY.md`, no `mkdocs.yml`); the repo-root
+`README.md` leads with START_HERE.
 
-- **USER PATH** docs stay at `docs/` top level.
-- **PROJECT RECORD** docs move to `docs/record/`.
-- `docs/dev-plans/` (design plans 00-09 + `research/`), `docs/how-and-why/` (code
-  companion explanations), `docs/hunts/` (bug-hunt working directory), and
-  `docs/assets/` (images) stay where they are: they are already scoped
-  directories. `hunts/` is record-class; the `docs/record/` README points at it.
+The user docs are grouped by the question the reader is asking. Only the two
+entry points live at the `docs/` root.
 
-There is no docs index (no mdbook `SUMMARY.md`, no `mkdocs.yml`); the entry point
-is `docs/START_HERE.md`, and the repo-root `README.md` leads with it.
+## The user path, by question
 
-## Top-level docs
+**"How do I get my board file in?"**: [`ingest/`](ingest/)
 
-| File | Role | Class | Destination |
-|---|---|---|---|
-| `AC_ANALYSIS.md` | AC / small-signal sweep: Bode, phase margin, gain crossover | USER | `docs/` (stay) |
-| `ALTIUM.md` | Altium `.PcbDoc` ingest | USER | `docs/` (stay) |
-| `ARCHITECTURE.md` | End-to-end pipeline and design overview | USER | `docs/` (stay) |
-| `BOARD_AS_CODE.md` | Decompile/edit/recompile a board as editable code | USER | `docs/` (stay) |
-| `CAPABILITIES.md` | Authoritative scope: every layer, MCU coverage, misconceptions | USER | `docs/` (stay) |
-| `CI.md` | Headless hardware CI: the core workflow | USER | `docs/` (stay) |
-| `COMPARISON.md` | Feature matrix and positioning vs the field | USER | `docs/` (stay) |
-| `DEVICE_DECODE.md` | Config-pin divider decode check (`device_decode` lint class) | USER | `docs/` (stay) |
-| `DOCKER.md` | Container images and how to run them | USER | `docs/` (stay) |
-| `EXAMPLES.md` | Install, first run, runnable examples index | USER | `docs/` (stay) |
-| `GERBER.md` | Gerber + pick-and-place reverse extraction | USER | `docs/` (stay) |
-| `JSON_OUTPUT.md` | The `--json` output schema: top-level verdict + every section | USER | `docs/` (stay) |
-| `LIMITATIONS.md` | Honest limitations, triage and closure | USER | `docs/` (stay) |
-| `MCU.md` | MCU co-sim backends and supported chips | USER | `docs/` (stay) |
-| `MODELS.md` | Device models: built-in, SPICE, datasheet extraction | USER | `docs/` (stay) |
-| `ORACLES.md` | Using ground-truth oracles (`--oracle`): kicad-cli, ngspice detection | USER | `docs/` (stay) |
-| `PACKS.md` | Model-pack format: bundle + share + pin model/sensor/logic data | USER | `docs/` (stay) |
-| `PERIPHERALS.md` | Runtime peripherals (buttons, pots, I2C/SPI slaves) | USER | `docs/` (stay) |
-| `RESOURCE_CONFLICTS.md` | MCU internal resource-conflict check | USER | `docs/` (stay) |
-| `SCHEMATICS.md` | Schematic (`.kicad_sch`) extraction | USER | `docs/` (stay) |
-| `SHORTS.md` | Copper short / clearance detection and simulation | USER | `docs/` (stay) |
-| `SI_CHECKS.md` | Signal-integrity static checks (`--si`) | USER | `docs/` (stay) |
-| `SIMULATORS.md` | Installing the external co-sim backends (Renode, Espressif QEMU) | USER | `docs/` (stay) |
-| `THERMAL.md` | Steady-state junction-temperature check | USER | `docs/` (stay) |
-| `TRANSIENTS.md` | Transient scenarios: load steps, brownout, inrush | USER | `docs/` (stay) |
-| `BUG_HUNT.md` | Tarski InputSystem bug-hunt war story | RECORD | `docs/record/` |
-| `FAMOUS_BUGS.md` | Dossier: famous bugs to re-derive + hunt corpus | RECORD | `docs/record/` |
-| `FAMOUS_SWEEP.md` | Famous-board sweep campaign (rounds 1-5) | RECORD | `docs/record/` |
-| `HUNT_TARGETS.md` | Dossier: which boards to hunt next | RECORD | `docs/record/` |
-| `KNOWN_FAULTS_VALIDATION.md` | Known-fault calibration campaign | RECORD | `docs/record/` |
-| `NAMING.md` | How the name was chosen (naming convention record) | RECORD | `docs/record/` |
-| `TARSKI_RESULTS.md` | Flagship benchmark results / evidence | RECORD | `docs/record/` |
-| `TEST_CAMPAIGN.md` | Test-campaign evidence: every claim traces to a test | RECORD | `docs/record/` |
-| `VIDEO_PLAN.md` | Internal showcase-video storyboard | RECORD | `docs/record/` |
+| File | Covers |
+|---|---|
+| [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc` binary ingest |
+| [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
+| [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
+| [`ingest/BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md) | Decompile / edit / recompile a board as editable code |
 
-## Subdirectories (unchanged)
+**"What does it check, and can I trust the findings?"**: [`checks/`](checks/)
 
-| Path | Role | Class | Destination |
-|---|---|---|---|
-| `docs/dev-plans/` | Design plans 00-09, perf notes, `research/` (dossiers, maps, the saga) | RECORD (already scoped) | stay |
-| `docs/how-and-why/` | Code companion explanations (per-crate how-and-why) | USER (already scoped) | stay |
-| `docs/extending/` | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack | USER (already scoped) | stay |
-| `docs/learn/` | First-principles course (10 chapters: netlist → MNA → Newton → co-sim → checks → extending) | USER (already scoped) | stay |
-| `docs/teach/` | Teaching material derived from the course | USER (already scoped) | stay |
-| `docs/spice-compat/` | SPICE compatibility statement (`compatibility.md`, the enforced supported/refused card list) + ngspice cross-check results (`results.md`) | USER (already scoped) | stay |
-| `docs/hunts/` | Bug-hunt working directory: per-board narratives, briefs, results, report assets | RECORD (already scoped) | stay |
-| `docs/assets/*` | Images embedded by docs | n/a | stay |
+| File | Covers |
+|---|---|
+| [`checks/SHORTS.md`](checks/SHORTS.md) | Copper short / clearance detection and simulation |
+| [`checks/SI_CHECKS.md`](checks/SI_CHECKS.md) | Signal-integrity static checks (`--si`) |
+| [`checks/RESOURCE_CONFLICTS.md`](checks/RESOURCE_CONFLICTS.md) | MCU internal resource-conflict check |
+| [`checks/DEVICE_DECODE.md`](checks/DEVICE_DECODE.md) | Config-pin divider decode check |
+| [`checks/THERMAL.md`](checks/THERMAL.md) | Steady-state junction-temperature check |
+| [`checks/TRANSIENTS.md`](checks/TRANSIENTS.md) | Transient scenarios: load steps, brownout, inrush |
+
+**"What analysis can it run past the static checks?"**: [`analysis/`](analysis/)
+
+| File | Covers |
+|---|---|
+| [`analysis/AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md) | AC / small-signal sweep: Bode, phase margin, gain crossover |
+| [`analysis/JSON_OUTPUT.md`](analysis/JSON_OUTPUT.md) | The `--json` output schema: top-level verdict + every section |
+
+**"How does firmware co-sim work, and which chips?"**: [`cosim/`](cosim/)
+
+| File | Covers |
+|---|---|
+| [`cosim/MCU.md`](cosim/MCU.md) | MCU co-sim backends, supported chips, firmware input tiers |
+| [`cosim/PERIPHERALS.md`](cosim/PERIPHERALS.md) | Runtime peripherals (buttons, pots, I2C/SPI slaves) |
+| [`cosim/SIMULATORS.md`](cosim/SIMULATORS.md) | Installing the external backends (Renode, Espressif QEMU) |
+| [`cosim/ORACLES.md`](cosim/ORACLES.md) | Ground-truth oracles (`--oracle`): kicad-cli, ngspice |
+
+**"How do I model my parts?"**: [`models/`](models/)
+
+| File | Covers |
+|---|---|
+| [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
+| [`models/PACKS.md`](models/PACKS.md) | Model-pack format: bundle + share model/sensor/logic data |
+
+**"How do I wire it into a pipeline?"**: [`ci/`](ci/)
+
+| File | Covers |
+|---|---|
+| [`ci/CI.md`](ci/CI.md) | Headless hardware CI: the core workflow, spec format, assertions |
+| [`ci/EXAMPLES.md`](ci/EXAMPLES.md) | Install, first run, every runnable example |
+| [`ci/DOCKER.md`](ci/DOCKER.md) | Container images and how to run them |
+
+**"What is this thing, honestly?"**: [`about/`](about/)
+
+| File | Covers |
+|---|---|
+| [`about/ARCHITECTURE.md`](about/ARCHITECTURE.md) | End-to-end pipeline and design overview |
+| [`about/CAPABILITIES.md`](about/CAPABILITIES.md) | Authoritative scope: every layer, MCU coverage, misconceptions |
+| [`about/COMPARISON.md`](about/COMPARISON.md) | Feature matrix and positioning vs the field |
+| [`about/LIMITATIONS.md`](about/LIMITATIONS.md) | Honest limitations, triage and closure |
+| [`about/release-and-licensing.md`](about/release-and-licensing.md) | Release process and the GPL boundary |
+
+## Scoped directories (unchanged)
+
+| Path | Role | Class |
+|---|---|---|
+| [`extending/`](extending/) | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack | USER |
+| [`learn/`](learn/) | First-principles course (netlist → MNA → Newton → co-sim → checks) | USER |
+| [`teach/`](teach/) | Teaching material derived from the course + the doc-coverage inventory | USER |
+| [`how-and-why/`](how-and-why/) | Code companion explanations, per crate | USER |
+| [`spice-compat/`](spice-compat/) | SPICE compatibility statement + ngspice cross-check results | USER |
+| [`record/`](record/) | The project's evidence trail: campaigns, calibration, benchmarks | RECORD |
+| [`hunts/`](hunts/) | Bug-hunt working directory: per-board narratives, briefs, results | RECORD |
+| [`dev-plans/`](dev-plans/) | Design plans 00-09, perf notes, `research/` | RECORD |
+| [`assets/`](assets/) | Images embedded by docs | n/a |
 
 ## Counts
 
-- USER PATH: 25 top-level docs.
-- PROJECT RECORD: 9 top-level docs moved to `docs/record/`, plus the `docs/hunts/`
-  working directory and `docs/dev-plans/` (both stay in place, already scoped).
+- USER PATH: 26 docs in 7 themed groups, plus the scoped USER directories.
+- PROJECT RECORD: `record/`, `hunts/`, `dev-plans/`.
+- Root: `START_HERE.md` and this map only.

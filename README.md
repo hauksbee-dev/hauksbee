@@ -4,9 +4,9 @@
 
 Software runs its tests on every commit. Hardware never got that loop: you change the layout, send it to fab, wait three weeks, populate the board, and only then find the bug with a scope. Hauksbee closes the loop. It takes a real PCB design file, works out the circuit it actually implements, and runs the board headless on every commit, so the bugs that used to cost a fab spin and a fortnight at the bench fail a test instead.
 
-No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/COMPARISON.md`](docs/COMPARISON.md) for the full matrix.
+No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md) for the full matrix.
 
-**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md): what every layer does, which MCU architectures the firmware co-sim covers (AVR via libsimavr; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section. The project's evidence trail (bug-hunt campaigns, known-fault calibration, benchmarks) lives in [`docs/record/`](docs/record/).
+**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/about/CAPABILITIES.md`](docs/about/CAPABILITIES.md): what every layer does, which MCU architectures the firmware co-sim covers (AVR via libsimavr; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section. The project's evidence trail (bug-hunt campaigns, known-fault calibration, benchmarks) lives in [`docs/record/`](docs/record/).
 
 [**Watch the showcase**](frontend/capture/out/hauksbee_showcase.mp4) (a dozen boards running headless, ~2.5 min).
 
@@ -20,11 +20,11 @@ The fastest way in needs no terminal at all: run `hauksbee serve`, open the page
 
 Point it at any PCB design and it will:
 
-- **Ingest** it: KiCad, Eagle, Altium `.PcbDoc` ([`docs/ALTIUM.md`](docs/ALTIUM.md)), IPC-D-356, and gerber-only boards that ship no CAD at all, reverse-extracted from copper geometry alone ([`docs/GERBER.md`](docs/GERBER.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
-- **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU across AVR, STM32, ESP32/-C3, nRF52840 and SiFive RISC-V. GPIO and UART co-sim run on every backend; ADC injection and I2C/SPI peripheral-slave models are on the AVR backend today, with the per-backend coverage matrix and the reason stated plainly in [`docs/MCU.md`](docs/MCU.md).
-- **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, signal integrity (now including a controlled-impedance estimate for USB and Ethernet from trace geometry and stackup, quasi-static closed-form, not a field solve), trace ampacity, behavioural power-IC models and transient brownouts, each tuned against a known-good corpus so it does not cry wolf ([`docs/SHORTS.md`](docs/SHORTS.md), [`docs/RESOURCE_CONFLICTS.md`](docs/RESOURCE_CONFLICTS.md), [`docs/SI_CHECKS.md`](docs/SI_CHECKS.md), [`docs/TRANSIENTS.md`](docs/TRANSIENTS.md)).
-- **Analyse** it past the static checks: a small-signal AC sweep for Bode plots, phase margin and gain crossover (averaged about the DC operating point, not cycle-by-cycle switching) ([`docs/AC_ANALYSIS.md`](docs/AC_ANALYSIS.md)), and a steady-state thermal pass that turns each part's dissipation into a junction temperature and flags the ones that run too hot (per-device `Tj = Tambient + P * theta_JA`, not a board thermal field solve) ([`docs/THERMAL.md`](docs/THERMAL.md)).
-- **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin and a pre-commit hook, with assertions for rails, faults, temperature and loop stability ([`docs/CI.md`](docs/CI.md)), and runnable examples in [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
+- **Ingest** it: KiCad, Eagle, Altium `.PcbDoc` ([`docs/ingest/ALTIUM.md`](docs/ingest/ALTIUM.md)), IPC-D-356, and gerber-only boards that ship no CAD at all, reverse-extracted from copper geometry alone ([`docs/ingest/GERBER.md`](docs/ingest/GERBER.md), [`docs/about/ARCHITECTURE.md`](docs/about/ARCHITECTURE.md)).
+- **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU across AVR, STM32, ESP32/-C3, nRF52840 and SiFive RISC-V. GPIO and UART co-sim run on every backend; ADC injection and I2C/SPI peripheral-slave models are on the AVR backend today, with the per-backend coverage matrix and the reason stated plainly in [`docs/cosim/MCU.md`](docs/cosim/MCU.md).
+- **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, signal integrity (now including a controlled-impedance estimate for USB and Ethernet from trace geometry and stackup, quasi-static closed-form, not a field solve), trace ampacity, behavioural power-IC models and transient brownouts, each tuned against a known-good corpus so it does not cry wolf ([`docs/checks/SHORTS.md`](docs/checks/SHORTS.md), [`docs/checks/RESOURCE_CONFLICTS.md`](docs/checks/RESOURCE_CONFLICTS.md), [`docs/checks/SI_CHECKS.md`](docs/checks/SI_CHECKS.md), [`docs/checks/TRANSIENTS.md`](docs/checks/TRANSIENTS.md)).
+- **Analyse** it past the static checks: a small-signal AC sweep for Bode plots, phase margin and gain crossover (averaged about the DC operating point, not cycle-by-cycle switching) ([`docs/analysis/AC_ANALYSIS.md`](docs/analysis/AC_ANALYSIS.md)), and a steady-state thermal pass that turns each part's dissipation into a junction temperature and flags the ones that run too hot (per-device `Tj = Tambient + P * theta_JA`, not a board thermal field solve) ([`docs/checks/THERMAL.md`](docs/checks/THERMAL.md)).
+- **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin and a pre-commit hook, with assertions for rails, faults, temperature and loop stability ([`docs/ci/CI.md`](docs/ci/CI.md)), and runnable examples in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
 
 ![Fault state: a part exceeds its rating and the log explains why](frontend/screenshots/beauty/faults.png)
 
@@ -53,7 +53,7 @@ docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --report
 ```
 
-The slim and full images and more `docker run` examples are in [`docs/DOCKER.md`](docs/DOCKER.md).
+The slim and full images and more `docker run` examples are in [`docs/ci/DOCKER.md`](docs/ci/DOCKER.md).
 
 **Then use it — first run, against a board that ships in this repo:**
 
@@ -74,7 +74,7 @@ hauksbee-ci init my_board.kicad_pcb                  # scaffold a CI spec beside
 hauksbee serve                                       # web front door (long-running): open the page, drop a board, read the report
 ```
 
-Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
+Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
 
 **Prebuilt binary (once a public release exists):**
 
@@ -149,7 +149,7 @@ kind = "no_faults"                        # and nothing is over-stressed meanwhi
 Assertions cover rails and forced net drives, timed peripheral events (button
 presses, sensor inputs), `voltage` / `toggle` / `boot-coverage` / `no_faults`,
 thermal limits, and tolerance/AC sweeps. More runnable specs and board-as-code
-examples are in [`docs/EXAMPLES.md`](docs/EXAMPLES.md); the full spec schema is
+examples are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md); the full spec schema is
 documented at the top of [`crates/hauksbee-ci/src/spec.rs`](crates/hauksbee-ci/src/spec.rs).
 
 ---
@@ -183,7 +183,7 @@ Renode covers STM32 / nRF52 / RISC-V; the Espressif QEMU fork covers the full
 ESP32 family. Both are detected from an external install (GPL/size; not bundled)
 using the same detect-don't-bundle pattern as the KiCad and ngspice oracles.
 Full details — discovery order, env-var overrides, manual install steps, and the
-Gatekeeper note for macOS — are in [`docs/SIMULATORS.md`](docs/SIMULATORS.md).
+Gatekeeper note for macOS — are in [`docs/cosim/SIMULATORS.md`](docs/cosim/SIMULATORS.md).
 
 ---
 
@@ -203,7 +203,7 @@ A later **firmware co-sim** hunt ([`docs/hunts/HUNT_2026-06-30.md`](docs/hunts/H
 
 ## A note on speed
 
-Hauksbee's matrix-exponential fast path wins in the PCB regime, many small RC islands hanging off shared rails, where exact large steps replace thousands of small ones. It is benchmarked at ~23x ngspice wall-clock on a half-wave rectifier and ~6x on a 90-block synapse array (`#[ignore]` benches, observations rather than guarantees). What *is* test-asserted is the accuracy: agreement with ngspice and analytic theory to fractions of a percent, and every speed claim is gated behind an accuracy cross-check. The method and the full table are in [`docs/COMPARISON.md`](docs/COMPARISON.md).
+Hauksbee's matrix-exponential fast path wins in the PCB regime, many small RC islands hanging off shared rails, where exact large steps replace thousands of small ones. It is benchmarked at ~23x ngspice wall-clock on a half-wave rectifier and ~6x on a 90-block synapse array (`#[ignore]` benches, observations rather than guarantees). What *is* test-asserted is the accuracy: agreement with ngspice and analytic theory to fractions of a percent, and every speed claim is gated behind an accuracy cross-check. The method and the full table are in [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md).
 
 ---
 
@@ -220,7 +220,7 @@ Hauksbee's matrix-exponential fast path wins in the PCB regime, many small RC is
                       └─▶ front door (`serve`): drop a board, get a plain report
 ```
 
-Partition the circuit at device boundaries and give every island the cheapest solver that is exactly right for it: linear islands get matrix exponentials (exact at any step size), nonlinear islands get MNA + Newton, digital is event-driven. Full write-up in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Partition the circuit at device boundaries and give every island the cheapest solver that is exactly right for it: linear islands get matrix exponentials (exact at any step size), nonlinear islands get MNA + Newton, digital is event-driven. Full write-up in [`docs/about/ARCHITECTURE.md`](docs/about/ARCHITECTURE.md).
 
 | crate | what |
 |---|---|
@@ -244,7 +244,7 @@ Hauksbee was built for one board no simulation tool could honestly check: Tarski
 
 The name is for [Francis Hauksbee](https://en.wikipedia.org/wiki/Francis_Hauksbee), who built the first machine to make the electrostatic spark on demand. Bringing a dead board to life is roughly the same trick.
 
-See the website at [hauksbee.dev](https://hauksbee.dev). Honest limitations are catalogued in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md). Exactly which SPICE cards `hauksbee sim` accepts or refuses — enforced against the loader so it cannot drift — is the [SPICE compatibility statement](docs/spice-compat/compatibility.md).
+See the website at [hauksbee.dev](https://hauksbee.dev). Honest limitations are catalogued in [`docs/about/LIMITATIONS.md`](docs/about/LIMITATIONS.md). Exactly which SPICE cards `hauksbee sim` accepts or refuses — enforced against the loader so it cannot drift — is the [SPICE compatibility statement](docs/spice-compat/compatibility.md).
 
 ---
 
@@ -258,7 +258,7 @@ Hauksbee stands on a lot of open-source work. The substantial ones:
 - [QEMU](https://www.qemu.org) and [Espressif's QEMU fork](https://github.com/espressif/qemu) (GPL-2.0) — ESP32 / ESP32-S3 / ESP32-C3 emulation with the SoC peripherals modelled.
 
 **PCB tooling**
-- [KiCad](https://www.kicad.org) (GPL-3.0) — the Altium `.PcbDoc` binary record parsers are ported field-by-field from KiCad's open-source Altium importer ([`docs/ALTIUM.md`](docs/ALTIUM.md)); `kicad-cli` is used for DRC cross-checks.
+- [KiCad](https://www.kicad.org) (GPL-3.0) — the Altium `.PcbDoc` binary record parsers are ported field-by-field from KiCad's open-source Altium importer ([`docs/ingest/ALTIUM.md`](docs/ingest/ALTIUM.md)); `kicad-cli` is used for DRC cross-checks.
 - [freerouting](https://github.com/freerouting/freerouting) — the open-source autorouter hauksbee hands recompiled board-as-code off to for production routing (separate process, invoked headless).
 - [ngspice](https://ngspice.sourceforge.io) — the reference SPICE engine the solver is cross-validated against for accuracy and benchmarked beside.
 

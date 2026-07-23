@@ -509,7 +509,7 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
             SiCheck::ControlledImpedance => (
                 format!("A trace that should be a controlled impedance is out of range ({}).", short_msg(&f.message)),
                 "Fast signals like USB or Ethernet need their traces to present a specific impedance (for example 90 ohm differential for USB) so the signal does not reflect off the wire. If the trace width / spacing for your board stackup gives the wrong impedance, you get reflections, and the link can be marginal or fail at speed.".to_string(),
-                "Adjust the trace width and pair spacing for your actual layer stackup so the estimated impedance hits the target (tools and the formulas in docs/SI_CHECKS.md give the geometry); or have the fab build a controlled-impedance stackup to your spec.".to_string(),
+                "Adjust the trace width and pair spacing for your actual layer stackup so the estimated impedance hits the target (tools and the formulas in docs/checks/SI_CHECKS.md give the geometry); or have the fab build a controlled-impedance stackup to your spec.".to_string(),
             ),
             SiCheck::TraceAmpacity => (
                 format!("A routed trace is too narrow for the current it has to carry ({}).", short_msg(&f.message)),
@@ -581,7 +581,7 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
             "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. \
              If it is: adjust the trace width and pair spacing for your actual layer \
              stackup so the estimate lands near the target (the formulas are in \
-             docs/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup \
+             docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup \
              to spec.",
         ),
         _ => HeadsUp::note(format!("{} ({affected}).", short_msg(m))),

@@ -145,7 +145,7 @@ estimator by design.
   check.
 - **`hauksbee-ci`** — the `max_temp` assertion (per-device or explicit ceiling)
   and the top-level `ambient_c` key. The `no_faults` assertion also catches
-  over-temperature. See [CI.md](CI.md).
+  over-temperature. See [CI.md](../ci/CI.md).
 - **Live UI** — per-component junction temperature is exported next to the stress
   fraction for the heat-map, and over-temperature faults appear in the fault
   overlay.

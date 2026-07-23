@@ -131,7 +131,7 @@ fn famous_altium_boards_extract_and_are_short_clean() {
     assert!(
         offenders.is_empty(),
         "real Altium boards must extract sanely and be short-clean; chase any \
-         short to the binary before believing it (docs/ALTIUM.md). Offenders:\n  {}",
+         short to the binary before believing it (docs/ingest/ALTIUM.md). Offenders:\n  {}",
         offenders.join("\n  ")
     );
 }

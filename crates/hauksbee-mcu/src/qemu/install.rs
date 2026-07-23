@@ -89,7 +89,7 @@ pub fn host_asset_triple() -> Result<&'static str> {
              Download the right asset from \
              https://github.com/{ESP_QEMU_REPO}/releases yourself and unpack \
              it so ~/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa exists \
-             (docs/SIMULATORS.md)."
+             (docs/cosim/SIMULATORS.md)."
         ),
     }
 }

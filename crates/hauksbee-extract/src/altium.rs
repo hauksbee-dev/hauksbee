@@ -38,7 +38,7 @@
 //! (`ReadProperties`, the unit conversion), and `altium_props_utils.cpp`
 //! (`ConvertToKicadUnit`). The `cfb` crate replaces KiCad's vendored
 //! `CompoundFileReader`. Cross-checked against the `altium2kicad` project and a
-//! Python `olefile` prototype before porting. See `docs/ALTIUM.md`.
+//! Python `olefile` prototype before porting. See `docs/ingest/ALTIUM.md`.
 //!
 //! [`cfb`]: https://docs.rs/cfb
 

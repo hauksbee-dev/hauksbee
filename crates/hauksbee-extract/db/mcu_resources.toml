@@ -15,7 +15,7 @@
 # `pinfunction`). So this is the source of truth for "pad N of this part is GPIO
 # X, on PWM slice S channel C", authored by hand from the reference manual with
 # the section cited per block, and (for RP2040) cross-checked against an
-# automated datasheet extraction (see docs/RESOURCE_CONFLICTS.md).
+# automated datasheet extraction (see docs/checks/RESOURCE_CONFLICTS.md).
 #
 # `match.value_re` / `match.lib_re` identify the part the same way the model DB
 # does. The first table whose match hits a component owns that component's pins.

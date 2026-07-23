@@ -46,7 +46,7 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     if !yes && !confirm("Proceed with download and install? [y/N] ")? {
         anyhow::bail!(
             "install declined. Re-run `hauksbee install esp-qemu` (add --yes to \
-             skip this prompt), or install manually: docs/SIMULATORS.md"
+             skip this prompt), or install manually: docs/cosim/SIMULATORS.md"
         );
     }
 

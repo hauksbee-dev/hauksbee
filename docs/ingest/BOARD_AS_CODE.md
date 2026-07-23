@@ -68,7 +68,7 @@ Tarski InputSystem board (`forge-codegen` test `dsl_roundtrip`).
 ## Authoring a board from scratch
 
 You do not have to start from a decompiled board. The DSL is small enough to
-hand-write. [`examples/board-as-code/starter.board`](../examples/board-as-code/starter.board)
+hand-write. [`examples/board-as-code/starter.board`](../../examples/board-as-code/starter.board)
 is a complete, hand-authored three-part board — a 2-pin header driving an LED
 through a series resistor — written from nothing and richly commented. Build one
 up the same way:
@@ -249,7 +249,7 @@ Full re-layout of stormduino, exported with `kicad-cli pcb export svg`
 
 | before | after |
 |---|---|
-| ![before](assets/storm_before.png) | ![after](assets/storm_after.png) |
+| ![before](../assets/storm_before.png) | ![after](../assets/storm_after.png) |
 
 Left is the original placement; right is the function-grouped re-layout, with
 every part inside the board outline, courtyards non-overlapping, and clearances
@@ -294,7 +294,7 @@ resistor) recompiled incrementally, and a diff that highlights the moved part in
 orange (with a dashed ghost at its old position and an arrow to the new one),
 new parts in green, and the 62 untouched parts in grey.
 
-![incremental recompile before/after/diff](assets/incremental_recompile.png)
+![incremental recompile before/after/diff](../assets/incremental_recompile.png)
 
 The middle and diff panels are identical to the original except for that one
 part: incremental recompile keeps every untouched component exactly where it
@@ -326,7 +326,7 @@ The hand-off, in `forge-codegen`'s `route_freerouting` module:
    vias back and write them onto the board as copper segments and vias on the
    correct nets.
 
-![routed stormduino (freerouting)](assets/storm_routed.png)
+![routed stormduino (freerouting)](../assets/storm_routed.png)
 
 ### Installing freerouting
 

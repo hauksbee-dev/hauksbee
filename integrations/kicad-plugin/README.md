@@ -21,7 +21,7 @@ gates for a schematic-level check. You can also run a schematic-stage spec from
 every `*.toml` next to the board (and in a sibling `ci/`), including ones that
 target the project's schematic. The shared core (`hauksbee_ci_core.py`) is
 file-type-agnostic, so when eeschema gains an API the entry point drops in beside
-this one. See `docs/CI.md` (Schematic-stage CI).
+this one. See `docs/ci/CI.md` (Schematic-stage CI).
 
 ## Prerequisites
 

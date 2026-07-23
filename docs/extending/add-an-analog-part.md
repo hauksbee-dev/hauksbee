@@ -11,7 +11,7 @@ When a part on your board is *not* modelled, hauksbee binds it OPEN and says so
 > **Shortcut:** to auto-draft this entry from a PDF datasheet instead of writing
 > it by hand, run the extractor and then lint/correct its output:
 > `cargo run -p hauksbee-models --bin model-extract -- part.pdf`
-> (see [../MODELS.md](../MODELS.md#pointing-hauksbee-at-a-datasheet)). The
+> (see [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet)). The
 > hand-written path below is still worth reading — it is what you edit the draft
 > into, and what `hauksbee models lint` checks.
 

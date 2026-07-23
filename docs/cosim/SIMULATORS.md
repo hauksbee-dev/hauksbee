@@ -1,6 +1,6 @@
 # External simulator backends
 
-> For the full capability map of hauksbee — MCU architecture coverage, which parts are proven, and the scope of the co-sim layer — see [`docs/CAPABILITIES.md`](CAPABILITIES.md).
+> For the full capability map of hauksbee — MCU architecture coverage, which parts are proven, and the scope of the co-sim layer — see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
 
 hauksbee's MCU co-simulation layer runs firmware against the solved analog
 circuit in lockstep. Three backends cover the full supported architecture range:
@@ -15,7 +15,7 @@ AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in this
 MIT repo): install it with `scripts/install-sims.sh --avr`, or build without AVR
 via `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.
 This document covers installing Renode and the Espressif QEMU fork for the other
-two. See [`docs/MCU.md`](MCU.md) for the full co-simulation
+two. See [`docs/cosim/MCU.md`](MCU.md) for the full co-simulation
 architecture, per-board recipes, and proven integration test results.
 
 ---
@@ -26,7 +26,7 @@ Renode is EPL-licensed and ~150 MB. Espressif QEMU is GPL-2.0 and similarly
 large. Vendoring either into hauksbee would bloat the distribution, impose
 redistribution obligations, and undercut the core premise (PCB CI from the
 design files, no bulky EDA toolchain required). The same "detect, don't bundle"
-pattern used for the KiCad and ngspice oracles (see [`docs/ORACLES.md`](ORACLES.md))
+pattern used for the KiCad and ngspice oracles (see [`docs/cosim/ORACLES.md`](ORACLES.md))
 applies here. hauksbee locates an externally installed binary and uses it on
 demand; tests skip cleanly when the binary is absent rather than failing.
 

@@ -146,6 +146,6 @@ test result: ok. 3 passed; 0 failed
 
 ---
 
-See [docs/BOARD_AS_CODE.md](../BOARD_AS_CODE.md) and
-[docs/SCHEMATICS.md](../SCHEMATICS.md) for what happens to an
+See [docs/ingest/BOARD_AS_CODE.md](../ingest/BOARD_AS_CODE.md) and
+[docs/ingest/SCHEMATICS.md](../ingest/SCHEMATICS.md) for what happens to an
 `ExtractedBoard` after your reader produces one.

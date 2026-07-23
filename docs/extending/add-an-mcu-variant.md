@@ -146,7 +146,7 @@ necessary file answers "which components ARE a `renode:stm32f107`?" — a
 `[[models]] kind = "mcu"` routing entry in the model library, matching your
 board's part value and carrying the backend string plus the pin-role map (the
 full recipe with a second RISC-V template is in
-[docs/MCU.md](../MCU.md#adding-a-genuinely-new-mcu-variant-the-recipe-pattern)):
+[docs/cosim/MCU.md](../cosim/MCU.md#adding-a-genuinely-new-mcu-variant-the-recipe-pattern)):
 
 ```toml
 # ~/.config/hauksbee/models/stm32f107.toml  (or a dir given by --models-dir)
@@ -251,6 +251,6 @@ hauksbee descriptor field.
 
 ---
 
-See [docs/MCU.md](../MCU.md) for the backend contract these descriptors
+See [docs/cosim/MCU.md](../cosim/MCU.md) for the backend contract these descriptors
 configure, and [add-a-sensor.md](add-a-sensor.md) for the peripherals your new
 MCU's firmware will talk to.

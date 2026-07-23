@@ -226,7 +226,7 @@ adc_temp = 519888.0                 # override any input's default
 
 The runner parses the spec, wires it onto the emulated MCU's I2C bus, and your
 firmware talks to it exactly as it would to the real part. See
-[docs/PERIPHERALS.md](../PERIPHERALS.md) for the layer this plugs into.
+[docs/cosim/PERIPHERALS.md](../cosim/PERIPHERALS.md) for the layer this plugs into.
 
 ## Beyond read-only sensors
 

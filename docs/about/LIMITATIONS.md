@@ -42,7 +42,7 @@ to be hauksbee defects.
 
 ### 2. Schematic bus-alias references not expanded
 
-- **Was** (docs/SCHEMATICS.md): "Bus aliases referenced as `{ALIAS}` are not
+- **Was** (docs/ingest/SCHEMATICS.md): "Bus aliases referenced as `{ALIAS}` are not
   expanded ... untested rather than known-broken."
 - **Fix.** Thread the per-sheet `bus_aliases` map through bus expansion:
   `expand_bus_aliased` takes an alias resolver, and `expand_bus_on_sheet` looks a
@@ -58,7 +58,7 @@ to be hauksbee defects.
 
 ### 3. Capacitor ESR/ESL class inference too narrow
 
-- **Was** (docs/TRANSIENTS.md): inference recognised only imperial MLCC size
+- **Was** (docs/checks/TRANSIENTS.md): inference recognised only imperial MLCC size
   codes and a coarse polarised bucket.
 - **Fix.** Broaden `class_from_footprint`: recognise metric size codes
   (1005/1608/2012/3216/3225 Metric) as their imperial-equivalent MLCC class; add
@@ -83,7 +83,7 @@ to be hauksbee defects.
   "never driven / Hi-Z" — a silent, board-wide false negative on essentially any
   crystal-clocked MCU board.
 - **Chased to ground** on `explosion33/RocketryIgniter` (see
-  [`hunts/HUNT_2026-06-30.md`](hunts/HUNT_2026-06-30.md)): a strong-output test
+  [`hunts/HUNT_2026-06-30.md`](../hunts/HUNT_2026-06-30.md)): a strong-output test
   firmware on the same pin also read 0 V (ruling out the firmware), and a board
   with the crystals stripped drove the pin to 5 V (isolating the cause).
 - **Fix** (`39128bb`): detect crystals/resonators **before** the passive
@@ -124,7 +124,7 @@ those boards' layouts; only their legacy schematics are out of scope.
   so pretending it is an F1 ADC would be fake fidelity. Unmapped channels drop
   loudly (once-per-channel stderr warning). Renode `on_i2c`/`on_spi` slave
   interception has been wired via generated C# bridge peripherals for a while
-  (see `docs/MCU.md`).
+  (see `docs/cosim/MCU.md`).
 - **QEMU ESP32 SAR ADC** is not modelled by the Espressif QEMU fork (a
   silicon-model gap), so `set_analog_in` writes the count into a RAM-mailbox
   slot instead (05 §5.1) — a firmware contract like the GPIO mailbox below:
@@ -145,7 +145,7 @@ those boards' layouts; only their legacy schematics are out of scope.
   patch to the fork's `hw/gpio/esp32_gpio.c` (store + return `GPIO_OUT`/`ENABLE`,
   handling the W1TS/W1TC aliases) plus a rebuild — fully specified, with the
   exact registers and the matching backend change, in
-  [`hunts/esp32-qemu-i2c-status.md`](hunts/esp32-qemu-i2c-status.md). Shipping the
+  [`hunts/esp32-qemu-i2c-status.md`](../hunts/esp32-qemu-i2c-status.md). Shipping the
   register-read backend path *without* a patched QEMU to validate it against
   would violate the no-unvalidatable-fixes rule, so it stays deferred — now with
   an exact, actionable spec rather than an open question. (The orthogonal
@@ -229,7 +229,7 @@ Still open (re-checked 2026-07-08):
 
 - **nRF5340 has no co-sim backend**: the Renode 1.16.1 portable build ships no
   nRF5340 platform, so the ZSWatch-class DISPLAY-EN fault stays a static miss.
-  Re-checked against `docs/MCU.md` (nRF5340 section) 2026-07-08: still true.
+  Re-checked against `docs/cosim/MCU.md` (nRF5340 section) 2026-07-08: still true.
   See `docs/record/KNOWN_FAULTS_VALIDATION.md`.
 - **PCB-only extraction has no pinfunctions**: multi-unit packages fall back to
   db pin maps when only a layout (no schematic netlist) is available; schematic
@@ -241,4 +241,4 @@ Still open (re-checked 2026-07-08):
   with the CYPD3177 USB-C PD sink only. It also does not read the silk-screened
   voltage label next to a rotary detent, so it reports which bands a selector can
   and cannot reach rather than "detent N labelled X codes Y". See
-  `docs/DEVICE_DECODE.md`.
+  `docs/checks/DEVICE_DECODE.md`.

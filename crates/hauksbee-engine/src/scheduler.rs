@@ -358,7 +358,7 @@ impl UnexercisedBus {
              models no {} controller — the firmware's bus traffic can never \
              reach it, so it was NEVER exercised and its behaviour is \
              unverified (its state is the power-on default). Add [soc.{}] \
-             controllers to the SoC descriptor to enable it (docs/MCU.md).",
+             controllers to the SoC descriptor to enable it (docs/cosim/MCU.md).",
             self.bus,
             self.id,
             self.bus,
@@ -397,7 +397,7 @@ impl AdcDrop {
              analog solve but this platform has no ADC injection map — the \
              firmware NEVER received it, so analog readings on that pin are \
              meaningless. Add an [[soc.adc]] injection recipe to the SoC \
-             descriptor to enable it (docs/MCU.md).",
+             descriptor to enable it (docs/cosim/MCU.md).",
             self.channel, self.mcu_ref, self.net,
         )
     }

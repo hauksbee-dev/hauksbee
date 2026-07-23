@@ -379,38 +379,38 @@ pub fn render_junit_error(message: &str) -> String {
 }
 
 /// One actionable "why / where to look" line for a failed assertion of the
-/// given `kind`. Points at the likely physical cause and the docs/CI.md section
+/// given `kind`. Points at the likely physical cause and the docs/ci/CI.md section
 /// to read — one line, per kind, not a full explanation engine. `None` for kinds
 /// that have no useful generic pointer.
 fn failure_hint(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "voltage" => "the rail left its window — check the supply feeding this net \
-            and the load pulling it down (docs/CI.md, \"voltage\").",
+            and the load pulling it down (docs/ci/CI.md, \"voltage\").",
         "rail_window" => "the rail dipped/recovered outside the window — check the \
-            scenario's load step and the decoupling on this net (docs/CI.md, \
+            scenario's load step and the decoupling on this net (docs/ci/CI.md, \
             \"rail_window\").",
         "boot-coverage" => "the firmware never drove the control net in time — check \
             `firmware = ...` points at the right image and the net is a GPIO the \
-            firmware actually drives (docs/CI.md, \"boot-coverage\" caveat).",
+            firmware actually drives (docs/ci/CI.md, \"boot-coverage\" caveat).",
         "no_faults" => "the stress monitor tripped — the named component exceeded a \
             rating (over-current / -voltage / -power / -temp / reverse-bias); check \
-            its part value and supply (docs/CI.md, \"no_faults\").",
+            its part value and supply (docs/ci/CI.md, \"no_faults\").",
         "max_current" => "the part drew more than its limit — check its load and the \
-            override value (docs/CI.md, \"max_current\").",
+            override value (docs/ci/CI.md, \"max_current\").",
         "max_temp" => "the junction ran hotter than the limit — check dissipation and \
-            the `ambient_c` assumption (docs/CI.md, \"max_temp\").",
+            the `ambient_c` assumption (docs/ci/CI.md, \"max_temp\").",
         "uart" => "the expected UART text never appeared — check the firmware image \
-            and baud, and that the MCU booted (docs/CI.md, \"uart\").",
+            and baud, and that the MCU booted (docs/ci/CI.md, \"uart\").",
         "toggle" => "the net toggled the wrong number of times — check the firmware's \
-            drive rate and the deadline window (docs/CI.md, \"toggle\").",
+            drive rate and the deadline window (docs/ci/CI.md, \"toggle\").",
         "protection_trip" => "the supply's protection did/did not latch as asserted — \
-            check the supply's limits and the load that triggers it (docs/CI.md, \
+            check the supply's limits and the load that triggers it (docs/ci/CI.md, \
             \"protection_trip\").",
         "phase_margin" => "the loop's phase margin missed the bound — check the \
-            compensation network and the `[ac]` sweep range (docs/CI.md, \
+            compensation network and the `[ac]` sweep range (docs/ci/CI.md, \
             \"phase_margin\").",
         "ac_gain" => "the small-signal gain missed the band — check the AC stimulus \
-            net and the sweep points (docs/CI.md, \"ac_gain\").",
+            net and the sweep points (docs/ci/CI.md, \"ac_gain\").",
         _ => return None,
     })
 }

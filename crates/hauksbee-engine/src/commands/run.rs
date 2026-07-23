@@ -141,7 +141,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         ExtractedBoard::from_gerber(&cfg.board).map_err(|e| {
             anyhow::anyhow!(
                 "gerber extraction from '{}' failed: {e}. Point at the gerber job \
-                 folder (or a .zip of it) containing the copper/drill files — see docs/GERBER.md.",
+                 folder (or a .zip of it) containing the copper/drill files — see docs/ingest/GERBER.md.",
                 cfg.board.display()
             )
         })?
