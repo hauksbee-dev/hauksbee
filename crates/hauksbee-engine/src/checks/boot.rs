@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use hauksbee_extract::ExtractedBoard;
+use hauksbee_extract::{Component, ExtractedBoard};
 
 /// The structured boot-safety advisory for a finished co-sim run. Built by
 /// [`analyze`]; rendered by the CLI (`--plain`/`--json`), the TUI and the web.
@@ -62,7 +62,21 @@ pub fn analyze(
         let held_high: HashSet<String> = firmware_held_high.iter().cloned().collect();
         let configured: HashSet<String> = output_configured.iter().cloned().collect();
         let driven: HashSet<String> = driven.iter().cloned().collect();
-        boot_gate_states(&gates, &held_high, &configured, &driven)
+        let mut rows = boot_gate_states(&gates, &held_high, &configured, &driven);
+        // Downgrade the false "floating" rows: a gate the firmware never drives
+        // but a bias resistor holds at a rail is NOT floating, it is resistively
+        // defined (the reverse-polarity P-FET with a 100k gate pulldown). Replace
+        // the warning-level Floating row with a factual, non-warning bias note
+        // naming the resistor. A gate with NO bias network stays Floating and
+        // fires exactly as before.
+        for (_, net, state) in rows.iter_mut() {
+            if *state == BootGateState::Floating {
+                if let Some(bias) = gate_bias(board, net) {
+                    *state = BootGateState::HeldByBias(bias);
+                }
+            }
+        }
+        rows
     } else {
         Vec::new()
     };
@@ -105,6 +119,100 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
         }
     }
     true
+}
+
+/// The bias resistor that fixes a gate net's power-up level, if one exists: a
+/// resistor tying the net to a rail/ground, directly (1 hop) or through one
+/// series resistor (2 hops, a plain pull chain or divider). Returns the resistor
+/// *on the gate net* (its reference + value) and the rail it reaches, so the
+/// boot panel can report "held low by R1 (100k to GND)" instead of "floating".
+///
+/// This is the read-out twin of [`net_has_no_bias_resistor`]: that predicate
+/// answers the yes/no the hazard filter needs (1 hop only, kept deliberately
+/// tight there), while this returns the *details* the informational panel needs,
+/// and reaches one series resistor further so a gate biased through a divider is
+/// still recognised as defined rather than mis-reported as undefined. It never
+/// invents a bias: it fires only when a real DC resistive path to a rail exists,
+/// so it can never suppress a genuinely floating gate.
+///
+/// "Resistor" is the same strict predicate the hazard filter uses
+/// ([`super::straps::is_assembled_resistor`]) — plain assembled R refs only, so a
+/// varistor / thermistor / DNP part is never miscredited as a bias.
+pub fn gate_bias(board: &ExtractedBoard, net_name: &str) -> Option<GateBias> {
+    let net = board.nets.iter().find(|n| n.name == net_name)?;
+    let bias_of = |comp: &Component, rail_id: i64| -> Option<GateBias> {
+        let (rail, level) = rail_name_and_level(board, rail_id)?;
+        Some(GateBias {
+            reference: comp.reference.clone(),
+            value: comp.value.clone(),
+            rail,
+            level,
+        })
+    };
+
+    // 1 hop: a resistor on the gate net whose other terminal is a rail/ground.
+    for (comp, _) in board.net_members(net.id) {
+        if !super::straps::is_assembled_resistor(comp) {
+            continue;
+        }
+        for p in &comp.pins {
+            if let Some(other) = p.net {
+                if other != net.id {
+                    if let Some(b) = bias_of(comp, other) {
+                        return Some(b);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2 hops: gate -> R1 -> mid -> R2 -> rail. Name R1 (the resistor sitting on
+    // the gate net) and the rail R2 reaches. `mid` must not itself be a rail —
+    // that is the 1-hop case, already handled — so this only extends the reach,
+    // never double-counts.
+    for (comp, _) in board.net_members(net.id) {
+        if !super::straps::is_assembled_resistor(comp) {
+            continue;
+        }
+        for p in &comp.pins {
+            let Some(mid) = p.net else { continue };
+            if mid == net.id || rail_name_and_level(board, mid).is_some() {
+                continue;
+            }
+            for (c2, _) in board.net_members(mid) {
+                if c2.reference == comp.reference || !super::straps::is_assembled_resistor(c2) {
+                    continue;
+                }
+                for p2 in &c2.pins {
+                    if let Some(other2) = p2.net {
+                        if other2 != mid {
+                            if let Some(b) = bias_of(comp, other2) {
+                                return Some(b);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A net's name and whether a bias toward it holds a gate LOW (ground family) or
+/// HIGH (a supply rail). `None` when the net is neither a rail nor ground.
+fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, BiasLevel)> {
+    if !is_power_or_ground_net(board, net_id) {
+        return None;
+    }
+    let net = board.nets.iter().find(|n| n.id == net_id)?;
+    let n = net.name.to_ascii_uppercase();
+    let is_ground = n.starts_with("GND") || n.ends_with("GND") || n.starts_with("VSS");
+    let level = if is_ground {
+        BiasLevel::Low
+    } else {
+        BiasLevel::High
+    };
+    Some((net.name.clone(), level))
 }
 
 /// True when a net connects to a transistor or relay — a switch whose control
@@ -256,7 +364,7 @@ fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
 /// What the firmware does to a gate net at power-up. Reported factually (no
 /// channel-type safety claim — a HIGH gate is "on" for a low-side N-MOSFET but
 /// "off" for a high-side P-MOSFET, which the netlist can't disambiguate).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootGateState {
     /// Strong push-pull HIGH (the pin is configured as an output and held high).
     DrivenHigh,
@@ -265,33 +373,91 @@ pub enum BootGateState {
     /// gate still goes high, but by accident rather than an intended drive.
     PulledHigh,
     DrivenLow,
+    /// The firmware never drives the gate AND no bias resistor fixes its level:
+    /// genuinely undefined at reset. This is the only state that carries the
+    /// "undefined until firmware drives it" warning.
     Floating,
+    /// The firmware never drives the gate, but a bias resistor ties its net to a
+    /// rail, so the level IS defined by hardware — the reverse-polarity P-FET
+    /// with a gate pulldown case. Reported as an informational, non-warning row
+    /// naming the resistor, so a correctly-biased gate is never mis-flagged as
+    /// floating (the zero-false-positive fix for the boot-gate panel).
+    HeldByBias(GateBias),
+}
+
+/// The bias resistor that fixes a not-firmware-driven gate's power-up level, and
+/// the rail it ties to. Populated by [`gate_bias`] so the panel can name the
+/// resistor, its value, and the rail instead of crying "floating".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateBias {
+    /// The resistor directly on the gate net (e.g. "R1").
+    pub reference: String,
+    /// Its value string (e.g. "100k"); may be empty on a value-less extraction.
+    pub value: String,
+    /// The rail/ground the bias ties toward (e.g. "GND", "+3V3").
+    pub rail: String,
+    /// Which way the gate is held.
+    pub level: BiasLevel,
+}
+
+/// Which level a bias resistor holds a gate at — a pull-down to ground holds it
+/// LOW, a pull-up to a supply holds it HIGH.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BiasLevel {
+    Low,
+    High,
+}
+
+impl BiasLevel {
+    fn word(self) -> &'static str {
+        match self {
+            BiasLevel::Low => "low",
+            BiasLevel::High => "high",
+        }
+    }
 }
 
 impl BootGateState {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            BootGateState::DrivenHigh => "driven HIGH and held",
-            BootGateState::PulledHigh => "pulled HIGH (weak internal pull-up)",
-            BootGateState::DrivenLow => "driven LOW and held",
-            BootGateState::Floating => "never driven (floating)",
+            BootGateState::DrivenHigh => "driven HIGH and held".to_string(),
+            BootGateState::PulledHigh => "pulled HIGH (weak internal pull-up)".to_string(),
+            BootGateState::DrivenLow => "driven LOW and held".to_string(),
+            BootGateState::Floating => "never driven (floating)".to_string(),
+            BootGateState::HeldByBias(b) => {
+                let paren = if b.value.is_empty() {
+                    format!("to {}", b.rail)
+                } else {
+                    format!("{} to {}", b.value, b.rail)
+                };
+                format!(
+                    "not driven by firmware; held {} by {} ({paren})",
+                    b.level.word(),
+                    b.reference,
+                )
+            }
         }
     }
     /// A short marker for the states worth a look (active or undefined at reset);
-    /// LOW is reported without a marker (the common held-off case).
-    pub fn marker(self) -> &'static str {
+    /// LOW and a hardware-biased gate are reported without a marker (both are the
+    /// common held-at-a-defined-level case, nothing for a reader to chase).
+    pub fn marker(&self) -> &'static str {
         match self {
             BootGateState::DrivenHigh | BootGateState::PulledHigh => "  <- switched at power-up",
             BootGateState::Floating => "  <- undefined until firmware drives it",
-            BootGateState::DrivenLow => "",
+            BootGateState::DrivenLow | BootGateState::HeldByBias(_) => "",
         }
     }
-    pub fn json(self) -> &'static str {
+    pub fn json(&self) -> &'static str {
         match self {
             BootGateState::DrivenHigh => "driven_high",
             BootGateState::PulledHigh => "pulled_high",
             BootGateState::DrivenLow => "driven_low",
             BootGateState::Floating => "floating",
+            BootGateState::HeldByBias(b) => match b.level {
+                BiasLevel::Low => "held_low_by_bias",
+                BiasLevel::High => "held_high_by_bias",
+            },
         }
     }
 }
@@ -355,9 +521,9 @@ pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        boot_gate_states, is_base_pad_name, is_gate_pad_name, is_power_or_ground_net,
-        net_drives_a_switch, net_has_no_bias_resistor, switch_control_pad, transistor_gate_nets,
-        BootGateState,
+        analyze, boot_gate_states, gate_bias, is_base_pad_name, is_gate_pad_name,
+        is_power_or_ground_net, net_drives_a_switch, net_has_no_bias_resistor, switch_control_pad,
+        transistor_gate_nets, BiasLevel, BootGateState,
     };
     use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 
@@ -571,6 +737,88 @@ mod tests {
                 ("Q4".to_string(), "GATE_A".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn gate_bias_direct_pulldown_and_pullup() {
+        // Pull-down to GND: held low, names R1 + value + rail (the reported case).
+        let mut r = resistor("R1", 1, 2);
+        r.value = "100k".into();
+        let b = board(&[(1, "Q1_G"), (2, "GND")], vec![r]);
+        let bias = gate_bias(&b, "Q1_G").expect("a pull-down to ground is a bias");
+        assert_eq!(bias.reference, "R1");
+        assert_eq!(bias.value, "100k");
+        assert_eq!(bias.rail, "GND");
+        assert_eq!(bias.level, BiasLevel::Low);
+
+        // Pull-up to a supply rail: held high.
+        let b = board(&[(1, "Q1_G"), (2, "+3V3")], vec![resistor("R2", 1, 2)]);
+        let bias = gate_bias(&b, "Q1_G").expect("a pull-up to a rail is a bias");
+        assert_eq!(bias.reference, "R2");
+        assert_eq!(bias.rail, "+3V3");
+        assert_eq!(bias.level, BiasLevel::High);
+    }
+
+    #[test]
+    fn gate_bias_two_hop_chain_reaches_rail() {
+        // gate -> R1 -> MID -> R2 -> GND. R1 (the resistor on the gate net) is
+        // named; the rail two hops away is still recognised, so a gate biased
+        // through a chain is not mis-reported as floating.
+        let b = board(
+            &[(1, "Q1_G"), (2, "MID"), (3, "GND")],
+            vec![resistor("R1", 1, 2), resistor("R2", 2, 3)],
+        );
+        let bias = gate_bias(&b, "Q1_G").expect("a 2-hop chain to a rail is a bias");
+        assert_eq!(bias.reference, "R1", "the resistor on the gate net is named");
+        assert_eq!(bias.rail, "GND");
+        assert_eq!(bias.level, BiasLevel::Low);
+    }
+
+    #[test]
+    fn gate_bias_absent_when_genuinely_floating_or_series_to_signal() {
+        // No resistor at all: genuinely floating, no bias.
+        let b = board(&[(1, "Q1_G")], vec![]);
+        assert!(gate_bias(&b, "Q1_G").is_none());
+        // A series resistor to a plain signal net (GPIO -> R -> gate) sets no
+        // default level: not a bias.
+        let b = board(&[(1, "Q1_G"), (2, "GPIO7")], vec![resistor("R1", 1, 2)]);
+        assert!(gate_bias(&b, "Q1_G").is_none());
+        // A DNP resistor to ground is electrically absent: not a bias.
+        let mut r = resistor("R1", 1, 2);
+        r.dnp = true;
+        let b = board(&[(1, "Q1_G"), (2, "GND")], vec![r]);
+        assert!(gate_bias(&b, "Q1_G").is_none());
+    }
+
+    #[test]
+    fn floating_gate_with_pulldown_is_downgraded_bare_gate_stays_floating() {
+        // Q1: a gate the firmware never drives, held low by a 100k pull-down ->
+        // reported as a factual bias note with NO warning marker. Q2: a gate with
+        // no bias network at all -> still floating, still warned (unchanged).
+        let mut r = resistor("R1", 1, 2);
+        r.value = "100k".into();
+        let b = board(
+            &[(1, "Q1_G"), (2, "GND"), (3, "Q2_G")],
+            vec![
+                transistor("Q1", "SOT-23", &[("1", "", 1)], false),
+                transistor("Q2", "SOT-23", &[("1", "", 3)], false),
+                r,
+            ],
+        );
+        let adv = analyze(&b, &[], &[], &[], true);
+        let q1 = adv.gate_states.iter().find(|(r, _, _)| r == "Q1").unwrap();
+        match &q1.2 {
+            BootGateState::HeldByBias(bias) => {
+                assert_eq!(bias.reference, "R1");
+                assert_eq!(bias.level, BiasLevel::Low);
+            }
+            other => panic!("Q1 should be HeldByBias, got {other:?}"),
+        }
+        assert_eq!(q1.2.marker(), "", "a correctly-biased gate carries no warning marker");
+        assert_eq!(q1.2.label(), "not driven by firmware; held low by R1 (100k to GND)");
+        let q2 = adv.gate_states.iter().find(|(r, _, _)| r == "Q2").unwrap();
+        assert_eq!(q2.2, BootGateState::Floating, "a bare gate is still floating");
+        assert!(q2.2.marker().contains("undefined"));
     }
 
     #[test]
