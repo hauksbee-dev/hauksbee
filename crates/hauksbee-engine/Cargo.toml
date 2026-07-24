@@ -17,6 +17,12 @@ default = ["avr", "renode", "qemu"]
 avr = ["hauksbee-mcu/avr", "hauksbee-server/avr"]
 renode = ["hauksbee-mcu/renode", "hauksbee-server/renode"]
 qemu = ["hauksbee-mcu/qemu", "hauksbee-server/qemu"]
+# Embed the built web app (frontend/dist, minus the large 3D demo models) into
+# the binary, extracted to ~/.cache/hauksbee on first `serve`. OFF by default:
+# a source checkout serves the live frontend/dist directly (fresher, and the
+# embed requires dist to exist at compile time). Release bundles turn it on so
+# `hauksbee serve` works from a bare installed binary (see scripts/bundle.sh).
+embed-web = ["dep:rust-embed"]
 
 [[bin]]
 name = "hauksbee"
@@ -44,6 +50,7 @@ forge-sexpr.workspace = true
 tempfile = { workspace = true }
 tokio = { version = "1.52.3", features = ["full"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+rust-embed = { version = "8", optional = true }
 toml = "0.8"
 # Watch mode (`hauksbee watch`): cross-platform filesystem notifications. Default
 # features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
