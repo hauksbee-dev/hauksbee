@@ -445,6 +445,45 @@ export function renderBoard(
     }
   }
 
+  // ── Reference labels, Google-Maps style ──
+  // A label appears only once its footprint is large enough ON SCREEN to hang
+  // a readable name on, and fades in as it grows: zoomed out the board is
+  // clean copper (no 3,443-label smear), zoomed in every part is named. The
+  // screen-size rule is self-limiting, so no explicit density cap is needed.
+  const LABEL_MIN_PX = 26
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+  ctx.shadowColor = 'rgba(0,0,0,0.9)'
+  ctx.shadowBlur = 3
+  const cw = ctx.canvas.width
+  const chh = ctx.canvas.height
+  for (const fp of board.footprints) {
+    if (fp.pads.length === 0) continue
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const pad of fp.pads) {
+      minX = Math.min(minX, pad.at.x - pad.size.w / 2)
+      maxX = Math.max(maxX, pad.at.x + pad.size.w / 2)
+      minY = Math.min(minY, pad.at.y - pad.size.h / 2)
+      maxY = Math.max(maxY, pad.at.y + pad.size.h / 2)
+    }
+    const extentPx = Math.max(maxX - minX, maxY - minY) * cam.scale
+    if (extentPx < LABEL_MIN_PX) continue
+    const [sx1, sy1] = ws(cam, minX, minY)
+    const [sx2, sy2] = ws(cam, maxX, maxY)
+    const cx = (sx1 + sx2) / 2
+    const topY = Math.min(sy1, sy2)
+    if (cx < -60 || cx > cw + 60 || topY < -20 || topY > chh + 20) continue
+    const fade = Math.min(1, (extentPx - LABEL_MIN_PX) / 18)
+    const fontPx = Math.min(13, Math.max(9, extentPx * 0.18))
+    ctx.globalAlpha = fade * 0.9
+    ctx.font = `${fontPx}px ui-monospace, monospace`
+    ctx.fillStyle = '#cdd6e4'
+    ctx.fillText(fp.ref, cx, topY - 3)
+  }
+  ctx.globalAlpha = 1
+  ctx.restore()
+
   // ── Faulted footprint ring overlays ──
   if (faultedRefs && faultedRefs.size > 0) {
     for (const fp of board.footprints) {

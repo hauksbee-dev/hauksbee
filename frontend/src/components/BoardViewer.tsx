@@ -23,6 +23,9 @@ interface BoardViewerProps {
   /** Externally chosen net to highlight (e.g., from probe click) */
   selectedNet?: string | null
   onFootprintClick?: (info: FootprintInfo) => void
+  /** Click on bare copper: the nearest net (trace/pad hit-test), or null when
+   *  nothing is within reach. Fires only for a true click (no drag). */
+  onNetClick?: (net: string | null) => void
   /** Faulted component references for pulse highlights */
   faultedRefs?: Set<string>
 }
@@ -48,7 +51,7 @@ function resolveGlbUrl(boardFile: string, boardInfo?: BoardInfoMsg | null): stri
   return null
 }
 
-export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick, faultedRefs }: BoardViewerProps) {
+export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick, faultedRefs }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -305,9 +308,16 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     setCam(c => zoomCamera(c, -e.deltaY, sx, sy))
   }, [])
 
+  // A "click" is a press that never travelled: dragging.current is armed on
+  // EVERY mousedown (it also drives pan), so it cannot distinguish click from
+  // drag — the old `!wasDragging` guard was always false and footprint clicks
+  // never fired. Track actual movement instead.
+  const movedSinceDown = useRef(false)
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
       dragging.current = true
+      movedSinceDown.current = false
       lastMouse.current = { x: e.clientX, y: e.clientY }
     }
   }, [])
@@ -320,6 +330,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     if (dragging.current) {
       const dx = e.clientX - lastMouse.current.x
       const dy = e.clientY - lastMouse.current.y
+      if (Math.abs(dx) + Math.abs(dy) > 2) movedSinceDown.current = true
       lastMouse.current = { x: e.clientX, y: e.clientY }
       setCam(c => panCamera(c, dx, dy))
     } else {
@@ -331,18 +342,21 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
-      const wasDragging = dragging.current
       dragging.current = false
-      if (!wasDragging) {
+      if (!movedSinceDown.current) {
         const rect = canvasRef.current!.getBoundingClientRect()
         const sx = e.clientX - rect.left
         const sy = e.clientY - rect.top
         const { x, y } = screenToWorld(camRef.current, sx, sy)
         const fp = findFootprintAt(x, y)
         if (fp && onFootprintClick) onFootprintClick(fp)
+        // Bare-copper click: the nearest trace/pad's net (for "set a check on
+        // this net" flows). Fired alongside the footprint hit so a consumer
+        // can use either.
+        if (onNetClick) onNetClick(findNearestNet(x, y))
       }
     }
-  }, [findFootprintAt, onFootprintClick])
+  }, [findFootprintAt, onFootprintClick, onNetClick, findNearestNet])
 
   const handleMouseLeave = useCallback(() => {
     dragging.current = false
