@@ -6,8 +6,10 @@ project record (evidence trail, war stories, internal plans). The entry point is
 no generated index (no mdbook `SUMMARY.md`, no `mkdocs.yml`); the repo-root
 `README.md` leads with START_HERE.
 
-The user docs are grouped by the question the reader is asking. Only the two
-entry points live at the `docs/` root.
+The user docs are grouped by the question the reader is asking. Only the entry
+points live at the `docs/` root: START_HERE, this map, and
+[`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md) (how to prepare your own board +
+firmware + spec, and the one local command that runs them).
 
 ## The user path, by question
 
@@ -90,4 +92,4 @@ entry points live at the `docs/` root.
 
 - USER PATH: 26 docs in 7 themed groups, plus the scoped USER directories.
 - PROJECT RECORD: `record/`, `hunts/`, `dev-plans/`.
-- Root: `START_HERE.md` and this map only.
+- Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, and this map only.
