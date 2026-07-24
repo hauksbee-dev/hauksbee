@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
 import { CheckIcon, PlayIcon, PlusIcon, BoardTargetIcon } from './Icons'
+import { BoardViewer } from './BoardViewer'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -94,10 +95,26 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   const [dragOver, setDragOver] = useState(false)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
   const lastBoardFile = useRef<File | null>(null)
+  // Object URL of the uploaded board WHEN it is KiCad layout text: the report's
+  // board map then uses the real BoardViewer renderer (pads, outline, pan/zoom)
+  // instead of the dot map. Null for formats the client can't draw (Eagle,
+  // Altium, gerber zip, .board DSL).
+  const [boardUrl, setBoardUrl] = useState<string | null>(null)
 
   const analyze = useCallback(async (board: File, firmware: File | null) => {
     setUploadError(null)
     setBusy(firmware ? `Analyzing ${board.name} + co-sim of ${firmware.name} ...` : `Analyzing ${board.name} ...`)
+    // Sniff the head for KiCad layout text to pick the report map's renderer.
+    try {
+      const head = new TextDecoder().decode(await board.slice(0, 64).arrayBuffer())
+      const isKicadPcb = /^\s*\(kicad_pcb/.test(head)
+      setBoardUrl(prev => {
+        if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+        return isKicadPcb ? URL.createObjectURL(board) : null
+      })
+    } catch {
+      setBoardUrl(null)
+    }
     try {
       let res: Response
       if (firmware) {
@@ -299,13 +316,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
                 board-as-code <code>.board</code>
               </div>
             </label>
-            <input
-              id="board-file"
-              type="file"
-              accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt,.board"
-              className="hidden"
-              onChange={e => { const f = e.target.files?.[0]; if (f) handleBoard(f) }}
-            />
 
             {/* Firmware — a quiet secondary jack below the card */}
             <label
@@ -336,13 +346,6 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
                 )}
               </span>
             </label>
-            <input
-              id="firmware-file"
-              type="file"
-              accept=".elf,.hex,.zip"
-              className="hidden"
-              onChange={e => { const f = e.target.files?.[0]; if (f) handleFirmware(f) }}
-            />
 
             {/* Samples — a first report with no file needed at all */}
             <div className="mt-8 text-center" data-testid="samples">
@@ -419,6 +422,24 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           </div>
         )}
 
+        {/* Hidden file inputs — OUTSIDE the pre-report card so the report view
+            can keep offering both jacks. Losing them with the card was the
+            "analyzed a board, now I can't add firmware" dead end. */}
+        <input
+          id="board-file"
+          type="file"
+          accept=".kicad_pcb,.kicad_sch,.brd,.PcbDoc,.d356,.zip,.txt,.board"
+          className="hidden"
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleBoard(f); e.target.value = '' }}
+        />
+        <input
+          id="firmware-file"
+          type="file"
+          accept=".elf,.hex,.zip"
+          className="hidden"
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleFirmware(f); e.target.value = '' }}
+        />
+
         {/* Report */}
         {report && (
           <ReportView
@@ -426,7 +447,49 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             boardLabel={preloadedBoardName}
             canRunLive={canRunLive}
             onRunIt={onRunIt}
+            // Preloaded (`run --serve`) boards are served at /boards/<name> for
+            // the live viewer; reuse that for the report map too.
+            boardUrl={
+              boardUrl ??
+              (preloadedBoardName?.endsWith('.kicad_pcb') ? `/boards/${preloadedBoardName}` : null)
+            }
           />
+        )}
+
+        {/* After a report: the board file is still in hand, so firmware can be
+            added (or swapped) without starting over, and another board is one
+            click away. */}
+        {report && !busy && (
+          <div className="mt-3 flex flex-col sm:flex-row gap-2">
+            {lastBoardFile.current && (
+              <label
+                htmlFor="firmware-file"
+                data-testid="report-firmware-jack"
+                className="fw-row flex-1 flex items-center gap-2.5 px-4 py-3 cursor-pointer text-[13px]"
+                data-active={firmwareFile ? 'true' : 'false'}
+              >
+                <span style={{ color: firmwareFile ? 'var(--live)' : 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}>
+                  {firmwareFile ? <CheckIcon size={15} /> : <PlusIcon size={15} />}
+                </span>
+                <span style={{ color: firmwareFile ? 'var(--live)' : 'var(--silk-dim)' }}>
+                  {firmwareFile ? (
+                    <>Firmware: <strong>{firmwareFile.name}</strong> — click to swap and re-run the co-sim</>
+                  ) : (
+                    <>Add firmware (<code>.elf</code> / <code>.hex</code> / project <code>.zip</code>) — the report re-runs with a co-sim of it on this board</>
+                  )}
+                </span>
+              </label>
+            )}
+            <label
+              htmlFor="board-file"
+              data-testid="report-another-board"
+              className="fw-row flex items-center gap-2.5 px-4 py-3 cursor-pointer text-[13px]"
+              data-active="false"
+            >
+              <span style={{ color: 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}><PlusIcon size={15} /></span>
+              <span style={{ color: 'var(--silk-dim)' }}>Check another board</span>
+            </label>
+          </div>
         )}
 
         {/* What it checks — a calm, secondary row (only before a report). */}
@@ -468,11 +531,12 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   )
 }
 
-function ReportView({ report: r, boardLabel, canRunLive, onRunIt }: {
+function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUrl }: {
   report: WebReport
   boardLabel: string | null
   canRunLive: boolean
   onRunIt: () => void
+  boardUrl: string | null
 }) {
   if (!r.ok) {
     return (
@@ -572,15 +636,32 @@ function ReportView({ report: r, boardLabel, canRunLive, onRunIt }: {
       {/* Firmware co-sim */}
       {r.cosim && <CosimBlock cosim={r.cosim} />}
 
-      {/* 2D board map */}
-      {r.components?.length > 0 && (
+      {/* Board map: the real renderer (pads, outline, pan/zoom) whenever the
+          uploaded file is KiCad layout text; the dot map only as the fallback
+          for formats the client cannot draw. */}
+      {boardUrl ? (
+        <section className="mt-7">
+          <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: '#64748b' }}>
+            Board map
+          </h2>
+          <div
+            className="rounded-lg overflow-hidden"
+            style={{ height: 520, position: 'relative', border: '1px solid #1e293b' }}
+          >
+            <BoardViewer boardFile={boardUrl} frame={null} />
+          </div>
+          <div className="mt-1.5 text-[11px]" style={{ color: '#475569' }}>
+            Scroll to zoom · drag to pan · hover a trace to see its net
+          </div>
+        </section>
+      ) : r.components?.length > 0 ? (
         <section className="mt-7">
           <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: '#64748b' }}>
             Board map (2D)
           </h2>
           <BoardMap components={r.components} />
         </section>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -826,13 +907,25 @@ function BoardMap({ components }: { components: WebComponent[] }) {
     const spanY = Math.max(1e-6, maxY - minY)
     const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY)
     ctx.clearRect(0, 0, W, H)
+    // Labels only while they can be read: past a few hundred parts every
+    // reference overlaps its neighbours and the map collapses into a grey
+    // smear (the 3,443-part flagship board was unreadable). Dense boards get
+    // clean position dots; the real geometry lives in the BoardViewer path.
+    const drawLabels = components.length <= 300
+    const dotR = components.length > 1000 ? 1.5 : 3
     for (const c of components) {
       const x = pad + (c.x - minX) * scale
       const y = pad + (c.y - minY) * scale
       ctx.fillStyle = '#e08a4e'
-      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = '#8fa0b3'; ctx.font = '10px sans-serif'
-      ctx.fillText(c.reference, x + 5, y + 3)
+      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill()
+      if (drawLabels) {
+        ctx.fillStyle = '#8fa0b3'; ctx.font = '10px sans-serif'
+        ctx.fillText(c.reference, x + 5, y + 3)
+      }
+    }
+    if (!drawLabels) {
+      ctx.fillStyle = '#475569'; ctx.font = '11px sans-serif'
+      ctx.fillText(`${components.length} parts (labels hidden at this density)`, pad, H - 10)
     }
   }, [components])
 
