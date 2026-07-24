@@ -1,0 +1,16 @@
+# MOS on-state Rds(on) vs ngspice-46 (the datasheet-Rds(on) path, RD/RS).
+# A hard-on power NMOS (VG = 5 V) with the drain supply swept through a 1 ohm
+# load: V(d) is a linear divider set by Rds(on) = RD + RS + channel. The FET
+# stays in triode across the whole sweep, so there is no threshold knee and no
+# subthreshold-tail deviation — the observable is purely the on-resistance,
+# which ngspice level 1 computes from the identical RD + RS + channel. The two
+# curves coincide: measured worst 1.75e-5 at VDD = 0.1 V. The bar (0.5%) is
+# ~300x that and still an order of magnitude below the failure a dropped RD/RS
+# would produce (Rds(on) collapsing to the ~7 mohm channel, a ~15x error).
+analysis = "dc"
+description = "power NMOS on-state drop set by RD+RS (datasheet Rds(on) split)"
+full_scale = 5.0
+
+[[probe]]
+expr = "V(d)"
+reltol = 0.005

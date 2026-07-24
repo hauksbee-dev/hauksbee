@@ -443,7 +443,7 @@ fn stamp_ac(
             stamp_bjt_ac(sys, layout, op, id, *c, *b, *e, model, opts, w)
         }
         Device::Mosfet { d, g, s, b, model, .. } => {
-            stamp_mosfet_ac(sys, layout, op, *d, *g, *s, *b, model, opts, w)
+            stamp_mosfet_ac(sys, layout, op, id, *d, *g, *s, *b, model, opts, w)
         }
         Device::OpAmp {
             out,
@@ -899,6 +899,7 @@ fn stamp_mosfet_ac(
     sys: &mut ComplexSystem,
     layout: &Layout,
     op: &OperatingPoint,
+    id: hauksbee_ir::DeviceId,
     d: NodeId,
     gnode: NodeId,
     s: NodeId,
@@ -912,9 +913,37 @@ fn stamp_mosfet_ac(
     }
     let sign = model.polarity.sign();
     let beta = model.beta();
-    let mut vd = sign * op.v(d);
+
+    // Drain/source series resistance (the datasheet-Rds(on) split): ohmic
+    // admittances between the external terminals and the layout's internal
+    // nodes, with the intrinsic small-signal device relocated inside — the
+    // exact structure of the transient stamp (stamp.rs `stamp_mosfet`) and the
+    // BJT AC series-R above. Toggle off: pin any allocated internal unknown
+    // (isolated row). A default rd == rs == 0 model allocates nothing and takes
+    // the external nodes bit-identically.
+    let di_ext = layout.node(d);
+    let si_ext = layout.node(s);
+    let mut d_eff = di_ext;
+    let mut s_eff = si_ext;
+    if let Some(&ints) = layout.mos_internal(id) {
+        if opts.effects.series_resistance {
+            if let Some(di_int) = ints[0] {
+                sys.stamp_admittance(di_ext, Some(di_int), Complex64::new(1.0 / model.rd, 0.0));
+                d_eff = Some(di_int);
+            }
+            if let Some(si_int) = ints[1] {
+                sys.stamp_admittance(si_ext, Some(si_int), Complex64::new(1.0 / model.rs, 0.0));
+                s_eff = Some(si_int);
+            }
+        } else {
+            for int_i in ints.into_iter().flatten() {
+                sys.add(int_i, int_i, Complex64::new(1.0, 0.0));
+            }
+        }
+    }
+    let mut vd = sign * op.vx(d_eff);
     let vg = sign * op.v(gnode);
-    let mut vs = sign * op.v(s);
+    let mut vs = sign * op.vx(s_eff);
     let swap = vd < vs;
     if swap {
         std::mem::swap(&mut vd, &mut vs);
@@ -957,8 +986,10 @@ fn stamp_mosfet_ac(
     let (_, gm, gds) =
         crate::stamp::mos_channel(beta, nsub * vt, vgs - vth, vds, lambda, opts.gmin);
 
-    let (di, gi, si) = (layout.node(d), layout.node(gnode), layout.node(s));
-    let (dn, sn) = if swap { (si, di) } else { (di, si) };
+    // Effective drain/source unknowns (internal when rd/rs moved the intrinsic
+    // inside, external otherwise); the gate carries no series resistance.
+    let gi = layout.node(gnode);
+    let (dn, sn) = if swap { (s_eff, d_eff) } else { (d_eff, s_eff) };
     stamp_pair(sys, dn, sn, gds);
     stamp_transconductance(sys, dn, sn, gi, sn, gm);
     if body_effect {
@@ -974,35 +1005,38 @@ fn stamp_mosfet_ac(
     if crate::stamp::mos_has_charge(model, &opts.effects) {
         let delta = 2.0 * nsub * vt;
         if model.has_gate_charge() {
-            let vgs_p = sign * (op.v(gnode) - op.v(s));
-            let vgd_p = sign * (op.v(gnode) - op.v(d));
+            // Gate caps ride the intrinsic drain/source (behind rd/rs), like the
+            // transient stamp; unswapped physical split (Cgs on source side).
+            let vgs_p = sign * (op.v(gnode) - op.vx(s_eff));
+            let vgd_p = sign * (op.v(gnode) - op.vx(d_eff));
             let c_gs =
                 crate::stamp::mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs_p).1;
             let c_gd =
                 crate::stamp::mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd_p).1;
-            sys.stamp_admittance(gi, si, Complex64::new(0.0, w * c_gs));
-            sys.stamp_admittance(gi, di, Complex64::new(0.0, w * c_gd));
+            sys.stamp_admittance(gi, s_eff, Complex64::new(0.0, w * c_gs));
+            sys.stamp_admittance(gi, d_eff, Complex64::new(0.0, w * c_gd));
         }
-        // Bulk depletion capacitances at the OP.
+        // Bulk depletion capacitances at the OP, at the internal drain/source.
         let bi = layout.node(bulk);
-        for (term, term_i, cbx) in [(d, di, model.cbd), (s, si, model.cbs)] {
+        for (term, term_i, cbx) in [(d, d_eff, model.cbd), (s, s_eff, model.cbs)] {
             if term == bulk || cbx <= 0.0 {
                 continue;
             }
-            let vj = sign * (op.v(bulk) - op.v(term));
+            let vj = sign * (op.v(bulk) - op.vx(term_i));
             let c = crate::stamp::depletion_charge(cbx, model.pb, model.mj, vj).1;
             sys.stamp_admittance(bi, term_i, Complex64::new(0.0, w * c));
         }
     }
     // Body-diode DC branch at the OP (structural, like the transient stamp):
-    // the small-signal junction conductance per bulk junction.
+    // the small-signal junction conductance per bulk junction, at the internal
+    // drain/source.
     if model.body_is > 0.0 {
         let bi = layout.node(bulk);
-        for (term, term_i) in [(d, di), (s, si)] {
+        for (term, term_i) in [(d, d_eff), (s, s_eff)] {
             if term == bulk {
                 continue;
             }
-            let vj = sign * (op.v(bulk) - op.v(term));
+            let vj = sign * (op.v(bulk) - op.vx(term_i));
             let e = (vj / vt).clamp(-40.0, 40.0).exp();
             let gj = (model.body_is * e / vt).max(opts.gmin);
             stamp_pair(sys, bi, term_i, gj);

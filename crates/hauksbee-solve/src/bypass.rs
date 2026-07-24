@@ -168,6 +168,16 @@ impl BypassState {
                     }
                 }
             }
+            // A series-R MOSFET's intrinsic drain/source unknowns: the channel,
+            // body-diode and gate-charge voltages the model evaluates live
+            // there, so their movement counts as terminal movement too.
+            if let Some(ints) = layout.mos_internal(id) {
+                for i in ints.iter().flatten() {
+                    if !read_idx.contains(&(*i as u32)) {
+                        read_idx.push(*i as u32);
+                    }
+                }
+            }
             index[id.0 as usize] = caches.len() as u32;
             let n_reads = read_idx.len();
             caches.push(DevCache {

@@ -322,6 +322,15 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
         if let Some(ints) = layout.bjt_internal(id) {
             ns.extend(ints.iter().copied());
         }
+        // A series-resistance MOSFET's internal drain/source unknowns (the
+        // datasheet-Rds(on) split) join the all-pairs set the same way: the
+        // ohmic stamps couple external<->internal and the relocated channel,
+        // body-diode and gate-charge companions couple the internals to the
+        // gate/bulk and each other. The union's all-pairs covers every slot
+        // (and the toggle-off unit diagonal is inside it too).
+        if let Some(ints) = layout.mos_internal(id) {
+            ns.extend(ints.iter().copied());
+        }
         // All-pairs structural coupling among a device's nodes covers every
         // companion/tangent stamp it can produce.
         for i in 0..ns.len() {
@@ -1952,10 +1961,52 @@ fn stamp_mosfet<S: StampSink>(
     let vt = hauksbee_ir_thermal(ctx.opts.model_temp(), ctx.opts.effects.temperature);
     let beta = model.beta();
 
+    // Series resistances rd/rs (the datasheet-Rds(on) split, mirroring the BJT
+    // rb/re/rc machinery): the layout allocated an internal DRAIN unknown when
+    // rd > 0 and an internal SOURCE unknown when rs > 0 (see
+    // `Layout::mos_internal` — a zero resistance allocates nothing, so a default
+    // model takes none of these branches). With the toggle on, stamp the ohmic
+    // conductance between each external terminal and its internal node and move
+    // the WHOLE transistor intrinsic (channel, body junctions, gate charges)
+    // onto the internal nodes — exactly where a real device's drain/source
+    // diffusion resistance sits, so a power FET's on-state drop lives in rd + rs
+    // rather than a spuriously-low channel. With the toggle off, the intrinsic
+    // stays on the external nodes (the no-series-R physics) and each
+    // allocated-but-unused internal unknown is pinned to 0 by a unit diagonal
+    // (an isolated row coupling to nothing). rd/rs NEVER relabel the physical
+    // drain/source: rd is always the drain terminal's resistance and rs the
+    // source terminal's, independent of the Vds symmetry swap below.
+    let di_ext = ctx.layout.node(d);
+    let si_ext = ctx.layout.node(s);
+    let mut d_eff = di_ext;
+    let mut s_eff = si_ext;
+    if let Some(&ints) = ctx.layout.mos_internal(id) {
+        if ctx.opts.effects.series_resistance {
+            if let Some(di_int) = ints[0] {
+                add_pair(sink, di_ext, Some(di_int), 1.0 / model.rd);
+                d_eff = Some(di_int);
+            }
+            if let Some(si_int) = ints[1] {
+                add_pair(sink, si_ext, Some(si_int), 1.0 / model.rs);
+                s_eff = Some(si_int);
+            }
+        } else {
+            for int_i in ints.into_iter().flatten() {
+                sink.g(int_i, int_i, 1.0);
+            }
+        }
+    }
+    // Read drain/source voltages at the EFFECTIVE unknowns (internal when a
+    // series resistor moved the intrinsic inside, external otherwise). For the
+    // default rd == rs == 0 model d_eff/s_eff ARE `layout.node(d)`/`node(s)` and
+    // `vx()` reproduces `ctx.v()` exactly — the bit-identity fast path.
+    let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
+    let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
+
     // Fold polarity: work in N-channel space.
-    let mut vd = sign * ctx.v(d);
+    let mut vd = sign * vx(d_eff);
     let vg = sign * ctx.v(gnode);
-    let mut vs = sign * ctx.v(s);
+    let mut vs = sign * vx(s_eff);
     // Ensure drain is the higher terminal (symmetry handled by swap).
     let swap = vd < vs;
     if swap {
@@ -2005,13 +2056,11 @@ fn stamp_mosfet<S: StampSink>(
     let (ids, gm, gds) = mos_channel(beta, nsub * vt, vgs - vth, vds, lambda, ctx.opts.gmin);
 
     // Map back through the swap and polarity. The drain current flows d->s in
-    // N-channel space; after a swap it flows the other way.
-    let (di, gi, si) = (
-        ctx.layout.node(d),
-        ctx.layout.node(gnode),
-        ctx.layout.node(s),
-    );
-    let (dn, sn) = if swap { (si, di) } else { (di, si) };
+    // N-channel space; after a swap it flows the other way. The drain/source
+    // unknowns are the EFFECTIVE (internal when rd/rs moved the intrinsic in)
+    // nodes; the gate carries no series resistance, so it stays external.
+    let gi = ctx.layout.node(gnode);
+    let (dn, sn) = if swap { (s_eff, d_eff) } else { (d_eff, s_eff) };
 
     // Conductances: gds between drain-source, gm couples drain current to vgs.
     add_pair(sink, dn, sn, gds);
@@ -2055,17 +2104,22 @@ fn stamp_mosfet<S: StampSink>(
     // ngspice's 1e-14 default, documented on the model field).
     if model.has_body_diode() {
         let bulk_i = ctx.layout.node(bulk);
-        // (terminal, its unknown, depletion cap, secondary bank index)
-        let junctions = [(d, di, model.cbd, 1usize), (s, si, model.cbs, 2usize)];
+        // (terminal, its EFFECTIVE unknown, depletion cap, secondary bank
+        // index). The bulk junctions sit at the internal drain/source (behind
+        // rd/rs) — where a real device's body diode connects, exactly as
+        // ngspice wires them. The `term == bulk` short test stays on the
+        // PHYSICAL terminals: it is a netlist-level body tie (the discrete
+        // bulk-to-source default), not the rd/rs split.
+        let junctions = [(d, d_eff, model.cbd, 1usize), (s, s_eff, model.cbs, 2usize)];
         for (term, term_i, cbx, bank) in junctions {
             if term == bulk {
                 continue;
             }
-            let v_raw = sign * (ctx.v(bulk) - ctx.v(term));
+            let v_raw = sign * (ctx.v(bulk) - vx(term_i));
             // DC junction: Shockley branch with pn-junction limiting, exactly
             // the diode's convergence discipline.
             let vj = if model.body_is > 0.0 {
-                let v_prev = sign * (ctx.v_prev(bulk) - ctx.v_prev(term));
+                let v_prev = sign * (ctx.v_prev(bulk) - vx_prev(term_i));
                 let vcr = vcrit(model.body_is, vt);
                 let vj = pnjlim(v_raw, v_prev, vt, vcr);
                 let e = (vj / vt).clamp(-40.0, 40.0).exp();
@@ -2095,32 +2149,37 @@ fn stamp_mosfet<S: StampSink>(
 
     // Gate charges (dev-plan 04 §3.3, gated by `junction_caps` — "the single
     // biggest reason a MOS switching deck disagrees with ngspice"): Q_gs on
-    // bank A, Q_gd on secondary bank 0, each a two-terminal charge companion
-    // at the PHYSICAL (unswapped) terminals — the charge sits on the real
-    // gate junction whichever way the channel evaluation swapped d/s. The
-    // charge-model choice (Meyer region limits on a smooth two-terminal
-    // Q(v)) is documented on [`mos_gate_charge`].
+    // bank A, Q_gd on secondary bank 0, each a two-terminal charge companion.
+    // "PHYSICAL (unswapped)" means Q_gs stays on the real SOURCE side and Q_gd
+    // on the real DRAIN side whichever way the channel evaluation swapped d/s
+    // for Vds < 0 — the charge does not follow the symmetry swap. It DOES
+    // follow the intrinsic onto the internal nodes (d_eff/s_eff): the gate
+    // capacitance connects to the intrinsic drain/source diffusion, behind
+    // rd/rs, so Cgd/Cgs reference the effective (internal when present)
+    // unknowns while the gate itself stays external. The charge-model choice
+    // (Meyer region limits on a smooth two-terminal Q(v)) is documented on
+    // [`mos_gate_charge`].
     if !ctx.dc && ctx.opts.effects.junction_caps && model.has_gate_charge() {
         let delta = 2.0 * nsub * vt;
-        let vgs_p = sign * (ctx.v(gnode) - ctx.v(s));
-        let vgd_p = sign * (ctx.v(gnode) - ctx.v(d));
+        let vgs_p = sign * (ctx.v(gnode) - vx(s_eff));
+        let vgd_p = sign * (ctx.v(gnode) - vx(d_eff));
         let (q_gs, c_gs) = mos_charge_gs(model.cgs_ov, model.c_ox, model.vto, delta, vgs_p);
         let geq_gs = ctx.coeffs.g * c_gs;
         let ieq_gs = (ctx.coeffs.g * q_gs
             - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
             - geq_gs * vgs_p;
-        add_pair(sink, gi, si, geq_gs);
+        add_pair(sink, gi, s_eff, geq_gs);
         inject(sink, gi, -sign * ieq_gs);
-        inject(sink, si, sign * ieq_gs);
+        inject(sink, s_eff, sign * ieq_gs);
 
         let (q_gd, c_gd) = mos_charge_gd(model.cgd_ov, model.c_ox, model.vto, delta, vgd_p);
         let bk = &ctx.state.xb[0];
         let geq_gd = ctx.coeffs.g * c_gd;
         let ieq_gd =
             (ctx.coeffs.g * q_gd - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq_gd * vgd_p;
-        add_pair(sink, gi, di, geq_gd);
+        add_pair(sink, gi, d_eff, geq_gd);
         inject(sink, gi, -sign * ieq_gd);
-        inject(sink, di, sign * ieq_gd);
+        inject(sink, d_eff, sign * ieq_gd);
     }
 }
 
