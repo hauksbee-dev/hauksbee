@@ -78,7 +78,9 @@ hauksbee serve                                       # web front door (long-runn
 
 ![The web front door: drop a board, try a sample, or read where your files live](frontend/screenshots/beauty/web-landing.png)
 
-Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
+Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do.
+
+**Native for agents, not just humans.** Every surface is machine-readable by design: `hauksbee run --json` and `hauksbee-ci run --json` emit one structured verdict object, exit codes distinguish green / failed / bad-input / not-trustworthy (an aborted analog solve exits 3 rather than pretending), honesty qualifiers (substitute MCU cores, coverage holes) are data fields rather than prose, and the whole analyze/check flow is reachable over localhost HTTP. An AI agent can scaffold a spec with `hauksbee-ci init`, iterate it to green, and wire the result into CI without ever opening the browser. [`AGENTS.md`](AGENTS.md) is the agent-facing contract. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
 
 **Prebuilt binary (once a public release exists):**
 
