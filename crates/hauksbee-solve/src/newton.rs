@@ -1191,6 +1191,31 @@ fn seed_bjt_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
     }
 }
 
+/// The MOSFET analogue of [`seed_bjt_internal_nodes`] (the datasheet-Rds(on)
+/// split): copy each series-resistance FET's EXTERNAL drain/source voltage onto
+/// its device-private internal drain/source unknown. Cold-starting the internal
+/// nodes at zero volts behind an already-biased external terminal leaves the
+/// intrinsic channel evaluated at a wildly wrong Vds every first iteration, and
+/// the stiff power-FET transconductance then walks Newton off — even
+/// source-stepping cannot recover it. "Same voltage as the terminal through a
+/// small ohmic resistance" is the physically sensible guess. On the all-zero
+/// cold start this is a no-op (0 -> 0), and a circuit without MOS internal
+/// nodes takes one empty-vec check in `mos_internal`.
+fn seed_mosfet_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
+    for (id, dev) in circuit.iter() {
+        if let Device::Mosfet { d, s, .. } = dev {
+            if let Some(&ints) = ws.layout.mos_internal(id) {
+                let ext = [*d, *s];
+                for t in 0..2 {
+                    if let Some(ii) = ints[t] {
+                        ws.x[ii] = ws.layout.node(ext[t]).map(|i| ws.x[i]).unwrap_or(0.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn dc_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1236,6 +1261,7 @@ fn dc_solve(
         }
     }
     seed_bjt_internal_nodes(ws, circuit);
+    seed_mosfet_internal_nodes(ws, circuit);
     let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     let r = solve(ws, opts.gmin, 1.0);
     if dbg {
@@ -2081,6 +2107,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     relaxed_opts.effects.series_resistance = false;
     dc_solve(&mut ws, &relaxed, &relaxed_opts, false, None).ok()?;
     seed_bjt_internal_nodes(&mut ws, &relaxed);
+    seed_mosfet_internal_nodes(&mut ws, &relaxed);
     Some(ws.x.clone())
 }
 

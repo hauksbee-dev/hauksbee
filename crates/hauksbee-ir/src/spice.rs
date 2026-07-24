@@ -3186,6 +3186,12 @@ fn mosfet_from_card(card: &ModelCard, kv: &HashMap<String, f64>) -> MosfetModel 
         cbs: card.get_or("cbs", d.cbs),
         pb: card.get_or("pb", d.pb),
         mj: card.get_or("mj", d.mj),
+        // Drain/source ohmic resistance (the datasheet-Rds(on) path): an
+        // ngspice-legal `.model M NMOS(RD=2 RS=0.5)` now carries them instead of
+        // silently dropping them. Absent keys leave rd = rs = 0 (ideal), which
+        // allocates no internal node and stamps bit-identically.
+        rd: card.get_or("rd", d.rd),
+        rs: card.get_or("rs", d.rs),
     }
 }
 

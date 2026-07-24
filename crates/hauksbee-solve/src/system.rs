@@ -49,6 +49,17 @@ pub struct Layout {
     /// series resistance is zero). Empty when the circuit has no such BJT,
     /// so existing circuits pay one `is_empty` check and nothing else.
     bjt_internal_of: Vec<[Option<usize>; 3]>,
+    /// For each MOSFET with drain/source ohmic resistance, its internal-node
+    /// unknowns in terminal order `[d_int, s_int]` (`None` per terminal whose
+    /// resistance is zero: `d_int` exists iff `rd > 0`, `s_int` iff `rs > 0`).
+    /// The transistor intrinsic (channel, body junctions, gate charges) moves
+    /// onto these — the datasheet-Rds(on) split — with the ohmic resistor
+    /// stamped between the external terminal and the internal one, exactly the
+    /// BJT `rb`/`re`/`rc` machinery above. Empty when the circuit has no such
+    /// MOSFET, so existing circuits pay one `is_empty` check and nothing else;
+    /// a FET with `rd == rs == 0` allocates NOTHING, preserving today's node
+    /// numbering and bit-identity.
+    mos_internal_of: Vec<[Option<usize>; 2]>,
     /// Mutual-inductance partners per device, indexed by `DeviceId.0`
     /// (dev-plan 04 §2.3): for each inductor in a coupled group, the OTHER
     /// windings it couples to as `(partner, M)` with `M = k·sqrt(L1·L2)`
@@ -92,6 +103,39 @@ impl Layout {
                     };
                     bjt_internal_of[id.0 as usize] =
                         [alloc(model.rc), alloc(model.rb), alloc(model.re)];
+                }
+            }
+        }
+        // MOSFET drain/source internal nodes (the datasheet-Rds(on) split),
+        // allocated exactly like the BJT block above and keyed on the MODEL
+        // FIELDS ONLY: a FET with rd == rs == 0 allocates nothing, so a default
+        // model and every pre-existing deck keep today's node numbering
+        // bit-identically. `d_int` exists iff rd > 0, `s_int` iff rs > 0
+        // (independent per terminal). Placed after the BJT allocation so a deck
+        // with both keeps a deterministic layout (BJT internals then MOS).
+        let mut mos_internal_of: Vec<[Option<usize>; 2]> = Vec::new();
+        for (_, dev) in circuit.iter() {
+            if let Device::Mosfet { model, .. } = dev {
+                if model.rd > 0.0 || model.rs > 0.0 {
+                    if mos_internal_of.is_empty() {
+                        mos_internal_of = vec![[None; 2]; circuit.devices.len()];
+                    }
+                }
+            }
+        }
+        if !mos_internal_of.is_empty() {
+            for (id, dev) in circuit.iter() {
+                if let Device::Mosfet { model, .. } = dev {
+                    let mut alloc = |r: f64| {
+                        if r > 0.0 {
+                            let i = next;
+                            next += 1;
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    };
+                    mos_internal_of[id.0 as usize] = [alloc(model.rd), alloc(model.rs)];
                 }
             }
         }
@@ -157,6 +201,7 @@ impl Layout {
             size: next,
             branch_of,
             bjt_internal_of,
+            mos_internal_of,
             couplings,
         }
     }
@@ -198,6 +243,23 @@ impl Layout {
             return None;
         }
         let ints = &self.bjt_internal_of[id.0 as usize];
+        if ints.iter().all(|i| i.is_none()) {
+            None
+        } else {
+            Some(ints)
+        }
+    }
+
+    /// Internal-node unknowns of a drain/source series-resistance MOSFET, in
+    /// terminal order `[d_int, s_int]`. `None` when the device allocated none
+    /// (the common case: default models, or not a MOSFET), so a rd/rs-free
+    /// circuit takes one `is_empty` branch and nothing else.
+    #[inline]
+    pub fn mos_internal(&self, id: DeviceId) -> Option<&[Option<usize>; 2]> {
+        if self.mos_internal_of.is_empty() {
+            return None;
+        }
+        let ints = &self.mos_internal_of[id.0 as usize];
         if ints.iter().all(|i| i.is_none()) {
             None
         } else {
