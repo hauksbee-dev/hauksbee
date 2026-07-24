@@ -2097,22 +2097,29 @@ fn stamp_mosfet<S: StampSink>(
     // carries them (`body_is > 0`), un-toggled; the depletion charges ride
     // `junction_caps`. Each junction is bulk->drain / bulk->source in folded
     // space (the bulk is the anode of an N-channel body diode; `sign` folds
-    // PMOS). A junction whose bulk IS its terminal (the discrete
-    // bulk-tied-to-source case) is a short: skipped, it can carry no state.
+    // PMOS). A junction is skipped only when it is a genuine SHORT, i.e. the
+    // bulk and the junction terminal resolve to the SAME unknown.
     // This is the reverse-conduction path of every synchronous-rectifier /
     // flyback deck; `body_is` defaults to 0 (BIT-IDENTITY deviation from
     // ngspice's 1e-14 default, documented on the model field).
     if model.has_body_diode() {
+        // The bulk carries no series resistance of its own, so its effective
+        // unknown is always the external one (ngspice's `bNode`).
         let bulk_i = ctx.layout.node(bulk);
-        // (terminal, its EFFECTIVE unknown, depletion cap, secondary bank
-        // index). The bulk junctions sit at the internal drain/source (behind
-        // rd/rs) — where a real device's body diode connects, exactly as
-        // ngspice wires them. The `term == bulk` short test stays on the
-        // PHYSICAL terminals: it is a netlist-level body tie (the discrete
-        // bulk-to-source default), not the rd/rs split.
-        let junctions = [(d, d_eff, model.cbd, 1usize), (s, s_eff, model.cbs, 2usize)];
-        for (term, term_i, cbx, bank) in junctions {
-            if term == bulk {
+        // (its EFFECTIVE unknown, depletion cap, secondary bank index). The
+        // bulk junctions sit at the internal drain/source (behind rd/rs) —
+        // where a real device's body diode connects, exactly as ngspice wires
+        // them (`bNode` to `dNodePrime`/`sNodePrime`, mos1set.c). The short
+        // test therefore compares ELECTRICAL unknowns, not physical terminals:
+        // with rd/rs the internal drain/source is a distinct unknown, so a
+        // netlist body tie (the discrete bulk-to-source default) no longer
+        // shorts the junction and the diode must be stamped between the
+        // external bulk and the internal terminal. At rd == rs == 0 both sides
+        // resolve to the same unknown and the junction is skipped exactly as
+        // before.
+        let junctions = [(d_eff, model.cbd, 1usize), (s_eff, model.cbs, 2usize)];
+        for (term_i, cbx, bank) in junctions {
+            if term_i == bulk_i {
                 continue;
             }
             let v_raw = sign * (ctx.v(bulk) - vx(term_i));
