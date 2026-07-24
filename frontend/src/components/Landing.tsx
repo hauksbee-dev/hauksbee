@@ -73,6 +73,20 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   )
 }
 
+// Bundled one-click samples (files under frontend/public/samples/, see its
+// README for provenance). A ladder: tiny clean board → real product → a
+// board + firmware pair that exercises the co-sim.
+const SAMPLES: { label: string; desc: string; board: string; firmware?: string }[] = [
+  { label: 'Blinky', desc: 'small clean board', board: '/samples/blinky.kicad_pcb' },
+  { label: 'Watchy', desc: 'a real smartwatch', board: '/samples/watchy.kicad_pcb' },
+  {
+    label: 'Boot gate + firmware',
+    desc: 'live co-sim',
+    board: '/samples/boot_gate.kicad_pcb',
+    firmware: '/samples/boot_gate.hex',
+  },
+]
+
 export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRunIt }: LandingProps) {
   const [report, setReport] = useState<WebReport | null>(preloadedReport)
   const [busy, setBusy] = useState<string | null>(null)
@@ -142,6 +156,33 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
     lastBoardFile.current = f
     void analyze(f, firmwareFile)
   }, [analyze, firmwareFile, handleFirmware])
+
+  // One-click samples: fetch a bundled board (and optionally its firmware)
+  // from /samples/ and push it through the exact same analyze path a dropped
+  // file takes, so the first report needs no file at all.
+  const runSample = useCallback(async (sample: { board: string; firmware?: string }) => {
+    setUploadError(null)
+    setBusy('Fetching the sample ...')
+    try {
+      const bres = await fetch(sample.board)
+      if (!bres.ok) throw new Error(`could not fetch ${sample.board}: ${bres.status}`)
+      const bname = sample.board.split('/').pop() ?? 'sample.kicad_pcb'
+      const board = new File([await bres.blob()], bname)
+      let fw: File | null = null
+      if (sample.firmware) {
+        const fres = await fetch(sample.firmware)
+        if (!fres.ok) throw new Error(`could not fetch ${sample.firmware}: ${fres.status}`)
+        const fname = sample.firmware.split('/').pop() ?? 'firmware.hex'
+        fw = new File([await fres.blob()], fname)
+      }
+      lastBoardFile.current = board
+      setFirmwareFile(fw)
+      await analyze(board, fw)
+    } catch (e) {
+      setUploadError(`Could not load the sample: ${e instanceof Error ? e.message : String(e)}`)
+      setBusy(null)
+    }
+  }, [analyze])
 
   return (
     <div
@@ -303,8 +344,61 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFirmware(f) }}
             />
 
+            {/* Samples — a first report with no file needed at all */}
+            <div className="mt-8 text-center" data-testid="samples">
+              <div className="text-[11px] uppercase" style={{ color: 'var(--silk-faint)', letterSpacing: '0.08em' }}>
+                No board handy? Try a sample
+              </div>
+              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                {SAMPLES.map(s => (
+                  <button
+                    key={s.label}
+                    type="button"
+                    onClick={() => void runSample(s)}
+                    className="px-3.5 py-2 rounded-lg text-[13px] cursor-pointer"
+                    style={{ background: 'var(--surface)', border: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}
+                  >
+                    <span className="font-semibold" style={{ color: 'var(--silk)' }}>{s.label}</span>
+                    <span className="ml-1.5">{s.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Prepare your own project — one line per ECAD, no jargon */}
+            <details className="mt-6 mx-auto text-[13px]" style={{ color: 'var(--silk-dim)', maxWidth: '34rem' }}>
+              <summary className="cursor-pointer text-center" style={{ listStylePosition: 'inside' }}>
+                Where do I find my board and firmware files?
+              </summary>
+              <div className="mt-3 space-y-2 leading-relaxed text-left rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}>
+                <div>
+                  <strong style={{ color: 'var(--silk)' }}>KiCad</strong> — drop the{' '}
+                  <code>.kicad_pcb</code> straight from your project folder. No export step.
+                </div>
+                <div>
+                  <strong style={{ color: 'var(--silk)' }}>Eagle</strong> — the <code>.brd</code>.{' '}
+                  <strong style={{ color: 'var(--silk)' }}>Altium</strong> — the <code>.PcbDoc</code>.
+                </div>
+                <div>
+                  <strong style={{ color: 'var(--silk)' }}>Only fab files?</strong> Zip the folder
+                  with the gerbers and drill file, drop the zip. The circuit is reverse-extracted
+                  from the copper itself.
+                </div>
+                <div>
+                  <strong style={{ color: 'var(--silk)' }}>Firmware</strong> — the compiled image.
+                  PlatformIO: <code>.pio/build/&lt;env&gt;/firmware.elf</code>, or just zip the whole
+                  project and it is found (or built) for you. ESP-IDF/CMake:{' '}
+                  <code>build/&lt;app&gt;.elf</code>. Arduino IDE: Sketch → Export Compiled Binary.
+                </div>
+                <div>
+                  Want this in a pipeline instead? <code>hauksbee-ci init your_board.kicad_pcb</code>{' '}
+                  scaffolds a checked-in spec — see <code>docs/ci/CI.md</code>.
+                </div>
+              </div>
+            </details>
+
             {/* Privacy reassurance */}
-            <div className="mt-4 text-center text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+            <div className="mt-5 text-center text-[12px]" style={{ color: 'var(--silk-faint)' }}>
               Runs entirely on this machine — nothing is uploaded.
             </div>
           </div>
