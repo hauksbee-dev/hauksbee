@@ -366,23 +366,29 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     }
   }, [findNearestNet])
 
+  // Shared hit-test for a tap/click that did not travel: resolves the footprint
+  // and nearest net under canvas-relative screen coords (sx, sy) and fires the
+  // consumer callbacks. Used by BOTH the mouse-up click and the touch tap so the
+  // two selection paths cannot drift apart.
+  const selectAt = useCallback((sx: number, sy: number) => {
+    const { x, y } = screenToWorld(camRef.current, sx, sy)
+    const fp = findFootprintAt(x, y)
+    if (fp && onFootprintClick) onFootprintClick(fp)
+    // Bare-copper click: the nearest trace/pad's net (for "set a check on
+    // this net" flows). Fired alongside the footprint hit so a consumer
+    // can use either.
+    if (onNetClick) onNetClick(findNearestNet(x, y, 8))
+  }, [findFootprintAt, onFootprintClick, onNetClick, findNearestNet])
+
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
       dragging.current = false
       if (!movedSinceDown.current) {
         const rect = canvasRef.current!.getBoundingClientRect()
-        const sx = e.clientX - rect.left
-        const sy = e.clientY - rect.top
-        const { x, y } = screenToWorld(camRef.current, sx, sy)
-        const fp = findFootprintAt(x, y)
-        if (fp && onFootprintClick) onFootprintClick(fp)
-        // Bare-copper click: the nearest trace/pad's net (for "set a check on
-        // this net" flows). Fired alongside the footprint hit so a consumer
-        // can use either.
-        if (onNetClick) onNetClick(findNearestNet(x, y, 8))
+        selectAt(e.clientX - rect.left, e.clientY - rect.top)
       }
     }
-  }, [findFootprintAt, onFootprintClick, onNetClick, findNearestNet])
+  }, [selectAt])
 
   const handleMouseLeave = useCallback(() => {
     dragging.current = false
@@ -392,12 +398,17 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
   // Touch support
   const lastTouchDist = useRef<number>(0)
+  // Where a single touch began, so touchend can tell a tap (stayed put) from a
+  // pan (travelled). Null once a second finger lands: a pinch is never a tap.
+  const touchStartPos = useRef<{ x: number; y: number } | null>(null)
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 1) {
       dragging.current = true
       lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+      touchStartPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
     } else if (e.touches.length === 2) {
       dragging.current = false
+      touchStartPos.current = null
       const dx = e.touches[0].clientX - e.touches[1].clientX
       const dy = e.touches[0].clientY - e.touches[1].clientY
       lastTouchDist.current = Math.sqrt(dx * dx + dy * dy)
@@ -424,7 +435,22 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     }
   }, [])
 
-  const handleTouchEnd = useCallback(() => { dragging.current = false }, [])
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    dragging.current = false
+    const start = touchStartPos.current
+    touchStartPos.current = null
+    // Tap-to-select: a single touch that lifted without travelling (< 10px) runs
+    // the same hit-test the mouse-up click does. Touch previously had no way to
+    // select a net or footprint (only mouse onMouseUp fired it).
+    if (start && e.touches.length === 0 && e.changedTouches.length === 1) {
+      const t = e.changedTouches[0]
+      const moved = Math.hypot(t.clientX - start.x, t.clientY - start.y)
+      if (moved <= 10) {
+        const rect = canvasRef.current!.getBoundingClientRect()
+        selectAt(t.clientX - rect.left, t.clientY - rect.top)
+      }
+    }
+  }, [selectAt])
 
   return (
     <div
@@ -435,6 +461,8 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       {/* 2D canvas layer */}
       <canvas
         ref={canvasRef}
+        role="img"
+        aria-label="Board map: scroll to zoom, drag to pan, click a trace to select its net. Keyboard users can pick a net in the checks panel below."
         className="absolute inset-0"
         style={{ display: viewMode === '2d' ? 'block' : 'none' }}
         onWheel={handleWheel}
@@ -451,6 +479,15 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         className="absolute inset-0 pointer-events-none"
         style={{ display: viewMode === '2d' ? 'block' : 'none' }}
       />
+
+      {/* Visually-hidden guidance for keyboard / screen-reader users: the canvas
+          has no keyboard net-selection path, so point them to the net pickers in
+          the checks panel below (which are ordinary focusable inputs). */}
+      <p className="sr-only">
+        This is an interactive board map. Selecting a net by pointer needs a mouse
+        or touch. Keyboard users can pick a net using the net fields in the checks
+        panel below this viewer.
+      </p>
 
       {/* 3D view -- only mounted when 3D tab is active */}
       {viewMode === '3d' && (
@@ -493,6 +530,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
           2D
         </button>
         <button
+          disabled={!glbUrl}
           onClick={() => {
             if (!glbUrl) return
             setViewMode('3d')

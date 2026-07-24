@@ -92,6 +92,19 @@ const SAMPLES: { label: string; desc: string; board: string; firmware?: string }
   },
 ]
 
+// Keyboard activation for the label-wrapped file inputs (U3 a11y): a styled
+// <label> is clickable by mouse and screen-reader but is not keyboard-focusable
+// on its own, so we give it role="button" + tabIndex and trigger the hidden
+// input on Enter/Space (the same activation the label already does on click).
+function activateOnEnterSpace(inputId: string) {
+  return (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      document.getElementById(inputId)?.click()
+    }
+  }
+}
+
 export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRunIt }: LandingProps) {
   const [report, setReport] = useState<WebReport | null>(preloadedReport)
   const [busy, setBusy] = useState<string | null>(null)
@@ -314,6 +327,10 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             <label
               data-testid="drop-zone"
               htmlFor="board-file"
+              role="button"
+              tabIndex={0}
+              aria-label="Choose a board file to analyze"
+              onKeyDown={activateOnEnterSpace('board-file')}
               onDragEnter={e => { e.preventDefault(); setDragOver(true) }}
               onDragOver={e => { e.preventDefault(); setDragOver(true) }}
               onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
@@ -370,6 +387,10 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             <label
               data-testid="firmware-zone"
               htmlFor="firmware-file"
+              role="button"
+              tabIndex={0}
+              aria-label="Add a firmware file to co-simulate on the board"
+              onKeyDown={activateOnEnterSpace('firmware-file')}
               onDragEnter={e => e.preventDefault()}
               onDragOver={e => e.preventDefault()}
               onDrop={e => {
@@ -458,12 +479,18 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
 
         {/* Progress / error */}
         {busy && (
-          <div className="mt-6 text-sm flex items-center justify-center gap-2" style={{ color: 'var(--copper-hi)' }}>
+          <div
+            role="status"
+            aria-live="polite"
+            className="mt-6 text-sm flex items-center justify-center gap-2"
+            style={{ color: 'var(--copper-hi)' }}
+          >
             <span className="slot-spin" /> {busy}
           </div>
         )}
         {uploadError && (
           <div
+            aria-live="polite"
             className="mt-6 rounded-lg px-4 py-3 text-sm text-center"
             style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid #7f1d1d', color: '#fca5a5' }}
           >
@@ -533,6 +560,10 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
               <label
                 htmlFor="firmware-file"
                 data-testid="report-firmware-jack"
+                role="button"
+                tabIndex={0}
+                aria-label="Add or swap firmware and re-run the co-sim"
+                onKeyDown={activateOnEnterSpace('firmware-file')}
                 className="fw-row flex-1 flex items-center gap-2.5 px-4 py-3 cursor-pointer text-[13px]"
                 data-active={firmwareFile ? 'true' : 'false'}
               >
@@ -551,6 +582,10 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             <label
               htmlFor="board-file"
               data-testid="report-another-board"
+              role="button"
+              tabIndex={0}
+              aria-label="Check another board"
+              onKeyDown={activateOnEnterSpace('board-file')}
               className="fw-row flex items-center gap-2.5 px-4 py-3 cursor-pointer text-[13px]"
               data-active="false"
             >
