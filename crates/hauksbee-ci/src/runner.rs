@@ -413,48 +413,31 @@ fn compute_ac(
     Ok(out)
 }
 
-/// Load and extract the board file the spec points at, dispatching on file
-/// type. This is what makes a `board = "thing.kicad_sch"` spec just work.
+/// Load and extract the board file the spec points at, via the shared
+/// board-input normalizer (`hauksbee_engine::board_input`). This is what makes
+/// a `board = "thing.kicad_sch"` spec just work, and it accepts exactly the
+/// format set every other surface does: `.kicad_pcb`, `.kicad_sch`
+/// hierarchies, `.net`, Eagle `.brd`, IPC-D-356, binary Altium `.PcbDoc`,
+/// gerber directories/zips, and Board-as-Code `.board` (bare or zipped).
 ///
 /// A `.kicad_sch` is loaded *by path* (not from its text) so the sheet
 /// hierarchy resolves: a schematic's sub-sheets live in sibling files, and only
 /// the path-based entry point follows them. Loading the root text alone would
 /// silently drop every component on a sub-sheet, producing a partial netlist
-/// that passes vacuous checks. Everything else (`.kicad_pcb`, `.net`, Eagle
-/// `.brd`, IPC-D-356) carries full connectivity in one file and is sniffed from
-/// its content as before.
+/// that passes vacuous checks.
+///
+/// `.board` needs no pre-compiled layout and no `--route` step: the compiled
+/// text places footprints with net-named pads (full connectivity, no copper
+/// tracks), and everything hauksbee-ci checks is netlist-driven.
 pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
-    let ext = board_path.extension().and_then(|e| e.to_str());
-
-    // Board-as-Code (`.board`) is a source format, not an extractable board:
-    // the extractor only knows the compiled layout/netlist formats, so it would
-    // otherwise fail with a cryptic "unrecognized board format" list that never
-    // mentions `.board`. Both `hauksbee-ci run` and `hauksbee-ci init` reach
-    // here, so catching it at this one seam gives both the exact recompile
-    // command (in-process from-code recompilation is a place+route step owned by
-    // the `hauksbee` binary, so we point at it rather than duplicating it).
-    if ext.map(|e| e.eq_ignore_ascii_case("board")).unwrap_or(false) {
-        let stem = board_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("board");
-        return Err(SpecError::Invalid(format!(
-            "'{}' is a Board-as-Code source file, which hauksbee-ci cannot load \
-             directly. Compile it to a layout first, then point the spec/init at \
-             that:\n    hauksbee from-code {} --out {stem}.kicad_pcb --route\n    \
-             hauksbee-ci init {stem}.kicad_pcb",
-            board_path.display(),
-            board_path.display(),
-        )));
-    }
-
-    let is_sch = ext
+    // CI-specific guard the normalizer does not carry: a spec pointing at a
+    // sub-sheet rather than the hierarchy root is an incomplete board.
+    let is_sch = board_path
+        .extension()
+        .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("kicad_sch"))
         .unwrap_or(false);
-
     if is_sch {
-        // Guard against pointing the spec at a sub-sheet rather than the
-        // hierarchy root: a sub-sheet on its own is an incomplete board.
         if let Some(root) = parent_schematic_of(board_path) {
             return Err(SpecError::Invalid(format!(
                 "board {} is a sub-sheet of {}. Point the spec at the hierarchy \
@@ -464,23 +447,29 @@ pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError>
                 root.display(),
             )));
         }
-        ExtractedBoard::from_kicad_schematic_path(board_path)
-            .map_err(|e| SpecError::Invalid(format!("extracting schematic: {e}")))
-    } else {
-        let text = std::fs::read_to_string(board_path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                SpecError::Io(format!(
-                    "no board file at '{}' (resolved from the spec's `board` key). \
-                     Check that path; it is taken relative to the spec file's directory",
-                    board_path.display()
-                ))
-            } else {
-                SpecError::Io(format!("reading board {}: {e}", board_path.display()))
-            }
-        })?;
-        ExtractedBoard::from_auto(&text)
-            .map_err(|e| SpecError::Invalid(format!("extracting board: {e}")))
     }
+
+    use hauksbee_engine::board_input::{self, BoardInputError};
+    board_input::from_path(board_path)
+        .map(|norm| norm.board)
+        .map_err(|e| match e {
+            // Re-word the file-system failures with the spec-relative context
+            // (the path came from the spec's `board` key, not argv).
+            BoardInputError::NotFound { path } => SpecError::Io(format!(
+                "no board file at '{path}' (resolved from the spec's `board` key). \
+                 Check that path; it is taken relative to the spec file's directory"
+            )),
+            BoardInputError::Io { path, message } => {
+                SpecError::Io(format!("reading board {path}: {message}"))
+            }
+            BoardInputError::Schematic(e) => {
+                SpecError::Invalid(format!("extracting schematic: {e}"))
+            }
+            BoardInputError::Extract(e) => SpecError::Invalid(format!("extracting board: {e}")),
+            // Zip / gerber / Board-as-Code failures already carry a
+            // self-contained, file-naming message.
+            other => SpecError::Invalid(other.to_string()),
+        })
 }
 
 /// Best-effort: is `sch` a sub-sheet referenced by another `.kicad_sch`? If so,
@@ -2292,6 +2281,87 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "A"
+    net "B"
+    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
+        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
+    }
+}
+"#;
+
+    #[test]
+    fn load_board_accepts_board_as_code() {
+        // B5: hauksbee-ci used to REJECT `.board` with a "compile it yourself
+        // with from-code --route first" error, even though the web checks panel
+        // told .board uploaders the downloaded spec would run. The compiled
+        // text carries full net connectivity (net-named pads), and CI is
+        // entirely netlist-driven, so no routing step is needed.
+        let dir = std::env::temp_dir().join(format!("hauksbee-ci-bac-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("cell.board");
+        std::fs::write(&p, DSL).unwrap();
+        let board = load_board(&p).expect(".board must load in CI now");
+        assert_eq!(board.components.len(), 1, "R1 survives the compile");
+        assert!(
+            board.nets.iter().any(|n| n.name == "A") && board.nets.iter().any(|n| n.name == "B"),
+            "net connectivity survives: {:?}",
+            board.nets.iter().map(|n| &n.name).collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_board_accepts_a_gerber_zip() {
+        // B5: a spec may point straight at the fab archive. Corpus-gated like
+        // the engine's gerber tests: skips when board-corpus is absent.
+        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+        if !src.exists() {
+            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
+                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
+            }
+            eprintln!("skipping CI gerber-zip test (corpus absent)");
+            return;
+        }
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("hauksbee-ci-gerb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("fab.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        for entry in std::fs::read_dir(&src).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                w.start_file(
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
+            }
+        }
+        w.finish().unwrap();
+        let board = load_board(&zip_path).expect("a gerber fab zip must load in CI");
+        assert!(!board.nets.is_empty(), "nets recovered from copper");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_board_missing_file_names_the_spec_key() {
+        // The spec-relative wording must survive the normalizer delegation.
+        let err = load_board(std::path::Path::new("/definitely/not/here.kicad_pcb"))
+            .expect_err("missing board errors");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("resolved from the spec's `board` key"),
+            "CI keeps its spec-relative error wording: {msg}"
+        );
+    }
 
     #[test]
     fn protection_trip_supply_net_is_added_to_its_scenario_window() {
