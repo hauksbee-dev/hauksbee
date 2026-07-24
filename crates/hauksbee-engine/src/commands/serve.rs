@@ -5,8 +5,6 @@
 //! drop-zone: drop a board (and optionally firmware) to get the plain-language
 //! report from the analysis API, then press "run it" to bring a board to life.
 
-use std::path::PathBuf;
-
 /// `hauksbee serve [--port N]`: the local web front door (drop-a-board report).
 pub fn run(port: u16) -> anyhow::Result<()> {
     use std::sync::Arc;
@@ -31,21 +29,22 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         let check: hauksbee_server::frontdoor::CheckRunner =
             Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
 
-        // The React bundle is the one web app. It is a build artifact (not
-        // checked in), so a fresh clone has no dist/ yet: tell the user how to
-        // build it rather than serving a blank 404.
-        let static_dir =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist");
-        let dir = static_dir.exists().then(|| static_dir.clone());
+        // The React bundle is the one web app. Resolve it via the ladder
+        // (HAUKSBEE_WEB_DIST override -> checkout dist -> embedded copy), so an
+        // installed release binary serves the UI too, not just a source
+        // checkout. If nothing resolves, tell the user how to build it rather
+        // than serving a blank 404.
+        let dir = crate::web_dist::resolve_web_dist();
 
         // Bind FIRST, then print. The requested port may be busy, in which case
         // the bind falls back to another port; printing `addr` before binding
         // advertised a URL the server was not actually listening on.
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
-        if dir.is_some() {
+        if let Some(static_dir) = dir.as_ref() {
             // dist/ is gitignored: a `git pull` updates frontend/src but not the
             // built bundle, so warn when what we serve predates the sources.
-            crate::commands::common::warn_if_dist_stale(&static_dir);
+            // No-ops for the embedded cache (no sibling src to compare against).
+            crate::commands::common::warn_if_dist_stale(static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
             println!("      http://{bound}\n");
             println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / .board / gerber zip) to get a");

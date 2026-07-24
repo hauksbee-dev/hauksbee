@@ -44,8 +44,10 @@ pub fn serve(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let server = Server::new(Box::new(engine));
-        let static_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist");
-        let dir = static_dir.exists().then(|| static_dir.clone());
+        // Resolve the web app via the ladder (HAUKSBEE_WEB_DIST override ->
+        // checkout dist -> embedded copy), so an installed release binary shows
+        // the live viewer too, not just a source checkout.
+        let dir = crate::web_dist::resolve_web_dist();
         let addr = format!("127.0.0.1:{port}");
 
         // The analysis API the React landing calls (W6 §1: the report and the
@@ -68,8 +70,8 @@ pub fn serve(
         // the bind falls back to another port; printing `addr` before binding
         // advertised a URL the server was not actually listening on.
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
-        if dir.is_some() {
-            warn_if_dist_stale(&static_dir);
+        if let Some(static_dir) = dir.as_ref() {
+            warn_if_dist_stale(static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
             println!("      http://{bound}\n");
             println!("  Lands on this board's report; press \"run it\" for the live 2D/3D sim.");

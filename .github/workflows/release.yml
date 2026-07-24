@@ -95,6 +95,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # bundle.sh builds frontend/dist and embeds it into the binary (embed-web)
+      # so `hauksbee serve` works from a bare install. That needs a JS toolchain;
+      # bun covers all four matrix runners (linux x64/arm64, macOS x64/arm64).
+      # Without this step bundle.sh would find no bun/npm, skip the frontend
+      # build, and (absent a committed dist/) ship a binary with no web UI.
+      - name: Install bun (for the embedded web UI)
+        uses: oven-sh/setup-bun@v2
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:

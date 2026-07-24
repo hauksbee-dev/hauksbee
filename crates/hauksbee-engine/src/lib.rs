@@ -49,6 +49,7 @@ pub mod tarski_decomp;
 pub mod tarski_prep;
 pub mod thermal;
 pub mod tui;
+pub mod web_dist;
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{bind_board, bind_board_with, is_ground, power_rail_voltage, BoundBoard};
