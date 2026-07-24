@@ -852,6 +852,7 @@ dependencies = [
  "regex",
  "serde",
  "toml",
+ "zip",
 ]
 
 [[package]]

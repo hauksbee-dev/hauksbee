@@ -864,6 +864,27 @@ fn run_one(
     // here so ELF loading works regardless of where the CLI is invoked from.
     let firmware = match spec.firmware_path() {
         Some(p) => {
+            // The spec's `firmware` may be a PlatformIO project directory, a
+            // built .pio tree, or a zip of either — parity with `run
+            // --firmware` and the web drop zone, so the same repo layout works
+            // in a pipeline. Resolve it to the compiled image first; a bare
+            // .elf/.hex passes through untouched (resolve returns None).
+            let p = match hauksbee_engine::firmware_input::resolve_firmware_cli(&p) {
+                Ok(Some(resolved)) => {
+                    eprintln!("  firmware: {}", resolved.note);
+                    resolved.path
+                }
+                Ok(None) => p,
+                Err(e) => {
+                    return Err(SpecError::Invalid(format!(
+                        "resolving the spec's `firmware = \"{}\"`: {e}",
+                        spec.firmware
+                            .as_ref()
+                            .map(|f| f.display().to_string())
+                            .unwrap_or_default()
+                    )))
+                }
+            };
             // Validate before the native loader sees it (a missing file segfaults
             // simavr/QEMU/Renode, exit 139). Name the spec field and what the path
             // was resolved relative to: the bundled blinky.toml's firmware is
