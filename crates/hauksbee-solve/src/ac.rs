@@ -1017,9 +1017,13 @@ fn stamp_mosfet_ac(
             sys.stamp_admittance(gi, d_eff, Complex64::new(0.0, w * c_gd));
         }
         // Bulk depletion capacitances at the OP, at the internal drain/source.
+        // The short test compares ELECTRICAL unknowns, not physical terminals,
+        // exactly as the transient stamp does: with rd/rs the internal
+        // drain/source is a distinct unknown, so a netlist body tie no longer
+        // shorts the junction away.
         let bi = layout.node(bulk);
-        for (term, term_i, cbx) in [(d, d_eff, model.cbd), (s, s_eff, model.cbs)] {
-            if term == bulk || cbx <= 0.0 {
+        for (term_i, cbx) in [(d_eff, model.cbd), (s_eff, model.cbs)] {
+            if term_i == bi || cbx <= 0.0 {
                 continue;
             }
             let vj = sign * (op.v(bulk) - op.vx(term_i));
@@ -1031,9 +1035,11 @@ fn stamp_mosfet_ac(
     // the small-signal junction conductance per bulk junction, at the internal
     // drain/source.
     if model.body_is > 0.0 {
+        // Same electrical-unknown short test as the depletion caps above and
+        // the transient stamp, so the linearization cannot diverge from DC.
         let bi = layout.node(bulk);
-        for (term, term_i) in [(d, d_eff), (s, s_eff)] {
-            if term == bulk {
+        for term_i in [d_eff, s_eff] {
+            if term_i == bi {
                 continue;
             }
             let vj = sign * (op.v(bulk) - op.vx(term_i));
