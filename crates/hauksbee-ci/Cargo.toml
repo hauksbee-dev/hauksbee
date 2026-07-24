@@ -27,6 +27,7 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = "0.8"
 regex = "1"
 hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }

@@ -41,6 +41,13 @@ pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
 pub type FirmwareAnalyzer =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
 
+/// Run the checks a web builder composed: `(board_name, board_bytes,
+/// Option<(firmware_name, firmware_bytes)>, spec_fragment) -> JSON string`.
+/// Boxed like [`FirmwareAnalyzer`] so the engine supplies its `hauksbee-ci`
+/// shell-out without the server crate depending on it.
+pub type CheckRunner =
+    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
+
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
 /// timid cap (the 3,443-component Tarski InputSystem .kicad_pcb is 44 MiB), and
 /// the server is localhost-only, so the limit exists solely to stop a
@@ -89,6 +96,90 @@ pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
 /// No server-rendered page: the React bundle owns `/`.
 pub fn router_with_firmware(analyze: FirmwareAnalyzer) -> Router {
     api_routes(analyze)
+}
+
+struct CheckState {
+    check: CheckRunner,
+}
+
+/// The web checks route (`POST /api/check`, multipart: `board` + optional
+/// `firmware` + `spec`). The spec part is the TOML body the browser's builder
+/// composed — everything except the file paths, which the engine injects from
+/// the uploaded parts. Merged into the unified router next to the analysis
+/// routes.
+pub fn check_route(check: CheckRunner) -> Router {
+    let state = Arc::new(CheckState { check });
+    Router::new()
+        .route("/api/check", post(check_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .with_state(state)
+}
+
+async fn check_handler(
+    State(state): State<Arc<CheckState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let mut board_name = "board".to_string();
+    let mut board_bytes: Option<Vec<u8>> = None;
+    let mut fw_name = String::new();
+    let mut fw_bytes: Option<Vec<u8>> = None;
+    let mut spec: Option<String> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let part = field.name().unwrap_or("").to_string();
+        let filename = field.file_name().map(|s| s.to_string());
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                let json = format!(
+                    "{{\"ok\":false,\"error\":\"failed to read upload part: {}\"}}",
+                    e.to_string().replace('"', "'")
+                );
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    json,
+                );
+            }
+        };
+        match part.as_str() {
+            "board" | "file" => {
+                if let Some(f) = filename {
+                    board_name = f;
+                }
+                board_bytes = Some(data.to_vec());
+            }
+            "firmware" => {
+                if let Some(f) = filename {
+                    fw_name = f;
+                }
+                if !data.is_empty() {
+                    fw_bytes = Some(data.to_vec());
+                }
+            }
+            "spec" => spec = Some(String::from_utf8_lossy(&data).into_owned()),
+            _ => {}
+        }
+    }
+
+    let (Some(board_bytes), Some(spec)) = (board_bytes, spec) else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            "{\"ok\":false,\"error\":\"the check request needs a 'board' part and a 'spec' part\"}"
+                .to_string(),
+        );
+    };
+
+    let json = match &fw_bytes {
+        Some(bytes) => (state.check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
+        None => (state.check)(&board_name, &board_bytes, None, &spec),
+    };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
 }
 
 /// Accept the raw board file as the request body, with the original filename in

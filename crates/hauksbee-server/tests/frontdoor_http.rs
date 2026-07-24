@@ -229,6 +229,7 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
             listener,
             Some(&dir_clone),
             analyze,
+            None,
             "{\"preloaded\":false}".to_string(),
         )
         .await

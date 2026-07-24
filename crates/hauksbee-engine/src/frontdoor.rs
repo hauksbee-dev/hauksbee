@@ -283,6 +283,15 @@ pub struct WebReport {
     /// JSON schema stays backward-compatible.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<JsonNote>,
+    /// Every net name on the board, sorted — the checks builder's pickers.
+    /// Empty (and omitted) on an error report; additive for compatibility.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nets: Vec<String>,
+    /// Binder-detected power supplies (rail net → nominal volts): the checks
+    /// builder prefills `[[supply]]` rows from these — the same data
+    /// `hauksbee-ci init` scaffolds from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supplies: Vec<WebSupply>,
     /// Firmware co-sim result, present only when [`analyze_with_firmware`] ran
     /// (a firmware file was dropped alongside the board). Additive +
     /// `skip_serializing_if` so the board-only `/api/analyze` path is byte-for-
@@ -365,6 +374,13 @@ fn zip_board_input(file_name: &str, contents: &[u8]) -> Result<ZipBoardInput, St
     })
 }
 
+/// A binder-detected power supply, as the checks builder consumes it.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebSupply {
+    pub net: String,
+    pub volts: f64,
+}
+
 /// The "could not read the file" report shape, shared by every early-return in
 /// [`analyze`] so the error surface stays consistent.
 fn unreadable(file_name: &str, error: String) -> WebReport {
@@ -382,6 +398,8 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         components: Vec::new(),
         bind: None,
         notes: Vec::new(),
+        nets: Vec::new(),
+        supplies: Vec::new(),
         cosim: None,
     }
 }
@@ -577,6 +595,24 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
         })
         .collect();
 
+    // The checks builder's raw material: every net name (for its pickers) and
+    // the binder-detected supplies (for its prefill) — the same data
+    // `hauksbee-ci init` scaffolds a spec from, so the web builder and the CLI
+    // scaffold can never disagree about what powers the board.
+    let mut nets: Vec<String> = board.nets.iter().map(|n| n.name.clone()).collect();
+    nets.sort();
+    nets.dedup();
+    let mut supplies: Vec<WebSupply> = bound
+        .supplies
+        .iter()
+        .map(|leg| WebSupply {
+            net: leg.net_name.clone(),
+            volts: leg.supply.nominal_volts(),
+        })
+        .collect();
+    supplies.sort_by(|a, b| a.net.cmp(&b.net));
+    supplies.dedup_by(|a, b| a.net == b.net);
+
     WebReport {
         ok: true,
         error: None,
@@ -591,6 +627,8 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
         components,
         bind: Some(bind_web),
         notes,
+        nets,
+        supplies,
         cosim: None,
     }
 }

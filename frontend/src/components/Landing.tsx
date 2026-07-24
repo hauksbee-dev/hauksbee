@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
 import { CheckIcon, PlayIcon, PlusIcon, BoardTargetIcon } from './Icons'
 import { BoardViewer } from './BoardViewer'
+import { ChecksPanel } from './ChecksPanel'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -100,6 +101,9 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   // instead of the dot map. Null for formats the client can't draw (Eagle,
   // Altium, gerber zip, .board DSL).
   const [boardUrl, setBoardUrl] = useState<string | null>(null)
+  // Net last clicked on the board render — the checks panel offers a one-click
+  // check on it ("click a trace and say what the voltage must be").
+  const [selectedNet, setSelectedNet] = useState<string | null>(null)
 
   const analyze = useCallback(async (board: File, firmware: File | null) => {
     setUploadError(null)
@@ -453,6 +457,21 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
               boardUrl ??
               (preloadedBoardName?.endsWith('.kicad_pcb') ? `/boards/${preloadedBoardName}` : null)
             }
+            onNetClick={setSelectedNet}
+            // A KiCad file that parses to nothing drawable falls back to the
+            // dot map rather than an empty void.
+            onEmptyBoard={() => setBoardUrl(null)}
+          />
+        )}
+
+        {/* Checks builder: compose the spec, run it through the real
+            hauksbee-ci, keep the file. */}
+        {report?.ok && (
+          <ChecksPanel
+            report={report}
+            boardFile={lastBoardFile.current}
+            firmwareFile={firmwareFile}
+            selectedNet={selectedNet}
           />
         )}
 
@@ -531,12 +550,14 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   )
 }
 
-function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUrl }: {
+function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUrl, onNetClick, onEmptyBoard }: {
   report: WebReport
   boardLabel: string | null
   canRunLive: boolean
   onRunIt: () => void
   boardUrl: string | null
+  onNetClick: (net: string | null) => void
+  onEmptyBoard: () => void
 }) {
   if (!r.ok) {
     return (
@@ -648,10 +669,16 @@ function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUrl }: {
             className="rounded-lg overflow-hidden"
             style={{ height: 520, position: 'relative', border: '1px solid #1e293b' }}
           >
-            <BoardViewer boardFile={boardUrl} frame={null} />
+            <BoardViewer
+              boardFile={boardUrl}
+              frame={null}
+              onNetClick={onNetClick}
+              onEmptyBoard={onEmptyBoard}
+            />
           </div>
           <div className="mt-1.5 text-[11px]" style={{ color: '#475569' }}>
-            Scroll to zoom · drag to pan · hover a trace to see its net
+            Scroll to zoom · drag to pan · hover a trace to see its net · click a trace to
+            start a check on it
           </div>
         </section>
       ) : r.components?.length > 0 ? (

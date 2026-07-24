@@ -96,6 +96,32 @@ impl CiResult {
         self.results.iter().all(|r| r.passed)
     }
 
+    /// Machine-readable run result (the `--json` surface, and what the web
+    /// checks panel consumes via `/api/check`). One stable JSON object: the
+    /// overall verdict, the per-assertion results verbatim, and every honesty
+    /// qualifier the human report carries (analog abort, substitutions,
+    /// coverage wording) — a consumer must never see a cleaner story than the
+    /// terminal does.
+    pub fn render_json(&self) -> String {
+        let value = serde_json::json!({
+            "ok": true,
+            "spec_name": self.spec_name,
+            "board": self.board,
+            "passed": self.passed(),
+            "exit_code": self.exit_code(),
+            "analog_abort": self.analog_abort,
+            "seeds": self.seeds,
+            "elapsed_s": self.elapsed.as_secs_f64(),
+            "coverage": self.coverage.as_ref().map(|c| c.describe()),
+            "substitutions": self.substitutions,
+            "coverage_warnings": self.coverage_warnings,
+            "results": self.results,
+        });
+        serde_json::to_string(&value).unwrap_or_else(|e| {
+            format!("{{\"ok\":false,\"error\":\"could not serialize the run result: {e}\"}}")
+        })
+    }
+
     pub fn pass_count(&self) -> usize {
         self.results.iter().filter(|r| r.passed).count()
     }

@@ -59,6 +59,10 @@ pub fn serve(
                 None => crate::analyze_json(name, contents),
             },
         );
+        // Same checks backend as `hauksbee serve`, so the web checks panel works
+        // in the preloaded (`run --serve`) flow too.
+        let check: hauksbee_server::frontdoor::CheckRunner =
+            Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
 
         // Bind FIRST, then print. The requested port may be busy, in which case
         // the bind falls back to another port; printing `addr` before binding
@@ -84,7 +88,7 @@ pub fn serve(
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
         server
-            .serve_app_on(listener, dir.as_deref(), board_file, analyze, startup_json)
+            .serve_app_on(listener, dir.as_deref(), board_file, analyze, Some(check), startup_json)
             .await
     })
 }
