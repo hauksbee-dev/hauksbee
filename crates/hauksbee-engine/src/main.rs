@@ -513,6 +513,11 @@ struct FromCodeArgs {
     /// Force the in-tree grid A* router instead of freerouting.
     #[arg(long)]
     route_grid: bool,
+
+    /// Fail (exit non-zero) when the route leaves open connections, a serious
+    /// (short) DRC finding, or a wrong-net endpoint. Only affects a routing run.
+    #[arg(long)]
+    route_strict: bool,
 }
 
 #[derive(Parser)]
@@ -621,6 +626,7 @@ fn main() -> anyhow::Result<()> {
             args.incremental,
             args.route,
             args.route_grid,
+            args.route_strict,
         ),
         Command::CheckCode(args) => hauksbee_engine::commands::boardcode::check(
             &args.code,
