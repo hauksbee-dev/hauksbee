@@ -632,7 +632,7 @@ jobs:
 
         {/* Results */}
         {result && (
-          <div className="mt-3" data-testid="check-results">
+          <div className="mt-3" data-testid="check-results" aria-live="polite">
             {result.ok === false ? (
               <div className="rounded-lg px-3 py-2.5 text-[13px]"
                 style={{ background: '#160b0b', border: '1px solid #7f1d1d', color: '#fca5a5' }}>
