@@ -217,6 +217,13 @@ impl StampPlan {
                     }
                 }
             }
+            if let Some(ints) = layout.mos_internal(id) {
+                for i in ints.iter().flatten() {
+                    if !unknowns.contains(&(*i as u32)) {
+                        unknowns.push(*i as u32);
+                    }
+                }
+            }
             SlotTable::build(unknowns, matrix)
         };
 
