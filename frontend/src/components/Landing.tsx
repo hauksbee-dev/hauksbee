@@ -78,6 +78,9 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 // Bundled one-click samples (files under frontend/public/samples/, see its
 // README for provenance). A ladder: tiny clean board → real product → a
 // board + firmware pair that exercises the co-sim.
+// Fetch aborts (a newer run superseded this one) are expected, not errors.
+const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError'
+
 const SAMPLES: { label: string; desc: string; board: string; firmware?: string }[] = [
   { label: 'Blinky', desc: 'small clean board', board: '/samples/blinky.kicad_pcb' },
   { label: 'Watchy', desc: 'a real smartwatch', board: '/samples/watchy.kicad_pcb' },
@@ -105,19 +108,39 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   // check on it ("click a trace and say what the voltage must be").
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
 
+  // Request-race guard for analyze/runSample: when the user starts a new run
+  // mid-flight (drops another board, swaps firmware, clicks a sample), the
+  // in-flight responses can land out of order and a stale response would
+  // overwrite the newer report (and a stale `finally` would clear the newer
+  // busy spinner). Each run takes a monotonic id and only the latest run may
+  // touch state; the previous run's fetch is aborted so it cannot land late.
+  const runIdRef = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
+  const beginRun = useCallback(() => {
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    runIdRef.current += 1
+    const id = runIdRef.current
+    return { signal: ctrl.signal, isCurrent: () => runIdRef.current === id }
+  }, [])
+
   const analyze = useCallback(async (board: File, firmware: File | null) => {
+    const { signal, isCurrent } = beginRun()
     setUploadError(null)
     setBusy(firmware ? `Analyzing ${board.name} + co-sim of ${firmware.name} ...` : `Analyzing ${board.name} ...`)
     // Sniff the head for KiCad layout text to pick the report map's renderer.
     try {
       const head = new TextDecoder().decode(await board.slice(0, 64).arrayBuffer())
       const isKicadPcb = /^\s*\(kicad_pcb/.test(head)
-      setBoardUrl(prev => {
-        if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
-        return isKicadPcb ? URL.createObjectURL(board) : null
-      })
+      if (isCurrent()) {
+        setBoardUrl(prev => {
+          if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+          return isKicadPcb ? URL.createObjectURL(board) : null
+        })
+      }
     } catch {
-      setBoardUrl(null)
+      if (isCurrent()) setBoardUrl(null)
     }
     try {
       let res: Response
@@ -125,12 +148,13 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
         const fd = new FormData()
         fd.append('board', board, board.name)
         fd.append('firmware', firmware, firmware.name)
-        res = await fetch('/api/analyze-with-firmware', { method: 'POST', body: fd })
+        res = await fetch('/api/analyze-with-firmware', { method: 'POST', body: fd, signal })
       } else {
         res = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream' },
           body: await board.arrayBuffer(),
+          signal,
         })
       }
       // Read the body ONCE as text, then parse defensively. The server always
@@ -152,13 +176,15 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             'the server returned an empty or non-JSON response',
         )
       }
-      setReport(parsed)
+      if (isCurrent()) setReport(parsed)
     } catch (e) {
-      setUploadError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
+      // An abort means a newer run superseded this one: not an error to show.
+      if (isAbort(e)) return
+      if (isCurrent()) setUploadError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
-      setBusy(null)
+      if (isCurrent()) setBusy(null)
     }
-  }, [])
+  }, [beginRun])
 
   const looksLikeFirmware = (name: string) => /\.(elf|hex)$/i.test(name)
 
@@ -182,28 +208,35 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   // from /samples/ and push it through the exact same analyze path a dropped
   // file takes, so the first report needs no file at all.
   const runSample = useCallback(async (sample: { board: string; firmware?: string }) => {
+    const { signal, isCurrent } = beginRun()
     setUploadError(null)
     setBusy('Fetching the sample ...')
     try {
-      const bres = await fetch(sample.board)
+      const bres = await fetch(sample.board, { signal })
       if (!bres.ok) throw new Error(`could not fetch ${sample.board}: ${bres.status}`)
       const bname = sample.board.split('/').pop() ?? 'sample.kicad_pcb'
       const board = new File([await bres.blob()], bname)
       let fw: File | null = null
       if (sample.firmware) {
-        const fres = await fetch(sample.firmware)
+        const fres = await fetch(sample.firmware, { signal })
         if (!fres.ok) throw new Error(`could not fetch ${sample.firmware}: ${fres.status}`)
         const fname = sample.firmware.split('/').pop() ?? 'firmware.hex'
         fw = new File([await fres.blob()], fname)
       }
+      // A newer run started while the sample files were downloading: hand
+      // nothing over (the newer run owns lastBoardFile/firmware now).
+      if (!isCurrent()) return
       lastBoardFile.current = board
       setFirmwareFile(fw)
       await analyze(board, fw)
     } catch (e) {
-      setUploadError(`Could not load the sample: ${e instanceof Error ? e.message : String(e)}`)
-      setBusy(null)
+      if (isAbort(e)) return
+      if (isCurrent()) {
+        setUploadError(`Could not load the sample: ${e instanceof Error ? e.message : String(e)}`)
+        setBusy(null)
+      }
     }
-  }, [analyze])
+  }, [analyze, beginRun])
 
   return (
     <div
