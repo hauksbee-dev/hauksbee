@@ -16,7 +16,9 @@ No other tool does this from the layout. Schematic simulators never see the boar
 
 ## What it does
 
-The fastest way in needs no terminal at all: run `hauksbee serve`, open the page it prints, drop a board on it (optionally with firmware), and read a plain-language report with a 2D map of the parts. The web page is the quick look; the checked-in `.toml` spec (below) is the repeatable check a pipeline gates on, and assertions run only there. Everything is the same engine, from the command line.
+The fastest way in needs no terminal at all: run `hauksbee serve`, open the page it prints, and either drop a board (optionally with firmware, or a zip of the whole PlatformIO project) or click one of the bundled samples for a first report with no file at all. The report renders the board's real copper (zoom in and part labels appear), and the checks panel lets you compose the rules that must hold (rail voltages, blink, UART output, nothing over-stressed) in plain language, run them on the spot through the real `hauksbee-ci`, and download the resulting `.toml` plus the GitHub workflow that enforces it on every push. The browser is the quick look and the on-ramp; the checked-in spec is the repeatable check a pipeline gates on. Everything is the same engine, from the command line.
+
+![The web checks builder: plain-language rules, the exact TOML, and a green run](frontend/screenshots/beauty/web-checks.png)
 
 Point it at any PCB design and it will:
 
@@ -74,6 +76,8 @@ hauksbee-ci init my_board.kicad_pcb                  # scaffold a CI spec beside
 hauksbee serve                                       # web front door (long-running): open the page, drop a board, read the report
 ```
 
+![The web front door: drop a board, try a sample, or read where your files live](frontend/screenshots/beauty/web-landing.png)
+
 Reports exit 0 by default even when they find something; `--strict` (alias `--fail-on-findings`) makes them fail a build, and `--plain` (alias `--explain`) rewrites any finding as what it is, why it matters and what to do. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
 
 **Prebuilt binary (once a public release exists):**
@@ -112,8 +116,9 @@ one command to get it (`hauksbee install esp-qemu`, or `scripts/install-sims.sh`
 
 **As a repeatable check** — a `.toml` spec captures the board, the firmware, how
 the board is powered, and the assertions that must hold, so a pipeline can gate
-on it. Scaffold one from a board with `hauksbee-ci init my_board.kicad_pcb`, then
-run it:
+on it. Compose it visually in the web checks panel (`hauksbee serve`, which also
+hands you the GitHub workflow), or scaffold one from a board with
+`hauksbee-ci init my_board.kicad_pcb`, then run it:
 
 ```bash
 hauksbee-ci run ci/boot.toml                    # exit 0 = all assertions held
