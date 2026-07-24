@@ -19,7 +19,19 @@ hauksbee serve                                          # web front door: drop a
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
 ```
 
+No board of your own yet? The `hauksbee serve` page has one-click samples
+(a small clean board, a real smartwatch, and a board + firmware pair that runs
+a live co-sim), so the first report needs no file at all.
+
 Full walkthrough, more example boards, and captured sessions: [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md).
+
+## Prepare your own project
+
+[`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md) is the hand-holding guide: the (at
+most) three files hauksbee needs, where each comes from (KiCad `.kicad_pcb` as
+is, Eagle `.brd`, Altium `.PcbDoc`, a zip of gerbers, PlatformIO firmware), a
+recommended repo layout, and the one local command that runs it. CI wrappers
+are optional and come later.
 
 ## Your next four reads
 
