@@ -34,3 +34,4 @@ tarski-works/oracle_slice_*/
 .DS_Store
 codex-webreview.log
 vendor/kicad-forge/Cargo.lock
+codex-routing-mosfet-review.log
