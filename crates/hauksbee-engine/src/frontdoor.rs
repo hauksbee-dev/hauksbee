@@ -300,84 +300,175 @@ pub struct WebReport {
 /// non-binary input falls back to the text sniffer over a lossy-UTF8 view
 /// (which is exact for the text formats). Decoding before this point would
 /// corrupt a binary board before it was ever parsed.
+/// The two things a `.zip` board upload can be. The reader registry knows
+/// neither (it reads one text/binary board), so [`analyze`] routes zips here.
+enum ZipBoardInput {
+    /// The zip wraps a Board-as-Code export: the `.board` source, read out.
+    BoardCode(String),
+    /// The zip is a gerber fab archive, reverse-extracted from copper.
+    Gerber(ExtractedBoard),
+}
+
+/// Classify and read a zipped board upload: a `.board` export inside wins (a
+/// fab archive never carries one); anything else is treated as a gerber job
+/// zip, exactly like CLI `run <fab.zip>`.
+fn zip_board_input(file_name: &str, contents: &[u8]) -> Result<ZipBoardInput, String> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents))
+        .map_err(|e| format!("could not open '{file_name}' as a zip archive: {e}"))?;
+    let mut code_entries: Vec<usize> = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(i) {
+            let name = entry.name();
+            if name.starts_with("__MACOSX/")
+                || name.rsplit('/').next().is_some_and(|f| f.starts_with('.'))
+            {
+                continue;
+            }
+            if name.to_ascii_lowercase().ends_with(".board") {
+                code_entries.push(i);
+            }
+        }
+    }
+    if code_entries.len() > 1 {
+        return Err(format!(
+            "'{file_name}' contains more than one .board file; zip (or upload) just the one you mean."
+        ));
+    }
+    if let Some(&i) = code_entries.first() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("could not read the .board inside '{file_name}': {e}"))?;
+        let mut src = String::new();
+        entry
+            .read_to_string(&mut src)
+            .map_err(|e| format!("could not read the .board inside '{file_name}': {e}"))?;
+        return Ok(ZipBoardInput::BoardCode(src));
+    }
+    // No .board: treat as a gerber fab archive. `from_gerber` wants a path, so
+    // park the bytes in a temp file.
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let tmp = std::env::temp_dir().join(format!(
+        "hauksbee-web-gerber-{}-{}.zip",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&tmp, contents).map_err(|e| format!("could not stage the zip: {e}"))?;
+    let result = ExtractedBoard::from_gerber(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    result.map(ZipBoardInput::Gerber).map_err(|e| {
+        format!(
+            "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
+             contain the gerber fab files (copper + drill), or one .board export."
+        )
+    })
+}
+
+/// The "could not read the file" report shape, shared by every early-return in
+/// [`analyze`] so the error surface stays consistent.
+fn unreadable(file_name: &str, error: String) -> WebReport {
+    WebReport {
+        ok: false,
+        error: Some(error),
+        board_name: String::new(),
+        file_name: file_name.to_string(),
+        num_components: 0,
+        num_nets: 0,
+        headline: "Could not read the file.".to_string(),
+        serious: 0,
+        total: 0,
+        sections: Vec::new(),
+        components: Vec::new(),
+        bind: None,
+        notes: Vec::new(),
+        cosim: None,
+    }
+}
+
 pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // Binary-first, mirroring `run`: `from_auto_bytes` claims a recognised
     // binary board (OLE2 magic + Altium streams) or returns None so text
     // formats keep their exact behaviour through `from_auto`.
     let binary = ExtractedBoard::from_auto_bytes(contents);
     let is_binary = binary.is_some();
-    let text = String::from_utf8_lossy(contents);
-    // Board-as-Code (`hauksbee to-code` output, usually `*.board`) is a DSL,
-    // not a CAD format, so the extractor cannot sniff it. Compile it to KiCad
-    // board text first — the same route CLI `run` takes — so the web drop zone
-    // accepts every file `run` does. The emitted text then flows through the
-    // untouched text path below (parse, DRC, SI) as if a `.kicad_pcb` was
-    // uploaded.
+
+    // A `.zip` upload is a gerber fab archive or a zipped Board-as-Code
+    // export; route it before the text sniffer (which knows neither). This is
+    // what makes the drop-zone claim "gerber zip" actually true — the CLI took
+    // this path via `run <fab.zip>` while the web upload fell through to
+    // "unrecognized board format".
+    let mut zip_code: Option<String> = None;
+    let mut gerber_board: Option<ExtractedBoard> = None;
+    if !is_binary && contents.starts_with(b"PK\x03\x04") {
+        match zip_board_input(file_name, contents) {
+            Ok(ZipBoardInput::BoardCode(src)) => zip_code = Some(src),
+            Ok(ZipBoardInput::Gerber(b)) => gerber_board = Some(b),
+            Err(e) => return unreadable(file_name, format!("Could not read this board file: {e}")),
+        }
+    }
+    let is_gerber = gerber_board.is_some();
+
+    let text: std::borrow::Cow<'_, str> = match &zip_code {
+        Some(src) => std::borrow::Cow::Borrowed(src.as_str()),
+        None => String::from_utf8_lossy(contents),
+    };
+    // Board-as-Code (`hauksbee to-code` output, usually `*.board`, possibly
+    // zipped) is a DSL, not a CAD format, so the extractor cannot sniff it.
+    // Compile it to KiCad board text first — the same route CLI `run` takes —
+    // so the web drop zone accepts every file `run` does. The emitted text then
+    // flows through the untouched text path below (parse, DRC, SI) as if a
+    // `.kicad_pcb` was uploaded.
     let is_board_code = !is_binary
-        && (std::path::Path::new(file_name)
-            .extension()
-            .and_then(|e| e.to_str())
-            == Some("board")
+        && !is_gerber
+        && (zip_code.is_some()
+            || std::path::Path::new(file_name)
+                .extension()
+                .and_then(|e| e.to_str())
+                == Some("board")
             || crate::commands::common::is_board_code_header(&text));
     let text: std::borrow::Cow<'_, str> = if is_board_code {
         match crate::boardcode::code_to_board_text(&text) {
             Ok(t) => std::borrow::Cow::Owned(t),
             Err(e) => {
-                return WebReport {
-                    ok: false,
-                    error: Some(format!("Could not compile this Board-as-Code file: {e}.")),
-                    board_name: String::new(),
-                    file_name: file_name.to_string(),
-                    num_components: 0,
-                    num_nets: 0,
-                    headline: "Could not read the file.".to_string(),
-                    serious: 0,
-                    total: 0,
-                    sections: Vec::new(),
-                    components: Vec::new(),
-                    bind: None,
-                    notes: Vec::new(),
-                    cosim: None,
-                };
+                return unreadable(
+                    file_name,
+                    format!("Could not compile this Board-as-Code file: {e}."),
+                );
             }
         }
     } else {
         text
     };
-    // Text view for the geometry-bearing text checks (DRC / SI). A binary board
-    // has no meaningful text: those checks get their bytes twin / None instead.
-    let text_view: Option<&str> = (!is_binary).then_some(&text);
-    let board = match binary.unwrap_or_else(|| ExtractedBoard::from_auto(&text)) {
-        Ok(b) => b,
-        Err(e) => {
-            return WebReport {
-                ok: false,
-                error: Some(format!(
-                    "Could not read this board file: {e}. Supported: KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC-D-356 .d356, Board-as-Code .board, or a gerber zip."
-                )),
-                board_name: String::new(),
-                file_name: file_name.to_string(),
-                num_components: 0,
-                num_nets: 0,
-                headline: "Could not read the file.".to_string(),
-                serious: 0,
-                total: 0,
-                sections: Vec::new(),
-                components: Vec::new(),
-                bind: None,
-                notes: Vec::new(),
-                cosim: None,
-            };
-        }
+    // Text view for the geometry-bearing text checks (DRC / SI). A binary or
+    // gerber board has no KiCad layout text: those checks get their bytes twin
+    // (Altium) or nothing, stated in the report rather than silently green.
+    let text_view: Option<&str> = (!is_binary && !is_gerber).then_some(&text);
+    let board = match gerber_board {
+        Some(b) => b,
+        None => match binary.unwrap_or_else(|| ExtractedBoard::from_auto(&text)) {
+            Ok(b) => b,
+            Err(e) => {
+                return unreadable(
+                    file_name,
+                    format!(
+                        "Could not read this board file: {e}. Supported: KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC-D-356 .d356, Board-as-Code .board, or a zip of gerbers / a .board export."
+                    ),
+                );
+            }
+        },
     };
 
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
 
     // DRC reads copper geometry from the raw input: the bytes twin
-    // (`altium_drc`) for a binary board, the text path (gerbers/KiCad layout)
-    // for everything else.
+    // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
+    // gerber archive has neither — its DRC section says so below instead of
+    // reporting a vacuous "no problems".
     let drc = if is_binary {
         ExtractedBoard::altium_drc(contents).unwrap_or_default()
+    } else if is_gerber {
+        Default::default()
     } else {
         ExtractedBoard::drc(&text).unwrap_or_default()
     };
@@ -402,7 +493,18 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     let si_plain = plain_si(&si);
 
     let mut sections = vec![
-        WebSection::from_plain("Copper spacing (DRC)", &drc_plain),
+        if is_gerber {
+            // An empty default DRC report would render "no copper spacing
+            // problems found" — a vacuous green for input we never checked.
+            WebSection {
+                title: "Copper spacing (DRC)".to_string(),
+                verdict: "Not checked: clearance DRC needs the layout file (KiCad/Eagle/Altium), which a gerber archive does not carry.".to_string(),
+                findings: Vec::new(),
+                heads_up: Vec::new(),
+            }
+        } else {
+            WebSection::from_plain("Copper spacing (DRC)", &drc_plain)
+        },
         WebSection::from_plain("Connectivity & wiring", &lint_plain),
         WebSection::from_plain("Signal integrity", &si_plain),
     ];
@@ -437,6 +539,15 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // Notes: bind-role caveat (active IC open on the live circuit). These mirror
     // the CLI/JSON `notes` so the web never silently omits an honesty annotation.
     let mut notes: Vec<JsonNote> = Vec::new();
+    if is_gerber {
+        notes.push(JsonNote {
+            kind: JsonNoteKind::Coverage,
+            message: "Gerber input: the circuit was reverse-extracted from the fab \
+                      files' copper geometry. Clearance DRC and trace-geometry SI need \
+                      the original layout file and were not run."
+                .to_string(),
+        });
+    }
     if bind_web.active_path_open() {
         notes.push(JsonNote {
             kind: JsonNoteKind::BindRole,
@@ -1359,6 +1470,93 @@ fn main {
             r3.error.as_deref().unwrap_or("").contains("Board-as-Code"),
             "the error names the DSL compile step: {:?}",
             r3.error
+        );
+    }
+
+    #[test]
+    fn analyze_zip_of_a_board_code_export_works() {
+        // "Zip it and we figure it out" must hold for the board slot too: a
+        // zipped .board export analyzes like the bare file would.
+        use std::io::Write;
+        let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "A"
+    net "B"
+    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
+        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
+    }
+}
+"#;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file("export/tarski.board", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(dsl).unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let r = analyze("tarski-export.zip", &bytes);
+        assert!(r.ok, "zipped .board must analyze: {:?}", r.error);
+        assert_eq!(r.num_components, 1, "R1 survives the zip + compile");
+        // A zip with neither gerbers nor a .board says what it looked for.
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file("README.md", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"not a board").unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let r2 = analyze("junk.zip", &bytes);
+        assert!(!r2.ok);
+        let err = r2.error.unwrap_or_default();
+        assert!(
+            err.contains("gerber") && err.contains(".board"),
+            "error names both zip forms: {err}"
+        );
+    }
+
+    /// Real gerber archive through the WEB path (the drop-zone claim "gerber
+    /// zip" used to be false there: the reader registry knows no zips, so the
+    /// upload died with "unrecognized board format"). Corpus-gated like the
+    /// extract crate's gerber tests: skips when board-corpus is absent.
+    #[test]
+    fn analyze_gerber_zip_reverse_extracts() {
+        use std::io::Write;
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+        if !dir.exists() {
+            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
+                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
+            }
+            eprintln!("skipping gerber-zip web test (corpus absent)");
+            return;
+        }
+        // Zip the fab dir the way a user would.
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                w.start_file(
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
+            }
+        }
+        let bytes = w.finish().unwrap().into_inner();
+        let r = analyze("cm4_adapter_gerbers.zip", &bytes);
+        assert!(r.ok, "gerber zip must reverse-extract: {:?}", r.error);
+        // The CM4 adapter fixture ships no pick-and-place file, so components
+        // cannot be named; copper nets are the reverse-extraction signal.
+        assert!(r.num_nets > 0, "nets recovered from copper: {}", r.num_nets);
+        // The unchecked layers are stated, not silently green.
+        let drc = r.sections.iter().find(|s| s.title.contains("DRC")).unwrap();
+        assert!(
+            drc.verdict.contains("Not checked"),
+            "gerber DRC section is honest: {}",
+            drc.verdict
+        );
+        assert!(
+            r.notes.iter().any(|n| n.message.contains("reverse-extracted")),
+            "coverage note present"
         );
     }
 
