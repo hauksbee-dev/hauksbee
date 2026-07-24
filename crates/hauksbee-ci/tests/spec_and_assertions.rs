@@ -228,6 +228,49 @@ fn demo_firmware_blink_uart_and_rail_all_pass() {
 }
 
 #[test]
+fn board_as_code_spec_runs_end_to_end() {
+    // B5: a spec may point straight at a Board-as-Code `.board` source.
+    // hauksbee-ci used to reject it with "compile it to a layout first with
+    // from-code --route"; the shared normalizer compiles it in-process (the
+    // compiled text carries full net connectivity, and CI is netlist-driven,
+    // so no routing step is needed). The board must bind and the voltage
+    // assertion on one of its nets must actually evaluate.
+    let dir = std::env::temp_dir().join("hauksbee_ci_tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let board = dir.join("cell.board");
+    std::fs::write(
+        &board,
+        r#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "A"
+    net "B"
+    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
+        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
+    }
+}
+"#,
+    )
+    .unwrap();
+    let p = write_tmp(
+        "board_as_code.toml",
+        &format!(
+            "board=\"{}\"\nduration_ms=1\n[[supply]]\nnet=\"A\"\nkind=\"ideal\"\nvolts=3.3\n\
+             [[assert]]\nkind=\"voltage\"\nnet=\"A\"\nmin=3.0\nmax=3.6\n",
+            board.display()
+        ),
+    );
+    let result = run(&RunConfig { spec: p, ..Default::default() }).expect(".board spec runs");
+    assert!(
+        result.passed(),
+        "the supplied rail on the compiled .board must hold 3.3 V:\n{}",
+        result.render_human()
+    );
+}
+
+#[test]
 fn boot_coverage_requires_net_min_and_deadline() {
     let board =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/tarski_brownout_cell.net");

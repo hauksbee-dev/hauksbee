@@ -7,7 +7,6 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
-use crate::boardcode::code_to_board_text;
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     strict_analog_exit_code, BindSummary, BootGateJson, JsonNote, JsonNoteKind, JsonReport,
@@ -72,36 +71,6 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
         hauksbee_mcu::validate_firmware_path(cfg.firmware.as_deref().expect("just set"))?;
     }
-    // Gerber job input: a DIRECTORY of fab files, or a gerber `.zip`. This is the
-    // "hand us only the fab files" path the README and `--help` advertise — the
-    // text/Altium readers below cannot parse it, so it is reverse-extracted from
-    // copper geometry via `from_gerber`. Detected purely by the path shape.
-    let is_gerber = cfg.board.is_dir()
-        || cfg
-            .board
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
-
-    // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
-    // would fail a UTF-8 read. Text formats (KiCad / Eagle / IPC) are recovered
-    // losslessly from these bytes. Keep the actionable not-found error. (A gerber
-    // dir/zip is read by `from_gerber` below, not as one blob.)
-    let raw = if is_gerber {
-        Vec::new()
-    } else {
-        std::fs::read(&cfg.board).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow::anyhow!(
-                    "no board file at '{}'. Check the path, or try a bundled example:\n  \
-                     hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
-                    cfg.board.display()
-                )
-            } else {
-                anyhow::anyhow!("reading '{}': {e}", cfg.board.display())
-            }
-        })?
-    };
     // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
     // product), say so — a clean verdict on one file is misleading if the user
     // meant the whole thing. Routed through `Notes` so it stays on stderr and is
@@ -109,60 +78,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // for an interactive user, and pure noise in report and pipeline output).
     let notes = Notes::new(quiet, cfg.json);
     warn_sibling_boards(&cfg.board, notes);
-    // Binary board (Altium): auto-detected from the OLE2 magic + Altium streams,
-    // exactly as the Eagle path is auto-detected from XML content. No new CLI
-    // surface.
-    let altium = if is_gerber {
-        None
-    } else {
-        ExtractedBoard::from_auto_bytes(&raw).transpose()?
-    };
-    // Text view for the text formats and the geometry-bearing text checks.
-    let mut text = if altium.is_some() {
-        String::new()
-    } else {
-        String::from_utf8_lossy(&raw).into_owned()
-    };
-    // Board-as-Code (`.board`): detected by extension or the DSL header. Parse
-    // the DSL, recompile it to `.kicad_pcb` text, then feed the same analysis
-    // path the layout formats use. The recompiled KiCad text replaces `text` so
-    // the geometry-bearing checks (DRC, SI) and the live viewer see the rebuilt
-    // board, not the DSL source they cannot parse.
-    let is_board_code = altium.is_none()
-        && (cfg.board.extension().and_then(|e| e.to_str()) == Some("board")
-            || crate::commands::common::is_board_code_header(&text));
-    if is_board_code {
-        text = code_to_board_text(&text)?;
-    }
-    // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
-    // it must be loaded by path to recurse the hierarchy; everything else is
-    // self-contained and sniffed from its content.
-    let mut board = if is_gerber {
-        ExtractedBoard::from_gerber(&cfg.board).map_err(|e| {
-            anyhow::anyhow!(
-                "gerber extraction from '{}' failed: {e}. Point at the gerber job \
-                 folder (or a .zip of it) containing the copper/drill files — see docs/ingest/GERBER.md.",
-                cfg.board.display()
-            )
-        })?
-    } else if let Some(b) = altium.clone() {
-        b
-    } else if !is_board_code
-        && cfg.board.extension().and_then(|e| e.to_str()) == Some("kicad_sch")
-    {
-        ExtractedBoard::from_kicad_schematic_path(&cfg.board)?
-    } else {
-        ExtractedBoard::from_auto(&text)?
-    };
-    // Fall back to the source file stem when the layout carries no title-block
-    // name, so every downstream identifier (the JSON `board` field, report
-    // headers) is usable instead of blank — gerber, DSL, and many real boards
-    // ship no title.
-    if board.name.trim().is_empty() {
-        if let Some(stem) = cfg.board.file_stem().and_then(|s| s.to_str()) {
-            board.name = stem.to_string();
-        }
-    }
+    // Every input format (gerber dir/zip, binary Altium, Board-as-Code, KiCad
+    // schematic hierarchy, the text layout/netlist formats) routes through the
+    // ONE normalizer shared with the web front door and hauksbee-ci, including
+    // the file-stem name fallback for titleless boards. `raw` keeps the file's
+    // exact bytes (the Altium DRC twin reads copper from them) and `text` is
+    // the KiCad-parseable layout text (empty for Altium/gerber, which have
+    // none; those checks get the bytes twin or an honest "not checked").
+    let norm = crate::board_input::from_path(&cfg.board)?;
+    let is_altium = norm.is_binary();
+    let raw = norm.raw;
+    let text = norm.layout_text.unwrap_or_default();
+    let board = norm.board;
     // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
     // < ~/.config/hauksbee/models (user) < --models-dir (highest). A custom
     // behavioural part dropped in any of these loads with no recompile.
@@ -198,7 +125,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // report, so a person (or an AI) gets everything in a single command instead
     // of running one flag at a time. Honours --plain / --json / --strict.
     if cfg.check {
-        return crate::reports::check::emit(&cfg.board, &board, &text, &raw, altium.is_some(), &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::check::emit(&cfg.board, &board, &text, &raw, is_altium, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
     }
 
     if cfg.report {
@@ -207,14 +134,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 
     // --drc: run geometric short / clearance detection, print, exit.
     if cfg.drc {
-        return crate::reports::drc::emit(&cfg.board, &board, &text, &raw, altium.is_some(), &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.oracle, cfg.strict);
+        return crate::reports::drc::emit(&cfg.board, &board, &text, &raw, is_altium, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.oracle, cfg.strict);
     }
 
     // --ampacity: IPC-2221 capacity-only report. No current is fabricated here:
     // without a per-net current spec this tells the user the bottleneck capacity
     // and explicitly asks for a current before pass/fail.
     if cfg.ampacity {
-        return crate::reports::ampacity::emit(&text, altium.is_some());
+        return crate::reports::ampacity::emit(&text, is_altium);
     }
 
     // --lint: run the connectivity lint-class checks, the boot strap-pin lint
@@ -240,7 +167,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
     if cfg.si {
-        return crate::reports::si::emit(&board, &text, altium.is_some(), &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::si::emit(&board, &text, is_altium, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
     }
 
     // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
@@ -271,7 +198,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &board,
             &text,
             &raw,
-            altium.is_some(),
+            is_altium,
             &lib,
             cfg.strict,
         );
@@ -292,7 +219,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // the TUI's text-based build path can't analyse those, so they keep the
     // websocket flow.
     let launch_tui =
-        !cfg.serve && !cfg.headless && altium.is_none() && (cfg.tui || stdout_is_tty);
+        !cfg.serve && !cfg.headless && !is_altium && (cfg.tui || stdout_is_tty);
     if launch_tui {
         return crate::tui::run(
             &cfg.board,
@@ -342,7 +269,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 
     // --apply-shorts: bridge every detected copper short before simulating.
     if cfg.apply_shorts {
-        let report = if altium.is_some() {
+        let report = if is_altium {
             ExtractedBoard::altium_drc(&raw)?
         } else {
             ExtractedBoard::drc_with_clearance_rules(
@@ -709,7 +636,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // binary board (Altium) hands over the file's own bytes — its `text` is
     // empty; text / Board-as-Code boards hand over the (possibly recompiled)
     // text, which is exactly what the analysis must see for them.
-    let report_bytes: &[u8] = if altium.is_some() { &raw } else { text.as_bytes() };
+    let report_bytes: &[u8] = if is_altium { &raw } else { text.as_bytes() };
     let report_json = match &cfg.firmware {
         Some(fw) => {
             let fw_name = crate::commands::common::file_name(fw);
