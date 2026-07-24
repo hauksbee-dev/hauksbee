@@ -25,6 +25,34 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
 
+/// Reject a request that a *website* in the user's browser made cross-origin to
+/// our loopback server. The analysis/check endpoints can run an uploaded
+/// PlatformIO project (`pio run` executes arbitrary `extra_scripts`), so a
+/// drive-by `FormData` POST from any open tab would be code execution under the
+/// user's account. `Sec-Fetch-Site` is set by the browser and CANNOT be forged
+/// by page JS: our own same-origin page sends `same-origin`; a hostile
+/// cross-site fetch sends `cross-site`/`same-site`. A non-browser client (curl,
+/// the CLI, a test) sends no such header, so tooling is unaffected. This is the
+/// standard private-network-access defense for a localhost server.
+///
+/// Returns `Some(response)` when the request must be refused, `None` to proceed.
+fn reject_cross_site(headers: &HeaderMap) -> Option<(StatusCode, [(header::HeaderName, &'static str); 1], String)> {
+    if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
+        // Browser-origin request: only our own page (same-origin) or a
+        // direct address-bar navigation (none) may reach these endpoints.
+        if site != "same-origin" && site != "none" {
+            return Some((
+                StatusCode::FORBIDDEN,
+                [(header::CONTENT_TYPE, "application/json")],
+                "{\"ok\":false,\"error\":\"cross-site request refused: the hauksbee analysis \
+                 endpoints accept requests only from the hauksbee page itself\"}"
+                    .to_string(),
+            ));
+        }
+    }
+    None
+}
+
 /// Analyze an uploaded board: `(file_name, board_bytes) -> JSON report string`.
 /// The board is passed as raw `&[u8]` (never lossy-decoded) so a binary format
 /// (Altium `.PcbDoc`, an OLE2 container) survives intact; the analyzer's
@@ -115,62 +143,77 @@ pub fn check_route(check: CheckRunner) -> Router {
         .with_state(state)
 }
 
+/// A JSON body response with the standard content-type header. Every error is
+/// built through `serde_json` so backslashes / control chars in a message can
+/// never produce invalid JSON (B9).
+fn json_body(status: StatusCode, value: serde_json::Value) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        value.to_string(),
+    )
+}
+
+fn json_error(msg: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+    json_body(StatusCode::OK, serde_json::json!({ "ok": false, "error": msg }))
+}
+
 async fn check_handler(
     State(state): State<Arc<CheckState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
     let mut board_name = "board".to_string();
     let mut board_bytes: Option<Vec<u8>> = None;
     let mut fw_name = String::new();
     let mut fw_bytes: Option<Vec<u8>> = None;
     let mut spec: Option<String> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let part = field.name().unwrap_or("").to_string();
-        let filename = field.file_name().map(|s| s.to_string());
-        let data = match field.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                let json = format!(
-                    "{{\"ok\":false,\"error\":\"failed to read upload part: {}\"}}",
-                    e.to_string().replace('"', "'")
-                );
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    json,
-                );
-            }
-        };
-        match part.as_str() {
-            "board" | "file" => {
-                if let Some(f) = filename {
-                    board_name = f;
+    // Explicit Ok(Some)/Ok(None)/Err: a malformed multipart stream is an
+    // ERROR, not a clean end-of-stream (B9). `while let Ok(Some(..))` would
+    // silently treat a truncated body as "no more fields".
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let part = field.name().unwrap_or("").to_string();
+                let filename = field.file_name().map(|s| s.to_string());
+                let data = match field.bytes().await {
+                    Ok(b) => b,
+                    Err(e) => return json_error(&format!("failed to read upload part: {e}")),
+                };
+                match part.as_str() {
+                    "board" | "file" => {
+                        if let Some(f) = filename {
+                            board_name = f;
+                        }
+                        board_bytes = Some(data.to_vec());
+                    }
+                    "firmware" => {
+                        if let Some(f) = filename {
+                            fw_name = f;
+                        }
+                        if !data.is_empty() {
+                            fw_bytes = Some(data.to_vec());
+                        }
+                    }
+                    "spec" => spec = Some(String::from_utf8_lossy(&data).into_owned()),
+                    _ => {}
                 }
-                board_bytes = Some(data.to_vec());
             }
-            "firmware" => {
-                if let Some(f) = filename {
-                    fw_name = f;
-                }
-                if !data.is_empty() {
-                    fw_bytes = Some(data.to_vec());
-                }
-            }
-            "spec" => spec = Some(String::from_utf8_lossy(&data).into_owned()),
-            _ => {}
+            Ok(None) => break,
+            Err(e) => return json_error(&format!("malformed multipart upload: {e}")),
         }
     }
 
     let (Some(board_bytes), Some(spec)) = (board_bytes, spec) else {
-        return (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            "{\"ok\":false,\"error\":\"the check request needs a 'board' part and a 'spec' part\"}"
-                .to_string(),
-        );
+        return json_error("the check request needs a 'board' part and a 'spec' part");
     };
 
+    // The runner returns a ready JSON string (its own {ok:...} shape); relay
+    // it verbatim with the content-type header.
     let json = match &fw_bytes {
         Some(bytes) => (state.check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
         None => (state.check)(&board_name, &board_bytes, None, &spec),
@@ -189,6 +232,9 @@ async fn analyze_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
     let file_name = headers
         .get("x-board-filename")
         .and_then(|v| v.to_str().ok())
@@ -217,6 +263,9 @@ async fn analyze_handler_fw(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
     let file_name = headers
         .get("x-board-filename")
         .and_then(|v| v.to_str().ok())
@@ -239,8 +288,12 @@ async fn analyze_handler_fw(
 /// to a board-only analysis when no firmware part is present.
 async fn analyze_firmware_handler(
     State(state): State<Arc<FirmwareState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
     let mut board_name = "board".to_string();
     let mut board_bytes: Option<Vec<u8>> = None;
     let mut fw_name = String::new();

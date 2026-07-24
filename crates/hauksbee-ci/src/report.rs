@@ -107,7 +107,15 @@ impl CiResult {
             "ok": true,
             "spec_name": self.spec_name,
             "board": self.board,
-            "passed": self.passed(),
+            // The OVERALL verdict is the process verdict: green only when the
+            // run was valid AND every assertion held. `passed()` alone ignores
+            // an analog abort (exit 3, every assertion left false-but-not-failed),
+            // which would render a green "all passed" over an untrustworthy run.
+            "passed": self.exit_code() == 0,
+            // The two components, so a consumer can tell "an assertion failed"
+            // from "the run itself was not trustworthy".
+            "assertions_passed": self.passed(),
+            "run_valid": !self.analog_invalid(),
             "exit_code": self.exit_code(),
             "analog_abort": self.analog_abort,
             "seeds": self.seeds,
