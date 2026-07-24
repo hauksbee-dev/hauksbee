@@ -40,7 +40,7 @@ pub enum RouteMode {
     Grid,
 }
 
-/// `hauksbee from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid]`
+/// `hauksbee from-code <code-file> [--out <file.kicad_pcb>] [--relayout|--incremental] [--route|--route-grid] [--route-strict]`
 pub fn from_code(
     code_path: &Path,
     out: Option<&Path>,
@@ -48,6 +48,7 @@ pub fn from_code(
     incremental: bool,
     route_flag: bool,
     route_grid_flag: bool,
+    route_strict: bool,
 ) -> anyhow::Result<()> {
     use forge_codegen::{relayout, LayoutConfig, Program};
 
@@ -83,7 +84,7 @@ pub fn from_code(
     let mut pcb = prog.build();
 
     if route != RouteMode::None {
-        route_board(&mut pcb, &prog, route, out)?;
+        route_board(&mut pcb, &prog, route, out, route_strict)?;
     }
 
     let board_text = pcb.emit();
@@ -99,11 +100,16 @@ pub fn from_code(
 
 /// Route a built board in place. Prefers freerouting; documents and falls back
 /// to the grid A* when freerouting is unavailable (or when explicitly forced).
+/// After whichever router merges copper back, an honest post-merge audit runs
+/// (connections routed, an automatic internal DRC, and an endpoint-net
+/// assertion); with `route_strict` an open connection or a serious DRC finding
+/// makes the command exit non-zero.
 fn route_board(
     pcb: &mut forge_model::Pcb,
     prog: &forge_codegen::Program,
     mode: RouteMode,
     out: Option<&Path>,
+    route_strict: bool,
 ) -> anyhow::Result<()> {
     use forge_codegen::{route_grid, FreeroutingConfig, RouteRules};
 
@@ -125,16 +131,11 @@ fn route_board(
         eprintln!("routing: freerouting handoff (DSN -> freerouting -> SES)...");
         match forge_codegen::route_with_freerouting(pcb, prog.outline, &rules, &fr_cfg, &workdir) {
             Ok(o) => {
-                let pct = if o.nets_to_route > 0 {
-                    o.nets_routed as f64 / o.nets_to_route as f64 * 100.0
-                } else {
-                    100.0
-                };
                 eprintln!(
-                    "routed: {}/{} nets ({:.0}%), {} segments, {} vias, {:.1}s (freerouting)",
-                    o.nets_routed, o.nets_to_route, pct, o.segments, o.vias, o.elapsed_secs
+                    "merged {} segments, {} vias in {:.1}s (freerouting)",
+                    o.segments, o.vias, o.elapsed_secs
                 );
-                return Ok(());
+                return post_merge_audit(pcb, "freerouting", false, route_strict);
             }
             Err(e) => {
                 eprintln!("freerouting failed ({e}); falling back to grid A*");
@@ -159,12 +160,65 @@ fn route_board(
             seg += 1;
         }
     }
+    eprintln!("merged {} segments (grid A* fallback)", seg);
+    post_merge_audit(pcb, "grid A* fallback", true, route_strict)
+}
+
+/// Post-merge honesty audit shared by both routers. Reports the real routed
+/// connections (rat-lines closed under the merged copper, not "nets with a
+/// wire"), runs the internal DRC on the produced board, and counts endpoints
+/// that terminate in a wrong-net pad. Under `route_strict`, any open connection,
+/// serious (short) DRC finding, or endpoint-net violation returns an error so
+/// the CLI exits non-zero.
+fn post_merge_audit(
+    pcb: &forge_model::Pcb,
+    router: &str,
+    is_grid: bool,
+    route_strict: bool,
+) -> anyhow::Result<()> {
+    let conn = forge_codegen::connectivity(pcb);
+    let endpoint_viol = forge_codegen::endpoint_net_violations(pcb);
+
+    // Run the same internal DRC as `hauksbee run --drc` on the produced board.
+    let board_text = pcb.emit();
+    let drc = hauksbee_extract::ExtractedBoard::drc(&board_text)?;
+    let serious = drc.short_count();
+    let total = drc.findings.len();
+    // On an unvalidated (KiCad 10+) format the shorts are unreliable; do not
+    // gate strict on them (matches the DRC surface's own caveat).
+    let reliable = drc.version_warning.is_none();
+
     eprintln!(
-        "routed: {} tracks ({} segments), {} unrouted nets (grid A* fallback)",
-        res.tracks.len(),
-        seg,
-        res.unrouted.len()
+        "routed: {}/{} connections, {} unrouted ({router}); endpoint-net violations: {endpoint_viol}",
+        conn.routed, conn.total, conn.unrouted
     );
+    eprintln!("DRC: {serious} serious, {total} total");
+    if let Some(w) = &drc.version_warning {
+        eprintln!("DRC note: {w}");
+    }
+    // BUG 4: the grid A* fallback has no clearance model, so a "completed" run
+    // can still be riddled with shorts. Say so plainly.
+    if is_grid && reliable && serious > 0 {
+        eprintln!(
+            "grid A* completed with {serious} clearance violations; this board needs freerouting"
+        );
+    }
+
+    if route_strict {
+        let mut reasons = Vec::new();
+        if conn.unrouted > 0 {
+            reasons.push(format!("{} unrouted connections", conn.unrouted));
+        }
+        if reliable && serious > 0 {
+            reasons.push(format!("{serious} serious DRC violations"));
+        }
+        if endpoint_viol > 0 {
+            reasons.push(format!("{endpoint_viol} endpoint-net violations"));
+        }
+        if !reasons.is_empty() {
+            anyhow::bail!("route-strict: {}", reasons.join(", "));
+        }
+    }
     Ok(())
 }
 

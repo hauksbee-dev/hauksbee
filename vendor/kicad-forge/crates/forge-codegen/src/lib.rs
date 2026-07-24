@@ -65,9 +65,9 @@ pub use layout::{
     RoutedTrack,
 };
 pub use route_freerouting::{
-    find_freerouting_jar, freerouting_available, merge_ses_into_pcb, parse_ses,
-    route_with_freerouting, run_freerouting, write_dsn, FreeroutingConfig, RouteError, RouteOutcome,
-    RouteRules, SesRoutes,
+    connectivity, endpoint_net_violations, find_freerouting_jar, freerouting_available,
+    merge_ses_into_pcb, parse_ses, route_with_freerouting, run_freerouting, write_dsn, Connectivity,
+    FreeroutingConfig, RouteError, RouteOutcome, RouteRules, SesRoutes,
 };
 
 use forge_model::Pcb;

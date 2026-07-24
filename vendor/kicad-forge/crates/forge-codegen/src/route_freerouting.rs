@@ -228,11 +228,22 @@ pub fn write_dsn(pcb: &Pcb, outline: Option<Outline>, rules: &RouteRules) -> Str
             if matches!(pad.kind(), PadKind::NpThruHole) {
                 continue;
             }
-            let ps = padstack_for(&pad.shape(), pad.size(), through);
-            padstacks.entry(ps.name.clone()).or_insert_with(|| ps.clone());
             // Pad position relative to the footprint origin, un-rotated (DSN
             // applies the component rotation itself at placement time).
-            let (lx, ly, _) = pad.at();
+            let (lx, ly, prot) = pad.at();
+            // Specctra padstack shapes are given in BOARD orientation and are
+            // NOT rotated by the placement angle. So a pad whose total rotation
+            // (footprint + pad) lands on 90 or 270 must present dimension-
+            // swapped extents: a 1.45x1.0 pad rotated 90 is a 1.0x1.45 shape in
+            // board space. KiCad's own DSN exporter does the same, naming the
+            // padstack by the swapped dimensions (so a swapped pad references a
+            // distinct padstack, never the un-rotated one).
+            let eff = (frot + prot).rem_euclid(180.0);
+            let swap = (eff - 90.0).abs() < 45.0;
+            let raw_size = pad.size();
+            let ps_size = if swap { (raw_size.1, raw_size.0) } else { raw_size };
+            let ps = padstack_for(&pad.shape(), ps_size, through);
+            padstacks.entry(ps.name.clone()).or_insert_with(|| ps.clone());
             local_pins.push((num.clone(), (lx, ly), ps.name.clone()));
 
             if let Some((_, net)) = pad.net() {
@@ -306,7 +317,7 @@ pub fn write_dsn(pcb: &Pcb, outline: Option<Outline>, rules: &RouteRules) -> Str
             to_units(at.0),
             to_units(at.1),
             side,
-            norm_rot(*rot)
+            specctra_place_angle(*rot)
         );
         let _ = writeln!(s, "    )");
     }
@@ -399,6 +410,19 @@ fn norm_rot(r: f64) -> i64 {
         v += 360.0;
     }
     v.round() as i64
+}
+
+/// The angle to emit in a Specctra `(place ...)` record for a footprint at KiCad
+/// rotation `kicad_rot`.
+///
+/// Specctra `front`/`back` placement rotates the OPPOSITE way to KiCad, so the
+/// exported angle is `(360 - a) mod 360`. Emitting the raw KiCad angle mirrors
+/// every rotated footprint in the router's view: on a symmetric 2-pad part pads
+/// 1/2 swap, so the router wires the wrong terminal of every rotated decoupler.
+/// Verified against KiCad's own DSN exporter: a footprint KiCad places at rot 90
+/// must be written `front 270` for its pins to land where KiCad puts them.
+fn specctra_place_angle(kicad_rot: f64) -> i64 {
+    norm_rot(360.0 - kicad_rot)
 }
 
 // ---------------------------------------------------------------------------
@@ -954,4 +978,514 @@ pub fn route_with_freerouting(
         vias,
         elapsed_secs: run.elapsed_secs,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Post-merge correctness checks (honest connectivity + endpoint-net assertion)
+// ---------------------------------------------------------------------------
+//
+// These run on the MERGED board (after freerouting or the grid fallback wrote
+// copper back onto it), so they judge the real result rather than a router's
+// self-report. They need only `forge_model`, so they are testable here without
+// a JRE and reusable by the engine's routing report.
+
+/// Two board points are the "same" copper node when within this many mm. Merged
+/// polyline segments share exact vertices; a via and the tracks meeting it snap
+/// to the same point, so a small epsilon suffices.
+const COINCIDE_EPS_MM: f64 = 0.05;
+/// Slack (mm) when testing whether a copper point sits inside a pad.
+const PAD_EPS_MM: f64 = 1e-3;
+
+/// A pad in absolute board coordinates, for point-in-pad connectivity + endpoint
+/// tests. Keyed by numeric net id (segments carry only the id after a merge).
+struct PlacedPadGeo {
+    net: i64,
+    center: (f64, f64),
+    /// Circle radius (mm) when `Some`; otherwise a rotated rectangle.
+    circle_r: Option<f64>,
+    /// Rectangle half-extents (mm) when not a circle.
+    half: (f64, f64),
+    /// Total pad rotation (footprint + pad), radians, y-down frame.
+    angle: f64,
+}
+
+impl PlacedPadGeo {
+    /// Whether board point `p` lies inside this pad.
+    fn contains(&self, p: (f64, f64)) -> bool {
+        let dx = p.0 - self.center.0;
+        let dy = p.1 - self.center.1;
+        if let Some(r) = self.circle_r {
+            let rr = r + PAD_EPS_MM;
+            return dx * dx + dy * dy <= rr * rr;
+        }
+        // Inverse of the y-down placement rotation used by `Pad::absolute_pos`
+        // (which maps local (px,py) to (px*c + py*s, -px*s + py*c)).
+        let c = self.angle.cos();
+        let s = self.angle.sin();
+        let lx = c * dx - s * dy;
+        let ly = s * dx + c * dy;
+        lx.abs() <= self.half.0 + PAD_EPS_MM && ly.abs() <= self.half.1 + PAD_EPS_MM
+    }
+}
+
+/// Absolute geometry of every routable pad on the board (skips `np_thru_hole`
+/// mounting holes, which carry no net).
+fn placed_pads(pcb: &Pcb) -> Vec<PlacedPadGeo> {
+    let mut out = Vec::new();
+    for fp in pcb.footprints() {
+        let (_, _, frot) = fp.at();
+        for pad in fp.pads() {
+            if matches!(pad.kind(), PadKind::NpThruHole) {
+                continue;
+            }
+            let net = pad.net().map(|(id, _)| id).unwrap_or(0);
+            let center = pad.absolute_pos(&fp);
+            let (w, h) = pad.size();
+            let (_, _, prot) = pad.at();
+            let angle = (frot + prot) * std::f64::consts::PI / 180.0;
+            let shape = pad.shape();
+            let circle_r = if (shape == "circle" || shape == "oval") && (w - h).abs() < 1e-6 {
+                Some(w.max(0.01) * 0.5)
+            } else {
+                None
+            };
+            out.push(PlacedPadGeo {
+                net,
+                center,
+                circle_r,
+                half: (w.max(0.01) * 0.5, h.max(0.01) * 0.5),
+                angle,
+            });
+        }
+    }
+    out
+}
+
+/// Honest routed-connections summary derived from the merged board.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Connectivity {
+    /// Total rat-line connections the board needs: sum over nets of `pads - 1`.
+    pub total: usize,
+    /// Connections actually made: `total - unrouted`.
+    pub routed: usize,
+    /// Connections still open: sum over nets of `components - 1`, where a net's
+    /// pads are split into connected components under the merged copper.
+    pub unrouted: usize,
+}
+
+/// Compute the routed-connections summary: for each net, split its pads into
+/// connected components joined by the merged tracks and vias, and count each
+/// extra component as one remaining rat-line. A fully routed net collapses to a
+/// single component (0 unrouted); a net with no copper leaves every connection
+/// open. This is the metric the engine reports, replacing the old "nets with at
+/// least one wire" count that called a shorted board 100% routed.
+pub fn connectivity(pcb: &Pcb) -> Connectivity {
+    use std::collections::{HashMap, HashSet};
+
+    let pads = placed_pads(pcb);
+    let mut net_pads: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (i, p) in pads.iter().enumerate() {
+        if p.net != 0 {
+            net_pads.entry(p.net).or_default().push(i);
+        }
+    }
+    let mut net_seg: HashMap<i64, Vec<((f64, f64), (f64, f64))>> = HashMap::new();
+    for s in pcb.segments() {
+        let id = s.net_id();
+        if id != 0 {
+            net_seg.entry(id).or_default().push((s.start(), s.end()));
+        }
+    }
+    let mut net_via: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
+    for v in pcb.vias() {
+        let id = v.net_id();
+        if id != 0 {
+            net_via.entry(id).or_default().push(v.at());
+        }
+    }
+
+    let eps2 = COINCIDE_EPS_MM * COINCIDE_EPS_MM;
+    let mut total = 0usize;
+    let mut unrouted = 0usize;
+
+    for (net, pad_idxs) in &net_pads {
+        let np = pad_idxs.len();
+        if np < 2 {
+            continue;
+        }
+        total += np - 1;
+
+        // Node list: pad nodes [0, np), then two nodes per segment (its
+        // endpoints), then one per via. `pad_of[k]` is the pad geometry index
+        // for pad nodes so we can test containment.
+        let mut points: Vec<(f64, f64)> = Vec::with_capacity(np);
+        let mut pad_of: Vec<Option<usize>> = Vec::with_capacity(np);
+        for &pi in pad_idxs {
+            points.push(pads[pi].center);
+            pad_of.push(Some(pi));
+        }
+        let seg_base = points.len();
+        let segs = net_seg.get(net).cloned().unwrap_or_default();
+        for (a, b) in &segs {
+            points.push(*a);
+            pad_of.push(None);
+            points.push(*b);
+            pad_of.push(None);
+        }
+        for v in net_via.get(net).cloned().unwrap_or_default() {
+            points.push(v);
+            pad_of.push(None);
+        }
+
+        let n = points.len();
+        let mut uf = UnionFind::new(n);
+        // A segment's two endpoints are one node.
+        let mut k = seg_base;
+        for _ in &segs {
+            uf.union(k, k + 1);
+            k += 2;
+        }
+        // Join coincident points, and pads to any copper point they contain.
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let mut join = dist2(points[i], points[j]) <= eps2;
+                if !join {
+                    if let Some(pi) = pad_of[i] {
+                        if pads[pi].contains(points[j]) {
+                            join = true;
+                        }
+                    }
+                }
+                if !join {
+                    if let Some(pj) = pad_of[j] {
+                        if pads[pj].contains(points[i]) {
+                            join = true;
+                        }
+                    }
+                }
+                if join {
+                    uf.union(i, j);
+                }
+            }
+        }
+
+        let mut roots: HashSet<usize> = HashSet::new();
+        for idx in 0..np {
+            roots.insert(uf.find(idx));
+        }
+        unrouted += roots.len().saturating_sub(1);
+    }
+
+    Connectivity {
+        total,
+        routed: total - unrouted,
+        unrouted,
+    }
+}
+
+/// Count merged copper endpoints (segment ends and vias) that fall inside a pad
+/// of a DIFFERENT net. A correct route never does this; the placement-rotation
+/// bug mirrors footprints so the router terminates wires in the wrong-net pad,
+/// which this catches in one point-in-pad sweep. Each offending endpoint is
+/// counted once.
+pub fn endpoint_net_violations(pcb: &Pcb) -> usize {
+    let pads = placed_pads(pcb);
+    let in_foreign_pad = |pt: (f64, f64), net: i64| -> bool {
+        pads.iter()
+            .any(|p| p.net != 0 && p.net != net && p.contains(pt))
+    };
+
+    let mut viol = 0usize;
+    for s in pcb.segments() {
+        let net = s.net_id();
+        if net == 0 {
+            continue;
+        }
+        if in_foreign_pad(s.start(), net) {
+            viol += 1;
+        }
+        if in_foreign_pad(s.end(), net) {
+            viol += 1;
+        }
+    }
+    for v in pcb.vias() {
+        let net = v.net_id();
+        if net != 0 && in_foreign_pad(v.at(), net) {
+            viol += 1;
+        }
+    }
+    viol
+}
+
+fn dist2(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    dx * dx + dy * dy
+}
+
+/// Minimal union-find for the per-net connectivity walk.
+struct UnionFind {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        UnionFind {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        root
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return;
+        }
+        match self.rank[ra].cmp(&self.rank[rb]) {
+            std::cmp::Ordering::Less => self.parent[ra] = rb,
+            std::cmp::Ordering::Greater => self.parent[rb] = ra,
+            std::cmp::Ordering::Equal => {
+                self.parent[rb] = ra;
+                self.rank[ra] += 1;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use forge_model::Pcb;
+    use std::collections::BTreeMap;
+    use std::f64::consts::PI;
+
+    /// A 3-pad SOT-like footprint with ASYMMETRIC pad positions (so a mirrored
+    /// placement is detectable) and ASYMMETRIC rect pads 0.9 x 0.8 (so a missing
+    /// dimension-swap is detectable). Nets 1/2/3 keep each pad distinguishable.
+    fn sot(reference: &str, x: f64, y: f64, rot: f64) -> String {
+        format!(
+            "  (footprint \"Package_TO_SOT_SMD:SOT-23\" (layer \"F.Cu\")\n\
+             \x20   (at {x} {y} {rot})\n\
+             \x20   (property \"Reference\" \"{reference}\" (at 0 0 0) (layer \"F.SilkS\"))\n\
+             \x20   (pad \"1\" smd rect (at -1.0 -1.0) (size 0.9 0.8) (layers \"F.Cu\") (net 1 \"N1\"))\n\
+             \x20   (pad \"2\" smd rect (at 1.0 -1.0) (size 0.9 0.8) (layers \"F.Cu\") (net 2 \"N2\"))\n\
+             \x20   (pad \"3\" smd rect (at 0.0 1.1) (size 0.9 0.8) (layers \"F.Cu\") (net 3 \"N3\"))\n\
+             \x20 )\n"
+        )
+    }
+
+    fn board_four_rotations() -> String {
+        let mut s = String::from("(kicad_pcb (version 20241229) (generator test)\n");
+        s.push_str("  (net 0 \"\")\n  (net 1 \"N1\")\n  (net 2 \"N2\")\n  (net 3 \"N3\")\n");
+        s.push_str(&sot("U1", 50.0, 40.0, 0.0));
+        s.push_str(&sot("U2", 72.0, 143.0, 90.0));
+        s.push_str(&sot("U3", 90.0, 60.0, 180.0));
+        s.push_str(&sot("U4", 120.0, 80.0, 270.0));
+        s.push_str(")\n");
+        s
+    }
+
+    struct ParsedDsn {
+        places: BTreeMap<usize, (i64, i64, i64)>,
+        pins: BTreeMap<usize, Vec<(String, i64, i64)>>,
+        rect_padstacks: BTreeMap<String, (i64, i64)>,
+    }
+
+    fn parse_dsn(dsn: &str) -> ParsedDsn {
+        let mut places = BTreeMap::new();
+        let mut pins: BTreeMap<usize, Vec<(String, i64, i64)>> = BTreeMap::new();
+        let mut rect_padstacks = BTreeMap::new();
+        let mut cur_image: Option<usize> = None;
+        let mut cur_padstack: Option<String> = None;
+
+        for line in dsn.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("(place ") {
+                let rest = rest.trim_end_matches(')');
+                let f: Vec<&str> = rest.split_whitespace().collect();
+                let idx = f[0].trim_start_matches('C').parse::<usize>().unwrap();
+                let x = f[1].parse::<i64>().unwrap();
+                let y = f[2].parse::<i64>().unwrap();
+                let ang = f[4].parse::<i64>().unwrap();
+                places.insert(idx, (x, y, ang));
+            } else if let Some(rest) = t.strip_prefix("(image ") {
+                let name = rest.trim_end_matches(')').trim();
+                let idx = name.trim_start_matches("img_").parse::<usize>().unwrap();
+                cur_image = Some(idx);
+            } else if let Some(rest) = t.strip_prefix("(pin ") {
+                if let Some(idx) = cur_image {
+                    let rest = rest.trim_end_matches(')');
+                    let f: Vec<&str> = rest.split_whitespace().collect();
+                    let name = f[0].trim_matches('"').to_string();
+                    let lx = f[2].parse::<i64>().unwrap();
+                    let ly = f[3].parse::<i64>().unwrap();
+                    pins.entry(idx).or_default().push((name, lx, ly));
+                }
+            } else if let Some(rest) = t.strip_prefix("(padstack ") {
+                cur_padstack = Some(rest.trim().trim_matches('"').to_string());
+            } else if t.starts_with("(shape (rect") {
+                if let Some(name) = &cur_padstack {
+                    let nums: Vec<i64> = t
+                        .replace('(', " ")
+                        .replace(')', " ")
+                        .split_whitespace()
+                        .filter_map(|s| s.parse::<i64>().ok())
+                        .collect();
+                    if nums.len() >= 4 {
+                        rect_padstacks.insert(name.clone(), (nums[2].abs(), nums[3].abs()));
+                    }
+                }
+            } else if t == ")" {
+                cur_image = None;
+                cur_padstack = None;
+            }
+        }
+        ParsedDsn {
+            places,
+            pins,
+            rect_padstacks,
+        }
+    }
+
+    /// BUG 1 + BUG 2 regression: for an asymmetric footprint at 0/90/180/270,
+    /// every emitted pin's ABSOLUTE position (place + the DSN's own placement
+    /// rotation) must equal the KiCad pad position, and the padstack a rotated
+    /// pin references must carry the dimension-SWAPPED extents.
+    #[test]
+    fn dsn_rotation_and_padstack_swap_match_kicad() {
+        let text = board_four_rotations();
+        let pcb = Pcb::parse(&text).expect("parse board");
+        let dsn = write_dsn(&pcb, None, &RouteRules::default());
+        let parsed = parse_dsn(&dsn);
+
+        let fps = pcb.footprints();
+        assert_eq!(fps.len(), 4);
+        for (idx, fp) in fps.iter().enumerate() {
+            let (px, py, angle) = parsed.places[&idx];
+            let a = (angle as f64) * PI / 180.0;
+            let (c, sn) = (a.cos(), a.sin());
+            let pins = &parsed.pins[&idx];
+            let pads = fp.pads();
+            assert_eq!(pins.len(), pads.len(), "pin count for fp {idx}");
+
+            let rot = fp.at().2;
+            let swap = ((rot).rem_euclid(180.0) - 90.0).abs() < 45.0;
+
+            for (k, pad) in pads.iter().enumerate() {
+                let (name, lx, ly) = &pins[k];
+                // Specctra front angle uses a standard CCW rotation; with the
+                // emitted (360 - kicad) angle this must reproduce absolute_pos.
+                let rx = (*lx as f64) * c - (*ly as f64) * sn;
+                let ry = (*lx as f64) * sn + (*ly as f64) * c;
+                let got = (px as f64 + rx, py as f64 + ry);
+
+                let (kx, ky) = pad.absolute_pos(fp);
+                let exp = (to_units(kx) as f64, to_units(ky) as f64);
+                assert!(
+                    (got.0 - exp.0).abs() <= 3.0 && (got.1 - exp.1).abs() <= 3.0,
+                    "fp {idx} (rot {rot}) pin {k}: DSN pos {got:?} != KiCad {exp:?}"
+                );
+
+                // BUG 2: the referenced padstack's rect extents are swapped at
+                // 90/270.
+                let (w, h) = pad.size();
+                let exp_hx = if swap {
+                    to_units(h.max(0.1) * 0.5)
+                } else {
+                    to_units(w.max(0.1) * 0.5)
+                };
+                let exp_hy = if swap {
+                    to_units(w.max(0.1) * 0.5)
+                } else {
+                    to_units(h.max(0.1) * 0.5)
+                };
+                let (hx, hy) = parsed.rect_padstacks[name];
+                assert_eq!(
+                    (hx, hy),
+                    (exp_hx, exp_hy),
+                    "fp {idx} (rot {rot}) pin {k}: padstack {name} extents"
+                );
+            }
+        }
+    }
+
+    /// The emitted place angle is (360 - kicad) mod 360, never the raw angle.
+    #[test]
+    fn place_angle_is_specctra_inverse() {
+        assert_eq!(specctra_place_angle(0.0), 0);
+        assert_eq!(specctra_place_angle(90.0), 270);
+        assert_eq!(specctra_place_angle(180.0), 180);
+        assert_eq!(specctra_place_angle(270.0), 90);
+        assert_eq!(specctra_place_angle(-90.0), 90);
+    }
+
+    fn one_pad_fp(reference: &str, x: f64, y: f64, net_id: i64, net_name: &str) -> String {
+        format!(
+            "  (footprint \"R\" (layer \"F.Cu\")\n\
+             \x20   (at {x} {y} 0)\n\
+             \x20   (property \"Reference\" \"{reference}\" (at 0 0 0) (layer \"F.SilkS\"))\n\
+             \x20   (pad \"1\" smd rect (at 0.0 0.0) (size 0.9 0.8) (layers \"F.Cu\") (net {net_id} \"{net_name}\"))\n\
+             \x20 )\n"
+        )
+    }
+
+    fn two_pad_board() -> Pcb {
+        let mut s = String::from("(kicad_pcb (version 20241229) (generator test)\n");
+        s.push_str("  (net 0 \"\")\n  (net 1 \"N1\")\n  (net 2 \"N2\")\n");
+        s.push_str(&one_pad_fp("A1", 10.0, 10.0, 1, "N1"));
+        s.push_str(&one_pad_fp("A2", 20.0, 10.0, 1, "N1"));
+        s.push_str(&one_pad_fp("A3", 30.0, 10.0, 2, "N2"));
+        s.push_str(")\n");
+        Pcb::parse(&s).expect("parse two-pad board")
+    }
+
+    #[test]
+    fn connectivity_counts_unrouted_and_routed() {
+        // Net 1 has two pads (one connection); net 2 has a single pad (none).
+        let mut pcb = two_pad_board();
+        let before = connectivity(&pcb);
+        assert_eq!(before.total, 1, "one connection needed on net 1");
+        assert_eq!(before.unrouted, 1, "no copper yet");
+        assert_eq!(before.routed, 0);
+
+        // Route it: a track from pad A1 to pad A2 on net 1.
+        pcb.add_segment((10.0, 10.0), (20.0, 10.0), 0.25, "F.Cu", Some(1));
+        let after = connectivity(&pcb);
+        assert_eq!(after.total, 1);
+        assert_eq!(after.unrouted, 0, "net 1 now fully connected");
+        assert_eq!(after.routed, 1);
+    }
+
+    #[test]
+    fn endpoint_net_violation_flags_wrong_net_pad() {
+        let mut pcb = two_pad_board();
+        // A net-1 track whose far end lands inside pad A3 (net 2): the exact
+        // signature of a mirrored footprint. One violation.
+        pcb.add_segment((10.0, 10.0), (30.0, 10.0), 0.25, "F.Cu", Some(1));
+        assert_eq!(endpoint_net_violations(&pcb), 1);
+
+        // A clean net-1 track (both ends on net-1 pads) is not a violation.
+        let mut clean = two_pad_board();
+        clean.add_segment((10.0, 10.0), (20.0, 10.0), 0.25, "F.Cu", Some(1));
+        assert_eq!(endpoint_net_violations(&clean), 0);
+    }
 }
