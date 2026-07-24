@@ -135,7 +135,7 @@ name lists its near-matches ("did you mean `ANALOG_VDD`?").
 | Key             | Type     | Default       | Meaning                                                       |
 | --------------- | -------- | ------------- | ------------------------------------------------------------- |
 | `name`          | string   | `"hauksbee-ci"`| Label shown in reports.                                       |
-| `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356. |
+| `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356, Altium `.PcbDoc`, a gerber folder/zip, or Board-as-Code `.board` (bare or zipped; compiled in-process, no routing step needed). The same formats `hauksbee run` accepts. |
 | `firmware`      | path     | none          | Firmware to boot on the detected MCU: a compiled ELF/hex, a PlatformIO project directory, or a zip of either (same three input tiers as `run --firmware`, see [`../cosim/MCU.md`](../cosim/MCU.md)). |
 | `mcu`           | string   | none          | Informational note only — nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. |
 | `duration_ms`   | float    | `100`         | Simulated time to run.                                        |

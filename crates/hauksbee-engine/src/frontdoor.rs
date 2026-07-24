@@ -300,80 +300,6 @@ pub struct WebReport {
     pub cosim: Option<WebCosimSection>,
 }
 
-/// Run the full front-door analysis on an uploaded board file.
-///
-/// `file_name` is used only for display and to disambiguate a `.kicad_sch` (which
-/// the extractor handles by content here too). `contents` is the file's RAW
-/// bytes: binary formats (Altium `.PcbDoc`, an OLE2 container) are sniffed and
-/// read from the bytes first, exactly like the CLI `run` path, and only a
-/// non-binary input falls back to the text sniffer over a lossy-UTF8 view
-/// (which is exact for the text formats). Decoding before this point would
-/// corrupt a binary board before it was ever parsed.
-/// The two things a `.zip` board upload can be. The reader registry knows
-/// neither (it reads one text/binary board), so [`analyze`] routes zips here.
-enum ZipBoardInput {
-    /// The zip wraps a Board-as-Code export: the `.board` source, read out.
-    BoardCode(String),
-    /// The zip is a gerber fab archive, reverse-extracted from copper.
-    Gerber(ExtractedBoard),
-}
-
-/// Classify and read a zipped board upload: a `.board` export inside wins (a
-/// fab archive never carries one); anything else is treated as a gerber job
-/// zip, exactly like CLI `run <fab.zip>`.
-fn zip_board_input(file_name: &str, contents: &[u8]) -> Result<ZipBoardInput, String> {
-    use std::io::Read;
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents))
-        .map_err(|e| format!("could not open '{file_name}' as a zip archive: {e}"))?;
-    let mut code_entries: Vec<usize> = Vec::new();
-    for i in 0..archive.len() {
-        if let Ok(entry) = archive.by_index(i) {
-            let name = entry.name();
-            if name.starts_with("__MACOSX/")
-                || name.rsplit('/').next().is_some_and(|f| f.starts_with('.'))
-            {
-                continue;
-            }
-            if name.to_ascii_lowercase().ends_with(".board") {
-                code_entries.push(i);
-            }
-        }
-    }
-    if code_entries.len() > 1 {
-        return Err(format!(
-            "'{file_name}' contains more than one .board file; zip (or upload) just the one you mean."
-        ));
-    }
-    if let Some(&i) = code_entries.first() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| format!("could not read the .board inside '{file_name}': {e}"))?;
-        let mut src = String::new();
-        entry
-            .read_to_string(&mut src)
-            .map_err(|e| format!("could not read the .board inside '{file_name}': {e}"))?;
-        return Ok(ZipBoardInput::BoardCode(src));
-    }
-    // No .board: treat as a gerber fab archive. `from_gerber` wants a path, so
-    // park the bytes in a temp file.
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "hauksbee-web-gerber-{}-{}.zip",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::write(&tmp, contents).map_err(|e| format!("could not stage the zip: {e}"))?;
-    let result = ExtractedBoard::from_gerber(&tmp);
-    let _ = std::fs::remove_file(&tmp);
-    result.map(ZipBoardInput::Gerber).map_err(|e| {
-        format!(
-            "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
-             contain the gerber fab files (copper + drill), or one .board export."
-        )
-    })
-}
-
 /// A binder-detected power supply, as the checks builder consumes it.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebSupply {
@@ -404,78 +330,42 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
     }
 }
 
+/// Run the full front-door analysis on an uploaded board file.
+///
+/// `file_name` is used only for display and to disambiguate a `.board` (which
+/// the normalizer routes to the Board-as-Code compiler). `contents` is the
+/// file's RAW bytes: binary formats (Altium `.PcbDoc`, an OLE2 container) are
+/// sniffed and read from the bytes first, exactly like the CLI `run` path, and
+/// only a non-binary input falls back to the text sniffer over a lossy-UTF8
+/// view (which is exact for the text formats). Decoding before this point
+/// would corrupt a binary board before it was ever parsed. All of that routing
+/// lives in [`crate::board_input::from_bytes`], the SAME normalizer the CLI
+/// path uses, so the web and CLI surfaces can never disagree about what a
+/// board file is.
 pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
-    // Binary-first, mirroring `run`: `from_auto_bytes` claims a recognised
-    // binary board (OLE2 magic + Altium streams) or returns None so text
-    // formats keep their exact behaviour through `from_auto`.
-    let binary = ExtractedBoard::from_auto_bytes(contents);
-    let is_binary = binary.is_some();
-
-    // A `.zip` upload is a gerber fab archive or a zipped Board-as-Code
-    // export; route it before the text sniffer (which knows neither). This is
-    // what makes the drop-zone claim "gerber zip" actually true — the CLI took
-    // this path via `run <fab.zip>` while the web upload fell through to
-    // "unrecognized board format".
-    let mut zip_code: Option<String> = None;
-    let mut gerber_board: Option<ExtractedBoard> = None;
-    if !is_binary && contents.starts_with(b"PK\x03\x04") {
-        match zip_board_input(file_name, contents) {
-            Ok(ZipBoardInput::BoardCode(src)) => zip_code = Some(src),
-            Ok(ZipBoardInput::Gerber(b)) => gerber_board = Some(b),
-            Err(e) => return unreadable(file_name, format!("Could not read this board file: {e}")),
-        }
+    match crate::board_input::from_bytes(file_name, contents) {
+        Ok(norm) => analyze_normalized(file_name, &norm),
+        Err(e) => unreadable(file_name, e.web_message()),
     }
-    let is_gerber = gerber_board.is_some();
+}
 
-    let text: std::borrow::Cow<'_, str> = match &zip_code {
-        Some(src) => std::borrow::Cow::Borrowed(src.as_str()),
-        None => String::from_utf8_lossy(contents),
-    };
-    // Board-as-Code (`hauksbee to-code` output, usually `*.board`, possibly
-    // zipped) is a DSL, not a CAD format, so the extractor cannot sniff it.
-    // Compile it to KiCad board text first — the same route CLI `run` takes —
-    // so the web drop zone accepts every file `run` does. The emitted text then
-    // flows through the untouched text path below (parse, DRC, SI) as if a
-    // `.kicad_pcb` was uploaded.
-    let is_board_code = !is_binary
-        && !is_gerber
-        && (zip_code.is_some()
-            || std::path::Path::new(file_name)
-                .extension()
-                .and_then(|e| e.to_str())
-                == Some("board")
-            || crate::commands::common::is_board_code_header(&text));
-    let text: std::borrow::Cow<'_, str> = if is_board_code {
-        match crate::boardcode::code_to_board_text(&text) {
-            Ok(t) => std::borrow::Cow::Owned(t),
-            Err(e) => {
-                return unreadable(
-                    file_name,
-                    format!("Could not compile this Board-as-Code file: {e}."),
-                );
-            }
-        }
-    } else {
-        text
-    };
+/// The static analysis on an already-normalized board. Split from [`analyze`]
+/// so [`analyze_with_firmware`] can normalize ONCE and hand the same
+/// [`crate::board_input::NormalizedBoard`] to both the static report and the
+/// co-sim, instead of re-reading the original bytes with a weaker sniffer
+/// (the old path failed co-sim on any `.board` or gerber zip that had just
+/// produced a clean static report).
+fn analyze_normalized(
+    file_name: &str,
+    norm: &crate::board_input::NormalizedBoard,
+) -> WebReport {
+    let is_binary = norm.is_binary();
+    let is_gerber = norm.is_gerber();
+    let board = &norm.board;
     // Text view for the geometry-bearing text checks (DRC / SI). A binary or
     // gerber board has no KiCad layout text: those checks get their bytes twin
     // (Altium) or nothing, stated in the report rather than silently green.
-    let text_view: Option<&str> = (!is_binary && !is_gerber).then_some(&text);
-    let board = match gerber_board {
-        Some(b) => b,
-        None => match binary.unwrap_or_else(|| ExtractedBoard::from_auto(&text)) {
-            Ok(b) => b,
-            Err(e) => {
-                return unreadable(
-                    file_name,
-                    format!(
-                        "Could not read this board file: {e}. Supported: KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC-D-356 .d356, Board-as-Code .board, or a zip of gerbers / a .board export."
-                    ),
-                );
-            }
-        },
-    };
+    let text_view: Option<&str> = norm.layout_text.as_deref();
 
     let lib = ModelLibrary::builtin_with_user_dirs(&[]);
 
@@ -484,11 +374,11 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // gerber archive has neither — its DRC section says so below instead of
     // reporting a vacuous "no problems".
     let drc = if is_binary {
-        ExtractedBoard::altium_drc(contents).unwrap_or_default()
+        ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
     } else if is_gerber {
         Default::default()
     } else {
-        ExtractedBoard::drc(&text).unwrap_or_default()
+        ExtractedBoard::drc(text_view.unwrap_or_default()).unwrap_or_default()
     };
     // Render from the grouped structure (single source of truth shared with the
     // CLI text/plain/json surfaces): duplicates collapsed, and gap==rule labelled
@@ -499,7 +389,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // `engine_lint` chokepoint (connectivity + strap lint + MCU resource conflicts
     // + the unchecked-strap-bearing-MCU coverage note), so the web report never
     // prints "Looks healthy" over a strap-bearing MCU whose BOOT0 was unexamined.
-    let lint = crate::checks::engine_lint(&board, &lib);
+    let lint = crate::checks::engine_lint(board, &lib);
     let lint_plain = plain_netlint(&lint);
 
     // SI needs the layout text for the geometry-bearing checks; a binary board
@@ -507,7 +397,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // chokepoint so the web report carries the trace-ampacity + input-cap-ripple
     // findings too — the bare `si_checks` left the web "Signal integrity" section
     // silently missing an under-width power trace the CLI `--si` flags.
-    let si = crate::checks::engine_si(&board, &lib, text_view);
+    let si = crate::checks::engine_si(board, &lib, text_view);
     let si_plain = plain_si(&si);
 
     let mut sections = vec![
@@ -533,7 +423,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // read "Looks healthy". Fold it in so all four personas agree: a Serious
     // verdict becomes a serious WebFinding (raising serious/total), an Info
     // verdict becomes a heads-up (suppressing a false "Looks healthy").
-    if let Some(section) = crate::usb_c_report(&board)
+    if let Some(section) = crate::usb_c_report(board)
         .as_ref()
         .and_then(usbc_web_section)
     {
@@ -550,7 +440,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     // derive the same bind-role honesty data the CLI/JSON surfaces carry. The
     // web report previously dropped this entirely (a board with every active IC
     // open showed "Looks healthy"); compute it once here from the bound report.
-    let bound = bind_board(&board, &lib);
+    let bound = bind_board(board, &lib);
     let bind_summary = BindSummary::from_report(&bound.report);
     let bind_web = BindSummaryWeb::from_summary(&bind_summary);
 
@@ -655,12 +545,16 @@ pub fn analyze_with_firmware(
     fw_name: &str,
     fw_bytes: &[u8],
 ) -> WebReport {
-    // Always run the static analysis first. If it failed to even read the board,
-    // there is no board to co-sim against; return the static error as-is.
-    let mut report = analyze(file_name, contents);
-    if !report.ok {
-        return report;
-    }
+    // Normalize ONCE; the static analysis and the co-sim share the same
+    // extracted board. The old path re-read the ORIGINAL bytes for co-sim with
+    // only the text/binary sniffers, so a `.board` or gerber zip that had just
+    // produced a clean static report failed with "could not re-read the board".
+    let norm = match crate::board_input::from_bytes(file_name, contents) {
+        Ok(n) => n,
+        // No board to co-sim against; return the normalization error as-is.
+        Err(e) => return unreadable(file_name, e.web_message()),
+    };
+    let mut report = analyze_normalized(file_name, &norm);
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
     // project) rather than a bare image — resolve it first. A resolution
@@ -673,7 +567,7 @@ pub fn analyze_with_firmware(
             return report;
         }
     };
-    let mut cosim = run_web_cosim(contents, &resolved.name, &resolved.bytes);
+    let mut cosim = run_web_cosim(&norm.board, &resolved.name, &resolved.bytes);
     if let Some(note) = &resolved.note {
         // Say which image actually ran when it came out of an archive/build,
         // so a wrong-env surprise is diagnosable from the report itself.
@@ -843,24 +737,20 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 /// The actual firmware co-sim for the web path. Mirrors `run_headless` in the
 /// CLI (same fixed 1 kHz frame cadence, same fault dedup via `plain_faults`) but
 /// runs synchronously for a short fixed window so it fits a request budget.
-fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSection {
+///
+/// Takes the ALREADY-extracted board from the caller's normalization pass
+/// (never re-reads the upload): every format the static analysis accepts,
+/// `.board` exports and gerber zips included, reaches co-sim identically.
+fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSection {
     use crate::plain::plain_faults;
     use crate::stress::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
     use std::io::Write;
 
-    // No MCU => firmware drives nothing. Inspect the bound board before paying for
-    // a temp file / engine build, and say so plainly. Same binary-first routing as
-    // [`analyze`], so a binary board reaches the co-sim path uncorrupted too.
-    let board = match ExtractedBoard::from_auto_bytes(contents)
-        .unwrap_or_else(|| ExtractedBoard::from_auto(&String::from_utf8_lossy(contents)))
-    {
-        Ok(b) => b,
-        // Should not happen (the static analyze already succeeded), but be safe.
-        Err(e) => return cosim_unavailable(format!("Could not re-read the board for co-sim: {e}.")),
-    };
+    // No MCU => firmware drives nothing. Inspect the bound board before paying
+    // for a temp file / engine build, and say so plainly.
     let lib = ModelLibrary::builtin();
-    let bound = bind_board(&board, &lib);
+    let bound = bind_board(board, &lib);
     if bound.mcus.is_empty() {
         return cosim_unavailable(
             "No microcontroller was found on this board; the firmware co-sim needs an MCU to run on.",
@@ -1049,7 +939,7 @@ fn run_web_cosim(contents: &[u8], fw_name: &str, fw_bytes: &[u8]) -> WebCosimSec
     // same zero-activity gate the notes above use.
     let firmware_ran = !(total_toggles == 0 && uart_empty && !any_gpio_driven);
     let boot_advisory = crate::checks::boot::analyze(
-        &board,
+        board,
         &sched.firmware_held_high_nets(),
         &sched.firmware_output_configured_nets(),
         &sched.firmware_driven_nets(),
@@ -1596,6 +1486,123 @@ fn main {
             r.notes.iter().any(|n| n.message.contains("reverse-extracted")),
             "coverage note present"
         );
+    }
+
+    #[test]
+    fn golden_parity_plain_kicad_pcb_report_is_unchanged() {
+        // The whole point of routing analyze() through the board_input
+        // normalizer is that NOTHING moves for the common case. This golden was
+        // captured from the pre-normalizer analyze() on boot_gate.kicad_pcb;
+        // byte-for-byte equality proves the plain .kicad_pcb web report did not
+        // change shape, counts, wording, or ordering under the refactor.
+        let golden = include_str!("../../../testdata/golden/boot_gate_web_report.json");
+        let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        assert_eq!(
+            json,
+            golden.trim_end(),
+            "the plain .kicad_pcb web report must be byte-identical to the pre-refactor golden"
+        );
+    }
+
+    #[test]
+    fn zipped_board_export_with_firmware_reaches_cosim() {
+        // B6 regression: the co-sim used to RE-READ the original upload bytes
+        // with only the text/binary sniffers, so a zipped .board export that
+        // produced a clean static report failed co-sim with "could not re-read
+        // the board". Normalizing once must give a REAL co-sim outcome: here
+        // the DSL board has no MCU, so the honest "no microcontroller" note.
+        use std::io::Write;
+        let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "A"
+    net "B"
+    comp R1 lib "Resistor_SMD:R_0402_1005Metric" val "10k" layer "F.Cu" at 0 0 rot 0 {
+        pad "1" smd rect at 0 0 size 1 1 layers [F.Cu] net "A"
+        pad "2" smd rect at 1 0 size 1 1 layers [F.Cu] net "B"
+    }
+}
+"#;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        w.start_file("export/tarski.board", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(dsl).unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let r = analyze_with_firmware("tarski-export.zip", &bytes, "fw.elf", BOOT_GATE_FW);
+        assert!(r.ok, "static analysis succeeds: {:?}", r.error);
+        let cosim = r.cosim.expect("cosim section present once firmware was supplied");
+        assert!(
+            !cosim
+                .findings
+                .iter()
+                .any(|f| f.why.contains("re-read") || f.why.contains("Could not re-read")),
+            "the re-read failure mode must be gone: {:?}",
+            cosim.findings
+        );
+        assert!(!cosim.ran, "the DSL board has no MCU, so the co-sim cannot run");
+        assert!(
+            cosim
+                .findings
+                .iter()
+                .any(|f| f.why.to_lowercase().contains("microcontroller")),
+            "the honest no-MCU note must be the reason: {:?}",
+            cosim.findings
+        );
+    }
+
+    /// B6, gerber arm: a gerber zip plus firmware must reach a real co-sim
+    /// outcome too (usually the honest "no MCU found", since a fab archive
+    /// names no parts). Corpus-gated like [`analyze_gerber_zip_reverse_extracts`].
+    #[test]
+    fn gerber_zip_with_firmware_reaches_cosim() {
+        use std::io::Write;
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+        if !dir.exists() {
+            if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
+                panic!("corpus required but uconsole_cm4_adapter_gerber missing");
+            }
+            eprintln!("skipping gerber-zip cosim test (corpus absent)");
+            return;
+        }
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.is_file() {
+                w.start_file(
+                    format!("gerbers/{}", p.file_name().unwrap().to_str().unwrap()),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+                w.write_all(&std::fs::read(&p).unwrap()).unwrap();
+            }
+        }
+        let bytes = w.finish().unwrap().into_inner();
+        let r = analyze_with_firmware("cm4_adapter_gerbers.zip", &bytes, "fw.elf", BOOT_GATE_FW);
+        assert!(r.ok, "gerber zip static analysis succeeds: {:?}", r.error);
+        let cosim = r.cosim.expect("cosim section present once firmware was supplied");
+        assert!(
+            !cosim
+                .findings
+                .iter()
+                .any(|f| f.why.contains("re-read") || f.why.contains("Could not re-read")),
+            "the re-read failure mode must be gone: {:?}",
+            cosim.findings
+        );
+        // A fab archive carries no part identities, so the expected honest
+        // outcome is "no MCU"; a run would also be acceptable if reverse
+        // extraction ever learns to name one.
+        if !cosim.ran {
+            assert!(
+                cosim
+                    .findings
+                    .iter()
+                    .any(|f| f.why.to_lowercase().contains("microcontroller")),
+                "a not-run co-sim must carry the honest reason: {:?}",
+                cosim.findings
+            );
+        }
     }
 
     #[test]
