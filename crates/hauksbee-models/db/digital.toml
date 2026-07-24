@@ -358,9 +358,11 @@ gnd_pin    = "7"
 "8"  = "y3"
 "9"  = "a3"
 "10" = "b3"
-"11" = "a4"
-"12" = "b4"
-"13" = "y4"
+# Right-side gates are OUTPUT-first on the '00/'08/'32/'86 pattern: 8 = 3Y and
+# 11 = 4Y (inputs 12/13), mirroring the left side's input-input-output order.
+"11" = "y4"
+"12" = "a4"
+"13" = "b4"
 "14" = "vcc"
 
 [models.ratings]
@@ -465,9 +467,11 @@ gnd_pin    = "7"
 "8"  = "y3"
 "9"  = "a3"
 "10" = "b3"
-"11" = "a4"
-"12" = "b4"
-"13" = "y4"
+# Right-side gates are OUTPUT-first on the '00/'08/'32/'86 pattern: 8 = 3Y and
+# 11 = 4Y (inputs 12/13), mirroring the left side's input-input-output order.
+"11" = "y4"
+"12" = "a4"
+"13" = "b4"
 "14" = "vcc"
 
 [models.ratings]
@@ -517,9 +521,11 @@ gnd_pin    = "7"
 "8"  = "y3"
 "9"  = "a3"
 "10" = "b3"
-"11" = "a4"
-"12" = "b4"
-"13" = "y4"
+# Right-side gates are OUTPUT-first on the '00/'08/'32/'86 pattern: 8 = 3Y and
+# 11 = 4Y (inputs 12/13), mirroring the left side's input-input-output order.
+"11" = "y4"
+"12" = "a4"
+"13" = "b4"
 "14" = "vcc"
 
 [models.ratings]
@@ -569,9 +575,11 @@ gnd_pin    = "7"
 "8"  = "y3"
 "9"  = "a3"
 "10" = "b3"
-"11" = "a4"
-"12" = "b4"
-"13" = "y4"
+# Right-side gates are OUTPUT-first on the '00/'08/'32/'86 pattern: 8 = 3Y and
+# 11 = 4Y (inputs 12/13), mirroring the left side's input-input-output order.
+"11" = "y4"
+"12" = "a4"
+"13" = "b4"
 "14" = "vcc"
 
 [models.ratings]
