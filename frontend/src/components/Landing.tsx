@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
 import { CheckIcon, PlayIcon, PlusIcon, BoardTargetIcon } from './Icons'
 import { BoardViewer } from './BoardViewer'
-import { ChecksPanel } from './ChecksPanel'
+import { ChecksPanel, checksStorageKey } from './ChecksPanel'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -195,13 +195,25 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
 
   const handleBoard = useCallback((f: File) => {
     // A firmware file in the board slot is a mis-drop, not a board: route it to
-    // the firmware jack instead of sending an ELF to the board extractor.
-    if (looksLikeFirmware(f.name) && !lastBoardFile.current) {
+    // the firmware jack instead of sending an ELF to the board extractor. This
+    // holds whether or not a board is already loaded ("check another board"
+    // reuses the same input, and an .elf dropped there is still firmware).
+    if (looksLikeFirmware(f.name)) {
       handleFirmware(f)
       return
     }
+    // Switching boards must not carry the previous board's firmware or clicked
+    // net along: the new board would silently co-sim the OLD firmware image.
+    // Firmware staged before the FIRST board is a deliberate pairing, keep it.
+    const switchingBoards = lastBoardFile.current !== null
     lastBoardFile.current = f
-    void analyze(f, firmwareFile)
+    if (switchingBoards) {
+      setFirmwareFile(null)
+      setSelectedNet(null)
+      void analyze(f, null)
+    } else {
+      void analyze(f, firmwareFile)
+    }
   }, [analyze, firmwareFile, handleFirmware])
 
   // One-click samples: fetch a bundled board (and optionally its firmware)
@@ -501,6 +513,10 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             hauksbee-ci, keep the file. */}
         {report?.ok && (
           <ChecksPanel
+            // Remount per board (the key doubles as the localStorage key): the
+            // panel's mount-time restore is then authoritative, and one
+            // board's builder state can never leak into another board's.
+            key={checksStorageKey(report)}
             report={report}
             boardFile={lastBoardFile.current}
             firmwareFile={firmwareFile}
