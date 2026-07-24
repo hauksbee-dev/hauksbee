@@ -5,9 +5,9 @@ Each deck in `crates/hauksbee-solve/tests/decks/` is run through both ngspice
 `-b` and the hauksbee solver; the worst-case error per probe is compared against
 the per-quantity tolerance declared in that deck's `expect.toml`.
 
-- Oracle: **ngspice ngspice-46**
-- Decks: **33**
-- Passing: **33/33**
+- Oracle: **ngspice ngspice-45.2**
+- Decks: **34**
+- Passing: **34/34**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -15,8 +15,8 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 |  |  | `V(base)` | 1.922e-6 | 5.0e-3 | op | PASS |
 |  |  | `V(emit)` | 2.563e-6 | 5.0e-3 | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | t=6.213e-5s | PASS |
-| bjt_switch_tail | tran | `V(c)` | 3.333e-5 | 1.0e-3 | t=2.060e-6s | PASS |
-| bsource_clamp | tran | `V(out)` | 1.869e-4 | 1.0e-2 | t=1.996e-3s | PASS |
+| bjt_switch_tail | tran | `V(c)` | 3.362e-5 | 1.0e-3 | t=2.045e-6s | PASS |
+| bsource_clamp | tran | `V(out)` | 1.037e-4 | 1.0e-2 | t=6.614e-4s | PASS |
 | bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 1.0e-2 | t=1.436e-3s | PASS |
 | bsource_time | tran | `V(out)` | 2.334e-4 | 1.0e-2 | t=3.654e-6s | PASS |
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
@@ -28,29 +28,30 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 |  |  | `I(V1)` | 5.044e-7 | 5.0e-3 | op | PASS |
 | diode_rectifier | tran | `V(out)` | 4.860e-4 | 2.0e-2 | t=1.114e-3s | PASS |
 | diode_rectifier_charge | tran | `V(out)` | 3.313e-4 | 2.0e-2 | t=2.192e-5s | PASS |
-| diode_reverse_recovery | tran | `V(a)` | 3.863e-2 | 5.0e-2 | t=1.308e-6s | PASS |
+| diode_reverse_recovery | tran | `V(a)` | 3.864e-2 | 5.0e-2 | t=1.308e-6s | PASS |
 | diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-3 | op | PASS |
-| flyback_diode | tran | `V(out)` | 1.599e-2 | 5.0e-2 | t=2.557e-5s | PASS |
+| flyback_diode | tran | `V(out)` | 1.578e-2 | 5.0e-2 | t=2.557e-5s | PASS |
 | mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | sweep=1.800e0 | PASS |
 | mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | t=2.049e-6s | PASS |
-| mos_load_switch | tran | `V(d)` | 3.222e-1 | 5.0e-1 | t=5.238e-6s | PASS |
-|  |  | `V(g)` | 6.854e-2 | 1.5e-1 | t=5.680e-6s | PASS |
+| mos_load_switch | tran | `V(d)` | 3.287e-1 | 5.0e-1 | t=1.141e-6s | PASS |
+|  |  | `V(g)` | 6.853e-2 | 1.5e-1 | t=5.680e-6s | PASS |
+| mos_rds_on | dc | `V(d)` | 1.752e-5 | 5.0e-3 | sweep=1.000e-1 | PASS |
 | opamp_subckt | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
-| pmos_load_switch | tran | `V(d)` | 6.718e-1 | 1.2e0 | t=1.110e-6s | PASS |
+| pmos_load_switch | tran | `V(d)` | 6.973e-1 | 1.2e0 | t=1.110e-6s | PASS |
 |  |  | `V(g)` | 7.108e-2 | 1.5e-1 | t=5.110e-6s | PASS |
 | rc_ac_bode | ac | `V(out) mag` | 2.760e-7 | 1.0e-2 | f=1.259e4Hz | PASS |
 |  |  | `V(out) phase(deg)` | 2.706e-4 | 1.0e0 | f=2.512e5Hz | PASS |
 | rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-2 | t=0.000e0s | PASS |
-| rc_ladder | tran | `V(n8)` | 7.197e-4 | 1.0e-2 | t=3.118e-5s | PASS |
+| rc_ladder | tran | `V(n8)` | 7.200e-4 | 1.0e-2 | t=3.118e-5s | PASS |
 | rc_lowpass | tran | `V(out)` | 8.912e-4 | 1.0e-2 | t=1.396e-6s | PASS |
 | resistor_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
-| rlc_series | tran | `V(out)` | 8.520e-3 | 2.0e-2 | t=3.151e-6s | PASS |
-| vccs_gm | tran | `V(out)` | 3.075e-3 | 1.0e-2 | t=1.010e-4s | PASS |
+| rlc_series | tran | `V(out)` | 8.504e-3 | 2.0e-2 | t=2.925e-6s | PASS |
+| vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | xfmr_1to2 | tran | `V(sec)` | 1.118e-2 | 2.0e-2 | t=3.914e-5s | PASS |
 |  |  | `V(pri)` | 5.589e-3 | 2.0e-2 | t=3.914e-5s | PASS |
@@ -79,6 +80,7 @@ the per-quantity tolerance declared in that deck's `expect.toml`.
 - **mos_body_bias**: reverse body bias shifts the threshold via GAMMA/PHI
 - **mos_body_diode**: body-diode reverse conduction, then synchronous channel takeover
 - **mos_load_switch**: NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing
+- **mos_rds_on**: power NMOS on-state drop set by RD+RS (datasheet Rds(on) split)
 - **opamp_subckt**: opamp subckt (VCVS macro, gain param) into an RC low-pass
 - **param_divider**: .param + {expr}-driven resistive divider DC operating point
 - **pmos_load_switch**: PMOS high-side switch: folded negative VTO + P-channel gate charge

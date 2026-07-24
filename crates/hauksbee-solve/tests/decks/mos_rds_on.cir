@@ -1,0 +1,19 @@
+MOS on-state Rds(on): drain/source series resistance (datasheet-Rds(on) path)
+* Power NMOS low-side switch held hard on (VG = 5 V, well above VTO = 2 V), the
+* drain supply VDD swept 0..5 V through a 1 ohm load. A large KP makes the
+* CHANNEL a near-short (~7 mohm at Vgs = 5), so the on-state resistance is
+* dominated by RD + RS = 0.1 ohm (the datasheet Rds(on) split). The drain is a
+* linear divider V(d) = VDD * Rds(on) / (RL + Rds(on)) ~ VDD * 0.107/1.107.
+* Holding the gate fully on keeps the FET in triode across the whole sweep, so
+* there is no threshold knee: the observable is purely the on-resistance.
+* Before this fix RD/RS were dropped and Rds(on) collapsed to the ~7 mohm
+* channel, an order of magnitude too low; ngspice level 1 honors RD/RS, so the
+* two on-state slopes coincide. Probe V(d).
+VDD vdd 0 DC 5
+RL vdd d 1
+VG g 0 DC 5
+M1 d g 0 0 PWR
+.model PWR NMOS(LEVEL=1 VTO=2 KP=50 W=1 L=1 RD=0.05 RS=0.05)
+.dc VDD 0 5 0.1
+.print dc v(d)
+.end
