@@ -122,7 +122,7 @@ fn claims() -> Vec<Claim> {
         // --- .model types ---------------------------------------------------
         accept(Cat::Model, "`.model ... D`", "Diode model: `is n rs cjo vj m tt bv xti eg` (aliases `cj0`, `pb`).", "t\nV1 a 0 1\nD1 a 0 DM\n.model DM D(IS=1e-14 N=1 RS=0.1 CJO=2p VJ=0.7 M=0.5 TT=5n BV=75)\n.end\n"),
         accept(Cat::Model, "`.model ... NPN/PNP`", "BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr xti eg`.", "t\nQ1 c b e QM\n.model QM PNP(BF=150 VAF=80 CJE=2p TF=1n)\nV1 c 0 -5\n.end\n"),
-        accept(Cat::Model, "`.model ... NMOS/PMOS`", "MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj`.", "t\nM1 d g 0 0 MM\n.model MM PMOS(VTO=-1.1 KP=2e-5 TOX=20n)\nV1 d 0 -5\n.end\n"),
+        accept(Cat::Model, "`.model ... NMOS/PMOS`", "MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj rd rs`.", "t\nM1 d g 0 0 MM\n.model MM PMOS(VTO=-1.1 KP=2e-5 TOX=20n RD=0.05 RS=0.05)\nV1 d 0 -5\n.end\n"),
         accept(Cat::Model, "`.model ... SW/VSWITCH`", "Voltage-switch model: `vt vh ron roff`.", "t\nS1 a b cp cn SM\n.model SM VSWITCH(VT=2.5 VH=0.5 RON=0.5 ROFF=1e12)\nV1 a 0 5\n.end\n"),
         // --- analyses -------------------------------------------------------
         accept(Cat::Analysis, "`.op`", "DC operating point (also the default when no analysis card is present).", "t\nV1 a 0 1\nR1 a 0 1k\n.op\n.end\n"),

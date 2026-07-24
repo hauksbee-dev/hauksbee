@@ -70,7 +70,7 @@ title and is ignored.
 |------|--------------|
 | `.model ... D` | Diode model: `is n rs cjo vj m tt bv xti eg` (aliases `cj0`, `pb`). |
 | `.model ... NPN/PNP` | BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr xti eg`. |
-| `.model ... NMOS/PMOS` | MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj`. |
+| `.model ... NMOS/PMOS` | MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj rd rs`. |
 | `.model ... SW/VSWITCH` | Voltage-switch model: `vt vh ron roff`. |
 
 ### Analyses
@@ -136,12 +136,20 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
   - **Analog accuracy (gain, subthreshold slope, short-channel effects) is a known gap.**
     Use a switch, load switch, or synchronous rectifier deck; do not expect an amplifier
     small-signal match.
-  - **A weakly-driven device reads as high `Rds(on)`, and that is physics, not a bug.**
-    `Rds(on)` in the square law is set by the gate *over*drive `Vgs − Vth`; a hand-rolled
-    LEVEL-1 model whose `KP`/`W`/`L` is small, or a gate barely above `Vth`, is genuinely
-    resistive and the operating point will show a large drain-source drop. If a switch you
-    expect to be "on" sits at several ohms, raise the overdrive (`KP`, `W/L`, or `Vgs`) or
-    supply a datasheet `Rds(on)` — the solver is reporting the model you gave it.
+  - **Datasheet `Rds(on)` is honored: supply it as `RD`/`RS`.** A power FET's on-state
+    resistance lives mostly in the drain/source ohmic resistance, not the channel. `RD` and
+    `RS` (SPICE ohmic drain/source resistance) are now read from both a `.model` card and the
+    part database (which splits each part's datasheet `Rds(on)` into `rd + rs`), and stamped
+    as series resistors with the transistor intrinsic moved onto internal drain/source nodes,
+    exactly the way ngspice level 1 wires them. On-state `Rds(on)` is therefore `rd + rs +
+    channel`, and it tracks ngspice on the `mos_rds_on` cross-check deck. Default `rd = rs =
+    0` (ideal), so a model without them is unchanged.
+  - **A weakly-driven device still reads as high `Rds(on)`, and that is physics, not a bug.**
+    Beyond `RD`/`RS`, the channel term is set by the gate *over*drive `Vgs − Vth`: a
+    hand-rolled LEVEL-1 model whose `KP`/`W`/`L` is small, or a gate barely above `Vth`, is
+    genuinely resistive and the operating point will show a large drain-source drop. If a
+    switch you expect to be "on" sits at several ohms, raise the overdrive (`KP`, `W/L`, or
+    `Vgs`), or state the part's `RD`/`RS`, and the solver reports the model you gave it.
 - **Coupled inductors `K` model lossless linear mutual coupling only.** `k=1` (a perfect
   transformer) is legal and solved without inverting the singular L-matrix. **Saturating
   cores are unsupported** — no core (BH) model card parses. Transformer/flyback decks are

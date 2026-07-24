@@ -2132,6 +2132,12 @@ fn bind_mosfet(
         cbs: p.get_f64("cbs").unwrap_or(def.cbs),
         pb: p.get_f64("pb").unwrap_or(def.pb),
         mj: p.get_f64("mj").unwrap_or(def.mj),
+        // Drain/source ohmic resistance ("split of datasheet Rds(on)"): the db
+        // documents these on every power-FET entry (e.g. IPA045N10N3G carries
+        // rd = rs = 1.75 mohm summing to a 3.5 mohm Rds(on)). Absent keys leave
+        // rd = rs = 0, bit-identical to a model without them.
+        rd: p.get_f64("rd").unwrap_or(def.rd),
+        rs: p.get_f64("rs").unwrap_or(def.rs),
     };
     circuit.add(Device::Mosfet {
         name: comp.reference.clone(),
