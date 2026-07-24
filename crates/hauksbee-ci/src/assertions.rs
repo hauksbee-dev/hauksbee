@@ -6,7 +6,7 @@ use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
 
 /// The result of one assertion across all seeds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AssertResult {
     pub label: String,
     pub kind: String,

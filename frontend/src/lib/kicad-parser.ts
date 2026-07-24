@@ -205,7 +205,9 @@ export function parseKicadPcb(src: string): ParsedBoard {
 
   // Parse footprints
   for (const c of root) {
-    if (!isList(c) || head(c) !== 'footprint') continue
+    // `footprint` is KiCad 6+; `module` is the same node in KiCad <= 5 files
+    // (and in generated boards like the bundled boot_gate demo). Same shape.
+    if (!isList(c) || (head(c) !== 'footprint' && head(c) !== 'module')) continue
     board.footprints.push(parseFootprint(c, board.nets))
   }
 
@@ -316,7 +318,12 @@ function parsePad(c: SNode[], nets: Map<string, string>, fpAt: Point, fpAngle: n
   const totalAngle = fpAngle + localAt.angle
 
   const sizeNode = findChild(c, 'size')
-  const size = { w: num(sizeNode?.[1]), h: num(sizeNode?.[2]) }
+  // Generated boards (the boot_gate demo, minimal to-code output) may omit
+  // (size ...): default to a visible 1 mm pad rather than a 0x0 one the
+  // renderer would silently skip.
+  const size = sizeNode
+    ? { w: num(sizeNode[1]), h: num(sizeNode[2]) }
+    : { w: 1, h: 1 }
 
   const drillNode = findChild(c, 'drill')
   let drill: Pad['drill'] | undefined

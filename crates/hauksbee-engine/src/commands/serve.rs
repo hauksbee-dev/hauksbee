@@ -26,6 +26,10 @@ pub fn run(port: u16) -> anyhow::Result<()> {
                 None => crate::analyze_json(name, contents),
             },
         );
+        // The web checks panel's backend: stage the uploads, inject the path
+        // keys, and run the sibling hauksbee-ci binary (--json).
+        let check: hauksbee_server::frontdoor::CheckRunner =
+            Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
 
         // The React bundle is the one web app. It is a build artifact (not
         // checked in), so a fresh clone has no dist/ yet: tell the user how to
@@ -56,6 +60,7 @@ pub fn run(port: u16) -> anyhow::Result<()> {
 
         // No board preloaded: the app lands on the drop zone.
         let startup_json = "{\"preloaded\":false}".to_string();
-        hauksbee_server::serve_frontdoor_on(listener, dir.as_deref(), analyze, startup_json).await
+        hauksbee_server::serve_frontdoor_on(listener, dir.as_deref(), analyze, Some(check), startup_json)
+            .await
     })
 }

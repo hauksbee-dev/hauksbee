@@ -74,6 +74,12 @@ struct RunArgs {
     #[arg(long)]
     quiet: bool,
 
+    /// Print the run result as one JSON object on stdout instead of the human
+    /// report (the web checks panel and any tool consume this). Exit codes are
+    /// unchanged; a spec/board error prints `{"ok":false,"error":...}`.
+    #[arg(long)]
+    json: bool,
+
     /// Re-run one ensemble member in isolation (a failing fuzz/tolerance seed,
     /// or a corner index). Sampling is keyed by the absolute seed number, so
     /// the isolated run reproduces the full run's values exactly.
@@ -112,6 +118,12 @@ fn main() -> ExitCode {
         Ok(r) => r,
         Err(e) => {
             // Spec / board errors: surface as a GitHub error too, then exit 2.
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "ok": false, "error": e.to_string() })
+                );
+            }
             eprintln!("hauksbee-ci: {e}");
             // Emit JUnit even on this error path when --junit was requested: a CI
             // that only reads the Checks/JUnit tab would otherwise see nothing at
@@ -140,7 +152,9 @@ fn main() -> ExitCode {
         }
     };
 
-    if !args.quiet {
+    if args.json {
+        println!("{}", result.render_json());
+    } else if !args.quiet {
         print!("{}", result.render_human());
     }
 

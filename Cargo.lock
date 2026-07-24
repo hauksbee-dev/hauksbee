@@ -851,6 +851,7 @@ dependencies = [
  "hauksbee-solve",
  "regex",
  "serde",
+ "serde_json",
  "toml",
  "zip",
 ]
