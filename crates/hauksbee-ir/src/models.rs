@@ -284,6 +284,15 @@ pub struct MosfetModel {
     pub pb: f64,
     /// Bulk-junction grading coefficient, SPICE `MJ`.
     pub mj: f64,
+    /// Drain ohmic series resistance (ohms), SPICE `RD`. One half of the
+    /// datasheet-Rds(on) split (`rd + rs + channel`): a power FET carries most
+    /// of its on-state drop here, not in the channel. `0` = ideal drain (the
+    /// default). Default-zero is load-bearing: a model without `rd` allocates
+    /// no internal drain node and stamps bit-identically to before this field.
+    pub rd: f64,
+    /// Source ohmic series resistance (ohms), SPICE `RS`. The other half of the
+    /// datasheet-Rds(on) split. `0` = ideal source (the default), bit-identical.
+    pub rs: f64,
 }
 
 impl Default for MosfetModel {
@@ -306,6 +315,8 @@ impl Default for MosfetModel {
             cbs: 0.0,
             pb: 0.8,
             mj: 0.5,
+            rd: 0.0,
+            rs: 0.0,
         }
     }
 }
