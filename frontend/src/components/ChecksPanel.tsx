@@ -57,6 +57,17 @@ const CHECK_KINDS: { kind: string; label: string; hint: string }[] = [
   { kind: 'rail_window', label: 'A rail may only dip briefly', hint: 'bound brownout depth, duration and recovery' },
 ]
 
+// Kinds that carry a net / a component ref. Shared by the TOML composer, the
+// raw parser's round-trip check, and the per-kind field pickers so the three
+// cannot drift apart.
+const NET_KINDS = ['voltage', 'toggle', 'boot-coverage', 'rail_window']
+const REF_KINDS = ['max_current', 'max_temp']
+
+// The published GitHub action, pinned to a release tag (the version in
+// Cargo.toml), never a moving branch: a workflow generated today must not
+// change behavior when main moves. Bump on each hauksbee release.
+const ACTION_REF = 'ETM-Code/hauksbee/integrations/github-action@v0.1.0'
+
 interface CheckResult {
   label: string
   kind: string
@@ -104,8 +115,8 @@ function buildToml(name: string, duration: string, supplies: SupplyRow[], checks
       if (!t) return
       out += quote ? `${key} = ${tomlString(t)}\n` : (numOr(v) ? `${key} = ${numOr(v)}\n` : '')
     }
-    if (['voltage', 'toggle', 'boot-coverage', 'rail_window'].includes(c.kind)) put('net', c.net, true)
-    if (['max_current', 'max_temp'].includes(c.kind)) put('ref', c.ref, true)
+    if (NET_KINDS.includes(c.kind)) put('net', c.net, true)
+    if (REF_KINDS.includes(c.kind)) put('ref', c.ref, true)
     if (c.kind === 'uart') put('contains', c.contains, true)
     put('min', c.min)
     put('max', c.max)
@@ -124,9 +135,21 @@ function buildToml(name: string, duration: string, supplies: SupplyRow[], checks
   return out
 }
 
+// Fields the builder round-trips on a [[supply]] / an [[assert]]. Anything
+// outside these sets (an assertion scenario, a ripple spec, a sensor...) would
+// be silently destroyed on the way back to the builder, so its presence makes
+// tomlToBuilder refuse the conversion.
+const SUPPLY_FIELDS = new Set(['net', 'kind', 'volts'])
+const ASSERT_FIELDS = new Set([
+  'kind', 'net', 'ref', 'min', 'max', 'after_ms', 'deadline_ms', 'contains',
+  'freq_hz', 'tolerance', 'min_toggles', 'amps', 'celsius', 'dip_below',
+  'for_max_ms', 'recover_to', 'recover_within_ms',
+])
+
 /** Best-effort: load a raw TOML back into builder rows. Returns null when the
- *  spec uses vocabulary the builder doesn't cover (tolerances, scenarios,
- *  overrides, peripherals...) — the caller then stays in raw mode. */
+ *  spec uses vocabulary the builder doesn't cover (an unknown top-level key,
+ *  OR any nested supply/assert field the builder would not write back out);
+ *  the caller then stays in raw mode, or warns before discarding. */
 function tomlToBuilder(raw: string): { name: string; duration: string; supplies: SupplyRow[]; checks: CheckRow[] } | null {
   let doc: Record<string, unknown>
   try {
@@ -138,6 +161,7 @@ function tomlToBuilder(raw: string): { name: string; duration: string; supplies:
   if (Object.keys(doc).some(k => !KNOWN.has(k))) return null
   const supplies: SupplyRow[] = []
   for (const s of (doc.supply as Record<string, unknown>[] | undefined) ?? []) {
+    if (Object.keys(s).some(k => !SUPPLY_FIELDS.has(k))) return null
     if (s.kind && s.kind !== 'ideal') return null
     supplies.push({ net: String(s.net ?? ''), volts: String(s.volts ?? '') })
   }
@@ -146,6 +170,14 @@ function tomlToBuilder(raw: string): { name: string; duration: string; supplies:
   for (const a of (doc.assert as Record<string, unknown>[] | undefined) ?? []) {
     const kind = String(a.kind ?? '')
     if (!CHECK_KINDS.some(k => k.kind === kind)) return null
+    // Refuse any field the composer would not re-emit for this kind: it would
+    // survive the parse but vanish from the round-tripped spec.
+    for (const key of Object.keys(a)) {
+      if (!ASSERT_FIELDS.has(key)) return null
+      if (key === 'net' && !NET_KINDS.includes(kind)) return null
+      if (key === 'ref' && !REF_KINDS.includes(kind)) return null
+      if (key === 'contains' && kind !== 'uart') return null
+    }
     const row = emptyCheck(id++, kind)
     const grab = (key: keyof CheckRow, tomlKey?: string) => {
       const v = a[tomlKey ?? key]
@@ -193,6 +225,26 @@ function Field({ label, value, onChange, width = 90, placeholder }: {
   )
 }
 
+/** Shape of the autosaved localStorage payload (all fields best-effort: a
+ *  corrupt or partial save must never break the report). */
+interface SavedChecksState {
+  specName?: string
+  duration?: string
+  supplies?: SupplyRow[]
+  checks?: CheckRow[]
+  rawMode?: boolean
+  rawText?: string
+}
+
+/** Storage key for a board's saved checks. The file name alone collides for
+ *  common names (every project has a board.kicad_pcb), so a cheap fingerprint
+ *  from the report disambiguates. Landing also uses this as the panel's React
+ *  key so the panel remounts per board: the mount-time restore is then
+ *  authoritative and one board's state can never leak into another's. */
+export function checksStorageKey(report: WebReport): string {
+  return `hauksbee.checks.${report.file_name}:${report.num_components}:${report.num_nets}`
+}
+
 export function ChecksPanel({ report, boardFile, firmwareFile, selectedNet }: {
   report: WebReport
   boardFile: File | null
@@ -200,42 +252,40 @@ export function ChecksPanel({ report, boardFile, firmwareFile, selectedNet }: {
   /** Net last clicked on the board render — offered as a one-click check. */
   selectedNet: string | null
 }) {
-  const storageKey = `hauksbee.checks.${report.file_name}`
-  const [specName, setSpecName] = useState(`${report.board_name || report.file_name} checks`)
-  const [duration, setDuration] = useState('100')
+  const storageKey = checksStorageKey(report)
+  // ── Restore a saved session for this board (auto-load). Because the panel
+  // remounts per board (keyed on storageKey by the parent), restoring in the
+  // state initializers is race-free: the autosave effect cannot fire before
+  // the restore has happened, and a board with no saved state starts from the
+  // report's own defaults instead of inheriting the previous board's rows. ──
+  const saved = useMemo<SavedChecksState | null>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      return raw ? (JSON.parse(raw) as SavedChecksState) : null
+    } catch {
+      return null
+    }
+  }, [storageKey])
+  const savedSupplies = saved?.supplies
+  const savedChecks = saved?.checks
+  const initialChecks = Array.isArray(savedChecks) && savedChecks.length
+    ? savedChecks
+    : [emptyCheck(1, 'no_faults')]
+  const [specName, setSpecName] = useState(saved?.specName || `${report.board_name || report.file_name} checks`)
+  const [duration, setDuration] = useState(saved?.duration || '100')
   const [supplies, setSupplies] = useState<SupplyRow[]>(
-    () => (report.supplies ?? []).map(s => ({ net: s.net, volts: String(s.volts) })),
+    () => (Array.isArray(savedSupplies) && savedSupplies.length
+      ? savedSupplies
+      : (report.supplies ?? []).map(s => ({ net: s.net, volts: String(s.volts) }))),
   )
-  const [checks, setChecks] = useState<CheckRow[]>([emptyCheck(1, 'no_faults')])
-  const [rawMode, setRawMode] = useState(false)
-  const [rawText, setRawText] = useState('')
+  const [checks, setChecks] = useState<CheckRow[]>(initialChecks)
+  const [rawMode, setRawMode] = useState(!!(saved?.rawMode && typeof saved.rawText === 'string'))
+  const [rawText, setRawText] = useState(typeof saved?.rawText === 'string' ? saved.rawText : '')
   const [addOpen, setAddOpen] = useState(false)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<RunResponse | null>(null)
   const [ciOpen, setCiOpen] = useState(false)
-  const nextId = useRef(2)
-
-  // ── Restore a saved session for this board (auto-load). ──
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(storageKey)
-      if (!saved) return
-      const state = JSON.parse(saved)
-      if (state.rawMode && typeof state.rawText === 'string') {
-        setRawMode(true)
-        setRawText(state.rawText)
-        return
-      }
-      if (state.specName) setSpecName(state.specName)
-      if (state.duration) setDuration(state.duration)
-      if (Array.isArray(state.supplies) && state.supplies.length) setSupplies(state.supplies)
-      if (Array.isArray(state.checks) && state.checks.length) {
-        setChecks(state.checks)
-        nextId.current = Math.max(...state.checks.map((c: CheckRow) => c.id)) + 1
-      }
-    } catch { /* a corrupt save must never break the report */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageKey])
+  const nextId = useRef(initialChecks.reduce((m, c) => Math.max(m, c.id), 0) + 1)
 
   const builtToml = useMemo(
     () => buildToml(specName, duration, supplies, checks),
@@ -285,10 +335,15 @@ export function ChecksPanel({ report, boardFile, firmwareFile, selectedNet }: {
   const specStem = (report.file_name || 'board').replace(/\.[^.]+$/, '')
   const specForDownload = () => {
     // The downloadable spec IS runnable: it carries the board/firmware paths
-    // relative to the recommended repo layout.
-    let head = `board = ${tomlString(`../hardware/${report.file_name}`)}\n`
-    if (firmwareFile) head += `firmware = ${tomlString(`../firmware/${firmwareFile.name}`)}\n`
-    return `${head}\n${effectiveToml}`
+    // relative to the recommended repo layout. The builder composes a
+    // fragment (it never writes board/firmware lines), but a raw spec may be
+    // a full file that already names its paths; prepend a key only when the
+    // spec text does not already carry it, so nothing is doubled.
+    const hasKey = (key: string) => new RegExp(`^\\s*${key}\\s*=`, 'm').test(effectiveToml)
+    let head = ''
+    if (!hasKey('board')) head += `board = ${tomlString(`../hardware/${report.file_name}`)}\n`
+    if (firmwareFile && !hasKey('firmware')) head += `firmware = ${tomlString(`../firmware/${firmwareFile.name}`)}\n`
+    return head ? `${head}\n${effectiveToml}` : effectiveToml
   }
 
   const download = (name: string, contents: string) => {
@@ -312,7 +367,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: hauksbee-ci
-        uses: ETM-Code/hauksbee/integrations/github-action@main
+        uses: ${ACTION_REF} # pin to a release tag
         with:
           spec: ci/${specStem}.toml
           junit: hauksbee-ci-results.xml
@@ -387,14 +442,14 @@ jobs:
                       onClick={() => setChecks(cs => cs.filter(x => x.id !== c.id))}>remove</button>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
-                    {['voltage', 'toggle', 'boot-coverage', 'rail_window'].includes(c.kind) && (
+                    {NET_KINDS.includes(c.kind) && (
                       <label className="inline-flex items-center gap-1.5 text-[12px]" style={{ color: '#64748b' }}>
                         net
                         <input style={{ ...inputStyle, width: 170 }} list="net-options" value={c.net}
                           onChange={e => update(c.id, { net: e.target.value })} />
                       </label>
                     )}
-                    {['max_current', 'max_temp'].includes(c.kind) && (
+                    {REF_KINDS.includes(c.kind) && (
                       <Field label="part (ref)" value={c.ref} width={90} placeholder="U1"
                         onChange={v => update(c.id, { ref: v })} />
                     )}
@@ -463,7 +518,7 @@ jobs:
             <div className="mt-3">
               <Field label="run length (ms)" value={duration} width={70} onChange={setDuration} />
               <span className="ml-3 text-[12px]" style={{ color: '#475569' }}>
-                {firmwareFile ? `firmware: ${firmwareFile.name} (co-simulated)` : 'no firmware loaded — add it above to check UART/blink/boot'}
+                {firmwareFile ? `firmware: ${firmwareFile.name} (co-simulated)` : 'no firmware loaded: add it just below this panel to check UART/blink/boot'}
               </span>
             </div>
           </>
@@ -484,11 +539,13 @@ jobs:
                 } else {
                   const parsed = tomlToBuilder(rawText)
                   if (parsed) {
+                    // Raw is the source of truth on a successful parse: an
+                    // intentionally emptied list clears the builder rows too.
                     setSpecName(parsed.name)
                     setDuration(parsed.duration)
-                    if (parsed.supplies.length) setSupplies(parsed.supplies)
-                    setChecks(parsed.checks.length ? parsed.checks : [emptyCheck(1, 'no_faults')])
-                    nextId.current = parsed.checks.length + 2
+                    setSupplies(parsed.supplies)
+                    setChecks(parsed.checks)
+                    nextId.current = parsed.checks.reduce((m, c) => Math.max(m, c.id), 0) + 1
                     setRawMode(false)
                   } else if (window.confirm(
                     'This TOML uses features the visual builder does not cover '
