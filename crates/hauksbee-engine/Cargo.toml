@@ -22,7 +22,9 @@ qemu = ["hauksbee-mcu/qemu", "hauksbee-server/qemu"]
 # a source checkout serves the live frontend/dist directly (fresher, and the
 # embed requires dist to exist at compile time). Release bundles turn it on so
 # `hauksbee serve` works from a bare installed binary (see scripts/bundle.sh).
-embed-web = ["dep:rust-embed"]
+# `rust-embed/include-exclude` is required for the `#[exclude]` attribute that
+# keeps the ~14 MB boards3d/ demo GLBs OUT of the binary (see web_dist.rs).
+embed-web = ["dep:rust-embed", "rust-embed/include-exclude"]
 
 [[bin]]
 name = "hauksbee"
