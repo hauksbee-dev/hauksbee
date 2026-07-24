@@ -34,6 +34,12 @@
 # `--no-default-features --features renode,qemu` for the MIT-clean shape (no
 # libsimavr link; verified avr-free). See the release.yml header and
 # docs/about/release-and-licensing.md for the licensing decision and the GPL guard.
+#
+# Web UI: on a build (not --no-build) this first builds frontend/dist and then
+# appends the `embed-web` feature, so the resulting binary embeds the web app
+# and `hauksbee serve` works from a bare install. embed-web only adds rust-embed
+# (permissive), so it has no bearing on the GPL guard. Needs bun or npm on PATH;
+# without a JS toolchain and no existing dist/, the bundle builds without a UI.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -83,6 +89,38 @@ fi
 SRC="$(hauksbee_target_bin)"
 if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust or pass --no-build."
+
+  # Build the web front door so the release bundle self-contains the UI. The
+  # embed-web feature (appended below) compiles frontend/dist INTO the binary,
+  # so `hauksbee serve` works from a bare installed binary with no checkout.
+  # Guard on a JS toolchain exactly like install.sh; if none is present, fall
+  # back to any existing dist/. Gated on DO_BUILD (the --no-build path ships the
+  # already-built binaries as-is and never rebuilds the frontend).
+  if have bun; then
+    log "Building web front door (frontend/dist via bun)"
+    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --silent && bun run build )
+  elif have npm; then
+    log "Building web front door (frontend/dist via npm)"
+    ( cd "$HAUKSBEE_ROOT/frontend" && npm install --silent && npm run build )
+  else
+    warn "No bun/npm found; skipping the frontend build."
+    warn "Will embed the existing frontend/dist/ if present, else build without a UI."
+  fi
+
+  # Self-contain the web app: append embed-web so the built binary serves the UI
+  # without a checkout. A release bundle always wants this. rust-embed needs
+  # frontend/dist to exist at COMPILE time, so only enable it when dist is
+  # actually present; a missing dist would otherwise hard-fail the build. Append
+  # (never replace) so it composes onto whatever features were requested, e.g.
+  # the release workflow's `renode,qemu` -> `renode,qemu,embed-web`.
+  if [ -d "$HAUKSBEE_ROOT/frontend/dist" ]; then
+    if [ -n "$FEATURES" ]; then FEATURES="$FEATURES,embed-web"; else FEATURES="embed-web"; fi
+    log "Self-contained web UI: embed-web enabled (features: ${FEATURES})"
+  else
+    warn "frontend/dist not found; building WITHOUT embed-web."
+    warn "The bare binary will have no web UI until it is built from a checkout."
+  fi
+
   # Assemble optional feature flags. Passed verbatim to `cargo build`.
   FEATURE_ARGS=()
   [ "$NO_DEFAULT_FEATURES" -eq 1 ] && FEATURE_ARGS+=(--no-default-features)
