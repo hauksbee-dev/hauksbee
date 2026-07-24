@@ -33,6 +33,7 @@ pub mod drivers;
 pub mod engine;
 pub mod firmware_input;
 pub mod frontdoor;
+pub mod webcheck;
 pub mod peripherals;
 pub mod plain;
 pub mod power_supply;

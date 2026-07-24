@@ -89,7 +89,17 @@ export interface WebReport {
   components: WebComponent[]
   bind?: BindSummaryWeb | null
   notes?: JsonNote[]
+  /** Every net name, sorted — the checks builder's pickers. */
+  nets?: string[]
+  /** Binder-detected supplies (rail net → nominal volts) for the checks
+   *  builder's prefill. */
+  supplies?: WebSupply[]
   cosim?: WebCosimSection | null
+}
+
+export interface WebSupply {
+  net: string
+  volts: number
 }
 
 /** What `/api/startup` returns: how the server was launched. */

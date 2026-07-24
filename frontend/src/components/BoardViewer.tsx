@@ -26,6 +26,10 @@ interface BoardViewerProps {
   /** Click on bare copper: the nearest net (trace/pad hit-test), or null when
    *  nothing is within reach. Fires only for a true click (no drag). */
   onNetClick?: (net: string | null) => void
+  /** Called when the file parsed but yielded NOTHING drawable (no footprints,
+   *  segments or vias) — the embedding view can fall back to a simpler map
+   *  instead of showing an empty void. */
+  onEmptyBoard?: () => void
   /** Faulted component references for pulse highlights */
   faultedRefs?: Set<string>
 }
@@ -51,7 +55,7 @@ function resolveGlbUrl(boardFile: string, boardInfo?: BoardInfoMsg | null): stri
   return null
 }
 
-export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick, faultedRefs }: BoardViewerProps) {
+export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick, onEmptyBoard, faultedRefs }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -100,6 +104,13 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         const parsed = parseKicadPcb(text)
         setBoard(parsed)
         setLoading(false)
+        if (
+          parsed.footprints.length === 0 &&
+          parsed.segments.length === 0 &&
+          parsed.vias.length === 0
+        ) {
+          onEmptyBoard?.()
+        }
       })
       .catch((e: Error) => {
         setError(e.message)
@@ -146,11 +157,15 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   }, [board])
 
   // ── Find nearest net to a board coordinate ──
-  const findNearestNet = useCallback((bx: number, by: number): string | null => {
+  // `reachPx` is the screen-pixel pick radius: hover keeps the tight default
+  // so the readout tracks exactly what is under the cursor; a CLICK passes a
+  // coarser radius (clicking is a blunter gesture, and on an unrouted board
+  // the only copper is pads).
+  const findNearestNet = useCallback((bx: number, by: number, reachPx = 3): string | null => {
     if (!board) return null
     let best: string | null = null
     let bestDist = Infinity
-    const threshold = 3 / cam.scale // 3 screen px
+    const threshold = reachPx / cam.scale
 
     for (const s of board.segments) {
       if (!s.netName) continue
@@ -353,7 +368,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         // Bare-copper click: the nearest trace/pad's net (for "set a check on
         // this net" flows). Fired alongside the footprint hit so a consumer
         // can use either.
-        if (onNetClick) onNetClick(findNearestNet(x, y))
+        if (onNetClick) onNetClick(findNearestNet(x, y, 8))
       }
     }
   }, [findFootprintAt, onFootprintClick, onNetClick, findNearestNet])
