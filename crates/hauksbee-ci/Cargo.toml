@@ -43,3 +43,6 @@ hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-feat
 # The sensor-attach tests also check Renode availability so they skip cleanly
 # when Renode is not installed.
 hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
+# The firmware-input parity test zips a committed .hex to prove a spec's
+# `firmware = "fw.zip"` resolves exactly like `run --firmware` does.
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
