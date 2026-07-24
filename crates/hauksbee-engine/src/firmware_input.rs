@@ -52,6 +52,26 @@ pub struct ResolvedFirmwareFile {
 
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 
+/// Quotas on an uploaded archive, enforced before and during extraction so a
+/// zip bomb (a tiny archive that inflates enormously) cannot exhaust memory
+/// or disk. Declared sizes from the central directory are checked first for a
+/// fast refusal, and the actual inflated byte counts are enforced too, because
+/// a hostile header can lie.
+struct ZipLimits {
+    /// Maximum number of entries in the archive.
+    max_entries: usize,
+    /// Maximum uncompressed bytes for any single entry.
+    max_entry_bytes: u64,
+    /// Maximum uncompressed bytes across the whole archive.
+    max_total_bytes: u64,
+}
+
+const ZIP_LIMITS: ZipLimits = ZipLimits {
+    max_entries: 10_000,
+    max_entry_bytes: 256 * 1024 * 1024,
+    max_total_bytes: 512 * 1024 * 1024,
+};
+
 /// The `pio` binary to invoke. `HAUKSBEE_PIO` overrides the PATH lookup (used
 /// by tests to prove the missing-pio error path; handy if pio lives off PATH).
 fn pio_bin() -> String {
@@ -65,6 +85,14 @@ fn pio_bin() -> String {
 /// to a `pio run` build of it. Errors are user-facing strings (they land in
 /// the co-sim card verbatim).
 pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<ResolvedFirmware, String> {
+    resolve_firmware_bytes_limited(fw_name, fw_bytes, &ZIP_LIMITS)
+}
+
+fn resolve_firmware_bytes_limited(
+    fw_name: &str,
+    fw_bytes: &[u8],
+    limits: &ZipLimits,
+) -> Result<ResolvedFirmware, String> {
     if !fw_bytes.starts_with(ZIP_MAGIC) {
         return Ok(ResolvedFirmware {
             name: fw_name.to_string(),
@@ -75,15 +103,45 @@ pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<Resolved
 
     let mut archive = zip::ZipArchive::new(Cursor::new(fw_bytes))
         .map_err(|e| format!("could not open '{fw_name}' as a zip archive: {e}"))?;
+    if archive.len() > limits.max_entries {
+        return Err(format!(
+            "'{fw_name}' contains {} entries, over the {} allowed for an uploaded \
+             archive (zip-bomb guard). Upload the compiled image, or a leaner \
+             project snapshot.",
+            archive.len(),
+            limits.max_entries
+        ));
+    }
 
     // Tier 2: an already-built image inside the archive.
     if let Some(best) = best_image_entry(&mut archive) {
         let mut file = archive
             .by_index(best.index)
             .map_err(|e| format!("could not read '{}' from the archive: {e}", best.entry_name))?;
-        let mut bytes = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut bytes)
+        if file.size() > limits.max_entry_bytes {
+            return Err(format!(
+                "'{}' inside the archive declares {} uncompressed bytes, over the \
+                 {} MiB per-file limit for uploaded archives (zip-bomb guard)",
+                best.entry_name,
+                file.size(),
+                limits.max_entry_bytes / (1024 * 1024)
+            ));
+        }
+        // Read through a hard cap, not to the declared size: a lying header
+        // must still trip the quota instead of exhausting memory.
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(limits.max_entry_bytes + 1)
+            .read_to_end(&mut bytes)
             .map_err(|e| format!("could not read '{}' from the archive: {e}", best.entry_name))?;
+        if bytes.len() as u64 > limits.max_entry_bytes {
+            return Err(format!(
+                "'{}' inside the archive inflates past the {} MiB per-file limit \
+                 for uploaded archives (zip-bomb guard)",
+                best.entry_name,
+                limits.max_entry_bytes / (1024 * 1024)
+            ));
+        }
         let name = Path::new(&best.entry_name)
             .file_name()
             .and_then(|n| n.to_str())
@@ -104,10 +162,12 @@ pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<Resolved
         });
     }
 
-    // Tier 3: a PlatformIO project snapshot — extract and build it.
+    // Tier 3: a PlatformIO project snapshot, extracted and built. The TempDir
+    // guard lives to the end of this block: pio builds inside it and the
+    // artifact bytes are read out before the dir is cleaned up on drop.
     if archive_has_platformio_ini(&mut archive) {
-        let dir = extract_zip_to_temp(&mut archive, fw_name)?;
-        let project = find_platformio_project(&dir).ok_or_else(|| {
+        let dir = extract_zip_to_temp(&mut archive, fw_name, limits)?;
+        let project = find_platformio_project(dir.path()).ok_or_else(|| {
             "the archive contains a platformio.ini but it could not be located after extraction"
                 .to_string()
         })?;
@@ -168,10 +228,14 @@ pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwa
             .and_then(|n| n.to_str())
             .unwrap_or("firmware.zip");
         let resolved = resolve_firmware_bytes(name, &bytes).map_err(anyhow::Error::msg)?;
-        // The loaders want a file: park the resolved image next to the other
-        // hauksbee temp artifacts.
-        let dir = std::env::temp_dir().join(format!("hauksbee-fw-{}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
+        // The loaders want a file. Stage it in a fresh tempfile dir
+        // (unpredictable name, created 0700: no symlink pre-creation race,
+        // unlike the old guessable PID-derived path), then deliberately
+        // persist it with `keep()`: the caller takes only `.path` and the
+        // loaders read the image much later in the run, so a Drop-cleaned dir
+        // would vanish under them. The CLI process is short-lived and the
+        // previous behavior also left the staged file to the OS temp cleaner.
+        let dir = tempfile::TempDir::new()?.keep();
         let out = dir.join(&resolved.name);
         std::fs::write(&out, &resolved.bytes)?;
         return Ok(Some(ResolvedFirmwareFile {
@@ -252,19 +316,19 @@ fn archive_has_platformio_ini<R: Read + std::io::Seek>(archive: &mut zip::ZipArc
 }
 
 /// Extract the whole archive under a fresh temp dir. Entry paths go through
-/// `enclosed_name` so a hostile archive cannot write outside it (zip-slip).
+/// `enclosed_name` so a hostile archive cannot write outside it (zip-slip),
+/// and the [`ZipLimits`] quotas are enforced on what actually inflates, so a
+/// zip bomb cannot exhaust disk. The dir comes from `tempfile` (unpredictable
+/// name, created 0700 with O_EXCL semantics), not a guessable PID-derived path
+/// a local attacker could pre-create as a symlink; it is removed when the
+/// returned guard drops.
 fn extract_zip_to_temp<R: Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     fw_name: &str,
-) -> Result<PathBuf, String> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-pio-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create a temp dir: {e}"))?;
+    limits: &ZipLimits,
+) -> Result<tempfile::TempDir, String> {
+    let dir = tempfile::TempDir::new().map_err(|e| format!("could not create a temp dir: {e}"))?;
+    let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -272,7 +336,16 @@ fn extract_zip_to_temp<R: Read + std::io::Seek>(
         let Some(rel) = entry.enclosed_name() else {
             continue; // absolute or ..-escaping path: refuse silently, never write it
         };
-        let out = dir.join(rel);
+        if entry.size() > limits.max_entry_bytes {
+            return Err(format!(
+                "'{}' in '{fw_name}' declares {} uncompressed bytes, over the {} MiB \
+                 per-file limit for uploaded archives (zip-bomb guard)",
+                entry.name(),
+                entry.size(),
+                limits.max_entry_bytes / (1024 * 1024)
+            ));
+        }
+        let out = dir.path().join(rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&out).map_err(|e| format!("extract failed: {e}"))?;
             continue;
@@ -282,8 +355,26 @@ fn extract_zip_to_temp<R: Read + std::io::Seek>(
         }
         let mut f = std::fs::File::create(&out)
             .map_err(|e| format!("extract of '{}' failed: {e}", out.display()))?;
-        std::io::copy(&mut entry, &mut f)
+        // Copy through a hard cap, one byte past the per-file limit, so an
+        // entry whose header lies about its size still trips the quota.
+        let copied = std::io::copy(&mut (&mut entry).take(limits.max_entry_bytes + 1), &mut f)
             .map_err(|e| format!("extract of '{}' failed: {e}", out.display()))?;
+        if copied > limits.max_entry_bytes {
+            return Err(format!(
+                "'{}' in '{fw_name}' inflates past the {} MiB per-file limit for \
+                 uploaded archives (zip-bomb guard)",
+                entry.name(),
+                limits.max_entry_bytes / (1024 * 1024)
+            ));
+        }
+        total += copied;
+        if total > limits.max_total_bytes {
+            return Err(format!(
+                "'{fw_name}' inflates past the {} MiB total limit for uploaded \
+                 archives (zip-bomb guard)",
+                limits.max_total_bytes / (1024 * 1024)
+            ));
+        }
     }
     Ok(dir)
 }
@@ -310,31 +401,116 @@ fn find_platformio_project(root: &Path) -> Option<PathBuf> {
     walk(root, 3)
 }
 
+/// Wall-clock ceiling on one `pio run`. Generous, because a first build can
+/// legitimately download a toolchain; but a wedged build (a dead package
+/// mirror, a build script waiting on stdin) must become an error, not a hung
+/// caller. `HAUKSBEE_PIO_TIMEOUT_SECS` overrides it (tests use this; so can a
+/// user whose first build genuinely needs longer).
+const PIO_BUILD_TIMEOUT_SECS: u64 = 300;
+
+/// Keep only this much of the tail of the build output for error reporting; a
+/// chatty (or hostile) build must not buffer unbounded bytes in memory.
+const PIO_OUTPUT_TAIL_BYTES: usize = 64 * 1024;
+
+fn pio_timeout() -> std::time::Duration {
+    let secs = std::env::var("HAUKSBEE_PIO_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(PIO_BUILD_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Drain a child pipe, keeping only the last [`PIO_OUTPUT_TAIL_BYTES`] bytes.
+/// Draining on a thread while the child runs matters: an unread pipe fills
+/// its kernel buffer and blocks the build, which would then only "fail" via
+/// the timeout.
+fn drain_tail(mut r: impl Read) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match r.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > PIO_OUTPUT_TAIL_BYTES {
+                    let excess = buf.len() - PIO_OUTPUT_TAIL_BYTES;
+                    buf.drain(..excess);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
 /// Build a PlatformIO project with the user's own toolchain and return the
 /// built image. Detect-don't-bundle: a missing `pio` and a failing build are
 /// both loud errors that say exactly what to do.
 fn pio_build(project: &Path) -> Result<(PathBuf, String), String> {
     let bin = pio_bin();
-    let out = std::process::Command::new(&bin)
+    let spawned = std::process::Command::new(&bin)
         .arg("run")
         .arg("-d")
         .arg(project)
-        .output();
-    let out = match out {
-        Ok(o) => o,
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(format!(
                 "this looks like a PlatformIO project, but PlatformIO is not installed \
                  (no `{bin}` on PATH). Install it (`brew install platformio` or \
-                 `uv tool install platformio`) and retry — or hand over the compiled \
+                 `uv tool install platformio`) and retry, or hand over the compiled \
                  image directly: .pio/build/<env>/firmware.elf inside your project."
             ));
         }
         Err(e) => return Err(format!("could not run `{bin} run`: {e}")),
     };
-    if !out.status.success() {
-        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-        text.push_str(&String::from_utf8_lossy(&out.stderr));
+    let stdout_thread = child
+        .stdout
+        .take()
+        .map(|s| std::thread::spawn(move || drain_tail(s)));
+    let stderr_thread = child
+        .stderr
+        .take()
+        .map(|s| std::thread::spawn(move || drain_tail(s)));
+
+    // Poll-wait with a deadline (the same pattern webcheck uses for its
+    // hauksbee-ci child): a wedged build must produce an error, not pin the
+    // caller forever.
+    let timeout = pio_timeout();
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if started.elapsed() > timeout {
+                    // Known limitation, deliberately out of scope here: this
+                    // kills only the `pio` parent. A build that spawned
+                    // emulator or toolchain descendants can leave them
+                    // running; a full process-group kill is the follow-up.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "`{bin} run` exceeded {}s and was stopped. A first build \
+                         downloads the toolchain and can be slow: run \
+                         `pio run -d <project>` yourself once so the cache is warm, \
+                         or raise HAUKSBEE_PIO_TIMEOUT_SECS.",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("waiting for `{bin} run`: {e}")),
+        }
+    };
+    let stdout = stdout_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+    let stderr = stderr_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+    if !status.success() {
+        let mut text = String::from_utf8_lossy(&stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&stderr));
         let tail: Vec<&str> = text.lines().rev().take(25).collect();
         let tail: Vec<&str> = tail.into_iter().rev().collect();
         return Err(format!(
@@ -407,6 +583,11 @@ mod tests {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
+    /// Tests that mutate process-wide env vars (HAUKSBEE_PIO, the timeout
+    /// override) serialize on this lock so the parallel test runner cannot
+    /// interleave them.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, bytes) in entries {
@@ -464,11 +645,109 @@ mod tests {
             ("blink/platformio.ini", b"[env:uno]\nplatform = atmelavr\nboard = uno\n"),
             ("blink/src/main.cpp", b"int main(){}"),
         ]);
+        let _env = ENV_LOCK.lock().unwrap();
         std::env::set_var("HAUKSBEE_PIO", "/definitely/not/a/real/pio");
         let err = resolve_firmware_bytes("blink.zip", &z).unwrap_err();
         std::env::remove_var("HAUKSBEE_PIO");
         assert!(err.contains("PlatformIO"), "names the missing tool: {err}");
         assert!(err.contains("firmware.elf"), "offers the manual path: {err}");
+    }
+
+    #[test]
+    fn zip_with_too_many_entries_is_refused() {
+        let z = zip_of(&[("a.txt", b"x"), ("b.txt", b"y"), ("c.txt", b"z")]);
+        let limits = ZipLimits { max_entries: 2, max_entry_bytes: 1024, max_total_bytes: 4096 };
+        let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
+        assert!(err.contains("entries"), "names the quota: {err}");
+        assert!(err.contains("zip-bomb"), "says why: {err}");
+    }
+
+    #[test]
+    fn oversized_built_image_is_refused() {
+        let big = vec![0u8; 1024];
+        let z = zip_of(&[("build/app.elf", big.as_slice())]);
+        let limits = ZipLimits { max_entries: 10, max_entry_bytes: 512, max_total_bytes: 1 << 20 };
+        let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
+        assert!(err.contains("per-file limit"), "names the quota: {err}");
+    }
+
+    #[test]
+    fn oversized_entry_is_refused_during_extraction() {
+        let big = vec![0u8; 4096];
+        let z = zip_of(&[
+            ("p/platformio.ini", b"[env:uno]\n"),
+            ("p/src/big.bin", big.as_slice()),
+        ]);
+        let limits = ZipLimits { max_entries: 10, max_entry_bytes: 128, max_total_bytes: 1 << 20 };
+        let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
+        assert!(err.contains("per-file limit"), "names the quota: {err}");
+    }
+
+    #[test]
+    fn total_uncompressed_quota_is_enforced() {
+        let chunk = vec![7u8; 300];
+        let z = zip_of(&[
+            ("p/platformio.ini", b"[env:uno]\n"),
+            ("p/src/a.bin", chunk.as_slice()),
+            ("p/src/b.bin", chunk.as_slice()),
+            ("p/src/c.bin", chunk.as_slice()),
+        ]);
+        let limits = ZipLimits { max_entries: 10, max_entry_bytes: 400, max_total_bytes: 700 };
+        let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
+        assert!(err.contains("total limit"), "names the quota: {err}");
+    }
+
+    #[test]
+    fn build_output_is_capped_to_a_tail() {
+        let mut data = vec![b'a'; PIO_OUTPUT_TAIL_BYTES + 500];
+        let n = data.len();
+        data[n - 1] = b'z';
+        let out = drain_tail(Cursor::new(data));
+        assert_eq!(out.len(), PIO_OUTPUT_TAIL_BYTES, "only the tail is kept");
+        assert_eq!(*out.last().unwrap(), b'z', "and it is the TAIL");
+    }
+
+    /// A hung `pio` is killed at the (test-shortened) deadline with an error
+    /// that says what happened, instead of blocking the caller forever.
+    #[cfg(unix)]
+    #[test]
+    fn pio_build_times_out_and_kills_a_hung_child() {
+        use std::os::unix::fs::PermissionsExt;
+        let _env = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = dir.path().join("slow-pio.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::env::set_var("HAUKSBEE_PIO", &script);
+        std::env::set_var("HAUKSBEE_PIO_TIMEOUT_SECS", "1");
+        let started = std::time::Instant::now();
+        let err = pio_build(&project).unwrap_err();
+        std::env::remove_var("HAUKSBEE_PIO");
+        std::env::remove_var("HAUKSBEE_PIO_TIMEOUT_SECS");
+        assert!(err.contains("exceeded 1s"), "says it timed out: {err}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "did not wait out the child's sleep"
+        );
+    }
+
+    /// The CLI zip path stages the image in a dir that survives the resolver
+    /// returning (the loaders read it much later in the run).
+    #[test]
+    fn cli_zip_resolves_to_a_persistent_file() {
+        let z = zip_of(&[("build/app.elf", b"\x7fELF cli image")]);
+        let dir = tempfile::TempDir::new().unwrap();
+        let zip_path = dir.path().join("fw.zip");
+        std::fs::write(&zip_path, &z).unwrap();
+        let r = resolve_firmware_cli(&zip_path).unwrap().expect("a zip resolves");
+        assert!(r.path.is_file(), "staged image exists: {}", r.path.display());
+        assert_eq!(std::fs::read(&r.path).unwrap(), b"\x7fELF cli image");
+        // The staging dir is deliberately kept; tidy it up in the test.
+        if let Some(parent) = r.path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
     }
 
     /// Real end-to-end `pio run` build. Ignored by default: it needs pio on

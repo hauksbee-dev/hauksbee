@@ -50,6 +50,51 @@ fn err_json(msg: &str) -> String {
         .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"internal error\"}".to_string())
 }
 
+/// Every spec key that names a file on disk. `board`/`firmware` are filled in
+/// server-side from the uploads; the rest would let a raw fragment read
+/// (`asbuilt`, an hwtrace `trace` and the data files it references, a sensor's
+/// `spec_file`) or overwrite (a vcd_sink's `vcd_path` reaches `File::create`)
+/// paths outside the staging dir, because the CI resolver accepts absolute
+/// paths and `..` traversal.
+const PATH_KEYS: [&str; 6] = ["board", "firmware", "asbuilt", "trace", "spec_file", "vcd_path"];
+
+/// The first path-bearing key the fragment tries to set, if any.
+///
+/// Two passes. The line scan matches the key as the first token of a possibly
+/// indented line, the way the builder (and a hand-written spec) emits it. The
+/// TOML parse then catches the same keys smuggled where a line scan cannot see
+/// them: inline tables (`peripheral = [{ vcd_path = "..." }]`), dotted keys
+/// (`assert.trace = "..."`), and quoted keys. A fragment that fails to parse
+/// cannot smuggle a path either: hauksbee-ci parses the identical text and
+/// refuses it before resolving anything.
+fn forbidden_path_key(spec_fragment: &str) -> Option<&'static str> {
+    for line in spec_fragment.lines() {
+        let key = line.trim_start().split(['=', ' ', '\t']).next().unwrap_or("");
+        if let Some(hit) = PATH_KEYS.iter().copied().find(|k| *k == key) {
+            return Some(hit);
+        }
+    }
+    spec_fragment
+        .parse::<toml::Value>()
+        .ok()
+        .as_ref()
+        .and_then(toml_path_key)
+}
+
+fn toml_path_key(value: &toml::Value) -> Option<&'static str> {
+    match value {
+        toml::Value::Table(table) => table.iter().find_map(|(key, val)| {
+            PATH_KEYS
+                .iter()
+                .copied()
+                .find(|k| *k == key.as_str())
+                .or_else(|| toml_path_key(val))
+        }),
+        toml::Value::Array(items) => items.iter().find_map(toml_path_key),
+        _ => None,
+    }
+}
+
 /// Hard ceiling on one web-triggered check run. The builder caps duration_ms
 /// client-side, but a pathological spec (huge fuzz count, a hung external
 /// emulator) must not pin the request forever.
@@ -65,31 +110,26 @@ pub fn run_web_check(
     spec_fragment: &str,
 ) -> String {
     // The client composes everything EXCEPT the file paths; a fragment that
-    // smuggles its own board/firmware would silently point the run somewhere
-    // else, so refuse it loudly.
-    for line in spec_fragment.lines() {
-        let t = line.trim_start();
-        if t.starts_with("board") || t.starts_with("firmware") {
-            let key = t.split(['=', ' ', '\t']).next().unwrap_or("");
-            if key == "board" || key == "firmware" {
-                return err_json(
-                    "the spec body must not set `board` or `firmware` — those keys are \
-                     filled in from the uploaded files",
-                );
-            }
-        }
+    // smuggles any path-bearing key would silently point the run at (or, for
+    // `vcd_path`, write over) files outside the staging dir, so refuse it
+    // loudly and name the key.
+    if let Some(key) = forbidden_path_key(spec_fragment) {
+        return err_json(&format!(
+            "the spec body must not set `{key}`: path-bearing keys are filled in \
+             from the uploaded files or are not available from the web panel"
+        ));
     }
 
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "hauksbee-web-check-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return err_json(&format!("could not create a working dir: {e}"));
-    }
+    // A fresh unpredictable staging dir (created 0700 with O_EXCL semantics),
+    // not a guessable PID-plus-counter path under /tmp that a local attacker
+    // could pre-create as a symlink and redirect the writes below. The guard
+    // must stay alive until after the child exits: hauksbee-ci reads the
+    // staged files while it runs. It is cleaned up when this function returns.
+    let staging = match tempfile::TempDir::new() {
+        Ok(d) => d,
+        Err(e) => return err_json(&format!("could not create a working dir: {e}")),
+    };
+    let dir = staging.path();
 
     let board_file = sanitize_name(board_name, "board.kicad_pcb");
     if let Err(e) = std::fs::write(dir.join(&board_file), board_bytes) {
@@ -226,5 +266,49 @@ kind = "no_faults"
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["ok"], false);
         assert!(v["error"].as_str().unwrap_or("").contains("must not set"));
+    }
+
+    /// Every path-bearing spec key is refused, top-level and indented, and the
+    /// rejection happens before anything touches the filesystem.
+    #[test]
+    fn every_path_bearing_key_is_rejected() {
+        for key in PATH_KEYS {
+            let frag = format!("{key} = \"/etc/passwd\"\n");
+            assert_eq!(forbidden_path_key(&frag), Some(key), "top-level {key}");
+            let indented = format!("  \t{key} = \"../../escape\"\n");
+            assert_eq!(forbidden_path_key(&indented), Some(key), "indented {key}");
+            let json = run_web_check("b.kicad_pcb", b"(kicad_pcb)", None, &frag);
+            let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(v["ok"], false, "{key} fragment must be refused");
+            assert!(
+                v["error"].as_str().unwrap_or("").contains(key),
+                "error names the offending key {key}: {json}"
+            );
+        }
+    }
+
+    /// Keys inside `[[table]]` blocks, inline tables, and dotted keys cannot
+    /// sneak past the line scan: the TOML walk catches them.
+    #[test]
+    fn nested_and_inline_path_keys_are_rejected() {
+        let block = "[[assert]]\nkind = \"hwtrace\"\ntrace = \"../secrets/trace.toml\"\n";
+        assert_eq!(forbidden_path_key(block), Some("trace"));
+        let inline = "peripheral = [{ id = \"scope\", type = \"vcd_sink\", net = \"CLK\", vcd_path = \"/tmp/pwn.vcd\" }]\n";
+        assert_eq!(forbidden_path_key(inline), Some("vcd_path"));
+        let dotted = "assert.trace = \"/etc/passwd\"\n";
+        assert_eq!(forbidden_path_key(dotted), Some("trace"));
+        let quoted = "\"vcd_path\" = \"/tmp/pwn.vcd\"\n";
+        assert_eq!(forbidden_path_key(quoted), Some("vcd_path"));
+        let sensor = "[[sensor]]\nid = \"t\"\nspec_file = \"/home/user/.ssh/id_rsa\"\n";
+        assert_eq!(forbidden_path_key(sensor), Some("spec_file"));
+    }
+
+    /// A legitimate fragment, and identifiers that merely CONTAIN a forbidden
+    /// key or mention one inside a string, pass the filter.
+    #[test]
+    fn benign_fragments_pass_the_path_filter() {
+        assert_eq!(forbidden_path_key(spec_fragment()), None);
+        let lookalikes = "name = \"trace of the board\"\nboard_rev = \"C\"\nfirmware_version = 2\n";
+        assert_eq!(forbidden_path_key(lookalikes), None);
     }
 }
