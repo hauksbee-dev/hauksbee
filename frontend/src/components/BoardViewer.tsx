@@ -92,15 +92,21 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
   // ── Load board ──
   useEffect(() => {
+    // Changing boardFile does not implicitly cancel the previous fetch: a slow
+    // earlier load could otherwise setBoard (or report an empty board) AFTER
+    // the newer file already rendered. Abort on cleanup and drop late resolves.
+    let cancelled = false
+    const ctrl = new AbortController()
     setLoading(true)
     setError(null)
     setBoard(null)
-    fetch(boardFile)
+    fetch(boardFile, { signal: ctrl.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.url}`)
         return r.text()
       })
       .then(text => {
+        if (cancelled) return
         const parsed = parseKicadPcb(text)
         setBoard(parsed)
         setLoading(false)
@@ -113,9 +119,14 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         }
       })
       .catch((e: Error) => {
+        if (cancelled || e.name === 'AbortError') return
         setError(e.message)
         setLoading(false)
       })
+    return () => {
+      cancelled = true
+      ctrl.abort()
+    }
   }, [boardFile])
 
   // ── Fit camera when board loads or canvas resizes ──
