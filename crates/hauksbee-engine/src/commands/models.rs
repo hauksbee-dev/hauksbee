@@ -246,10 +246,10 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `hauksbee models resolve <board>`: per component, which model entry won
-/// and from which priority layer — the pack author's debugging surface
+/// `hauksbee models resolve <board> [--json]`: per component, which model entry
+/// won and from which priority layer: the pack author's debugging surface
 /// (the layer-annotated extension of `run --report`'s bind table).
-pub fn resolve(board_path: &Path, models_dir: Option<&Path>) -> anyhow::Result<()> {
+pub fn resolve(board_path: &Path, models_dir: Option<&Path>, json: bool) -> anyhow::Result<()> {
     // The shared board-input normalizer: this used to carry its own mini
     // board-code compile + schematic dispatch, which meant `models resolve`
     // accepted a different format set than `run` (no Altium, no gerber, no
@@ -257,8 +257,61 @@ pub fn resolve(board_path: &Path, models_dir: Option<&Path>) -> anyhow::Result<(
     let board = crate::board_input::from_path(board_path)?.board;
     let extra: Vec<&Path> = models_dir.into_iter().collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
-    print!("{}", resolve_report(&lib, &board));
+    if json {
+        println!("{}", resolve_report_json(&lib, &board));
+    } else {
+        print!("{}", resolve_report(&lib, &board));
+    }
     Ok(())
+}
+
+/// One resolved (or unresolved) component row: the single source both the text
+/// table and the JSON object render from, so they can never disagree.
+struct ResolveRow {
+    reference: String,
+    value: String,
+    model: String,
+    layer: String,
+    origin: String,
+    resolved: bool,
+}
+
+fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> Vec<ResolveRow> {
+    board
+        .components
+        .iter()
+        .map(|comp| {
+            let res = crate::binder::resolve(lib, comp);
+            let (model, layer, origin, resolved) = match (&res.model, res.layer) {
+                (Some(m), Some(l)) => (
+                    m.id.clone(),
+                    l.to_string(),
+                    res.origin.clone().unwrap_or_default(),
+                    true,
+                ),
+                (Some(m), None) => (
+                    m.id.clone(),
+                    "engine-fallback".to_string(),
+                    res.origin.clone().unwrap_or_default(),
+                    true,
+                ),
+                _ => (
+                    "UNRESOLVED".to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                    false,
+                ),
+            };
+            ResolveRow {
+                reference: comp.reference.clone(),
+                value: comp.value.clone(),
+                model,
+                layer,
+                origin,
+                resolved,
+            }
+        })
+        .collect()
 }
 
 /// The `models resolve` table, separated from I/O so tests can assert on it.
@@ -275,28 +328,43 @@ pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoa
         "{:<10} {:<24} {:<28} {:<16} {}",
         "Ref", "Value", "Model", "Layer", "Origin"
     );
-    for comp in &board.components {
-        let res = crate::binder::resolve(lib, comp);
-        let (model, layer, origin) = match (&res.model, res.layer) {
-            (Some(m), Some(l)) => (
-                m.id.clone(),
-                l.to_string(),
-                res.origin.clone().unwrap_or_default(),
-            ),
-            (Some(m), None) => (
-                m.id.clone(),
-                "engine-fallback".to_string(),
-                res.origin.clone().unwrap_or_default(),
-            ),
-            _ => ("UNRESOLVED".to_string(), "-".to_string(), "-".to_string()),
-        };
+    for row in resolve_rows(lib, board) {
         let _ = writeln!(
             out,
             "{:<10} {:<24} {:<28} {:<16} {}",
-            comp.reference, comp.value, model, layer, origin
+            row.reference, row.value, row.model, row.layer, row.origin
         );
     }
     out
+}
+
+/// The `models resolve --json` object: the same rows as the text table, plus a
+/// resolved/unresolved rollup so a consumer needs no counting pass.
+pub fn resolve_report_json(
+    lib: &ModelLibrary,
+    board: &hauksbee_extract::ExtractedBoard,
+) -> String {
+    let rows = resolve_rows(lib, board);
+    let unresolved = rows.iter().filter(|r| !r.resolved).count();
+    serde_json::json!({
+        "ok": true,
+        "components": rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "ref": r.reference,
+                    "value": r.value,
+                    "model": r.model,
+                    "layer": r.layer,
+                    "origin": r.origin,
+                    "resolved": r.resolved,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "total": rows.len(),
+        "unresolved": unresolved,
+    })
+    .to_string()
 }
 
 /// Locate the directory holding `pack.toml` inside an unpacked tree: the root

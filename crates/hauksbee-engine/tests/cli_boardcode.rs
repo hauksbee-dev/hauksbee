@@ -125,6 +125,285 @@ fn main {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A tiny two-pad one-net board for the routing-seam tests. Pad `at` offsets
+/// are footprint-RELATIVE (KiCad semantics), so R1 at (15,10) puts pad 1 at
+/// board (10,10) and pad 2 at (20,10), both on net "A".
+const SEAM_BOARD: &str = r#"# Board-as-Code (hauksbee board DSL v1)
+board version 20241229
+
+fn main {
+    net "A"
+    comp R1 lib "Resistor_SMD:R_0805_2012Metric" val "10k" layer "F.Cu" at 15 10 rot 0 {
+        pad "1" smd rect at -5 0 size 1 1 layers [F.Cu] net "A"
+        pad "2" smd rect at 5 0 size 1 1 layers [F.Cu] net "A"
+    }
+}
+"#;
+
+/// A SES that routes SEAM_BOARD's net "A": one F.Cu wire from pad 1 to pad 2.
+/// No `(place ...)` anchor, so the scale is the declared-resolution fallback
+/// (10000 units/mm).
+const SEAM_SES: &str = r#"(session board.ses
+  (routes
+    (resolution um 10)
+    (network_out
+      (net "A"
+        (wire (path F.Cu 2500 100000 100000 200000 100000))
+      )
+    )
+  )
+)
+"#;
+
+fn scratch_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("hauksbee_cli_{tag}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// The DSN/SES seam end to end, no router installed: `from-code --route-dsn`
+/// exports the DSN and stops (announcing it), then `merge-ses` merges an
+/// externally produced SES and its `--json` object carries the audit.
+#[test]
+fn route_dsn_export_and_merge_ses_roundtrip() {
+    let dir = scratch_dir("seam");
+    let board = dir.join("seam.board");
+    std::fs::write(&board, SEAM_BOARD).unwrap();
+
+    // Export the DSN and stop.
+    let dsn = dir.join("seam.dsn");
+    let out_pcb = dir.join("seam.kicad_pcb");
+    let out = Command::new(bin())
+        .args([
+            "from-code",
+            board.to_str().unwrap(),
+            "--out",
+            out_pcb.to_str().unwrap(),
+            "--route-dsn",
+            dsn.to_str().unwrap(),
+        ])
+        .output()
+        .expect("hauksbee runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "route-dsn export must exit 0:\n{stderr}");
+    let dsn_text = std::fs::read_to_string(&dsn).expect("DSN written");
+    assert!(dsn_text.starts_with("(pcb "), "a Specctra DSN:\n{dsn_text}");
+    assert!(
+        stderr.contains("merge-ses"),
+        "announces the way back (merge-ses):\n{stderr}"
+    );
+
+    // Merge an externally routed SES back, machine-readable.
+    let ses = dir.join("seam.ses");
+    std::fs::write(&ses, SEAM_SES).unwrap();
+    let routed = dir.join("routed.kicad_pcb");
+    let out = Command::new(bin())
+        .args([
+            "merge-ses",
+            board.to_str().unwrap(),
+            ses.to_str().unwrap(),
+            "--out",
+            routed.to_str().unwrap(),
+            "--route-strict",
+            "--json",
+        ])
+        .output()
+        .expect("hauksbee runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a fully-routed merge passes --route-strict:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("one parseable JSON object on stdout");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["nets_total"], 1, "{v}");
+    assert_eq!(v["connections_routed"], 1, "{v}");
+    assert_eq!(v["unrouted"], 0, "{v}");
+    assert_eq!(v["segments"], 1, "{v}");
+    assert_eq!(v["engine"], "merged-ses", "{v}");
+    assert_eq!(v["endpoint_net_violations"], 0, "{v}");
+    assert!(v["drc_serious"].is_number(), "{v}");
+    assert!(v["seconds"].is_number(), "{v}");
+    let routed_text = std::fs::read_to_string(&routed).expect("routed board written");
+    assert!(
+        routed_text.contains("(segment"),
+        "merged copper reaches the board file"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A SES that closes nothing real must not pass: an off-board wire merges but
+/// leaves the connection open, `--route-strict --json` reports ok:false with
+/// the metrics, and the board is NOT written.
+#[test]
+fn merge_ses_strict_fails_on_open_connection_with_one_json_line() {
+    let dir = scratch_dir("seam_strict");
+    let board = dir.join("seam.board");
+    std::fs::write(&board, SEAM_BOARD).unwrap();
+    let ses = dir.join("bad.ses");
+    // A wire nowhere near pad 2: net "A" stays open.
+    std::fs::write(
+        &ses,
+        r#"(session board.ses
+  (routes
+    (resolution um 10)
+    (network_out
+      (net "A"
+        (wire (path F.Cu 2500 100000 100000 120000 100000))
+      )
+    )
+  )
+)
+"#,
+    )
+    .unwrap();
+    let routed = dir.join("routed.kicad_pcb");
+    let out = Command::new(bin())
+        .args([
+            "merge-ses",
+            board.to_str().unwrap(),
+            ses.to_str().unwrap(),
+            "--out",
+            routed.to_str().unwrap(),
+            "--route-strict",
+            "--json",
+        ])
+        .output()
+        .expect("hauksbee runs");
+    assert!(!out.status.success(), "an open connection must fail strict");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 1, "exactly one JSON line on stdout:\n{stdout}");
+    let v: serde_json::Value = serde_json::from_str(lines[0]).expect("parseable JSON");
+    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(v["unrouted"], 1, "{v}");
+    assert!(
+        v["error"].as_str().unwrap().contains("route-strict"),
+        "{v}"
+    );
+    assert!(!routed.exists(), "a strict-failed board is not written");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `check-code --json` emits one machine-readable object; the human table is
+/// unchanged when the flag is absent.
+#[test]
+fn check_code_json_object() {
+    let dir = scratch_dir("checkjson");
+    let board = dir.join("seam.board");
+    std::fs::write(&board, SEAM_BOARD).unwrap();
+
+    let out = Command::new(bin())
+        .args([
+            "check-code",
+            board.to_str().unwrap(),
+            "--seconds",
+            "0.01",
+            "--json",
+        ])
+        .output()
+        .expect("hauksbee runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "healthy board exits 0:\n{stdout}");
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("one JSON object on stdout");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["components"], 1, "{v}");
+    assert!(v["nets"].is_number() && v["resolved_fraction"].is_number(), "{v}");
+    assert!(v["faults"].is_array() && v["unresolved"].is_array(), "{v}");
+    assert!(v["simulated_seconds"].is_number(), "{v}");
+
+    // Default output is the human table, not JSON.
+    let human = Command::new(bin())
+        .args(["check-code", board.to_str().unwrap(), "--seconds", "0.01"])
+        .output()
+        .expect("hauksbee runs");
+    let hs = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        hs.contains("Board-as-Code check:"),
+        "human table unchanged:\n{hs}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `models resolve --json` emits the per-component table as JSON.
+#[test]
+fn models_resolve_json_object() {
+    let dir = scratch_dir("resolvejson");
+    let board = dir.join("seam.board");
+    std::fs::write(&board, SEAM_BOARD).unwrap();
+
+    let out = Command::new(bin())
+        .args(["models", "resolve", board.to_str().unwrap(), "--json"])
+        .output()
+        .expect("hauksbee runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "resolve --json exits 0:\n{stdout}");
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("one JSON object on stdout");
+    let comps = v["components"].as_array().expect("components array");
+    assert_eq!(comps.len(), 1, "{v}");
+    assert_eq!(comps[0]["ref"], "R1", "{v}");
+    assert_eq!(comps[0]["value"], "10k", "{v}");
+    assert!(comps[0]["model"].is_string() && comps[0]["layer"].is_string(), "{v}");
+    assert!(v["total"].is_number() && v["unresolved"].is_number(), "{v}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--version` carries the git hash the binary was built from (build.rs sets
+/// GIT_HASH; this test builds inside the repo, so it must be present).
+#[test]
+fn version_carries_git_hash() {
+    let out = Command::new(bin())
+        .arg("--version")
+        .output()
+        .expect("hauksbee runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(env!("CARGO_PKG_VERSION")),
+        "crate version present: {stdout}"
+    );
+    assert!(
+        stdout.contains("git "),
+        "git hash present when built in a checkout: {stdout}"
+    );
+}
+
+/// `from-code --json` without a routing flag is refused loudly (it describes a
+/// routing run), instead of silently printing nothing machine-readable.
+#[test]
+fn from_code_json_requires_a_routing_flag() {
+    let dir = scratch_dir("jsonnoroute");
+    let board = dir.join("seam.board");
+    std::fs::write(&board, SEAM_BOARD).unwrap();
+    let out_pcb = dir.join("seam.kicad_pcb");
+    let out = Command::new(bin())
+        .args([
+            "from-code",
+            board.to_str().unwrap(),
+            "--out",
+            out_pcb.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("hauksbee runs");
+    assert!(!out.status.success(), "--json with no routing flag refuses");
+    // The refusal itself is machine-readable (the JSON error envelope).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("JSON error envelope on stdout");
+    assert_eq!(v["ok"], false, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("--route"), "{v}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn to_code_netlist_emits_board() {
     // `to-code` accepts a netlist (not just a .kicad_pcb) and emits Board-as-Code.
