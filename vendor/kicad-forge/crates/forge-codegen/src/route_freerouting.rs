@@ -64,6 +64,12 @@ macro_rules! rbail {
 /// `mm * UM_PER_MM * 10` = units, and `units / 10000.0` = mm.
 const RES_UNITS_PER_MM: f64 = 10_000.0;
 
+/// File names the routing workdir uses for the DSN/SES pair. Public so a CLI
+/// can announce the DSN path (the natural hand-edit / external-router seam)
+/// without hard-coding a string that could drift from what this module writes.
+pub const DSN_FILE_NAME: &str = "board.dsn";
+pub const SES_FILE_NAME: &str = "board.ses";
+
 fn to_units(mm: f64) -> i64 {
     (mm * RES_UNITS_PER_MM).round() as i64
 }
@@ -606,7 +612,39 @@ pub fn find_freerouting_jar(cfg: &FreeroutingConfig) -> Option<PathBuf> {
     found.into_iter().next()
 }
 
+/// Check that a purported freerouting jar really is a jar: a jar is a ZIP, so
+/// four bytes of magic (`PK\x03\x04`) settle it. The failure this catches is a
+/// broken download saved as an HTML error page, which otherwise runs all the
+/// way to `java -jar` and dies as a bare "exit status: 1" with no hint that the
+/// file itself is garbage.
+pub fn validate_jar(path: &Path) -> Result<()> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| RouteError(format!("opening freerouting jar {}: {e}", path.display())))?;
+    let mut head = [0u8; 32];
+    let n = f.read(&mut head)?;
+    if n >= 4 && head[..4] == *b"PK\x03\x04" {
+        return Ok(());
+    }
+    // Show what the file actually starts with, printably, so an HTML error page
+    // is recognisable at a glance.
+    let shown: String = String::from_utf8_lossy(&head[..n])
+        .chars()
+        .take(24)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    rbail!(
+        "freerouting jar at {} is not a jar (starts with '{}')",
+        path.display(),
+        shown.trim_end()
+    );
+}
+
 /// Whether freerouting is usable on this machine (a jar and a JRE exist).
+///
+/// Deliberately does NOT reject a corrupt jar here: reporting a found-but-
+/// broken jar as "absent" would route the engine silently onto the grid
+/// fallback. [`run_freerouting`] validates the jar and fails LOUDLY instead.
 pub fn freerouting_available(cfg: &FreeroutingConfig) -> bool {
     if find_freerouting_jar(cfg).is_none() {
         return false;
@@ -627,11 +665,34 @@ pub struct FreeroutingRun {
     pub ses_path: PathBuf,
     /// Wall-clock seconds the router took.
     pub elapsed_secs: f64,
+    /// The jar that did the routing (so a report can name the exact engine).
+    pub jar: PathBuf,
+}
+
+/// Last few non-empty lines of a log file, for error messages. `None` when the
+/// file is missing or empty.
+fn log_tail(path: &Path, lines: usize) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let tail: Vec<&str> = text
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(lines)
+        .collect();
+    if tail.is_empty() {
+        return None;
+    }
+    Some(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
 }
 
 /// Run freerouting headlessly on a DSN file, writing the SES beside it. Runs as
 /// a child process, polled on an interval, and **killed if it exceeds the
 /// configured timeout** (autorouting a large board can otherwise run away).
+///
+/// The child's stdout/stderr go to `freerouting.stdout.log` /
+/// `freerouting.stderr.log` beside the SES (files, not pipes, so a chatty
+/// router can never deadlock the poll loop), and a failure's error message
+/// carries the stderr tail: a bare "exit status: 1" tells an operator nothing.
 pub fn run_freerouting(
     dsn_path: &Path,
     ses_path: &Path,
@@ -639,6 +700,7 @@ pub fn run_freerouting(
 ) -> Result<FreeroutingRun> {
     let jar = find_freerouting_jar(cfg)
         .ok_or_else(|| RouteError("freerouting jar not found (set FREEROUTING_JAR)".into()))?;
+    validate_jar(&jar)?;
 
     let start = Instant::now();
     // Version-specific flags: freerouting 2.x understands `-da` (disable the
@@ -660,9 +722,13 @@ pub fn run_freerouting(
         cmd.arg("-da");
     }
     // headless + no GUI; freerouting goes to CLI mode when -de/-do given.
+    // Child output goes to log files (never Stdio::null(): a corrupt jar's
+    // stack trace, or 1.9.0's per-pass progress, must be recoverable).
+    let stdout_log = ses_path.with_file_name("freerouting.stdout.log");
+    let stderr_log = ses_path.with_file_name("freerouting.stderr.log");
     let mut child: Child = cmd
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(std::fs::File::create(&stdout_log)?))
+        .stderr(Stdio::from(std::fs::File::create(&stderr_log)?))
         .spawn()
         .map_err(|e| RouteError(format!("spawning freerouting: {e}")))?;
 
@@ -671,7 +737,17 @@ pub fn run_freerouting(
         match child.try_wait()? {
             Some(status) => {
                 if !status.success() {
-                    rbail!("freerouting exited with {status}");
+                    let tail = log_tail(&stderr_log, 8).or_else(|| log_tail(&stdout_log, 8));
+                    match tail {
+                        Some(t) => rbail!(
+                            "freerouting exited with {status}; last output:\n{t}\n(full log: {})",
+                            stderr_log.display()
+                        ),
+                        None => rbail!(
+                            "freerouting exited with {status} and wrote no output (logs beside {})",
+                            ses_path.display()
+                        ),
+                    }
                 }
                 break;
             }
@@ -680,7 +756,9 @@ pub fn run_freerouting(
                     let _ = child.kill();
                     let _ = child.wait();
                     rbail!(
-                        "freerouting exceeded {}s timeout; killed",
+                        "freerouting exceeded the {}s timeout; killed. A large board can \
+                         legitimately need 12-15 minutes: raise the timeout (route-timeout), \
+                         or export the DSN and route it yourself, merging the SES back after",
                         cfg.timeout.as_secs()
                     );
                 }
@@ -695,6 +773,7 @@ pub fn run_freerouting(
     Ok(FreeroutingRun {
         ses_path: ses_path.to_path_buf(),
         elapsed_secs: start.elapsed().as_secs_f64(),
+        jar,
     })
 }
 
@@ -949,6 +1028,19 @@ pub fn merge_ses_into_pcb(
     (seg_count, via_count)
 }
 
+/// Merge raw SES text onto a board: detect the coordinate scale (see
+/// [`detect_ses_scale`]), parse, and merge. Returns `(segments, vias)` added.
+///
+/// This is the externally-routed half of the DSN/SES seam: an operator who
+/// exported the DSN, routed it with any Specctra-capable router on their own
+/// clock, and now holds a SES file, merges it through the same code path a
+/// live freerouting run uses, so the post-merge audit judges both identically.
+pub fn merge_ses_text(pcb: &mut Pcb, ses_text: &str, rules: &RouteRules) -> (usize, usize) {
+    let scale = detect_ses_scale(ses_text, pcb);
+    let routes = parse_ses(ses_text, scale);
+    merge_ses_into_pcb(pcb, &routes, rules)
+}
+
 // ---------------------------------------------------------------------------
 // Tiny s-expression lexer (read-only, for SES)
 // ---------------------------------------------------------------------------
@@ -1026,6 +1118,9 @@ pub struct RouteOutcome {
     pub segments: usize,
     pub vias: usize,
     pub elapsed_secs: f64,
+    /// The engine that produced the copper, named from the jar that ran
+    /// (e.g. `freerouting-1.9.0`), so a machine-readable report can carry it.
+    pub engine: String,
 }
 
 /// Route a placed board end to end with freerouting: write DSN, run the router
@@ -1039,8 +1134,8 @@ pub fn route_with_freerouting(
     workdir: &Path,
 ) -> Result<RouteOutcome> {
     std::fs::create_dir_all(workdir)?;
-    let dsn = workdir.join("board.dsn");
-    let ses = workdir.join("board.ses");
+    let dsn = workdir.join(DSN_FILE_NAME);
+    let ses = workdir.join(SES_FILE_NAME);
     let dsn_text = write_dsn(pcb, outline, rules);
     std::fs::write(&dsn, &dsn_text)?;
 
@@ -1068,12 +1163,22 @@ pub fn route_with_freerouting(
 
     let (segments, vias) = merge_ses_into_pcb(pcb, &routes, rules);
 
+    // Name the engine from the jar file stem: "freerouting-1.9.0.jar" routed
+    // this board, and a report claiming so must be able to prove it.
+    let engine = run
+        .jar
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("freerouting")
+        .to_string();
+
     Ok(RouteOutcome {
         nets_to_route,
         nets_routed,
         segments,
         vias,
         elapsed_secs: run.elapsed_secs,
+        engine,
     })
 }
 
@@ -2349,6 +2454,61 @@ mod tests {
             1,
             "a cross-layer T is not a connection"
         );
+    }
+
+    /// A jar is a ZIP: four magic bytes accept it, and an HTML error page
+    /// saved as "freerouting.jar" is named for what it is, with what it starts
+    /// with, instead of dying later as a bare "exit status: 1".
+    #[test]
+    fn validate_jar_names_a_corrupt_download() {
+        let dir = std::env::temp_dir().join(format!("forge_jar_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let html = dir.join("freerouting-1.9.0.jar");
+        std::fs::write(&html, "<!DOCTYPE html>\n<html><body>404</body></html>").unwrap();
+        let err = validate_jar(&html).expect_err("an HTML page is not a jar");
+        let msg = err.to_string();
+        assert!(msg.contains("is not a jar"), "names the failure: {msg}");
+        assert!(
+            msg.contains("<!DOCTYPE html>"),
+            "shows what the file starts with: {msg}"
+        );
+        assert!(msg.contains("freerouting-1.9.0.jar"), "names the path: {msg}");
+
+        let real = dir.join("ok.jar");
+        std::fs::write(&real, b"PK\x03\x04rest-of-a-zip").unwrap();
+        validate_jar(&real).expect("ZIP magic passes");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// merge_ses_text is the externally-routed seam: raw SES text (scale
+    /// auto-detected, here the declared-resolution fallback) merges onto the
+    /// board and closes the net's connection exactly as a live run would.
+    #[test]
+    fn merge_ses_text_merges_external_ses() {
+        let mut pcb = two_pad_board();
+        // Pads A1 (10,10) and A2 (20,10) on net N1; SES units at the declared
+        // 10000/mm fallback scale (no place record to anchor on).
+        let ses = r#"(session board.ses
+  (routes
+    (resolution um 10)
+    (network_out
+      (net "N1"
+        (wire (path F.Cu 2500 100000 100000 200000 100000))
+        (via "Via[0-1]_6000" 200000 100000)
+      )
+    )
+  )
+)
+"#;
+        let (segments, vias) = merge_ses_text(&mut pcb, ses, &RouteRules::default());
+        assert_eq!(segments, 1, "one wire span merged");
+        assert_eq!(vias, 1, "one via merged");
+        let c = connectivity(&pcb);
+        assert_eq!(c.total, 1);
+        assert_eq!(c.unrouted, 0, "the external SES closes the connection");
+        assert_eq!(endpoint_net_violations(&pcb), 0);
     }
 
     /// A segment passing straight THROUGH a pad connects it even though
