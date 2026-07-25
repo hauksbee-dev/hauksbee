@@ -310,6 +310,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.strict,
             &probes,
             cfg.probe_csv.as_deref(),
+            // --chunk-us: not yet wired through RunConfig (the clap RunArgs and
+            // the RunConfig literal live in main.rs, another lane). The whole
+            // plumbing below this point is live; wiring is: add a `--chunk-us
+            // <f64>` arg to RunArgs, a `chunk_us: Option<f64>` field to
+            // RunConfig, and replace this None with `cfg.chunk_us`.
+            None,
         )?;
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
@@ -411,6 +417,22 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                     message: format!("co-sim: {w}"),
                 });
             }
+            // Sub-chunk pulses invisible to tick-evaluated sequential parts
+            // (friction 1.16) and runtime driver contention: same Coverage
+            // note channel, in addition to the structured CosimJson fields,
+            // so a consumer that only filters notes still sees them.
+            for p in engine.scheduler().short_pulses() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: p.message(),
+                });
+            }
+            for c in engine.scheduler().driver_contentions() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: c.message(),
+                });
+            }
             for net in held_high_boot_nets {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::BootControlNet,
@@ -482,6 +504,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 &engine.scheduler().spi_framing_modes(),
             ) {
                 report.heads_up.push(crate::plain::HeadsUp::note(w));
+            }
+            // Sub-chunk pulse and driver-contention findings, same wording as
+            // the JSON notes and the default text summary.
+            for p in engine.scheduler().short_pulses() {
+                report.heads_up.push(crate::plain::HeadsUp::note(p.message()));
+            }
+            for c in engine.scheduler().driver_contentions() {
+                report.heads_up.push(crate::plain::HeadsUp::note(c.message()));
             }
             // Boot-safety heads-up: control nets the firmware switches ON and
             // holds from power-up, with no resistor setting a safe default. The

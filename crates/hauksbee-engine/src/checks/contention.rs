@@ -76,8 +76,10 @@
 //! field case is out of static reach. This check catches MODEL-to-MODEL
 //! contention only, and its finding prose says so; the model-to-firmware half
 //! belongs to co-sim time, where the scheduler knows the real pin directions.
-//! No scheduler-side contention detector exists yet: that is a recorded
-//! follow-up, not something this lint quietly covers.
+//! That half is covered by the scheduler's runtime monitor
+//! (`Scheduler::detect_driver_contention`), which fires when a firmware-enabled
+//! GPIO driver and an enabled modelled push-pull output share a net, using the
+//! same `output_roles`/tri-state classification this check rests on.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -398,10 +400,10 @@ mod tests {
     /// healthy topology there is, a gate output feeding an MCU input. Firing
     /// here would put a High finding on virtually every board that wires logic
     /// to an MCU, which the zero-false-positive gate forbids. The model-to-MCU
-    /// half of the field case is therefore out of STATIC reach; it is catchable
+    /// half of the field case is therefore out of STATIC reach; it is caught
     /// at co-sim time, where the scheduler learns real pin directions from the
-    /// firmware's DDR writes, and a scheduler-side contention monitor is the
-    /// recorded follow-up. What the static check DOES catch is the other face
+    /// firmware's DDR writes (`Scheduler::detect_driver_contention`, which has
+    /// its own tests). What the static check DOES catch is the other face
     /// of the same field failure: the mis-mapped model output landing on a net
     /// with any OTHER modelled push-pull output (see
     /// `two_pushpull_outputs_on_one_net_fire`).

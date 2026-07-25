@@ -103,6 +103,29 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
                 parts: d.parts,
             })
             .collect(),
+        short_pulses: sched
+            .short_pulses()
+            .iter()
+            .map(|p| hauksbee_engine::result::CosimShortPulse {
+                net: p.net.clone(),
+                mcu_ref: p.mcu_ref.clone(),
+                pin: format!("P{}{}", p.port, p.bit),
+                pulse_s: p.pulse_s,
+                chunk_s: p.chunk_s,
+                parts: p.parts.clone(),
+            })
+            .collect(),
+        driver_contention: sched
+            .driver_contentions()
+            .iter()
+            .map(|c| hauksbee_engine::result::CosimDriverContention {
+                net: c.net.clone(),
+                mcu_ref: c.mcu_ref.clone(),
+                pin: format!("P{}{}", c.port, c.bit),
+                parts: c.parts.clone(),
+                t_s: c.t_s,
+            })
+            .collect(),
         unexercised_buses: sched
             .unexercised_buses()
             .iter()
