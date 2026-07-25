@@ -48,10 +48,19 @@ pub struct PcbBuilder {
     version: i64,
     layers: Vec<LayerBuilder>,
     nets: Vec<NetBuilder>,
-    footprints: Vec<FootprintBuilder>,
+    footprints: Vec<FpEntry>,
     segments: Vec<SegSpec>,
     vias: Vec<ViaSpec>,
     gr_lines: Vec<GrLineSpec>,
+}
+
+/// A footprint slot in the builder: either a minimal spec built field by field,
+/// or a complete pre-built `(footprint ...)` CST node (used by the library
+/// copy-through path, which dresses the node from the installed `.kicad_mod`).
+/// One vector keeps both kinds so emission order stays the insertion order.
+enum FpEntry {
+    Spec(FootprintBuilder),
+    Node(List),
 }
 
 struct SegSpec {
@@ -125,7 +134,18 @@ impl PcbBuilder {
     }
 
     pub fn add_footprint(mut self, fp: FootprintBuilder) -> Self {
-        self.footprints.push(fp);
+        self.footprints.push(FpEntry::Spec(fp));
+        self
+    }
+
+    /// Add a complete, already-built `(footprint ...)` CST node.
+    ///
+    /// The node is emitted verbatim in insertion order alongside footprints
+    /// added via [`PcbBuilder::add_footprint`]. The caller is responsible for
+    /// the node being a well-formed board footprint (placement `at`, layer,
+    /// reference/value properties, pad nets).
+    pub fn add_footprint_node(mut self, node: List) -> Self {
+        self.footprints.push(FpEntry::Node(node));
         self
     }
 
@@ -210,7 +230,10 @@ fn build_kicad_pcb(b: PcbBuilder) -> List {
 
     // footprints
     for fp in b.footprints {
-        children.push(Sexpr::List(build_footprint(fp)));
+        match fp {
+            FpEntry::Spec(spec) => children.push(Sexpr::List(build_footprint(spec))),
+            FpEntry::Node(node) => children.push(Sexpr::List(node)),
+        }
     }
 
     // segments
