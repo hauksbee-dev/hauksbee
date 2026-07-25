@@ -119,6 +119,29 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
                 controller: b.controller.clone(),
             })
             .collect(),
+        short_pulses: sched
+            .short_pulses()
+            .iter()
+            .map(|p| crate::result::CosimShortPulse {
+                net: p.net.clone(),
+                mcu_ref: p.mcu_ref.clone(),
+                pin: format!("P{}{}", p.port, p.bit),
+                pulse_s: p.pulse_s,
+                chunk_s: p.chunk_s,
+                parts: p.parts.clone(),
+            })
+            .collect(),
+        driver_contention: sched
+            .driver_contentions()
+            .iter()
+            .map(|c| crate::result::CosimDriverContention {
+                net: c.net.clone(),
+                mcu_ref: c.mcu_ref.clone(),
+                pin: format!("P{}{}", c.port, c.bit),
+                parts: c.parts.clone(),
+                t_s: c.t_s,
+            })
+            .collect(),
     })
 }
 
@@ -258,6 +281,7 @@ pub fn run_headless(
     strict: bool,
     probes: &[String],
     probe_csv: Option<&Path>,
+    chunk_us: Option<f64>,
 ) -> anyhow::Result<Vec<crate::FaultEvent>> {
     use crate::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
@@ -270,7 +294,7 @@ pub fn run_headless(
         .mcu_identities()
         .iter()
         .any(|(_, backend, _)| backend.starts_with("renode:") || backend.starts_with("qemu:"));
-    let frame_dt = if external { 10.0 / 1000.0 } else { 1.0 / 1000.0 };
+    let mut frame_dt = if external { 10.0 / 1000.0 } else { 1.0 / 1000.0 };
     if external {
         engine.scheduler_mut().chunk_s = frame_dt;
         eprintln!(
@@ -279,6 +303,21 @@ pub fn run_headless(
         );
     } else {
         eprintln!("co-sim: {seconds:.2}s headless...");
+    }
+    // Explicit chunk override (--chunk-us): the operator's speed-vs-resolution
+    // trade (friction 1.16: a 2 us STROBE pulse is invisible to tick-evaluated
+    // sequential parts at the 100 us default). Applied AFTER the external
+    // default so an explicit value wins on every backend; the frame is widened
+    // to at least one chunk so `step`'s chunk arithmetic stays exact.
+    if let Some(us) = chunk_us {
+        anyhow::ensure!(
+            us > 0.0 && us.is_finite(),
+            "--chunk-us must be a positive number of microseconds, got {us}"
+        );
+        let chunk_s = us * 1e-6;
+        engine.scheduler_mut().chunk_s = chunk_s;
+        frame_dt = frame_dt.max(chunk_s);
+        eprintln!("co-sim: solver chunk set to {us} us (--chunk-us)");
     }
     let mut t = 0.0;
     let mut next_progress = seconds / 5.0; // ~5 progress lines over the run
@@ -398,6 +437,17 @@ pub fn run_headless(
         }
         for b in sched.unexercised_buses() {
             println!("\nWARNING: {}", b.message());
+        }
+        // Sub-chunk pulses swallowed by the tick-evaluated digital path
+        // (friction 1.16) and runtime driver contention (the model-vs-MCU case
+        // the static lint cannot reach): both produce plausible WRONG results,
+        // so the default text summary must carry them like the other two
+        // silent-garbage modes above.
+        for p in sched.short_pulses() {
+            println!("\nWARNING: {}", p.message());
+        }
+        for c in sched.driver_contentions() {
+            println!("\nWARNING: {}", c.message());
         }
         // Per-bus SPI transaction-framing tier (05 §2). `heuristic` is the
         // documented actively-wrong tier (merges two transactions in a chunk;
