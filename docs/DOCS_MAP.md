@@ -20,6 +20,7 @@ firmware + spec, and the one local command that runs them).
 | [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc` binary ingest |
 | [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
 | [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
+| [`ingest/DNP.md`](ingest/DNP.md) | Do-not-populate parts: what gets simulated, and how to change it |
 | [`ingest/BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md) | Decompile / edit / recompile a board as editable code |
 
 **"What does it check, and can I trust the findings?"**: [`checks/`](checks/)

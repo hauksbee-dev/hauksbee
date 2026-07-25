@@ -169,6 +169,7 @@ mod tests {
             net_names: Vec::new(),
             digital: Vec::new(),
             mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
             component_kinds: HashMap::new(),
             input_sources: HashMap::new(),
             supplies: Vec::new(),

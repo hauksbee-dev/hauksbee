@@ -52,6 +52,12 @@ pub struct RunConfig {
     /// Solver chunk width in microseconds. Narrower chunks resolve firmware
     /// pulses the default width steps straight over, at proportional cost.
     pub chunk_us: Option<f64>,
+    /// References of DNP parts to simulate as fitted, whatever the policy says.
+    pub fit: Vec<String>,
+    /// References of DNP parts to leave open, whatever the policy says.
+    pub no_fit: Vec<String>,
+    /// What to do with the DNP parts neither list names.
+    pub dnp_policy: hauksbee_extract::dnp::DnpPolicy,
     /// `.asbuilt.toml` overlay: the declarative physical delta (cuts, jumpers,
     /// fitted values) between the design files and the real reworked board,
     /// applied to the bound board before the engine is built.
@@ -92,7 +98,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     let is_altium = norm.is_binary();
     let raw = norm.raw;
     let text = norm.layout_text.unwrap_or_default();
-    let board = norm.board;
+    let mut board = norm.board;
+    // Do-not-populate policy, applied before binding because DNP decides
+    // whether a part is stamped at all. The decision is printed rather than
+    // assumed: a board where a part was quietly added or dropped is a board
+    // whose numbers mean something other than the reader thinks.
+    let dnp = board.apply_dnp_policy(cfg.dnp_policy, &cfg.fit, &cfg.no_fit)?;
+    if !quiet {
+        for line in dnp.lines() {
+            eprintln!("{line}");
+        }
+    }
+    let board = board;
     // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
     // < ~/.config/hauksbee/models (user) < --models-dir (highest). A custom
     // behavioural part dropped in any of these loads with no recompile.
@@ -261,6 +278,20 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // non-interactive paths keep the loud install-guidance error the scheduler
     // raises. CLI-layer on purpose: the library/server must never prompt.
     if cfg.firmware.is_some() {
+        // Firmware on a board with no processor cannot produce an answer: every
+        // "the firmware must ..." assertion would pass because nothing ever ran.
+        // That is invalid-for-analysis, not a warning, so it exits 3 like the
+        // other unanswerable runs rather than reporting a vacuous success.
+        if bound.mcus.is_empty() {
+            eprintln!(
+                "error: {}",
+                crate::binder::no_processor_message(
+                    &bound.dnp_mcus,
+                    crate::binder::FitRemedy::Cli
+                )
+            );
+            std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
+        }
         let backends: Vec<String> = bound.mcus.iter().map(|m| m.backend.clone()).collect();
         crate::commands::install::offer_esp_qemu_install(&backends)?;
     }

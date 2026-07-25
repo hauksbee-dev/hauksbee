@@ -93,9 +93,7 @@ fn value_d_diode_binds_conducting_1n4148() {
 /// bind as conducting devices rather than landing in the OPEN/unresolved bucket.
 #[test]
 fn tarski_stretcher_diodes_bind_conducting() {
-    let text = std::fs::read_to_string(common::testdata("tarski_inputsystem.net"))
-        .expect("tarski netlist present");
-    let board = ExtractedBoard::from_auto(&text).expect("parse netlist");
+    let board = common::tarski_board();
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
 

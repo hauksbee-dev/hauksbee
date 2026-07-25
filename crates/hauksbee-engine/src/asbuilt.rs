@@ -885,6 +885,7 @@ mod tests {
             net_names: Vec::new(),
             digital: vec![digital],
             mcus: vec![mcu],
+            dnp_mcus: Vec::new(),
             component_kinds: HashMap::new(),
             input_sources: HashMap::new(),
             supplies: Vec::new(),

@@ -103,6 +103,11 @@ pub struct BoundBoard {
     pub net_names: Vec<String>,
     pub digital: Vec<DigitalComponent>,
     pub mcus: Vec<McuBinding>,
+    /// Processors that were skipped because the board file marks them DNP, as
+    /// (reference, value). Non-empty with an empty `mcus` means the board has
+    /// no simulable processor for a reason the user can undo (`--fit`), which
+    /// is what the firmware gates report instead of running vacuously.
+    pub dnp_mcus: Vec<(String, String)>,
     /// reference -> resolved model kind string (for board_info coloring).
     pub component_kinds: HashMap<String, String>,
     /// Named controllable input sources: reference -> DeviceId of a Vsource /
@@ -128,6 +133,57 @@ impl BoundBoard {
     /// Look up a net node by name.
     pub fn node(&self, net: &str) -> Option<NodeId> {
         self.net_nodes.get(net).copied()
+    }
+}
+
+/// Which override syntax to suggest when a DNP processor blocked a run.
+#[derive(Clone, Copy)]
+pub enum FitRemedy {
+    /// `hauksbee run --fit A101`
+    Cli,
+    /// `fit = ["A101"]` in a `hauksbee-ci` spec.
+    Spec,
+}
+
+/// Why a run that needs firmware cannot proceed, and what to do about it.
+///
+/// Firmware on a board with zero processors is unanswerable rather than
+/// merely suspicious: nothing executes, so every firmware assertion passes
+/// without being tested. Callers pair this with
+/// [`EXIT_INVALID_FOR_ANALYSIS`](crate::result::EXIT_INVALID_FOR_ANALYSIS)
+/// (or their spec-error equivalent) so a vacuous green is impossible.
+pub fn no_processor_message(dnp_mcus: &[(String, String)], remedy: FitRemedy) -> String {
+    if dnp_mcus.is_empty() {
+        return "cannot run firmware: this board bound zero processors, and none were \
+                skipped for DNP. Check that the board's processor is a part the model \
+                library recognises; `hauksbee models resolve <board>` lists what resolved."
+            .to_string();
+    }
+    let named = dnp_mcus
+        .iter()
+        .map(|(r, v)| format!("{r} ({v})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let refs = dnp_mcus
+        .iter()
+        .map(|(r, _)| r.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let is_are = if dnp_mcus.len() == 1 { "is" } else { "are" };
+    match remedy {
+        FitRemedy::Cli => format!(
+            "cannot run firmware: this board bound zero processors. {named} {is_are} marked \
+             DNP in the board file, so it was not simulated. If the module is really fitted \
+             (socketed modules are often marked DNP because they are bought separately), \
+             re-run with --fit {refs}. If it is really absent, drop --firmware and analyse \
+             the board without it."
+        ),
+        FitRemedy::Spec => format!(
+            "spec names firmware but the board bound zero processors: {named} {is_are} marked \
+             DNP in the board file. If the module is really fitted, add fit = [\"{refs}\"] to \
+             the spec; if it is really absent, remove `firmware` and the firmware assertions, \
+             which cannot be evaluated without a processor."
+        ),
     }
 }
 
@@ -210,6 +266,9 @@ pub fn bind_board_with(
             )
     });
 
+    // DNP parts the model DB recognises as processors, as (reference, value).
+    let mut dnp_mcus: Vec<(String, String)> = Vec::new();
+
     // ── Pass 2: bind every component ────────────────────────────────────────
     for comp in &board.components {
         // A DNP part sits on the layout but is not assembled: it is
@@ -218,6 +277,17 @@ pub fn bind_board_with(
         // that are open on the real board. Every checks/* module already
         // filters `dnp`; the binder must too.
         if comp.dnp {
+            // A DNP processor is the one skip that can hollow out a whole run:
+            // with no MCU there is no firmware, so every "the firmware must
+            // ..." assertion passes vacuously. Note which ones they were so the
+            // report can say so out loud (patched in below, once it is known
+            // whether any MCU bound at all).
+            if matches!(
+                resolve(lib, comp).model.as_ref().map(|m| m.kind),
+                Some(ComponentKind::Mcu)
+            ) {
+                dnp_mcus.push((comp.reference.clone(), comp.value.clone()));
+            }
             report.push(BindRow {
                 reference: comp.reference.clone(),
                 value: comp.value.clone(),
@@ -333,6 +403,30 @@ pub fn bind_board_with(
         });
     }
 
+    // A board whose only processor was skipped for DNP still analyses fine as
+    // copper, but it can no longer run firmware, and a silent zero-MCU board is
+    // how a "the firmware must drive RESET high" assertion passes without ever
+    // executing an instruction. Say it on the row that caused it.
+    if mcus.is_empty() && !dnp_mcus.is_empty() {
+        let refs = dnp_mcus
+            .iter()
+            .map(|(r, _)| r.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        for row in report.rows.iter_mut() {
+            if dnp_mcus.iter().any(|(r, _)| r == &row.reference) {
+                row.warning = Some(format!(
+                    "{} is marked DNP in the board file, so it is not simulated, and it is the \
+                     board's only processor: no firmware can run on this board as bound. \
+                     Socketed modules (an Arduino Nano, an ESP32 carrier) are often marked DNP \
+                     because they ship separately; if this one is really fitted, pass --fit {}, \
+                     or add fit = [\"{}\"] to your check spec.",
+                    row.reference, refs, refs
+                ));
+            }
+        }
+    }
+
     // ── Pass 3b: stamp behavioural devices (power ICs) ──────────────────────
     // Any resolved model carrying a non-empty `[models.behavioral]` block (a
     // charger / PMIC / balancer the SPICE kinds cannot express) is stamped as a
@@ -355,6 +449,7 @@ pub fn bind_board_with(
         net_names,
         digital,
         mcus,
+        dnp_mcus,
         component_kinds,
         input_sources,
         supplies,
