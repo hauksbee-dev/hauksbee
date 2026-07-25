@@ -49,6 +49,9 @@ pub struct RunConfig {
     pub ac_loop: Option<String>,
     pub probe: Vec<String>,
     pub probe_csv: Option<std::path::PathBuf>,
+    /// Solver chunk width in microseconds. Narrower chunks resolve firmware
+    /// pulses the default width steps straight over, at proportional cost.
+    pub chunk_us: Option<f64>,
     /// `.asbuilt.toml` overlay: the declarative physical delta (cuts, jumpers,
     /// fitted values) between the design files and the real reworked board,
     /// applied to the bound board before the engine is built.
@@ -310,12 +313,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.strict,
             &probes,
             cfg.probe_csv.as_deref(),
-            // --chunk-us: not yet wired through RunConfig (the clap RunArgs and
-            // the RunConfig literal live in main.rs, another lane). The whole
-            // plumbing below this point is live; wiring is: add a `--chunk-us
-            // <f64>` arg to RunArgs, a `chunk_us: Option<f64>` field to
-            // RunConfig, and replace this None with `cfg.chunk_us`.
-            None,
+            cfg.chunk_us,
         )?;
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
