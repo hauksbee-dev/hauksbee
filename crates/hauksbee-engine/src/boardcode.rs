@@ -344,10 +344,20 @@ pub fn render_check_report(r: &CheckReport) -> String {
     } else {
         (r.resolved_fraction * 100.0).floor() as u32
     };
+    // Zero active nets is the CORRECT answer for this surface (it runs no
+    // firmware, so nothing toggles), but a bare "0 active nets" sitting above
+    // "no faults" reads as a failure to a first-time user. Say why.
+    let active = if r.active_nets == 0 {
+        "0 active nets (nothing toggles without firmware; `hauksbee run <board> \
+         --firmware <f> --headless` exercises it)"
+            .to_string()
+    } else {
+        format!("{} active nets", r.active_nets)
+    };
     let _ = writeln!(
         s,
-        "  {} components, {} nets, {pct}% resolved, {} active nets",
-        r.component_count, r.net_count, r.active_nets,
+        "  {} components, {} nets, {pct}% resolved, {active}",
+        r.component_count, r.net_count,
     );
     // Name the unresolved parts so "{pct}% resolved" is actionable: these bind to
     // no model and simulate as OPEN, so any firmware/analog result on their nets

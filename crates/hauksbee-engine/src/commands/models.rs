@@ -201,10 +201,24 @@ pub fn remove(name: &str) -> anyhow::Result<()> {
 /// when no override-dir descriptor shadows them.
 pub fn list(builtin: bool) -> anyhow::Result<()> {
     if builtin {
+        // Say up front that this list is NOT the set of co-simulatable MCUs.
+        // Descriptors cover the external-emulator backends only; AVR parts
+        // reach the in-process simavr core through routing entries and appear
+        // nowhere here, so a bare descriptor list reads as "no AVR support",
+        // the exact opposite of the truth.
         println!("built-in MCU SoC descriptors (backend:part):");
         for spec in hauksbee_mcu::SocConfig::builtin_specs() {
             println!("  {spec}");
         }
+        println!(
+            "\n  These are the descriptors for the EXTERNAL emulator backends (Renode,\n  \
+             Espressif QEMU). They are not the whole list of co-simulatable parts:\n  \
+             AVR (ATmega328P and the Arduino boards built on it) runs on the\n  \
+             in-process simavr core, whose parts come from simavr's own database\n  \
+             rather than a descriptor, so no AVR entry appears above. Run\n  \
+             `hauksbee doctor` to see which backends this binary actually has, and\n  \
+             `hauksbee models resolve <board>` to see what a given board binds to."
+        );
         println!(
             "\n  To add a new MCU (so a board's part co-simulates exactly instead of on a\n  \
              substitute core): drop a <part>.soc.toml in $HAUKSBEE_MCU_DIR or\n  \
