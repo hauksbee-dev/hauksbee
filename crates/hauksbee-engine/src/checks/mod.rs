@@ -27,9 +27,15 @@
 //!   currents from the DB models and runs the
 //!   [`audit_trace_currents`](hauksbee_extract::audit_trace_currents) engine.
 //! - [`ripple`]: input bulk-capacitor ripple-current overstress on a buck.
+//! - [`contention`]: the model-aware driver-contention lint. Two parts that BIND
+//!   to push-pull digital outputs on one net are fighting, whatever the
+//!   schematic's pin electrical types said. The extract-layer contention check
+//!   reads pin types and treats a `bidirectional` MCU pad as a resolver, so a
+//!   mis-mapped logic model driving an MCU GPIO net slipped past it.
 
 pub mod ampacity;
 pub mod boot;
+pub mod contention;
 pub mod converter;
 pub mod device_decode;
 pub mod mcu_coverage;
@@ -42,7 +48,8 @@ use hauksbee_models::ModelLibrary;
 
 /// The full engine-level lint: the connectivity net-lint plus the model-aware
 /// checks — strap pins, MCU resource conflicts, the unmodelled-MCU coverage
-/// note, and configured-device decode faults (e.g. a CYPD3177 PD-sink divider).
+/// note, configured-device decode faults (e.g. a CYPD3177 PD-sink divider), and
+/// model-aware driver contention.
 /// Kept as one function so every surface (`--lint`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set and no caller can
 /// reopen the "Looks healthy" hole by forgetting one — device_decode used to be
@@ -59,6 +66,9 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(device_decode::device_decode_lint(board, lib).findings);
+    report
+        .findings
+        .extend(contention::contention_lint(board, lib).findings);
     report
 }
 
