@@ -758,6 +758,11 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
             })?;
         comp.value = ov.value.clone();
     }
+    // The DNP policy is board state too, and it decides whether a part is
+    // stamped at all, so it lands at this same pre-bind seam.
+    board
+        .apply_dnp_policy(spec.dnp.into(), &spec.fit, &spec.no_fit)
+        .map_err(|e| SpecError::Invalid(format!("dnp: {e}")))?;
     Ok(board)
 }
 
@@ -806,6 +811,19 @@ fn run_one(
         overlay
             .apply(&mut bound)
             .map_err(|e| SpecError::Invalid(e.to_string()))?;
+    }
+
+    // A spec that names firmware on a board with no processor cannot be
+    // evaluated: nothing executes, so every firmware assertion passes without
+    // ever being tested. In a pipeline that is the most expensive failure the
+    // tool can have, so it is a spec error, not a warning.
+    if spec.firmware.is_some() && bound.mcus.is_empty() {
+        return Err(SpecError::Invalid(
+            hauksbee_engine::binder::no_processor_message(
+                &bound.dnp_mcus,
+                hauksbee_engine::binder::FitRemedy::Spec,
+            ),
+        ));
     }
 
     // Reject max_current/max_temp asserts on components the bound circuit

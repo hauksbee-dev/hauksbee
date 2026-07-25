@@ -85,6 +85,31 @@ pub struct SensorAttach {
     pub controller: Option<String>,
 }
 
+/// What a spec does with the Do-Not-Populate parts it does not name in `fit`
+/// or `no_fit`. The spec spelling of [`hauksbee_extract::dnp::DnpPolicy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DnpMode {
+    /// Simulate DNP parts as fitted, except near-zero-ohm links.
+    #[default]
+    FitExceptLinks,
+    /// Simulate every DNP part as fitted, links included.
+    FitAll,
+    /// Leave every DNP part out, as a fab house would build the board.
+    Honour,
+}
+
+impl From<DnpMode> for hauksbee_extract::dnp::DnpPolicy {
+    fn from(m: DnpMode) -> Self {
+        use hauksbee_extract::dnp::DnpPolicy;
+        match m {
+            DnpMode::FitExceptLinks => DnpPolicy::FitExceptLinks,
+            DnpMode::FitAll => DnpPolicy::FitAll,
+            DnpMode::Honour => DnpPolicy::Honour,
+        }
+    }
+}
+
 /// A fully-parsed, validated spec.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +125,20 @@ pub struct Spec {
     /// Optional firmware ELF/hex, relative to the spec file's directory.
     #[serde(default)]
     pub firmware: Option<PathBuf>,
+    /// References of Do-Not-Populate parts to simulate as fitted, whatever
+    /// `dnp` says. An unknown reference is a loud spec error.
+    #[serde(default)]
+    pub fit: Vec<String>,
+    /// References of Do-Not-Populate parts to leave open, whatever `dnp` says.
+    #[serde(default)]
+    pub no_fit: Vec<String>,
+    /// What to do with the DNP parts neither `fit` nor `no_fit` names:
+    /// `"fit-except-links"` (the default: simulate DNP parts as fitted, since
+    /// most get placed eventually, but leave near-zero-ohm links open because
+    /// fitting one merges the nets it bridges), `"fit-all"`, or `"honour"` to
+    /// leave every DNP part out as a fab house would build it.
+    #[serde(default)]
+    pub dnp: DnpMode,
     /// Optional as-built overlay (.asbuilt.toml), relative to the spec file's
     /// directory: the declarative physical delta between the design files and
     /// the real reworked board (cut traces, jumpers, lifted pins, fitted

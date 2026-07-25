@@ -25,6 +25,7 @@
 //! canonical form defined here).
 
 pub mod altium;
+pub mod dnp;
 pub mod drc;
 mod eagle;
 pub mod gerber;
@@ -75,6 +76,9 @@ pub enum ExtractError {
     /// actionable failure than the old "last fallback's error" behaviour.
     #[error("unrecognized board format; tried {tried}")]
     Unrecognized { tried: String },
+    /// A caller-supplied reference designator does not exist on the board.
+    #[error("{0}")]
+    UnknownReference(String),
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
@@ -205,6 +209,29 @@ impl ExtractedBoard {
     /// Eagle `.brd` (XML, Eagle 6+): Arduino, Adafruit, SparkFun designs.
     pub fn from_eagle_brd(text: &str) -> Result<Self, ExtractError> {
         eagle::extract(text)
+    }
+
+    /// Clear the DNP flag on the named references: "these parts ARE populated
+    /// on the board I am asking about".
+    ///
+    /// DNP in an ECAD file means "the assembler does not fit this", which is
+    /// not always the same as "absent from the working system". The common
+    /// case is a socketed module (an Arduino Nano, an ESP32 carrier) marked
+    /// DNP because it is bought separately and plugged into headers: the
+    /// design intends it to be there, and simulating without it silently
+    /// deletes the board's processor. Depopulated bridge resistors and config
+    /// straps are the opposite case, and stay skipped.
+    ///
+    /// Returns the number of parts actually un-DNP'd, and errors naming every
+    /// reference that is not on the board, so a typo'd override fails loudly
+    /// instead of quietly doing nothing.
+    ///
+    /// This fits exactly the named parts and nothing else. For the policy that
+    /// decides the rest of the board's DNP parts, see
+    /// [`apply_dnp_policy`](Self::apply_dnp_policy).
+    pub fn fit(&mut self, refs: &[String]) -> Result<usize, ExtractError> {
+        let decision = self.apply_dnp_policy(dnp::DnpPolicy::Honour, refs, &[])?;
+        Ok(decision.fitted.len())
     }
 
     /// IPC-D-356/356A fab netlist: the universal fallback any EDA exports.
