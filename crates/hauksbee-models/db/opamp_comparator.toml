@@ -204,6 +204,10 @@ out_lo     = 0.05   # output low typ at 5V supply (V)
 out_hi     = 4.95   # output high typ at 5V supply (V)
 hysteresis = 0.003  # input offset voltage ±3 mV typ
 tpd_s      = 7.0e-9 # propagation delay 7 ns typ @ 5V (Table 6.3)
+# Supply draw: LMV7219 supply current 0.9 mA typical / 1.1 mA max at 5 V
+# (SNOS561). Stamped as a constant quiescent pull on the VCC pin net so a
+# metering shunt in series with the part's rail reads it.
+supply_static_ua = 900.0
 
 [models.pins]
 "1" = "out"

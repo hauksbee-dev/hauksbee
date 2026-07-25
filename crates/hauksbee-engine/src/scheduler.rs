@@ -1661,6 +1661,21 @@ impl Scheduler {
             self.chains = chains;
         }
 
+        // 5b2(prev). Refresh every digital part's VCC supply draw for this
+        // chunk: drain the output-transition accumulators (filled above by the
+        // per-chunk ticks AND the edge-granularity replay/chain paths) and set
+        // each part's supply Isource to static + n·Cpd_eff·VCC/dt. This runs
+        // over ALL digital components, chain-owned chips are skipped by the
+        // tick loop but still switch, and their supply legs are refreshed
+        // here. Parts without supply params have no leg and no-op.
+        {
+            let volts = self.node_volts.clone();
+            let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
+            for d in self.digital.iter_mut() {
+                d.update_supply(&mut self.circuit, chunk, &node_v);
+            }
+        }
+
         // 5c(prev). Deliver the deferred I2C transaction-end hooks (05 §3.1):
         // every slave that saw a STOP during this chunk's MCU run gets
         // `on_stop(ctx)` so it can drive its output nets before this chunk's

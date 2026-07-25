@@ -871,6 +871,7 @@ mod tests {
             roles: dig_roles,
             drivers: dig_drivers,
             logic: None,
+            supply: None,
         };
 
         let mut net_nodes = HashMap::new();
