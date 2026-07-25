@@ -26,7 +26,7 @@ use hauksbee_ir::{
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary};
 
-use crate::digital::{output_roles, DigitalComponent};
+use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::report::{BindOutcome, BindReport, BindRow};
@@ -2294,6 +2294,34 @@ fn bind_comparator(
     let out_hi = model.params.get_f64("out_hi").unwrap_or(5.0);
     let hyst = model.params.get_f64("hysteresis").unwrap_or(0.005);
 
+    // Static supply draw (`supply_static_ua`, default 0 = nothing stamped):
+    // the part's quiescent ICC pulled from its supply pin net, so a metering
+    // shunt in series with that rail reads the comparator. A fixed Isource is
+    // enough here, the behavioral Comparator device has no VCC leg at all,
+    // and its dynamic (switching) draw is negligible next to ICC for the
+    // LMV7219 class. Same param name as the digital layer's static term.
+    let static_ua = model.params.get_f64("supply_static_ua").unwrap_or(0.0);
+    if static_ua > 0.0 {
+        let vcc = roles
+            .get("vcc")
+            .or_else(|| roles.get("vs"))
+            .or_else(|| roles.get("vdd"))
+            .copied();
+        if let Some(vcc) = vcc.filter(|n| !n.is_ground()) {
+            let gnd = roles
+                .get("vss")
+                .or_else(|| roles.get("gnd"))
+                .copied()
+                .unwrap_or(NodeId::GROUND);
+            circuit.add(Device::Isource {
+                name: format!("Iq_{}", comp.reference),
+                p: vcc,
+                n: gnd,
+                kind: SourceKind::Dc(static_ua * 1e-6),
+            });
+        }
+    }
+
     // Multi-channel packages (LM393 dual, LM339 quad): one Comparator per
     // complete out_X/in_plus_X/in_minus_X channel, keyed `_q<N>` — same shape
     // and rationale as bind_opamp above.
@@ -2673,7 +2701,43 @@ fn bind_digital(
     // enables them.
     let leg_handles: Vec<PinDriver> = drivers.values().cloned().collect();
     match DigitalComponent::new(comp.reference.clone(), model, roles.clone(), drivers) {
-        Ok(d) => digital.push(d),
+        Ok(mut d) => {
+            // VCC supply draw (`supply_static_ua` / `supply_cpd_pf` params,
+            // both defaulting to 0 = no leg stamped): a controllable Isource
+            // from the part's VCC pin net to its GND pin net, refreshed once
+            // per chunk by the scheduler. This is what makes a metering shunt
+            // in series with the part's rail read the part at all, the
+            // Thevenin output drivers are referenced to ground and never move
+            // charge through VCC.
+            let static_ua = model.params.get_f64("supply_static_ua").unwrap_or(0.0);
+            let cpd_pf = model.params.get_f64("supply_cpd_pf").unwrap_or(0.0);
+            if static_ua > 0.0 || cpd_pf > 0.0 {
+                let vcc = roles.get("vcc").or_else(|| roles.get("vdd")).copied();
+                match vcc {
+                    Some(vcc) if !vcc.is_ground() => {
+                        let gnd = roles
+                            .get("gnd")
+                            .or_else(|| roles.get("vss"))
+                            .copied()
+                            .unwrap_or(NodeId::GROUND);
+                        d.supply = Some(SupplyDraw::stamp(
+                            circuit,
+                            vcc,
+                            gnd,
+                            &comp.reference,
+                            static_ua,
+                            cpd_pf,
+                        ));
+                    }
+                    _ => eprintln!(
+                        "warning: {}: model '{}' declares supply draw but its VCC pin is \
+                         unwired or grounded; no supply current will be drawn",
+                        comp.reference, model.id
+                    ),
+                }
+            }
+            digital.push(d)
+        }
         // Never silently downgrade a broken spec to a passthrough: the part is
         // left unmodeled LOUDLY, with its output nets genuinely floating (the
         // stamped legs tri-stated to `roff`), matching the message below.

@@ -18,6 +18,12 @@ vih       = 3.15     # input high threshold (V) at Vcc=4.5V
 vil       = 1.35     # input low threshold (V) at Vcc=4.5V
 tpd_s     = 1.4e-8   # max propagation delay clock→Qn = 14 ns at 4.5V (Table 6.5)
 bits      = 8
+# Supply draw: ICC = 80 uA max per package at 25 C, Vcc 6 V (TI SCLS041I);
+# 20 uA stamped as a representative operating value. Cpd is NOT in the TI
+# table: 40 pF per output transition is an ASSUMED representative MSI-part
+# value, not a citation, override per board if the term matters.
+supply_static_ua = 20.0
+supply_cpd_pf    = 40.0
 supply_pin = "16"
 gnd_pin    = "8"
 
@@ -101,6 +107,11 @@ vih       = 3.15
 vil       = 1.35
 tpd_s     = 1.4e-8
 bits      = 8
+# Supply draw: ICC = 80 uA max per package at 25 C, Vcc 6 V (TI SCLS052I);
+# 20 uA stamped. Cpd 40 pF per output transition is ASSUMED (representative
+# MSI value, not a datasheet citation).
+supply_static_ua = 20.0
+supply_cpd_pf    = 40.0
 supply_pin = "16"
 gnd_pin    = "8"
 
@@ -169,6 +180,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 8.0e-9  # 8 ns max at 4.5V
+# Supply draw: ICC = 20 uA max per package at 25 C, Vcc 6 V (74HC SSI
+# standard, TI SCLS049); 10 uA stamped. Cpd 25 pF per buffer ASSUMED
+# (family-typical, not a datasheet citation).
+supply_static_ua = 10.0
+supply_cpd_pf    = 25.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -227,6 +243,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 8.0e-9
+# Supply draw: ICC = 20 uA max per package at 25 C (74HC SSI standard);
+# 10 uA stamped (~3.3 uA/gate). Cpd 20 pF per gate, 74HC-family typical
+# (the '00's cited 20 pF extended to the triple NOR; ASSUMED for the '27).
+supply_static_ua = 10.0
+supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -285,6 +306,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 8.0e-9
+# Supply draw: ICC = 20 uA max per package at 25 C, Vcc 6 V (TI SCLS050);
+# 10 uA stamped (2.5 uA/gate). Cpd 20 pF per gate (74HC-family typical;
+# the '00's cited figure extended to the '02).
+supply_static_ua = 10.0
+supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -344,6 +370,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 9.0e-9
+# Supply draw: TI SCLS181, ICC = 20 uA max per package at 25 C, Vcc 6 V
+# (~2 uA typical); 10 uA stamped = 2.5 uA/gate. Cpd = 20 pF typical per
+# gate (SCLS181 power-dissipation capacitance, Cpd).
+supply_static_ua = 10.0
+supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -399,6 +430,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 9.0e-9
+# Supply draw: ICC = 20 uA max per package at 25 C, Vcc 6 V (TI SN74HC04);
+# 10 uA stamped (~1.7 uA/inverter). Cpd = 20 pF typical per inverter
+# (TI SN74HC04 power-dissipation capacitance).
+supply_static_ua = 10.0
+supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -453,6 +489,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 9.0e-9
+# Supply draw: ICC = 20 uA max per package at 25 C, Vcc 6 V (TI SN74HC08);
+# 10 uA stamped (2.5 uA/gate). Cpd 20 pF per gate (74HC-family typical;
+# the '00's cited 20 pF extended to the AND gate).
+supply_static_ua = 10.0
+supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -507,6 +548,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 9.0e-9
+# Supply draw: ICC = 20 uA max per package at 25 C, Vcc 6 V (TI SN74HC32);
+# 10 uA stamped (2.5 uA/gate). Cpd 20 pF per gate (74HC-family typical;
+# the '00's cited 20 pF extended to the OR gate).
+supply_static_ua = 10.0
+supply_cpd_pf    = 20.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -561,6 +607,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 1.1e-8
+# Supply draw: ICC = 20 uA max per package at 25 C, Vcc 6 V (TI SN74HC86);
+# 10 uA stamped (2.5 uA/gate). Cpd = 30 pF per gate (XOR switches more
+# internal nodes than the simple gates; NXP 74HC86 CPD 30 pF typical).
+supply_static_ua = 10.0
+supply_cpd_pf    = 30.0
 supply_pin = "14"
 gnd_pin    = "7"
 
@@ -616,6 +667,11 @@ vol       = 0.1
 vih       = 3.15
 vil       = 1.35
 tpd_s     = 1.6e-8
+# Supply draw: ICC = 40 uA max per package at 25 C, Vcc 6 V (74HC dual-FF
+# standard); 10 uA stamped. Cpd = 24 pF per flip-flop (NXP 74HC74 CPD
+# 24 pF typical), counted per output (Q/Qn) transition.
+supply_static_ua = 10.0
+supply_cpd_pf    = 24.0
 supply_pin = "14"
 gnd_pin    = "7"
 

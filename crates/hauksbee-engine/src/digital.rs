@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use hauksbee_ir::{Circuit, NodeId};
+use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::logic_spec::Logic;
 use hauksbee_models::ModelEntry;
 
@@ -234,6 +234,86 @@ pub fn replay_components_on_edges(
     microticks
 }
 
+/// VCC supply-current draw of one digital package: a controllable `Isource`
+/// stamped from the part's VCC pin net to its GND pin net, refreshed once per
+/// scheduler chunk by [`DigitalComponent::update_supply`].
+///
+/// The Thevenin output [`PinDriver`]s are referenced to GROUND, not to the
+/// part's VCC net, so a switching output moves charge that the supply rail
+/// never sees, a metering shunt in series with VCC reads zero forever. This
+/// leg is what the shunt sees. Two terms, both defaulting to zero (a model
+/// without the params draws nothing, exactly the old behaviour):
+///
+/// - **static** (`supply_static_ua`, µA): the datasheet quiescent ICC per
+///   package, drawn whenever the rail is up.
+/// - **dynamic** (`supply_cpd_pf`, pF): charge `Q = Cpd_eff · VCC` per output
+///   transition, converted to a current pulse averaged over the chunk it
+///   occurred in (`I = n · Cpd_eff · VCC / dt`). `Cpd_eff` plays the role of
+///   `Cpd + C_L` in the standard CMOS dissipation formula
+///   `P = (Cpd + C_L) · VCC² · f`: the model's internal power-dissipation
+///   capacitance plus whatever load estimate the operator folds in.
+///
+/// Deliberately NOT modelled: crowbar/shoot-through current during the output
+/// transition. It lasts nanoseconds; the solver evaluates in 100 µs chunks, so
+/// it cannot be resolved as a waveform, and folding its charge into `Cpd_eff`
+/// is the standard datasheet convention anyway (Cpd is MEASURED with the
+/// crowbar term included).
+///
+/// Transitions are counted in `drive_outputs`, the single choke point every
+/// output level change passes through (per-chunk tick, chain `apply`,
+/// `latch_byte`). Sub-chunk glitches that never reach a driver are invisible
+/// here, the same tick-quantisation contract the rest of the digital layer
+/// already has.
+#[derive(Debug, Clone)]
+pub struct SupplyDraw {
+    /// The controllable `Isource` (p = VCC net, n = GND net) in the circuit.
+    pub isource: DeviceId,
+    /// The VCC pin's net node, read each chunk for the actual rail voltage.
+    pub vcc: NodeId,
+    /// Static quiescent draw while powered (amps).
+    pub static_a: f64,
+    /// Effective switched capacitance per output transition (farads).
+    pub cpd_f: f64,
+    /// Output transitions accumulated since the last `update_supply` drain.
+    pub transitions: u32,
+    /// Last driven level per output role, for transition detection.
+    last_levels: HashMap<String, bool>,
+}
+
+impl SupplyDraw {
+    /// Rail voltage below which the part is treated as unpowered: no static
+    /// draw, no switching charge. Keeps the constant-current leg from dragging
+    /// an unpowered rail negative during supply ramp.
+    pub const POWERED_THRESHOLD_V: f64 = 1.0;
+
+    /// Stamp a zero-valued controllable `Isource` from `vcc` to `gnd` and
+    /// return the handle. `static_ua`/`cpd_pf` are the model params verbatim
+    /// (µA / pF); conversion to SI happens here.
+    pub fn stamp(
+        circuit: &mut Circuit,
+        vcc: NodeId,
+        gnd: NodeId,
+        tag: &str,
+        static_ua: f64,
+        cpd_pf: f64,
+    ) -> Self {
+        let isource = circuit.add(Device::Isource {
+            name: format!("Iq_{tag}"),
+            p: vcc,
+            n: gnd,
+            kind: SourceKind::Dc(0.0),
+        });
+        SupplyDraw {
+            isource,
+            vcc,
+            static_a: static_ua * 1e-6,
+            cpd_f: cpd_pf * 1e-12,
+            transitions: 0,
+            last_levels: HashMap::new(),
+        }
+    }
+}
+
 /// One bound digital component: its pin→net wiring, drivers, and the
 /// compiled spec evaluator holding all state.
 pub struct DigitalComponent {
@@ -249,6 +329,9 @@ pub struct DigitalComponent {
     /// exactly what the old kind-`Buffer` fallback did when it had nothing
     /// to mirror.
     pub logic: Option<LogicComponent>,
+    /// VCC supply draw (`None` for models without supply params, no leg is
+    /// stamped and behaviour is byte-identical to before the feature).
+    pub supply: Option<SupplyDraw>,
 }
 
 /// Synthesize the transparent-passthrough spec for a digital model WITHOUT a
@@ -316,6 +399,7 @@ impl DigitalComponent {
             roles,
             drivers,
             logic,
+            supply: None,
         })
     }
 
@@ -340,6 +424,7 @@ impl DigitalComponent {
             roles,
             drivers,
             logic: Some(logic),
+            supply: None,
         }
     }
 
@@ -375,18 +460,56 @@ impl DigitalComponent {
     }
 
     /// Push the evaluator's current output levels and tri-state enables onto
-    /// the stamped drivers.
+    /// the stamped drivers. Every output level change on every path (per-chunk
+    /// tick, edge-driven chain `apply`, `latch_byte`) funnels through here, so
+    /// this is also where supply-draw transition counting lives: a level
+    /// change on a driven output role increments the accumulator that
+    /// [`update_supply`](Self::update_supply) drains once per chunk. Counted
+    /// whether or not the driver is currently tri-stated, the part's internal
+    /// nodes switch (and draw Cpd charge) either way.
     fn drive_outputs(&mut self, circuit: &mut Circuit) {
         let Some(logic) = self.logic.as_ref() else {
             return;
         };
         for (name, level, enabled) in logic.outputs() {
             if let Some(drv) = self.drivers.get_mut(name) {
+                if let Some(s) = self.supply.as_mut() {
+                    if let Some(prev) = s.last_levels.insert(name.to_string(), level) {
+                        if prev != level {
+                            s.transitions += 1;
+                        }
+                    }
+                }
                 drv.set_enabled(circuit, enabled);
                 if enabled {
                     drv.set_volts(circuit, self.levels.drive_volts(level));
                 }
             }
+        }
+    }
+
+    /// Refresh the part's VCC supply draw for the coming chunk: drain the
+    /// transition accumulator and set the `Isource` to
+    /// `static + n · Cpd_eff · VCC / dt`. Called once per scheduler chunk for
+    /// EVERY digital component (including chain-owned chips that the per-chunk
+    /// tick skips, their transitions were accumulated on the edge path).
+    /// No-op for parts without a supply leg. While the rail reads below
+    /// [`SupplyDraw::POWERED_THRESHOLD_V`] the draw is zero.
+    pub fn update_supply(&mut self, circuit: &mut Circuit, dt: f64, node_v: &dyn Fn(NodeId) -> f64) {
+        let Some(s) = self.supply.as_mut() else {
+            return;
+        };
+        let n = std::mem::take(&mut s.transitions) as f64;
+        let vcc_v = node_v(s.vcc);
+        let amps = if vcc_v >= SupplyDraw::POWERED_THRESHOLD_V && dt > 0.0 {
+            s.static_a + n * s.cpd_f * vcc_v / dt
+        } else {
+            0.0
+        };
+        if let Some(Device::Isource { kind, .. }) =
+            circuit.devices.get_mut(s.isource.0 as usize)
+        {
+            *kind = SourceKind::Dc(amps);
         }
     }
 
@@ -1791,5 +1914,134 @@ mod tests {
         // 6. RESET_SR pulse: Q back HIGH (idle).
         latch.tick(&mut circuit, &make_v(false, true));
         assert!(q(&latch), "RESET_SR returns Q to HIGH (idle)");
+    }
+
+    /// A toggling gate must draw the expected charge from its VCC net:
+    /// `Q_chunk = I · dt = (static + n · Cpd_eff · VCC / dt) · dt`, i.e. the
+    /// static term plus exactly `Cpd_eff · VCC` per output transition. This is
+    /// the contract that makes energy-per-operation measurable through a
+    /// supply shunt in co-simulation.
+    #[test]
+    fn toggling_gate_draws_expected_supply_charge() {
+        let lib = ModelLibrary::builtin();
+        let q = ComponentQuery::new(None, Some("74HC00".to_string()), None);
+        let model = lib.resolve(&q).model.expect("builtin 74HC00 model");
+        let static_ua = model
+            .params
+            .get_f64("supply_static_ua")
+            .expect("74HC00 declares supply_static_ua");
+        let cpd_pf = model
+            .params
+            .get_f64("supply_cpd_pf")
+            .expect("74HC00 declares supply_cpd_pf");
+        assert!(static_ua > 0.0 && cpd_pf > 0.0);
+
+        let mut circuit = Circuit::new();
+        let n_a = circuit.node("A");
+        let n_b = circuit.node("B");
+        let n_y = circuit.node("Y1");
+        let n_vcc = circuit.node("VDD_EVAL");
+
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        roles.insert("a1".into(), n_a);
+        roles.insert("b1".into(), n_b);
+        roles.insert("y1".into(), n_y);
+        roles.insert("vcc".into(), n_vcc);
+
+        let mut drivers = HashMap::new();
+        drivers.insert(
+            "y1".to_string(),
+            PinDriver::stamp(&mut circuit, n_y, "Y1", "U1_y1", DEFAULT_RO),
+        );
+        let mut gate = DigitalComponent::new("U1".into(), &model, roles, drivers)
+            .expect("74HC00 logic compiles");
+        gate.supply = Some(SupplyDraw::stamp(
+            &mut circuit,
+            n_vcc,
+            NodeId::GROUND,
+            "U1",
+            static_ua,
+            cpd_pf,
+        ));
+        let isource = gate.supply.as_ref().unwrap().isource;
+        let drawn_amps = |c: &Circuit| -> f64 {
+            match c.devices.get(isource.0 as usize) {
+                Some(Device::Isource {
+                    kind: SourceKind::Dc(v),
+                    ..
+                }) => *v,
+                other => panic!("supply Isource missing: {other:?}"),
+            }
+        };
+
+        const VCC: f64 = 5.0;
+        const DT: f64 = 100e-6;
+        // Node voltages: VCC up, B held high, A per-tick.
+        let make_v = |a_high: bool| {
+            move |n: NodeId| -> f64 {
+                if n == n_vcc {
+                    VCC
+                } else if n == n_b {
+                    VCC
+                } else if n == n_a {
+                    if a_high {
+                        VCC
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            }
+        };
+
+        // Chunk 1: first evaluation. A=0,B=1 -> Y=1. The very first drive is
+        // level ESTABLISHMENT, not a transition: no dynamic charge.
+        gate.tick(&mut circuit, &make_v(false));
+        gate.update_supply(&mut circuit, DT, &make_v(false));
+        let i_static = drawn_amps(&circuit);
+        assert!(
+            (i_static - static_ua * 1e-6).abs() < 1e-15,
+            "quiescent-only chunk draws the static term: got {i_static}, want {}",
+            static_ua * 1e-6
+        );
+
+        // Chunk 2: A rises -> Y falls. One output transition.
+        gate.tick(&mut circuit, &make_v(true));
+        gate.update_supply(&mut circuit, DT, &make_v(true));
+        let i_one = drawn_amps(&circuit);
+        let want_one = static_ua * 1e-6 + cpd_pf * 1e-12 * VCC / DT;
+        assert!(
+            (i_one - want_one).abs() < 1e-15,
+            "one transition: got {i_one}, want {want_one}"
+        );
+        // The dynamic CHARGE over the chunk is exactly Cpd_eff * VCC.
+        let q_dyn = (i_one - i_static) * DT;
+        assert!(
+            (q_dyn - cpd_pf * 1e-12 * VCC).abs() < 1e-20,
+            "charge per transition: got {q_dyn}, want {}",
+            cpd_pf * 1e-12 * VCC
+        );
+
+        // Chunk 3: A falls -> Y rises. Another transition, same charge.
+        gate.tick(&mut circuit, &make_v(false));
+        gate.update_supply(&mut circuit, DT, &make_v(false));
+        assert!((drawn_amps(&circuit) - want_one).abs() < 1e-15);
+
+        // Chunk 4: no input change -> accumulator drained, back to static.
+        gate.tick(&mut circuit, &make_v(false));
+        gate.update_supply(&mut circuit, DT, &make_v(false));
+        assert!((drawn_amps(&circuit) - i_static).abs() < 1e-15);
+
+        // Unpowered rail: no draw at all, static included.
+        let dead = |n: NodeId| -> f64 {
+            if n == n_vcc {
+                0.0
+            } else {
+                0.0
+            }
+        };
+        gate.update_supply(&mut circuit, DT, &dead);
+        assert_eq!(drawn_amps(&circuit), 0.0, "unpowered rail draws nothing");
     }
 }
