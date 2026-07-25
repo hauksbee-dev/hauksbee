@@ -42,10 +42,7 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode, strict
                 _ => print!("{}", hauksbee_extract::render_netlint(&report)),
             }
             if !guesses.is_empty() {
-                println!("\npin-role guesses ({}):", guesses.len());
-                for (r, g) in &guesses {
-                    println!("  ? {r}: {g}");
-                }
+                print!("{}", render_pin_role_guesses(&guesses));
             }
         }
     }
@@ -53,6 +50,50 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode, strict
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// Guesses beyond this many collapse to a per-pattern summary. A correct guess
+/// on a standard 2-pin or 3-pin footprint is not news; printing one line each
+/// buries the actual findings under 15 lines on a 137-part board and 300 on a
+/// 3,000-part one. Below the threshold the full list is still the friendlier
+/// output, so small boards are unchanged.
+const GUESS_LIST_LIMIT: usize = 6;
+
+/// Render the pin-role guesses: in full when there are few, otherwise one line
+/// per distinct inferred pattern with a count. The complete per-part mapping
+/// always remains available in `--json`, where it rides the `notes` array as
+/// structured `bind_role` entries, so collapsing here hides nothing that a
+/// consumer needs.
+fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    let _ = writeln!(s, "\npin-role guesses ({}):", guesses.len());
+    if guesses.len() <= GUESS_LIST_LIMIT {
+        for (r, g) in guesses {
+            let _ = writeln!(s, "  ? {r}: {g}");
+        }
+        return s;
+    }
+    // Group by the inferred pattern, keeping first-seen order so the output is
+    // deterministic for a given board.
+    let mut order: Vec<&str> = Vec::new();
+    let mut counts: std::collections::HashMap<&str, (usize, &str)> = std::collections::HashMap::new();
+    for (r, g) in guesses {
+        let entry = counts.entry(g.as_str()).or_insert_with(|| {
+            order.push(g.as_str());
+            (0, r.as_str())
+        });
+        entry.0 += 1;
+    }
+    for pattern in order {
+        let (n, first) = counts[pattern];
+        let _ = writeln!(s, "  ? {pattern} (x{n}, e.g. {first})");
+    }
+    let _ = writeln!(
+        s,
+        "  the per-part mapping is in --json (bind_role notes)"
+    );
+    s
 }
 
 /// Build the `--lint --json` document: the bind header, the lint findings, and
