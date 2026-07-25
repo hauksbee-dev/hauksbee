@@ -268,6 +268,70 @@ fn json_error(msg: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1]
     json_body(StatusCode::OK, serde_json::json!({ "ok": false, "error": msg }))
 }
 
+/// The parts every upload endpoint accepts. `board`/`file` name the PCB (a
+/// caller reaching for either should just work, since the browser form uses a
+/// `file` input id while the raw path is conceptually "the board"), `firmware`
+/// is optional and an empty part means "none selected", and `spec` carries the
+/// checks TOML. Unknown parts are ignored so a future field cannot break an
+/// older server.
+#[derive(Default)]
+struct UploadedParts {
+    board_name: String,
+    board_bytes: Option<Vec<u8>>,
+    fw_name: String,
+    fw_bytes: Option<Vec<u8>>,
+    spec: Option<String>,
+}
+
+/// Drain a multipart body into [`UploadedParts`], or return the user-facing
+/// reason it could not be read.
+///
+/// One parser for every upload endpoint: the handlers previously carried a copy
+/// each, and they had already drifted, with one building its error JSON by hand
+/// so a message containing a backslash or a control character could emit
+/// invalid JSON. Distinguishing `Ok(None)` (the clean end of the stream) from
+/// `Err` (a truncated or malformed body) also matters: collapsing them reports a
+/// corrupt upload as "no board file in the upload", which sends the user
+/// looking in the wrong place.
+async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String> {
+    let mut parts = UploadedParts {
+        board_name: "board".to_string(),
+        ..Default::default()
+    };
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Err(format!("malformed multipart upload: {e}")),
+        };
+        let name = field.name().unwrap_or("").to_string();
+        let filename = field.file_name().map(|s| s.to_string());
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(e) => return Err(format!("failed to read upload part: {e}")),
+        };
+        match name.as_str() {
+            "board" | "file" => {
+                if let Some(f) = filename {
+                    parts.board_name = f;
+                }
+                parts.board_bytes = Some(data.to_vec());
+            }
+            "firmware" => {
+                if let Some(f) = filename {
+                    parts.fw_name = f;
+                }
+                if !data.is_empty() {
+                    parts.fw_bytes = Some(data.to_vec());
+                }
+            }
+            "spec" => parts.spec = Some(String::from_utf8_lossy(&data).into_owned()),
+            _ => {}
+        }
+    }
+    Ok(parts)
+}
+
 async fn check_handler(
     State(state): State<Arc<CheckState>>,
     headers: HeaderMap,
@@ -276,51 +340,14 @@ async fn check_handler(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let mut board_name = "board".to_string();
-    let mut board_bytes: Option<Vec<u8>> = None;
-    let mut fw_name = String::new();
-    let mut fw_bytes: Option<Vec<u8>> = None;
-    let mut spec: Option<String> = None;
-
-    // Explicit Ok(Some)/Ok(None)/Err: a malformed multipart stream is an
-    // ERROR, not a clean end-of-stream (B9). `while let Ok(Some(..))` would
-    // silently treat a truncated body as "no more fields".
-    loop {
-        match multipart.next_field().await {
-            Ok(Some(field)) => {
-                let part = field.name().unwrap_or("").to_string();
-                let filename = field.file_name().map(|s| s.to_string());
-                let data = match field.bytes().await {
-                    Ok(b) => b,
-                    Err(e) => return json_error(&format!("failed to read upload part: {e}")),
-                };
-                match part.as_str() {
-                    "board" | "file" => {
-                        if let Some(f) = filename {
-                            board_name = f;
-                        }
-                        board_bytes = Some(data.to_vec());
-                    }
-                    "firmware" => {
-                        if let Some(f) = filename {
-                            fw_name = f;
-                        }
-                        if !data.is_empty() {
-                            fw_bytes = Some(data.to_vec());
-                        }
-                    }
-                    "spec" => spec = Some(String::from_utf8_lossy(&data).into_owned()),
-                    _ => {}
-                }
-            }
-            Ok(None) => break,
-            Err(e) => return json_error(&format!("malformed multipart upload: {e}")),
-        }
-    }
-
-    let (Some(board_bytes), Some(spec)) = (board_bytes, spec) else {
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(p) => p,
+        Err(msg) => return json_error(&msg),
+    };
+    let (Some(board_bytes), Some(spec)) = (parts.board_bytes, parts.spec) else {
         return json_error("the check request needs a 'board' part and a 'spec' part");
     };
+    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
 
     // The runner returns a ready JSON string (its own {ok:...} shape); relay
     // it verbatim with the content-type header.
@@ -404,86 +431,22 @@ async fn analyze_firmware_handler(
     if let Some(resp) = reject_cross_site(&headers) {
         return resp;
     }
-    let mut board_name = "board".to_string();
-    let mut board_bytes: Option<Vec<u8>> = None;
-    let mut fw_name = String::new();
-    let mut fw_bytes: Option<Vec<u8>> = None;
-
-    loop {
-        // Distinguish "no more parts" (Ok(None), the clean end of the stream)
-        // from a malformed/truncated multipart body (Err). The old
-        // `while let Ok(Some(..))` collapsed both into "stop looping", so a
-        // corrupt upload fell through to the misleading "no board file in the
-        // upload" error below instead of naming the real cause.
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => {
-                let json = format!(
-                    "{{\"ok\":false,\"error\":\"malformed multipart upload: {}\"}}",
-                    e.to_string().replace('"', "'")
-                );
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    json,
-                );
-            }
-        };
-        let part = field.name().unwrap_or("").to_string();
-        let filename = field.file_name().map(|s| s.to_string());
-        let data = match field.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                let json = format!(
-                    "{{\"ok\":false,\"error\":\"failed to read upload part: {}\"}}",
-                    e.to_string().replace('"', "'")
-                );
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    json,
-                );
-            }
-        };
-        match part.as_str() {
-            // Accept "board" or "file" for the PCB part. The browser form uses a
-            // `file` input id and the raw /api/analyze path is conceptually "the
-            // file", so a caller who reaches for either name should just work
-            // instead of hitting a confusing "expected a 'board' part" error.
-            "board" | "file" => {
-                if let Some(f) = filename {
-                    board_name = f;
-                }
-                board_bytes = Some(data.to_vec());
-            }
-            "firmware" => {
-                if let Some(f) = filename {
-                    fw_name = f;
-                }
-                // Ignore an empty firmware part (e.g. the browser sent the field
-                // with no file selected) so we cleanly fall back to board-only.
-                if !data.is_empty() {
-                    fw_bytes = Some(data.to_vec());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let board_bytes = match board_bytes {
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(p) => p,
+        Err(msg) => return json_error(&msg),
+    };
+    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
+    let board_bytes = match parts.board_bytes {
         Some(b) => b,
         None => {
-            let json =
-                "{\"ok\":false,\"error\":\"no board file in the upload (expected a 'board' or 'file' part)\"}"
-                    .to_string();
-            return (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                json,
-            );
+            return json_error(
+                "no board file in the upload (expected a 'board' or 'file' part)",
+            )
         }
     };
+
+    // Firmware is optional: an absent (or empty) part falls back to a
+    // board-only analysis, which is the same contract /api/analyze offers.
     let json = match &fw_bytes {
         Some(bytes) => (state.analyze)(&board_name, &board_bytes, Some((&fw_name, bytes))),
         None => (state.analyze)(&board_name, &board_bytes, None),
