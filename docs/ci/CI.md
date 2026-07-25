@@ -56,18 +56,7 @@ none of these gates can vacuously green-out.
 
 ## The model
 
-```
-layout change ──▶ hauksbee-ci run ci/power-up.toml
-                     │  extract the circuit from the board file
-                     │  bind every component to a device model
-                     │  attach the configured power supplies
-                     │  boot the firmware on the emulated MCU
-                     │  run N fuzzed power-up seeds
-                     ▼
-                  assertions ──▶ exit 0 (green) / 1 (red)
-                              ──▶ JUnit XML  (any CI ingests it)
-                              ──▶ ::error    (GitHub annotations)
-```
+![Every layout change runs the spec headless and produces an exit code, JUnit XML and inline annotations](../assets/diagrams/ci-model.svg)
 
 One spec describes one headless co-simulation and the things that must hold for
 the build to pass. Check it into the hardware repo next to the board. Wire it
