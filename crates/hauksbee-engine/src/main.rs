@@ -521,6 +521,30 @@ struct RunArgs {
     /// (`--chunk-us 1` for a 2 us strobe); runtime scales inversely.
     #[arg(long, value_name = "US", help_heading = "Advanced / analyses")]
     chunk_us: Option<f64>,
+
+    /// Simulate these Do-Not-Populate parts as fitted, whatever the DNP policy
+    /// says. Comma-separated and/or repeatable: `--fit A101,R7`. An unknown
+    /// reference is a loud error.
+    #[arg(long, value_name = "REF[,REF...]", value_delimiter = ',', help_heading = "Do-not-populate")]
+    fit: Vec<String>,
+
+    /// Leave these Do-Not-Populate parts open, whatever the DNP policy says.
+    /// The inverse of `--fit`, for a footprint you know will stay empty.
+    #[arg(long, value_name = "REF[,REF...]", value_delimiter = ',', help_heading = "Do-not-populate")]
+    no_fit: Vec<String>,
+
+    /// Leave every DNP part out of the simulation, matching what a fab house
+    /// would build from the board file. The default instead simulates DNP
+    /// parts as fitted, because most DNP footprints get placed eventually,
+    /// while keeping near-zero-ohm links (0R bridges, solder jumpers, ferrite
+    /// beads) open, since fitting one of those merges the nets it bridges.
+    /// Every run prints which parts were fitted and which were left open.
+    #[arg(long, conflicts_with = "fit_all_dnp", help_heading = "Do-not-populate")]
+    honour_dnp: bool,
+
+    /// Simulate every DNP part as fitted, including near-zero-ohm links.
+    #[arg(long, help_heading = "Do-not-populate")]
+    fit_all_dnp: bool,
 }
 
 #[derive(Parser)]
@@ -856,5 +880,14 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         probe: a.probe,
         probe_csv: a.probe_csv,
         chunk_us: a.chunk_us,
+        fit: a.fit,
+        no_fit: a.no_fit,
+        dnp_policy: if a.honour_dnp {
+            hauksbee_extract::dnp::DnpPolicy::Honour
+        } else if a.fit_all_dnp {
+            hauksbee_extract::dnp::DnpPolicy::FitAll
+        } else {
+            hauksbee_extract::dnp::DnpPolicy::FitExceptLinks
+        },
     }
 }

@@ -14,6 +14,22 @@ pub fn demo_firmware() -> PathBuf {
     testdata("firmware/demo/demo.hex")
 }
 
+/// The Tarski InputSystem netlist, with its Arduino Nano fitted.
+///
+/// A101 carries KiCad's DNP flag because the Nano is a module bought
+/// separately and plugged into headers, so it is not on the assembly BOM. It
+/// is very much on the working board, and without the fit the binder correctly
+/// drops the only processor and every firmware test becomes vacuous. Loading
+/// through one helper keeps that decision in a single place.
+pub fn tarski_board() -> hauksbee_extract::ExtractedBoard {
+    let text = std::fs::read_to_string(testdata("tarski_inputsystem.net"))
+        .expect("tarski netlist present");
+    let mut board = hauksbee_extract::ExtractedBoard::from_auto(&text).expect("parse netlist");
+    let fitted = board.fit(&["A101".to_string()]).expect("A101 is on the board");
+    assert_eq!(fitted, 1, "A101 should have been DNP and is now fitted");
+    board
+}
+
 /// A minimal synthetic `.kicad_pcb` (KiCad-5 `module` style, bare atoms):
 ///
 /// - U1: ATmega328P (TQFP-32 pad map) — VCC/AVCC on +5V, GND pads on GND,
