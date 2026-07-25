@@ -808,7 +808,11 @@ fn net_name(list: &List) -> Option<String> {
 }
 
 /// Format an f64 for KiCad output: up to 6 decimal places, no trailing zeros.
-pub(crate) fn fmt_f64(v: f64) -> String {
+///
+/// Public because downstream emitters (e.g. the library copy-through in
+/// forge-codegen) must format coordinates identically to the builder, or the
+/// same board would emit two different textual spellings of one number.
+pub fn fmt_f64(v: f64) -> String {
     // Check for integer value.
     if v.fract() == 0.0 && v.abs() < 1e12 {
         return format!("{}", v as i64);

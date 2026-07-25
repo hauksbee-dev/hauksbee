@@ -40,6 +40,7 @@ mod cluster;
 pub mod dsl;
 mod emit;
 mod fingerprint;
+mod fplib;
 mod layout;
 mod netlist;
 mod partition;
@@ -60,6 +61,7 @@ pub use rebuild::{
 pub use report::{render_anomaly, render_report};
 
 pub use dsl::{from_board, to_code, Program};
+pub use fplib::FootprintLib;
 pub use layout::{
     relayout, route_grid, FullConfig, IncrementalConfig, LayoutConfig, LayoutReport, RouteResult,
     RoutedTrack,
