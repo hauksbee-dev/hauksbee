@@ -19,10 +19,24 @@ use clap::{Parser, Subcommand};
 /// Point `hauksbee` at any board file (KiCad, Eagle, IPC-D-356, or gerbers) and
 /// it extracts the circuit, binds device models, runs the static checks, and can
 /// co-simulate the firmware on an emulated MCU. Start with `run --report`.
+/// The `--version` string: crate version plus the git hash this binary was
+/// built from (`build.rs` sets `GIT_HASH`; absent outside a git checkout, e.g.
+/// a source tarball, in which case the bare crate version is all we honestly
+/// have). The hash is what lets an operator tie behaviour to an exact build.
+/// Returned as `&'static str` because that is what clap's `version` wants; the
+/// one-time `OnceLock` init is the cheapest way to a static composed string.
+fn version_string() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| match option_env!("GIT_HASH") {
+        Some(hash) => format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
+        None => env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
 #[derive(Parser)]
 #[command(
     name = "hauksbee",
-    version,
+    version = version_string(),
     about = "CI for hardware: hand it a PCB; it tells you what blows up before you order boards.",
     long_about = None,
     propagate_version = true,
@@ -82,6 +96,25 @@ enum Command {
     /// Example:
     ///   hauksbee from-code my_board.board --out my_board.kicad_pcb --route
     FromCode(FromCodeArgs),
+
+    /// Merge an externally routed Specctra SES file back onto a board.
+    ///
+    /// The return half of `from-code --route-dsn`: export the DSN, route it
+    /// with any Specctra-capable router on your own clock (the freerouting
+    /// GUI, a long headless run, a different autorouter entirely), then merge
+    /// the SES it produced. The board is recompiled from the same `.board`
+    /// source (placement is deterministic, so pads land where the DSN said),
+    /// the SES copper is merged on, and the SAME post-merge audit the built-in
+    /// `--route` path runs judges the result: real routed connections, the
+    /// internal DRC, and the endpoint-net assertion. `--route-strict` gates on
+    /// that audit exactly as `from-code --route-strict` does. This also makes
+    /// a route a cacheable, diffable artifact: keep the SES, re-merge at will.
+    ///
+    /// Example:
+    ///   hauksbee from-code my.board --out my.kicad_pcb --route-dsn my.dsn
+    ///   java -jar freerouting.jar -de my.dsn -do my.ses   # any router, any time
+    ///   hauksbee merge-ses my.board my.ses --out my.kicad_pcb --route-strict
+    MergeSes(MergeSesArgs),
 
     /// Recompile, bind, co-sim with the stress monitor, print a fault report.
     ///
@@ -280,6 +313,11 @@ struct ModelsResolveArgs {
     /// Extra model directory, loaded at the --models-dir layer (priority 30).
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
+    /// Emit the resolution as one JSON object ({"components":[{"ref","value",
+    /// "model","layer","origin"}]}) instead of the text table. A component the
+    /// binder could not resolve carries model "UNRESOLVED".
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -518,6 +556,66 @@ struct FromCodeArgs {
     /// (short) DRC finding, or a wrong-net endpoint. Only affects a routing run.
     #[arg(long)]
     route_strict: bool,
+
+    /// Wall-clock budget in seconds for the freerouting run before it is
+    /// killed (and the grid A* fallback takes over). The default 180 s only
+    /// covers small boards: a real 137-part board legitimately needs 12-15
+    /// minutes, so raise this (e.g. --route-timeout 1200) rather than let the
+    /// fallback silently take over.
+    #[arg(long, value_name = "SECS", default_value_t = 180)]
+    route_timeout: u64,
+
+    /// Maximum freerouting optimisation passes (its `-mp`). Fewer passes
+    /// finish sooner at some routing-quality cost.
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    route_passes: u32,
+
+    /// Explicit freerouting jar to run, overriding $FREEROUTING_JAR and the
+    /// conventional-location search (tools/ up the tree, ~/.local/share/freerouting).
+    #[arg(long, value_name = "JAR")]
+    freerouting_jar: Option<PathBuf>,
+
+    /// Write the Specctra routing DSN to this file and STOP before routing:
+    /// route it with any Specctra-capable router, for as long as you like,
+    /// then merge the SES back with `hauksbee merge-ses`. The unrouted board
+    /// is still emitted to --out/stdout as usual.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["route", "route_grid"])]
+    route_dsn: Option<PathBuf>,
+
+    /// Emit one machine-readable JSON object for the routing run on stdout
+    /// instead of prose: {"nets_total","connections_routed","unrouted",
+    /// "segments","vias","seconds","engine","drc_serious",
+    /// "endpoint_net_violations"} (with --route-dsn: {"ok","dsn"}). Requires
+    /// --out so the board text does not share stdout, and a routing flag
+    /// (--route/--route-grid/--route-dsn) to describe.
+    #[arg(long, requires = "out")]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct MergeSesArgs {
+    /// Board-as-Code file (or directory) the DSN was exported from.
+    #[arg(value_name = "CODE")]
+    code: PathBuf,
+
+    /// The routed Specctra SES file to merge (coordinate scale auto-detected).
+    #[arg(value_name = "SES")]
+    ses: PathBuf,
+
+    /// Write the routed `.kicad_pcb` here (default: print to stdout).
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+
+    /// Fail (exit non-zero) when the merged route leaves open connections, a
+    /// serious (short) DRC finding, or a wrong-net endpoint.
+    #[arg(long)]
+    route_strict: bool,
+
+    /// Emit one machine-readable JSON object for the merge on stdout (same
+    /// shape as `from-code --route --json`, engine "merged-ses"). Requires
+    /// --out so the board text does not share stdout.
+    #[arg(long, requires = "out")]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -604,6 +702,13 @@ struct CheckCodeArgs {
     /// estimate (Tj = Tambient + P * theta_JA). Default 25 C.
     #[arg(long, default_value_t = 25.0, value_name = "C", help_heading = "Advanced / analyses")]
     ambient: f64,
+
+    /// Emit the check as one JSON object ({"ok","board","components","nets",
+    /// "resolved_fraction","unresolved","simulated_seconds","active_nets",
+    /// "faults"}) instead of the human table. The exit code is unchanged
+    /// (1 when a part is destroyed).
+    #[arg(long)]
+    json: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -611,8 +716,17 @@ fn main() -> anyhow::Result<()> {
     // Fix #3 (LOW): under `--json`, an AI/CI consumer expects parseable output on
     // EVERY path, including a hard error. Emit `{"ok": false, "error": "..."}`
     // instead of the plaintext `error:` line so the failure is still valid JSON.
-    // Only `run --json` produces JSON at all, so this is the only place it applies.
-    let json = matches!(&cli.command, Command::Run(args) if args.json);
+    // Applies to every subcommand that has a `--json` flag.
+    let json = match &cli.command {
+        Command::Run(args) => args.json,
+        Command::FromCode(args) => args.json,
+        Command::MergeSes(args) => args.json,
+        Command::CheckCode(args) => args.json,
+        Command::Models(args) => {
+            matches!(&args.command, ModelsCommand::Resolve(r) if r.json)
+        }
+        _ => false,
+    };
     let quiet = cli.quiet;
     let result = match cli.command {
         Command::Run(args) => hauksbee_engine::commands::run::run(run_config(args), quiet),
@@ -621,18 +735,33 @@ fn main() -> anyhow::Result<()> {
         }
         Command::FromCode(args) => hauksbee_engine::commands::boardcode::from_code(
             &args.code,
+            &hauksbee_engine::commands::boardcode::FromCodeOpts {
+                out: args.out,
+                relayout: args.relayout,
+                incremental: args.incremental,
+                route: args.route,
+                route_grid: args.route_grid,
+                route_strict: args.route_strict,
+                route_timeout_secs: args.route_timeout,
+                route_passes: args.route_passes,
+                freerouting_jar: args.freerouting_jar,
+                route_dsn: args.route_dsn,
+                json: args.json,
+            },
+        ),
+        Command::MergeSes(args) => hauksbee_engine::commands::boardcode::merge_ses(
+            &args.code,
+            &args.ses,
             args.out.as_deref(),
-            args.relayout,
-            args.incremental,
-            args.route,
-            args.route_grid,
             args.route_strict,
+            args.json,
         ),
         Command::CheckCode(args) => hauksbee_engine::commands::boardcode::check(
             &args.code,
             args.seconds,
             args.destructive,
             args.ambient,
+            args.json,
         ),
         Command::Serve(args) => hauksbee_engine::commands::serve::run(args.port),
         Command::Doctor(args) => {
@@ -656,6 +785,7 @@ fn main() -> anyhow::Result<()> {
             ModelsCommand::Resolve(args) => hauksbee_engine::commands::models::resolve(
                 &args.board,
                 args.models_dir.as_deref(),
+                args.json,
             ),
         },
         Command::Watch(args) => {
