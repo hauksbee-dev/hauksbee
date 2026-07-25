@@ -66,8 +66,9 @@ pub use layout::{
 };
 pub use route_freerouting::{
     connectivity, endpoint_net_violations, find_freerouting_jar, freerouting_available,
-    merge_ses_into_pcb, parse_ses, route_with_freerouting, run_freerouting, write_dsn, Connectivity,
-    FreeroutingConfig, RouteError, RouteOutcome, RouteRules, SesRoutes,
+    merge_ses_into_pcb, merge_ses_text, parse_ses, route_with_freerouting, run_freerouting,
+    validate_jar, write_dsn, Connectivity, FreeroutingConfig, RouteError, RouteOutcome, RouteRules,
+    SesRoutes, DSN_FILE_NAME, SES_FILE_NAME,
 };
 
 use forge_model::Pcb;
