@@ -327,49 +327,11 @@ fn qemu_version(bin: &std::path::Path) -> Option<String> {
     text.lines().next().map(|l| l.trim().to_string())
 }
 
-/// Locate a usable `kicad-cli`: PATH first, then the standard macOS / Linux /
-/// Homebrew install locations, preferring the highest version. This MIRRORS
-/// the private `reports::drc::find_kicad_cli` (that module is owned by another
-/// lane, so the function cannot be re-exported from here); if either copy
-/// changes, change both.
+/// Locate a usable `kicad-cli`. Delegates to the DRC oracle's own finder so
+/// the dependency panel and the check that consumes kicad-cli can never
+/// disagree about whether it is installed or which one won.
 fn find_kicad_cli() -> Option<(String, String)> {
-    let mut candidates: Vec<String> = vec!["kicad-cli".to_string()];
-    let home = std::env::var("HOME").unwrap_or_default();
-    for base in ["/Applications".to_string(), format!("{home}/Applications")] {
-        if let Ok(rd) = std::fs::read_dir(&base) {
-            for e in rd.flatten() {
-                let name = e.file_name();
-                if name.to_str().is_some_and(|n| n.starts_with("KiCad")) {
-                    for sub in ["Contents/MacOS/kicad-cli", "KiCad.app/Contents/MacOS/kicad-cli"] {
-                        let cli = e.path().join(sub);
-                        if cli.exists() {
-                            candidates.push(cli.to_string_lossy().into_owned());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for p in ["/usr/bin/kicad-cli", "/usr/local/bin/kicad-cli", "/opt/homebrew/bin/kicad-cli"] {
-        if std::path::Path::new(p).exists() {
-            candidates.push(p.to_string());
-        }
-    }
-    let mut best: Option<(String, String, (u32, u32, u32))> = None;
-    for c in candidates {
-        let Ok(out) = Command::new(&c).arg("version").output() else {
-            continue;
-        };
-        if !out.status.success() {
-            continue;
-        }
-        let ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let parsed = parse_kicad_version(&ver);
-        if best.as_ref().is_none_or(|b| parsed > b.2) {
-            best = Some((c, ver, parsed));
-        }
-    }
-    best.map(|(p, v, _)| (p, v))
+    crate::reports::drc::find_kicad_cli()
 }
 
 /// `"9.0.3" -> (9,0,3)`; anything unparsable sorts lowest.
