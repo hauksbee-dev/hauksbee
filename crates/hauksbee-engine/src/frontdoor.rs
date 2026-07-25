@@ -883,6 +883,43 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
             },
         );
     }
+    // Runtime driver contention (the model-vs-MCU case the static lint
+    // documents as out of its reach): a real electrical fight, so it is a
+    // SERIOUS finding that folds into the fault counts, not a caveat.
+    for c in sched.driver_contentions() {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "serious".to_string(),
+                what: format!("Driver contention on net '{}'", c.net),
+                why: c.message(),
+                fix: "Check the model pin mapping (`hauksbee models resolve`) and the \
+                      firmware's pin-direction writes; two push-pull drivers must never \
+                      share a net without a series element."
+                    .to_string(),
+            },
+        );
+    }
+    // Sub-chunk pulses swallowed by tick-evaluated sequential parts (friction
+    // 1.16): a co-sim FIDELITY caveat (the board may be fine; the result is
+    // not trustworthy), so note-level, which demotes the headline the same way
+    // the other honesty caveats do.
+    for p in sched.short_pulses() {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: format!(
+                    "A GPIO pulse on net '{}' is too short for the co-sim to observe",
+                    p.net
+                ),
+                why: p.message(),
+                fix: "Rerun from the command line with --chunk-us at or below half the \
+                      pulse width, or widen the pulse in firmware."
+                    .to_string(),
+            },
+        );
+    }
     // Zero-activity refusal: a run that drove nothing proves nothing.
     if total_toggles == 0 && uart_empty && !any_gpio_driven {
         findings.insert(

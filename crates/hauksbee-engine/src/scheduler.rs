@@ -312,6 +312,27 @@ pub struct Scheduler {
     /// current). `frame_v_extremes`: net name -> (min_v, max_v) over the frame.
     frame_peak_current: HashMap<String, f64>,
     frame_v_extremes: HashMap<String, (f64, f64)>,
+    /// Net node -> references of TICK-evaluated sequential parts whose
+    /// sequential inputs (register clocks / resets / loads / serial data, per
+    /// the spec's own [`crate::logic::LogicComponent::sequential_pins`]) the
+    /// net feeds. "Tick-evaluated" excludes every edge-exact path: 595 chain
+    /// chips (`chain_chips`), generalized replay chips (`replay_chips`), and
+    /// 165 read-chain chips (responder-owned). Built once at construction;
+    /// consulted by [`Scheduler::detect_short_pulses`] (friction 1.16).
+    tick_sequential_nets: HashMap<u32, Vec<String>>,
+    /// Sub-chunk GPIO pulse warnings raised this run (friction 1.16), one per
+    /// offending net. See [`ShortPulse`].
+    short_pulses: Vec<ShortPulse>,
+    /// Nets already warned about by `detect_short_pulses`, so a pulse train
+    /// warns once per net per run, not once per chunk.
+    short_pulse_nets: std::collections::HashSet<u32>,
+    /// Runtime driver-contention findings raised this run (the model-vs-MCU
+    /// half of the field failure the static lint documents as out of reach in
+    /// `checks/contention.rs`), one per offending net. See [`DriverContention`].
+    contentions: Vec<DriverContention>,
+    /// Nets already reported by `detect_driver_contention` (once per net per
+    /// run).
+    contention_nets: std::collections::HashSet<u32>,
 }
 
 
@@ -399,6 +420,140 @@ impl AdcDrop {
              meaningless. Add an [[soc.adc]] injection recipe to the SoC \
              descriptor to enable it (docs/cosim/MCU.md).",
             self.channel, self.mcu_ref, self.net,
+        )
+    }
+}
+
+/// A firmware GPIO pulse that rose AND fell inside a single solver chunk, on a
+/// net that clocks a TICK-evaluated sequential part (cold-drive friction 1.16,
+/// defect report 7). Chain-responder parts (74HC595/165 chains, bit-banged
+/// SPI/I2C) resolve such edges synchronously inside the firmware's instruction
+/// stream, but an ordinary sequential part (a 74HC74 latch, a ripple counter)
+/// is evaluated once per chunk against the PREVIOUS solve, so a pulse contained
+/// in one chunk is never observed: the part's state trails or misses events
+/// while the rest of the board looks edge-exact. That asymmetry produces
+/// plausible WRONG answers, not errors, so it must be surfaced loudly.
+///
+/// Detected from the cycle-stamped pin-edge log ([`ChunkPinEdges`]): two
+/// consecutive opposite-level transitions of one pin inside one chunk are a
+/// completed pulse, and its width is the cycle gap normalised over the chunk's
+/// cycle span. Raised once per offending net per run.
+#[derive(Debug, Clone)]
+pub struct ShortPulse {
+    /// The net carrying the pulse.
+    pub net: String,
+    /// The MCU whose pin drove it (reference designator).
+    pub mcu_ref: String,
+    /// Port letter of the driving pin.
+    pub port: char,
+    /// Bit index of the driving pin.
+    pub bit: u8,
+    /// Narrowest completed pulse observed on the net (seconds). On a poll
+    /// backend (`cycle_exact == false`) this is coarse but the containment
+    /// (both edges inside one chunk) still holds exactly.
+    pub pulse_s: f64,
+    /// The solver chunk the pulse fell inside (seconds).
+    pub chunk_s: f64,
+    /// References of the tick-evaluated sequential parts clocked by the net.
+    pub parts: Vec<String>,
+}
+
+/// Compact human time: "2.0 us", "150 ns", "1.5 ms".
+fn fmt_seconds(s: f64) -> String {
+    if s >= 1e-3 {
+        format!("{:.1} ms", s * 1e3)
+    } else if s >= 1e-6 {
+        format!("{:.1} us", s * 1e6)
+    } else {
+        format!("{:.0} ns", s * 1e9)
+    }
+}
+
+impl ShortPulse {
+    /// The one-line warning every surface (text, --plain, --json note, web)
+    /// emits for this net, so they all name the same facts; same
+    /// shared-wording discipline as [`UnexercisedBus::message`].
+    pub fn message(&self) -> String {
+        let suggest_us = (self.pulse_s * 1e6 / 2.0).max(0.1);
+        format!(
+            "co-sim: net '{}' carries a {} pulse from {} pin P{}{} that is shorter than \
+             the {} solver chunk. Sequential part(s) {} clock from this net but are \
+             evaluated once per chunk against the previous solve, so a pulse that rises \
+             and falls inside one chunk is NEVER observed: their state lags or misses \
+             events entirely, while chain-responder parts (74HC595/165 chains) on the \
+             same board see every edge exactly. Results stay plausible-looking but \
+             wrong. Rerun with --chunk-us {:.1} (a chunk no wider than half the pulse) \
+             to make it visible, or widen the pulse in firmware. Edge-scheduling \
+             sequential parts is the real fix and is recorded as a follow-up \
+             (cold-drive friction 1.16).",
+            self.net,
+            fmt_seconds(self.pulse_s),
+            self.mcu_ref,
+            self.port,
+            self.bit,
+            fmt_seconds(self.chunk_s),
+            self.parts.join("/"),
+            suggest_us,
+        )
+    }
+}
+
+/// Runtime driver contention: the firmware configured an MCU pin as a push-pull
+/// OUTPUT on a net where an ENABLED modelled push-pull output was already
+/// driving. This is the model-vs-MCU half of the field failure whose
+/// model-vs-model half the static lint catches
+/// ([`crate::checks::contention`]): at lint time every MCU GPIO driver is
+/// stamped high-impedance and only firmware sets direction, so "modelled output
+/// shares a net with an MCU pad" is the most common HEALTHY topology there is,
+/// and the static check documents this case as out of reach. The scheduler
+/// learns real pin directions at runtime (pin-change edges and
+/// `pins_configured_output` DDR sync), so it is the one place the fight is
+/// observable.
+///
+/// What counts as a modelled push-pull output is shared with the static check
+/// by construction, not by parallel reimplementation: the binder stamps a
+/// [`crate::drivers::PinDriver`] on every connected output role from
+/// [`crate::digital::output_roles`] (the same single source the static check's
+/// `scan()` consults), and the spec's `[models.logic.tristate]` groups drive
+/// the driver's live `enabled` flag (the same groups the static check expands
+/// to exclude tri-stateable roles). A tri-stated (released) model output or a
+/// tri-stated MCU pin therefore never fires here, matching the static
+/// exclusions at runtime granularity. Raised once per net per run.
+#[derive(Debug, Clone)]
+pub struct DriverContention {
+    /// The contended net.
+    pub net: String,
+    /// The MCU whose pin joined the fight (reference designator).
+    pub mcu_ref: String,
+    /// Port letter of the firmware-driven pin.
+    pub port: char,
+    /// Bit index of the firmware-driven pin.
+    pub bit: u8,
+    /// `"REF.role"` of every enabled modelled push-pull output on the net,
+    /// sorted for determinism.
+    pub parts: Vec<String>,
+    /// Sim time (s) at which both sides were first seen driving together.
+    pub t_s: f64,
+}
+
+impl DriverContention {
+    /// The one-line finding every surface emits for this net; same
+    /// shared-wording discipline as [`UnexercisedBus::message`].
+    pub fn message(&self) -> String {
+        format!(
+            "co-sim: driver contention on net '{}' from t={:.6}s: firmware configured \
+             {} pin P{}{} as a push-pull OUTPUT while modelled push-pull output(s) {} \
+             were already driving the same net. Two push-pull drivers fighting one net \
+             means both parts pass current well beyond their output ratings on real \
+             hardware, and the simulation solves the fight to a voltage that looks like \
+             data, so every waveform touching this net is untrustworthy from that time \
+             on. Check the model pin mapping with `hauksbee models resolve` (a part \
+             bound to the wrong pinout caused the field failure this check exists for) \
+             and the firmware's pin-direction writes. The static output-contention lint \
+             cannot see firmware pin directions, so this runtime monitor is the only \
+             check that can catch the model-vs-MCU case.",
+            self.net, self.t_s, self.mcu_ref, self.port, self.bit,
+            self.parts.join(", "),
         )
     }
 }
@@ -594,6 +749,11 @@ impl Scheduler {
             digital_in_evidence: HashMap::new(),
             frame_peak_current: HashMap::new(),
             frame_v_extremes: HashMap::new(),
+            tick_sequential_nets: HashMap::new(),
+            short_pulses: Vec::new(),
+            short_pulse_nets: std::collections::HashSet::new(),
+            contentions: Vec::new(),
+            contention_nets: std::collections::HashSet::new(),
         };
 
         // One (initially absent) input-responder registry slot per live MCU;
@@ -620,7 +780,49 @@ impl Scheduler {
         // digital-input sync's "is this net really driven?" check.
         sched.rebuild_digital_in_evidence();
 
+        // Index the nets that clock TICK-evaluated sequential parts, for the
+        // sub-chunk pulse warning (friction 1.16). Built after the 595 chains,
+        // replay chips, and 165 read chains above, because those edge-exact
+        // paths are exactly what the index must EXCLUDE.
+        sched.rebuild_tick_sequential_nets();
+
         Ok(sched)
+    }
+
+    /// Rebuild [`Scheduler::tick_sequential_nets`]: net node -> references of
+    /// sequential digital parts evaluated on the once-per-chunk tick path,
+    /// keyed by the nets their spec-declared sequential inputs
+    /// ([`DigitalComponent::sequential_pins`]: register clocks, resets, loads,
+    /// enables, serial data) are wired to. Edge-exact parts are excluded: 595
+    /// chain chips, generalized replay chips, and 165 read-chain chips all see
+    /// every edge in cycle order, so a sub-chunk pulse is visible to them and
+    /// warning about it would be a false positive (a bit-banged SRCLK train is
+    /// the NORMAL way those parts are driven).
+    fn rebuild_tick_sequential_nets(&mut self) {
+        let mut edge_exact: std::collections::HashSet<usize> =
+            self.chain_chips.iter().copied().collect();
+        edge_exact.extend(self.replay_chips.iter().copied());
+        for c in &self.hc165_chains {
+            let c = c.lock().unwrap_or_else(|e| e.into_inner());
+            edge_exact.extend(c.order.iter().copied());
+        }
+        let mut map: HashMap<u32, Vec<String>> = HashMap::new();
+        for (i, d) in self.digital.iter().enumerate() {
+            if edge_exact.contains(&i) || !d.is_sequential() {
+                continue;
+            }
+            for pin in d.sequential_pins() {
+                let Some(&node) = d.roles.get(pin) else { continue };
+                let refs = map.entry(node.0).or_default();
+                if !refs.iter().any(|r| r == &d.reference) {
+                    refs.push(d.reference.clone());
+                }
+            }
+        }
+        for refs in map.values_mut() {
+            refs.sort();
+        }
+        self.tick_sequential_nets = map;
     }
 
     /// Rebuild [`Scheduler::digital_in_evidence`]: net node -> device indices,
@@ -1632,6 +1834,14 @@ impl Scheduler {
             self.sync_configured_outputs(mi, configured);
         }
 
+        // 1c. Sub-chunk pulse honesty (friction 1.16): a GPIO pulse that rose
+        // and fell inside THIS chunk is invisible to every tick-evaluated
+        // sequential part on its net (they sample once per chunk, against the
+        // previous solve), while chain responders resolve the same edges
+        // exactly. Warn once per offending net, from the cycle-stamped edge
+        // log just drained.
+        self.detect_short_pulses(chunk);
+
         // 5(prev). Digital components drive their outputs from current state,
         // sampling the previous chunk's solved node voltages. Chips clocked by an
         // edge path are SKIPPED here: chips owned by an edge-driven 595 chain
@@ -1660,6 +1870,14 @@ impl Scheduler {
             }
             self.chains = chains;
         }
+
+        // 5b'. Runtime driver-contention monitor (the model-vs-MCU half of the
+        // field failure the static lint documents as out of static reach in
+        // checks/contention.rs). Runs after the MCU edge/DDR sync (which sets
+        // the firmware side's driver enables) AND after the digital tick /
+        // chain apply (which set the model side's, tri-state included), so
+        // both sides' live drive states are current for this chunk.
+        self.detect_driver_contention();
 
         // 5b2(prev). Refresh every digital part's VCC supply draw for this
         // chunk: drain the output-transition accumulators (filled above by the
@@ -2214,6 +2432,12 @@ impl Scheduler {
         self.frame_peak_current.clear();
         self.frame_v_extremes.clear();
         self.faults_pending.clear();
+        // Run-accumulated co-sim findings: a replay must re-detect (and a
+        // stale once-per-net guard would silently swallow a real re-fire).
+        self.short_pulses.clear();
+        self.short_pulse_nets.clear();
+        self.contentions.clear();
+        self.contention_nets.clear();
         // The stress monitor accumulates across a run (consecutive-over-limit
         // counters, already-raised faults, live stress, destroyed flags). Left
         // uncleared, a replay would silently drop a fault that fired last run
@@ -2415,6 +2639,178 @@ impl Scheduler {
     pub fn net_voltage(&self, net: &str) -> Option<f64> {
         let node = self.net_nodes.get(net)?;
         self.node_volts.get(node.0 as usize).copied()
+    }
+
+    /// The name of the net on `node`, or `"node N"` for an unnamed one.
+    fn net_name_of(&self, node: u32) -> String {
+        self.net_nodes
+            .iter()
+            .find(|(_, n)| n.0 == node)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| format!("node {node}"))
+    }
+
+    /// Friction 1.16 detector: scan the chunk's drained cycle-stamped edge log
+    /// for a pin that completed a pulse (two consecutive opposite-level
+    /// transitions) INSIDE this chunk, driving a net that clocks a
+    /// tick-evaluated sequential part. Containment in one chunk is exactly the
+    /// invisible case: the once-per-chunk tick samples the settled end-of-chunk
+    /// voltage, so a pulse that has already returned to its resting level is
+    /// never seen (a pulse spanning a chunk boundary IS seen at the boundary
+    /// sample, and correctly does not warn). Warns once per net per run.
+    ///
+    /// The pulse width is the cycle gap between the two transitions,
+    /// normalised over the chunk's cycle span and scaled by the chunk
+    /// duration; coarse (but still contained, hence still correct to warn) on
+    /// poll backends whose stamps are not cycle-exact.
+    fn detect_short_pulses(&mut self, chunk: f64) {
+        if self.tick_sequential_nets.is_empty() {
+            return;
+        }
+        let mut found: Vec<ShortPulse> = Vec::new();
+        for (mi, ce) in self.last_chunk_edges.iter().enumerate() {
+            let (c0, c1) = ce.cycle_span;
+            if c1 <= c0 {
+                continue;
+            }
+            let span = (c1 - c0) as f64;
+            // Sorted pin order so the once-per-net record is deterministic
+            // when several pins share a net (HashMap iteration is not).
+            let mut pins: Vec<&(char, u8)> = ce.edges.keys().collect();
+            pins.sort();
+            for pin in pins {
+                let transitions = &ce.edges[pin];
+                if transitions.len() < 2 {
+                    continue;
+                }
+                let Some(drv) = self.mcus[mi].binding.gpio_drivers.get(pin) else {
+                    continue;
+                };
+                let node = drv.net.0;
+                if self.short_pulse_nets.contains(&node) {
+                    continue;
+                }
+                let Some(parts) = self.tick_sequential_nets.get(&node) else {
+                    continue;
+                };
+                // Narrowest completed pulse: the smallest cycle gap between
+                // consecutive opposite-level transitions.
+                let mut width: Option<f64> = None;
+                for w in transitions.windows(2) {
+                    if w[0].1 == w[1].1 {
+                        continue;
+                    }
+                    let g = (w[1].0.saturating_sub(w[0].0)) as f64 / span * chunk;
+                    if width.map_or(true, |cur| g < cur) {
+                        width = Some(g);
+                    }
+                }
+                let Some(pulse_s) = width else { continue };
+                self.short_pulse_nets.insert(node);
+                found.push(ShortPulse {
+                    net: self.net_name_of(node),
+                    mcu_ref: ce.mcu_reference.clone(),
+                    port: pin.0,
+                    bit: pin.1,
+                    pulse_s,
+                    chunk_s: chunk,
+                    parts: parts.clone(),
+                });
+            }
+        }
+        for p in found {
+            eprintln!("WARNING: {}", p.message());
+            self.short_pulses.push(p);
+        }
+    }
+
+    /// Runtime driver-contention monitor: report every net where an ENABLED
+    /// MCU GPIO driver (the firmware configured the pin as an output, seen via
+    /// pin-change edges or the `pins_configured_output` DDR sync) coexists
+    /// with an ENABLED modelled push-pull output driver of a digital part.
+    /// Fires once per net per run.
+    ///
+    /// Classification is shared with the static lint
+    /// ([`crate::checks::contention`]) by construction: the model drivers
+    /// scanned here are exactly the [`crate::drivers::PinDriver`]s the binder
+    /// stamped from [`crate::digital::output_roles`] (the static check's own
+    /// single source of what counts as an output), and a driver's live
+    /// `enabled` flag is set by the same `[models.logic.tristate]` groups the
+    /// static check expands for its tri-state exclusion. So a tri-stated
+    /// (released) model output never fires here, an OE-driven bus in its
+    /// normal one-talker-at-a-time state never fires here, and a tri-stated
+    /// MCU pin (driver disabled, the binder's stamped default) never fires
+    /// here.
+    ///
+    /// Skipped on the very first chunk (`sim_time == 0`): the model drivers'
+    /// tri-state enables have not yet been evaluated against a real solve
+    /// there (the zero-filled voltage seed would read an active-low OE as
+    /// asserted), and firing on that fiction would be a false positive. The
+    /// same honesty rule the plain digital-input sync applies.
+    fn detect_driver_contention(&mut self) {
+        if self.sim_time <= 0.0 || self.digital.is_empty() || self.mcus.is_empty() {
+            return;
+        }
+        // Enabled modelled push-pull outputs per net node, as "REF.role".
+        let mut model_out: HashMap<u32, Vec<String>> = HashMap::new();
+        for d in &self.digital {
+            for (role, drv) in &d.drivers {
+                if !drv.enabled {
+                    continue;
+                }
+                model_out
+                    .entry(drv.net.0)
+                    .or_default()
+                    .push(format!("{}.{role}", d.reference));
+            }
+        }
+        if model_out.is_empty() {
+            return;
+        }
+        let mut found: Vec<DriverContention> = Vec::new();
+        for m in &self.mcus {
+            // Sorted pin order for a deterministic once-per-net record.
+            let mut pins: Vec<&(char, u8)> = m.binding.gpio_drivers.keys().collect();
+            pins.sort();
+            for &(port, bit) in pins {
+                let drv = &m.binding.gpio_drivers[&(port, bit)];
+                if !drv.enabled {
+                    continue;
+                }
+                let node = drv.net.0;
+                if self.contention_nets.contains(&node) {
+                    continue;
+                }
+                let Some(parts) = model_out.get(&node) else { continue };
+                let mut parts = parts.clone();
+                parts.sort();
+                self.contention_nets.insert(node);
+                found.push(DriverContention {
+                    net: self.net_name_of(node),
+                    mcu_ref: m.binding.reference.clone(),
+                    port,
+                    bit,
+                    parts,
+                    t_s: self.sim_time,
+                });
+            }
+        }
+        for c in found {
+            eprintln!("WARNING: {}", c.message());
+            self.contentions.push(c);
+        }
+    }
+
+    /// Sub-chunk GPIO pulse warnings raised this run (friction 1.16), one per
+    /// offending net, in detection order.
+    pub fn short_pulses(&self) -> &[ShortPulse] {
+        &self.short_pulses
+    }
+
+    /// Runtime driver-contention findings raised this run (the model-vs-MCU
+    /// case the static lint cannot reach), one per offending net.
+    pub fn driver_contentions(&self) -> &[DriverContention] {
+        &self.contentions
     }
 
     /// Snapshot every net's current voltage.
@@ -5250,5 +5646,383 @@ mod soc_wiring_tests {
         let err = missing.expect_err("unknown part must fail").to_string();
         assert!(err.contains("no SoC descriptor found"), "err: {err}");
         assert!(err.contains("renode:stm32f199"), "err: {err}");
+    }
+}
+
+#[cfg(test)]
+mod pulse_and_contention_tests {
+    use super::*;
+    use hauksbee_mcu::{Mcu, PinId};
+    use hauksbee_solve::SolverOptions;
+
+    // ── Sub-chunk pulse warning (friction 1.16) + runtime driver contention ──
+
+    /// A mock core whose cycle counter advances at 16 MHz per `run_micros`, so
+    /// a drained edge log normalises over a REAL cycle span. (The
+    /// [`RecordingCore`]'s default `current_cycle` is a constant 0, which
+    /// yields an empty span and would suppress the pulse-width math entirely.)
+    struct CycleCore {
+        cycles: u64,
+    }
+
+    impl Mcu for CycleCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            self.cycles += n;
+            Ok(n)
+        }
+        fn run_micros(&mut self, us: u64) -> anyhow::Result<()> {
+            self.cycles += 16 * us;
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn current_cycle(&self) -> u64 {
+            self.cycles
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: self.cycles,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+    }
+
+    /// A 74HC74 dual flip-flop whose clock (pad 3 = `clk1`) sits on STROBE and
+    /// data (pad 2 = `d1`) on DATA, plus a FREE net wired only to a pull-down:
+    /// the minimal board on which a sub-chunk pulse can hit (a) a net that
+    /// clocks a tick-evaluated sequential part and (b) a net that clocks
+    /// nothing.
+    const PULSE_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "STROBE")
+  (net 4 "DATA")
+  (net 5 "FREE")
+
+  (module Logic:74HC74 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U5 (at 0 0) (layer F.SilkS))
+    (fp_text value 74HC74 (at 0 2) (layer F.Fab))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 4 "DATA"))
+    (pad 3 thru_hole circle (at 0 3) (size 1 1) (net 3 "STROBE"))
+    (pad 7 thru_hole circle (at 0 7) (size 1 1) (net 1 "GND"))
+    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 2 "+5V"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 5 "FREE"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+
+    /// Build the PULSE_BOARD scheduler with one hand-wired mock MCU ("A1",
+    /// [`CycleCore`]) owning a tri-stated GPIO driver per (pin, net) pair,
+    /// exactly the shape the binder stamps.
+    fn pulse_scheduler(pins: &[((char, u8), &str)]) -> Scheduler {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PULSE_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut gpio_drivers = HashMap::new();
+        for &(pin, net) in pins {
+            let node = sched.net_nodes[net];
+            let mut drv = crate::drivers::PinDriver::stamp(
+                &mut sched.circuit,
+                node,
+                net,
+                &format!("t_{}{}", pin.0, pin.1),
+                crate::drivers::DEFAULT_RO,
+            );
+            drv.set_enabled(&mut sched.circuit, false);
+            gpio_drivers.insert(pin, drv);
+        }
+        let binding = McuBinding {
+            reference: "A1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(CycleCore { cycles: 0 }), binding));
+        sched.responder_registries.push(None);
+        sched.relayout();
+        sched
+    }
+
+    /// Preload the mock MCU's shared capture state with an already-happened
+    /// GPIO transition sequence, the exact shape `on_pin_change` accumulates;
+    /// the next `step` drains it like a real firmware chunk.
+    fn preload_edges(sched: &Scheduler, pin: (char, u8), transitions: &[(u64, bool)]) {
+        let mut sh = sched.mcus[0]
+            .shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for &(cycle, level) in transitions {
+            sh.pin_edges.insert(pin, level);
+            sh.pin_edge_log.push(PinEdge {
+                cycle,
+                port: pin.0,
+                bit: pin.1,
+                level,
+            });
+        }
+    }
+
+    /// THE FRICTION-1.16 CASE: a 2 us GPIO pulse (rise + fall inside one
+    /// 100 us chunk) on the net clocking a tick-evaluated 74HC74 must warn,
+    /// naming the net, the measured width, the chunk, and the part at risk;
+    /// and it must warn ONCE per net per run, not once per chunk.
+    #[test]
+    fn subchunk_pulse_on_a_tick_sequential_clock_net_warns_once() {
+        let mut sched = pulse_scheduler(&[(('B', 1), "STROBE")]);
+
+        // 2 us pulse at 16 MHz = 32 cycles, wholly inside the chunk's
+        // [0, 1600) cycle span.
+        preload_edges(&sched, ('B', 1), &[(100, true), (132, false)]);
+        sched.step(DEFAULT_CHUNK_S);
+
+        let pulses = sched.short_pulses();
+        assert_eq!(pulses.len(), 1, "exactly one warning: {pulses:?}");
+        let p = &pulses[0];
+        assert_eq!(p.net, "STROBE");
+        assert_eq!(p.mcu_ref, "A1");
+        assert_eq!((p.port, p.bit), ('B', 1));
+        assert_eq!(p.parts, vec!["U5".to_string()]);
+        assert!(
+            (p.pulse_s - 2e-6).abs() < 1e-9,
+            "measured width must be the 2 us cycle gap, got {}",
+            p.pulse_s
+        );
+        assert!((p.chunk_s - DEFAULT_CHUNK_S).abs() < 1e-12);
+        let msg = p.message();
+        for needle in ["STROBE", "U5", "2.0 us", "100.0 us", "--chunk-us", "follow-up"] {
+            assert!(msg.contains(needle), "message must name '{needle}': {msg}");
+        }
+
+        // A second pulse train on the same net must NOT append a second record.
+        preload_edges(&sched, ('B', 1), &[(100, true), (132, false)]);
+        sched.step(DEFAULT_CHUNK_S);
+        assert_eq!(sched.short_pulses().len(), 1, "once per net per run");
+    }
+
+    /// The same pulse stretched to ~1 ms (rise in one chunk, fall ten chunks
+    /// later) is OBSERVED by the chunk-boundary sample, so it must NOT warn;
+    /// and a sub-chunk pulse on a net that clocks nothing sequential must not
+    /// warn either. Zero-false-positive discipline for the 1.16 warning.
+    #[test]
+    fn spanning_pulse_and_non_clock_net_stay_silent() {
+        // Rise in chunk 0, fall in chunk 10: every chunk carries at most ONE
+        // transition, so no completed pulse ever falls inside a chunk.
+        let mut sched = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        preload_edges(&sched, ('B', 1), &[(100, true)]);
+        sched.step(DEFAULT_CHUNK_S);
+        for _ in 0..9 {
+            sched.step(DEFAULT_CHUNK_S);
+        }
+        preload_edges(&sched, ('B', 1), &[(100, false)]);
+        sched.step(DEFAULT_CHUNK_S);
+        assert!(
+            sched.short_pulses().is_empty(),
+            "a chunk-spanning pulse is observed and must not warn: {:?}",
+            sched.short_pulses()
+        );
+
+        // A 2 us pulse on FREE (a pull-down only, no sequential part) is
+        // electrically fine at any width: silent.
+        let mut sched = pulse_scheduler(&[(('B', 2), "FREE")]);
+        preload_edges(&sched, ('B', 2), &[(100, true), (132, false)]);
+        sched.step(DEFAULT_CHUNK_S);
+        assert!(
+            sched.short_pulses().is_empty(),
+            "a pulse on a net clocking nothing must not warn: {:?}",
+            sched.short_pulses()
+        );
+    }
+
+    /// THE FIELD CASE, runtime half: a 74HC08 output (pad 3 = `y1`) on net
+    /// SHARED that the firmware also drives as a GPIO output. The static lint
+    /// proves this unreachable statically
+    /// (`checks::contention::tests::field_case_model_vs_mcu_gpio_is_out_of_static_reach`);
+    /// here the scheduler catches it the moment the pin becomes a DRIVING
+    /// output, once per net per run. Before the firmware drives the pin
+    /// (tri-stated MCU driver, the binder's stamped default) it must stay
+    /// silent: a gate output feeding an MCU input is the most common healthy
+    /// topology there is.
+    const CONTENTION_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "SHARED")
+  (net 4 "INA")
+  (net 5 "INB")
+
+  (module Logic:74HC08 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U1 (at 0 0) (layer F.SilkS))
+    (fp_text value 74HC08 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 1) (size 1 1) (net 4 "INA"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 5 "INB"))
+    (pad 3 thru_hole circle (at 0 3) (size 1 1) (net 3 "SHARED"))
+    (pad 7 thru_hole circle (at 0 7) (size 1 1) (net 1 "GND"))
+    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 2 "+5V"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "INA"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+  (module Resistor:R2 (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 5 "INB"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+
+    fn contention_scheduler(board_text: &str, pin: (char, u8), net: &str) -> Scheduler {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(board_text).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let node = sched.net_nodes[net];
+        let mut gpio_drivers = HashMap::new();
+        let mut drv = crate::drivers::PinDriver::stamp(
+            &mut sched.circuit,
+            node,
+            net,
+            &format!("t_{}{}", pin.0, pin.1),
+            crate::drivers::DEFAULT_RO,
+        );
+        drv.set_enabled(&mut sched.circuit, false);
+        gpio_drivers.insert(pin, drv);
+        let binding = McuBinding {
+            reference: "A1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers,
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+        };
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(CycleCore { cycles: 0 }), binding));
+        sched.responder_registries.push(None);
+        sched.relayout();
+        sched
+    }
+
+    #[test]
+    fn firmware_output_fighting_an_enabled_model_output_fires_once() {
+        let mut sched = contention_scheduler(CONTENTION_BOARD, ('B', 1), "SHARED");
+
+        // Tri-stated MCU pin (firmware never drove it): the 74HC08 driving
+        // SHARED alone is the healthy gate-feeds-MCU-input topology. Silent.
+        sched.step(2.0 * DEFAULT_CHUNK_S);
+        assert!(
+            sched.driver_contentions().is_empty(),
+            "a tri-stated MCU pin is not contention: {:?}",
+            sched.driver_contentions()
+        );
+
+        // The firmware drives PB1 (a pin-change edge enables the driver):
+        // two push-pull drivers now share SHARED. Fires, once.
+        preload_edges(&sched, ('B', 1), &[(10, true)]);
+        sched.step(DEFAULT_CHUNK_S);
+        let found = sched.driver_contentions();
+        assert_eq!(found.len(), 1, "exactly one finding: {found:?}");
+        let c = &found[0];
+        assert_eq!(c.net, "SHARED");
+        assert_eq!(c.mcu_ref, "A1");
+        assert_eq!((c.port, c.bit), ('B', 1));
+        assert_eq!(c.parts, vec!["U1.y1".to_string()]);
+        assert!(c.t_s > 0.0, "detection is skipped on the unsolved first chunk");
+        let msg = c.message();
+        for needle in ["SHARED", "U1.y1", "PB1", "models resolve", "pin-direction"] {
+            assert!(msg.contains(needle), "message must name '{needle}': {msg}");
+        }
+
+        // Still fighting next chunk: once per net per run, no growth.
+        sched.step(2.0 * DEFAULT_CHUNK_S);
+        assert_eq!(sched.driver_contentions().len(), 1, "once per net per run");
+    }
+
+    /// A 74HC125 whose `y1` shares a net with a firmware-driven pin but whose
+    /// own `oe_n_1` is tied HIGH (tri-stated, released): the model output is
+    /// NOT driving, so there is no fight and the monitor must stay silent.
+    /// This is the runtime mirror of the static check's tri-state exclusion,
+    /// derived from the same `[models.logic.tristate]` spec via the driver's
+    /// live `enabled` flag.
+    #[test]
+    fn tristated_model_output_is_not_contention() {
+        const TRISTATE_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 3 "BUS")
+  (net 4 "INA")
+
+  (module Logic:74HC125 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U2 (at 0 0) (layer F.SilkS))
+    (fp_text value 74HC125 (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 1) (size 1 1) (net 2 "+5V"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 4 "INA"))
+    (pad 3 thru_hole circle (at 0 3) (size 1 1) (net 3 "BUS"))
+    (pad 7 thru_hole circle (at 0 7) (size 1 1) (net 1 "GND"))
+    (pad 14 thru_hole circle (at 0 14) (size 1 1) (net 2 "+5V"))
+  )
+  (module Resistor:R (layer F.Cu)
+    (at 110 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 thru_hole circle (at 0 0) (size 1 1) (net 4 "INA"))
+    (pad 2 thru_hole circle (at 0 2) (size 1 1) (net 1 "GND"))
+  )
+)
+"#;
+        let mut sched = contention_scheduler(TRISTATE_BOARD, ('B', 1), "BUS");
+
+        // Chunk 0 solves the rails; from chunk 1 on the tick reads OE_n at
+        // ~5 V and keeps y1 released. Then the firmware drives PB1: an output
+        // into a released 3-state pin, the intended arrangement. Silent.
+        sched.step(2.0 * DEFAULT_CHUNK_S);
+        preload_edges(&sched, ('B', 1), &[(10, true)]);
+        sched.step(3.0 * DEFAULT_CHUNK_S);
+        assert!(
+            sched.driver_contentions().is_empty(),
+            "a tri-stated (OE-released) model output is not contention: {:?}",
+            sched.driver_contentions()
+        );
     }
 }

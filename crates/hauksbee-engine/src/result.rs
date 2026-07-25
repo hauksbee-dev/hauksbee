@@ -579,6 +579,51 @@ pub struct CosimJson {
     /// (and omitted) when every bound bus device sits on a modeled controller.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unexercised_buses: Vec<CosimUnexercisedBus>,
+    /// Firmware GPIO pulses that rose and fell inside one solver chunk on a
+    /// net clocking a TICK-evaluated sequential part (friction 1.16): those
+    /// parts sample once per chunk against the previous solve, so the pulse
+    /// was NEVER observed by them and their state in this run lags or misses
+    /// events, while chain-responder parts on the same board saw every edge
+    /// exactly. One entry per offending net. Empty (and omitted) on a run with
+    /// no such pulses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub short_pulses: Vec<CosimShortPulse>,
+    /// Runtime driver contention: nets where the firmware configured an MCU
+    /// pin as a push-pull OUTPUT while an enabled modelled push-pull output
+    /// was already driving (the model-vs-MCU case the static output-contention
+    /// lint documents as out of its reach). Waveforms touching these nets are
+    /// untrustworthy from `t_s` on. One entry per offending net. Empty (and
+    /// omitted) on a healthy run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub driver_contention: Vec<CosimDriverContention>,
+}
+
+/// One sub-chunk GPIO pulse warning (see [`CosimJson::short_pulses`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct CosimShortPulse {
+    pub net: String,
+    pub mcu_ref: String,
+    /// The driving pin, e.g. `"PB1"`.
+    pub pin: String,
+    /// Narrowest completed pulse observed on the net (seconds).
+    pub pulse_s: f64,
+    /// The solver chunk it fell inside (seconds).
+    pub chunk_s: f64,
+    /// Tick-evaluated sequential parts clocked by the net.
+    pub parts: Vec<String>,
+}
+
+/// One runtime driver-contention finding (see [`CosimJson::driver_contention`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct CosimDriverContention {
+    pub net: String,
+    pub mcu_ref: String,
+    /// The firmware-driven pin, e.g. `"PB1"`.
+    pub pin: String,
+    /// `"REF.role"` of every enabled modelled push-pull output on the net.
+    pub parts: Vec<String>,
+    /// Sim time (s) at which both sides were first seen driving together.
+    pub t_s: f64,
 }
 
 /// One dropped ADC injection channel (see [`CosimJson::adc_dropped`]).
