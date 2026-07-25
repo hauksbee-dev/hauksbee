@@ -1,0 +1,33 @@
+<mxfile host="hauksbee">
+  <diagram name="ci-model" id="ci">
+    <mxGraphModel dx="900" dy="600" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="chg" value="A layout change lands" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="250" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="run" value="hauksbee-ci run ci/power-up.toml&#10;&#10;extract the circuit from the board file&#10;bind every component to a device model&#10;attach the configured power supplies&#10;boot the firmware on the emulated MCU&#10;run N fuzzed power-up seeds" style="rounded=1;arcSize=6;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;align=left;spacingLeft=14;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="330" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="ass" value="assertions" style="rounded=1;arcSize=20;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="125" y="296" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="exit" value="exit 0 green, exit 1 red" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="420" y="270" width="230" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="junit" value="JUnit XML, any CI ingests it" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="420" y="325" width="230" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="gh" value="::error, GitHub annotations" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="420" y="380" width="230" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;" edge="1" parent="1" source="chg" target="run"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;" edge="1" parent="1" source="run" target="ass"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="ass" target="exit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="ass" target="junit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="ass" target="gh"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

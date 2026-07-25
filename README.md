@@ -216,16 +216,7 @@ Hauksbee's matrix-exponential fast path wins in the PCB regime, many small RC is
 
 ## Architecture
 
-```
-.kicad_pcb / .brd / .PcbDoc / .d356 / gerber ──▶ extract: pads ⇒ nets ⇒ connectivity ⇒ components
-        │                                          ▲ model binding
-        ▼                                          │ (built-in │ user SPICE │ datasheet via codex)
-   Circuit IR ──▶ partitioned hybrid solver  ◀──▶  MCU backends (AVR/STM32/ESP32/nRF/RISC-V)
-        │            linear → matrix exponential       GPIO+UART lockstep on all; ADC/I2C/SPI on AVR
-        ▼            nonlinear → MNA + Newton
-   server (websocket) ──▶ frontend: 2D/3D render, signal flow, probes, scope
-                      └─▶ front door (`serve`): drop a board, get a plain report
-```
+![How a board file becomes a simulation: extract, bind, solve, co-simulate, report](docs/assets/diagrams/architecture.svg)
 
 Partition the circuit at device boundaries and give every island the cheapest solver that is exactly right for it: linear islands get matrix exponentials (exact at any step size), nonlinear islands get MNA + Newton, digital is event-driven. Full write-up in [`docs/about/ARCHITECTURE.md`](docs/about/ARCHITECTURE.md).
 
