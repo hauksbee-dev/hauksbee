@@ -34,6 +34,21 @@ pub fn file_name(p: &Path) -> String {
     p.file_name().and_then(|s| s.to_str()).unwrap_or("board").to_string()
 }
 
+/// The dependency panel's backend hooks, shared by `hauksbee serve` and
+/// `run --serve`: status is the engine's own discovery (`deps::deps_json`),
+/// installs go through the engine's streaming installer (`deps::install_dep`,
+/// which enforces its own one-at-a-time slot, timeout, and output cap).
+pub fn deps_hooks() -> (
+    hauksbee_server::frontdoor::DepsStatus,
+    hauksbee_server::frontdoor::DepInstaller,
+) {
+    use std::sync::Arc;
+    let status: hauksbee_server::frontdoor::DepsStatus = Arc::new(crate::deps::deps_json);
+    let install: hauksbee_server::frontdoor::DepInstaller =
+        Arc::new(|id, progress| crate::deps::install_dep(id, progress));
+    (status, install)
+}
+
 pub fn serve(
     engine: HauksbeeEngine,
     port: u16,
@@ -90,7 +105,15 @@ pub fn serve(
             println!("      hauksbee run <board> --headless     # co-sim summary\n");
         }
         server
-            .serve_app_on(listener, dir.as_deref(), board_file, analyze, Some(check), startup_json)
+            .serve_app_on(
+                listener,
+                dir.as_deref(),
+                board_file,
+                analyze,
+                Some(check),
+                Some(deps_hooks()),
+                startup_json,
+            )
             .await
     })
 }

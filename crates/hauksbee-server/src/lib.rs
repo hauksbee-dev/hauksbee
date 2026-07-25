@@ -15,7 +15,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use engine::Engine;
-use frontdoor::{CheckRunner, FirmwareAnalyzer};
+use frontdoor::{CheckRunner, DepInstaller, DepsStatus, FirmwareAnalyzer};
 use protocol::{ClientMessage, ServerMessage, Status};
 use std::path::Path;
 use std::sync::Arc;
@@ -155,6 +155,7 @@ impl Server {
         board_file: Option<(String, String)>,
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
+        deps: Option<(DepsStatus, DepInstaller)>,
         startup_json: String,
     ) -> Router {
         unified_router(
@@ -163,6 +164,7 @@ impl Server {
             board_file,
             Some(analyze),
             check,
+            deps,
             startup_json,
         )
     }
@@ -176,10 +178,11 @@ impl Server {
         board_file: Option<(String, String)>,
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
+        deps: Option<(DepsStatus, DepInstaller)>,
         startup_json: String,
     ) -> anyhow::Result<()> {
         let listener = bind_with_fallback(addr).await?;
-        let router = self.app_router(static_dir, board_file, analyze, check, startup_json);
+        let router = self.app_router(static_dir, board_file, analyze, check, deps, startup_json);
         axum::serve(listener, router).await?;
         Ok(())
     }
@@ -195,9 +198,10 @@ impl Server {
         board_file: Option<(String, String)>,
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
+        deps: Option<(DepsStatus, DepInstaller)>,
         startup_json: String,
     ) -> anyhow::Result<()> {
-        let router = self.app_router(static_dir, board_file, analyze, check, startup_json);
+        let router = self.app_router(static_dir, board_file, analyze, check, deps, startup_json);
         axum::serve(listener, router).await?;
         Ok(())
     }
@@ -213,6 +217,7 @@ fn unified_router(
     board_file: Option<(String, String)>,
     analyze: Option<FirmwareAnalyzer>,
     check: Option<CheckRunner>,
+    deps: Option<(DepsStatus, DepInstaller)>,
     startup_json: String,
 ) -> Router {
     let mut router = Router::new();
@@ -226,6 +231,12 @@ fn unified_router(
     // embedding binary supplied a runner (the hauksbee-ci shell-out).
     if let Some(check) = check {
         router = router.merge(frontdoor::check_route(check));
+    }
+    // The dependency panel's backend (`GET /api/deps`, `POST
+    // /api/deps/install/{id}`): present whenever the embedding binary supplied
+    // the engine's probe + installer hooks.
+    if let Some((status, install)) = deps {
+        router = router.merge(frontdoor::deps_routes(status, install));
     }
     // `/api/startup`: the frontend reads this once on load to decide whether to
     // show the drop zone (serve) or a preloaded board's report (run --serve).
@@ -294,10 +305,11 @@ pub async fn serve_frontdoor(
     static_dir: Option<&Path>,
     analyze: FirmwareAnalyzer,
     check: Option<CheckRunner>,
+    deps: Option<(DepsStatus, DepInstaller)>,
     startup_json: String,
 ) -> anyhow::Result<()> {
     let (listener, _bound) = bind_frontdoor(addr).await?;
-    serve_frontdoor_on(listener, static_dir, analyze, check, startup_json).await
+    serve_frontdoor_on(listener, static_dir, analyze, check, deps, startup_json).await
 }
 
 /// Bind the front-door address (applying the busy-port fallback) and return the
@@ -321,9 +333,10 @@ pub async fn serve_frontdoor_on(
     static_dir: Option<&Path>,
     analyze: FirmwareAnalyzer,
     check: Option<CheckRunner>,
+    deps: Option<(DepsStatus, DepInstaller)>,
     startup_json: String,
 ) -> anyhow::Result<()> {
-    let router = unified_router(None, static_dir, None, Some(analyze), check, startup_json);
+    let router = unified_router(None, static_dir, None, Some(analyze), check, deps, startup_json);
     axum::serve(listener, router).await?;
     Ok(())
 }

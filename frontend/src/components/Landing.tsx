@@ -3,6 +3,7 @@ import type { WebReport, WebSection, WebFinding, WebHeadsUp, WebComponent, WebCo
 import { CheckIcon, PlayIcon, PlusIcon, BoardTargetIcon } from './Icons'
 import { BoardViewer } from './BoardViewer'
 import { ChecksPanel, checksStorageKey } from './ChecksPanel'
+import { DepsPanel } from './DepsPanel'
 
 // The landing state (W6 §1): the drop-a-board flow and plain-language report,
 // absorbed from the old server-rendered front door into the React app. Renders
@@ -622,6 +623,12 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             </div>
           </div>
         )}
+
+        {/* Which co-sim backends and oracles this machine has, with one-click
+            installs for the missing ones (the engine's own discovery decides
+            red vs green). Landing state only: once a report is up, the report
+            owns the page. */}
+        {!report && <DepsPanel />}
 
         <div
           className="mt-12 text-center text-[12px]"
