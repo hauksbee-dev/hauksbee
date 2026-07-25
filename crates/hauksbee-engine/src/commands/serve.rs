@@ -28,6 +28,9 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         // keys, and run the sibling hauksbee-ci binary (--json).
         let check: hauksbee_server::frontdoor::CheckRunner =
             Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
+        // The dependency panel's backend: status from the engine's own
+        // discovery, installs through the engine's streaming installer.
+        let deps = crate::commands::common::deps_hooks();
 
         // The React bundle is the one web app. Resolve it via the ladder
         // (HAUKSBEE_WEB_DIST override -> checkout dist -> embedded copy), so an
@@ -59,7 +62,7 @@ pub fn run(port: u16) -> anyhow::Result<()> {
 
         // No board preloaded: the app lands on the drop zone.
         let startup_json = "{\"preloaded\":false}".to_string();
-        hauksbee_server::serve_frontdoor_on(listener, dir.as_deref(), analyze, Some(check), startup_json)
+        hauksbee_server::serve_frontdoor_on(listener, dir.as_deref(), analyze, Some(check), Some(deps), startup_json)
             .await
     })
 }
