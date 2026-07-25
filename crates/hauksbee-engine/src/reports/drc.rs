@@ -97,7 +97,7 @@ fn actual_mm(desc: &str) -> Option<f64> {
 /// standard macOS / Linux / Homebrew install locations, preferring the highest
 /// version (a KiCad-10 cli is needed to read v20260206 boards). KiCad is NOT
 /// bundled with hauksbee; this finds an existing install. Returns (path, version).
-fn find_kicad_cli() -> Option<(String, String)> {
+pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
     let mut candidates: Vec<String> = vec!["kicad-cli".to_string()];
     let home = std::env::var("HOME").unwrap_or_default();
     for base in ["/Applications".to_string(), format!("{home}/Applications")] {
