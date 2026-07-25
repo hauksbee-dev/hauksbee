@@ -230,6 +230,7 @@ async fn served_html_is_no_cache_but_hashed_assets_are_not() {
             Some(&dir_clone),
             analyze,
             None,
+            None,
             "{\"preloaded\":false}".to_string(),
         )
         .await
@@ -294,6 +295,110 @@ async fn malformed_multipart_names_the_real_cause() {
         !resp.contains("no board file in the upload"),
         "must not hide the parse error behind the missing-board message: {resp}"
     );
+}
+
+/// Spawn the dependency routes with stub hooks: status returns a fixed JSON,
+/// the installer streams two lines then succeeds for "ok-dep" and fails with a
+/// tail-bearing message for anything else.
+async fn spawn_deps() -> std::net::SocketAddr {
+    let status: frontdoor::DepsStatus =
+        Arc::new(|| "{\"deps\":[{\"id\":\"stub\",\"present\":false}]}".to_string());
+    let install: frontdoor::DepInstaller = Arc::new(|id, progress| {
+        progress("step one");
+        progress("step two");
+        if id == "ok-dep" {
+            Ok(())
+        } else {
+            Err(format!("install of '{id}' failed. Last output:\nthe disk is full"))
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = frontdoor::deps_routes(status, install);
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test]
+async fn deps_status_relays_the_engine_json() {
+    let addr = spawn_deps().await;
+    let resp = http(
+        addr,
+        "GET /api/deps HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(resp.contains("200 OK"), "{resp:.200}");
+    assert!(resp.contains("application/json"), "{resp:.200}");
+    assert!(resp.contains("\"id\":\"stub\""), "status JSON relayed: {resp}");
+}
+
+#[tokio::test]
+async fn deps_install_streams_progress_then_done() {
+    let addr = spawn_deps().await;
+    let resp = http(
+        addr,
+        "POST /api/deps/install/ok-dep HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Length: 0\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(resp.contains("200 OK"), "{resp:.200}");
+    assert!(resp.contains("text/event-stream"), "SSE content type: {resp:.300}");
+    assert!(resp.contains("data: step one"), "progress line one streamed: {resp}");
+    assert!(resp.contains("data: step two"), "progress line two streamed: {resp}");
+    assert!(resp.contains("event: done"), "terminal done event: {resp}");
+    assert!(!resp.contains("event: error"), "no error on success: {resp}");
+}
+
+#[tokio::test]
+async fn deps_install_failure_carries_the_real_tail() {
+    let addr = spawn_deps().await;
+    let resp = http(
+        addr,
+        "POST /api/deps/install/renode HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Content-Length: 0\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(resp.contains("event: error"), "terminal error event: {resp}");
+    // The multi-line error survives SSE framing as consecutive data lines.
+    assert!(
+        resp.contains("data: the disk is full"),
+        "the child's output tail reaches the browser: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn deps_install_refuses_cross_site_requests() {
+    // The install route runs an installer, so a drive-by POST from a hostile
+    // page (Sec-Fetch-Site: cross-site, which page JS cannot forge) must be
+    // refused before anything starts — same guard as the analyze/check routes.
+    let addr = spawn_deps().await;
+    let resp = http(
+        addr,
+        "POST /api/deps/install/ok-dep HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Sec-Fetch-Site: cross-site\r\nContent-Length: 0\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(resp.contains("403"), "cross-site install must 403: {resp:.300}");
+    assert!(
+        !resp.contains("event: done") && !resp.contains("data: step one"),
+        "the installer must not have run: {resp}"
+    );
+    // Same-origin page JS (Sec-Fetch-Site: same-origin) stays allowed.
+    let ok = http(
+        addr,
+        "POST /api/deps/install/ok-dep HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+         Sec-Fetch-Site: same-origin\r\nContent-Length: 0\r\n\r\n",
+        b"",
+    )
+    .await;
+    assert!(ok.contains("200 OK"), "same-origin must pass: {ok:.200}");
+    assert!(ok.contains("event: done"), "{ok}");
 }
 
 #[tokio::test]

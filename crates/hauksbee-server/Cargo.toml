@@ -24,4 +24,7 @@ hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features =
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.52.3", features = ["full"] }
+# Streams the dependency-install progress (`/api/deps/install/{id}`) as an SSE
+# body: ReceiverStream adapts the worker's mpsc channel into the axum Body.
+tokio-stream = "0.1"
 tower-http = { version = "0.6.11", features = ["fs", "compression-gzip"] }

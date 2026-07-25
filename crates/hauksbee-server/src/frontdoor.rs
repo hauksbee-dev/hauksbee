@@ -19,10 +19,10 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Multipart, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path as UrlPath, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::Router;
 
 /// Reject a request that a *website* in the user's browser made cross-origin to
@@ -75,6 +75,18 @@ pub type FirmwareAnalyzer =
 /// shell-out without the server crate depending on it.
 pub type CheckRunner =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
+
+/// Report the optional-dependency status: `() -> JSON string` (the engine's
+/// `deps::deps_json`, which runs the engine's OWN discovery). Boxed like the
+/// analyzers so the server crate stays engine-free.
+pub type DepsStatus = Arc<dyn Fn() -> String + Send + Sync>;
+
+/// Run one dependency install, streaming human-readable progress lines through
+/// the sink: `(dep_id, line_sink) -> Result<(), error_message>`. The engine's
+/// implementation enforces its own one-at-a-time slot, timeout, and output cap;
+/// on failure the message already carries the child's real output tail.
+pub type DepInstaller =
+    Arc<dyn Fn(&str, &mut dyn FnMut(&str)) -> Result<(), String> + Send + Sync>;
 
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
 /// timid cap (the 3,443-component Tarski InputSystem .kicad_pcb is 44 MiB), and
@@ -141,6 +153,104 @@ pub fn check_route(check: CheckRunner) -> Router {
         .route("/api/check", post(check_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .with_state(state)
+}
+
+struct DepsState {
+    status: DepsStatus,
+    install: DepInstaller,
+}
+
+/// The dependency panel's backend: `GET /api/deps` (status via the engine's own
+/// discovery) and `POST /api/deps/install/{id}` (run an install, streaming its
+/// progress as Server-Sent Events). Merged into the unified router next to the
+/// analysis routes. The install route executes an installer, so it carries the
+/// same [`reject_cross_site`] guard as every other mutating endpoint: a hostile
+/// page in another tab must not be able to trigger a download.
+pub fn deps_routes(status: DepsStatus, install: DepInstaller) -> Router {
+    let state = Arc::new(DepsState { status, install });
+    Router::new()
+        .route("/api/deps", get(deps_status_handler))
+        .route("/api/deps/install/{id}", post(deps_install_handler))
+        .with_state(state)
+}
+
+/// GET `/api/deps`: relay the engine's dependency JSON. The probe shells a few
+/// `--version` checks, so it runs on the blocking pool rather than stalling the
+/// async runtime.
+async fn deps_status_handler(State(state): State<Arc<DepsState>>) -> impl IntoResponse {
+    let status = state.status.clone();
+    let json = tokio::task::spawn_blocking(move || (status)())
+        .await
+        .unwrap_or_else(|_| "{\"deps\":[]}".to_string());
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+/// One SSE frame: `event: <kind>` with the text as (possibly multi-line) data.
+fn sse_event(kind: &str, text: &str) -> String {
+    let mut s = format!("event: {kind}\n");
+    let mut any = false;
+    for line in text.lines() {
+        s.push_str("data: ");
+        s.push_str(line);
+        s.push('\n');
+        any = true;
+    }
+    if !any {
+        s.push_str("data:\n");
+    }
+    s.push('\n');
+    s
+}
+
+/// POST `/api/deps/install/{id}`: start the install and stream its progress as
+/// SSE (`log` events line by line, then exactly one `done` or `error`). A
+/// streaming response, because these are multi-minute downloads: a request that
+/// blocks silently until the end is indistinguishable from a hang. SSE framing
+/// is used (rather than bare chunked text) because the compression layer
+/// exempts `text/event-stream`, so lines reach the browser as they happen
+/// instead of sitting in a gzip buffer.
+///
+/// The installer keeps running if the browser disconnects mid-stream: an
+/// interrupted half-install would be worse than a completed one the user
+/// stopped watching.
+async fn deps_install_handler(
+    State(state): State<Arc<DepsState>>,
+    UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp.into_response();
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
+    let install = state.install.clone();
+    tokio::task::spawn_blocking(move || {
+        let result = {
+            let tx = tx.clone();
+            let mut sink = move |line: &str| {
+                // A send failure means the browser went away; the install
+                // continues (see the handler doc), we just stop relaying.
+                let _ = tx.blocking_send(sse_event("log", line));
+            };
+            (install)(&id, &mut sink)
+        };
+        let _ = match result {
+            Ok(()) => tx.blocking_send(sse_event("done", "ok")),
+            Err(e) => tx.blocking_send(sse_event("error", &e)),
+        };
+    });
+    use tokio_stream::StreamExt as _;
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|s| Ok::<Bytes, std::convert::Infallible>(Bytes::from(s)));
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(axum::body::Body::from_stream(stream))
+        .expect("static headers build")
 }
 
 /// A JSON body response with the standard content-type header. Every error is

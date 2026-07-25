@@ -28,6 +28,7 @@ pub mod boardcode;
 pub mod checks;
 pub mod commands;
 pub mod decoupling;
+pub mod deps;
 pub mod digital;
 pub mod logic;
 pub mod drivers;
