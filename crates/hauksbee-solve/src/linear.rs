@@ -300,8 +300,7 @@ impl LinearIsland {
         // dangerous line in the solver: a device that `is_linear()` but is not
         // assembled below (a VCVS in an RC chain) would leave the island on the
         // matrix-exponential path with that device silently absent from the A
-        // matrix, a plausible wrong waveform, not a crash (see
-        // `docs/dev-plans/04-spice-compat.md` §1, the compile row). Modeling
+        // matrix, a plausible wrong waveform, not a crash. Modeling
         // controlled sources inside the state-space reduction is future
         // optimization work with its own exactness gate; refusing is exact
         // today because the MNA sub-solve stamps them in full.
@@ -354,8 +353,8 @@ impl LinearIsland {
                 // member because an F/H reads its branch current; refusing is
                 // the only honest answer for it too.) F/H join E/G here:
                 // constant-gain, linear, and absent from the reducer's
-                // A-matrix vocabulary, compiling past them would be the
-                // silent-drop hazard of 04-spice-compat.md §1; the MNA
+                // A-matrix vocabulary, compiling past them would be the same
+                // silent drop: a plausible wrong waveform, no crash. The MNA
                 // sub-solve stamps them exactly.
                 Device::Vcvs { .. }
                 | Device::Vccs { .. }

@@ -610,8 +610,8 @@ impl Transient {
                     // physical time constant (the membrane discharge RC ~ 70 ns
                     // through the 7 Ohm switch), tracked but not microscopic; LTE
                     // grows it back once the fast tail passes. Floored to a sane
-                    // value, never below the old h*0.5 (so a genuinely fine flip
-                    // step doesn't get coarsened).
+                    // value, never below half the current h (so a genuinely fine
+                    // flip step doesn't get coarsened).
                     accept = true;
                     let resume = (h * 0.5).max(1e-7);
                     next_dt = resume.clamp(dt_min, dt_max);
@@ -1021,8 +1021,8 @@ fn node_v(ws: &Workspace, node: NodeId) -> f64 {
 ///
 /// `h_prev` is the previous ACCEPTED step (the spacing of x1..x2 in the
 /// reactive history); 0.0 means "no history yet" (first trial), which falls
-/// back to `h` and reproduces the old first-step behaviour exactly (the
-/// seeded history has x2 == x1, so the h_prev term vanishes).
+/// back to `h`, which is the uniform-grid estimate (the seeded history has
+/// x2 == x1, so the h_prev term vanishes).
 fn lte_estimate(
     circuit: &Circuit,
     ws: &Workspace,
@@ -1124,11 +1124,11 @@ fn lte_estimate(
 /// sampled. A sub-step stimulus (a 1 us PWL pulse arriving after a long quiet
 /// stretch during which dt grew to hundreds of microseconds) produces
 /// identical endpoints and no curvature signal: the pulse is silently aliased
-/// away (lore #8 is the co-sim face of the same failure). Registering source
-/// corners as mandatory step landings is the classic SPICE cure ("the
-/// breakpoint table"), and is what makes the co-sim's PWL edge drive
-/// (docs/dev-plans/05-cosim-fidelity.md section 1.3) honest on the analog
-/// side.
+/// away (the co-sim face of the same failure is a pulse narrower than one
+/// co-sim chunk, which the analog side never resolves at all). Registering
+/// source corners as mandatory step landings is the classic SPICE cure ("the
+/// breakpoint table"), and is what keeps the co-sim's PWL edge drive honest
+/// on the analog side.
 ///
 /// PULSE corner enumeration is capped: a fast periodic source over a long
 /// window enumerates corners only up to [`MAX_BREAKPOINTS`]; beyond the cap
@@ -1167,9 +1167,9 @@ fn breakpoint_table(circuit: &Circuit, tstop: f64) -> Vec<f64> {
     // the accepted-step history carries the curvature signal. The PWL vertices
     // and ramp kinks in `always` are the mandatory landings the co-sim's edge
     // drive depends on and are finite by construction, so a dense PULSE
-    // elsewhere must never push a late PWL corner past the cap (the bug this
-    // split fixes: the old single list truncated the merged, time-sorted array,
-    // silently dropping a late PWL vertex behind an earlier PULSE burst).
+    // elsewhere must never push a late PWL corner past the cap. One merged,
+    // time-sorted list truncated at the cap does exactly that: it silently
+    // drops a late PWL vertex sitting behind an earlier PULSE burst.
     corners.capped.truncate(MAX_BREAKPOINTS);
     let mut bps = corners.always;
     bps.append(&mut corners.capped);
@@ -1319,10 +1319,11 @@ mod breakpoint_cap_tests {
 
     /// R5 regression: a late PWL vertex must survive even when a fast PULSE
     /// source enumerates far more than `MAX_BREAKPOINTS` corners ahead of it.
-    /// The old single-list `truncate` kept only the earliest 100k times across
-    /// ALL sources, so the PWL landing at 0.9 s was silently dropped behind the
-    /// PULSE burst that filled the cap in the first ~25 ms, exactly the
-    /// stride-over-a-pulse aliasing the breakpoint table exists to prevent.
+    /// One shared list truncated at the cap keeps only the earliest 100k
+    /// times across ALL sources, so the PWL landing at 0.9 s is silently
+    /// dropped behind the PULSE burst that fills the cap in the first ~25 ms,
+    /// exactly the stride-over-a-pulse aliasing the breakpoint table exists
+    /// to prevent.
     #[test]
     fn pwl_vertex_survives_a_cap_exhausting_pulse() {
         let mut c = Circuit::new();
@@ -1382,9 +1383,9 @@ mod branch_output_tests {
     /// The reported branch current of a Vsource/Inductor must be read from that
     /// device's OWN branch unknown, not a running offset over the
     /// Vsource/Inductor-only list. A VCVS (which also owns a branch) defined
-    /// BEFORE the inductor in device order used to shift every later branch,
-    /// so I(L1) was read from the VCVS's slot (~0 A) instead of the real
-    /// inductor current.
+    /// BEFORE the inductor in device order shifts every later branch under
+    /// such an offset, so I(L1) reads the VCVS's slot (~0 A) instead of the
+    /// real inductor current.
     #[test]
     fn inductor_current_correct_with_a_vcvs_ahead_of_it() {
         let mut c = Circuit::new();

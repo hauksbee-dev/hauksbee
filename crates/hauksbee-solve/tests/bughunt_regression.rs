@@ -33,8 +33,8 @@ fn rc(farads: f64) -> Circuit {
 
 /// Bug-hunt #2: the final Fixed step must not overshoot `tstop`. With dt = 1 ns
 /// and tstop = 3.5 ns (not a multiple of dt), the last emitted sample used to
-/// land at 4 ns, because the `dt_min` floor was applied AFTER the `tstop` clamp
-///, forcing the sub-dt final step back up to a full dt past the stop time.
+/// land at 4 ns, because the `dt_min` floor was applied AFTER the `tstop` clamp,
+/// forcing the sub-dt final step back up to a full dt past the stop time.
 #[test]
 fn fixed_step_does_not_overshoot_tstop() {
     let c = rc(1e-9);

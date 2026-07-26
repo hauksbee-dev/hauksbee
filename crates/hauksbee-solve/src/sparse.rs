@@ -752,14 +752,12 @@ impl Symbolic {
     /// `scratch` is a caller-owned work buffer of length >= `n` (the matrix
     /// dimension); it holds the permuted/eliminated right-hand side and is
     /// fully overwritten before any read, so its incoming contents are
-    /// irrelevant. Hoisting it out of `solve` removes the per-call heap
-    /// allocation that used to sit on the Newton hot path (one `vec![0.0; n]`
-    /// per solve, per iteration, per step). `&self` stays immutable so callers
+    /// irrelevant. Keeping it caller-owned keeps a heap allocation off the
+    /// Newton hot path, where an internal buffer would cost one `vec![0.0; n]`
+    /// per solve, per iteration, per step. `&self` stays immutable so callers
     /// can hold the factorization while bringing their own scratch, which is
     /// also what lets each thread solve a private island matrix without
-    /// contending on a shared buffer (see plan §4.1). The permute / forward /
-    /// back / unpermute arithmetic below is byte-for-byte unchanged; only the
-    /// buffer's origin moved, so every existing solve stays bit-identical.
+    /// contending on a shared buffer (see plan §4.1).
     pub fn solve(&self, b: &mut [f64], scratch: &mut [f64]) {
         let n = self.n;
         // Permute rhs by pivot rows: y[k] = b[pivot_row[k]].

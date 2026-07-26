@@ -42,9 +42,9 @@ pub struct Workspace {
     /// §4.3).
     lin_point: Vec<f64>,
     /// Persistent buffer holding the PREVIOUS iteration's linearization point,
-    /// replacing the per-iteration `lin_point.clone()` that fed the singular-
-    /// refactor node-block convergence check. Copied from `x_prev_iter` before it
-    /// is refreshed, so the values are identical to the old clone (plan §4.3).
+    /// which feeds the singular-refactor node-block convergence check without a
+    /// per-iteration `lin_point.clone()`. Copied from `x_prev_iter` before that
+    /// buffer is refreshed (plan §4.3).
     prev_iterate: Vec<f64>,
     /// Per-node UNDAMPED Newton step from the previous iteration, used by the
     /// staged-DC adaptive damping to detect oscillating nodes (a sign reversal)
@@ -528,7 +528,7 @@ pub fn newton_solve(
             // needs the stamp/factor/backsolve split and these three calls are
             // the only place the phases exist. A cached-bool branch when off.
             //
-            // AssemblyMode routing (03-solver-performance.md §5): `Planned`
+            // AssemblyMode routing: `Planned`
             // (explicit opt-in) replays the compiled constant backbone and
             // re-stamps only the nonlinear/time-varying tier through
             // pre-resolved slots; the default `Interpreted` keeps the classic
@@ -2499,9 +2499,9 @@ mod residual_tests {
         // current iterate to decide whether it is a root. For a transient IC solve
         // the iterate satisfies the IC-PINNED system (cap shorted to its ic via a
         // penalty conductance); measuring the residual with caps OPEN
-        // (use_ic=false, the old hard-coded value) reports the KCL of a DIFFERENT
-        // system, so a genuine IC operating point looks badly imbalanced and is
-        // wrongly rejected. The residual must be taken under the same use_ic.
+        // (use_ic=false) reports the KCL of a DIFFERENT system, so a genuine
+        // IC operating point looks badly imbalanced and is wrongly rejected.
+        // The residual must be taken under the same use_ic.
         let mut c = Circuit::new();
         let top = c.node("top");
         let mid = c.node("mid");
@@ -2525,8 +2525,8 @@ mod residual_tests {
             ohms: 1e3,
             tc1: None,
         });
-        // Cap across the lower leg pinned to ic=0, so the ic solve holds mid at 0 V
-        //, far from the true 0.5 V divider bias, giving the caps-open KCL a large
+        // Cap across the lower leg pinned to ic=0, so the ic solve holds mid at 0 V,
+        // far from the true 0.5 V divider bias, giving the caps-open KCL a large
         // imbalance at this iterate.
         c.add(Device::Capacitor {
             name: "C1".into(),
@@ -2547,8 +2547,8 @@ mod residual_tests {
             "the IC-pinned iterate is a root under use_ic=true, residual {r_ic:e}"
         );
 
-        // With caps OPEN (the old hard-coded use_ic=false), the pinned node shows
-        // ~1 mA of KCL imbalance; the false rejection ResidualAccept would make.
+        // With caps OPEN (use_ic=false), the pinned node shows ~1 mA of KCL
+        // imbalance; the false rejection ResidualAccept would make.
         let r_open = ws.dc_residual_inf_norm_with(&c, &opts, false);
         assert!(
             r_open > 1e-4,
@@ -2642,9 +2642,9 @@ mod vswitch_jacobian_tests {
     // A gently-coupled negative-feedback switch (wide tanh transition, moderate
     // impedances) on which plain undamped Newton converges. With the control-node
     // Jacobian the conductance is Newton-linearized, so the loop closes in a
-    // handful of iterations. Without a control tangent (the old `let _ = rhs`) the
-    // conductance lags the control voltage by one iteration (Picard), which on
-    // this feedback loop needs many more sweeps to settle. Bound the iteration
+    // handful of iterations. Without a control tangent the conductance lags
+    // the control voltage by one iteration (Picard), which on this feedback
+    // loop needs many more sweeps to settle. Bound the iteration
     // count below what a tangent-free stamp needs.
     fn gentle_feedback_switch_circuit() -> (Circuit, NodeId) {
         let mut c = Circuit::new();
@@ -2793,7 +2793,7 @@ mod switch_freeze_tests {
     // (The freeze is correct precisely when the root is saturated, pinning a
     // switch to a rail cannot represent a switch whose true solution is partial
     // conduction at its own knee; that case is handled by the smooth tanh path
-    // with the new control tangent, not the freeze. The limit-cycle cure's
+    // with the control tangent, not the freeze. The limit-cycle cure's
     // load-bearing proof on a real switch mesh is the Tarski board.)
     #[test]
     fn staged_event_solve_settles_switch_core() {
