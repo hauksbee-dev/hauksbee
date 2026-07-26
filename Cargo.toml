@@ -20,6 +20,20 @@ exclude = ["vendor/kicad-forge"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+# Every crate inherits these, so the shared metadata is stated once and cannot
+# drift between the eight published crates. `description` is deliberately NOT
+# here: each crate describes what it actually does.
+repository = "https://github.com/ETM-Code/hauksbee"
+homepage = "https://github.com/ETM-Code/hauksbee"
+readme = "README.md"
+keywords = ["pcb", "eda", "simulation", "kicad", "hardware"]
+categories = ["simulation", "science", "development-tools::testing"]
+# Minimum supported Rust version. This is the toolchain the project is actually
+# built and tested on, which is the only floor we can honestly claim today. It
+# is probably conservative: the code may well build on something older. Lower it
+# only once a CI job proves a specific older version green, never by guessing,
+# since a wrong MSRV breaks downstream builds for reasons the author cannot see.
+rust-version = "1.92"
 
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)

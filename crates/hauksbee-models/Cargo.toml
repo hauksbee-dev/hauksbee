@@ -3,6 +3,13 @@ name = "hauksbee-models"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Device model library and part resolution for hauksbee."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "model-extract"

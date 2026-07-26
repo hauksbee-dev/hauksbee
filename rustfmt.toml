@@ -1,0 +1,3 @@
+# Defaults, stated explicitly so the convention is a file rather than folklore.
+# `cargo fmt --all --check` gates this in CI.
+edition = "2021"

@@ -3,6 +3,12 @@ name = "hauksbee-mcu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 build = "build.rs"
 description = "Generalized MCU emulation bridge (simavr-backed AVR)"
 

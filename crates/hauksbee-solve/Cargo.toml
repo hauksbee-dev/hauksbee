@@ -3,6 +3,13 @@ name = "hauksbee-solve"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Sparse MNA circuit solver: DC, transient, and AC small-signal analysis for hauksbee."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 hauksbee-ir = { path = "../hauksbee-ir" }
