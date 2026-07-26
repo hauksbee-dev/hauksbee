@@ -26,7 +26,7 @@
 //! `HAUKSBEE_REQUIRE_CORPUS=1` is set, which turns absence into a hard failure so
 //! the calibration cannot vacuously green-out in CI.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hauksbee_engine::checks::contention::{contention_lint, scan};
 use hauksbee_extract::ExtractedBoard;
@@ -55,9 +55,9 @@ fn load(p: &PathBuf) -> Option<ExtractedBoard> {
 }
 
 /// Walk the corpus and yield every loadable CAD file.
-fn corpus_boards(root: &PathBuf) -> Vec<(PathBuf, ExtractedBoard)> {
+fn corpus_boards(root: &Path) -> Vec<(PathBuf, ExtractedBoard)> {
     let mut out = Vec::new();
-    let mut stack = vec![root.clone()];
+    let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;

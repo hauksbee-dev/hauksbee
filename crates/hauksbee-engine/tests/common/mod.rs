@@ -1,4 +1,10 @@
 //! Shared test helpers and fixtures.
+//
+// Every integration test binary compiles this module in full but uses only the
+// handful of helpers it needs, so the rest look dead to that binary. The
+// warning is an artifact of how Rust builds integration tests, not a signal
+// about the code.
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 

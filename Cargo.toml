@@ -35,6 +35,59 @@ categories = ["simulation", "science", "development-tools::testing"]
 # since a wrong MSRV breaks downstream builds for reasons the author cannot see.
 rust-version = "1.92"
 
+# Clippy runs under `-D warnings` in CI, so anything not listed here fails the
+# build. The list below is the debt that existed when the gate went up: real
+# style findings worth fixing, allowed for now so the gate can start catching
+# NEW problems today instead of waiting on a burn-down.
+#
+# Two rules for this list. It only shrinks, and a lint leaves it by being fixed,
+# never by being moved here to make a build pass. Some of these are riskier than
+# they look: `cargo clippy --fix` on clone_on_copy and the Default-initialiser
+# lints once rewrote the solver into silently returning a collapsed rail, so
+# they get fixed by hand, with the tests watched.
+[workspace.lints.clippy]
+assertions_on_constants = "allow"
+assign_op_pattern = "allow"
+clone_on_copy = "allow"
+cloned_ref_to_slice_refs = "allow"
+collapsible_if = "allow"
+collapsible_match = "allow"
+collapsible_str_replace = "allow"
+derivable_impls = "allow"
+doc_lazy_continuation = "allow"
+doc_overindented_list_items = "allow"
+duplicate_mod = "allow"
+field_reassign_with_default = "allow"
+if_same_then_else = "allow"
+items_after_test_module = "allow"
+large_enum_variant = "allow"
+manual_clamp = "allow"
+manual_contains = "allow"
+manual_find = "allow"
+manual_is_multiple_of = "allow"
+manual_memcpy = "allow"
+manual_range_contains = "allow"
+manual_repeat_n = "allow"
+manual_strip = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+needless_lifetimes = "allow"
+needless_range_loop = "allow"
+neg_cmp_op_on_partial_ord = "allow"
+print_literal = "allow"
+question_mark = "allow"
+redundant_closure = "allow"
+should_implement_trait = "allow"
+sliced_string_as_bytes = "allow"
+type_complexity = "allow"
+unnecessary_map_or = "allow"
+unnecessary_sort_by = "allow"
+unwrap_or_default = "allow"
+useless_format = "allow"
+useless_vec = "allow"
+vec_init_then_push = "allow"
+write_literal = "allow"
+
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)
 # so a fresh clone builds with no sibling checkout and no network. They come from

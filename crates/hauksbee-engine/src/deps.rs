@@ -343,19 +343,6 @@ fn find_kicad_cli() -> Option<(String, String)> {
     crate::reports::drc::find_kicad_cli()
 }
 
-/// `"9.0.3" -> (9,0,3)`; anything unparsable sorts lowest.
-fn parse_kicad_version(v: &str) -> (u32, u32, u32) {
-    let mut it = v
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse::<u32>().ok());
-    (
-        it.next().unwrap_or(0),
-        it.next().unwrap_or(0),
-        it.next().unwrap_or(0),
-    )
-}
-
 fn probe_kicad_cli() -> DepStatus {
     let unlocks = "cross-checking copper DRC findings against KiCad's own DRC (the layout \
                    oracle), and SVG/Gerber export of re-laid-out boards";
@@ -912,12 +899,5 @@ mod tests {
                 "the script ran with --renode-only: {lines:?}"
             );
         }
-    }
-
-    #[test]
-    fn kicad_version_ordering_prefers_newest() {
-        assert!(parse_kicad_version("10.0.1") > parse_kicad_version("9.9.9"));
-        assert!(parse_kicad_version("9.0.3") > parse_kicad_version("9.0"));
-        assert_eq!(parse_kicad_version("garbage"), (0, 0, 0));
     }
 }

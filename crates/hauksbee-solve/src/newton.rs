@@ -734,8 +734,9 @@ pub fn newton_solve(
             let mut best_norm = f64::INFINITY;
             // Census readout: whether this iteration's search ended by Armijo
             // sufficient decrease (vs hitting the floor and falling back to
-            // the best trial). Written below, read only when the census is on.
-            let mut armijo_ok = false;
+            // the best trial). The loop below has one exit and assigns it
+            // there, so it needs no initial value.
+            let armijo_ok;
             // Ground truth for the predictor: did the FIRST (alpha=1) trial
             // pass Armijo?
             let mut trials = 0u32;

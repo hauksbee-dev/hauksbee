@@ -8,7 +8,7 @@
 //! current, unknown rating). A corpus-gated sweep pins zero false positives on
 //! the known-good famous boards.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hauksbee_engine::checks::{ampacity, converter, ripple};
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiReport, SiSeverity};
@@ -348,9 +348,9 @@ fn famous_corpus_has_no_ampacity_or_ripple_findings() {
 
 /// Recursively collect `.kicad_pcb` files under a root (bounded depth, skips the
 /// huge history dirs to keep the sweep quick).
-fn walk_kicad_pcbs(root: &PathBuf) -> Vec<PathBuf> {
+fn walk_kicad_pcbs(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut stack = vec![root.clone()];
+    let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;

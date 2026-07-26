@@ -76,3 +76,6 @@ crossterm = { workspace = true }
 # language's functions/loops/closures, and evalexpr has no I/O, filesystem, or
 # network surface. default-features off drops rand/regex/serde we don't use.
 evalexpr = { version = "13", default-features = false }
+
+[lints]
+workspace = true
