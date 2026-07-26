@@ -141,7 +141,7 @@ pub mod mailbox {
     /// ESP32-C3 (RISC-V) RTC slow memory base differs from the Xtensa parts.
     pub const C3_BASE: u32 = 0x5000_0000;
 
-    // ── Mailbox v2: the ADC + bus extension (05-cosim-fidelity §5.1/§5.2) ───
+    // ── Mailbox v2: the ADC + bus extension ─────────────────────────────────
     //
     // Espressif QEMU models neither the SAR ADC nor a host hook for I2C/SPI
     // byte traffic, so these functions ride the same RAM mailbox as GPIO.
@@ -234,8 +234,9 @@ pub mod mailbox {
 /// peripheral registers, because the QEMU fork's gpio model does not expose
 /// register read-back. The bit layout still matches GPIO_OUT_REG.
 ///
-/// Plain-data register-offset carrier (05-cosim-fidelity §5.5), serde-derivable
-/// so it is a W5 file-load target with no loader landing now.
+/// Plain-data register-offset carrier, so a new part declares its mailbox
+/// addresses instead of adding branches to the backend; serde-derivable so it
+/// is a W5 file-load target with no loader landing now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GpioBank {
     /// Logical port letter the engine uses in [`PinId`]. The ESP32 GPIO matrix
@@ -252,7 +253,8 @@ pub struct GpioBank {
 
 /// Per-part QEMU configuration: enough to boot a machine and bridge it.
 ///
-/// Plain-data per-part surface (05-cosim-fidelity §5.5): the machine name, GPIO
+/// Plain-data per-part surface, carrying every part difference as data rather
+/// than as backend logic: the machine name, GPIO
 /// banks with their mailbox offsets, icount/frequency, expected ISA, and I2C bus
 /// paths are struct fields a constructor fills. `Serialize`/`Deserialize` make it
 /// the file-load target for W5's data-driven MCU descriptor; no loader now.
@@ -290,8 +292,8 @@ impl QemuConfig {
     // ── Built-in parts (06 §2) ──────────────────────────────────────────────
     //
     // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors (embedded
-    // via `include_str!`): the mailbox layout, arch, and clocking that used to be
-    // hand-written here now live in the TOML. A fresh part is addable purely as
+    // via `include_str!`): the mailbox layout, arch, and clocking all live in
+    // the TOML. A fresh part is addable purely as
     // data via [`crate::SocConfig::resolve`]. `.expect` is correct, a shipped
     // descriptor failing to load is a build bug caught by tests/soc_descriptors.rs.
 
@@ -1324,8 +1326,8 @@ mod tests {
             max,
             "over-range clamps to the top code"
         );
-        // Near-full-scale: 2^n scaling rounds up to the top code where the old
-        // 2^n-1 scaling (round(0.99976*4095)) stuck one code low at 4094.
+        // Near-full-scale: 2^n scaling rounds up to the top code where a
+        // 2^n-1 scaling (round(0.99976*4095)) sticks one code low at 4094.
         let near_full = fs * (f64::from(max) - 0.5) / f64::from(max);
         assert_eq!(
             adc_count(near_full, fs, max),
@@ -1408,7 +1410,7 @@ mod tests {
     /// scheduler chunk of 100 µs advanced the guest ~8 ms, an ~80x
     /// over-advance that desynced the QEMU MCU from the analog solve and the
     /// lockstep peers. Post-boot, the requested interval must be honored
-    /// exactly. Before the fix this asserted 8 ms for the 100 µs case.
+    /// exactly.
     #[test]
     fn run_window_post_boot_honors_the_requested_chunk() {
         assert_eq!(
@@ -1416,7 +1418,7 @@ mod tests {
             Duration::from_secs_f64(100e-6),
             "a booted guest must advance the requested 100 µs, not the boot floor"
         );
-        // The old 50 ms cap also truncated legitimately long post-boot chunks.
+        // A 50 ms cap would also truncate legitimately long post-boot chunks.
         assert_eq!(
             run_window(0.2, true),
             Duration::from_secs_f64(0.2),

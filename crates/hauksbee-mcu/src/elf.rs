@@ -3,12 +3,12 @@
 //!
 //! # Why this exists
 //!
-//! Every backend's firmware-load path used to hand the image straight to the
-//! emulator with no architecture check. Loading an Xtensa ESP32 image onto a
-//! RISC-V ESP32-C3 board (`qemu-system-riscv32`) did not error: the RISC-V core
-//! tried to execute Xtensa instructions, the SPI-flash second-stage bootloader
-//! header parsed as `0xffffffff`, and the run produced ~136 MB of UART garbage
-//! with no diagnostic. (Found by docs/hunts/personas/persona-esp32-iot.md.)
+//! Handing an image straight to the emulator with no architecture check fails
+//! silently rather than loudly. Loading an Xtensa ESP32 image onto a
+//! RISC-V ESP32-C3 board (`qemu-system-riscv32`) does not error: the RISC-V core
+//! tries to execute Xtensa instructions, the SPI-flash second-stage bootloader
+//! header parses as `0xffffffff`, and the run produces ~136 MB of UART garbage
+//! with no diagnostic.
 //!
 //! An ELF carries its target ISA in the `e_machine` half-word at file offset
 //! 0x12. This module reads it and compares it against the architecture the
