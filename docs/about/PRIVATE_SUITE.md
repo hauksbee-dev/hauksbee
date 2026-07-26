@@ -12,7 +12,7 @@ misleading test count.
 
 ## What is missing
 
-**56 tests across 12 files, plus 11 engine examples.**
+**60 tests across 13 files, plus 11 engine examples.**
 
 | Suite | Tests | What it covers |
 |---|---|---|
@@ -24,14 +24,15 @@ misleading test count.
 | `tarski_stretcher_transient` | 3 | Pulse-stretcher transient against measured hardware |
 | `flagship_brownout` | 3 | The brownout CI scenario, red and repaired |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |
+| `asbuilt_equivalence` | 5 | That the declarative as-built overlay reproduces the imperative rework it replaced |
 | `boardcode_miswire` | 2 | Round-trip through the board-as-code form |
 | `hardware_history` | 2 | Replay against recorded hardware traces |
 | `mcp4728_cosim` | 2 | DAC peripheral co-simulation |
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
 
-Eleven more tests are excised from files that otherwise ship, in
-`spec_and_assertions`, `cli_boardcode`, `asbuilt_equivalence`, `dnp_processor`,
-`diode_fallback` and `extract`. Those files keep the rest of their coverage.
+Ten more tests are excised from files that otherwise ship, in
+`spec_and_assertions`, `cli_boardcode`, `dnp_processor`, `diode_fallback` and
+`extract`. Those files keep the rest of their coverage.
 
 Two engine modules leave with the data, because they encode the board's topology
 and its validated rework rather than merely referring to it.
