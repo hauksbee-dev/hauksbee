@@ -14,8 +14,8 @@ use hauksbee_models::ModelLibrary;
 use std::path::PathBuf;
 
 fn corpus(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus")
+    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
         .join(rel)
 }
 

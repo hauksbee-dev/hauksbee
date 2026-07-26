@@ -25,8 +25,9 @@ fn schematic_example() -> PathBuf {
 /// The corpus pic_programmer project directory, if the corpus symlink is
 /// present in this checkout.
 fn pic_programmer_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus/kicad-demos-src/demos/pic_programmer")
+    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("kicad-demos-src/demos/pic_programmer")
 }
 
 fn write_tmp(name: &str, body: &str) -> PathBuf {

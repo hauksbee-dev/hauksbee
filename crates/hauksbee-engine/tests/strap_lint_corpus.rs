@@ -33,7 +33,9 @@ use hauksbee_extract::{ExtractedBoard, LintCheck, NetLintReport, Severity};
 use hauksbee_models::ModelLibrary;
 
 fn famous_root() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous");
     if p.exists() {
         return Some(p);
     }

@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use hauksbee_extract::{audit_trace_currents, net_copper_from_root, CopperKind, TraceAudit};
 
 fn corpus_famous() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous");
     if p.exists() {
         Some(p)
     } else if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {

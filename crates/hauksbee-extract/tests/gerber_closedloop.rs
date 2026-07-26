@@ -25,8 +25,8 @@ use hauksbee_extract::gerber::from_gerber_dir;
 use hauksbee_extract::ExtractedBoard;
 
 fn corpus(rel: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus")
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
         .join(rel);
     p.exists().then_some(p)
 }

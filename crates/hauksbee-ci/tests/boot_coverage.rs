@@ -162,8 +162,9 @@ fn gate_left_floating_fails_naming_the_net() {
 // absence is always a skip - the proven backend tests gate the same way).
 
 fn watchy_v15_board() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous/watchy_history/v1.5/Watchy.kicad_pcb");
     p.exists().then_some(p)
 }
 
