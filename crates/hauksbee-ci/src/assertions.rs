@@ -69,7 +69,7 @@ fn evaluate_hwtrace(
 
     // In corners mode a member index is a corner number, not a random seed,
     // label it to match evaluate_one, the coverage banner, and every sibling
-    // assertion (the round-30 fix, previously left unapplied to this path).
+    // assertion.
     let member = match mode {
         Some(crate::tolerance::Mode::Corners) => "corner",
         _ => "seed",
@@ -559,12 +559,12 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
 
 /// Boot-coverage: the control net named by `net` must reach and hold its defined
 /// level (`min`, volts) by `deadline_ms` after reset, and no stress fault may
-/// fire during the boot window before it does. This is the formerly-rejected
-/// "Hi-Z control input" class made decidable by running the firmware: on a net
-/// with no static board bias (the genuinely-undefined case this targets) only
-/// the firmware can bring it to level, so this measures whether the firmware
-/// drives it in time. A statically-biased net reads at level from t=0 and is out
-/// of scope (it was never undefined).
+/// fire during the boot window before it does. This makes the "Hi-Z control
+/// input" class decidable by running the firmware: on a net with no static
+/// board bias (the genuinely-undefined case this targets) only the firmware can
+/// bring it to level, so this measures whether the firmware drives it in time.
+/// A statically-biased net reads at level from t=0 and is out of scope (it is
+/// never undefined).
 fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.net.clone().unwrap_or_default();
     let level = a.min.unwrap_or(0.0);
@@ -612,7 +612,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         Some(tc) => {
             // Reached in time. It must then HOLD continuously through the
             // deadline: a drop back below level at or before the deadline breaks
-            // coverage (this is the case the old end-of-run latch conflated with
+            // coverage (a bare end-of-run latch would conflate this case with
             // "never reached"). A drop AFTER the deadline is a legitimate release
             // and does not fail, boot coverage is about the boot window only.
             if let Some(td) = drop_after {
@@ -1579,8 +1579,8 @@ mod tests {
     // Boot coverage must (1) pass a net that reaches its level by the deadline
     // and holds THROUGH the deadline even if it is later released, (2) fail a net
     // that reached but fell back before the deadline, with a message distinct
-    // from (3) a net that never reached at all. The old end-of-run latch
-    // conflated (2) and (3) and wrongly failed (1).
+    // from (3) a net that never reached at all. An end-of-run latch alone
+    // conflates (2) and (3) and wrongly fails (1).
     #[test]
     fn boot_coverage_honours_deadline_hold_and_distinguishes_drop_from_never() {
         use super::check_boot_coverage;
@@ -1755,8 +1755,9 @@ mod tests {
         )
         .unwrap();
 
-        // One sample, sitting BELOW the dip threshold: the old code measured a
-        // 0 ms dip (windows(2) is empty) and auto-passed.
+        // One sample, sitting BELOW the dip threshold. A duration measured from
+        // consecutive sample pairs is 0 ms here (windows(2) is empty), which
+        // would auto-pass a rail that is in fact under the threshold.
         let mut win = RailWindow::new();
         win.observe(0.099, 2.5);
         let (ok, msg) = check_rail_window(&a, &outcome_with_window(win));
