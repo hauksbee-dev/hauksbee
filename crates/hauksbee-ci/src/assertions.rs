@@ -704,7 +704,7 @@ fn parse_hex_bytes(s: &str) -> Option<Vec<u8>> {
             .collect()
     } else {
         let h: String = cleaned.split_whitespace().collect();
-        if h.len() % 2 != 0 || h.is_empty() {
+        if !h.len().is_multiple_of(2) || h.is_empty() {
             return None;
         }
         (0..h.len())
@@ -2274,7 +2274,7 @@ mod tests {
         // Two MCUs; whichever HashMap order they land in, the sorted-by-key
         // concatenation is deterministic ("A" before "B"), so "^BOOT" (A's
         // output) anchors the same way every time.
-        let mut mk = |first: &str, second: &str| -> bool {
+        let mk = |first: &str, second: &str| -> bool {
             let mut uart = std::collections::HashMap::new();
             uart.insert(first.to_string(), "BOOT_OK\n".to_string());
             uart.insert(second.to_string(), "READY\n".to_string());

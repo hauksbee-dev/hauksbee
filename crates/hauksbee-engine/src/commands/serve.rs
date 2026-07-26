@@ -27,7 +27,7 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         // The web checks panel's backend: stage the uploads, inject the path
         // keys, and run the sibling hauksbee-ci binary (--json).
         let check: hauksbee_server::frontdoor::CheckRunner =
-            Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
+            Arc::new(crate::webcheck::run_web_check);
         // The dependency panel's backend: status from the engine's own
         // discovery, installs through the engine's streaming installer.
         let deps = crate::commands::common::deps_hooks();

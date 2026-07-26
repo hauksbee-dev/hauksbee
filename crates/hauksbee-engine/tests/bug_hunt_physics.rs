@@ -286,7 +286,7 @@ fn siblings_all_neurons_share_one_timing_value_set() {
                 && r[fam.len()..]
                     .chars()
                     .next()
-                    .map_or(false, |c| c.is_ascii_digit())
+                    .is_some_and(|c| c.is_ascii_digit())
             {
                 let got = si(v).unwrap_or(f64::NAN);
                 if (got - want).abs() / want > 0.001 {

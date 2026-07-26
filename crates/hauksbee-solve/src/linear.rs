@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn expm_identity_of_zero() {
-        let e = expm(&vec![0.0; 4], 2);
+        let e = expm(&[0.0; 4], 2);
         assert!((e[0] - 1.0).abs() < 1e-12);
         assert!((e[3] - 1.0).abs() < 1e-12);
         assert!(e[1].abs() < 1e-12);

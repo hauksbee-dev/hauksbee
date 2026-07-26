@@ -845,7 +845,7 @@ fn nearest_builtin(spec: &str, builtins: &[&'static str]) -> Option<&'static str
         let backend_penalty = usize::from(backend != cb);
         // Order: bigger LCP wins, then smaller distance, then same backend.
         let key = (usize::MAX - lcp, dist, backend_penalty);
-        if best.map_or(true, |(a, b, c, _)| key < (a, b, c)) {
+        if best.is_none_or(|(a, b, c, _)| key < (a, b, c)) {
             best = Some((key.0, key.1, key.2, cand));
         }
     }
