@@ -77,5 +77,8 @@ crossterm = { workspace = true }
 # network surface. default-features off drops rand/regex/serde we don't use.
 evalexpr = { version = "13", default-features = false }
 
+[dev-dependencies]
+hauksbee-testkit = { path = "../hauksbee-testkit" }
+
 [lints]
 workspace = true

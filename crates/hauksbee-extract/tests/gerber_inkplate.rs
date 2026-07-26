@@ -25,8 +25,9 @@ use hauksbee_extract::gerber::connect::GerberCopperKind;
 use hauksbee_extract::gerber::from_gerber_dir;
 
 fn inkplate_dir() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus/famous/inkplate6_gerber");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous/inkplate6_gerber");
     p.exists().then_some(p)
 }
 

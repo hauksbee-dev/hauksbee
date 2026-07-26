@@ -2358,8 +2358,9 @@ fn main {
     fn load_board_accepts_a_gerber_zip() {
         // B5: a spec may point straight at the fab archive. Corpus-gated like
         // the engine's gerber tests: skips when board-corpus is absent.
-        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+        let src = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or_default()
+            .join("famous/uconsole_cm4_adapter_gerber");
         if !src.exists() {
             if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
                 panic!("corpus required but uconsole_cm4_adapter_gerber missing");

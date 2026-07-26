@@ -14,12 +14,23 @@ use forge_model::Pcb;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const TARSKI: &str = "/Users/hauksbee-user/Tarski/Tarski-Repos/Tarski-Schematics/Neuron/InputSystem/InputSystem.kicad_pcb";
+/// Default board when none is given on the command line: the Tarski
+/// InputSystem, which lives in a private design repo. Set HAUKSBEE_TARSKI_DIR
+/// to a checkout of it, or just pass a board path as the first argument.
+fn default_board() -> Option<std::path::PathBuf> {
+    std::env::var_os("HAUKSBEE_TARSKI_DIR")
+        .map(|d| std::path::PathBuf::from(d).join("Neuron/InputSystem/InputSystem.kicad_pcb"))
+}
 
 fn main() {
     let path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| TARSKI.to_string());
+        .or_else(|| default_board().map(|p| p.display().to_string()))
+        .unwrap_or_else(|| {
+            eprintln!("usage: bug_hunt <board file>");
+            eprintln!("   or: set HAUKSBEE_TARSKI_DIR and run with no argument");
+            std::process::exit(2);
+        });
     if !Path::new(&path).exists() {
         eprintln!("board not found: {path}");
         std::process::exit(1);

@@ -1536,8 +1536,9 @@ fn main {
     #[test]
     fn analyze_gerber_zip_reverse_extracts() {
         use std::io::Write;
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+        let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or_default()
+            .join("famous/uconsole_cm4_adapter_gerber");
         if !dir.exists() {
             if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
                 panic!("corpus required but uconsole_cm4_adapter_gerber missing");
@@ -1656,8 +1657,9 @@ fn main {
     #[test]
     fn gerber_zip_with_firmware_reaches_cosim() {
         use std::io::Write;
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+        let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or_default()
+            .join("famous/uconsole_cm4_adapter_gerber");
         if !dir.exists() {
             if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
                 panic!("corpus required but uconsole_cm4_adapter_gerber missing");

@@ -27,7 +27,9 @@ use hauksbee_engine::checks::usb_c::audit_cc_termination;
 use hauksbee_extract::ExtractedBoard;
 
 fn famous_root() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous");
     if p.exists() {
         return Some(p);
     }

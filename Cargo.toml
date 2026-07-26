@@ -9,6 +9,7 @@ members = [
     "crates/hauksbee-server",
     "crates/hauksbee-engine",
     "crates/hauksbee-ci",
+    "crates/hauksbee-testkit",
 ]
 # The vendored forge-* crates (vendor/kicad-forge) form their own workspace and
 # must NOT be members here: excluding them keeps `cargo metadata`/build/test from

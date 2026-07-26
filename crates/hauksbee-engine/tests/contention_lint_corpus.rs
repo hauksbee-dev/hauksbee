@@ -33,7 +33,7 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 fn corpus_root() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default();
     if p.exists() {
         return Some(p);
     }

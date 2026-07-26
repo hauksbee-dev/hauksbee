@@ -30,7 +30,9 @@ use std::path::{Path, PathBuf};
 use hauksbee_extract::{ExtractedBoard, LintCheck};
 
 fn corpus() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous");
     if p.exists() {
         Some(p)
     } else {

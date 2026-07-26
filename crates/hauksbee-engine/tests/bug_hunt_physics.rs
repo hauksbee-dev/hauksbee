@@ -35,7 +35,16 @@ use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{Integration, SolverOptions, StepControl, Transient};
 use std::collections::HashMap;
 
-const LAYOUT: &str = "/Users/hauksbee-user/Tarski/Tarski-Repos/Tarski-Schematics/Neuron/InputSystem/InputSystem.kicad_pcb";
+/// The Tarski InputSystem layout, from the private design repo. Point
+/// HAUKSBEE_TARSKI_DIR at a checkout to run this; absent, the test says so
+/// rather than passing having read nothing.
+fn layout() -> Option<std::path::PathBuf> {
+    hauksbee_testkit::private_asset(
+        "HAUKSBEE_TARSKI_DIR",
+        "Neuron/InputSystem/InputSystem.kicad_pcb",
+        "bug_hunt_physics",
+    )
+}
 
 /// Parse a KiCad value string ("820k", "4.7nF", "150pF", "1k", "47") into SI.
 fn si(v: &str) -> Option<f64> {
@@ -68,7 +77,7 @@ fn si(v: &str) -> Option<f64> {
 
 /// Pull every component value on the layout, keyed by reference.
 fn layout_values() -> Option<HashMap<String, String>> {
-    let text = std::fs::read_to_string(LAYOUT).ok()?;
+    let text = std::fs::read_to_string(layout()?).ok()?;
     let board = ExtractedBoard::from_kicad_pcb(&text).ok()?;
     Some(
         board
@@ -326,13 +335,8 @@ fn inh_q4_mirror_banks_fully_populated() {
     // check. A synapse missing its inhibitory resistor while another carried a
     // spare would still sum to 180 and pass. It is a coarse population sanity
     // check, not a localizer.
-    let text = match std::fs::read_to_string(LAYOUT) {
-        Ok(t) => t,
-        Err(_) => {
-            eprintln!("layout missing; skipping");
-            return;
-        }
-    };
+    let Some(path) = layout() else { return };
+    let text = std::fs::read_to_string(path).expect("readable once located");
     let board = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let r10m = board.components.iter().filter(|c| c.value == "10M").count();
     let hc595 = board

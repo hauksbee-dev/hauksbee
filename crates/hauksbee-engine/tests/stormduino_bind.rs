@@ -13,19 +13,21 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 use hauksbee_server::engine::Engine;
 
-fn board_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(
-        "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/stormduino/stormduino Rev2.kicad_pcb",
+/// The stormduino board, if this machine has the corpus. It is a private
+/// board, so it is absent from corpus.toml and from any public checkout.
+fn board_path(what: &str) -> Option<std::path::PathBuf> {
+    hauksbee_testkit::corpus_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "stormduino/stormduino Rev2.kicad_pcb",
+        what,
     )
 }
 
 #[test]
 fn stormduino_resolves_over_60pct() {
-    let path = board_path();
-    if !path.exists() {
-        eprintln!("stormduino board not present at {path:?}; skipping");
+    let Some(path) = board_path("stormduino_resolves_over_60pct") else {
         return;
-    }
+    };
     let text = std::fs::read_to_string(&path).unwrap();
     let board = ExtractedBoard::from_auto(&text).expect("parse KiCad-5 PCB");
     let lib = ModelLibrary::builtin();
@@ -54,11 +56,9 @@ fn stormduino_resolves_over_60pct() {
 /// net, so the demo firmware should make D13 (the SCK / Arduino-D13 net) toggle.
 #[test]
 fn stormduino_d13_toggles_under_firmware() {
-    let path = board_path();
-    if !path.exists() {
-        eprintln!("stormduino board not present; skipping firmware run");
+    let Some(path) = board_path("stormduino_d13_toggles_under_firmware") else {
         return;
-    }
+    };
     let text = std::fs::read_to_string(&path).unwrap();
     let mut engine =
         HauksbeeEngine::from_board_file(&text, Some(&common::demo_firmware()), "/boards/storm")

@@ -17,7 +17,9 @@ use std::path::PathBuf;
 use hauksbee_ci::{run, RunConfig};
 
 fn corpus() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous")
+    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous")
 }
 
 fn require_corpus() -> bool {
