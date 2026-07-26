@@ -122,7 +122,7 @@ fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
         r#"You are a sensor register-map extraction assistant. Read the datasheet
 text below for the part: {part}
 
-Emit a DECLARATIVE register-map sensor spec in TOML — NOT a SPICE model. The goal
+Emit a DECLARATIVE register-map sensor spec in TOML, NOT a SPICE model. The goal
 is to capture how firmware reads this sensor over the bus: its address/framing,
 the key registers, and how each register's bytes encode a physical value.
 
@@ -142,7 +142,7 @@ THE SPEC FORMAT (emit exactly this shape):
   default = 25.0
 
   # Registers. EITHER a const register (identity / config) OR an encoded one.
-  # WHO_AM_I / device-ID register — a constant the firmware checks:
+  # WHO_AM_I / device-ID register, a constant the firmware checks:
   [[sensor.register]]
   addr = 0x0f
   const = [0x42]              # the exact identity byte(s) from the datasheet
@@ -156,17 +156,17 @@ THE SPEC FORMAT (emit exactly this shape):
   # optional: scale =, offset =  (encoded = expr*scale + offset)
 
 ENCODINGS (pick the one matching the datasheet's register format):
-  u8, u16_be, u16_le, i16_be, i16_le   — plain integers, big/little endian
-  q7.1_be                              — LM75-style temperature: signed,
+  u8, u16_be, u16_le, i16_be, i16_le   - plain integers, big/little endian
+  q7.1_be                              - LM75-style temperature: signed,
                                          0.125 C/LSB, count left-justified by 5
                                          into a big-endian 16-bit word
-  raw                                  — const-only register (no expr/encoding)
+  raw                                  - const-only register (no expr/encoding)
 
 RULES:
 1. Include the WHO_AM_I / device-ID register if the part has one (with its exact
    constant), plus the primary data register(s) firmware actually reads.
 2. Every `expr` may only reference names declared in a [[sensor.input]].
-3. Output ONLY the TOML, starting with `[sensor]` — no prose, no markdown fences.
+3. Output ONLY the TOML, starting with `[sensor]`; no prose, no markdown fences.
 4. Use only values stated in the datasheet; do not invent register addresses.
 
 DATASHEET TEXT (truncated):
@@ -279,7 +279,7 @@ fn parse_args() -> Result<Args> {
 
 fn print_help() {
     println!(
-        r"model-extract — extract a simulation model from a PDF datasheet
+        r"model-extract: extract a simulation model from a PDF datasheet
 
 USAGE:
     model-extract --pdf <path> --part <part_number> [OPTIONS]
@@ -399,7 +399,7 @@ The entry must use [[models]] array syntax and include:
 For kind="{kind}", the required params are:
 {required_params}
 
-[models.ratings] — pull these from the datasheet's "absolute maximum ratings" /
+[models.ratings]: pull these from the datasheet's "absolute maximum ratings" /
 "limiting values" table. Include every field the datasheet gives a number for;
 omit a field entirely if the datasheet does not state it (do NOT invent it):
 {ratings_hint}
@@ -407,12 +407,12 @@ omit a field entirely if the datasheet does not state it (do NOT invent it):
 IMPORTANT RULES:
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
-2. Use only values explicitly stated in the datasheet — do NOT guess. For SPICE
+2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
    params not given verbatim (e.g. `is`), you may derive them from a stated
    operating point (e.g. VBE at a known IC) and say so in the comment.
 3. If a required param is genuinely absent and cannot be derived, use a
    conservative typical value for the part family and comment `# estimated`.
-4. Output ONLY the TOML block, starting with [[models]] — no prose, no markdown
+4. Output ONLY the TOML block, starting with [[models]]; no prose, no markdown
    fences, no leading or trailing text.
 5. Currents in AMPERES, voltages in VOLTS, power in WATTS (convert mA/mW yourself).
 6. Param values must be within these physical bounds:
@@ -460,7 +460,7 @@ fn behavioral_hint_for_kind(kind: &str) -> String {
     };
     let common = format!(
         r#"
-BEHAVIOURAL MODEL — this is a "{kind}" power IC. In ADDITION to the above, set
+BEHAVIOURAL MODEL: this is a "{kind}" power IC. In ADDITION to the above, set
 `kind = "{base}"` (the base kind) and add a `[models.behavioral]` block that
 captures the part's internal behaviour the SPICE kinds cannot. The schema:
 

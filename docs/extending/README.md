@@ -3,8 +3,8 @@
 Worked walkthroughs, one per extension type. Each starts from a real datasheet
 or file format, walks the actual steps against the current code, and ends with
 the test that proves the extension works. They assume you can read TOML and run
-`cargo`, and, for everything except [new device physics](new-device-physics.md)
-— they assume **no knowledge of hauksbee's source**.
+`cargo`, and, for everything except [new device physics](new-device-physics.md),
+they assume **no knowledge of hauksbee's source**.
 
 ## I want to add a ___
 

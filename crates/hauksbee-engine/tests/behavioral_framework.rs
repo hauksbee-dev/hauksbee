@@ -580,7 +580,7 @@ fn converter_input_limit_settles_and_conserves_energy() {
         let p_out = v_bat * v_bat / 2.0; // R_load = 2 ohms
         assert!(
             p_out <= p_in + 1e-6,
-            "output power {p_out:.2} W exceeds input power {p_in:.2} W — energy manufactured"
+            "output power {p_out:.2} W exceeds input power {p_in:.2} W; energy manufactured"
         );
         assert!(
             iin <= limit + 0.05,

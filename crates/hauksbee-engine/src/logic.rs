@@ -112,7 +112,7 @@ pub enum LogicCompileError {
     #[error(
         "combinational cycle through {outputs:?} has {external} external \
          input(s) and {members} member(s): {total} > {cap} enumeration bits, \
-         too wide to verify convergence exhaustively — refused rather than \
+         too wide to verify convergence exhaustively; refused rather than \
          shipped unverified"
     )]
     TooWideToVerify {
@@ -901,7 +901,7 @@ impl LogicComponent {
                         // scream rather than silently hold a wrong level.
                         eprintln!(
                             "ERROR: logic '{}': comb cycle failed to settle within {} sweeps \
-                             at runtime — this should have been refused at compile time",
+                             at runtime; this should have been refused at compile time",
                             self.spec_id, COMB_FIXPOINT_BOUND
                         );
                     }

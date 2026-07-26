@@ -200,7 +200,7 @@ pub fn mcu_coverage_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintR
             message: format!(
                 "{label} looks like a strap-bearing MCU (STM32/ESP32 class) but has no boot-strap \
                  table in the model database (it is absent, or resolved only to a generic fallback), \
-                 so its boot strap-pins (e.g. BOOT0 / ESP32 strapping pins) were NOT checked — a \
+                 so its boot strap-pins (e.g. BOOT0 / ESP32 strapping pins) were NOT checked; a \
                  mis-strapped boot pin is a reset-time latch firmware cannot override"
             ),
             refs: vec![comp.reference.clone()],

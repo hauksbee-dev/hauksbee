@@ -35,7 +35,7 @@ impl fmt::Display for SpecError {
                     if suggestions.is_empty() {
                         writeln!(f)?;
                     } else {
-                        writeln!(f, " — did you mean: {}?", suggestions.join(", "))?;
+                        writeln!(f, "; did you mean: {}?", suggestions.join(", "))?;
                     }
                 }
                 Ok(())

@@ -107,12 +107,12 @@ covers its interior bytes via the register's read length:
 
 ```toml
 [[sensor.register]]
-addr     = 0xF7   # press_msb/lsb/xlsb — 20-bit raw ADC pressure count
+addr     = 0xF7   # press_msb/lsb/xlsb: 20-bit raw ADC pressure count
 encoding = "u20_be_xlsb"
 expr     = "adc_press"
 
 [[sensor.register]]
-addr     = 0xFD   # hum_msb/lsb — 16-bit raw ADC humidity count
+addr     = 0xFD   # hum_msb/lsb: 16-bit raw ADC humidity count
 encoding = "u16_be"
 expr     = "adc_hum"
 ```
@@ -160,7 +160,7 @@ Green looks like:
 
 ```
 sensor 'BME280': ok
-1 item(s) checked, 0 finding(s) — clean
+1 item(s) checked, 0 finding(s): clean
 ```
 
 The validator catches: duplicate addresses (post-mask for SPI), an `expr`

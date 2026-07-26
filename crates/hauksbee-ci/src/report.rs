@@ -69,21 +69,21 @@ impl EnsembleCoverage {
         match self {
             EnsembleCoverage::MonteCarlo { seeds, components } => format!(
                 "tolerance ensemble: nominal baseline + {seeds} sampled seed(s) over \
-                 {components} toleranced component(s) — statistical coverage, not \
+                 {components} toleranced component(s): statistical coverage, not \
                  worst-case proof"
             ),
             EnsembleCoverage::Corners { corners, components } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) over \
-                 {components} component(s) — bounds the worst case only where the \
+                 {components} component(s): bounds the worst case only where the \
                  response is monotonic in each value"
             ),
             EnsembleCoverage::SingleMember { seed, components, corners: true } => format!(
                 "single corner: corner {seed} over {components} toleranced \
-                 component(s) — one pinned deterministic corner, not full corner coverage"
+                 component(s): one pinned deterministic corner, not full corner coverage"
             ),
             EnsembleCoverage::SingleMember { seed, components, corners: false } => format!(
                 "single ensemble member: seed {seed} over {components} toleranced \
-                 component(s) — one pinned draw, not ensemble coverage"
+                 component(s): one pinned draw, not ensemble coverage"
             ),
         }
     }
@@ -203,12 +203,12 @@ impl CiResult {
         // Substitution honesty: a GREEN over a substitute MCU core cannot vouch
         // for firmware behaviour on the real silicon. Say so plainly.
         for msg in &self.substitutions {
-            out.push_str(&format!("  co-sim ran on a SUBSTITUTE chip — {msg}\n"));
+            out.push_str(&format!("  co-sim ran on a SUBSTITUTE chip: {msg}\n"));
         }
         // Coverage honesty: a GREEN over a co-sim path that never ran (dropped
         // ADC injection, unexercised bus device) must be qualified plainly.
         for msg in &self.coverage_warnings {
-            out.push_str(&format!("  co-sim COVERAGE HOLE — {msg}\n"));
+            out.push_str(&format!("  co-sim COVERAGE HOLE: {msg}\n"));
         }
         let verdict = if self.analog_invalid() {
             "INVALID (analog co-sim did not converge)"
@@ -304,7 +304,7 @@ impl CiResult {
         // it alongside the results): a pass over a substitute core is qualified.
         for msg in &self.substitutions {
             out.push_str(&format!(
-                "    <system-out>co-sim ran on a SUBSTITUTE chip — {}</system-out>\n",
+                "    <system-out>co-sim ran on a SUBSTITUTE chip: {}</system-out>\n",
                 xml_escape(msg)
             ));
         }
@@ -312,7 +312,7 @@ impl CiResult {
         // suite-level channel so the JUnit surface carries the qualification too.
         for msg in &self.coverage_warnings {
             out.push_str(&format!(
-                "    <system-out>co-sim COVERAGE HOLE — {}</system-out>\n",
+                "    <system-out>co-sim COVERAGE HOLE: {}</system-out>\n",
                 xml_escape(msg)
             ));
         }
@@ -418,32 +418,32 @@ pub fn render_junit_error(message: &str) -> String {
 /// that have no useful generic pointer.
 fn failure_hint(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "voltage" => "the rail left its window — check the supply feeding this net \
+        "voltage" => "the rail left its window; check the supply feeding this net \
             and the load pulling it down (docs/ci/CI.md, \"voltage\").",
-        "rail_window" => "the rail dipped/recovered outside the window — check the \
+        "rail_window" => "the rail dipped/recovered outside the window; check the \
             scenario's load step and the decoupling on this net (docs/ci/CI.md, \
             \"rail_window\").",
-        "boot-coverage" => "the firmware never drove the control net in time — check \
+        "boot-coverage" => "the firmware never drove the control net in time; check \
             `firmware = ...` points at the right image and the net is a GPIO the \
             firmware actually drives (docs/ci/CI.md, \"boot-coverage\" caveat).",
-        "no_faults" => "the stress monitor tripped — the named component exceeded a \
+        "no_faults" => "the stress monitor tripped; the named component exceeded a \
             rating (over-current / -voltage / -power / -temp / reverse-bias); check \
             its part value and supply (docs/ci/CI.md, \"no_faults\").",
-        "max_current" => "the part drew more than its limit — check its load and the \
+        "max_current" => "the part drew more than its limit; check its load and the \
             override value (docs/ci/CI.md, \"max_current\").",
-        "max_temp" => "the junction ran hotter than the limit — check dissipation and \
+        "max_temp" => "the junction ran hotter than the limit; check dissipation and \
             the `ambient_c` assumption (docs/ci/CI.md, \"max_temp\").",
-        "uart" => "the expected UART text never appeared — check the firmware image \
+        "uart" => "the expected UART text never appeared; check the firmware image \
             and baud, and that the MCU booted (docs/ci/CI.md, \"uart\").",
-        "toggle" => "the net toggled the wrong number of times — check the firmware's \
+        "toggle" => "the net toggled the wrong number of times; check the firmware's \
             drive rate and the deadline window (docs/ci/CI.md, \"toggle\").",
-        "protection_trip" => "the supply's protection did/did not latch as asserted — \
+        "protection_trip" => "the supply's protection did/did not latch as asserted; \
             check the supply's limits and the load that triggers it (docs/ci/CI.md, \
             \"protection_trip\").",
-        "phase_margin" => "the loop's phase margin missed the bound — check the \
+        "phase_margin" => "the loop's phase margin missed the bound; check the \
             compensation network and the `[ac]` sweep range (docs/ci/CI.md, \
             \"phase_margin\").",
-        "ac_gain" => "the small-signal gain missed the band — check the AC stimulus \
+        "ac_gain" => "the small-signal gain missed the band; check the AC stimulus \
             net and the sweep points (docs/ci/CI.md, \"ac_gain\").",
         _ => return None,
     })

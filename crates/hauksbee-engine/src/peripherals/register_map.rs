@@ -82,7 +82,7 @@ impl CompiledRegister {
             panic!(
                 "RegisterMapSensor: expr evaluation failed at runtime for register 0x{:02x} \
                  (expr: {:?}); inputs: {:?}. \
-                 This is a bug — all declared inputs should be present.",
+                 This is a bug: all declared inputs should be present.",
                 self.spec.addr,
                 self.spec.expr,
                 inputs.keys().collect::<Vec<_>>()
@@ -189,7 +189,7 @@ fn decode(enc: Encoding, bytes: &[u8]) -> (f64, u32) {
         }
         other => panic!(
             "RegisterMapSensor: encoding {other:?} has no write decode; \
-             SensorSpec::validate rejects it — this spec bypassed validation"
+             SensorSpec::validate rejects it; this spec bypassed validation"
         ),
     }
 }

@@ -745,7 +745,7 @@ fn env_dir_missing_warning(dir: &std::path::Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "HAUKSBEE_MCU_DIR is set to '{}' but that directory does not exist — \
+        "HAUKSBEE_MCU_DIR is set to '{}' but that directory does not exist; \
          MCU descriptor overrides will NOT load and the embedded built-ins \
          will be used instead",
         dir.display()

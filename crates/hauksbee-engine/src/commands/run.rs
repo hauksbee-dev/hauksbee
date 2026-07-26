@@ -402,7 +402,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::Coverage,
                     message: "co-sim saw zero net toggles and no UART output; the \
-                              firmware was not exercised — this result cannot vouch \
+                              firmware was not exercised; this result cannot vouch \
                               for firmware behaviour"
                         .to_string(),
                 });
@@ -469,7 +469,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         "control net '{net}' drives a transistor/relay, is driven HIGH and held \
                          from power-up, and has no resistor setting a safe default. If a HIGH on \
                          it turns the switched load ON when it must stay OFF until firmware \
-                         enables it, it is energised at power-up — confirm the polarity and that \
+                         enables it, it is energised at power-up; confirm the polarity and that \
                          this is intended."
                     ),
                 });
@@ -503,13 +503,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             let mut report = crate::plain_faults(&faults);
             for sub in engine.scheduler().substitutions() {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
-                    "co-sim ran on a SUBSTITUTE chip — {}",
+                    "co-sim ran on a SUBSTITUTE chip: {}",
                     sub.message()
                 )));
             }
             if zero_activity {
                 report.heads_up.push(crate::plain::HeadsUp::note(
-                    "co-sim saw zero net toggles and no UART output — the firmware was not \
+                    "co-sim saw zero net toggles and no UART output; the firmware was not \
                      exercised, so this result cannot vouch for firmware behaviour",
                 ));
             }
@@ -554,7 +554,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                      from the moment the board powers up, with no resistor setting a safe default \
                      level. If a HIGH on this net turns the load ON when it must stay OFF until \
                      the firmware deliberately enables it (a MOSFET, relay, motor driver, or \
-                     igniter), it is energised at power-up — confirm the polarity and that this \
+                     igniter), it is energised at power-up; confirm the polarity and that this \
                      is intended."
                 )));
             }
@@ -566,7 +566,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             let open = crate::result::coverage_open_active_refs(&summary);
             if !open.is_empty() {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
-                    "co-sim coverage: {} of {} critical parts modelled — {} active IC(s) are \
+                    "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) are \
                      unresolved or open, so firmware/analog/thermal results on their nets are \
                      INCOMPLETE (the copper/DRC checks are unaffected). Add models with --models-dir.",
                     summary.critical_parts_bound_n,
@@ -590,7 +590,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 println!(
                     "BOOT HAZARD: control net '{net}' switches a transistor/relay and is driven \
                      HIGH and held from the moment the board powers up, with no resistor setting \
-                     a safe default level — if a HIGH turns the load ON when it must stay OFF \
+                     a safe default level; if a HIGH turns the load ON when it must stay OFF \
                      until firmware enables it (a MOSFET, relay, motor driver, or igniter), it is \
                      energised at power-up. Confirm the polarity and that this is intended."
                 );
@@ -601,7 +601,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             let open = crate::result::coverage_open_active_refs(&summary);
             if !open.is_empty() {
                 println!(
-                    "co-sim coverage: {} of {} critical parts modelled — {} active IC(s) \
+                    "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) \
                      unresolved/open, so firmware/analog results on their nets are INCOMPLETE; \
                      add models with --models-dir (copper/DRC checks are unaffected).",
                     summary.critical_parts_bound_n,
@@ -656,7 +656,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             for net in held_high_boot_nets {
                 eprintln!(
                     "BOOT HAZARD (--strict-boot): control net '{net}' switches a transistor/relay \
-                     and is driven HIGH and held from power-up with no bias resistor — the load is \
+                     and is driven HIGH and held from power-up with no bias resistor; the load is \
                      energised at reset."
                 );
             }

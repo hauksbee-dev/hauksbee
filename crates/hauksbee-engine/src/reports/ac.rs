@@ -44,7 +44,7 @@ pub fn emit(
     // stimulus set their own drive and are exempt: that IS a chosen injection.)
     if !json && !hauksbee_solve::has_dedicated_ac_source(circuit) {
         eprintln!(
-            "NOTE: no dedicated AC injection source — the sweep drove every independent \n\
+            "NOTE: no dedicated AC injection source: the sweep drove every independent \n\
              source (power rails included), so this Bode is a superposition, not a \n\
              single-input transfer function. To measure a real transfer function, name \n\
              the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop with \n\
@@ -93,7 +93,7 @@ pub fn emit(
             });
             println!("{}", jr.to_json());
         } else {
-            eprintln!("WARNING: AC result not valid — {reason}");
+            eprintln!("WARNING: AC result not valid: {reason}");
             // Did-you-mean per missing node, then the discoverability pointer,
             // matching the net-not-found pattern the co-sim / spec surfaces use.
             for n in &nodes {
@@ -131,7 +131,7 @@ pub fn emit(
             });
             println!("{}", jr.to_json());
         } else {
-            eprintln!("WARNING: AC result not valid — {reason}");
+            eprintln!("WARNING: AC result not valid: {reason}");
             eprintln!(
                 "  (every reported net is at the {:.0} dB floor: no path to drive it. \
                  Bind the driving ICs with --models-dir, then re-run.)",
@@ -168,7 +168,7 @@ pub fn emit(
                 });
                 println!("{}", jr.to_json());
             } else {
-                eprintln!("WARNING: --ac-loop result not valid — {reason}");
+                eprintln!("WARNING: --ac-loop result not valid: {reason}");
                 eprintln!(
                     "  (no feedback path to measure at '{loop_net}'. Bind the driving \
                      ICs with --models-dir, then re-run.)"
@@ -271,7 +271,7 @@ pub fn emit(
         if ac_is_all_sentinel(bode) {
             no_path_nets.push(net.clone());
             println!(
-                "\nAC sweep: net '{net}' — NO SIGNAL PATH (all points at the {:.0} dB floor); result not meaningful for this net.",
+                "\nAC sweep: net '{net}': NO SIGNAL PATH (all points at the {:.0} dB floor); result not meaningful for this net.",
                 crate::result::AC_FLOOR_DB
             );
             continue;
@@ -310,7 +310,7 @@ pub fn emit(
     let ac_open = coverage_open_active_refs(&summary);
     if !ac_open.is_empty() {
         eprintln!(
-            "\nCAVEAT: this AC result is NOT trustworthy — {} active IC(s) on the live circuit \
+            "\nCAVEAT: this AC result is NOT trustworthy: {} active IC(s) on the live circuit \
              are unresolved/open ({}), so the response/loop shown is a passive shell, not the real \
              circuit. Bind them with --models-dir, then re-run.",
             ac_open.len(),

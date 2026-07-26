@@ -318,7 +318,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         out.heads_up.push(HeadsUp::glossed(
             format!("The copper-short results below may be unreliable on this file: {w}"),
             "This board was saved by a newer KiCad than hauksbee's copper reader was \
-             validated against, so its zone/fill format can be misread — a filled ground \
+             validated against, so its zone/fill format can be misread: a filled ground \
              pour can look like it shorts every net it surrounds, producing shorts that \
              are not really there (false alarms), or hiding a real one.",
             "Treat any short below as \"check, don't panic\": open the board in KiCad and \
@@ -395,8 +395,8 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
                 "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly your {:.3} mm rule).",
                 friendly_layer(&g.layer), g.min_gap_mm, g.rule_mm
             ),
-            "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation — but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string(),
-            "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is — just be aware there is no slack.".to_string(),
+            "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation, but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string(),
+            "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is; just be aware there is no slack.".to_string(),
         );
     }
 
@@ -426,7 +426,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 format!("Tie \"{net}\" to a defined level: a pull-up resistor to power (to hold it high/enabled) or a pull-down to ground (to hold it low), per the chip's datasheet, or drive it from a known output."),
             ),
             LintCheck::LedCurrentSanity => (
-                format!("The LED + resistor on {parts} looks mis-sized — its current is outside the sensible range for an indicator."),
+                format!("The LED + resistor on {parts} looks mis-sized: its current is outside the sensible range for an indicator."),
                 "Too much current and the LED runs hot and ages fast (or pulls more than the driving pin should source); too little and it is too dim to see. The series resistor sets this current.".to_string(),
                 "Re-pick the series resistor for roughly 1 to 20 mA: resistor = (supply voltage minus LED forward voltage) / target current. Check the LED's datasheet for its forward voltage and max current.".to_string(),
             ),
@@ -437,12 +437,12 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::StrapPin => (
                 format!("A boot/strap pin on {parts} (net \"{net}\") will not be held at the level the chip needs when it powers up."),
-                "Some chips read certain pins at the instant they reset to decide how to boot (which mode, where to load code from). If that pin is at the wrong level — or wobbling, e.g. a clock signal sits on it — the chip can boot into the wrong mode or fail to start.".to_string(),
+                "Some chips read certain pins at the instant they reset to decide how to boot (which mode, where to load code from). If that pin is at the wrong level (or wobbling, e.g. a clock signal sits on it), the chip can boot into the wrong mode or fail to start.".to_string(),
                 format!("Hold \"{net}\" firmly at the level the datasheet wants during reset, usually with a pull-up or pull-down resistor, and keep fast/active signals off that pin until after boot."),
             ),
             LintCheck::McuResourceConflict => (
                 format!("Two different functions need the same internal block of the microcontroller at once ({parts}). {}", f.message),
-                "A microcontroller has a fixed number of internal blocks (timers/PWM channels, communication units, pin groups). Two board features have been wired to pins that share one block, so the chip physically cannot run both at the same time — one feature will not work.".to_string(),
+                "A microcontroller has a fixed number of internal blocks (timers/PWM channels, communication units, pin groups). Two board features have been wired to pins that share one block, so the chip physically cannot run both at the same time: one feature will not work.".to_string(),
                 "Move one of the functions to a different pin that maps to a free internal block, or give up one of the two features. The chip's datasheet pin-mux table shows which pins share which block.".to_string(),
             ),
             LintCheck::DesignatorFootprintMismatch => (
@@ -462,7 +462,7 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
             ),
             LintCheck::UncheckedMcu => (
                 f.message.clone(),
-                "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so a strap-bearing MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps were verified — and a mis-strapped boot pin is latched by hardware at reset, before any firmware runs.".to_string(),
+                "The boot strap-pin check needs the part's model to know which pins are straps and what level they want at reset, so a strap-bearing MCU that is not in the model database is skipped. A clean lint result therefore does NOT mean its boot straps were verified, and a mis-strapped boot pin is latched by hardware at reset, before any firmware runs.".to_string(),
                 "Check the boot/strap pins (e.g. BOOT0, or the ESP32 strapping pins) by hand against the datasheet, or supply a device model with --models-dir so hauksbee can check them automatically.".to_string(),
             ),
             LintCheck::DeviceDecode => (
@@ -575,7 +575,7 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
             "Fast links like USB (90 ohm differential) or Ethernet need their traces to \
              present a specific impedance so the signal does not reflect off the wire and \
              smear. This is a computed estimate, flagged only because the board did not \
-             formally declare a controlled-impedance stackup — it is informational, not a \
+             formally declare a controlled-impedance stackup; it is informational, not a \
              confirmed failure, but a value well off target on a real high-speed net can \
              make the link marginal or fail to enumerate.",
             "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. \
@@ -654,7 +654,7 @@ pub fn plain_faults(faults: &[FaultEvent]) -> PlainReport {
                     volts(f.value),
                     volts(f.limit),
                 ),
-                "Every part has a maximum safe voltage. Above it the insulation/junction can break down — a capacitor can short or vent, a semiconductor can be punched through — often instantly and permanently.".to_string(),
+                "Every part has a maximum safe voltage. Above it the insulation/junction can break down (a capacitor can short or vent, a semiconductor can be punched through), often instantly and permanently.".to_string(),
                 "Use a part rated for at least this voltage (with margin), or lower the voltage it sees (clamp, divider, or correct the supply/rail it is on).".to_string(),
             ),
             FaultKind::ReverseBias => (

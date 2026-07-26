@@ -1546,7 +1546,7 @@ impl Mcu for RenodeBackend {
             "elf" | "" => self.monitor.command(&format!("sysbus LoadELF @{p}"))?,
             "hex" => self.monitor.command(&format!("sysbus LoadHEX @{p}"))?,
             "bin" => bail!("raw .bin needs a load address; supply an ELF instead"),
-            other => bail!("unsupported firmware extension '.{other}' — use .elf or .hex"),
+            other => bail!("unsupported firmware extension '.{other}'; use .elf or .hex"),
         };
         if monitor_failed(&resp) {
             bail!("Renode failed to load firmware {p}: {resp}");

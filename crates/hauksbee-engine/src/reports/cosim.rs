@@ -158,7 +158,7 @@ pub fn heuristic_framing_warnings(
         .map(|(bus, _)| {
             format!(
                 "SPI bus '{bus}' ran on HEURISTIC transaction framing (no chip-select \
-                 edge available): boundaries are guessed at chunk edges — two \
+                 edge available): boundaries are guessed at chunk edges; two \
                  transactions in one chunk merge, and one spanning a boundary is \
                  truncated. Wire cs_net for exact framing."
             )
@@ -298,7 +298,7 @@ pub fn run_headless(
     if external {
         engine.scheduler_mut().chunk_s = frame_dt;
         eprintln!(
-            "co-sim: {seconds:.2}s on an external emulator (slow — roughly wall-clock \
+            "co-sim: {seconds:.2}s on an external emulator (slow: roughly wall-clock \
              per simulated second; this is normal for Renode/QEMU). Progress:"
         );
     } else {

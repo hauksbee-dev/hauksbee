@@ -62,7 +62,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     let mut v: &str = &cleaned;
     while let Some(rest) = strip_size_code(v) {
         if rest.is_empty() {
-            return None; // bare "0402" / "0603" / ... — not a value
+            return None; // bare "0402" / "0603" / ..., not a value
         }
         v = rest;
     }

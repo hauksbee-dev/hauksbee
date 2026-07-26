@@ -162,7 +162,7 @@ impl PartStatus {
         match self {
             PartStatus::Bound => "bound (exact match)",
             PartStatus::Family => "family / heuristic match",
-            PartStatus::Unresolved => "UNRESOLVED (no model — defaults to OPEN)",
+            PartStatus::Unresolved => "UNRESOLVED (no model; defaults to OPEN)",
             PartStatus::Ignored => "ignored (connector / mechanical)",
         }
     }
@@ -598,8 +598,8 @@ impl AppState {
                     s.net_a, s.net_b, s.layer, s.gap_mm
                 ),
                 plain: format!(
-                    "Copper of net {} is touching net {} on layer {}. This is a dead short \
-                     — the two nets are electrically joined where they should be separate.",
+                    "Copper of net {} is touching net {} on layer {}. This is a dead short: \
+                     the two nets are electrically joined where they should be separate.",
                     s.net_a, s.net_b, s.layer
                 ),
                 nets: vec![s.net_a.clone(), s.net_b.clone()],
@@ -640,7 +640,7 @@ impl AppState {
                 headline: g.label(),
                 plain: format!(
                     "{} location(s) where {} and {} sit exactly at the {:.3} mm minimum \
-                     clearance on {} — no margin, but not below the rule.",
+                     clearance on {}: no margin, but not below the rule.",
                     g.count, g.net_a, g.net_b, g.rule_mm, g.layer
                 ),
                 nets: vec![g.net_a.clone(), g.net_b.clone()],
@@ -817,13 +817,13 @@ impl AppState {
                 } else {
                     ""
                 };
-                format!("{} {} — {}{}", p.reference, p.value, p.became, mark)
+                format!("{} {}: {}{}", p.reference, p.value, p.became, mark)
             }
             LeftPaneIndex::Net(i) => {
                 let n = &self.nets[i];
                 match n.voltage_v {
-                    Some(v) => format!("net {} — DC {v:.3} V", n.name),
-                    None => format!("net {} — (no DC voltage)", n.name),
+                    Some(v) => format!("net {}: DC {v:.3} V", n.name),
+                    None => format!("net {}: (no DC voltage)", n.name),
                 }
             }
             LeftPaneIndex::None => String::new(),

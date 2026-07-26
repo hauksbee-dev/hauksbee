@@ -1,6 +1,6 @@
 # SPICE compatibility statement
 
-*What "drop-in for the common cases" means, precisely — and how the promise is kept honest.*
+*What "drop-in for the common cases" means, precisely, and how the promise is kept honest.*
 
 Hauksbee reads a `.cir` netlist through one loader (`crates/hauksbee-ir/src/spice.rs`)
 and simulates a **documented, enforced subset** of SPICE. The promise is narrow and
@@ -27,8 +27,8 @@ Refusals are always line-numbered `SpiceError`s (`Syntax`, `UnknownElement`,
 silent misparse of a *recognized* card, and no silent drop of an *unrecognized*
 directive: a card or directive the loader understands is either honored or refused
 with a reason, and any dot-directive it does not recognize is refused too (only a
-short allowlist of directives that change nothing when ignored — `.end`, `.op`,
-`.title`, `.width`, `.save` — is accepted as a no-op; see §4).
+short allowlist of directives that change nothing when ignored (`.end`, `.op`,
+`.title`, `.width`, `.save`) is accepted as a no-op; see §4).
 
 ---
 
@@ -47,22 +47,22 @@ title and is ignored.
 
 | Card | What it does |
 |------|--------------|
-| `R` resistor | `Rxxx a b value [tc1=]` — linear resistor, optional linear temp-coefficient. |
-| `C` capacitor | `Cxxx a b value [ic=]` — capacitor, optional initial voltage (honored under `uic`). |
-| `L` inductor | `Lxxx a b value [ic=]` — inductor, optional initial current. |
-| `V` voltage source | `Vxxx p n <dc|sin|pulse|pwl> [AC mag phase]` — independent voltage source. |
-| `I` current source | `Ixxx p n <dc|sin|pulse|pwl> [AC mag phase]` — independent current source. |
-| `D` diode | `Dxxx a k model` — Shockley diode with junction cap / transit time / breakdown from its `.model` (the model is required and must be a diode model). |
-| `Q` BJT | `Qxxx c b e model` — Gummel-Poon BJT with charge storage (cje/cjc/tf/tr) and series rb/re/rc. |
-| `M` MOSFET | `Mxxx d g s b model [L= W=]` — LEVEL-1 MOSFET (see caveats) with gate charge and body diode. |
-| `S` voltage switch | `Sxxx a b nc+ nc- model` — voltage-controlled switch (`.model SW/VSWITCH`, defaults if absent). |
-| `E` VCVS | `Exxx n+ n- nc+ nc- gain` — linear voltage-controlled voltage source. |
-| `G` VCCS | `Gxxx n+ n- nc+ nc- gm` — linear voltage-controlled current source. |
-| `F` CCCS | `Fxxx n+ n- vname gain` — current-controlled current source (controlled by a named V-source's branch current). |
-| `H` CCVS | `Hxxx n+ n- vname transres` — current-controlled voltage source. |
+| `R` resistor | `Rxxx a b value [tc1=]`: linear resistor, optional linear temp-coefficient. |
+| `C` capacitor | `Cxxx a b value [ic=]`: capacitor, optional initial voltage (honored under `uic`). |
+| `L` inductor | `Lxxx a b value [ic=]`: inductor, optional initial current. |
+| `V` voltage source | `Vxxx p n <dc|sin|pulse|pwl> [AC mag phase]`: independent voltage source. |
+| `I` current source | `Ixxx p n <dc|sin|pulse|pwl> [AC mag phase]`: independent current source. |
+| `D` diode | `Dxxx a k model`: Shockley diode with junction cap / transit time / breakdown from its `.model` (the model is required and must be a diode model). |
+| `Q` BJT | `Qxxx c b e model`: Gummel-Poon BJT with charge storage (cje/cjc/tf/tr) and series rb/re/rc. |
+| `M` MOSFET | `Mxxx d g s b model [L= W=]`: LEVEL-1 MOSFET (see caveats) with gate charge and body diode. |
+| `S` voltage switch | `Sxxx a b nc+ nc- model`: voltage-controlled switch (`.model SW/VSWITCH`, defaults if absent). |
+| `E` VCVS | `Exxx n+ n- nc+ nc- gain`: linear voltage-controlled voltage source. |
+| `G` VCCS | `Gxxx n+ n- nc+ nc- gm`: linear voltage-controlled current source. |
+| `F` CCCS | `Fxxx n+ n- vname gain`: current-controlled current source (controlled by a named V-source's branch current). |
+| `H` CCVS | `Hxxx n+ n- vname transres`: current-controlled voltage source. |
 | `B` behavioral source | `Bxxx n+ n- V={expr}` or `I={expr}` over `v()/i()/time/param` (evalexpr subset). |
-| `K` coupled inductors | `Kxxx L1 L2 k` — lossless mutual coupling, `0 < k <= 1` (k=1 legal). |
-| `X` subcircuit call | `Xxxx nodes... NAME [p=v]` — instantiates a `.subckt`, flattened at load with mangled internal names. |
+| `K` coupled inductors | `Kxxx L1 L2 k`: lossless mutual coupling, `0 < k <= 1` (k=1 legal). |
+| `X` subcircuit call | `Xxxx nodes... NAME [p=v]`: instantiates a `.subckt`, flattened at load with mangled internal names. |
 
 ### `.model` types
 
@@ -78,9 +78,9 @@ title and is ignored.
 | Card | What it does |
 |------|--------------|
 | `.op` | DC operating point (also the default when no analysis card is present). |
-| `.tran` | `.tran tstep tstop [tstart] [tmax] [uic]` — transient analysis. |
-| `.dc` | `.dc src start stop step [src2 ...]` — DC sweep of a V/I source, optional nested second sweep. |
-| `.ac` | `.ac <dec|oct|lin> n fstart fstop` — small-signal AC sweep (needs an `AC` source stimulus). |
+| `.tran` | `.tran tstep tstop [tstart] [tmax] [uic]`: transient analysis. |
+| `.dc` | `.dc src start stop step [src2 ...]`: DC sweep of a V/I source, optional nested second sweep. |
+| `.ac` | `.ac <dec|oct|lin> n fstart fstop`: small-signal AC sweep (needs an `AC` source stimulus). |
 
 ### Directives
 
@@ -88,23 +88,23 @@ title and is ignored.
 |------|--------------|
 | `.print` / `.plot` | `.print ANALYSIS var...` selects outputs (`V(a)`, `V(a,b)`, `I(V1)`); `.plot` is treated as `.print`. |
 | `.ic` (with `uic`) | `.ic V(node)=val` seeds transient node voltages; requires `uic` on `.tran`. |
-| `.nodeset` | `.nodeset V(node)=val` — DC Newton start guess (never pinned/enforced). |
-| `.param` | `.param name=expr` — named parameters, order-independent topological resolve. |
+| `.nodeset` | `.nodeset V(node)=val`: DC Newton start guess (never pinned/enforced). |
+| `.param` | `.param name=expr`: named parameters, order-independent topological resolve. |
 | `.include` / `.inc` | `.include <file>` splices another file inline before every other pass. |
 | `.lib <file> <section>` | `.lib <file> <section>` splices one named `.lib/.endl` section (bare one-arg form is refused). |
-| `.options` / `.option` | `.options reltol= abstol= vntol=` — solver tolerance overrides (other keys ignored). |
-| `.temp` | `.temp <celsius>` — one global circuit temperature. |
-| `.subckt` / `.ends` | `.subckt NAME ports [p=v]` ... `.ends` — subcircuit definition (nestable calls, per-instance params). |
+| `.options` / `.option` | `.options reltol= abstol= vntol=`: solver tolerance overrides (other keys ignored). |
+| `.temp` | `.temp <celsius>`: one global circuit temperature. |
+| `.subckt` / `.ends` | `.subckt NAME ports [p=v]` ... `.ends`: subcircuit definition (nestable calls, per-instance params). |
 
 ### Source functions
 
 | Card | What it does |
 |------|--------------|
-| `DC` | `DC value` (or a bare value) — constant source level. |
-| `SIN` | `SIN(offset amp freq [delay theta phase])` — damped sinusoid. |
-| `PULSE` | `PULSE(v1 v2 delay rise fall width period)` — pulse train. |
-| `PWL` | `PWL(t1 v1 t2 v2 ...)` — piecewise-linear waveform. |
-| `AC` stimulus | `AC [mag] [phase]` on a source card — the small-signal drive for `.ac` (bare `AC` = mag 1, phase 0). |
+| `DC` | `DC value` (or a bare value): constant source level. |
+| `SIN` | `SIN(offset amp freq [delay theta phase])`: damped sinusoid. |
+| `PULSE` | `PULSE(v1 v2 delay rise fall width period)`: pulse train. |
+| `PWL` | `PWL(t1 v1 t2 v2 ...)`: piecewise-linear waveform. |
+| `AC` stimulus | `AC [mag] [phase]` on a source card: the small-signal drive for `.ac` (bare `AC` = mag 1, phase 0). |
 
 ### Expressions
 
@@ -120,7 +120,7 @@ title and is ignored.
 These cards work, but not identically to a full SPICE3 / ngspice front end. Each caveat
 is deliberate and, where it affects a waveform, is quantified in [`results.md`](results.md).
 
-- **MOSFETs are LEVEL-1 only — a switch model, not an analog model.** The DC channel is
+- **MOSFETs are LEVEL-1 only: a switch model, not an analog model.** The DC channel is
   the Shichman-Hodges square law; `LEVEL=2/3/BSIM` cards are **refused** (§3), not
   silently downgraded. The implemented physics targets board-shaped switching, not
   analog precision:
@@ -129,7 +129,7 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
     within **≈2 ns of ngspice** on the switch decks (`mos_load_switch`, `pmos_load_switch`),
     rather than matching Meyer's full two-voltage capacitances (which do not conserve
     charge).
-  - **Subthreshold** current below `vth` is a smooth tail — a *documented deviation*:
+  - **Subthreshold** current below `vth` is a smooth tail, a *documented deviation*:
     ngspice's LEVEL-1 has exactly zero current there.
   - **Gate oxide capacitance** is zero when the model omits `TOX` (ngspice materializes a
     default `TOX`/`W`/`L`); state `TOX` on the card to get intrinsic gate charge.
@@ -152,17 +152,17 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
     `Vgs`), or state the part's `RD`/`RS`, and the solver reports the model you gave it.
 - **Coupled inductors `K` model lossless linear mutual coupling only.** `k=1` (a perfect
   transformer) is legal and solved without inverting the singular L-matrix. **Saturating
-  cores are unsupported** — no core (BH) model card parses. Transformer/flyback decks are
+  cores are unsupported**: no core (BH) model card parses. Transformer/flyback decks are
   the payoff (`xfmr_1to2`, `xfmr_k1`, `flyback_diode`); a negative `k` is refused (swap a
   winding's terminals instead).
 - **BJT charge storage uses SPICE-default junction grading.** `cje/cjc/tf/tr` and series
-  `rb/re/rc` are honored, but per-junction `VJE/VJC`/`MJE/MJC` overrides are not parsed —
+  `rb/re/rc` are honored, but per-junction `VJE/VJC`/`MJE/MJC` overrides are not parsed;
   the values default to `0.75`/`0.33` (what an ngspice card without them also gets).
 - **Diode model must resolve, like `Q`/`M`.** A `Dxxx a k model` whose named `.model` is
   undefined is refused (`references undefined .model`), and one whose `.model` is not a
   diode (e.g. an `NPN`) is refused (`not a diode model`) rather than silently inheriting
-  foreign parameters. The model token is required — there is no bare `Dxxx a k` default-
-  diode form — so a typo'd model name is caught, not silently defaulted. (This closes the
+  foreign parameters. The model token is required (there is no bare `Dxxx a k` default-
+  diode form), so a typo'd model name is caught, not silently defaulted. (This closes the
   loader inconsistency where the diode used to default while `Q`/`M` erred; see §3.)
 - **Behavioral `B` sources use a fixed expression subset.** `V={expr}`/`I={expr}` over
   `v(node)`, `v(a,b)`, `i(vsource)`, `time`, and `.param` values, with the function set
@@ -215,7 +215,7 @@ asserted by the drift test.
 | `.dc` on a non-source | `.dc` can only sweep an independent V or I source. | `can only sweep an independent V or I source` |
 | degenerate VCVS | A VCVS shorting its own output port (or unity self-sense) is singular and refuses by name. | `shorts its own output port` |
 | undefined subckt | An `X` call to a subcircuit that was never defined refuses with the name. | `undefined subckt` |
-| missing BJT/MOS `.model` | A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way — see below). | `references undefined .model` |
+| missing BJT/MOS `.model` | A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way; see below). | `references undefined .model` |
 | unknown `.ac` sweep type | `.ac` accepts only `dec`, `oct`, or `lin`. | `unknown `.ac` sweep type` |
 | `.param` dependency cycle | Parameters that reference each other circularly are refused. | `dependency cycle` |
 | `D` undefined `.model` | A diode naming a model that does not exist is refused (no longer silently defaulted). | `references undefined .model` |
@@ -231,7 +231,7 @@ asserted by the drift test.
 <!-- END GENERATED: refused -->
 
 Also refused as `unknown element type` (the loader has no card for them): any element
-letter outside `R C L V I D Q M S E G F H K B` and the `X` subckt call — including `W`,
+letter outside `R C L V I D Q M S E G F H K B` and the `X` subckt call, including `W`,
 `A`, `N`, `P`, `Y`, etc.
 
 ---
@@ -264,12 +264,12 @@ Things a user migrating a deck must know, beyond the per-card caveats above:
 - **Unsupported *analysis directives* refuse loudly.** `.tf`, `.noise`, `.disto`, `.pz`,
   `.sens`, `.four`, and `.meas` each refuse with `SpiceError::Unsupported` and a per-card
   reason (`unsupported directive `.meas`: measurement statements are not implemented; …`)
-  rather than being silently dropped — a deck that asked for one of these analyses will not
+  rather than being silently dropped; a deck that asked for one of these analyses will not
   quietly produce nothing. Any *other* unrecognized dot-directive is refused the same way
   (`unrecognized directive`), so nothing falls through to a silent no-op. The only
   directives accepted-and-ignored are the ones whose omission cannot change a computed
   value: `.end` (deck terminator), `.op` (the default DC operating point), `.title` (deck
-  name), and `.width` / `.save` (output formatting/selection — hauksbee retains every
+  name), and `.width` / `.save` (output formatting/selection; hauksbee retains every
   node). This closes the last "no silent no-op" gap the statement previously tracked.
 
 ---

@@ -43,8 +43,8 @@ job dir ──classify──▶ copper layers, drill, pick-and-place, (BOM)
 2. **Parse** copper layers into solid primitives (capsules and polygons in board
    mm), the drill into plated holes, the pick-and-place into placements.
 3. **Reconstruct** connectivity geometrically: copper that touches is one net
-   (R-tree-pruned union-find, with a shape/distance model that mirrors `drc.rs`
-   — a parallel copy with matched numerics, since the gerber path needs ops the
+   (R-tree-pruned union-find, with a shape/distance model that mirrors `drc.rs`;
+   a parallel copy with matched numerics, since the gerber path needs ops the
    DRC didn't expose), plated holes stitch the layers, and each placed component
    claims the flashes nearest it as pads tagged with their net.
 
@@ -227,7 +227,7 @@ plated holes:        1095
 nets reconstructed:  342
 components placed:    223
 flashes:             6449 total, 3762 assigned to components, 2687 unassigned (vias/test)
-GND net detected:    true   (1158 pads — the dominant ground)
+GND net detected:    true   (1158 pads; the dominant ground)
 components bound:    217/223 (97%) to >= 1 net
 extraction time:     ~238 ms
 ```

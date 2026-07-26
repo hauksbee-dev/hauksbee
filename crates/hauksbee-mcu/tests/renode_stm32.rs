@@ -124,7 +124,7 @@ fn stm32_reports_drive_direction() {
     );
     assert!(
         has('C', 13),
-        "PC13 is configured as a GP output — even while driven LOW mid-blink \
+        "PC13 is configured as a GP output: even while driven LOW mid-blink \
          it must read as DRIVEN, not floating; got {outputs:?}"
     );
     assert!(
@@ -200,7 +200,7 @@ fn stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk() {
     // Bring up the STM32F4 Discovery platform. No firmware is loaded; we only
     // care that platform setup and SPI bridge registration succeed.
     let mut mcu = RenodeBackend::new(RenodeConfig::stm32f4_discovery())
-        .expect("spawn Renode STM32F4 Discovery — platform or bridge setup failed");
+        .expect("spawn Renode STM32F4 Discovery; platform or bridge setup failed");
 
     // Track which bytes each bridge received so cross-talk would produce the
     // wrong controller's count > 0.
@@ -250,7 +250,7 @@ fn stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk() {
     );
 
     eprintln!(
-        "stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk: PASS — \
+        "stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk: PASS: \
          spi2 and spi3 bridges registered on the real STM32F4 Discovery platform \
          without redefinition conflict"
     );

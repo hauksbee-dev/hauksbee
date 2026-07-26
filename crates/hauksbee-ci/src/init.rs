@@ -263,7 +263,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     if let Some((rail, _)) = supplies.first() {
         let _ = writeln!(s);
         let _ = writeln!(s, "# rail_window: does the rail stay up under a dynamic load step (a WiFi");
-        let _ = writeln!(s, "# burst, a motor kick, an inrush)? This is the transient/brownout check —");
+        let _ = writeln!(s, "# burst, a motor kick, an inrush)? This is the transient/brownout check:");
         let _ = writeln!(s, "# there is NO `run --transient` flag; it lives here. A [[profile]] shapes");
         let _ = writeln!(s, "# the load current, a [[scenario]] attaches it to a supply net, and the");
         let _ = writeln!(s, "# rail_window assert bounds the rail while it runs. See docs/checks/TRANSIENTS.md.");
@@ -274,7 +274,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         let _ = writeln!(s, "# rise_s = 0.001");
         let _ = writeln!(s, "# duration_s = 0.0");
         let _ = writeln!(s, "# [[profile.segment]]");
-        let _ = writeln!(s, "# level_a = 0.5                  # the step / burst current (A) — tune to your load");
+        let _ = writeln!(s, "# level_a = 0.5                  # the step / burst current (A); tune to your load");
         let _ = writeln!(s, "# rise_s = 0.0005");
         let _ = writeln!(s, "# duration_s = 0.010");
         let _ = writeln!(s, "# period_s = 0.100");
@@ -300,12 +300,12 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     if mcu_backend.is_some() {
         let _ = writeln!(s);
         let _ = writeln!(s, "# uart: the firmware's serial output contains a string or matches a regex.");
-        let _ = writeln!(s, "#   (needs `firmware = ...` above — the tool boots the image and reads the UART.)");
+        let _ = writeln!(s, "#   (needs `firmware = ...` above; the tool boots the image and reads the UART.)");
         let _ = writeln!(s, "# [[assert]]");
         let _ = writeln!(s, "# kind = \"uart\"");
         let _ = writeln!(s, "# contains = \"hello\"             # a boot banner / heartbeat your firmware prints");
         let _ = writeln!(s);
-        let _ = writeln!(s, "# toggle: a net toggles at an expected rate — a blink / clock / PWM check.");
+        let _ = writeln!(s, "# toggle: a net toggles at an expected rate, a blink / clock / PWM check.");
         let toggle_net = boot_net.as_deref().unwrap_or("LED");
         let _ = writeln!(s, "# [[assert]]");
         let _ = writeln!(s, "# kind = \"toggle\"");

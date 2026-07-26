@@ -6,8 +6,8 @@
 ## The claim
 
 No tool, open or commercial (verified June 2026), does what hauksbee does:
-ingest a real PCB layout file, extract the circuit it implements, and run it
-— physically accurate analog co-simulated with real firmware on emulated
+ingest a real PCB layout file, extract the circuit it implements, and run it:
+physically accurate analog co-simulated with real firmware on emulated
 MCUs, rendered live on the actual board.
 
 ## Feature matrix

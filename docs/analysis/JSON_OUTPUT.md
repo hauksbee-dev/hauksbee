@@ -92,7 +92,7 @@ degradation so a run that silently lost fidelity never reads as healthy:
       "net_a": "GND", "net_b": "VCC", "layer": "F.Cu", "gap_mm": 0.0,
       "loc_mm": [12.4, 30.1], "severity": "serious",
       "plain": "GND shorts VCC on F.Cu at (12.40, 30.10) mm (gap 0.000 mm)",
-      "fix": "separate the two nets' copper — widen the gap or reroute…"
+      "fix": "separate the two nets' copper: widen the gap or reroute…"
     }],
     "violations": [], "at_limit": []
   }
