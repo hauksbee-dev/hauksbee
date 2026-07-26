@@ -1050,12 +1050,19 @@ fn antenna_keepout(c: &Component) -> Option<(KeepoutRect, &'static str)> {
         // We model the band from the antenna edge (local y -5.3) outward by 15 mm
         // (to -20.3), spanning the module half-width (+-9 mm).
         //
-        // Calibration note: on the only corpus board carrying this module (Olimex
-        // ESP32-EVB), the module is mounted at the board's top edge so this
-        // keepout band lies OFF the board (in free space), and the check is
-        // correctly silent - the textbook-correct edge placement. The check
-        // therefore ships as a calibrated guard that fires only on a genuine
-        // copper intrusion under/near the antenna, never on this corpus.
+        // Calibration, measured rather than assumed: on the Olimex ESP32-EVB the
+        // module sits near the board's top edge but not at it. U3's origin is at
+        // y 79.883 with the antenna edge at y 74.58, while the board outline
+        // starts at y 67.06, so only about 7.5 mm of the 15 mm band hangs off
+        // the board. The remaining 7.5 mm lies over board copper that Olimex
+        // floods with ground, and the check reports 17 to 21 intrusions on every
+        // revision.
+        //
+        // Whether that is a real RF defect or an acceptable compromise is a
+        // hardware question this table cannot settle, and it is the difference
+        // between a true positive and the kind of false alarm that gets a
+        // checker switched off. Until it is settled the corpus expectations name
+        // it as an open question rather than asserting either answer.
         return Some((
             KeepoutRect {
                 x_min: -9.0,
