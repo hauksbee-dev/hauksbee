@@ -3,6 +3,13 @@ name = "hauksbee-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Web front door for hauksbee: upload a board, get a plain-language report."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 
 [features]
 # Forward the MCU backend choices to hauksbee-mcu. All on by default so the
