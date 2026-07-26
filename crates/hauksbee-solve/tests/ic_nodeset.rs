@@ -63,7 +63,7 @@ fn ic_uic_seeds_rc_initial_voltage_and_decays() {
 fn nodeset_selects_bistable_state_but_does_not_pin() {
     // Cross-coupled NMOS inverters with resistor loads: a bistable latch. Its DC
     // has two stable roots (qa high / qb low, or the mirror). `.nodeset` seeds
-    // the DC start vector, so it SELECTS which root Newton finds — but nothing
+    // the DC start vector, so it SELECTS which root Newton finds, but nothing
     // is pinned, so the settled voltages differ from the seed.
     let latch = |ns: &str| -> (f64, f64) {
         let net = format!(

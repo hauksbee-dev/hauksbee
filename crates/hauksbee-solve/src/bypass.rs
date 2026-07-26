@@ -9,10 +9,10 @@
 //!
 //! * **Per iteration**: the unknowns the device reads (`ctx.x` at its
 //!   terminals, plus a series-R BJT's internal unknowns) and the pn-limiting
-//!   anchor (`ctx.x_prev`). These are the tangent + equivalent current — the
+//!   anchor (`ctx.x_prev`). These are the tangent + equivalent current; the
 //!   thing bypass exists to reuse.
 //! * **Per step**: the integration factor `coeffs.g`, the charge-companion
-//!   history (`state.x1/dx1/x2` — the diode/BJT/MOS charge companions landed
+//!   history (`state.x1/dx1/x2`; the diode/BJT/MOS charge companions landed
 //!   in dev-plan 04 carry per-step history in their RHS terms), the source
 //!   time, and `gmin`. Constant across one step's whole Newton iteration
 //!   sequence, DIFFERENT on the next step.
@@ -22,8 +22,8 @@
 //! may hold everything in the first two groups **as long as it never survives
 //! a `newton_solve` call**: a `generation` counter bumps at solve start and a
 //! device's record is only replayable inside the generation that recorded it.
-//! That single rule covers every cross-step hazard at once — dt changes, LTE
-//! retries at a different h, event retries, companion-history advance —
+//! That single rule covers every cross-step hazard at once, dt changes, LTE
+//! retries at a different h, event retries, companion-history advance,
 //! because each of those is a fresh `newton_solve` call. (The first-two-
 //! iterations rule below re-evaluates everything at the start of every solve
 //! anyway; the generation is the structural guarantee, not the only line of
@@ -40,7 +40,7 @@
 //! stamps' own non-finite guards.
 //!
 //! The READ set is the device's node unknowns (`Device::nodes()` through the
-//! layout — for a MOSFET that includes the optional bulk; for a VSwitch its
+//! layout, for a MOSFET that includes the optional bulk; for a VSwitch its
 //! control pair, though switches are excluded below) plus a series-R BJT's
 //! device-private internal unknowns (dev-plan 04 §3.2): the intrinsic
 //! junction voltages live there, so "the internal unknowns' movement counts
@@ -54,14 +54,14 @@
 //!   driver holds bypass there, mirroring its extrapolation-seed skip);
 //! * the Armijo line-search residual evaluations keep the full `stamp_all`:
 //!   the census arc (7A) proved those norms sit on the cancellation noise
-//!   floor, so the residual the line search compares must stay order-exact —
+//!   floor, so the residual the line search compares must stay order-exact,
 //!   bypass never touches `residual_inf_norm_at`;
 //! * the accepted step must match the no-bypass reference to reltol (§6.2's
-//!   gate) — bypass may change the iterate PATH, never the answer.
+//!   gate), bypass may change the iterate PATH, never the answer.
 //!
 //! # Exclusion list (refuse-rather-than-fake)
 //!
-//! Bypassed: **Diode, BJT, MOSFET** — the `exp()`-heavy junction devices,
+//! Bypassed: **Diode, BJT, MOSFET**: the `exp()`-heavy junction devices,
 //! exactly SPICE's classic set, and the devices whose evaluation dominates a
 //! quiescent board's assembly.
 //!
@@ -69,27 +69,27 @@
 //!
 //! * **Behavioral (B-source)**: its FD Jacobian probes the expression at
 //!   perturbed dependency values every evaluation, and its fault channel
-//!   (`take_behavioral_fault`) must see every iterate — a cached stamp would
+//!   (`take_behavioral_fault`) must see every iterate, a cached stamp would
 //!   silently skip the very evaluation that detects `ln(-2)` at a new point.
 //! * **Comparator**: bang-bang output with hysteresis read from the CURRENT
-//!   iterate's output voltage — the discrete decision is the event the march
+//!   iterate's output voltage; the discrete decision is the event the march
 //!   bisects on, exactly the "disable bypass near breakpoints" case; also
 //!   nearly free to evaluate (no exp).
 //! * **VSwitch**: the event-flip device of the flagship board (the
 //!   event-freeze machinery exists for it), and under break-before-make its
-//!   stamp reads its SIBLING leg's control nodes — inputs outside its own
+//!   stamp reads its SIBLING leg's control nodes, inputs outside its own
 //!   terminal set. Cheap tanh, dangerous semantics: excluded.
 //! * **OpAmp**: rail-clamp discontinuity decides its stamp shape; evaluation
 //!   is a handful of multiplies. Nothing to win.
 //! * Linear devices (R, C, L, sources, E/F/G/H, coupling): their matrix parts
 //!   are constant or already backbone-compiled (plan.rs); their RHS history
 //!   terms change per step, which the cache cannot outlive anyway. No exp to
-//!   skip — bypassing them buys nothing and risks the reactive history.
+//!   skip, bypassing them buys nothing and risks the reactive history.
 //!
 //! # Replay fidelity
 //!
 //! A fresh evaluation stamps through [`RecordingSink`], which resolves each
-//! write to its frozen-pattern slot and applies it with `add_at` — the same
+//! write to its frozen-pattern slot and applies it with `add_at`; the same
 //! `+=` on the same slot `SparseMatrix::add` performs, so a bypass-armed
 //! assembly in which nothing qualifies for skipping is bit-identical to the
 //! interpreted walk. A replay re-adds the recorded raw writes in the original
@@ -206,12 +206,12 @@ impl BypassState {
 
     /// Invalidate every record: called at the top of each armed
     /// `newton_solve`, so no cache survives a step / retry / dt change (the
-    /// per-step inputs — companion history, coeffs, time — moved).
+    /// per-step inputs (companion history, coeffs, time) moved).
     pub(crate) fn begin_solve(&mut self) {
         self.gen = self.gen.wrapping_add(1);
     }
 
-    /// (evaluations, skips) since construction — the observability the §6.2
+    /// (evaluations, skips) since construction; the observability the §6.2
     /// gate wants (skip rate measured, not guessed).
     pub(crate) fn counters(&self) -> (u64, u64) {
         (self.evals, self.skips)
@@ -357,7 +357,7 @@ mod tests {
     use hauksbee_ir::{BjtModel, Circuit, Device, DiodeModel, NodeId, SourceKind};
 
     /// A mixed nonlinear board: source, resistors, cap, diode (with charge),
-    /// BJT, MOSFET, switch, comparator — every stamp class the walk visits.
+    /// BJT, MOSFET, switch, comparator, every stamp class the walk visits.
     fn mixed_board() -> Circuit {
         let mut c = Circuit::new();
         let vin = c.node("vin");
@@ -634,7 +634,7 @@ mod tests {
             // DC solves), then a transient-shaped solve after the source has
             // moved a realistic per-step amount (~0.5 V): a warm-basin walk
             // that takes several real iterations. (A whole-quarter-period
-            // 2 V jump 2-cycles the bare Newton — real marches never move a
+            // 2 V jump 2-cycles the bare Newton, real marches never move a
             // source that far in one step, dt control forbids it.)
             crate::newton::dc_operating_point(&mut ws, &c, &opts).expect("dc converges");
             let r = newton_solve(

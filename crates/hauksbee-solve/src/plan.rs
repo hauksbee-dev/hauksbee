@@ -4,7 +4,7 @@
 //! the `Device` enum, and for each conductance does a binary search to find its
 //! matrix slot. Most of that work re-derives things that never change:
 //!
-//! * **Tier 1 — the constant backbone.** Contributions that are the same every
+//! * **Tier 1: the constant backbone.** Contributions that are the same every
 //!   transient assembly: temperature-independent resistor conductances, the
 //!   ±1 incidence entries of ideal voltage sources and inductor branch rows,
 //!   and (keyed on the integration factor `coeffs.g = k/dt`) the companion
@@ -13,11 +13,11 @@
 //!   to a `(row, position)` slot in the frozen pattern once, so replaying the
 //!   backbone is a flat loop of `add_at` with no enum dispatch and no search.
 //!
-//! * **Tier 2 — the interpreted re-stamp.** Contributions that change per step
+//! * **Tier 2: the interpreted re-stamp.** Contributions that change per step
 //!   or per Newton iteration: diode/BJT/MOSFET tangents, switch and behavioral
 //!   blocks, source values, and the reactive RHS history terms. These still
 //!   run the *exact interpreted device code* (`stamp_device`), so the physics
-//!   and its formulas exist in one place only — but they write through a
+//!   and its formulas exist in one place only, but they write through a
 //!   pre-resolved per-device slot table ([`SlotTable`]) instead of a per-write
 //!   binary search, and devices whose matrix part lives entirely in the
 //!   backbone (capacitors, inductors, sources) write RHS-only.
@@ -29,9 +29,9 @@
 //! solver tolerance (reltol/vntol) rather than bit-for-bit. The
 //! `Partitioning::Off` oracle keeps calling the interpreted `stamp_all`
 //! unchanged; the planned path is selected only by an explicit
-//! [`crate::AssemblyMode::Planned`] opt-in. Contexts the plan does not model —
+//! [`crate::AssemblyMode::Planned`] opt-in. Contexts the plan does not model,
 //! DC operating-point solves (reactive elements open/short/IC-pinned), the
-//! staged-DC regularizers (`branch_reg > 0`), and event-frozen solves — fall
+//! staged-DC regularizers (`branch_reg > 0`), and event-frozen solves, fall
 //! back to the interpreted assembly inside `stamp_all_planned`, so the fast
 //! path can never be silently wrong on them.
 
@@ -73,8 +73,8 @@ enum Restamp {
 }
 
 /// Pre-resolved slots for every `(row, col)` pair a device can touch: the
-/// device's (deduped, non-ground) node unknowns, plus — for the behavioral
-/// B-source — its own branch unknown and any control-source branch columns.
+/// device's (deduped, non-ground) node unknowns, plus, for the behavioral
+/// B-source; its own branch unknown and any control-source branch columns.
 /// A handful of entries either way, which makes the local index scan a couple
 /// of register compares instead of a binary search over a (possibly
 /// hub-length) matrix row.
@@ -198,7 +198,7 @@ impl StampPlan {
         };
         // Slot table over a device's deduped, non-ground node unknowns, plus
         // any device-private internal unknowns (a series-resistance BJT's
-        // intrinsic nodes, dev-plan 04 §3.2) — the relocated core and the
+        // intrinsic nodes, dev-plan 04 §3.2); the relocated core and the
         // ohmic couplings stamp there, and a table miss would fall back to
         // the slow row search every iteration.
         let node_table = |dev: &Device, id: hauksbee_ir::DeviceId| {
@@ -269,7 +269,7 @@ impl StampPlan {
                     push_at(&mut reactive_ops, br, br, -*henries);
                     // Mutual terms (dev-plan 04 §2.3): −M·coeffs.g at (this
                     // branch row, partner branch column) folds into the
-                    // reactive backbone with multiplier −M — the exact same
+                    // reactive backbone with multiplier −M; the exact same
                     // (slot, multiplier)×coeffs.g dt-dependence as the self
                     // term above, sound for the same reason the CCCS fold is:
                     // the plan compiles AFTER the layout freeze, so the
@@ -354,7 +354,7 @@ impl StampPlan {
                 } => {
                     // Fully constant like the VCCS: two (output-row,
                     // control-branch-column) entries fold into the backbone.
-                    // The folding is SOUND here — this compilation runs after
+                    // The folding is SOUND here; this compilation runs after
                     // layout freeze, so `layout.branch(ctrl_src)` is the same
                     // resolved index the interpreted stamp uses (the question
                     // §2.2 flags for F/H is answered by construction: the plan
@@ -406,7 +406,7 @@ impl StampPlan {
                 // Unlike the node-only nonlinear devices above, its writes
                 // reach beyond its node unknowns: a V-output owns a branch
                 // row/column, and every I(...) dep references another
-                // device's branch COLUMN — extend the slot table with those
+                // device's branch COLUMN, extend the slot table with those
                 // unknowns so the re-stamp stays search-free (the SlottedSink
                 // fallback would keep a miss correct, but the table is the
                 // point of the plan).
@@ -440,7 +440,7 @@ impl StampPlan {
                 // matrix cross terms folded into the reactive backbone at the
                 // Inductor arm above (via `mutual_partners`), and its history
                 // rides the windings' RhsOnly restamps. Mirrors the inert
-                // `stamp_device` arm — one home for the physics.
+                // `stamp_device` arm, one home for the physics.
                 Device::Coupling { .. } => {}
             }
         }
@@ -730,7 +730,7 @@ mod tests {
 
     /// S3 measurement estate (run with `--ignored --nocapture`, release):
     /// the cost of ONE assembly, interpreted vs planned, on the two graded
-    /// shapes the acceptance gate names — an RC-ladder-like linear board
+    /// shapes the acceptance gate names, an RC-ladder-like linear board
     /// (backbone-dominated: the planned walk skips every resistor and does
     /// zero slot searches) and a shunt-mirror-like nonlinear board (hub rail
     /// row, where the tier-2 slot tables replace binary searches over a long

@@ -7,7 +7,7 @@
 //! external tool is absent, so a contributor without `uv`/`spicelib` is not
 //! blocked. When `uv` is present it shells out to a one-shot Python script that
 //! parses each rawfile with `spicelib.RawRead` and asserts the values, exiting
-//! nonzero on any mismatch — a failure here is a real format bug.
+//! nonzero on any mismatch, a failure here is a real format bug.
 
 use hauksbee_solve::{write_ascii_rawfile, RawPlot, SimOutput};
 use std::process::Command;

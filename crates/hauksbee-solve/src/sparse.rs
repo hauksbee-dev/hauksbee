@@ -267,7 +267,7 @@ impl Symbolic {
             return true;
         }
         if !self.allow_dynamic {
-            // Default: preserve the original semantics exactly — a frozen-order
+            // Default: preserve the original semantics exactly, a frozen-order
             // singular factorization reports failure and lets the caller decide.
             return false;
         }
@@ -443,7 +443,7 @@ impl Symbolic {
     /// the matrix is genuinely (numerically) singular.
     ///
     /// This is O(work) sparse, but it rebuilds the ordering, so it is the slow
-    /// path by design — it runs only when `refactor_frozen` fails.
+    /// path by design; it runs only when `refactor_frozen` fails.
     pub fn refactor_dynamic(&mut self, m: &SparseMatrix) -> bool {
         let n = self.n;
         if n == 0 {
@@ -563,7 +563,7 @@ impl Symbolic {
                 // A Markowitz count of zero (a singleton) can't be beaten;
                 // and since columns are sorted ascending by count, once the
                 // best possible mark for the NEXT column exceeds best_mark we
-                // could stop — but keep it simple and correct: stop on a 0.
+                // could stop, but keep it simple and correct: stop on a 0.
                 if best_mark == 0 {
                     break 'cols;
                 }
@@ -572,13 +572,13 @@ impl Symbolic {
             if best_r == usize::MAX {
                 // No numerically usable pivot remains: the trailing submatrix is
                 // (numerically) singular. On a DC operating-point solve this is
-                // the genuinely-floating-node degeneracy — e.g. a stretch-cap /
+                // the genuinely-floating-node degeneracy, e.g. a stretch-cap /
                 // diode-anode node connected to the rest only through a
                 // reverse-biased junction (~0 S) and a DC-open capacitor, whose
                 // DC voltage is physically undefined. Rather than fail the whole
                 // factorization (which would discard the 4900+ well-defined
                 // unknowns we already eliminated), ANCHOR each remaining live
-                // (row==col) unknown with a unit pivot, pinning it to 0 — exactly
+                // (row==col) unknown with a unit pivot, pinning it to 0, exactly
                 // what an infinitesimal gmin-to-ground does in the limit. This is
                 // the standard Gmin/`option rshunt` resolution of a floating node
                 // and keeps the factorization (and the solve) well-posed; those
@@ -608,7 +608,7 @@ impl Symbolic {
                 // Fully DECOUPLE the anchored unknown: emit no L and no U for it.
                 // `solve` then sets x[c] = b[pr] / 1.0; the anchored row is the
                 // residual of a numerically-singular (floating) block whose rhs
-                // is at the gmin/leak scale, so x[c] resolves to ~0 — the
+                // is at the gmin/leak scale, so x[c] resolves to ~0; the
                 // floating-node convention. Emitting the U couplings instead made
                 // the anchored unknown chase later unknowns and could amplify to
                 // NaN on a stiff transient, so we keep it isolated.
@@ -757,7 +757,7 @@ impl Symbolic {
     /// irrelevant. Hoisting it out of `solve` removes the per-call heap
     /// allocation that used to sit on the Newton hot path (one `vec![0.0; n]`
     /// per solve, per iteration, per step). `&self` stays immutable so callers
-    /// can hold the factorization while bringing their own scratch — which is
+    /// can hold the factorization while bringing their own scratch, which is
     /// also what lets each thread solve a private island matrix without
     /// contending on a shared buffer (see plan §4.1). The permute / forward /
     /// back / unpermute arithmetic below is byte-for-byte unchanged; only the

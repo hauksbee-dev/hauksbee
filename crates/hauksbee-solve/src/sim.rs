@@ -104,7 +104,7 @@ impl SimOutput {
     }
 }
 
-/// Every non-ground node voltage, in node order — the sane default when the
+/// Every non-ground node voltage, in node order; the sane default when the
 /// deck carries no `.print` and the user passed no `--print`.
 pub fn default_probes(circuit: &Circuit) -> Vec<Probe> {
     (1..circuit.node_count())
@@ -156,8 +156,8 @@ pub fn run_op(
     // KCL residual of the adopted point. The bound is a small absolute
     // current, 1e-6 A: every genuinely converged ladder outcome (including
     // the homotopy / gmin-ramp sub-attempts that also set `used_staged_dc`)
-    // lands at nA or below — the opt-in ResidualAccept path certifies roots
-    // at `residual_accept_tol` = 1e-9 A — while a forced-OFF forward diode
+    // lands at nA or below; the opt-in ResidualAccept path certifies roots
+    // at `residual_accept_tol` = 1e-9 A, while a forced-OFF forward diode
     // leaves an amp-scale imbalance. 1e-6 A keeps three orders of headroom on
     // each side and is far above `opts.abstol` (1e-12 A) so legitimate
     // step-norm-terminated solves are never rejected. Do NOT reject on
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn ac_refuses_a_deck_with_no_ac_stimulus() {
         // A `.ac` deck whose sources carry no `AC` spec would run with a zero
-        // drive — refuse rather than hand back all zeros.
+        // drive, refuse rather than hand back all zeros.
         let net = "ac\nVin in 0 DC 1\nR1 in out 1k\nC1 out 0 159.155n\n\
                    .ac dec 5 10 1e6\n.end\n";
         let (c, d) = SpiceLoader::load_with_directives(net).unwrap();

@@ -10,10 +10,10 @@
 //!
 //! The NUMERICAL gates are the hard ones and block unconditionally
 //! (bit-identical across threads, tear-vs-monolith to 1e-6, planned-vs-Off to
-//! reltol — see `tests/rail_tear.rs`, `tests/planned_assembly.rs`). This SPEED
+//! reltol, see `tests/rail_tear.rs`, `tests/planned_assembly.rs`). This SPEED
 //! gate is a soft gate: wall time is noisy, so it only ever fires against a
 //! same-machine-class baseline, it skips loudly rather than guess, it keys on
-//! the QUIET number (the minimum across reps — contention only adds time, so the
+//! the QUIET number (the minimum across reps, contention only adds time, so the
 //! min is the least-disturbed estimate of true compute cost), and a board whose
 //! quiet number is not even reproducible on this machine is marked advisory
 //! (tracked, non-blocking) until a quiet-machine recapture confirms it.
@@ -129,7 +129,7 @@ fn boards() -> Vec<Board> {
 }
 
 /// Small helper: the board ids are built from sizes, so intern them to `'static`
-/// (there are six, once per process — a bounded, deliberate leak).
+/// (there are six, once per process, a bounded, deliberate leak).
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
@@ -171,7 +171,7 @@ fn median(samples: &[f64]) -> f64 {
 
 /// The QUIET NUMBER: the minimum across reps. On a shared/loaded machine (the
 /// dev box regularly sits at load 20+ while sibling builds run), contention only
-/// ever ADDS wall time — it never makes a solve faster than its true compute
+/// ever ADDS wall time; it never makes a solve faster than its true compute
 /// cost. So the minimum is the least-disturbed estimate of that cost, and it is
 /// reproducible where the median is not. This is the "pick the quiet-machine
 /// number honestly" escape the plan (08 §4) grants for exactly this situation.
@@ -249,7 +249,7 @@ fn baseline_path(class: &str) -> std::path::PathBuf {
 // that the quiet number should be checked for reproducibility across two
 // captures before a board is gated (rather than left advisory). The live gate
 // keys on the quiet number, which is robust to spread, so it does not demote on
-// spread per run — advisory is a deliberate, committed decision in the TOML.
+// spread per run, advisory is a deliberate, committed decision in the TOML.
 const ADVISORY_SPREAD: f64 = 0.10;
 
 /// Reps for the real gate. The gate keys on the QUIET number (min), so it needs
@@ -292,7 +292,7 @@ fn perf_gate() {
         Err(_) => {
             eprintln!(
                 "PERF GATE SKIPPED: no baseline for class '{class}' at {}.\n  Capture one \
-                 (honest-update rule 08 §4 — commit it on its own with an explanation):\n  \
+                 (honest-update rule 08 §4, commit it on its own with an explanation):\n  \
                  HAUKSBEE_PERF_CLASS={class} cargo test -p hauksbee-solve --release --test \
                  perf_gate perf_capture_baseline -- --ignored --nocapture",
                 path.display()
@@ -321,7 +321,7 @@ fn perf_gate() {
     let mut violations: Vec<String> = Vec::new();
     for board in boards() {
         let Some(bb) = base.boards.get(board.id) else {
-            eprintln!("  {:<16} no baseline entry — skipped", board.id);
+            eprintln!("  {:<16} no baseline entry, skipped", board.id);
             continue;
         };
         let samples = board.measure(GATE_WARMUP, GATE_REPS);
@@ -346,7 +346,7 @@ fn perf_gate() {
             let dir = if ratio > 0.0 {
                 "REGRESSION (slower)"
             } else {
-                "SPEEDUP (faster than baseline — a stale baseline is itself a reason to update it)"
+                "SPEEDUP (faster than baseline, a stale baseline is itself a reason to update it)"
             };
             violations.push(format!(
                 "  {}: quiet {} vs baseline {}  ({:+.1}%, {})",
@@ -402,7 +402,7 @@ fn perf_capture_baseline() {
     eprintln!("=== perf baseline capture: class '{class}', arch '{arch}', reps {REPS} ===\n");
 
     let mut lines = Vec::new();
-    lines.push("# Perf baseline — HONEST-UPDATE RULE (08-validation-and-test-campaign.md §4):".to_string());
+    lines.push("# Perf baseline, HONEST-UPDATE RULE (08-validation-and-test-campaign.md §4):".to_string());
     lines.push("# change this file only in its OWN commit whose message explains the delta".to_string());
     lines.push("# (a flame-graph diff or a written reason). Never fold a baseline move into an".to_string());
     lines.push("# unrelated change; never loosen the gate silently to make a regression pass.".to_string());

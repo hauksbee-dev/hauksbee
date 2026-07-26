@@ -50,7 +50,7 @@ impl IntegCoeffs {
     /// two-step rule differentiates through THREE points, and its stencil
     /// weights depend on how far apart those points actually sit. Under the
     /// adaptive controller the grid is non-uniform, so applying the
-    /// uniform-grid weights there silently degrades BDF2 to first order —
+    /// uniform-grid weights there silently degrades BDF2 to first order,
     /// exactly on the stiff problems Gear-2 is chosen for. Callers on a
     /// uniform grid (fixed step, unit tests) pass `dt_prev == dt`; a
     /// non-positive `dt_prev` (no accepted step yet) also means "assume
@@ -92,7 +92,7 @@ impl IntegCoeffs {
                 //
                 // Sanity: the weights sum to zero (a constant has zero
                 // derivative), and r = 1 collapses them to the familiar
-                // uniform stencil (3 q_n - 4 q_{n-1} + q_{n-2}) / (2h) —
+                // uniform stencil (3 q_n - 4 q_{n-1} + q_{n-2}) / (2h),
                 // bit-for-bit, since (1+2r) = 3, (1+r)·h = 2h and r² = 1 are
                 // all exact and each coefficient is then a single correctly
                 // rounded division of the same real value as before (a unit
@@ -317,7 +317,7 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
         // A series-resistance BJT's internal unknowns (dev-plan 04 §3.2) join
         // the all-pairs set: the ohmic stamps couple external<->internal and
         // the relocated Gummel-Poon core couples the internals among
-        // themselves — the union's all-pairs covers both (and the toggle-off
+        // themselves; the union's all-pairs covers both (and the toggle-off
         // unit diagonal is inside it too).
         if let Some(ints) = layout.bjt_internal(id) {
             ns.extend(ints.iter().copied());
@@ -353,7 +353,7 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
             }
         }
         // Branch-current reads (F/H control, behavioral `I(...)` deps)
-        // reserve slots in the CONTROL source's branch COLUMN — a column
+        // reserve slots in the CONTROL source's branch COLUMN, a column
         // belonging to a DIFFERENT device. This is the structurally new bit
         // vs E/G: the reservation walk needs the resolved control branch
         // index, and it has it because `Layout::new` runs before the pattern
@@ -576,7 +576,7 @@ pub(crate) fn stamp_device<S: StampSink>(
             deps,
         } => stamp_behavioral(ctx, id, name, *p, *n, *output, expr, deps, sink),
         // A coupling stamps NOTHING here on purpose: it is a relationship,
-        // not an element. Its physics lives in the WINDINGS' stamps —
+        // not an element. Its physics lives in the WINDINGS' stamps,
         // `stamp_inductor` consults `layout.mutual_partners` (built from the
         // Coupling devices at layout time) for the −M·coeffs.g cross terms
         // and each winding's mutual history voltage. An arm that stamped the
@@ -592,7 +592,7 @@ thread_local! {
     /// First behavioral-expression fault of the current assembly (device-named,
     /// human-readable). The stamp interface is infallible by design (a sink of
     /// accumulations), so an expression that errors or produces a non-finite
-    /// value at some Newton iterate cannot return an error — instead the
+    /// value at some Newton iterate cannot return an error, instead the
     /// faulting device stamps NOTHING, notes itself here, and the solve
     /// drivers check [`take_behavioral_fault`] immediately after each
     /// assembly: the Newton iteration is aborted as non-converged (never
@@ -627,8 +627,8 @@ pub(crate) fn take_behavioral_fault() -> Option<String> {
 /// FD scheme (plan §2.5, shipped default; symbolic d/dv is the later
 /// upgrade): forward difference per slot with step
 /// `delta_k = reltol*|x_k| + floor`, where the floor is the per-quantity
-/// convergence floor — `vntol` for a `V(...)` slot, `abstol` for an
-/// `I(...)` slot — so the perturbation is always resolvable at the same
+/// convergence floor, `vntol` for a `V(...)` slot, `abstol` for an
+/// `I(...)` slot, so the perturbation is always resolvable at the same
 /// scale the Newton convergence test cares about. Any non-finite value
 /// (IEEE semantics: `1/0 = inf`, `ln(-1) = NaN`, see `CompiledExpr::eval`)
 /// or structural eval error is a fault: partial derivatives from a poisoned
@@ -697,7 +697,7 @@ pub(crate) fn behavioral_eval_partials(
 ///   gains); the constant term is an equivalent current source `p -> n`.
 /// * **V-output**: constraint row `v_p - v_n - f = 0` on its own branch
 ///   unknown (incidence identical to `stamp_vsource`), linearized to
-///   `v_p - v_n - sum_k g_k*x_k = f0 - sum_k g_k*x_k0` — `-g_k` at
+///   `v_p - v_n - sum_k g_k*x_k = f0 - sum_k g_k*x_k0`, `-g_k` at
 ///   `(branch_row, dep_col)`, the constant on the branch RHS (a VCVS with
 ///   numeric gains plus a Newton-companion value).
 ///
@@ -705,12 +705,12 @@ pub(crate) fn behavioral_eval_partials(
 /// column) or the control source's branch unknown for `I(...)` slots. Like
 /// every dependent source, the value is a device property: never scaled by
 /// source-stepping homotopy (`src_scale`), matching SPICE. The same stamp
-/// serves DC (time = 0) and transient — the constraint has no memory. Sense
+/// serves DC (time = 0) and transient; the constraint has no memory. Sense
 /// contract: dependency-node ROWS receive nothing (only their columns are
 /// referenced), which the conduction cross-check enforces mechanically.
 ///
 /// On an expression fault the device stamps NOTHING and notes a device-named
-/// fault for the drivers (see [`BEHAVIORAL_FAULT`]) — never a NaN into the
+/// fault for the drivers (see [`BEHAVIORAL_FAULT`]), never a NaN into the
 /// matrix.
 #[allow(clippy::too_many_arguments)]
 fn stamp_behavioral<S: StampSink>(
@@ -923,9 +923,9 @@ fn stamp_inductor<S: StampSink>(
     // generalizes verbatim from `v = L·di/dt` to `v_j = Σ_k L_jk·di_k/dt`
     // (L_jj the self term already stamped above, L_jk = M = k·sqrt(Lj·Lk)).
     // Per partner k this adds one matrix cross term −M·coeffs.g at
-    // (this branch row, partner branch column) — L stamped DIRECTLY, never
+    // (this branch row, partner branch column), L stamped DIRECTLY, never
     // inverted, so a k=1 group's singular inductance matrix is harmless (the
-    // node-incidence terms keep the MNA system regular) — plus the partner's
+    // node-incidence terms keep the MNA system regular), plus the partner's
     // history contribution to this winding's veq, the exact mutual analogue
     // of the self expressions above (each history is the PARTNER's own
     // ReactiveState slot; no shared state exists or is needed, because the
@@ -980,11 +980,11 @@ fn stamp_vsource<S: StampSink>(
 /// constraint row `v_p - v_n - gain*(v_cp - v_cn) = 0` in place of a fixed
 /// value. The branch incidence (`±1` in the p/n KCL rows and the branch row)
 /// is identical to `stamp_vsource`; the control terms land in the branch ROW
-/// only (columns cp/cn), so the control pair's own rows stay untouched — that
+/// only (columns cp/cn), so the control pair's own rows stay untouched, that
 /// is the sense-terminal contract `Device::sense_nodes` declares. The RHS is
 /// zero (nothing time-varying, nothing to src_scale: the gain is a device
 /// property, not an independent source value). The same stamp serves DC and
-/// transient — the constraint has no memory.
+/// transient; the constraint has no memory.
 #[allow(clippy::too_many_arguments)]
 fn stamp_vcvs<S: StampSink>(
     ctx: &StampCtx,
@@ -1017,11 +1017,11 @@ fn stamp_vcvs<S: StampSink>(
 /// `v_p - v_n - transres*i_ctrl = 0`. The branch incidence (±1 in the p/n KCL
 /// rows and mirrored in the branch row) is identical to `stamp_vsource`; the
 /// dependence lands as a single `-transres` entry in H's OWN branch row at the
-/// CONTROL source's branch COLUMN — reading another device's unknown, never
+/// CONTROL source's branch COLUMN, reading another device's unknown, never
 /// touching the control loop's node rows (the control coupling is declared via
 /// `Device::controlling_source`, not `sense_nodes`, precisely because it is a
 /// branch-current read). RHS is zero (the transresistance is a device
-/// property, not an independent source value — no src_scale). Same stamp for
+/// property, not an independent source value, no src_scale). Same stamp for
 /// DC and transient: the constraint has no memory.
 fn stamp_ccvs<S: StampSink>(
     ctx: &StampCtx,
@@ -1081,7 +1081,7 @@ fn vcrit(is: f64, vt: f64) -> f64 {
 /// * forward / weak reverse (`vd >= -3 n·Vt`): the Shockley exponential;
 /// * reverse (`-bv <= vd < -3 n·Vt`): tiny constant leakage `-Is`;
 /// * breakdown (`vd < -bv`, only when the model gives a finite `bv`):
-///   `i = -Is·exp(-(bv+vd)/(n·Vt))` — ngspice's `-IBV·exp(-(BV+v)/VT)` shape
+///   `i = -Is·exp(-(bv+vd)/(n·Vt))`, ngspice's `-IBV·exp(-(BV+v)/VT)` shape
 ///   with `Is` standing in for `IBV`. The SIGN is the point: the current is
 ///   REVERSE (negative, cathode->anode) and grows exponentially as `vd` drops
 ///   below `-bv`. Using `Is` as the scale makes the current CONTINUOUS at
@@ -1207,7 +1207,7 @@ pub(crate) fn depletion_charge(cjo: f64, vj: f64, m: f64, vd: f64) -> (f64, f64)
 /// SPICE default junction built-in potential / grading coefficient for the
 /// BJT's depletion capacitances (`VJE`/`VJC` = 0.75 V, `MJE`/`MJC` = 0.33).
 /// The loader does not parse per-junction `vj`/`m` overrides yet, so both
-/// junctions use the ngspice defaults — the value an ngspice model card
+/// junctions use the ngspice defaults; the value an ngspice model card
 /// without VJE/MJE also gets, which keeps the differential decks honest.
 pub(crate) const BJT_VJ: f64 = 0.75;
 pub(crate) const BJT_MJ: f64 = 0.33;
@@ -1216,7 +1216,7 @@ pub(crate) const BJT_MJ: f64 = 0.33;
 /// `junction_caps` gate AND at least one charge-producing model field. A
 /// default model (`cje == cjc == tf == tr == 0`) never stores charge, so
 /// decks whose BJT models predate this physics are bit-identical whatever
-/// the toggle — the same contract [`diode_has_charge`] pins for diodes.
+/// the toggle; the same contract [`diode_has_charge`] pins for diodes.
 #[inline]
 pub(crate) fn bjt_has_charge(
     model: &BjtModel,
@@ -1230,7 +1230,7 @@ pub(crate) fn bjt_has_charge(
 /// POLARITY-FOLDED (NPN-reference) space: depletion (`cje`, SPICE-default
 /// knee) plus forward diffusion `tf·i_cc`, where `i_cc = cf` is the forward
 /// transport current the Gummel-Poon core already evaluates (`gif` its
-/// tangent) — the transit-time charge rides the core's own transport
+/// tangent); the transit-time charge rides the core's own transport
 /// evaluation instead of recomputing it.
 pub(crate) fn bjt_charge_be(model: &BjtModel, vbe: f64, cf: f64, gif: f64) -> (f64, f64) {
     let mut q = 0.0;
@@ -1267,7 +1267,7 @@ pub(crate) fn bjt_charge_bc(model: &BjtModel, vbc: f64, cr: f64, gir: f64) -> (f
 
 /// Both BJT stored charges `(Q_be, Q_bc)` at FOLDED junction voltages,
 /// recomputing the transport currents through the same clamped exponentials
-/// the stamp uses — the seed/advance/LTE entry point (the stamp itself reuses
+/// the stamp uses; the seed/advance/LTE entry point (the stamp itself reuses
 /// its already-evaluated `cf`/`gif`/`cr`/`gir` via the per-junction helpers).
 pub(crate) fn bjt_charges_at(
     model: &BjtModel,
@@ -1294,7 +1294,7 @@ pub(crate) fn bjt_charges_at(
 
 /// FOLDED junction voltages `(vbe, vbc)` of a BJT at the solution vector `x`,
 /// measured at the INTRINSIC (internal) nodes when series resistance is
-/// stamped — the voltages its stored charges are functions of. This is the
+/// stamped; the voltages its stored charges are functions of. This is the
 /// single node-resolution rule the transient/partitioned seed-advance arms
 /// and the AC stamp share with `stamp_bjt`: internal unknowns when the
 /// `series_resistance` toggle is on AND the layout allocated them, the
@@ -1319,7 +1319,7 @@ pub(crate) fn bjt_junction_voltages(
 /// The unknown indices the Gummel-Poon core (and the charges) live on:
 /// `[c, b, e]` as internal-node indices where the layout allocated them and
 /// the `series_resistance` toggle honors them, external node indices
-/// otherwise (per terminal — a zero-valued resistance allocated no internal
+/// otherwise (per terminal, a zero-valued resistance allocated no internal
 /// node and stays external).
 pub(crate) fn bjt_effective_nodes(
     layout: &Layout,
@@ -1343,7 +1343,7 @@ pub(crate) fn bjt_effective_nodes(
 
 /// Meyer-limit intrinsic gate-drain capacitance fraction: `Cgd -> (1/2)·Cox`
 /// in deep triode (Meyer's `vds -> 0` limit); zero in saturation/cutoff where
-/// only the overlap remains — the Miller-charge asymmetry that sets switching
+/// only the overlap remains; the Miller-charge asymmetry that sets switching
 /// timing.
 pub(crate) const MOS_CGD_MEYER: f64 = 0.5;
 
@@ -1351,7 +1351,7 @@ pub(crate) const MOS_CGD_MEYER: f64 = 0.5;
 /// `junction_caps` gate AND at least one charge-producing model field (gate
 /// overlap/oxide caps or bulk depletion caps). A default model never stores
 /// charge, so decks whose MOS models predate this physics are bit-identical
-/// whatever the toggle — the [`diode_has_charge`]/[`bjt_has_charge`] contract.
+/// whatever the toggle; the [`diode_has_charge`]/[`bjt_has_charge`] contract.
 #[inline]
 pub(crate) fn mos_has_charge(
     model: &MosfetModel,
@@ -1395,17 +1395,17 @@ fn sigmoid(x: f64) -> f64 {
 /// fed into the plain Shichman-Hodges triode/saturation expressions. Above
 /// threshold `vov_eff -> vov` (the square law, exponentially fast); below,
 /// `vov_eff -> 2·n·Vt·e^(vov/(2·n·Vt))`, so the saturation current tends to
-/// `2·beta·(n·Vt)²·e^(vov/(n·Vt))` — an exponential subthreshold tail with
+/// `2·beta·(n·Vt)²·e^(vov/(n·Vt))`, an exponential subthreshold tail with
 /// slope n·Vt, which is what the old two-branch form MEANT its
 /// "continuity scale" to buy. That form matched neither value nor slope at
 /// `vgs == vth` (the exponential branch carried `beta·(n·Vt)²·e` where the
 /// square law carries 0), so a gate sweep saw `id` drop by the full
-/// `i0` and `gm` collapse to 0 crossing threshold — a Newton limit-cycle trap
+/// `i0` and `gm` collapse to 0 crossing threshold, a Newton limit-cycle trap
 /// and a lie against the model's "smooth subthreshold tail" doc. The blended
 /// overdrive is C-infinity in `vgs`, so `id` and `gm` are continuous
 /// everywhere by construction (`gm` picks up the `sigmoid` chain factor
 /// d vov_eff/d vgs). Channel-length modulation multiplies every region
-/// including the tail — the (1 + lambda·vds) factor would otherwise jump at
+/// including the tail; the (1 + lambda·vds) factor would otherwise jump at
 /// the region switch.
 #[inline]
 pub(crate) fn mos_channel(
@@ -1450,7 +1450,7 @@ pub(crate) fn mos_channel(
 /// genuine `Q(v)` whose capacitance matches Meyer's REGION LIMITS, smoothly
 /// interpolated over a `delta`-wide transition at the threshold (`softplus`
 /// makes Q C-infinity-smooth, so Newton sees continuous C and dC/dv through
-/// every switching edge — the FC-knee discipline applied to the region
+/// every switching edge; the FC-knee discipline applied to the region
 /// switch):
 ///
 /// * [`mos_charge_gs`]: `C = c_ov + c_ox` BELOW threshold falling to
@@ -1458,20 +1458,20 @@ pub(crate) fn mos_channel(
 ///   CUTOFF GATE-BULK capacitance (`Cgb = Cox`) REFERENCED TO THE SOURCE:
 ///   in the target case (discrete MOSFET, bulk tied to source) that is
 ///   electrically exact, and dropping it instead (the first cut of this
-///   model) made every gate charge ~`Cox` too fast below threshold — the
+///   model) made every gate charge ~`Cox` too fast below threshold; the
 ///   switching edges led ngspice by the whole subthreshold gate-RC
 ///   (measured on the §3.3 load-switch decks: worst pointwise errors 5.45
 ///   NMOS / 54.5 PMOS without it). The ON value is Meyer's DEEP-TRIODE
 ///   limit `Cox/2`, not the saturation `2/3·Cox`: a switch dwells in
 ///   triode whenever it is on and only transits saturation briefly during
-///   the drain swing, and the choice is cross-check-driven — with `2/3`
+///   the drain swing, and the choice is cross-check-driven, with `2/3`
 ///   the load-switch turn-off edge lagged ngspice by 5-8 ns (gate
 ///   discharging through an over-stated triode Cgs; worst pointwise error
 ///   0.76), with `1/2` the same edge aligns to 0.8 ns (worst 0.32,
 ///   mid-edge).
 /// * [`mos_charge_gd`]: `C = c_ov` in cutoff/saturation rising to
 ///   `c_ov + (1/2)·c_ox` in triode (`vgd` crossing the threshold is the
-///   drain end of the channel forming) — the Miller-charge asymmetry that
+///   drain end of the channel forming); the Miller-charge asymmetry that
 ///   sets switching timing.
 ///
 /// What is given up vs Meyer is the region interpolation only a
@@ -1509,7 +1509,7 @@ pub(crate) fn mos_charge_gd(c_ov: f64, c_ox: f64, vth: f64, delta: f64, v: f64) 
 }
 
 /// All four MOSFET stored charges `(Q_gs, Q_gd, Q_bd, Q_bs)` at FOLDED
-/// junction voltages — the seed/advance/LTE entry point, computing exactly
+/// junction voltages; the seed/advance/LTE entry point, computing exactly
 /// what the stamp's companions integrate. Gate charges are the
 /// [`mos_gate_charge`] shape at the zero-bias threshold `vto` (the charge
 /// region switch deliberately ignores the body effect: the common
@@ -1631,7 +1631,7 @@ fn stamp_diode<S: StampSink>(
     // vcrit; the breakdown exponential is the same curve MIRRORED about
     // vd = -bv, so in the breakdown region (vd below -bv, with a 10·nvt skirt,
     // ngspice's region test) the per-iteration move is limited in mirrored
-    // coordinates vdtemp = -(vd + bv) — pnjlim toward the same vcrit — and
+    // coordinates vdtemp = -(vd + bv), pnjlim toward the same vcrit, and
     // mapped back. Without this, one Newton iterate landing volts past -bv
     // evaluates exp() at full depth and poisons the step exactly the way the
     // unlimited forward branch used to. `bv == INFINITY` (the default) makes
@@ -1648,7 +1648,7 @@ fn stamp_diode<S: StampSink>(
     // FIRST stamp from the relaxed (diodes-off) seed cannot overflow exp(). The
     // relaxed seed leaves some stretcher-diode cathodes floating; their first
     // forward bias can be tens of volts, and on iteration 1 pnjlim sees a zero
-    // delta (anchor == iterate) so it does not limit — diode_eval then evaluates
+    // delta (anchor == iterate) so it does not limit, diode_eval then evaluates
     // exp(vd/nvt) ≈ 1e30 A and poisons the Newton step (measured: dc_residual
     // ~1e30 A at the V_out nets). Clamping vd to a few hundred mV past vcrit
     // bounds the current to a sane magnitude without changing the root: a real
@@ -1685,7 +1685,7 @@ fn stamp_diode<S: StampSink>(
     // where ieq_hist carries the Q/dQ history exactly as the capacitor's
     // history term carries C·v_prev (= Q_prev) and C·dv_prev (= i_prev): the
     // diode's ReactiveState slots hold CHARGE in x1/x2 and dQ/dt in dx1, so
-    // this rides the identical integration machinery — the linear capacitor
+    // this rides the identical integration machinery; the linear capacitor
     // IS this formula specialized to Q = C·v. Newton then linearizes Q(v) at
     // the iterate with dQ/dv = C(vd):
     //   i_lin(v) = geq·v + (i_hat(vd) - geq·vd),  geq = coeffs.g·C(vd).
@@ -1719,12 +1719,12 @@ fn stamp_bjt<S: StampSink>(
 
     // Series resistances rb/re/rc (dev-plan 04 §3.2): the layout allocated an
     // internal unknown per NONZERO terminal resistance (see
-    // `Layout::bjt_internal` — zero-valued resistances allocate nothing, so a
+    // `Layout::bjt_internal`, zero-valued resistances allocate nothing, so a
     // default model takes none of these branches). With the toggle on, stamp
     // the ohmic conductance between each external terminal and its internal
     // node and move the Gummel-Poon core (and the charges below) onto the
     // internal nodes. With the toggle off, the core stays on the external
-    // nodes — exactly the no-series-R physics — and each allocated-but-unused
+    // nodes, exactly the no-series-R physics, and each allocated-but-unused
     // internal unknown is pinned to 0 by a unit diagonal (an isolated row
     // coupled to nothing, so it cannot influence the solution).
     let ext = [ctx.layout.node(c), ctx.layout.node(b), ctx.layout.node(e)];
@@ -1754,7 +1754,7 @@ fn stamp_bjt<S: StampSink>(
     // Separate critical voltages per junction (SPICE3's VCRITF/VCRITR):
     // pnjlim's gate (`vnew > vcrit`) and its `arg <= 0` fallback (return
     // vcrit) are only self-consistent when vcrit is built from the SAME n·Vt
-    // the call limits with — feeding the vbc call the nf-scaled vcrit made
+    // the call limits with, feeding the vbc call the nf-scaled vcrit made
     // the reverse limiter fire at the wrong threshold whenever nf != nr.
     // Iteration-path only; the converged root is unchanged.
     let vcrit_be = vcrit(is, model.nf * vt);
@@ -1773,14 +1773,14 @@ fn stamp_bjt<S: StampSink>(
 
     // Base-width modulation (Early effect): SGP's base-charge factor with
     // IKF absent is qb = q1 = 1/(1 - vbc/VAF - vbe/VAR), and the transport
-    // current is DIVIDED by qb — i.e. MULTIPLIED by (1 - vbc/VAF - vbe/VAR),
+    // current is DIVIDED by qb, i.e. MULTIPLIED by (1 - vbc/VAF - vbe/VAR),
     // which is > 1 in forward-active (vbc < 0), so ic grows with vce and
     // ro = VAF/IC, the classic Early slope; the -vbe/VAR term is the REVERSE
     // Early voltage, shrinking ic as the forward junction charges the base
     // (it dominates in saturation/reverse-active, where VAR-carrying models
     // used to mis-simulate silently: the field was parsed and dropped here).
     // (This arc FIXED an inversion here: the previous code divided by
-    // (1 - vbc/VAF), shrinking ic with vce — undetected because the bias
+    // (1 - vbc/VAF), shrinking ic with vce, undetected because the bias
     // decks' collector points are bias-network-set, exposed by the §3.2
     // amplifier-gain cross-check against ngspice. For the default model both
     // `vaf` and `var` are infinite, `early == 1.0`, and `1/1.0 == 1.0`
@@ -1819,14 +1819,14 @@ fn stamp_bjt<S: StampSink>(
 
     // Linearized stamp, two variants sharing the residual physics:
     //
-    // LEGACY (external nodes — every pre-§3.2 deck): conductances among (b,e)
+    // LEGACY (external nodes, every pre-§3.2 deck): conductances among (b,e)
     // and (b,c) plus the transconductance gm coupling c to vbe, with vce as
     // the output coordinate. This Jacobian is APPROXIMATE in saturation
     // (mapping ∂ic/∂vbc through go-between-c-e plus gm-on-vbe mismatches the
-    // true partial by gir), which board-level resistances damp fine — and it
+    // true partial by gir), which board-level resistances damp fine, and it
     // is the byte-for-byte path the fixture hash pins, so it stays.
     //
-    // EXACT (core relocated onto internal nodes — the §3.2 opt-in honored):
+    // EXACT (core relocated onto internal nodes; the §3.2 opt-in honored):
     // the true partials
     //   ∂ic/∂vbe = gif·q1_inv
     //   ∂ic/∂vbc = -gir·q1_inv - gmu - (cf-cr)/vaf  (Early term only when the
@@ -1840,10 +1840,10 @@ fn stamp_bjt<S: StampSink>(
     // off run) stays on the pinned legacy bytes, and the staged-DC relaxed
     // pass (which solves with `series_resistance` OFF precisely to get the
     // easier base-topology system) stays legacy too. Both Jacobians define
-    // the same root — the RHS residual brackets are the terminal currents
+    // the same root; the RHS residual brackets are the terminal currents
     // either way.
     //
-    // (ci, bi, ei) are the EFFECTIVE unknowns resolved above — the intrinsic
+    // (ci, bi, ei) are the EFFECTIVE unknowns resolved above; the intrinsic
     // internal nodes when series resistance is stamped, the externals
     // otherwise. `sign` folds out of the matrix entries (sign² = 1) and folds
     // the RHS brackets whole; folding only some terms breaks PNP convergence.
@@ -1903,7 +1903,7 @@ fn stamp_bjt<S: StampSink>(
 
     // Charge storage (dev-plan 04 §3.2): base-emitter and base-collector
     // charges as CHARGE-BASED companions, exactly the diode's §3.1 companion
-    // applied per junction — bank A of the device's `ReactiveState` slots
+    // applied per junction, bank A of the device's `ReactiveState` slots
     // holds Q_be, bank B holds Q_bc (both in FOLDED space, like every voltage
     // above). Open at DC like a capacitor; only active when the model stores
     // charge AND the toggle allows, so charge-free decks are bit-identical.
@@ -1919,7 +1919,7 @@ fn stamp_bjt<S: StampSink>(
     // current i_hat(v) = coeffs.g·Q(v) - ieq_hist rides the same IntegCoeffs
     // machinery (slots hold CHARGE in x1/x2, dQ/dt in dx1), Newton linearizes
     // with dQ/dv = C at the iterate. The folded charge current flows b->e
-    // (resp. b->c) in NPN-reference space; `sign` maps it to real space —
+    // (resp. b->c) in NPN-reference space; `sign` maps it to real space,
     // the conductance stamp is polarity-free (sign² = 1) while the RHS
     // residual folds, mirroring the DC bracket above.
     let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
@@ -1964,11 +1964,11 @@ fn stamp_mosfet<S: StampSink>(
     // Series resistances rd/rs (the datasheet-Rds(on) split, mirroring the BJT
     // rb/re/rc machinery): the layout allocated an internal DRAIN unknown when
     // rd > 0 and an internal SOURCE unknown when rs > 0 (see
-    // `Layout::mos_internal` — a zero resistance allocates nothing, so a default
+    // `Layout::mos_internal`, a zero resistance allocates nothing, so a default
     // model takes none of these branches). With the toggle on, stamp the ohmic
     // conductance between each external terminal and its internal node and move
     // the WHOLE transistor intrinsic (channel, body junctions, gate charges)
-    // onto the internal nodes — exactly where a real device's drain/source
+    // onto the internal nodes, exactly where a real device's drain/source
     // diffusion resistance sits, so a power FET's on-state drop lives in rd + rs
     // rather than a spuriously-low channel. With the toggle off, the intrinsic
     // stays on the external nodes (the no-series-R physics) and each
@@ -1999,7 +1999,7 @@ fn stamp_mosfet<S: StampSink>(
     // Read drain/source voltages at the EFFECTIVE unknowns (internal when a
     // series resistor moved the intrinsic inside, external otherwise). For the
     // default rd == rs == 0 model d_eff/s_eff ARE `layout.node(d)`/`node(s)` and
-    // `vx()` reproduces `ctx.v()` exactly — the bit-identity fast path.
+    // `vx()` reproduces `ctx.v()` exactly; the bit-identity fast path.
     let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
     let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
 
@@ -2018,7 +2018,7 @@ fn stamp_mosfet<S: StampSink>(
     // Body-effect threshold shift (dev-plan 04 §3.3): `gamma` was parsed and
     // silently ignored before this arc. With a bulk terminal present and
     // `gamma > 0`, `vth = vto + gamma·(sqrt(phi - vbs) - sqrt(phi))` at the
-    // folded bulk-to-EFFECTIVE-source voltage (the post-swap source — ngspice
+    // folded bulk-to-EFFECTIVE-source voltage (the post-swap source, ngspice
     // measures the body effect from whichever terminal acts as the source).
     // `gamma == 0` (every pre-§3.3 model, every db entry) takes the plain
     // `vto` path bit-identically and never reads the bulk voltage.
@@ -2047,7 +2047,7 @@ fn stamp_mosfet<S: StampSink>(
 
     let nsub = model.n_sub.max(1.0);
     // Channel evaluation via the shared C1-continuous blend (see
-    // [`mos_channel`]) — the AC tangent calls the SAME function at the OP.
+    // [`mos_channel`]); the AC tangent calls the SAME function at the OP.
     let lambda = if ctx.opts.effects.early_effect {
         model.lambda
     } else {
@@ -2083,7 +2083,7 @@ fn stamp_mosfet<S: StampSink>(
     inject(sink, sn, ieq_signed);
 
     // Trapezoidal/Gear/BE history bracket shared by every charge companion
-    // below — the diode's §3.1 companion verbatim (slots hold CHARGE in
+    // below; the diode's §3.1 companion verbatim (slots hold CHARGE in
     // x1/x2, dQ/dt in dx1; the discrete current is coeffs.g·Q(v) - hist).
     let hist = |x1: f64, dx1: f64, x2: f64| match ctx.opts.integration {
         Integration::Trapezoidal => ctx.coeffs.g * x1 + dx1,
@@ -2093,7 +2093,7 @@ fn stamp_mosfet<S: StampSink>(
     let sl = id.0 as usize;
 
     // Body diode (dev-plan 04 §3.3): STRUCTURAL bulk-junction physics, the
-    // BJT-junction discipline — the DC branches exist whenever the model
+    // BJT-junction discipline; the DC branches exist whenever the model
     // carries them (`body_is > 0`), un-toggled; the depletion charges ride
     // `junction_caps`. Each junction is bulk->drain / bulk->source in folded
     // space (the bulk is the anode of an N-channel body diode; `sign` folds
@@ -2107,7 +2107,7 @@ fn stamp_mosfet<S: StampSink>(
         // unknown is always the external one (ngspice's `bNode`).
         let bulk_i = ctx.layout.node(bulk);
         // (its EFFECTIVE unknown, depletion cap, secondary bank index). The
-        // bulk junctions sit at the internal drain/source (behind rd/rs) —
+        // bulk junctions sit at the internal drain/source (behind rd/rs),
         // where a real device's body diode connects, exactly as ngspice wires
         // them (`bNode` to `dNodePrime`/`sNodePrime`, mos1set.c). The short
         // test therefore compares ELECTRICAL unknowns, not physical terminals:
@@ -2154,12 +2154,12 @@ fn stamp_mosfet<S: StampSink>(
         }
     }
 
-    // Gate charges (dev-plan 04 §3.3, gated by `junction_caps` — "the single
+    // Gate charges (dev-plan 04 §3.3, gated by `junction_caps`, "the single
     // biggest reason a MOS switching deck disagrees with ngspice"): Q_gs on
     // bank A, Q_gd on secondary bank 0, each a two-terminal charge companion.
     // "PHYSICAL (unswapped)" means Q_gs stays on the real SOURCE side and Q_gd
     // on the real DRAIN side whichever way the channel evaluation swapped d/s
-    // for Vds < 0 — the charge does not follow the symmetry swap. It DOES
+    // for Vds < 0; the charge does not follow the symmetry swap. It DOES
     // follow the intrinsic onto the internal nodes (d_eff/s_eff): the gate
     // capacitance connects to the intrinsic drain/source diffusion, behind
     // rd/rs, so Cgd/Cgs reference the effective (internal when present)
@@ -2361,7 +2361,7 @@ fn stamp_vswitch<S: StampSink>(
 /// target through the single pole (exact first-order update over `dt`), then
 /// rate-limited by the slew spec. Shared verbatim by the Newton stamp (every
 /// iteration reads the SAME frozen `v_prev`, so the step's dynamics are a
-/// fixed affine map of the current inputs — no mid-Newton state mutation) and
+/// fixed affine map of the current inputs, no mid-Newton state mutation) and
 /// by the on-accept state advance in `transient.rs` (which persists the
 /// result as the next step's `v_prev`, exactly the capacitor's roll-forward
 /// discipline).
@@ -2371,7 +2371,7 @@ fn stamp_vswitch<S: StampSink>(
 /// bit-identically. Otherwise `Some((v_out, dscale))` where `v_out` is the
 /// EMF to drive this step and `dscale` = ∂v_out/∂target is the factor the
 /// input-coupling tangent must be scaled by (`1-exp(-dt/τ)` through the pole,
-/// 0 when the slew clamp is pinning the output — the output is then a
+/// 0 when the slew clamp is pinning the output; the output is then a
 /// constant this step, like a frozen comparator rail).
 pub(crate) fn opamp_transient_output(
     v_prev: f64,
@@ -2432,7 +2432,7 @@ fn stamp_opamp<S: StampSink>(
     // ideal target itself but the target passed through the device's
     // single-pole + slew output dynamics (`opamp_transient_output`), anchored
     // at the EMF persisted from the last ACCEPTED step (`ReactiveState.x1`,
-    // seeded from the DC point and rolled forward on step acceptance only —
+    // seeded from the DC point and rolled forward on step acceptance only,
     // the capacitor's companion-state lifecycle). The DC operating point and
     // the AC path are untouched: a single pole passes DC unattenuated, and
     // slew is a large-signal (transient-only) limit.
@@ -2537,7 +2537,7 @@ fn stamp_comparator<S: StampSink>(
         // whenever the comparator inputs pass near threshold, which makes the
         // output node chase the inputs and the inner Newton limit-cycle (the
         // output flip-flops at the step cap forever). Decoupling the output from
-        // the inputs entirely — output := frozen rail — makes the inner circuit
+        // the inputs entirely, output := frozen rail, makes the inner circuit
         // strictly feed-FORWARD through the comparator, so Newton converges
         // cleanly. The outer event loop is what enforces input/output
         // consistency: it re-derives each comparator's rail from the converged
@@ -2674,7 +2674,7 @@ mod diode_physics_tests {
     }
 
     /// The FC-knee continuation must be C1 in the CAPACITANCE (C and dC/dv
-    /// continuous), i.e. C2 in the charge — the property that keeps Newton
+    /// continuous), i.e. C2 in the charge; the property that keeps Newton
     /// from chattering when a switching edge crosses FC·vj.
     #[test]
     fn junction_cap_knee_is_c1_continuous() {
@@ -2805,7 +2805,7 @@ mod diode_physics_tests {
     }
 
     /// §3.4 contract: the one toggle the stamps still cannot honor (diode RS
-    /// — deliberately deferred, see `effect_log::DIODE_SERIES_R`) LOGS ONCE
+    ///, deliberately deferred, see `effect_log::DIODE_SERIES_R`) LOGS ONCE
     /// instead of silently ignoring the parsed model field. The BJT flags
     /// this test used to read are GONE: cje/cjc/tf/tr and rb/re/rc are real
     /// stamps now (§3.2), asserted by the toggle tests below.
@@ -3026,7 +3026,7 @@ mod bjt_physics_tests {
 
     /// Residual (terminal-current) rows `(f_b, f_c)` of a one-BJT system at a
     /// PINNED iterate: b at `vb` (previous iterate `vb_prev`), c at `vc`, e
-    /// grounded — the pure DC physics through the same `stamp_residual` sink
+    /// grounded; the pure DC physics through the same `stamp_residual` sink
     /// Newton brackets with. Temperature toggle OFF so `is` and `Vt` match
     /// hand arithmetic exactly.
     fn bjt_residual(model: BjtModel, vb: f64, vc: f64, vb_prev: f64) -> (f64, f64) {
@@ -3077,7 +3077,7 @@ mod bjt_physics_tests {
     }
 
     /// Bug-hunt r4 #11: `VAR` (reverse Early voltage) was parsed but never
-    /// stamped — the base-charge factor carried only `-vbc/VAF`. The SGP
+    /// stamped; the base-charge factor carried only `-vbc/VAF`. The SGP
     /// factor is `q1_inv = 1 - vbc/VAF - vbe/VAR`, so at a forward vbe a
     /// finite VAR must scale the TRANSPORT current by exactly the corrected
     /// factor and in the physically-correct DIRECTION (forward base charge
@@ -3093,7 +3093,7 @@ mod bjt_physics_tests {
         let (fb_fin, fc_fin) = bjt_residual(m_fin, vb, vc, vb);
         // Base current has no q1 factor: untouched to the bit.
         assert_eq!(fb_inf.to_bits(), fb_fin.to_bits());
-        // Collector current scales by q1_inv(VAR)/q1_inv(∞) — smaller, not
+        // Collector current scales by q1_inv(VAR)/q1_inv(∞), smaller, not
         // larger (the ibc offset is ~1e-11 relative at this bias).
         let (vbe, vbc) = (vb, vb - vc);
         let q_inf = 1.0 - vbc / 100.0;
@@ -3122,7 +3122,7 @@ mod bjt_physics_tests {
     /// voltage (built from nf·Vt) while limiting on the nr·Vt scale, so with
     /// nf != nr the reverse limiter gated and clamped at the wrong threshold
     /// (SPICE3 computes separate VCRITF/VCRITR for exactly this reason).
-    /// Iteration-path only — but the wrong clamp bends Newton's path, so pin
+    /// Iteration-path only, but the wrong clamp bends Newton's path, so pin
     /// the vcrit values AND the stamped residual at a limited iterate.
     #[test]
     fn bjt_vbc_limiter_uses_reverse_vcrit() {
@@ -3137,7 +3137,7 @@ mod bjt_physics_tests {
         assert!(vcrit_f < 1.0 && 1.0 < vcrit_r);
         assert_eq!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_r), 1.0);
         assert_ne!(pnjlim(1.0, 0.9, m.nr * vt, vcrit_f), 1.0);
-        // Stamp-level: b at 1.0 V (prev 0.9), c grounded — both junctions
+        // Stamp-level: b at 1.0 V (prev 0.9), c grounded, both junctions
         // forward. The base-row residual is F_b = A·x - rhs at the RAW x, so
         // a limited junction contributes its tangent extrapolated back to the
         // raw voltage: F_b = ib(limited) + gpi·(vbe_raw - vbe_lim)
@@ -3181,7 +3181,7 @@ mod mos_channel_tests {
 
     /// Bug-hunt r4 #10: the old two-branch channel had a genuine downward id
     /// jump of the full `i0 = beta·(n·Vt)²·e` at `vgs == vth` (and gm
-    /// collapsed from `i0/(n·Vt)` to 0) — the "continuity scale" matched
+    /// collapsed from `i0/(n·Vt)` to 0); the "continuity scale" matched
     /// nothing. The blended overdrive must give id and gm with NO jump across
     /// threshold: consecutive fine-sweep deltas bounded by the local slope,
     /// one-sided limits at vth agreeing tightly, and gm equal to the true
@@ -3234,7 +3234,7 @@ mod mos_channel_tests {
             let above = f(1e-9);
             assert!((above.0 - below.0).abs() <= 1e-6 * at.0.abs().max(1e-30));
             assert!((above.1 - below.1).abs() <= 1e-6 * at.1.abs().max(1e-30));
-            // gm IS d id / d vgs — through the threshold, not just beside it.
+            // gm IS d id / d vgs, through the threshold, not just beside it.
             for &v in &[-0.1, -0.02, 0.0, 0.02, 0.1] {
                 let d = 1e-7;
                 let fd = (f(v + d).0 - f(v - d).0) / (2.0 * d);
@@ -3256,7 +3256,7 @@ mod mos_channel_tests {
         let nvt = vt; // nsub = 1
         let beta = 2e-5;
         let f = |vov: f64, vds: f64| mos_channel(beta, nvt, vov, vds, 0.0, 0.0);
-        // Deep subthreshold: one n·Vt of gate bias is one decade-of-e — the
+        // Deep subthreshold: one n·Vt of gate bias is one decade-of-e; the
         // exponential tail's defining ratio.
         let ratio = f(-0.2 + nvt, 2.0).0 / f(-0.2, 2.0).0;
         assert!(
@@ -3472,7 +3472,7 @@ mod behavioral_fd_tests {
     /// must match ANALYTIC derivatives on a known expression at representative
     /// operating points. With `delta = reltol*|x| + floor` the forward
     /// difference carries an O(delta * f''/2) truncation term, so the bar is
-    /// set from reltol (1e-3) times the local curvature — a few 1e-3 relative
+    /// set from reltol (1e-3) times the local curvature, a few 1e-3 relative
     /// on curved terms, tighter on linear ones.
     #[test]
     fn fd_partials_match_analytic() {
@@ -3499,7 +3499,7 @@ mod behavioral_fd_tests {
             assert!((f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0), "f0 at ({v},{i},{t})");
             // Linear partial: FD is exact to rounding for a linear term...
             // except for the tanh term's contribution? No: partials are per
-            // SLOT — slot 0 perturbs v only, and f is linear in v, so the
+            // SLOT, slot 0 perturbs v only, and f is linear in v, so the
             // difference quotient is exactly 2 up to cancellation rounding.
             let dv_err = ((partials[0] - 2.0) / 2.0).abs();
             worst_lin = worst_lin.max(dv_err);
@@ -3524,7 +3524,7 @@ mod behavioral_fd_tests {
     }
 
     /// The fault contract of the partials helper: NaN values, INF values, and
-    /// eval errors all come back as Err — never as poisoned numbers.
+    /// eval errors all come back as Err, never as poisoned numbers.
     #[test]
     fn fd_partials_report_faults() {
         let opts = SolverOptions::default();
@@ -3573,7 +3573,7 @@ mod gear2_varstep_tests {
             assert_eq!(c.a1.to_bits(), (2.0 / dt).to_bits(), "a1 at dt={dt}");
             assert_eq!(c.a2.to_bits(), (0.5 / dt).to_bits(), "a2 at dt={dt}");
             // "No accepted step yet" (dt_prev <= 0) must take the same r = 1
-            // path — exact, because the seeded history is flat (x2 == x1).
+            // path, exact, because the seeded history is flat (x2 == x1).
             let c0 = IntegCoeffs::for_step(Integration::Gear2, dt, 0.0, false);
             assert_eq!(c0.g.to_bits(), c.g.to_bits());
             assert_eq!(c0.a1.to_bits(), c.a1.to_bits());
@@ -3610,7 +3610,7 @@ mod gear2_varstep_tests {
                 "stencil not exact on quadratic at h={h}, r={r}: got {got}, want {want}"
             );
             // And the OLD uniform coefficients really do get this wrong when
-            // r != 1 — documents what the fix repairs.
+            // r != 1, documents what the fix repairs.
             let cu = IntegCoeffs::for_step(Integration::Gear2, h, h, false);
             let bad = cu.g * q(tn) - (cu.a1 * q(t1) - cu.a2 * q(t2));
             assert!(
@@ -3622,12 +3622,12 @@ mod gear2_varstep_tests {
 
     /// R6 #F7 regression, part 3: ORDER OF ACCURACY under a CHANGING step.
     /// Integrate q' = -q (exact: e^{-t}) to t = 1 on a deliberately
-    /// alternating grid h, h/2, h, h/2, ... — every single step changes size.
+    /// alternating grid h, h/2, h, h/2, ..., every single step changes size.
     /// Each implicit BDF2 step solves g·q_n - (a1·q_{n-1} - a2·q_{n-2}) = -q_n,
     /// i.e. q_n = (a1·q_{n-1} - a2·q_{n-2}) / (g + 1), exactly the algebra the
     /// capacitor companion performs. Halving the base h must cut the error by
     /// ~4x (2nd order). The pre-fix uniform coefficients on this grid converge
-    /// at ~2x (1st order) — the silent degradation this test pins.
+    /// at ~2x (1st order); the silent degradation this test pins.
     #[test]
     fn alternating_grid_converges_at_second_order() {
         // March q' = -q with variable-step BDF2 on the alternating grid,

@@ -190,8 +190,8 @@ mod tests {
     /// Measured on the SEQUENTIAL execution arm (`ParallelPolicy::Off`): the
     /// S1 property under audit is the solver hot path's own buffers, which the
     /// S4 pooled arm runs identically (same per-island code, same scratch).
-    /// The pool's work-stealing deques allocate as jobs are pushed — runtime
-    /// machinery outside the solver's numerics — so auditing the pooled arm
+    /// The pool's work-stealing deques allocate as jobs are pushed, runtime
+    /// machinery outside the solver's numerics, so auditing the pooled arm
     /// would count rayon internals, not solver leaks. The pooled arm's own
     /// gate is the §3.5 bit-identical determinism test.
     #[test]

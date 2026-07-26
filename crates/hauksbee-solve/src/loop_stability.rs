@@ -170,7 +170,7 @@ pub fn margins_from_bode(bode: &[(f64, f64, f64)]) -> StabilityMargins {
     // Phase crossover / gain margin: collect EVERY -180 deg crossing of the
     // unwrapped phase (either direction), interpolating the frequency (in
     // log-f) and the gain at each. Convention: the gain margin is read at the
-    // lowest-frequency -180 deg crossing at or above the gain crossover — the
+    // lowest-frequency -180 deg crossing at or above the gain crossover; the
     // first point past unity gain where extra loop gain would push the
     // response onto the critical point. If no crossing lies at/above the gain
     // crossover (or the gain never crosses unity), fall back to the

@@ -210,7 +210,7 @@ impl AcAnalysis {
     /// driven with unit AC amplitude for backwards compatibility.
     pub fn run(&self, circuit: &Circuit, spec: &AcSpec) -> Result<AcResponse, String> {
         // 1. DC operating point (reusing the real solver verbatim). AC linearizes
-        // around the ordinary DC bias and must IGNORE initial conditions — a cap
+        // around the ordinary DC bias and must IGNORE initial conditions, a cap
         // pinned to its `ic` (shorted) would collapse a nonlinear stage's bias and
         // corrupt every device tangent, so use the no-IC entry point.
         let mut ws = Workspace::new(circuit);
@@ -287,7 +287,7 @@ impl AcAnalysis {
             );
         }
         // A behavioral expression that faults AT THE OPERATING POINT (should
-        // be impossible — the OP solve just evaluated it cleanly — but a
+        // be impossible, the OP solve just evaluated it cleanly, but a
         // refusal here beats a silently incomplete complex system).
         if let Some(fault) = crate::stamp::take_behavioral_fault() {
             return Err(format!("AC linearization refused: {fault}"));
@@ -387,7 +387,7 @@ fn stamp_ac(
             sys.add(br, br, Complex64::new(0.0, -w * *henries));
             // Mutual inductance: the coupled branch relation
             // `v_j = jw·Σ_k L_jk·i_k` adds −jwM at (this branch row, partner
-            // branch column) — real transformer behavior in `.ac`, same
+            // branch column), real transformer behavior in `.ac`, same
             // L-direct (never inverted) form as the transient companion, so
             // k = 1 is as legal here as there. Empty slice for K-free decks.
             for &(pid, m) in layout.mutual_partners(id) {
@@ -425,7 +425,7 @@ fn stamp_ac(
             // the transient stamp uses (so breakdown biases get the breakdown
             // conductance). A charge-storing diode (dev-plan 04 §3.1)
             // additionally contributes jw*C(vd): junction depletion plus
-            // diffusion capacitance frozen at the operating point — an AC
+            // diffusion capacitance frozen at the operating point, an AC
             // answer without it would silently miss the pole the transient
             // model has. Charge-free models add exactly 0.0j: bit-identical.
             let vd = op.v(*a) - op.v(*k);
@@ -505,13 +505,13 @@ fn stamp_ac(
             let g = vswitch_g_from_s(s, *ron, *roff);
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(g, 0.0));
 
-            // CONTROL TRANSCONDUCTANCE — the small-signal image of the
+            // CONTROL TRANSCONDUCTANCE; the small-signal image of the
             // transient tangent (stamp.rs, `stamp_vswitch`). The switch
             // current i = gsw(vctrl)·(v_a − v_b) has the exact differential
             //   di = gsw·(dv_a − dv_b) + (v_a − v_b)·(dgsw/dvctrl)·(dv_cp − dv_cn)
             // The second term is the modulation path (switch-as-VGA); dropping
             // it made `.ac` report a fixed resistor while transient captured
-            // the control coupling — a mirror divergence. The tanh derivative
+            // the control coupling, a mirror divergence. The tanh derivative
             // uses the BARE pre-break-before-make `th` (the transient tangent
             // likewise ignores d(win)/dvctrl) while `g` is the same OP
             // conductance the transient stamps (bbm win factor included). No
@@ -532,7 +532,7 @@ fn stamp_ac(
         Device::Comparator { out, .. } => {
             // Digital output: no small-signal INPUT path (the bang-bang
             // transfer has no tangent), but the DC stamp holds the output at
-            // its rail through a 1-S output stage on every path — small-
+            // its rail through a 1-S output stage on every path, small-
             // signal that rail is AC ground, so the quiescent output
             // conductance stays. Stamping nothing left the output node a
             // gmin-open, and anything AC-coupled to it saw the wrong (near-
@@ -599,7 +599,7 @@ fn stamp_ac(
             }
         }
         // Current-controlled sources: linear and frequency-independent like
-        // E/G — the AC stamp is the transient stamp with real entries. The
+        // E/G; the AC stamp is the transient stamp with real entries. The
         // control branch index resolves through the SAME layout the transient
         // path froze, so the F/H coupling column is identical.
         Device::Cccs {
@@ -636,10 +636,10 @@ fn stamp_ac(
         }
         // Behavioral B-source: a LINEARIZED AC stamp at the operating point,
         // through the SAME finite-difference partials the transient Newton
-        // uses (frozen at the OP, evaluated at time = 0 — the DC bias the OP
+        // uses (frozen at the OP, evaluated at time = 0; the DC bias the OP
         // was solved at). The result is a VCVS/VCCS-shaped stamp with numeric
         // gains, real-valued and frequency-independent (the expression device
-        // stores no charge); RHS 0 — a dependent source is never an AC drive,
+        // stores no charge); RHS 0, a dependent source is never an AC drive,
         // and `time` is a bias input with no small-signal excitation. This is
         // exactly the textbook `g = df/dx at the OP` contract the module doc
         // promises for nonlinear devices. A fault at the OP stamps nothing
@@ -723,7 +723,7 @@ fn stamp_ac(
 /// Whether the circuit carries a dedicated AC injection source (a `Vsource` /
 /// `Isource` named `VINJ`/`VLOOP`/`VAC`/`IINJ`/`ILOOP`/`IAC`, or a `_VINJ`-style
 /// suffix). When false, [`AcAnalysis::run`] drives EVERY independent source with
-/// unit AC — a superposition, not a single-input transfer function — so the
+/// unit AC (a superposition, not a single-input transfer function) so the
 /// caller should warn that the sweep has no chosen injection point.
 pub fn has_dedicated_ac_source(circuit: &Circuit) -> bool {
     circuit.iter().any(|(_, dev)| match dev {
@@ -764,11 +764,11 @@ fn resistor_value(ohms: f64, tc1: Option<f64>, opts: &SolverOptions) -> f64 {
 
 /// BJT small-signal model at the bias: input conductances gpi (b-e), gmu (b-c),
 /// output go (c-e), and transconductance gm (ic vs vbe). This mirrors the
-/// Gummel-Poon tangents the transient stamp computes, frozen at the OP —
+/// Gummel-Poon tangents the transient stamp computes, frozen at the OP,
 /// including its §3.2 additions: the ohmic rb/re/rc between external and
 /// internal nodes (with the tangents relocated onto the internal nodes,
 /// through the same node-resolution rule), and `jw·C` per junction (depletion
-/// plus diffusion capacitance at the bias) when the model stores charge — an
+/// plus diffusion capacitance at the bias) when the model stores charge, an
 /// AC answer without them would silently miss the poles the transient model
 /// has. Default models add exactly 0.0j on the external nodes: bit-identical.
 #[allow(clippy::too_many_arguments)]
@@ -838,7 +838,7 @@ fn stamp_bjt_ac(
 
     // gpi/gmu UNFLOORED, exactly like the transient stamp (stamp.rs floors
     // only gm/go): a gmin floor here coupled a cold base to a driven
-    // collector through a phantom 1e-12 S gmu the DC path never stamps —
+    // collector through a phantom 1e-12 S gmu the DC path never stamps,
     // the node-diagonal gmin shunt is the only conditioning, both paths.
     let gpi = is * ef / (nvf * model.bf);
     let gmu = is * er / (nvr * model.br);
@@ -916,7 +916,7 @@ fn stamp_mosfet_ac(
 
     // Drain/source series resistance (the datasheet-Rds(on) split): ohmic
     // admittances between the external terminals and the layout's internal
-    // nodes, with the intrinsic small-signal device relocated inside — the
+    // nodes, with the intrinsic small-signal device relocated inside; the
     // exact structure of the transient stamp (stamp.rs `stamp_mosfet`) and the
     // BJT AC series-R above. Toggle off: pin any allocated internal unknown
     // (isolated row). A default rd == rs == 0 model allocates nothing and takes
@@ -976,7 +976,7 @@ fn stamp_mosfet_ac(
     let nsub = model.n_sub.max(1.0);
 
     // Small-signal channel tangent: the SAME shared C1 blend the transient
-    // stamp linearizes (`crate::stamp::mos_channel`), evaluated at the OP —
+    // stamp linearizes (`crate::stamp::mos_channel`), evaluated at the OP,
     // one function, so the DC and AC tangents cannot disagree at threshold.
     let lambda = if opts.effects.early_effect {
         model.lambda
@@ -999,7 +999,7 @@ fn stamp_mosfet_ac(
     }
 
     // Gate-charge capacitances at the OP (dev-plan 04 §3.3): jw·C per gate
-    // junction, the small-signal image of the transient charge companions —
+    // junction, the small-signal image of the transient charge companions,
     // an AC answer without them would miss the very poles the switching
     // physics adds. Charge-free models add exactly nothing: bit-identical.
     if crate::stamp::mos_has_charge(model, &opts.effects) {
@@ -1080,7 +1080,7 @@ fn stamp_opamp_ac(
                 // The transient stamp low-passes the WHOLE driven target
                 // (vref + gain*(vp-vn)) toward the ideal, so the reference
                 // feedthrough is rolled off by the same single pole as the gain
-                // path — not held flat. Scale the reference coupling by the pole
+                // path, not held flat. Scale the reference coupling by the pole
                 // factor at UNIT gain (1 at DC, 1/(1+jw/wp) above pole_hz) so the
                 // AC stamp stays the exact transient tangent: DC agrees, and the
                 // reference->output transfer rolls off instead of leaving a
@@ -1112,7 +1112,7 @@ fn opamp_ac_gain(gain: f64, pole_hz: Option<f64>, w: f64) -> Complex64 {
 }
 
 /// The switch's smooth tanh selection fraction `s` in [0, 1] at control
-/// voltage `vctrl` — the transient stamp's formula (stamp.rs), split out so
+/// voltage `vctrl`; the transient stamp's formula (stamp.rs), split out so
 /// the AC arm can apply the break-before-make win factor between `s` and the
 /// log-interpolated conductance exactly where the DC stamp applies it.
 fn vswitch_s(vctrl: f64, von: f64, voff: f64) -> f64 {
@@ -1133,7 +1133,7 @@ fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
 /// `a` whose names differ only in the binder's `_s0`/`_s1` throw suffix.
 /// Mirrors `SpdtPairs::analyze` in newton.rs (the DC path's pairing rule,
 /// rebuilt here because the workspace keeps its map private). Empty for
-/// boards with no SPDTs — the break-before-make factor is then inert.
+/// boards with no SPDTs; the break-before-make factor is then inert.
 fn spdt_siblings(circuit: &Circuit) -> std::collections::HashMap<DeviceId, DeviceId> {
     let mut groups: std::collections::HashMap<(u32, String), Vec<DeviceId>> =
         std::collections::HashMap::new();

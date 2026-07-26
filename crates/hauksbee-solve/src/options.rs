@@ -1,7 +1,7 @@
 //! Solver configuration: integration method, tolerances, and physics toggles.
 //!
 //! Every physical effect that can be turned off is a named boolean here.
-//! Turning physics off is a product feature — for debugging ("does the bug
+//! Turning physics off is a product feature, for debugging ("does the bug
 //! survive without junction caps?") and for raw speed when fidelity isn't
 //! needed. Defaults are realistic; the named toggles let a caller trade
 //! accuracy for speed deliberately.
@@ -76,7 +76,7 @@ pub enum AssemblyMode {
 /// `Off` (the default) is the reference: no cache exists, no movement test
 /// runs, and every solve path is bit-for-bit the classic assembly. `On` is an
 /// explicit opt-in speed knob whose accepted steps must match the no-bypass
-/// reference to solver tolerance (reltol), never bit-for-bit — the iterate
+/// reference to solver tolerance (reltol), never bit-for-bit; the iterate
 /// PATH may change, the answer may not (§6.2's gate). The bypass machinery
 /// carries SPICE's safety discipline internally: never on the first two
 /// iterations of a solve, never on DC / event-frozen solves or the trials
@@ -166,12 +166,12 @@ pub struct DeviceEffects {
     /// DC behaviour even in transient (fast, but loses switching dynamics).
     /// Honored for DIODES (cjo/vj/m/tt, dev-plan 04 §3.1), BJTs (cje/cjc/tf/tr,
     /// §3.2: two charge banks) and MOSFETs (gate charges + body-diode depletion,
-    /// §3.3) — all charge-based companions with LTE participation and jwC in AC.
+    /// §3.3), all charge-based companions with LTE participation and jwC in AC.
     /// A model without charge fields stamps identically whatever this toggle
     /// says.
     pub junction_caps: bool,
     /// Ohmic series resistances. Honored for BJTs (RB/RE/RC via layout-private
-    /// internal nodes, dev-plan 04 §3.2). The diode's RS is NOT stamped yet —
+    /// internal nodes, dev-plan 04 §3.2). The diode's RS is NOT stamped yet,
     /// a diode model carrying a nonzero RS logs once (under HAUKSBEE_DEBUG)
     /// instead of silently ignoring it (§3.4); it can ride the same
     /// internal-node machinery in a follow-up.

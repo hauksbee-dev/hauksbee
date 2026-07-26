@@ -10,7 +10,7 @@
 //! on its physics verdicts (spike count, spike times) because an adaptive
 //! grid legitimately re-times under any iterate-path change.
 //!
-//! The OFF side of gate (b) — bypass Off must not move a single ULP — is
+//! The OFF side of gate (b), bypass Off must not move a single ULP, is
 //! carried by the existing suites and the linesearch fixture's cross-commit
 //! hash (0xb015e2ec03a28c4b), which run with `NewtonBypass::Off` (the
 //! default) and therefore never touch the bypass code at all.
@@ -56,7 +56,7 @@ fn run(c: &Circuit, opts: SolverOptions, tstop: f64) -> Waveforms {
 }
 
 /// Gate (a), linear rung: the RC ladder. A fully linear board solves in one
-/// exact Newton shot per step, so bypass is structurally inert — the ON run
+/// exact Newton shot per step, so bypass is structurally inert; the ON run
 /// must be BIT-IDENTICAL to the reference, not merely within tolerance.
 #[test]
 fn rc_ladder_bypass_on_is_bit_identical() {
@@ -85,7 +85,7 @@ fn mirror_array_gate(blocks: usize, tstop: f64) -> (f64, f64) {
     let (mut c, _membranes) = build_shunt_array(blocks);
     // Modulate the +5 V supply (±0.5 V, 20 us period): the quasi-static DC
     // drive converges every step in <= 2 Newton iterations, and bypass never
-    // skips before iteration 3 — the gate would be vacuously bit-identical.
+    // skips before iteration 3; the gate would be vacuously bit-identical.
     // A moving rail keeps every mirror junction re-solving (3+ iterations),
     // so the ON run genuinely replays cached stamps and the tolerance
     // assertion tests something real (verified via the census skip counter).
@@ -144,7 +144,7 @@ fn mirror_array_240_bypass_matches_reference() {
 }
 
 /// The flagship-shaped stiff fixture (the linesearch_fixture board:
-/// integrate-and-fire relaxation oscillator, SPDT pair, TransientDyn armed —
+/// integrate-and-fire relaxation oscillator, SPDT pair, TransientDyn armed,
 /// staged regularizers + event retry + Armijo line search, FromZero,
 /// adaptive). This board exists in `tests/linesearch_fixture.rs`, which must
 /// stay the only test in its binary; the construction is replicated verbatim
@@ -228,7 +228,7 @@ fn spiking_board() -> Circuit {
     // in it (the linesearch fixture itself is diode-free; the flagship board
     // is not). Anode at the 1 V rail, cathode at the membrane: reverse-biased
     // (quiescent) for the whole inter-spike charge, conducting only in the
-    // brief post-reset dip below ~0.45 V — the quiescent-most-of-the-time
+    // brief post-reset dip below ~0.45 V; the quiescent-most-of-the-time
     // shape bypass targets, without clamping the firing ramp.
     c.add(Device::Diode {
         name: "DLOAD".into(),
@@ -278,8 +278,8 @@ fn crossings(t: &[f64], v: &[f64], thresh: f64) -> Vec<f64> {
 }
 
 /// Gate (b), ON side: the stiff fixture with bypass ON must reproduce the
-/// no-bypass physics — same spike count, spike times within a small fraction
-/// of the ~25 us period. (The OFF side — bit-identity of the reference path —
+/// no-bypass physics, same spike count, spike times within a small fraction
+/// of the ~25 us period. (The OFF side, bit-identity of the reference path,
 /// is the linesearch fixture's own hash, untouched by this arc.)
 #[test]
 fn stiff_fixture_bypass_preserves_spike_train() {
@@ -310,7 +310,7 @@ fn stiff_fixture_bypass_preserves_spike_train() {
         "bypass moved the FIRST spike: {t0_off} vs {t0_on}"
     );
     // Later spikes: a self-resetting relaxation loop accumulates phase drift
-    // under ANY iterate-path change (the fixture's own doctrine — its spike
+    // under ANY iterate-path change (the fixture's own doctrine; its spike
     // count is asserted as a band, never as exact times). Bound each spike's
     // shift as a fraction of its own elapsed time (phase drift), not as an
     // absolute window.
@@ -331,11 +331,11 @@ fn stiff_fixture_bypass_preserves_spike_train() {
     );
 }
 
-/// Gate (c): the plan's named high-Z stress fixture — a weakly-driven
+/// Gate (c): the plan's named high-Z stress fixture, a weakly-driven
 /// sense net in the W1 §2.4 dead-membrane shape. A fixed source behind a
 /// large series resistance charges a membrane cap THROUGH A DIODE; the
 /// membrane's only other connection is a 1 GΩ leak, so near the comparator
-/// threshold every accepted step moves the node by far less than bypasstol —
+/// threshold every accepted step moves the node by far less than bypasstol,
 /// a tiny terminal move that carries the entire signal (the diode's charge
 /// current IS the information). If bypass ever wrongly froze that current,
 /// the crossing would shift or vanish. The verdict (does the comparator fire,
@@ -354,7 +354,7 @@ fn high_z_board(drive_v: f64) -> Circuit {
         n: NodeId::GROUND,
         kind: SourceKind::Dc(drive_v),
     });
-    // The weak driver: 10 MΩ series (the "driver pass" shape — a fixed source
+    // The weak driver: 10 MΩ series (the "driver pass" shape, a fixed source
     // behind series R feeding a kept sense node).
     c.add(Device::Resistor { name: "RDRV".into(), a: drv, b: a, ohms: 10e6, tc1: None });
     c.add(Device::Diode {
@@ -389,7 +389,7 @@ fn high_z_board(drive_v: f64) -> Circuit {
     });
     // The masked-convergence stressor: an UNRELATED stiff junction branch on
     // the same board. The Newton iterations are GLOBAL (one monolithic
-    // matrix), so this sine-walked diode forces 3+ iterations on every step —
+    // matrix), so this sine-walked diode forces 3+ iterations on every step,
     // which is exactly when the quiescent sense diode D1 gets bypassed while
     // the rest of the system iterates. Without it every step converges in
     // <= 2 iterations and the bypass never fires (a vacuous gate, measured).
@@ -429,7 +429,7 @@ fn high_z_verdict(c: &Circuit, wf: &Waveforms) -> (usize, Option<f64>, f64) {
 fn high_z_sense_net_verdict_unchanged() {
     // Super-threshold drive: the membrane must cross 0.4 V and fire once.
     // Sub-threshold drive (0.35 V < the 0.4 V threshold, whatever the diode
-    // drops): the membrane can never reach threshold — never fires.
+    // drops): the membrane can never reach threshold, never fires.
     for (drive, should_fire) in [(1.2, true), (0.35, false)] {
         let c = high_z_board(drive);
         let mk = |bypass| SolverOptions {
