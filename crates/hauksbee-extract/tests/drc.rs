@@ -266,8 +266,8 @@ fn via_outside_zone_is_clean() {
 #[test]
 fn unfilled_multilayer_zone_outline_is_kept_on_every_layer() {
     // R11: a zone declared over BOTH copper layers with `(layers "F.Cu" "B.Cu")`
-    // and no computed fill. The outline must be kept on each layer for clearance
-    //; the old code read only a single `(layer ...)`, found none, and dropped
+    // and no computed fill. The outline must be kept on each layer for clearance;
+    // the old code read only a single `(layer ...)`, found none, and dropped
     // the whole zone, so a track crossing the pour boundary on B.Cu went unseen.
     // A track on net A crossing the left outline edge (x=10) on B.Cu now shorts
     // against the GND zone edge.

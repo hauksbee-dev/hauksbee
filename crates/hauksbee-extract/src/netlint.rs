@@ -269,8 +269,8 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     let after = rest[int_part.len()..].strip_prefix('V')?;
     let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
     // The name must be ENTIRELY consumed by the "<digits>V<digits>" grammar.
-    // Otherwise rail-named SIGNAL nets, "5V_DET", "3V3_EN", "5V_SEL", "12V_PG"
-    //, over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
+    // Otherwise rail-named SIGNAL nets, "5V_DET", "3V3_EN", "5V_SEL", "12V_PG",
+    // over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
     // reports a monitor/enable net as a supply and suppresses genuine findings
     // (a missing I2C pull-up whose divider taps a "5V_DET" sense net).
     if !after[frac.len()..].is_empty() {
@@ -283,13 +283,13 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
             .parse()
             .ok()?
     };
-    // No upper clamp. An earlier `mag <= 60.0` ceiling silently rejected any
-    // rail above 60 V and fell back to the 5 V default, so `rail_voltage("+65V")`
-    // returned 5.0 and check_led_current under-counted the drive, suppressing a
+    // No upper clamp. A `mag <= 60.0` ceiling silently rejects any
+    // rail above 60 V and falls back to the 5 V default, so `rail_voltage("+65V")`
+    // returns 5.0 and check_led_current under-counts the drive, suppressing a
     // genuine over-current finding. Real boards run 65 V motor rails, 100 V+ LED
     // strings, 400 V PFC buses; the magnitude is whatever the token says as long
     // as it is a positive, finite number. (Mirrors binder.rs::embedded_rail_magnitude,
-    // whose identical clamp was removed in the same spirit.)
+    // which is unclamped in the same spirit.)
     (mag > 0.0 && mag.is_finite()).then_some(mag)
 }
 
@@ -329,7 +329,7 @@ fn ref_designator(reference: &str) -> String {
 /// Is this component a plain two-terminal resistor (the kind that can be a
 /// pull-up)? Identified by ref designator + a chip-resistor footprint, and by
 /// having exactly two *connected* pads (extra net-less pads in the footprint are
-/// ignored, which is the bug that previously hid 0201 pull-ups).
+/// ignored; counting them as terminals hides 0201 pull-ups).
 fn is_resistor(c: &Component) -> bool {
     let r = ref_designator(&c.reference);
     let lib = c.lib_id.to_ascii_lowercase();
@@ -1135,9 +1135,9 @@ fn resistor_to_rail(
 // x2, Olimex EVB, Corne, Lily58, RP2040-minimal, Reform x2, Olimex Pico-PC):
 // the single raw fire on that corpus (Reform `EDP_IRQ`) is an open-drain
 // interrupt line whose pins a symbol author typed `output`, and it is excluded
-// by the open-drain-name and tiebreaker rules below. See `docs/record/FAMOUS_SWEEP.md`
-// Round 4 for the calibration evidence and for why the sibling "undriven input"
-// check was REJECTED (it could not reach zero false positives).
+// by the open-drain-name and tiebreaker rules below. The sibling "undriven
+// input" check is deliberately absent: on the same corpus it could not be
+// calibrated to zero false positives.
 
 /// A push-pull driver type. `tri_state` / `open_collector` / `open_emitter` are
 /// deliberately NOT here: those are wired-OR safe and resolve contention.
@@ -1294,9 +1294,9 @@ mod pin_array_tests {
     #[test]
     fn body_dimension_footprints_are_not_pin_arrays() {
         // R45/R46: KiCad appends a body dimension ("7x7mm", "3.9x4.9mm") to nearly
-        // every SMD IC footprint. The old code read any `<digit>x<digit>` as a pin
-        // grid, so those ICs became "connector-like" and the floating-control /
-        // I2C-pull-up / output-contention lints were silently suppressed on real
+        // every SMD IC footprint. Reading any `<digit>x<digit>` as a pin
+        // grid makes those ICs "connector-like", silently suppressing the
+        // floating-control / I2C-pull-up / output-contention lints on real
         // ICs. A body dimension (decimal, or an "mm" unit) is NOT a pin grid.
         for fp in [
             "MCU_ST:LQFP-48_7x7mm",
@@ -1371,12 +1371,12 @@ mod parse_ohms_tests {
     #[test]
     fn leading_r_sub_ohm_notation_parses() {
         // R5 regression: "R47" = 0.47 Ω (the leading-R sub-1-ohm marking). The
-        // empty integer part used to fail the parse and, via `?`, abort the
-        // whole rail-resistor search, silently skipping the LED-current check
-        // on a near-dead-short.
+        // empty integer part must not fail the parse: a failure here propagates
+        // via `?` and aborts the whole rail-resistor search, silently skipping
+        // the LED-current check on a near-dead-short.
         assert_eq!(parse_ohms("R47"), Some(0.47));
         assert_eq!(parse_ohms("r47"), Some(0.47));
-        // The forms that already worked must still work.
+        // The other leading/trailing-R spellings.
         assert_eq!(parse_ohms("4R7"), Some(4.7));
         assert_eq!(parse_ohms("47R"), Some(47.0));
         assert_eq!(parse_ohms("0R"), Some(0.0));
