@@ -3,13 +3,12 @@
 //! `hauksbee-ci`) routes through this one module, so the set of accepted
 //! formats can never drift between surfaces again.
 //!
-//! Before this module existed the normalization logic was implemented three
-//! incompatible times: the web front door handled binary Altium, gerber zips,
-//! zipped/bare `.board` exports and text; the web co-sim re-read the ORIGINAL
-//! bytes with only the text/binary sniffers (so a `.board` or gerber zip that
-//! produced a clean static report failed co-sim with "could not re-read the
-//! board"); and `hauksbee-ci` read the file as UTF-8 text and rejected
-//! `.board` outright. One normalizer, two entry points:
+//! Normalizing per surface is how format sets drift apart: a surface that
+//! reads the file as UTF-8 text rejects a binary Altium board and a `.board`
+//! export outright, and one that re-reads the ORIGINAL bytes with only the
+//! text/binary sniffers fails co-sim with "could not re-read the board" on a
+//! `.board` or gerber zip that just produced a clean static report. One
+//! normalizer, two entry points:
 //!
 //! * [`from_bytes`]: the web path. A file name (display/sniff hint only) plus
 //!   the file's RAW bytes. Binary formats are sniffed from the bytes first, a
@@ -80,7 +79,7 @@ pub struct NormalizedBoard {
 
 impl NormalizedBoard {
     /// A binary Altium board: DRC comes from the raw bytes twin, and there is
-    /// no layout text. The old call sites' `is_binary` / `altium.is_some()`.
+    /// no layout text. What call sites mean by `is_binary` / `altium.is_some()`.
     pub fn is_binary(&self) -> bool {
         self.kind == InputKind::Altium
     }
@@ -94,8 +93,8 @@ impl NormalizedBoard {
 
 /// Why a board input could not be normalized. Variants keep the semantic
 /// content; `Display` renders the CLI-facing message and [`web_message`]
-/// renders the web front door's wording, so both surfaces keep the tailored
-/// text they had before the normalizer unified them.
+/// renders the web front door's wording, so one normalizer still speaks to
+/// each surface in the wording that surface needs.
 ///
 /// [`web_message`]: BoardInputError::web_message
 #[derive(Debug, thiserror::Error)]
@@ -130,9 +129,9 @@ pub enum BoardInputError {
 }
 
 impl BoardInputError {
-    /// The web front door's wording for this failure, exactly as
-    /// `frontdoor::analyze` phrased it before the normalizer existed, so the
-    /// `/api/analyze` error surface is unchanged.
+    /// The web front door's wording for this failure: what `/api/analyze`
+    /// returns, phrased for someone who just dropped a file in a browser
+    /// rather than for a terminal.
     pub fn web_message(&self) -> String {
         match self {
             BoardInputError::BoardCode(e) => {
@@ -148,7 +147,7 @@ impl BoardInputError {
 
 /// Normalize an uploaded board from its raw bytes: the web path.
 ///
-/// A literal port of the old `frontdoor::analyze` loading head. `file_name` is
+/// The loading head behind `frontdoor::analyze`. `file_name` is
 /// a display/sniff hint only (the `.board` extension routes the compile path);
 /// `contents` is the file's RAW bytes. Binary formats (Altium `.PcbDoc`, an
 /// OLE2 container) are sniffed from the bytes first, exactly like the CLI
@@ -224,9 +223,9 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
 
 /// Normalize a board from a filesystem path: the CLI/CI path.
 ///
-/// A literal port of the old `hauksbee run` loading head, plus the zip
-/// classification the web path already had (so `run <x.zip>` with a `.board`
-/// export inside compiles instead of failing as gerber). Adds what only a
+/// The loading head behind `hauksbee run`. It shares the zip
+/// classification with the web path (so `run <x.zip>` with a `.board`
+/// export inside compiles instead of failing as gerber), and adds what only a
 /// path can give:
 ///
 /// * gerber DIRECTORY detection (`is_dir`);
@@ -621,9 +620,9 @@ fn main {
 
     #[test]
     fn from_path_zip_with_a_board_export_compiles_instead_of_failing_as_gerber() {
-        // The CLI used to treat EVERY .zip as a gerber archive, so a zipped
-        // Board-as-Code export died with a gerber error. The zip classifier
-        // now routes it exactly like the web drop zone does.
+        // Treating EVERY .zip as a gerber archive kills a zipped Board-as-Code
+        // export with a gerber error. The zip classifier routes it exactly like
+        // the web drop zone does.
         let dir = std::env::temp_dir().join(format!("hauksbee-bi-zip-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("export.zip");

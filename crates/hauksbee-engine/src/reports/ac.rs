@@ -68,10 +68,10 @@ pub fn emit(
         per_net.iter().filter(|(_, b)| !b.is_empty()).collect();
 
     // Fix #1b (HIGH honesty hole): if EVERY requested net produced no data at all
-    // (none exist in the circuit), `nonempty` is empty. Previously this slipped
-    // past the all-sentinel guard (which requires `!nonempty.is_empty()`) and the
-    // JSON path emitted `ac: { valid: true, nets: [] }` with exit 0, a meaningless
-    // result reported as valid. Refuse it: name the missing requested nodes, emit
+    // (none exist in the circuit), `nonempty` is empty. That case slips past the
+    // all-sentinel guard below (which requires `!nonempty.is_empty()`), leaving
+    // the JSON path free to emit `ac: { valid: true, nets: [] }` with exit 0, a
+    // meaningless result reported as valid. Refuse it: name the missing nodes, emit
     // valid:false, and exit 3, exactly like the all-sentinel path. Only fires when
     // the user explicitly asked for nodes; the "every node" default never lands
     // here because at least one real node exists in any bound circuit.

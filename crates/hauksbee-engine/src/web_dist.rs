@@ -4,7 +4,7 @@
 //!
 //! The compile-time path `CARGO_MANIFEST_DIR/../../frontend/dist` only exists on
 //! the build machine's checkout. A user who installs a release binary (or moves
-//! it) has no such directory, and used to get no web UI. The `embed-web` cargo
+//! it) has no such directory, so no web UI to serve. The `embed-web` cargo
 //! feature fixes that: release bundles compile the built dist into the binary
 //! and this resolver extracts it to a cache dir on first use.
 //!

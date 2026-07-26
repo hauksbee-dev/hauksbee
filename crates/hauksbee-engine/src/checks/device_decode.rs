@@ -33,12 +33,12 @@
 //! SILENT. A check that cannot resolve the divider does not fire. (See
 //! `docs/checks/DEVICE_DECODE.md` and `docs/about/LIMITATIONS.md`.)
 //!
-//! ## CYPD3177 seed (the hunt this reproduces)
+//! ## CYPD3177 seed (the fault this check reproduces)
 //!
-//! `docs/hunts/pd-sink-trigger.md` CANDIDATE 4. The board's rotary VBUS voltage
-//! selector mis-codes its top two detents because it keeps a permanent 10k
-//! pull-down across the pin and switches an *additional parallel* leg in, which
-//! cannot reproduce the datasheet's intended single-pull-down-per-detent codes.
+//! The board's rotary VBUS voltage selector mis-codes its top two detents
+//! because it keeps a permanent 10k pull-down across the pin and switches an
+//! *additional parallel* leg in, which cannot reproduce the datasheet's
+//! intended single-pull-down-per-detent codes.
 //! Detent 4 ("15 V") decodes to the 12 V band; detent 5 ("20 V") decodes to the
 //! 19 V band. Compounded by a hard-wired VBUS_MIN = 19 V, which (datasheet Note 1)
 //! overrides VBUS_MAX whenever VBUS_MIN > VBUS_MAX, defeating the selector.

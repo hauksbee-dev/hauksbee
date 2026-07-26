@@ -175,7 +175,7 @@ fn pin_net_for_role(
 ///
 /// When the model gives *no* pin roles at all (an untyped connector), we fall
 /// back to "every non-ground pad", a connector's contacts are all through
-/// terminals, and a rating with no pin map is the old conservative behaviour.
+/// terminals, and a rating with no pin map is the conservative reading.
 fn power_nets_of(
     board: &ExtractedBoard,
     comp: &hauksbee_extract::Component,

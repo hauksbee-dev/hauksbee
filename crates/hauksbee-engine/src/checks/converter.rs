@@ -396,11 +396,11 @@ fn rail_nominal_v(name: &str) -> Option<f64> {
             return Some(v);
         }
     }
-    // No role-name guessing at all. An earlier version fabricated 40 V for any
-    // name CONTAINING "SOLAR"/"PV"/"VBUS_IN" (and 13 V/40 V for VIN/VOUT/BAT),
-    // but "PV" is a substring of ordinary buck/gate-driver nets like PVDD/PVCC,
-    // and a fabricated voltage on the OUTPUT rail outranked a real "+12V" token
-    // on the input and flipped a buck to a boost (skipping the ripple check).
+    // No role-name guessing at all. Fabricating a voltage from a name CONTAINING
+    // "SOLAR"/"PV"/"VBUS_IN" (or 13 V/40 V for VIN/VOUT/BAT) is unsafe twice
+    // over: "PV" is a substring of ordinary buck/gate-driver nets like PVDD/PVCC,
+    // and a fabricated voltage on the OUTPUT rail outranks a real "+12V" token
+    // on the input, flipping a buck to a boost and skipping the ripple check.
     // Only explicit numeric tokens above are trustworthy; everything else is
     // unknown, and classify_topology takes its documented Buck default.
     None
@@ -433,9 +433,9 @@ mod tests {
     #[test]
     fn generic_output_name_does_not_fabricate_a_boost() {
         // Regression (R5): a real 3.3 V buck whose output rail is just named
-        // generically "VOUT" must stay a Buck. The old VOUT->13.0 guess
-        // outranked the "+12V" input token and mis-flagged the stage Boost,
-        // which silently skipped its ripple check.
+        // generically "VOUT" must stay a Buck. A VOUT->13.0 guess would outrank
+        // the "+12V" input token and mis-flag the stage Boost, which silently
+        // skips its ripple check.
         assert_eq!(rail_nominal_v("VOUT"), None);
         assert_eq!(rail_nominal_v("VIN"), None);
         assert_eq!(rail_nominal_v("BAT"), None);

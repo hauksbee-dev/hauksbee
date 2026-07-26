@@ -323,7 +323,7 @@ struct ModelsResolveArgs {
 #[derive(Parser)]
 // The five "print one report and exit" flags pick the report to show, so they
 // are mutually exclusive: pass at most one (clap errors clearly if you pass two,
-// rather than the old parser's silent first-wins behaviour).
+// rather than silently honouring the first and ignoring the rest).
 #[command(group(
     clap::ArgGroup::new("report_mode")
         .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal", "usb_c"])

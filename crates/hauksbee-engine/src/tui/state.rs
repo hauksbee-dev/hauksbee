@@ -852,8 +852,8 @@ impl AppState {
     }
 
     /// Handle Enter: open the right detail for the focused pane. On Findings it
-    /// toggles the finding detail; on Nets&Parts it opens the part/net detail
-    /// (the previously-dead Enter the personas reported). Co-sim has no detail.
+    /// toggles the finding detail; on Nets&Parts it opens the part/net detail,
+    /// so Enter is live in every pane that has one. Co-sim has no detail.
     pub fn activate(&mut self) {
         match self.focus {
             Pane::Findings => self.toggle_detail(),
@@ -1296,7 +1296,7 @@ mod tests {
         assert_eq!(st.focus, Pane::Cosim);
     }
 
-    // ── W6 §2: scope probe + ring buffer + downsample ────────────────────────
+    // ── scope probe + ring buffer + downsample ───────────────────────────────
 
     #[test]
     fn scope_probe_caps_and_evicts_oldest() {

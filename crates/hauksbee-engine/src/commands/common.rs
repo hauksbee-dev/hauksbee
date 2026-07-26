@@ -68,8 +68,8 @@ pub fn serve(
         let dir = crate::web_dist::resolve_web_dist();
         let addr = format!("127.0.0.1:{port}");
 
-        // The analysis API the React landing calls (W6 §1: the report and the
-        // live sim are one app). Same callback `hauksbee serve` uses, so the two
+        // The analysis API the React landing calls (the report and the live sim
+        // are one app). Same callback `hauksbee serve` uses, so the two
         // commands converge on one server path with a preload difference only.
         let analyze: hauksbee_server::frontdoor::FirmwareAnalyzer = Arc::new(
             |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| match fw {
@@ -182,8 +182,8 @@ mod tests {
 
     /// The staleness advisory fires when a source file is newer than the built
     /// dist/index.html, and stays quiet when the build is up to date. This is
-    /// the regression test for the "git pull updated src, `hauksbee serve`
-    /// served the old bundle, user re-hit an already-fixed bug" trap.
+    /// the regression test for the "git pull updates src, `hauksbee serve`
+    /// serves the stale bundle, user re-hits an already-fixed bug" trap.
     #[test]
     fn dist_stale_message_fires_only_when_sources_are_newer() {
         let root = std::env::temp_dir().join(format!("hauksbee-stale-test-{}", std::process::id()));

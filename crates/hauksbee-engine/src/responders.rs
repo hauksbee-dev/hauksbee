@@ -20,10 +20,9 @@
 //! held by the scheduler), the pin key is the dispatch map here.
 //!
 //! Registered protocols:
-//!   * [`Hc165Responder`]; the original consumer: MCU-bit-banged 74HC165
-//!     parallel-in/serial-out chains (the B2 readback fix), unchanged in
-//!     behaviour, now arriving through the registry instead of owning the
-//!     hook outright.
+//!   * [`Hc165Responder`], MCU-bit-banged 74HC165 parallel-in/serial-out
+//!     chains (the B2 readback fix), reaching the hook through the registry
+//!     like every other protocol rather than owning it outright.
 //!   * [`BitBangSpiResponder`], firmware bit-bangs SCLK/MOSI/CS on GPIOs and
 //!     reads MISO from an existing byte-level [`SpiBus`] slave model.
 //!   * [`SoftI2cResponder`], firmware bit-bangs SCL/SDA on GPIOs; a small
@@ -61,9 +60,9 @@ pub trait InputResponder: Send {
 /// [`InputResponder`]s, dispatching each output edge only to the responders
 /// keyed on that pin.
 ///
-/// A pin miss is one `HashMap` lookup; the same cheap early-return the
-/// original single-purpose 165 closure had, preserved so a busy non-protocol
-/// pin (a status LED toggling in the firmware's hot loop) costs nothing.
+/// A pin miss is one `HashMap` lookup and an early return, so a busy
+/// non-protocol pin (a status LED toggling in the firmware's hot loop) costs
+/// nothing.
 /// Multiple responders may watch the same pin (e.g. two protocols sharing a
 /// clock line); their drives concatenate in registration order.
 #[derive(Default)]
@@ -116,10 +115,11 @@ impl ResponderRegistry {
 
 /// The 74HC165 read-chain as a registry citizen: forwards PL / SCLK edges to
 /// the shared [`Hc165Chain`], which samples the latch inputs on a PL load and
-/// presents the next QH bit on MISO. Behaviour is exactly the closure the
-/// scheduler used to install directly (the B2 readback fix); only the
-/// dispatch route changed. The chain stays `Arc`-shared with the scheduler so
-/// `hc165_chain_pins()` / `hc165_loaded_words()` introspection keeps working.
+/// presents the next QH bit on MISO. Behaviour is exactly the B2 readback-fix
+/// semantics, reached through the responder registry rather than a
+/// scheduler-installed closure. The chain stays `Arc`-shared with the
+/// scheduler so `hc165_chain_pins()` / `hc165_loaded_words()` introspection
+/// keeps working.
 pub struct Hc165Responder {
     chain: Arc<Mutex<Hc165Chain>>,
     levels: LogicLevels,
@@ -156,9 +156,8 @@ impl InputResponder for Hc165Responder {
     }
 
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
-        // Same lock order as the pre-registry closure: voltage snapshot first,
-        // then the chain (both leaf locks; nothing here takes them together
-        // the other way round).
+        // Fixed lock order: voltage snapshot first, then the chain (both leaf
+        // locks; nothing here takes them together the other way round).
         let v = self.volts.lock().unwrap_or_else(|e| e.into_inner());
         let node_v = |n: hauksbee_ir::NodeId| v.get(n.0 as usize).copied().unwrap_or(0.0);
         let mut ch = self.chain.lock().unwrap_or_else(|e| e.into_inner());
@@ -357,8 +356,8 @@ impl InputResponder for BitBangSpiResponder {
 
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
         if pin == self.pins.mosi {
-            // The master must hold MOSI stable through the slave's sample window
-            //; the half-period at `sample_hold_level` (the clock's resting level
+            // The master must hold MOSI stable through the slave's sample window;
+            // the half-period at `sample_hold_level` (the clock's resting level
             // after a sample edge). A MOSI transition there is not the declared
             // mode's shift phase: the firmware is clocking a different phase, so
             // we fault rather than accumulate a mistimed bit. (Mode 0: the sample
@@ -1236,7 +1235,7 @@ addr_mask = 0x7f
         assert!(!m.resp.faulted());
     }
 
-    /// PROOF: a mode-1 (CPOL=0, CPHA=1) read succeeds, CPHA=1 is now MODELED
+    /// PROOF: a mode-1 (CPOL=0, CPHA=1) read succeeds, CPHA=1 is MODELED
     /// (bit 7 driven on the first leading edge, sample on the trailing edge),
     /// not faulted, WHEN the spec declares it. Contrast with
     /// `bitbang_spi_refuses_cpha1_clock_phase`, where a mode-0 spec meets CPHA=1

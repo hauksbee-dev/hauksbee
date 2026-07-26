@@ -255,10 +255,10 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
 /// won and from which priority layer: the pack author's debugging surface
 /// (the layer-annotated extension of `run --report`'s bind table).
 pub fn resolve(board_path: &Path, models_dir: Option<&Path>, json: bool) -> anyhow::Result<()> {
-    // The shared board-input normalizer: this used to carry its own mini
-    // board-code compile + schematic dispatch, which meant `models resolve`
-    // accepted a different format set than `run` (no Altium, no gerber, no
-    // zipped .board). One normalizer, no drift.
+    // The shared board-input normalizer. A private mini board-code compile +
+    // schematic dispatch here would leave `models resolve` accepting a
+    // different format set than `run` (no Altium, no gerber, no zipped
+    // .board). One normalizer, no drift.
     let board = crate::board_input::from_path(board_path)?.board;
     let extra: Vec<&Path> = models_dir.into_iter().collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);

@@ -632,8 +632,8 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
 fn short_msg(msg: &str) -> String {
     let m = msg.trim();
     // Split only on clause boundaries ("; ", ". "), NOT a bare ".", so decimal
-    // numbers like "0.200 mm" and "Zdiff ~ 171 ohm [target 90 ohm]" survive intact
-    //, a bare "." chopped the controlled-impedance note down to "W~0".
+    // numbers like "0.200 mm" and "Zdiff ~ 171 ohm [target 90 ohm]" survive intact,
+    // a bare "." chopped the controlled-impedance note down to "W~0".
     let first = m.split("; ").next().unwrap_or(m).trim();
     let first = first.split(". ").next().unwrap_or(first).trim();
     if first.chars().count() <= 160 {

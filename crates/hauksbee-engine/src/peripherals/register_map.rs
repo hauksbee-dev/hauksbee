@@ -916,9 +916,9 @@ impl I2cSlave for RegisterMapSensor {
         // Subsequent writes are register payload. A declared write register
         // decodes and commits as soon as its full width has arrived (further
         // bytes are ignored-and-counted: none of the modeled parts
-        // auto-increment writes). Payload for an undeclared register keeps the
-        // old accept-and-ignore behaviour; the firmware's config writes don't
-        // stall, but is now counted instead of silently dropped.
+        // auto-increment writes). Payload for an undeclared register is
+        // accepted and ignored, so the firmware's config writes never stall,
+        // and it is counted rather than silently dropped.
         let key = self.normalize_addr(self.pointer);
         if let Some(w) = self.write_regs.get(&key) {
             let width = w.encoding.natural_width();
@@ -1341,8 +1341,8 @@ rw_read_is_high = true
 addr_mask = 0x7f
 "#;
 
-    // Same sensor but declared with the PRE-MASKED address 0x50 (the old hand-
-    // masked style). Must still resolve identically, backward compatibility.
+    // Same sensor but declared with the PRE-MASKED address 0x50 (the hand-
+    // masked style). Must resolve identically, backward compatibility.
     const BMP280_PREMASKED_SPEC: &str = r#"
 [sensor]
 name = "BMP280"
@@ -1481,9 +1481,9 @@ addr_mask = 0x7f
 
     // ── §6 sensor-coverage fixtures: BME280 + MPU6050 ────────────────────────
     //
-    // Per 05-cosim-fidelity §6.2/§7.2: each new sensor lands with a fixture that
-    // "reads a known register value through the bound bus and asserts the decoded
-    // physical quantity". These load the SHIPPED specs (docs/hunts/specs/*.toml)
+    // The sensor-coverage rule: each new sensor lands with a fixture that reads
+    // a known register value through the bound bus and asserts the decoded
+    // physical quantity. These load the SHIPPED specs (docs/hunts/specs/*.toml)
     // so the fixture proves the exact spec that ships, drive them through the real
     // `I2cBus` dispatch path (no injection, no hand-coded model), and assert the
     // decoded physical output against datasheet worked-example numbers.
@@ -1874,8 +1874,8 @@ style = "i2c_pointer"
 
     // A command-framed device whose command completes in a SINGLE byte
     // (group_bytes = 1): the command byte IS the group. Regression for round-4
-    // #4; the group used to never drain (drain ran only from the Active arm on
-    // the next write), so a Start/Write/Stop produced no state change at all.
+    // #4: with drain running only from the Active arm on the next write, the
+    // group never drains and a Start/Write/Stop produces no state change at all.
     const ONE_BYTE_CMD_SPEC: &str = r#"
 [sensor]
 name = "ONEBYTE"

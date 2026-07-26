@@ -15,8 +15,8 @@
 //!    does to each transistor gate at reset (driven HIGH / pulled HIGH / driven
 //!    LOW / floating), reported factually rather than judged.
 //!
-//! The predicates and rendering that used to live in the engine binary are here
-//! verbatim; the CLI is now a thin caller.
+//! The predicates and the rendering both live here, so every surface reads the
+//! same advisory; the CLI is a thin caller.
 
 use std::collections::HashSet;
 

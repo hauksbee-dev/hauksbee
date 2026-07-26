@@ -114,8 +114,8 @@ pub struct BoundBoard {
     /// Isource the UI can override (sliders).
     pub input_sources: HashMap<String, hauksbee_ir::DeviceId>,
     /// Configurable power supplies, one per detected supply net (Feature 1).
-    /// Default to [`PowerSupply::Ideal`] at the rail's nominal voltage, which
-    /// preserves the old ideal-rail behaviour bit-for-bit.
+    /// Default to [`PowerSupply::Ideal`] at the rail's nominal voltage, so a
+    /// board whose supplies are left unconfigured sees perfect rails.
     pub supplies: Vec<SupplyLeg>,
     /// Behavioural devices (power ICs with a declarative behavioural model:
     /// chargers, PMICs, balancers). Iterated by the scheduler each chunk, the
@@ -365,7 +365,7 @@ pub fn bind_board_with(
 
     // ── Pass 3: attach configurable power supplies ──────────────────────────
     // Every detected supply net gets a behavioral supply (default Ideal at the
-    // rail's nominal voltage, identical to the old ideal Vsource), unless a
+    // rail's nominal voltage, electrically an ideal Vsource), unless a
     // vreg already sources that exact net (we keep the regulator chain). The
     // supply is stamped as a controllable Vsource behind a tiny series resistor
     // so the scheduler can read rail current and update the supply per chunk.
@@ -946,7 +946,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
 
     // A part whose reference class or footprint says "diode" must never fall
     // through to the R/C/L first-letter heuristic below: "CR1" with value
-    // "5.1V" used to land there via 'C' and bind as a 5.1 FARAD capacitor.
+    // "5.1V" would land there via 'C' and bind as a 5.1 FARAD capacitor.
     // Exception: a genuine R/C/L *reference* on a diode-shaped *footprint*
     // (e.g. a 10k R_MELF resistor) whose value clearly parses as a passive
     // magnitude must not be deleted; it yields to the passive fallback below.
@@ -1654,8 +1654,8 @@ fn role_node_map_pins(
     // vendor footprints name pads by electrode ("A"/"K" on a diode, "G"/"D"/
     // "S" on a MOSFET, "C"/"B"/"E" on a BJT) instead of numbering them; with
     // no pinfunction (footprint-only extraction) and a numerically-keyed
-    // model pad map, such a part previously matched nothing and bound OPEN,
-    // a real junction silently deleted. The letters reuse the kind-aware
+    // model pad map, such a part would otherwise match nothing and bind OPEN,
+    // silently deleting a real junction. The letters reuse the kind-aware
     // pinfunction vocabulary, so "C" stays cathode-on-a-diode and
     // collector-on-a-BJT.
     if let Some(kind) = kind {
@@ -1746,8 +1746,8 @@ fn role_from_pinfunction(kind: ComponentKind, function: &str) -> Option<String> 
             // bind_analog_switch). By the universal SPDT convention the
             // Normally-Closed contact is the one tied to COM at rest / control-low
             // and Normally-Open closes on control-high, so NC → s0, NO → s1.
-            // (These were previously swapped, routing COM to the wrong throw in
-            // every control state on any board using NO/NC pin names.)
+            // (Swapping the two routes COM to the wrong throw in every control
+            // state on any board that names its throws NO/NC.)
             "b1" | "s0" | "nc" => "s0",
             "b2" | "s1" | "no" => "s1",
             "s" | "sel" | "in" | "ctrl" => "ctrl",
@@ -1798,10 +1798,10 @@ fn bind_passive(
         .unwrap_or(&comp.value);
     let parsed = parse_value(effective_value);
     // A passive with more than two pads is an ARRAY (a bussed or isolated
-    // R/C network), not one 2-terminal element. The old path silently took
-    // the first two pads and stamped ONE device, deleting every other element
-    // in the pack, a 4-resistor array became a single resistor. Split it
-    // into per-element devices instead.
+    // R/C network), not one 2-terminal element. Silently taking the first two
+    // pads and stamping ONE device deletes every other element in the pack: a
+    // 4-resistor array becomes a single resistor. Split it into per-element
+    // devices instead.
     if comp.pins.len() > 2 {
         return bind_passive_array(comp, parsed.as_ref(), circuit, node_of);
     }
@@ -2310,7 +2310,7 @@ fn bind_opamp(
 
     // Multi-channel packages (LM358 dual, INA2181 dual, LM324 quad) carry
     // per-channel roles out_a/in_plus_a/in_minus_a, ..._b/_c/_d. Stamp one
-    // OpAmp per complete channel; the old channel-A-only lookup left channel
+    // OpAmp per complete channel; a channel-A-only lookup would leave channel
     // B/C/D outputs silently floating. Per-unit names use the `_q<N>` key the
     // CI thermal aggregation matches (as bind_bjt does for paired BJTs).
     let mut stamped = 0;
@@ -2548,8 +2548,8 @@ fn bind_analog_switch(
 
     // Multi-gate bilateral packages (CD74HC4066 quad): numbered gate roles
     // in_out_<n>a / in_out_<n>b switched by ctrl_<n>, each gate electrically
-    // independent. Stamp one VSwitch per complete gate; the old single-SPST
-    // fall-through bound gate 1 only and silently dropped gates 2..4. Per-unit
+    // independent. Stamp one VSwitch per complete gate; a single-SPST
+    // fall-through would bind gate 1 only and silently drop gates 2..4. Per-unit
     // names use the `_s<n>` key the CI thermal aggregation matches (the same
     // family as the SPDT's `_s0`/`_s1` legs above).
     {
@@ -2991,8 +2991,8 @@ fn bind_mcu(
     }
 
     // Map roles to (port,bit) GPIO and ADC channels, then stamp drivers/probes.
-    // Dynamic promotion (05-cosim-fidelity §4.1, closes TARSKI_RESULTS §5.2): a
-    // dual-purpose ADC/GPIO pin (Nano a0..a5 = PC0..PC5, or bare pc0_adc0..)
+    // Dynamic promotion: a dual-purpose ADC/GPIO pin (Nano a0..a5 = PC0..PC5,
+    // or bare pc0_adc0..)
     // binds BOTH ways structurally. It keeps its ADC channel mapping AND gets
     // the same tri-stated Thevenin GPIO driver an ordinary digital pin gets.
     // Every driver starts high-impedance (a 1e9 Ω leg from a 0 V source, i.e.
@@ -3332,7 +3332,7 @@ fn arduino_digital_to_port(num: u8) -> Option<(char, u8)> {
 
 /// Map a dual-purpose analog-pin role to its GPIO `(port, bit)`, so `bind_mcu`
 /// can stamp the tri-stated driver half of the dual ADC+GPIO bind (dynamic
-/// promotion, 05-cosim-fidelity §4.1). On the ATmega328P the analog pins
+/// promotion). On the ATmega328P the analog pins
 /// A0..A5 are port C bits 0..5 (PC0..PC5); A6/A7 (Nano modules) are ADC-only
 /// with no port pin and return `None`, so they stay pure ADC probes. Handles
 /// both the Nano module role ("a2", "a3_...") and the bare role carrying an
@@ -3431,13 +3431,14 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
         "+24V" | "+24.0V" | "24V" => Some(24.0),
         "+1V8" | "1V8" | "1.8V" => Some(1.8),
         // Negative rails (analog supplies, RS-232 drivers, op-amp VEE feeds).
-        // These previously fell through every arm; the substring fallback
-        // below requires a leading '+' or a VCC/VBUS token, so "-5V" returned
-        // None, got no SupplyLeg, and silently floated at 0 V. A negative rail
-        // is NOT ground: it must keep its own node AND get a supply at the
-        // negative voltage. Bare "VEE" is deliberately unresolved: its
-        // magnitude is board-dependent (-5/-12/-15 are all common), so
-        // inventing one would guess; name the net with its voltage instead.
+        // Without explicit arms these fall through to the substring fallback
+        // below, which requires a leading '+' or a VCC/VBUS token, so "-5V"
+        // returns None, gets no SupplyLeg, and silently floats at 0 V. A
+        // negative rail is NOT ground: it must keep its own node AND get a
+        // supply at the negative voltage. Bare "VEE" is deliberately
+        // unresolved: its magnitude is board-dependent (-5/-12/-15 are all
+        // common), so inventing one would guess; name the net with its
+        // voltage instead.
         "-5V" | "-5V0" | "-5.0V" => Some(-5.0),
         "-12V" | "-12.0V" => Some(-12.0),
         "-15V" | "-15.0V" => Some(-15.0),
@@ -3808,7 +3809,7 @@ mod natural_ref_key_tests {
     fn mcp4728_addresses_ascend_by_natural_device_order() {
         // Simulate the address-assignment pass over DAC bindings whose
         // designators are non-uniform width (U2, U10). U2 must get 0x60 and
-        // U10 0x61; the reverse of the old lexicographic bug (#12).
+        // U10 0x61, which plain lexicographic ordering would reverse.
         let mut dacs = vec![
             DacBinding {
                 reference: "U10".into(),
@@ -3893,9 +3894,10 @@ mod digital_ro_tests {
         );
     }
 
-    /// R23 (vreg-silent-5v-default): a vreg model with no `vout` param used to
-    /// regulate silently to 5.0 V, overdriving a 3.3 V board with zero warning.
-    /// A missing `vout` must now emit a warning that names the assumed default.
+    /// R23 (vreg-silent-5v-default): a vreg model with no `vout` param falls
+    /// back to 5.0 V, which overdrives a 3.3 V board. Regulating there
+    /// silently is the hazard, so a missing `vout` must emit a warning that
+    /// names the assumed default.
     #[test]
     fn vreg_without_vout_param_warns_about_the_assumed_default() {
         let mut model = make_entry(
@@ -3935,16 +3937,16 @@ mod digital_ro_tests {
     /// R30 (spst-fallback-wires-ctrl-as-terminal): an analog switch with only its
     /// common and control pins wired (the switched throw unconnected/DNP) reaches
     /// the SPST fallback. The fallback must leave the switch OPEN; the control
-    /// net is the gate, never a signal terminal. The old code picked the two
-    /// lowest-NodeId non-POWER roles as the two throws, so it wired `ctrl` itself
-    /// as a terminal and stamped a VSwitch whose `b` equalled its own `ctrl_p`:
-    /// a fabricated ~ron path shorting the common signal net to the control line
-    /// (and injecting the control voltage) whenever the gate went high.
+    /// net is the gate, never a signal terminal. Picking the two lowest-NodeId
+    /// non-POWER roles as the two throws wires `ctrl` itself as a terminal and
+    /// stamps a VSwitch whose `b` equals its own `ctrl_p`: a fabricated ~ron
+    /// path shorting the common signal net to the control line (and injecting
+    /// the control voltage) whenever the gate goes high.
     #[test]
     fn ctrl_role_recognises_all_multi_gate_and_select_spellings() {
-        // R45: is_ctrl_role only knew ctrl/ctrl_1/in, so the multi-gate branch's
-        // ctrl_2/ctrl_3/ctrl_4 (and the SPDT sel/s controls) leaked into the SPST
-        // fallback's throw candidates and could be stamped as a switch terminal,
+        // R45: any control spelling is_ctrl_role misses (the multi-gate branch's
+        // ctrl_2/ctrl_3/ctrl_4, the SPDT sel/s controls) leaks into the SPST
+        // fallback's throw candidates and can be stamped as a switch terminal,
         // shorting a signal net onto a control net. Every control spelling must be
         // excluded.
         for r in [
@@ -4047,12 +4049,12 @@ mod digital_ro_tests {
         );
     }
 
-    /// R31 (spdt-no-nc-inverted): the NO/NC pin-function tokens were mapped to
-    /// the wrong throws. s0 is the throw that conducts when the control is LOW; by
+    /// R31 (spdt-no-nc-inverted): the NO/NC pin-function tokens must land on
+    /// the right throws. s0 is the throw that conducts when the control is LOW; by
     /// the universal SPDT convention the Normally-Closed contact conducts at rest
     /// (control-low) and Normally-Open closes on control-high. So NC → s0 and
-    /// NO → s1; the opposite of the old mapping, which routed COM to the wrong
-    /// throw in every control state on any board using NO/NC pin names.
+    /// NO → s1. The inverted mapping routes COM to the wrong throw in every
+    /// control state on any board that names its throws NO/NC.
     #[test]
     fn spdt_no_nc_map_to_the_correct_throws() {
         assert_eq!(
@@ -4215,8 +4217,8 @@ mod crystal_fallback_tests {
     }
 
     /// R23 (MELF-passive-silent-open): a MELF-footprint resistor/cap has a
-    /// diode-shaped body, so the diode-evidence gate used to delete it (return
-    /// None -> open circuit). An R/C/L *reference* whose value is a clear passive
+    /// diode-shaped body, so an unqualified diode-evidence gate deletes it
+    /// (return None -> open circuit). An R/C/L *reference* whose value is a clear passive
     /// magnitude must fall through to the passive fallback instead.
     #[test]
     fn melf_footprint_resistor_binds_as_passive_not_open() {
@@ -4250,7 +4252,8 @@ mod fmt_tests {
 
     #[test]
     fn capacitor_scales_to_pico_nano_micro() {
-        // The reported bug: 390 pF used to print as "0.000 µF".
+        // A fixed µF scale renders 390 pF as "0.000 µF"; the scale tracks the
+        // magnitude instead.
         assert_eq!(fmt_eng(390e-12, "F"), "390 pF");
         assert_eq!(fmt_eng(1e-9, "F"), "1 nF");
         assert_eq!(fmt_eng(4.7e-9, "F"), "4.7 nF");
@@ -4299,9 +4302,9 @@ mod rail_voltage_tests {
     use super::power_rail_voltage;
 
     /// Round-8 #1: a positive numeric rail carries its own magnitude. "+15V"
-    /// contains the substring "5V" and starts with '+', so the old loose
-    /// heuristic classified it as a 5 V rail, a +15V op-amp supply solved at
-    /// 5 V. The positive fallback now parses the true magnitude.
+    /// contains the substring "5V" and starts with '+', so a loose substring
+    /// heuristic classifies it as a 5 V rail and solves a +15V op-amp supply
+    /// at 5 V. The positive fallback parses the true magnitude instead.
     #[test]
     fn positive_numeric_rails_keep_their_magnitude() {
         assert_eq!(power_rail_voltage("+15V"), Some(15.0));
@@ -4359,10 +4362,11 @@ mod rail_voltage_tests {
 
     /// R33: a supply-token rail ABOVE 60 V that embeds a "5V"/"3V3" digit
     /// substring ("VBUS_65V" contains "5V", "VDD_63V3" contains "3V3") must read
-    /// its FULL magnitude. embedded_rail_magnitude used to clamp >60 V to None, so
-    /// control fell through to the loose substring branch and silently solved a
-    /// 65 V rail at 5 V, masking overvoltage stress. The '+' form ("+65V") was
-    /// already correct via positive_rail_fallback; the token form now matches it.
+    /// its FULL magnitude. Clamping embedded_rail_magnitude above 60 V to None
+    /// drops control into the loose substring branch, which silently solves a
+    /// 65 V rail at 5 V and hides overvoltage stress, so there is no upper
+    /// clamp. The '+' form ("+65V") resolves via positive_rail_fallback and the
+    /// token form matches it.
     #[test]
     fn high_voltage_token_rails_are_not_swallowed_by_the_5v_substring() {
         assert_eq!(power_rail_voltage("VBUS_65V"), Some(65.0));
@@ -4548,11 +4552,11 @@ mod gpio_role_tests {
     }
 
     /// R11: STM32 GPIO banks run past port E, an F4/F7 in a large package has
-    /// PF/PG/PH/PI. Both the pin-role stage (capped at E) and the role→(port,bit)
-    /// stage (capped at G) silently dropped every pin on those banks.
+    /// PF/PG/PH/PI. Both the pin-role stage and the role→(port,bit) stage must
+    /// cover them; a cap at E or at G silently drops every pin on those banks.
     #[test]
     fn stm32_ports_past_e_map() {
-        // Pin-function → role: F/G/H/I now survive (previously capped at E).
+        // Pin-function → role: F/G/H/I survive.
         assert_eq!(
             role_from_mcu_pinfunction_token("PF9"),
             Some("pf9".to_string())
