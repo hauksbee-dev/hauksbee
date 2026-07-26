@@ -3,7 +3,7 @@
 //! Software got transformed by running tests on every commit. Hardware has had
 //! nothing like it. `hauksbee-ci` runs the hauksbee PCB emulator headless in a
 //! pipeline: on every layout change it boots the firmware on the real board,
-//! and asserts the things you would otherwise only learn on the bench — the
+//! and asserts the things you would otherwise only learn on the bench; the
 //! rail comes up at 4.96 V, the UART says hello, the LED blinks at 5 Hz, no
 //! part exceeds its rating.
 //!
@@ -49,7 +49,7 @@ pub struct RunConfig {
     /// exactly. `None` = run the whole ensemble.
     pub seed: Option<u32>,
     /// Extra model directory, layered above the builtin db, installed packs,
-    /// and the user model dirs — the same `--models-dir` layer `hauksbee run`
+    /// and the user model dirs; the same `--models-dir` layer `hauksbee run`
     /// has, so a custom `[[models]]` routing entry binds in CI too.
     pub models_dir: Option<PathBuf>,
 }
@@ -76,7 +76,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             .collect()
     };
     // Union of co-sim coverage warnings (dropped ADC channels, unexercised bus
-    // peripherals) across members, deduped and order-stable — same discipline
+    // peripherals) across members, deduped and order-stable, same discipline
     // as substitutions: a hole in ONE member is a hole in the ensemble.
     let coverage_warnings: Vec<String> = {
         let mut seen = std::collections::BTreeSet::new();
@@ -101,7 +101,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         // of 2^n. Report the single pinned member honestly instead.
         if let Some(seed) = cfg.seed {
             // A corners member is a deterministic min/max corner, not a random
-            // draw — carry the mode so the banner says "corner N", matching the
+            // draw, carry the mode so the banner says "corner N", matching the
             // mode-aware per-assertion INVALID/FAIL wording.
             let corners = matches!(spec.ensemble_mode()?, tolerance::Mode::Corners);
             Some(report::EnsembleCoverage::SingleMember {

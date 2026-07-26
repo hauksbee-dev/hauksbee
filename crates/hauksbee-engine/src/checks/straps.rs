@@ -75,7 +75,7 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
             };
             // A floating strap net. For a pin with a documented internal pull
             // (every ESP32 strap) an undriven net settles to a defined level, so
-            // skip — the prior, conservative behaviour. But a pin with NO internal
+            // skip; the prior, conservative behaviour. But a pin with NO internal
             // pull (STM32 BOOT0) left floating is genuinely undefined at reset:
             // that is the fault, not a non-event. This is the boot-mode latch the
             // firmware cannot override.
@@ -85,7 +85,7 @@ pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
                     // least boots *deterministically* wrong, so it is caught on the
                     // first power-up at the bench. A float boots correctly often
                     // enough to pass the bench yet fail intermittently in the field
-                    // (humidity, EMI, a probe) — a latent, unrecoverable failure
+                    // (humidity, EMI, a probe), a latent, unrecoverable failure
                     // that survives bring-up, which is the more dangerous outcome.
                     report.findings.push(LintFinding {
                         check: LintCheck::StrapPin,
@@ -191,7 +191,7 @@ fn examine_strap(
 /// A two-terminal resistor (ref R*, not RV/RT/RN/RP/RM, two connected pads, not
 /// a ferrite/inductor), and assembled (not DNP). Mirrors the extract lint's
 /// `is_resistor` plus a DNP guard. Shared with the boot check's bias-resistor
-/// predicate — a varistor (RV) or thermistor (RT) to ground sets no DC level
+/// predicate, a varistor (RV) or thermistor (RT) to ground sets no DC level
 /// and must never be credited as a bias.
 pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
     if c.dnp {
@@ -387,7 +387,7 @@ fn is_ground_name(name: &str) -> bool {
 /// voltage table. Breadth matches boot.rs's `is_power_or_ground_net`, and for
 /// the same calibration reason: the old exact-name table (3V3/5V/1V8 plus
 /// VCC/VBUS-gated forms) missed VBAT/VSYS/VMOT/VIN and bare voltages (9V/12V),
-/// so a correct pull-up to "VBAT" read as a signal net — which both let the
+/// so a correct pull-up to "VBAT" read as a signal net, which both let the
 /// clock-reach hop wander onto a rail (a spurious HIGH clock finding through an
 /// oscillator's VDD) and hid a genuine wrong-direction pull from `wrong_pull`.
 fn is_rail_name(name: &str) -> bool {
@@ -412,12 +412,12 @@ fn is_unconnected_net(name: &str) -> bool {
     name.trim_start_matches('/').starts_with("unconnected-")
 }
 
-/// True when the only thing on `net_id` is `mcu` itself — no resistor, no other
+/// True when the only thing on `net_id` is `mcu` itself, no resistor, no other
 /// component, nothing that could define a level. Such a strap net is floating
 /// just as surely as a KiCad `unconnected-*` net, even if it carries a real name.
 /// A net with ANY other member (a pull resistor, a header, a jumper, another
 /// driver) is NOT isolated, so a jumper-selectable BOOT0 (a resistor to a 3-pin
-/// header, as on dev boards) never trips this — only a genuinely dangling pin.
+/// header, as on dev boards) never trips this, only a genuinely dangling pin.
 fn net_is_isolated_to(board: &ExtractedBoard, net_id: i64, mcu: &Component) -> bool {
     board
         .net_members(net_id)
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn strap_pullup_to_vbat_rail_does_not_reach_oscillator_vdd() {
         // Bug #19 regression: same shape as the +3V3 test above, but the rail
-        // is named "VBAT" — a name the old exact table did not recognise, so
+        // is named "VBAT", a name the old exact table did not recognise, so
         // the series-R hop walked onto the rail, found the oscillator's VDD,
         // and fired a spurious HIGH "free-running clock" finding on a correct
         // pull-up. VBAT must count as a rail; the board is clean.
@@ -665,7 +665,7 @@ mod tests {
     fn floating_boot0_no_internal_pull_fires_high() {
         // The flight-controller bug shape (explosion33/RCS_Hardware): an STM32
         // BOOT0 pad left UNCONNECTED, with no pull resistor anywhere. STM32 BOOT0
-        // has no internal pull, so the boot source is undefined at reset — the
+        // has no internal pull, so the boot source is undefined at reset; the
         // part can come up in the bootloader instead of the application. Must fire
         // a SERIOUS strap finding.
         let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
@@ -720,7 +720,7 @@ mod tests {
     fn jumper_selectable_boot0_does_not_fire() {
         // The zero-false-positive guarantee: a BOOT0 routed through a resistor to a
         // 3-pin selector header (the standard dev-board boot-mode jumper) has a
-        // non-MCU member on its net, so it is NOT isolated and must NOT fire — even
+        // non-MCU member on its net, so it is NOT isolated and must NOT fire, even
         // though no static pull resolves it (the jumper does, at assembly).
         let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)
   (net 0 "")
@@ -760,7 +760,7 @@ mod tests {
 
     #[test]
     fn floating_esp32_strap_does_not_fire() {
-        // The symmetric negative: an ESP32 GPIO0 left undriven must NOT fire — the
+        // The symmetric negative: an ESP32 GPIO0 left undriven must NOT fire; the
         // ESP32 strap has a documented internal pull, so a floating net settles to
         // a defined level. This is the calibration the floating arm must respect.
         let text = r#"(kicad_pcb (version 20211014) (host pcbnew 6.0)

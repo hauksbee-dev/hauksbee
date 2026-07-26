@@ -6,12 +6,12 @@
 //! and passes with the Monitor/RAM injection path:
 //!
 //!   1. The test configures an `AdcChannelMap` that delivers channel 0's count
-//!      into an SRAM result word (`0x2000_4000`) via `sysbus WriteDoubleWord` —
+//!      into an SRAM result word (`0x2000_4000`) via `sysbus WriteDoubleWord`,
 //!      the same Monitor TCP channel the backend's ODR diffing rides.
 //!   2. The firmware is a REAL Cortex-M3 program executed by Renode: a
 //!      hand-assembled Thumb loop (built byte-by-byte below, because this repo
 //!      cannot assume an ARM cross-toolchain) that first configures every
-//!      GPIOC pin as an output (CRL/CRH = 0x33333333, GP push-pull 50 MHz —
+//!      GPIOC pin as an output (CRL/CRH = 0x33333333, GP push-pull 50 MHz,
 //!      required since the direction-aware ODR poll only reports
 //!      configured-output pins as driven, exactly like real hardware only
 //!      drives configured outputs), then reads the ADC result word and copies
@@ -48,7 +48,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// SRAM word the injected count is written to (STM32F103 SRAM, well clear of
-/// anything the tiny firmware uses — it has no stack and no data).
+/// anything the tiny firmware uses; it has no stack and no data).
 const ADC_RESULT_WORD: u32 = 0x2000_4000;
 
 /// Build the tiny Cortex-M3 firmware as a loadable ELF32 image, in memory.

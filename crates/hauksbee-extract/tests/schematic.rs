@@ -456,7 +456,7 @@ fn fixture_global_bus_label_globalizes_members() {
     // A GLOBAL bus label `GB[0..1]` on both sheets must make each member a
     // global net: the top sheet's GB0 (RA) and the child sheet's GB0 (RC) are
     // one net even though no wire, sheet pin, or hierarchical label crosses
-    // the boundary — exactly how KiCad treats a global bus label. Before the
+    // the boundary, exactly how KiCad treats a global bus label. Before the
     // fix the label's scope was dropped and the members stayed sheet-local.
     let Some(b) = fixture("global_bus_top.kicad_sch") else {
         eprintln!("fixture missing; skipping");
@@ -475,7 +475,7 @@ fn fixture_global_bus_label_globalizes_members() {
         "distinct members GB0 and GB1 must not merge"
     );
     // Control: a LOCAL bus label `LB[0..1]` on both sheets must NOT globalize
-    // its members — the two LB0 nets are unrelated sheet-local nets.
+    // its members; the two LB0 nets are unrelated sheet-local nets.
     assert!(
         !same_net(&b, ("RE", "1"), ("RF", "1")),
         "local bus member LB0 must stay per-sheet"
@@ -488,7 +488,7 @@ fn fixture_global_bus_label_globalizes_members() {
 fn fixture_net_naming_priority() {
     // One net carrying two competing anchor kinds must take the
     // higher-priority name, per KiCad's driver precedence
-    // global > power > local > hierarchical — NOT the alphabetically
+    // global > power > local > hierarchical, NOT the alphabetically
     // smallest name of the old two-tier scheme.
     let Some(b) = fixture("naming_priority.kicad_sch") else {
         eprintln!("fixture missing; skipping");

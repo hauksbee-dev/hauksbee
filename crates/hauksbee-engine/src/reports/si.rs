@@ -1,6 +1,6 @@
 //! The `--si` report: the signal-integrity / physics static checks from the
 //! extractor, augmented with the engine-layer checks whose attribution needs the
-//! bound database models — trace ampacity (IPC-2221) and input-cap ripple. It
+//! bound database models, trace ampacity (IPC-2221) and input-cap ripple. It
 //! renders in the requested mode and, under `--strict`, exits non-zero on a real
 //! finding. CLI glue over the extract- and engine-layer SI checks.
 

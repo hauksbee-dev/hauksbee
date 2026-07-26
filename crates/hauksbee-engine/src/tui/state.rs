@@ -72,7 +72,7 @@ pub enum Severity {
     Serious,
     /// Degrades margin / robustness: medium lint & SI findings.
     Medium,
-    /// Dim, informational — but kept visible (the actionable USB-impedance note
+    /// Dim, informational, but kept visible (the actionable USB-impedance note
     /// is `Info` yet must never be hidden).
     Info,
 }
@@ -176,7 +176,7 @@ pub struct Part {
     pub status: PartStatus,
     /// What it became (the bind outcome label), for the detail line.
     pub became: String,
-    /// True for an MCU or an active IC (U/IC/MCU prefix) — marked in the list.
+    /// True for an MCU or an active IC (U/IC/MCU prefix), marked in the list.
     pub active_ic: bool,
     /// True when this is an UNRESOLVED active IC sitting on the live circuit:
     /// the "critical, open" case the honesty layer cares about.
@@ -191,7 +191,7 @@ pub struct Net {
     pub voltage_v: Option<f64>,
 }
 
-/// A detail view for the selected left-pane row — either a part or a net. This
+/// A detail view for the selected left-pane row, either a part or a net. This
 /// is what the Nets&Parts pane opens on Enter, mirroring the Findings detail so
 /// Enter is consistent across panes (the personas hit a dead Enter here).
 #[derive(Debug, Clone, PartialEq)]
@@ -230,7 +230,7 @@ enum LeftPaneIndex {
 
 /// The maximum number of nets on the scope at once. Probing a fifth net evicts
 /// the oldest-probed one (FIFO), so the scope never grows unbounded and stays
-/// readable at small terminal heights. A deliberate UI constraint — the
+/// readable at small terminal heights. A deliberate UI constraint; the
 /// `scope_probe_caps_and_evicts_oldest` test mirrors it.
 pub const SCOPE_MAX_PROBES: usize = 4;
 
@@ -299,7 +299,7 @@ impl ScopeSeries {
 /// stream via [`ScopeState::record`]; entirely terminal-free.
 #[derive(Debug, Clone, Default)]
 pub struct ScopeState {
-    /// Probed net names in probe order — front is the oldest, evicted first when
+    /// Probed net names in probe order, front is the oldest, evicted first when
     /// the cap is hit.
     order: Vec<String>,
     /// Per-net rolling history, keyed by net name. Always in sync with `order`.
@@ -353,7 +353,7 @@ impl ScopeState {
         }
     }
 
-    /// Drop every buffered sample but keep the probe selection — used when a new
+    /// Drop every buffered sample but keep the probe selection, used when a new
     /// co-sim run starts (sim time resets to 0) so an old trace doesn't splice
     /// onto the new one.
     pub fn clear_samples(&mut self) {
@@ -374,13 +374,13 @@ impl ScopeState {
 /// which knows whether a co-sim is currently running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeView {
-    /// No MCU/firmware on this board — there are no live signals to scope.
+    /// No MCU/firmware on this board; there are no live signals to scope.
     NoMcu,
     /// An MCU exists but no net is probed yet.
     NoProbes,
     /// Nets are probed but no samples have arrived (run not started, or just begun).
     NoData,
-    /// At least one probed net has samples — draw the sparklines.
+    /// At least one probed net has samples, draw the sparklines.
     Live,
 }
 
@@ -501,11 +501,11 @@ pub struct AppState {
 
     /// Number of UNRESOLVED *active* ICs sitting on the live circuit. When > 0,
     /// the analog results are not trustworthy and the verdict must say so. Taken
-    /// straight from the [`BindSummary`] honesty data — never recomputed.
+    /// straight from the [`BindSummary`] honesty data, never recomputed.
     pub active_unresolved: usize,
     /// The refs of those unresolved active ICs (for the verdict warning line).
     pub active_unresolved_refs: Vec<String>,
-    /// True when the board has no MCU/firmware target — the co-sim pane is a
+    /// True when the board has no MCU/firmware target; the co-sim pane is a
     /// static-analysis-only surface, not a firmware co-sim.
     pub no_mcu: bool,
     /// Set when the requested MCU part was modelled by a less-specific core
@@ -535,7 +535,7 @@ pub struct AppState {
     /// at the top until the first keypress dismisses it (see [`TUI_LAUNCH_BANNER`]).
     pub banner_dismissed: bool,
     /// The scope: which nets are probed (`p` from the Nets & Parts list) and
-    /// their rolling voltage history, fed from the co-sim stream. Read-mostly —
+    /// their rolling voltage history, fed from the co-sim stream. Read-mostly,
     /// the only mutation is the probe toggle plus sample recording.
     pub scope: ScopeState,
 }
@@ -648,7 +648,7 @@ impl AppState {
                 location_mm: None,
                 layer: Some(g.layer.clone()),
                 fix: None,
-                // Grouped, non-actionable noise — collapsed into the notes count.
+                // Grouped, non-actionable noise, collapsed into the notes count.
                 actionable: false,
             });
         }
@@ -688,7 +688,7 @@ impl AppState {
         });
 
         // Honesty data: unresolved *active* ICs on the live circuit. Reused from
-        // the BindSummary — never recomputed — so the TUI verdict can't diverge
+        // the BindSummary, never recomputed, so the TUI verdict can't diverge
         // from the machine surface.
         let active_unresolved_refs: Vec<String> = summary
             .active_path_unresolved
@@ -864,7 +864,7 @@ impl AppState {
 
     /// The net name the Nets & Parts cursor is currently on, but only when the
     /// Parts pane is focused and the selection sits on a net row (not a part).
-    /// This is what `p` probes — probing is scoped to "a net from the parts/nets
+    /// This is what `p` probes, probing is scoped to "a net from the parts/nets
     /// list", so a part row or any other focused pane yields `None`.
     pub fn selected_probe_net(&self) -> Option<&str> {
         if self.focus != Pane::Parts {
@@ -947,7 +947,7 @@ impl AppState {
     }
 
     /// The honesty warning for the verdict pane when active ICs are unresolved.
-    /// `None` when every active IC is resolved. Reuses the BindSummary count —
+    /// `None` when every active IC is resolved. Reuses the BindSummary count,
     /// never recomputed.
     pub fn unresolved_warning(&self) -> Option<String> {
         if self.active_unresolved == 0 {
@@ -1020,7 +1020,7 @@ fn parts_from_report(report: &BindReport, summary: &BindSummary) -> Vec<Part> {
         .collect();
 
     // Sort the most important parts to the top: critical-open first, then other
-    // unresolved, then active ICs, then everything else, then ignored — so the
+    // unresolved, then active ICs, then everything else, then ignored, so the
     // engineer's eye lands on what matters. Lower rank sorts higher.
     const RANK_CRITICAL_OPEN: u8 = 0;
     const RANK_UNRESOLVED: u8 = 1;

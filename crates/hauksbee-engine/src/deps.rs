@@ -8,7 +8,7 @@
 //! actually accept. The ngspice probe follows the documented lookup the
 //! ngspice differential harness uses (`$NGSPICE`, PATH, per-OS defaults); the
 //! kicad-cli probe mirrors `reports::drc::find_kicad_cli` (private to a module
-//! another lane owns — keep the two in lockstep if either changes).
+//! another lane owns, keep the two in lockstep if either changes).
 //!
 //! The install side shells KILLABLE children and streams their output:
 //! `hauksbee install esp-qemu --yes` (this very binary's own Rust installer,
@@ -17,7 +17,7 @@
 //! script is shipped in release bundles next to the binary). One install runs
 //! at a time (RAII slot, same pattern as `webcheck::WebCheckSlot`), a hard
 //! timeout kills the whole child process group, and a failure surfaces the
-//! child's actual output tail — never a bare exit code.
+//! child's actual output tail, never a bare exit code.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;

@@ -8,7 +8,7 @@
 //!
 //! 1. **Held-high control-net hazards** ([`BootAdvisory::held_high_control_nets`]):
 //!    a control net the firmware drives (or pulls) HIGH and holds from reset, that
-//!    switches a transistor/relay and has no bias resistor setting a safe default —
+//!    switches a transistor/relay and has no bias resistor setting a safe default,
 //!    a MOSFET gate / relay / motor enable / igniter energised at power-up. The
 //!    switch requirement is the zero-false-positive guard.
 //! 2. **Per-gate power-up state** ([`BootAdvisory::gate_states`]): what the firmware
@@ -27,11 +27,11 @@ use hauksbee_extract::{Component, ExtractedBoard};
 #[derive(Debug, Clone, Default)]
 pub struct BootAdvisory {
     /// Control nets that switch a transistor/relay, are held HIGH from power-up,
-    /// and have no bias resistor setting a safe default — the heads-up hazards.
+    /// and have no bias resistor setting a safe default; the heads-up hazards.
     pub held_high_control_nets: Vec<String>,
     /// Per-transistor-gate power-up state rows for the informational panel. Empty
     /// when the firmware did not run (nothing drove the pins, so every gate would
-    /// read "floating" — which says nothing about the design).
+    /// read "floating", which says nothing about the design).
     pub gate_states: Vec<(String, String, BootGateState)>,
 }
 
@@ -41,7 +41,7 @@ pub struct BootAdvisory {
 /// factual level); `output_configured` is the set it drove as outputs (splits a
 /// strong HIGH from a weak pull-up); `driven` is the union of output-configured
 /// and written nets. `firmware_ran` is `true` only when firmware was supplied and
-/// actually exercised the board — the gate-state panel is suppressed otherwise.
+/// actually exercised the board; the gate-state panel is suppressed otherwise.
 pub fn analyze(
     board: &ExtractedBoard,
     firmware_held_high: &[String],
@@ -87,7 +87,7 @@ pub fn analyze(
     }
 }
 
-/// True when a net has no *bias* resistor — no resistor tying it toward a power
+/// True when a net has no *bias* resistor, no resistor tying it toward a power
 /// rail or ground, so nothing on the board fixes its power-up level (it is set
 /// entirely by firmware). Used to sharpen the boot-control-net heads-up to nets
 /// with no hardware fail-safe. A resistor whose other terminal is NOT a rail or
@@ -136,7 +136,7 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
 /// so it can never suppress a genuinely floating gate.
 ///
 /// "Resistor" is the same strict predicate the hazard filter uses
-/// ([`super::straps::is_assembled_resistor`]) — plain assembled R refs only, so a
+/// ([`super::straps::is_assembled_resistor`]), plain assembled R refs only, so a
 /// varistor / thermistor / DNP part is never miscredited as a bias.
 pub fn gate_bias(board: &ExtractedBoard, net_name: &str) -> Option<GateBias> {
     let net = board.nets.iter().find(|n| n.name == net_name)?;
@@ -167,8 +167,8 @@ pub fn gate_bias(board: &ExtractedBoard, net_name: &str) -> Option<GateBias> {
     }
 
     // 2 hops: gate -> R1 -> mid -> R2 -> rail. Name R1 (the resistor sitting on
-    // the gate net) and the rail R2 reaches. `mid` must not itself be a rail —
-    // that is the 1-hop case, already handled — so this only extends the reach,
+    // the gate net) and the rail R2 reaches. `mid` must not itself be a rail,
+    // that is the 1-hop case, already handled, so this only extends the reach,
     // never double-counts.
     for (comp, _) in board.net_members(net.id) {
         if !super::straps::is_assembled_resistor(comp) {
@@ -215,16 +215,16 @@ fn rail_name_and_level(board: &ExtractedBoard, net_id: i64) -> Option<(String, B
     Some((net.name.clone(), level))
 }
 
-/// True when a net connects to a transistor or relay — a switch whose control
+/// True when a net connects to a transistor or relay, a switch whose control
 /// input (a MOSFET/BJT gate-base, a relay coil) at the wrong level at power-up
 /// switches a load. This is the load-bearing zero-FP guard for the boot
 /// advisory: it separates a genuine load-control net (e.g. an igniter gate fed
-/// by a mis-mapped pull-up) from an ordinary `INPUT_PULLUP` button input — both
+/// by a mis-mapped pull-up) from an ordinary `INPUT_PULLUP` button input, both
 /// read HIGH at boot, but only the former switches anything. Reference prefix
 /// 'Q' = transistor, 'K' = relay (standard KiCad designators). DNP (not
 /// assembled) switches don't count. (Pin-function data that would let us require
 /// the *control* terminal specifically is absent in PCB-only extraction, so any
-/// terminal of a populated Q/K qualifies — a deliberate, conservative breadth.)
+/// terminal of a populated Q/K qualifies, a deliberate, conservative breadth.)
 pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
     let Some(net) = board.nets.iter().find(|n| n.name == net_name) else {
         return false;
@@ -241,7 +241,7 @@ pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
 /// Whether a net id names a power rail or ground. Grounds: the GND/AGND/VSS
 /// family. Rails: a leading '+', a `V…`/`…V` name (VCC/VDD/VBAT/VMOT/VSYS/VIN
 /// and bare voltages like 12V/3V3/5V/1V8). The broad `V`-name rule is
-/// deliberately inclusive — a missed rail would mis-read a real pull as "no
+/// deliberately inclusive, a missed rail would mis-read a real pull as "no
 /// bias" and over-flag, so on the zero-FP surface we err toward recognising
 /// rails (a false rail only *suppresses* an advisory, the safe direction here is
 /// the opposite, hence breadth).
@@ -287,7 +287,7 @@ fn switch_control_pad(footprint: &str) -> Option<&'static str> {
         return Some("4");
     }
     // 3-lead discrete packages where the control terminal is pad 1 (MOSFET gate
-    // G-D-S, BJT base B-C-E/B-E-C — pad 1 is the control either way).
+    // G-D-S, BJT base B-C-E/B-E-C, pad 1 is the control either way).
     const THREE_LEAD: [&str; 12] = [
         "SOT-23", "SOT23", "SOT-323", "SOT323", "SC-70", "SC70", "TO-252", "DPAK", "TO-263",
         "D2PAK", "TO-220", "TO-247",
@@ -301,7 +301,7 @@ fn switch_control_pad(footprint: &str) -> Option<&'static str> {
 /// Whether footprint `f` contains 3-lead package name `p` AND really is the
 /// 3-lead variant. "SOT-23-5" / "SOT-23-6" / "SC-70-5" still contain the bare
 /// package name, but a trailing `-N` lead count other than 3 is a different
-/// pinout where pad 1 is not the control terminal — so the match must not fire
+/// pinout where pad 1 is not the control terminal, so the match must not fire
 /// (this mirrors the explicit SOT-23-8 handling in the caller). A bare name
 /// with no lead-count suffix ("SOT-23") is the 3-lead package.
 fn is_three_lead_variant(f: &str, p: &str) -> bool {
@@ -325,13 +325,13 @@ fn is_gate_pad_name(s: &str) -> bool {
 
 /// A pad named as a BJT *base* (`B`/`BASE`). Kept separate from the gate name so
 /// a 4-terminal MOSFET with an explicit bulk/body pad labelled `B` never has its
-/// bulk picked over the real gate — gate names are tried first.
+/// bulk picked over the real gate, gate names are tried first.
 fn is_base_pad_name(s: &str) -> bool {
     matches!(s.trim().to_ascii_uppercase().as_str(), "B" | "BASE")
 }
 
 /// Every transistor (`Q…`) whose control terminal can be identified, paired with
-/// the net on that terminal — the rows of the boot-state panel. The control pad
+/// the net on that terminal; the rows of the boot-state panel. The control pad
 /// is found first by an explicit `G`/`GATE` pad name (then `B`/`BASE`), else by
 /// footprint convention. DNP transistors and unidentifiable parts are skipped
 /// (the panel omits a device rather than mislabel it).
@@ -362,14 +362,14 @@ fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
 }
 
 /// What the firmware does to a gate net at power-up. Reported factually (no
-/// channel-type safety claim — a HIGH gate is "on" for a low-side N-MOSFET but
+/// channel-type safety claim, a HIGH gate is "on" for a low-side N-MOSFET but
 /// "off" for a high-side P-MOSFET, which the netlist can't disambiguate).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootGateState {
     /// Strong push-pull HIGH (the pin is configured as an output and held high).
     DrivenHigh,
     /// HIGH via a weak internal pull-up (the firmware left the pin an input but
-    /// enabled its pull-up) — e.g. a serial RX pin mis-mapped onto a gate. The
+    /// enabled its pull-up), e.g. a serial RX pin mis-mapped onto a gate. The
     /// gate still goes high, but by accident rather than an intended drive.
     PulledHigh,
     DrivenLow,
@@ -378,7 +378,7 @@ pub enum BootGateState {
     /// "undefined until firmware drives it" warning.
     Floating,
     /// The firmware never drives the gate, but a bias resistor ties its net to a
-    /// rail, so the level IS defined by hardware — the reverse-polarity P-FET
+    /// rail, so the level IS defined by hardware; the reverse-polarity P-FET
     /// with a gate pulldown case. Reported as an informational, non-warning row
     /// naming the resistor, so a correctly-biased gate is never mis-flagged as
     /// floating (the zero-false-positive fix for the boot-gate panel).
@@ -400,7 +400,7 @@ pub struct GateBias {
     pub level: BiasLevel,
 }
 
-/// Which level a bias resistor holds a gate at — a pull-down to ground holds it
+/// Which level a bias resistor holds a gate at, a pull-down to ground holds it
 /// LOW, a pull-up to a supply holds it HIGH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BiasLevel {
@@ -466,11 +466,11 @@ impl BootGateState {
 /// `held_high` is the UNFILTERED set of nets held high (a factual level, so it
 /// must not be the safety-filtered advisory list); `configured` is the set the
 /// firmware drove as outputs (used to split a strong HIGH from a pull-up);
-/// `driven` is the union (output-configured ∪ written) — a net in neither is
+/// `driven` is the union (output-configured ∪ written), a net in neither is
 /// floating. A `pinMode(OUTPUT)`-with-no-write pin appears in `driven` and
 /// reports "driven LOW"; note the analog solve leaves it tri-stated (it only
 /// enables a Thevenin leg on a PORT edge), so panel and solver intentionally
-/// disagree there — the panel is the more faithful account of the real pin.
+/// disagree there; the panel is the more faithful account of the real pin.
 fn boot_gate_states(
     gates: &[(String, String)],
     held_high: &HashSet<String>,

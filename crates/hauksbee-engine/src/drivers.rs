@@ -7,7 +7,7 @@
 //! output resistance `ro`. We stamp this into the [`Circuit`] as a hidden
 //! driver node, a `Vsource` from that node to ground, and a `Resistor` from
 //! the driver node to the real net node. Updating the pin level is then just
-//! mutating the `Vsource`'s value between solver chunks — cheap, and contention
+//! mutating the `Vsource`'s value between solver chunks, cheap, and contention
 //! between multiple drivers on one net resolves naturally through the resistor
 //! network in MNA.
 

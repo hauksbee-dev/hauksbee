@@ -60,7 +60,7 @@ pub trait I2cSlave: Send {
     /// `&mut Circuit` exists to build a `TickCtx` from. [`I2cBus::dispatch`]
     /// therefore only *records* the STOP; the scheduler delivers the hook once
     /// per chunk via [`I2cBus::flush_stops`], after the MCU ran and before the
-    /// analog solve — which is the earliest moment the solver could see a
+    /// analog solve, which is the earliest moment the solver could see a
     /// driven net anyway (the chunk-rate limit documented in the module
     /// header). Transaction *state* resets must therefore not live here; every
     /// slave already re-arms on the next `on_start`.
@@ -173,7 +173,7 @@ impl I2cBus {
                 self.active = None;
                 // A physical STOP ends the whole transaction: every address it
                 // touched via (repeated) START gets its transaction end, plus
-                // the named address — honored, not overridden, so a caller can
+                // the named address, honored, not overridden, so a caller can
                 // route a Stop to a specific slave. Record them; the
                 // ctx-bearing on_stop is delivered by `flush_stops` at the
                 // chunk boundary (see the trait docs).
@@ -193,7 +193,7 @@ impl I2cBus {
 
     /// Deliver the deferred transaction-end hooks: call `on_stop(ctx)` on every
     /// slave that saw a STOP since the last flush. The scheduler calls this once
-    /// per chunk, after the MCU ran and before the analog solve — the first
+    /// per chunk, after the MCU ran and before the analog solve; the first
     /// point a `&mut Circuit` is borrowable, and the earliest the solve could
     /// see a driven net. Multiple transactions to one slave inside a chunk
     /// collapse to one delivery from the final state, exactly the resolution
@@ -269,7 +269,7 @@ impl Peripheral for I2cBus {
 
 /// A generic 24Cxx I2C EEPROM with a 16-bit word address (covers 24C32..24C512
 /// addressing; smaller parts simply wrap). Write protocol: two address bytes
-/// (hi, lo) then data bytes, auto-incrementing *within the write page* — like
+/// (hi, lo) then data bytes, auto-incrementing *within the write page*, like
 /// the real parts, a page write that runs past the page boundary wraps the low
 /// address bits back to the page start and overwrites from there (24C32/24C64
 /// datasheets: "the address roll over during write is from the last byte of the
@@ -285,7 +285,7 @@ pub struct Eeprom24c {
     addr_phase: u8,
     addr_hi: u8,
     /// Write-page size in bytes (power of two). Defaults to 32, the 24C32/24C64
-    /// page size — the smallest parts this 16-bit-address model covers.
+    /// page size; the smallest parts this 16-bit-address model covers.
     /// Configure via [`Eeprom24c::with_page_size`] for larger parts (64 for
     /// 24C128/24C256, 128 for 24C512).
     page_size: usize,
@@ -668,7 +668,7 @@ mod tests {
     fn eeprom_page_size_is_configurable() {
         // A 64-byte-page part (24C128/24C256 class): a write crossing 0x3F
         // wraps to 0x00. (With the default 32-byte page it would wrap to 0x20
-        // instead — asserted untouched below — so this proves the configured
+        // instead, asserted untouched below, so this proves the configured
         // size is honored, not just that some wrap happened.)
         let mut bus = I2cBus::new("I2C")
             .with_slave(Box::new(Eeprom24c::new(0x50, 4096).with_page_size(64)));
@@ -731,7 +731,7 @@ mod tests {
 
     /// PROOF: a physical STOP ends the WHOLE transaction. A repeated-START
     /// chain that re-addresses a second slave (write 0x60, Sr, read 0x48,
-    /// STOP naming only 0x48) still delivers the transaction end to BOTH —
+    /// STOP naming only 0x48) still delivers the transaction end to BOTH,
     /// the first-leg device is not skipped just because the last START went
     /// elsewhere. And a same-address chain stays a single delivery (no
     /// duplicate Stops from the Sr).

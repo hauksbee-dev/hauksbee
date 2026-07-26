@@ -99,7 +99,7 @@ impl Token {
     /// optionally signed) as valid floats. KiCad coordinates are never any of
     /// those, and a non-finite value would propagate silently through geometry
     /// (e.g. every DRC clearance comparison against NaN is false), so a
-    /// non-finite parse is treated as no value — callers' `unwrap_or` fallbacks
+    /// non-finite parse is treated as no value, callers' `unwrap_or` fallbacks
     /// then behave as intended.
     pub fn as_f64(&self) -> Option<f64> {
         self.value().parse::<f64>().ok().filter(|v| v.is_finite())

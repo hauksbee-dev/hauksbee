@@ -6,7 +6,7 @@
 //! Each vector is the part's DATASHEET function table (Texas Instruments
 //! SN74HCxx datasheets; the db entry for each part cites its source next to
 //! the `[models.logic]` block), driven through the same builtin model entry a
-//! board bind resolves — so these tests pin the shipped data, not a copy.
+//! board bind resolves, so these tests pin the shipped data, not a copy.
 
 use std::collections::HashMap;
 
@@ -131,7 +131,7 @@ fn hc04_inverter_function_table() {
 
 #[test]
 fn hc27_triple_3input_nor_function_table() {
-    // TI SN74HC27 (SCLS089): Y = !(A | B | C) — all 8 rows per gate. (The
+    // TI SN74HC27 (SCLS089): Y = !(A | B | C), all 8 rows per gate. (The
     // pre-migration buffer fallback mirrored only the A input; this is the
     // fixed behaviour.)
     let mut lc = compile_builtin("74HC27");
@@ -155,7 +155,7 @@ fn hc27_triple_3input_nor_function_table() {
 #[test]
 fn hc125_tristate_buffer_function_table() {
     // TI SN74HC125 (SCLS049): Y follows A while the gate's own OE_n is LOW;
-    // OE_n HIGH puts Y in high impedance — per-gate independent enables.
+    // OE_n HIGH puts Y in high impedance, per-gate independent enables.
     let mut lc = compile_builtin("74HC125");
     tick(
         &mut lc,

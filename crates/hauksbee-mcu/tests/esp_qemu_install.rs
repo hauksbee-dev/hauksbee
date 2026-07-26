@@ -60,7 +60,7 @@ fn unpacked_esp_fork_binary_is_accepted() {
 #[test]
 fn mainline_binary_without_esp32_machines_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    // A mainline qemu-system-xtensa advertises boards like lx60, sim — no esp32.
+    // A mainline qemu-system-xtensa advertises boards like lx60, sim, no esp32.
     let archive = fake_release_archive(
         dir.path(),
         "qemu-system-xtensa",

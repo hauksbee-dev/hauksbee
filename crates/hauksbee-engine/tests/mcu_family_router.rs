@@ -153,7 +153,7 @@ fn recognized_family_without_platform_and_non_mcu_parts_stay_unresolved() {
 
 // Regression: the builtin esp32s3 DB entry matches value "ESP32-S3" (Watchy
 // v3's MCU), so the family-router fallback never runs for it. The bind must
-// still land on the QEMU Xtensa backend — the old silent
+// still land on the QEMU Xtensa backend; the old silent
 // `.unwrap_or("simavr:atmega328p")` default sent an ESP32-S3 into the AVR
 // path (wrong ISA, and the GPL-gated `avr` feature the MIT-clean build
 // excludes).

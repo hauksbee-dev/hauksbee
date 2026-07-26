@@ -56,7 +56,7 @@ frontend: board-accurate 2D/3D render, live signal flow, probes, controls
    solves its own small matrix instead of one giant one.
 2. **Compile, don't interpret.** The IR can be lowered to specialized Rust
    (or a precompiled stamp plan) so the per-step inner loop is flat code
-   with fixed sparsity — no per-step model dispatch.
+   with fixed sparsity, no per-step model dispatch.
 3. **Solver debugging controls.** Every effect (parasitics, temperature
    dependence, charge storage, tolerances) is toggleable; granularity is
    adjustable. Turning physics off is a feature for debugging and speed.

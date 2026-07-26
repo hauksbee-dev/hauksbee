@@ -122,7 +122,7 @@ The non-zero exit code is `2`. Without `--strict` every report still exits `0`.
 
 The live 2D/3D web viewer is served by `hauksbee run <board> --serve` (or the
 `hauksbee serve` subcommand). Note: bare `hauksbee run <board>` on a terminal now
-opens the full-screen terminal dashboard (TUI) instead — pass `--serve` for the
+opens the full-screen terminal dashboard (TUI) instead, pass `--serve` for the
 web frontend. The frontend is a build artifact and is not checked in, so build it
 once:
 

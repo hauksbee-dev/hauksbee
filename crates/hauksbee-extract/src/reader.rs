@@ -45,7 +45,7 @@ pub type ReadError = ExtractError;
 ///
 /// Implementations must keep [`detects`](BoardReader::detects) cheap (a magic /
 /// structural prefix check, never a full parse) and must **not** false-positive
-/// on another format's files — the detection-matrix test
+/// on another format's files; the detection-matrix test
 /// (`tests/reader_matrix.rs`) enforces this pairwise across every fixture.
 pub trait BoardReader: Send + Sync {
     /// Stable short identifier, e.g. `"kicad-pcb"`. Shown in
@@ -55,7 +55,7 @@ pub trait BoardReader: Send + Sync {
     /// Cheap magic / structure check. Must not false-positive on other formats.
     ///
     /// `bytes` is the file content; `path` is a filename hint when the caller
-    /// has one (the content sniff is authoritative — path is only ever a
+    /// has one (the content sniff is authoritative, path is only ever a
     /// tie-break, and the builtin readers do not need it).
     fn detects(&self, bytes: &[u8], path: Option<&Path>) -> bool;
 
@@ -148,7 +148,7 @@ impl BoardReader for EagleReader {
 }
 
 /// IPC-D-356/356A fab netlist. Detected by its fixed-column test records
-/// (`317`/`327`/`367` at column 0) — the same records
+/// (`317`/`327`/`367` at column 0); the same records
 /// [`ExtractedBoard::from_ipc_d356`] requires, so detection and a successful
 /// read coincide exactly (a file with no such record was rejected by the old
 /// fallback too).
@@ -204,7 +204,7 @@ impl BoardReader for AltiumReader {
 /// so order only ever matters if a third-party reader overlaps a builtin.
 /// [`register`](Registry::register) therefore inserts at the **front**, so a
 /// fork can deliberately shadow a builtin. Among the builtins the order mirrors
-/// the legacy sniff precedence — eagle → netlist → schematic → pcb → ipc356 —
+/// the legacy sniff precedence, eagle → netlist → schematic → pcb → ipc356,
 /// with the binary Altium reader consulted first (its check is a couple of
 /// bytes and it can never match text).
 pub struct Registry {
@@ -252,7 +252,7 @@ impl Registry {
     }
 
     /// Detect and read in one step. When nothing matches, the error enumerates
-    /// every reader that was tried ([`ReadError::Unrecognized`]) — the
+    /// every reader that was tried ([`ReadError::Unrecognized`]); the
     /// improvement over the old generic fallback failure.
     pub fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
         match self.detect(bytes, path) {

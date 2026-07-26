@@ -48,7 +48,7 @@ pub fn stamp_bridge(
     }
     // Idempotency keys on the NODE PAIR, not the concatenated name: net names
     // routinely contain underscores, so "SHORT_{a}_{b}" is not injective over
-    // pairs — ("GPIO_1","2") and ("GPIO","1_2") both render "SHORT_GPIO_1_2",
+    // pairs, ("GPIO_1","2") and ("GPIO","1_2") both render "SHORT_GPIO_1_2",
     // and keying on the name silently dropped the second, genuinely distinct
     // short. The node ids are also folded into the device name so two colliding
     // name-pairs still get unique device names in the circuit.

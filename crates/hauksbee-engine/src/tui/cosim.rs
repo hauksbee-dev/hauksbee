@@ -41,14 +41,14 @@ pub struct CosimUpdate {
     /// True once at least one byte of UART output has been seen.
     pub uart_seen: bool,
     /// True once at least one watched GPIO/control net has changed level since
-    /// boot — i.e. the firmware visibly drove something. While this stays false
+    /// boot, i.e. the firmware visibly drove something. While this stays false
     /// past the boot window the pane shows the stall note.
     pub gpio_active: bool,
     /// True once the firmware has driven ANY GPIO output edge (from the
     /// scheduler's pin-change record), even one that is set high and HELD with no
     /// further movement. This is the honest "the firmware ran" signal: `gpio_active`
     /// (net moved off baseline) misses a drive-and-hold boot line, so the stall
-    /// note must also consult this or it cries wolf on working boot firmware —
+    /// note must also consult this or it cries wolf on working boot firmware,
     /// matching the CLI/web `Scheduler::any_gpio_driven()` behaviour.
     pub gpio_driven: bool,
     /// Chip-substitution caveat, if the firmware was emulated on a less-specific
@@ -77,7 +77,7 @@ pub struct CosimUpdate {
     pub error: Option<String>,
     /// The full per-net voltage snapshot at this chunk (the same
     /// `frame.net_voltages` the tracker reads). Carried so the scope pane can
-    /// sample the history of ANY net the user probes from the parts/nets list —
+    /// sample the history of ANY net the user probes from the parts/nets list,
     /// not just the watched GPIO subset in `gpio_nets`. This reuses the worker's
     /// existing per-chunk data; it is not a second co-sim path.
     pub net_voltages: HashMap<String, f64>,
@@ -89,7 +89,7 @@ pub struct GpioNet {
     pub name: String,
     /// Current level (V).
     pub volts: f64,
-    /// True once this net's level has moved off its boot baseline — i.e. the MCU
+    /// True once this net's level has moved off its boot baseline, i.e. the MCU
     /// is (or was) actively driving it. Distinguishes a deliberately-driven line
     /// from one sitting at a static rail.
     pub driven: bool,
@@ -187,7 +187,7 @@ fn run_worker(
     // Coarsen the scheduler chunk so QEMU/Renode backends step in viable jumps
     // (the integration tests use 5 ms for exactly this reason; the 100 us
     // default would make the run appear to hang). The same value drives both the
-    // scheduler field and the per-frame step below — derive it once.
+    // scheduler field and the per-frame step below, derive it once.
     let frame_dt = (chunk_ms / 1000.0).max(1e-4);
     engine.scheduler_mut().chunk_s = frame_dt;
     let target_s = seconds.max(0.0);
@@ -202,7 +202,7 @@ fn run_worker(
 
     // Per-net activity tracker: remember each watched net's boot baseline level
     // and whether it has ever moved off it. A net that moves is one the firmware
-    // is (or was) actively driving — that's the live observability the pane is
+    // is (or was) actively driving, that's the live observability the pane is
     // for, and it's also how we tell "stalled" from "running but quiet".
     let mut tracker = NetActivity::default();
 
@@ -215,7 +215,7 @@ fn run_worker(
 
         // Accumulate UART, split into lines. Iterate in sorted-by-MCU-key order
         // so a multi-MCU board's merged UART is deterministic run-to-run, not
-        // HashMap iteration order — matching reports/cosim.rs and frontdoor.rs.
+        // HashMap iteration order, matching reports/cosim.rs and frontdoor.rs.
         let mut uart_entries: Vec<_> = frame.uart.iter().collect();
         uart_entries.sort_by(|a, b| a.0.cmp(b.0));
         for (_, bytes) in uart_entries {
@@ -275,7 +275,7 @@ fn run_worker(
         }
     }
 
-    // Final snapshot marked done — keep the GPIO/UART state so the finished pane
+    // Final snapshot marked done, keep the GPIO/UART state so the finished pane
     // still shows what the firmware drove (don't blank it on completion).
     let gpio_driven = engine.scheduler().any_gpio_driven();
     let substitution = engine
@@ -362,11 +362,11 @@ struct NetActivity {
 }
 
 /// A net level is considered "moved" off baseline once it shifts by more than
-/// this many volts — comfortably above solver noise, below a logic swing.
+/// this many volts, comfortably above solver noise, below a logic swing.
 const MOVE_THRESHOLD_V: f64 = 0.3;
 
 /// Cap on watched nets shown in the GPIO pane, so it stays readable. A deliberate
-/// UI constraint, not an accident — the `snapshot_caps_at_twelve` test mirrors it.
+/// UI constraint, not an accident; the `snapshot_caps_at_twelve` test mirrors it.
 const GPIO_PANE_MAX_NETS: usize = 12;
 
 impl NetActivity {
@@ -414,7 +414,7 @@ impl NetActivity {
 /// is what an engineer wants to watch toggle.
 fn is_watch_net(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
-    // Power/ground rails are never "the LED" — exclude them explicitly so a
+    // Power/ground rails are never "the LED", exclude them explicitly so a
     // matched keyword inside a rail name doesn't pull a static rail in.
     let bare = upper.trim_start_matches(['/', '+']).trim_start_matches("NET-(");
     if matches!(bare, "GND" | "VCC" | "VDD" | "VBUS" | "3V3" | "5V" | "+3V3" | "+5V") {

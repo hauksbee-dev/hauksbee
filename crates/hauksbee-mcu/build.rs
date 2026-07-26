@@ -99,7 +99,7 @@ fn main() {
         .allowlist_var("cpu_.*")
         // The ioport IRQ enum (IOPORT_IRQ_REG_PORT etc.) MUST come from the
         // platform's own simavr header: its index SHIFTS between simavr
-        // versions — e.g. the addition of IOPORT_IRQ_PIN_ALL_IN moves
+        // versions, e.g. the addition of IOPORT_IRQ_PIN_ALL_IN moves
         // IOPORT_IRQ_REG_PORT from 10 to 11. Hardcoding the index makes the
         // GPIO read subscribe to the wrong IRQ on a different simavr build, so
         // the port reads as "never driven" (GREEN on one host, RED on another).

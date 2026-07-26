@@ -1,5 +1,5 @@
 //! `--ac`: small-signal AC sweep on the bound circuit. Prints a Bode
-//! (magnitude dB + phase) table for the requested net(s), and — with `--ac-loop` —
+//! (magnitude dB + phase) table for the requested net(s), and, with `--ac-loop`,
 //! gain crossover and phase margin. Refuses (exit 3) to present a meaningless
 //! all-sentinel or no-signal-path sweep as valid data.
 
@@ -39,7 +39,7 @@ pub fn emit(
     // Injection-point honesty: with no dedicated AC source the sweep drives EVERY
     // independent source (the power rails included), so the Bode is a superposition
     // of all stimuli, not a single-input transfer function. On an extracted board
-    // there is usually no VINJ, so warn — a user reading a "transfer function" off
+    // there is usually no VINJ, so warn, a user reading a "transfer function" off
     // this would be measuring the wrong thing. (SPICE decks with explicit `AC`
     // stimulus set their own drive and are exempt: that IS a chosen injection.)
     if !json && !hauksbee_solve::has_dedicated_ac_source(circuit) {
@@ -61,7 +61,7 @@ pub fn emit(
         .collect();
 
     // Fix #1 (CRITICAL): an AC sweep where EVERY reported net is at the -6000 dB
-    // sentinel has no signal path — it is a meaningless result, not data. Refuse
+    // sentinel has no signal path; it is a meaningless result, not data. Refuse
     // to present it as a Bode table; name the unresolved driving ICs and exit 3
     // ("board invalid for the requested analysis"), never 0.
     let nonempty: Vec<&(String, Vec<(f64, f64, f64)>)> =
@@ -70,7 +70,7 @@ pub fn emit(
     // Fix #1b (HIGH honesty hole): if EVERY requested net produced no data at all
     // (none exist in the circuit), `nonempty` is empty. Previously this slipped
     // past the all-sentinel guard (which requires `!nonempty.is_empty()`) and the
-    // JSON path emitted `ac: { valid: true, nets: [] }` with exit 0 — a meaningless
+    // JSON path emitted `ac: { valid: true, nets: [] }` with exit 0, a meaningless
     // result reported as valid. Refuse it: name the missing requested nodes, emit
     // valid:false, and exit 3, exactly like the all-sentinel path. Only fires when
     // the user explicitly asked for nodes; the "every node" default never lands
@@ -84,7 +84,7 @@ pub fn emit(
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
-                // The requested nets are ALL missing here — surface them in the
+                // The requested nets are ALL missing here, surface them in the
                 // structured field too, not just the prose reason, so a machine
                 // consumer reading `not_found_nets` sees them (matching the
                 // partial-sweep path below and this report's never-silent promise).
@@ -94,7 +94,7 @@ pub fn emit(
             println!("{}", jr.to_json());
         } else {
             eprintln!("WARNING: AC result not valid — {reason}");
-            // Did-you-mean per missing node, then the discoverability pointer —
+            // Did-you-mean per missing node, then the discoverability pointer,
             // matching the net-not-found pattern the co-sim / spec surfaces use.
             for n in &nodes {
                 let near = crate::reports::cosim::nearest_nets(n, &bound.net_names, 5);
@@ -141,11 +141,11 @@ pub fn emit(
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
 
-    // Loop-net validity guard (degeneracy) — applied to BOTH --json and text
+    // Loop-net validity guard (degeneracy), applied to BOTH --json and text
     // BEFORE either emits. A loop/break net that is missing from the circuit OR
     // sits at the dB floor has no feedback path to measure: LoopStability would
     // yield a meaningless ~-6000 dB gain on the text path, while the --json path
-    // (which returns just below) would emit valid:true and exit 0 — a structured
+    // (which returns just below) would emit valid:true and exit 0, a structured
     // false-pass. Refuse it identically on both surfaces with exit 3.
     if let Some(loop_net) = ac_loop {
         let loop_bode = resp.bode(circuit, loop_net);
@@ -156,7 +156,7 @@ pub fn emit(
                 no_signal_path_reason(loop_net, &summary)
             };
             if json {
-                // Structured refusal on the JSON surface too — a consumer reading
+                // Structured refusal on the JSON surface too, a consumer reading
                 // stdout (not the exit code) must see valid:false, not empty output.
                 let mut jr = JsonReport::new(&bound.name, summary);
                 jr.ac = Some(AcJson {
@@ -178,8 +178,8 @@ pub fn emit(
         }
     }
 
-    // Optional CSV of the full sweep. Written here — BEFORE the `--json` early
-    // return — so the artifact is produced on BOTH surfaces: a caller that wants
+    // Optional CSV of the full sweep. Written here, BEFORE the `--json` early
+    // return, so the artifact is produced on BOTH surfaces: a caller that wants
     // structured JSON on stdout AND a CSV file on disk (a common CI/tooling
     // pattern) gets both from one run. Placed after the validity guards so an
     // invalid/empty sweep still refuses first and writes no misleading CSV.
@@ -218,7 +218,7 @@ pub fn emit(
             .collect();
         // A requested net whose bode is EMPTY was not found in the circuit at
         // all. It lands in neither `nets` nor `no_path`, so without surfacing it
-        // here the JSON would silently drop it while the text path warns — the
+        // here the JSON would silently drop it while the text path warns; the
         // exact "never silent" promise this report makes.
         let not_found: Vec<String> = per_net
             .iter()
@@ -267,7 +267,7 @@ pub fn emit(
         }
         requested_nets += 1;
         // A single net at the floor amid others that carry signal is still a
-        // local "no path here" — caveat it rather than presenting -6000 as data.
+        // local "no path here", caveat it rather than presenting -6000 as data.
         if ac_is_all_sentinel(bode) {
             no_path_nets.push(net.clone());
             println!(
@@ -352,7 +352,7 @@ pub fn emit(
 /// A net with no signal path is a full series of `AC_FLOOR_DB` (-6000 dB)
 /// sentinel rows. The JSON and text surfaces deliberately never present that
 /// floor as real data (they list such nets under `no_signal_path_nets`), so the
-/// CSV must not either — otherwise a CI tool ingesting `mag_db` reads -6000 dB as
+/// CSV must not either, otherwise a CI tool ingesting `mag_db` reads -6000 dB as
 /// a genuine measurement. Such nets are dropped from the rows and returned so the
 /// caller can report the omission explicitly (never silent). An empty bode (a net
 /// not found in the circuit) contributes no rows, as before.
@@ -383,7 +383,7 @@ mod ac_csv_tests {
     fn csv_omits_no_signal_path_nets_instead_of_writing_the_floor() {
         // R32: the CSV writer emitted every -6000 dB sentinel row verbatim, so a
         // dead net (no drive path) landed in the file as if it were real -6000 dB
-        // data — contradicting the JSON/text "never present the floor as data"
+        // data, contradicting the JSON/text "never present the floor as data"
         // contract. The floor-only net must be omitted and reported.
         let live: Vec<(f64, f64, f64)> = vec![(1.0, -3.0, -45.0), (10.0, -20.0, -90.0)];
         let dead: Vec<(f64, f64, f64)> =

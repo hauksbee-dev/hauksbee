@@ -341,7 +341,7 @@ hauksbee run board.kicad_pcb --firmware fw.hex --headless --seconds 2 \
   a loud error (with near-matches) before the run starts, so a typo never yields
   a silently-empty column.
 - `--probe-csv` sets the output path. The header is `time_s` followed by one
-  column per probed net, one row per chunk — feed it straight to a plotting
+  column per probed net, one row per chunk, feed it straight to a plotting
   script, a notebook, or a diff against a golden capture.
 
 This is the headless, scriptable counterpart to watching a net in the TUI, and

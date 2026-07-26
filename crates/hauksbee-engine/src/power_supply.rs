@@ -4,7 +4,7 @@
 //! *behavioral source*: an [`PinDriver`](crate::drivers)-style Thevenin leg
 //! whose target voltage is recomputed between solver chunks from the rail
 //! current measured in the previous chunk. This mirrors the GPIO-driver
-//! pattern — set a `Vsource` value, let MNA resolve the rest — but the update
+//! pattern, set a `Vsource` value, let MNA resolve the rest, but the update
 //! rule encodes real supply behaviour (current limiting, output resistance,
 //! ripple, battery droop and depletion).
 //!
@@ -24,13 +24,13 @@
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 
 /// Series output resistance used for the "ideal" and current-source-limited
-/// supplies — small enough to be electrically negligible (a few mΩ) but
+/// supplies, small enough to be electrically negligible (a few mΩ) but
 /// non-zero so the `Vsource` branch current is well defined and so the rail
 /// never becomes a hard short in MNA.
 pub const STIFF_R_OHMS: f64 = 1e-3;
 
 /// Battery / cell electrochemistry. Per-cell open-circuit voltage is a
-/// piecewise-linear function of state-of-charge (SoC, 0..1) — see
+/// piecewise-linear function of state-of-charge (SoC, 0..1), see
 /// [`Chemistry::ocv_per_cell`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chemistry {
@@ -50,13 +50,13 @@ impl Chemistry {
     /// `(soc, volts)` knots taken from published discharge curves.
     ///
     /// Sources (typical room-temperature, low-rate discharge):
-    /// - Li-ion: Panasonic NCR18650B datasheet discharge curve — 4.2 V full,
+    /// - Li-ion: Panasonic NCR18650B datasheet discharge curve, 4.2 V full,
     ///   ~3.7 V nominal plateau, ~3.0 V knee, 2.5 V empty.
-    /// - Alkaline: Energizer E91 AA application data — 1.6 V fresh sloping
+    /// - Alkaline: Energizer E91 AA application data, 1.6 V fresh sloping
     ///   steadily to ~0.9 V cutoff (alkalines have no plateau).
-    /// - NiMH: Panasonic eneloop HR-3UTGB — 1.45 V full, flat ~1.25 V plateau,
+    /// - NiMH: Panasonic eneloop HR-3UTGB, 1.45 V full, flat ~1.25 V plateau,
     ///   1.0 V cutoff.
-    /// - LiFePO4: A123 / generic LFP — 3.6 V surface-charge, extremely flat
+    /// - LiFePO4: A123 / generic LFP, 3.6 V surface-charge, extremely flat
     ///   ~3.3–3.2 V plateau, 2.5 V cutoff.
     pub fn ocv_per_cell(self, soc: f64) -> f64 {
         let s = soc.clamp(0.0, 1.0);

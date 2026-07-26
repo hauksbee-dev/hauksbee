@@ -115,7 +115,7 @@ interpreter realizes as a live `I2cSlave`/`SpiSlave`. The read side maps
 physical inputs through `evalexpr` value expressions into datasheet register
 packings (BME280, MPU6050, LM75 are byte-identical to hand-coded models).
 
-Since 05 §3.2 the spec also describes the **write side** — what firmware
+Since 05 §3.2 the spec also describes the **write side**: what firmware
 writes do:
 
 - **Pointer-framed write registers** decode into stored variables that read
@@ -128,7 +128,7 @@ writes do:
   voltage laws drive analog nets**. The MCP4728 is pure data now
   (`docs/hunts/specs/mcp4728.toml`); the scheduler binds the binder-stamped
   VOUT `PinDriver`s to the spec's outputs, and the slave drives them itself in
-  the ctx-bearing `on_stop` (05 §3.1) — delivered once per chunk, after the
+  the ctx-bearing `on_stop` (05 §3.1), delivered once per chunk, after the
   MCU ran and before the analog solve, because the byte events arrive inside
   the MCU callback where no circuit context exists (and the solve could not
   see a mid-chunk voltage anyway).
@@ -145,11 +145,11 @@ What the write side does **not** do, stated rather than faked:
   single-shot completes instantly, a DAC write lands at the next chunk solve.
 - **Undeclared writes are ACKed and counted** (`ignored_write_bytes` in the
   slave's `state()`), like a real part ACKing a command family the model
-  omits — an eaten config write is observable, never silent.
+  omits, an eaten config write is observable, never silent.
 - **SSD1306 is deferred (design sketch).** A display is a write-only
   command/data STREAM, not a register map: the control byte (0x00 command /
   0x40 data) selects an interpreter, commands set an addressing-mode cursor,
-  and data bytes fill a 128×64 framebuffer — a **sink with megabytes of
+  and data bytes fill a 128×64 framebuffer, a **sink with megabytes of
   addressable state**, not per-channel scalars with a voltage law. Forcing it
   into `state`/`output` would mean thousands of fake "channels" and no net to
   drive. The honest shape is a third device class: `write_command`-style
@@ -176,7 +176,7 @@ inside a single `run_micros` chunk. So:
   bridge peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave address,
   loaded into the running machine over the Monitor). A hardware-TWI/SPI sensor
   therefore co-simulates on the Renode ARM/RISC-V backends the same way it does
-  on simavr — see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode`
+  on simavr, see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode`
   integration tests. (Bit-banged masters are still the exception above.)
 
 ## Output sinks
@@ -256,7 +256,7 @@ min = 15
 max = 25
 ```
 
-The `field` name is per peripheral `type` — each exposes its own state keys.
+The `field` name is per peripheral `type`, each exposes its own state keys.
 The full vocabulary (matched exactly; an unknown field errors at load):
 
 | peripheral `type` | `field` keys | meaning |

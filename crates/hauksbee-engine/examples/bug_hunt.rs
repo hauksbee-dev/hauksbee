@@ -1,4 +1,4 @@
-//! Bug hunt — Channel 1 (codegen anomalies) dump.
+//! Bug hunt, Channel 1 (codegen anomalies) dump.
 //!
 //! Runs forge-codegen's repeat-block decompiler over the real InputSystem
 //! layout and prints, for every multi-instance cluster, the per-instance
@@ -51,7 +51,7 @@ fn main() {
     }
 
     // For each cluster, classify anomalies. We care most about ValueMismatch on
-    // a cluster where the mismatch is RARE (one instance differs from many) —
+    // a cluster where the mismatch is RARE (one instance differs from many),
     // that is the "single wrong part in an otherwise uniform array" signal.
     println!("\n===== ANOMALY DETAIL (rare value/lib deviations first) =====");
     for c in &analysis.clusters {

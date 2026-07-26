@@ -62,7 +62,7 @@ pub trait SpiSlave: Send {
     }
 
     /// The byte this slave would shift out on the NEXT [`SpiSlave::transfer`],
-    /// when that byte is already determined by prior traffic — `None` when the
+    /// when that byte is already determined by prior traffic, `None` when the
     /// model cannot say. Must be non-advancing: calling it any number of times
     /// must not change the observable byte stream.
     ///
@@ -88,7 +88,7 @@ pub trait SpiSlave: Send {
     /// Only the bit-banged SPI responder (05 §1.5), which reconstructs the wire
     /// timing from GPIO edges, consults this; the byte-level `on_spi` path is
     /// mode-agnostic (simavr's hardware SPI already clocks the configured mode).
-    /// Default `0` (CPOL=0, CPHA=0) — the historical assumption.
+    /// Default `0` (CPOL=0, CPHA=0); the historical assumption.
     fn spi_mode(&self) -> u8 {
         0
     }
@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn mcp3008_uses_2n_full_scale_not_2n_minus_1() {
         // Datasheet transfer function is code = 1024 * Vin/Vref (LSB = Vref/1024),
-        // saturating at 1023 — NOT code = 1023 * Vin/Vref which under-reads by up
+        // saturating at 1023, NOT code = 1023 * Vin/Vref which under-reads by up
         // to ~1 LSB. Read the code directly off the converter.
         let read = |v: f64| {
             let mut adc = Mcp3008::new(5.0);

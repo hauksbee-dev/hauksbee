@@ -1,4 +1,4 @@
-//! Extraction from IPC-D-356/356A netlists — the universal fallback. Every
+//! Extraction from IPC-D-356/356A netlists; the universal fallback. Every
 //! serious EDA tool (Altium, Allegro, PADS, Eagle, KiCad) exports this with
 //! fab outputs, so any board whose source format we don't read natively can
 //! still be ingested via its fab files.
@@ -42,7 +42,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         saw_record = true;
         // A 317/327/367 marks a real test record whose fixed columns run past
         // column 32 (net, ref-des, pin, then coordinates). A line too short for
-        // them is truncated — NOT a legitimate blank-ref via record, which keeps
+        // them is truncated, NOT a legitimate blank-ref via record, which keeps
         // full width with spaces. Count it and skip, so a truncated export is
         // surfaced rather than silently discarded down the via path below (which
         // would otherwise be indistinguishable from an intentional blank ref).
@@ -213,8 +213,8 @@ mod tests {
     #[test]
     fn truncated_record_is_skipped_full_record_parses() {
         // Bug-hunt #7: a truncated 317 line (too short to hold its ref-des
-        // columns) must be dropped as truncated — NOT silently treated as a
-        // blank-ref via record — while a full record still parses.
+        // columns) must be dropped as truncated, NOT silently treated as a
+        // blank-ref via record, while a full record still parses.
         let full = record("GND", "R1", "1");
         let truncated = "317GND"; // 6 chars: a truncated data record
         let text = format!("{full}\n{truncated}\n");

@@ -590,7 +590,7 @@ mod tests {
     use super::*;
 
     /// Round-7 #7: a Stimulus waveform must be sampled at the chunk END (t+dt),
-    /// the same zero-order-hold instant DynamicLoad and VcdSink use — sampling
+    /// the same zero-order-hold instant DynamicLoad and VcdSink use, sampling
     /// at the chunk start put it a full chunk out of phase with every other
     /// analog source on the timeline.
     #[test]

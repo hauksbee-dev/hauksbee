@@ -120,7 +120,7 @@ pub fn parse(text: &str) -> DrillFile {
             explicit_units = true;
             // METRIC default is 3.3, but a prior `;FILE_FORMAT=` may have set
             // the real split (e.g. 4:4); only impose the default if none was
-            // given — symmetric with the INCH handler below.
+            // given, symmetric with the INCH handler below.
             if !format_set {
                 int_digits = 3;
                 dec_digits = 3;
@@ -358,7 +358,7 @@ M30
     #[test]
     fn absurd_file_format_width_does_not_panic() {
         // A corrupt/hostile FILE_FORMAT must not drive the implicit-decimal
-        // format! width past its limit — `;FILE_FORMAT=99999:1` used to panic
+        // format! width past its limit, `;FILE_FORMAT=99999:1` used to panic
         // with "Formatting argument out of range". Integer coordinates (no
         // decimal point) exercise the width path.
         let drill = "\

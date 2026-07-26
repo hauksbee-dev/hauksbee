@@ -12,7 +12,7 @@
 //!
 //! `Text` instead borrows: the source is owned once by the
 //! [`Document`](crate::Document) as an `Arc<str>`, and a parsed `Text` is a
-//! plain pointer+length view into it — no per-node allocation and no refcount.
+//! plain pointer+length view into it, no per-node allocation and no refcount.
 //! It is laid out as **16 bytes** (one word smaller than `String`), so the CST
 //! nodes are smaller than the original owned-`String` design too.
 //!
@@ -22,7 +22,7 @@
 //! * **Span** (borrowed): `cap == SPAN`. `ptr/len` view bytes the Document owns.
 //! * **Owned**: `cap != SPAN` is a real heap capacity; `ptr/len/cap` are a
 //!   `String`'s raw parts and are freed on drop. `cap == 0` (and `ptr` dangling)
-//!   is the canonical empty owned string — no allocation.
+//!   is the canonical empty owned string, no allocation.
 //!
 //! `u32` len/cap caps a single piece of text at 4 GiB, far beyond any token or
 //! whole KiCad file.

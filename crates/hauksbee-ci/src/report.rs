@@ -35,7 +35,7 @@ pub struct CiResult {
     /// Co-sim coverage warnings (U3): dropped ADC injections (the firmware never
     /// received the solved voltage) and never-exercised bus peripherals (no
     /// matching controller modeled). Surfaced in every report format, exactly
-    /// like `substitutions` — a GREEN over an un-run co-sim path must be
+    /// like `substitutions`, a GREEN over an un-run co-sim path must be
     /// qualified everywhere a pipeline reads.
     pub coverage_warnings: Vec<String>,
 }
@@ -51,7 +51,7 @@ pub enum EnsembleCoverage {
     Corners { corners: u32, components: usize },
     /// A single pinned ensemble member (`--seed N`): the runner filtered the
     /// ensemble down to exactly this one, so the nominal-baseline / sampled-count
-    /// arithmetic doesn't apply — report the member honestly instead. `corners`
+    /// arithmetic doesn't apply, report the member honestly instead. `corners`
     /// distinguishes a deterministic corner (corners mode) from a random draw
     /// (Monte-Carlo), so the banner matches the mode-aware per-assertion wording.
     SingleMember {
@@ -100,7 +100,7 @@ impl CiResult {
     /// checks panel consumes via `/api/check`). One stable JSON object: the
     /// overall verdict, the per-assertion results verbatim, and every honesty
     /// qualifier the human report carries (analog abort, substitutions,
-    /// coverage wording) — a consumer must never see a cleaner story than the
+    /// coverage wording), a consumer must never see a cleaner story than the
     /// terminal does.
     pub fn render_json(&self) -> String {
         let value = serde_json::json!({
@@ -182,7 +182,7 @@ impl CiResult {
             out.push_str(&format!("  [{mark}] {}\n        {}\n", r.label, r.detail));
             // On a real red (not a pass, not an INVALID refusal), add one
             // actionable "why / where to look" line keyed off the assertion kind.
-            // Deliberately one line — a pointer at the likely cause and the doc
+            // Deliberately one line, a pointer at the likely cause and the doc
             // section, not a plain-language engine.
             if !r.passed && !r.invalid {
                 if let Some(hint) = failure_hint(&r.kind) {
@@ -386,8 +386,8 @@ impl CiResult {
 }
 
 /// A synthetic JUnit document for a spec/board error (exit 2), so a CI that only
-/// reads the JUnit/Checks tab still sees *something* — a single errored testcase
-/// carrying the error message — instead of an empty report. Reuses the same
+/// reads the JUnit/Checks tab still sees *something*, a single errored testcase
+/// carrying the error message, instead of an empty report. Reuses the same
 /// `<error>` shape the per-assertion INVALID path emits, so downstream ingestors
 /// (GitLab, Jenkins, GitHub) render it as an errored test, distinct from a
 /// failure. `message` is the spec/board error text.
@@ -414,7 +414,7 @@ pub fn render_junit_error(message: &str) -> String {
 
 /// One actionable "why / where to look" line for a failed assertion of the
 /// given `kind`. Points at the likely physical cause and the docs/ci/CI.md section
-/// to read — one line, per kind, not a full explanation engine. `None` for kinds
+/// to read, one line, per kind, not a full explanation engine. `None` for kinds
 /// that have no useful generic pointer.
 fn failure_hint(kind: &str) -> Option<&'static str> {
     Some(match kind {

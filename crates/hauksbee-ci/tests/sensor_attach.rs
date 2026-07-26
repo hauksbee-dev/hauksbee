@@ -10,7 +10,7 @@
 //! `RegisterMapSensor::from_toml` is called from the runner, the sensor is
 //! attached to the I2C bus, Renode routes the firmware's I2C transactions
 //! through the hauksbee bridge, and the FLAG net follows the 30 C threshold.
-//! Reply bytes come entirely from the declarative interpreter — no hand-coded
+//! Reply bytes come entirely from the declarative interpreter, no hand-coded
 //! Lm75, no injection.
 //!
 //! ## Running
@@ -88,7 +88,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
     );
 }
 
-/// The cold run: declarative LM75 at 20 C — FLAG must stay LOW (voltage PASS).
+/// The cold run: declarative LM75 at 20 C, FLAG must stay LOW (voltage PASS).
 ///
 /// Negative control: the firmware reads 20 C < 30 C and must not drive FLAG.
 /// The 4k7 pull-down holds the net at ~0 V the whole run.

@@ -145,7 +145,7 @@ impl LoadProfile {
                 // period ramps from `prev_level`, for continuity with the segment
                 // that preceded the train. Anchoring every period to prev_level
                 // re-injected a phantom recurring spike whenever the preceding
-                // segment sat above idle — e.g. the esp32 cold-boot surge (1.2 A)
+                // segment sat above idle, e.g. the esp32 cold-boot surge (1.2 A)
                 // ahead of a 240 mA/40 mA-idle WiFi burst train re-spiked to
                 // ~1.2 A at every period edge, corrupting the exact rail-dip /
                 // protection-trip analysis the profile exists to drive.

@@ -1,9 +1,9 @@
-//! The "drop your board, get a report" analysis API — the report backend the
+//! The "drop your board, get a report" analysis API; the report backend the
 //! React landing page calls.
 //!
 //! A non-CLI, non-engineer user runs `hauksbee serve`, opens the printed URL,
 //! drops a board file onto the React drop zone, and gets back the plain-language
-//! verdict, the full report, and a 2D map of where the parts sit — all rendered
+//! verdict, the full report, and a 2D map of where the parts sit, all rendered
 //! by the React app (W6 §1). There is no server-rendered HTML page anymore: the
 //! one web experience is the React app in `frontend/dist`, and this module is the
 //! JSON API it fetches (`/api/analyze`, `/api/analyze-with-firmware`).
@@ -144,7 +144,7 @@ struct CheckState {
 
 /// The web checks route (`POST /api/check`, multipart: `board` + optional
 /// `firmware` + `spec`). The spec part is the TOML body the browser's builder
-/// composed — everything except the file paths, which the engine injects from
+/// composed, everything except the file paths, which the engine injects from
 /// the uploaded parts. Merged into the unified router next to the analysis
 /// routes.
 pub fn check_route(check: CheckRunner) -> Router {
@@ -419,7 +419,7 @@ async fn analyze_handler_fw(
 }
 
 /// Accept a `multipart/form-data` upload with a `board` part (required) and a
-/// `firmware` part (optional). Both parts are passed as raw `&[u8]` — NEVER
+/// `firmware` part (optional). Both parts are passed as raw `&[u8]`, NEVER
 /// lossy-decoded, which would corrupt an ELF or a binary board (Altium
 /// .PcbDoc); the analyzer's extractor sniffs binary-vs-text itself. Falls back
 /// to a board-only analysis when no firmware part is present.

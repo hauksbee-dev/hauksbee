@@ -54,13 +54,13 @@ const SPI_IRQ_OUTPUT: i32 = 1; // MOSI (from MCU to peripheral)
 /// fixed constant: simavr's `IOPORT_IRQ_*` enum reorders between versions (the
 /// addition of `IOPORT_IRQ_PIN_ALL_IN` shifts this from 10 to 11), so it is
 /// sourced from whatever simavr the build linked (via bindgen) rather than
-/// hardcoded — a hardcoded 11 subscribed to the wrong IRQ on an older simavr,
+/// hardcoded, a hardcoded 11 subscribed to the wrong IRQ on an older simavr,
 /// making GPIO output read as "never driven" (GREEN on one host, RED on another).
 const IOPORT_IRQ_REG_PORT: i32 = ffi::IOPORT_IRQ_REG_PORT as i32;
 
 /// Index for the DDR (data-direction) register; bindgen-sourced for the same
 /// version-skew reason as `IOPORT_IRQ_REG_PORT`. Subscribed so a
-/// `pinMode(OUTPUT)` (a DDR write) is recorded as "ever configured output" —
+/// `pinMode(OUTPUT)` (a DDR write) is recorded as "ever configured output",
 /// observation only, see `make_ddr_hook`.
 const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 
@@ -75,7 +75,7 @@ const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 ///    `external.pull_mask/pull_value`. Without it the drive is a one-shot:
 ///    simavr's `avr_ioport_update_irqs` runs after EVERY firmware PORT or DDR
 ///    write to the port and re-derives every input pin's level from pull
-///    state — so a pin whose PORT bit the firmware left at 1 (the classic
+///    state, so a pin whose PORT bit the firmware left at 1 (the classic
 ///    open-drain "release = input with pull-up" idiom of soft-I2C masters)
 ///    snaps back to the internal pull-up's 1 on the very next SCL toggle,
 ///    stomping the responder's ACK/data bit before the firmware reads it.
@@ -85,7 +85,7 @@ const IOPORT_IRQ_DIRECTION_ALL: i32 = ffi::IOPORT_IRQ_DIRECTION_ALL as i32;
 ///    way a real (stronger) external driver beats the ~35k internal pull-up.
 ///
 /// `ext_drive` is the engine-maintained per-port (mask, value) shadow of the
-/// external state — the ioctl REPLACES the whole port's pull bytes, so the
+/// external state; the ioctl REPLACES the whole port's pull bytes, so the
 /// merged state must be resent, not just the changed bit. Later drives to the
 /// same pin (responder updates, chunk-boundary `set_digital_in` syncs) simply
 /// overwrite: last external writer owns the line.
@@ -147,7 +147,7 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 /// instruction. This is what lets a firmware bit-bang a clock and `digitalRead`
 /// the resulting serial-out bit in the SAME tight loop (the 74HC165 readback):
 /// the output-pin hook fires on the SCLK/PL edge, the responder computes the
-/// next QH bit, and the bit is raised onto the MISO ioport input IRQ here — so
+/// next QH bit, and the bit is raised onto the MISO ioport input IRQ here, so
 /// the very next `digitalRead(MISO)` sees it. Resolving the readback per output
 /// edge (not once per analog chunk) is the read-direction analogue of the
 /// edge-driven 74HC595 write path.
@@ -170,7 +170,7 @@ struct PortState {
     /// Current DDR mask (1 = output). Tracks the *latest* direction, not an
     /// accumulation, so a pin set OUTPUT then back to INPUT (open-drain release /
     /// bus hand-off) reads as input again rather than stuck "output". METADATA
-    /// ONLY — it never enables a circuit driver or fires a pin-change; it just
+    /// ONLY; it never enables a circuit driver or fires a pin-change; it just
     /// lets a higher layer tell an output-low-held pin (driven LOW) from one the
     /// firmware never configured (floating). Keeping it out of the drive path is
     /// deliberate: an earlier version that drove the circuit from DDR edges
@@ -201,7 +201,7 @@ struct SharedState {
     /// 7-bit addresses of the modeled I2C slaves, from
     /// [`Mcu::set_i2c_slave_addresses`] (the engine populates it from the
     /// attached bus's responder registry). `Some` gates the address ACK: an
-    /// address in the set is ACKed, any other is NACKed — the honest
+    /// address in the set is ACKed, any other is NACKed; the honest
     /// no-answer the `SoftI2cResponder` already gives, so a firmware bus
     /// scanner finds exactly the modeled devices instead of all 127. `None`
     /// (never configured) keeps the legacy ACK-everything behaviour for
@@ -225,7 +225,7 @@ unsafe impl Send for SharedState {}
 
 /// Replacement for simavr's default `sleep` callback. In "raw" mode simavr
 /// installs `avr_callback_sleep_raw`, which `usleep`s for the whole gap to the
-/// next cycle-timer whenever the firmware executes a SLEEP instruction — pinning
+/// next cycle-timer whenever the firmware executes a SLEEP instruction, pinning
 /// the co-sim thread to REAL wall-clock time and breaking the bounded-chunk
 /// contract that `run_micros`/`run_cycles` (and the per-frame server loop) rely
 /// on. simavr's run loop advances `avr->cycle` itself (not this callback), so a
@@ -325,7 +325,7 @@ macro_rules! make_port_hook {
 }
 
 /// Per-port DDR (direction) hook: records which bits have ever been configured
-/// as outputs. Observation only — it does NOT fire `on_pin_change` and does NOT
+/// as outputs. Observation only; it does NOT fire `on_pin_change` and does NOT
 /// touch the circuit, so it cannot latch open-drain pins or clamp bus nets. The
 /// boot-state panel uses it to distinguish a `pinMode(OUTPUT)` pin held LOW from
 /// a pin the firmware never configured (genuinely floating).
@@ -460,7 +460,7 @@ unsafe extern "C" fn twi_hook(
             }
 
             // Answer the address: ACK (data=1) for a modeled slave so the
-            // firmware's Wire library proceeds, NACK (data=0) otherwise —
+            // firmware's Wire library proceeds, NACK (data=0) otherwise,
             // simavr's TWI master decodes the ACK-condition message's data
             // bit into TW_M{T,R}_SLA_ACK / _NACK status.
             if !avr.is_null() {
@@ -620,7 +620,7 @@ pub struct AvrMcu {
     /// loop runs until `avr->cycle >= run_target` rather than `start + n`:
     /// `avr_run` advances by whole instructions (1–5 cycles), so each chunk
     /// stops up to 4 cycles PAST its endpoint, and a per-chunk `start + n`
-    /// target discarded that overshoot — re-incurring it every chunk, the
+    /// target discarded that overshoot, re-incurring it every chunk, the
     /// guest clock ran unboundedly AHEAD of simulated time. Anchoring to this
     /// running absolute target lets a prior chunk's overshoot shrink (or
     /// zero) the next chunk's deficit, so `|cycle − freq·t|` stays bounded by
@@ -662,7 +662,7 @@ impl AvrMcu {
             ffi::avr_init(avr);
             (*avr).frequency = frequency as u32;
             // Route simavr's own logging through hauksbee's debug channel. By
-            // default simavr writes AVR_LOG lines straight to fd 2 — including
+            // default simavr writes AVR_LOG lines straight to fd 2, including
             // `avr_sadly_crashed`'s crash dump, which the persona panel saw leak
             // into user-facing CI output when a boot assert ran without firmware.
             // AVR_LOG is gated on `avr->log`, so setting it to LOG_NONE (0)
@@ -826,7 +826,7 @@ impl AvrMcu {
             // flash for THIS part, and `copy_nonoverlapping` below trusts the
             // hex's own addresses. A hex built for a larger part (a mega2560
             // image loaded onto a 328p) would memcpy straight past the buffer
-            // — silent heap corruption, not a diagnostic. The `.elf` path is
+            //, silent heap corruption, not a diagnostic. The `.elf` path is
             // arch-gated; give the `.hex` path the equivalent fail-loud check.
             let flash_size = (*self.avr).flashend as usize + 1;
             let base = boot_base as usize;
@@ -1009,7 +1009,7 @@ impl Mcu for AvrMcu {
     fn drive_direction_observable(&self) -> bool {
         // The DDR hooks record the live data-direction register per port, so an
         // absent pin in `pins_configured_output` genuinely means "not an
-        // output" — a held-LOW output can never masquerade as floating here.
+        // output", a held-LOW output can never masquerade as floating here.
         true
     }
 
@@ -1091,7 +1091,7 @@ impl Mcu for AvrMcu {
                 sleeping: cpu == ffi::cpu_Sleeping as i32,
                 // Terminal states, surfaced so a crashed/finished core is
                 // distinguishable from a healthy chunk (run_cycles breaks its
-                // step loop on these but still returns Ok — the state snapshot
+                // step loop on these but still returns Ok; the state snapshot
                 // is where callers see WHY the core stopped making progress).
                 done: cpu == ffi::cpu_Done as i32,
                 crashed: cpu == ffi::cpu_Crashed as i32,
@@ -1132,7 +1132,7 @@ mod cycle_budget_tests {
         }
         // 100 chunks × 100 µs = 10 ms → exactly 36 864 cycles.
         assert_eq!(total, 36_864, "carried total must be exact");
-        // Naive per-chunk truncation would be 368 × 100 = 36 800 — 64 short.
+        // Naive per-chunk truncation would be 368 × 100 = 36 800, 64 short.
         assert_eq!(36_864 - 368 * 100, 64, "the drift the carry eliminates");
     }
 

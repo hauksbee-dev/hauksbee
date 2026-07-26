@@ -21,7 +21,7 @@ use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
 /// A KiCad PCB with one 2-pin diode (value 1N4148, SOD-323 body) wired between
-/// two nets, pads numbered 1/2 with NO pinfunction — the layout-only case.
+/// two nets, pads numbered 1/2 with NO pinfunction; the layout-only case.
 const LAYOUT_DIODE_PCB: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "CATHODE_NET")

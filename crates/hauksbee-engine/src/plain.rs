@@ -49,11 +49,11 @@ impl PlainLevel {
 #[derive(Debug, Clone)]
 pub struct PlainFinding {
     pub level: PlainLevel,
-    /// "What it is" — the headline, in everyday language.
+    /// "What it is"; the headline, in everyday language.
     pub what: String,
-    /// "Why it matters" — the consequence if left as-is.
+    /// "Why it matters"; the consequence if left as-is.
     pub why: String,
-    /// "Suggested fix" — the concrete thing to change.
+    /// "Suggested fix"; the concrete thing to change.
     pub fix: String,
 }
 
@@ -65,11 +65,11 @@ pub struct PlainFinding {
 /// caveat); renderers omit those lines when empty.
 #[derive(Debug, Clone, Default)]
 pub struct HeadsUp {
-    /// "What it is" — the observation, in everyday language.
+    /// "What it is"; the observation, in everyday language.
     pub what: String,
-    /// "Why it matters" — the consequence. May be empty.
+    /// "Why it matters"; the consequence. May be empty.
     pub why: String,
-    /// "What to do" — the concrete next step. May be empty.
+    /// "What to do"; the concrete next step. May be empty.
     pub fix: String,
 }
 
@@ -144,7 +144,7 @@ impl PlainReport {
         let n = self.findings.len();
         if n == 0 {
             // No failures, but if there are actionable heads-up notes (e.g. a USB
-            // pair off its impedance target), don't claim "no problems found" —
+            // pair off its impedance target), don't claim "no problems found",
             // that buries the one thing the user may have come to check. Point at
             // the notes below without escalating them to a failure (cry wolf).
             if !self.heads_up.is_empty() {
@@ -301,7 +301,7 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
 /// Translate the *grouped* DRC ([`DrcStructured`]) for the plain / web surfaces.
 ///
 /// This is the single source of truth shared with the default text and `--json`
-/// paths: duplicates are collapsed by (net pair + layer), and — crucially — a
+/// paths: duplicates are collapsed by (net pair + layer), and, crucially, a
 /// group whose gap is exactly *at* the rule (`gap == rule`) is described as "at
 /// minimum clearance (no margin)", NOT "below the spacing the board asks for".
 /// Saying "below" when the gap merely equals the rule is the dishonest wording
@@ -327,7 +327,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         ));
     }
 
-    // Real shorts first — the things that actually break a board.
+    // Real shorts first; the things that actually break a board.
     for sh in &st.shorts {
         let a = if sh.net_a.is_empty() { "an unnamed net" } else { &sh.net_a };
         let b = if sh.net_b.is_empty() { "an unnamed net" } else { &sh.net_b };
@@ -527,7 +527,7 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
 
     // Fix #3: promote ACTIONABLE info notes into "Heads up" rather than dropping
     // them. An info note is actionable when it reports a real off-target value
-    // (the controlled-impedance "+N% from target" note — the 171-ohm USB case),
+    // (the controlled-impedance "+N% from target" note; the 171-ohm USB case),
     // as opposed to a within-tolerance "ok" or a "no judgement" observation.
     for f in info_only(report) {
         if let Some(note) = actionable_info_note(f) {
@@ -594,7 +594,7 @@ fn short_msg(msg: &str) -> String {
     let m = msg.trim();
     // Split only on clause boundaries ("; ", ". "), NOT a bare ".", so decimal
     // numbers like "0.200 mm" and "Zdiff ~ 171 ohm [target 90 ohm]" survive intact
-    // — a bare "." chopped the controlled-impedance note down to "W~0".
+    //, a bare "." chopped the controlled-impedance note down to "W~0".
     let first = m.split("; ").next().unwrap_or(m).trim();
     let first = first.split(". ").next().unwrap_or(first).trim();
     if first.chars().count() <= 160 {
@@ -792,7 +792,7 @@ mod tests {
         // Three findings for the SAME net pair + layer, all with gap == rule
         // (exactly at minimum clearance, NOT below). The structured plain
         // renderer must (a) collapse them into ONE finding, and (b) describe
-        // them as "at minimum clearance (no margin)" — never "below".
+        // them as "at minimum clearance (no margin)", never "below".
         let at_limit = || {
             let mut f = drc_short();
             f.kind = ViolationKind::Clearance;
@@ -939,7 +939,7 @@ mod tests {
         };
         let plain = plain_si(&report);
         // Not a finding (so it never escalates to a failure), but the verdict must
-        // ACKNOWLEDGE the note rather than claim "no problems found" — and the note
+        // ACKNOWLEDGE the note rather than claim "no problems found", and the note
         // itself survives under "Heads up".
         assert!(plain.findings.is_empty());
         assert_eq!(plain.heads_up.len(), 1, "off-target info promoted");

@@ -10,7 +10,7 @@
 //!
 //! Behaviour is DECLARATIVE: each part's model entry carries a
 //! `[models.logic]` block (06-extensibility §1.1) that the generic
-//! [`LogicComponent`] evaluator compiles at bind time — the old hardcoded
+//! [`LogicComponent`] evaluator compiles at bind time; the old hardcoded
 //! `DigitalKind::{Hc595, Hc165, Buffer, NorLatch}` enum and its per-kind tick
 //! methods were deleted after a byte-exact regression proved the spec-driven
 //! reimplementations identical at every edge (`tests/logic_migration.rs`).
@@ -21,8 +21,8 @@
 //!
 //! What stays Rust, deliberately: the MCU-facing chain controllers
 //! ([`Hc595Chain`], [`Hc165Chain`]) and their net-walking recovery
-//! (`order_*_chains`). They are GPIO-integration machinery — mapping edge
-//! logs and MISO responders onto daisy chains — not part behaviour; the
+//! (`order_*_chains`). They are GPIO-integration machinery, mapping edge
+//! logs and MISO responders onto daisy chains, not part behaviour; the
 //! per-chip shift/latch semantics they mirror INTO the components now live
 //! in the components' specs. Their chain-candidacy test is structural (a
 //! part declaring a `ser` input and a `qh_serial`/`qh` output participates),
@@ -85,7 +85,7 @@ impl LogicLevels {
 /// `set` (active-high SET), `reset` (active-high RESET), output `q` (`qb` is
 /// the internal cross-couple node, unwired on the board). Active-LOW Q
 /// semantics: at reset Q is HIGH (idle), a SET pulse drives Q LOW and the
-/// cross-couple HOLDS it LOW until the next RESET — so the firmware-driven
+/// cross-couple HOLDS it LOW until the next RESET, so the firmware-driven
 /// 74HC165 readback samples the level the real board's latch Q presents
 /// (idle HIGH -> 0xFFC0, captured spike LOW). The cross-coupled `comb` pair
 /// resolves by the evaluator's fixpoint machinery; `init` seeds the cleared
@@ -374,11 +374,11 @@ impl DigitalComponent {
     /// Build a digital component from its model entry and a role→node map. The
     /// caller has already stamped output [`PinDriver`]s and passes them in.
     ///
-    /// The model's `[models.logic]` block is compiled here (bind time — the
+    /// The model's `[models.logic]` block is compiled here (bind time; the
     /// expressions are never re-parsed on the tick path). A model without a
     /// logic block gets the synthesized `a*`/`y*` passthrough. A model WITH a
     /// logic block that fails to compile is a hard error: the caller decides
-    /// whether to skip the part loudly (nets float, lore #9) — it is never
+    /// whether to skip the part loudly (nets float, lore #9); it is never
     /// silently downgraded to a passthrough.
     pub fn new(
         reference: String,
@@ -569,7 +569,7 @@ impl DigitalComponent {
     }
 
     /// True when the part has at least one clocked register (edge-replay
-    /// candidacy — see the scheduler's generalized replay).
+    /// candidacy, see the scheduler's generalized replay).
     pub fn is_sequential(&self) -> bool {
         self.logic.as_ref().map(|l| l.is_sequential()).unwrap_or(false)
     }
@@ -752,7 +752,7 @@ impl Hc595Chain {
         let oe_n = role_gpio(head, "oe_n");
 
         // The chain controller mirrors its per-chip bytes into the chips' spec
-        // registers by NAME ("shift"/"store", 8 bits) — the documented contract
+        // registers by NAME ("shift"/"store", 8 bits); the documented contract
         // between the Rust chain fast-path and a 595-shaped [models.logic]
         // spec. A chip that chains (ser + qh_serial roles) but lacks the
         // registers would silently desynchronize from its own analog outputs,
@@ -870,7 +870,7 @@ impl Hc595Chain {
             d.drive_from_registers(circuit);
             // Tri-state / enable the parallel-output drivers per the CHAIN's
             // OE_n level (tracked from MCU edges; the chip itself is skipped by
-            // the per-chunk tick, so its own sampled tristate state is stale —
+            // the per-chunk tick, so its own sampled tristate state is stale,
             // the chain is authoritative here). Applied AFTER the drive so the
             // chain's decision wins; qh_serial stays enabled (not OE-gated on
             // the 74HC595).
@@ -888,7 +888,7 @@ impl Hc595Chain {
 /// by the MCU (it is not consumed by another 165's `ser` input); each subsequent
 /// chip is the one feeding the previous chip's `ser` from its own `qh`. So
 /// walking a chain head→tail follows the serial bitstream backward from QH/MISO
-/// into the upstream chips — the order the firmware shifts bits OUT.
+/// into the upstream chips; the order the firmware shifts bits OUT.
 ///
 /// Mirror of [`order_595_chains`] for the read direction. A chip not reachable
 /// from any head becomes its own singleton chain rather than being merged.
@@ -954,13 +954,13 @@ pub fn order_165_chains(digital: &[DigitalComponent]) -> Vec<Vec<usize>> {
 }
 
 /// An edge-driven model of one MCU-bit-banged 74HC165 parallel-in / serial-out
-/// chain — the READ-direction analogue of [`Hc595Chain`].
+/// chain; the READ-direction analogue of [`Hc595Chain`].
 ///
 /// The firmware reads the chain by pulsing PL (parallel-load) low to capture the
 /// parallel inputs, then bit-banging the shared SCLK while sampling the head
 /// chip's QH on its MISO input pin. Both the PL pulse and the SCLK pulse train
 /// are sub-µs back-to-back `digitalWrite`s, far below the analog chunk rate, so
-/// they MUST be resolved in the EVENT domain at edge granularity — exactly like
+/// they MUST be resolved in the EVENT domain at edge granularity, exactly like
 /// the 595 write path. The crucial difference: the firmware `digitalRead`s the
 /// serial-out bit *between its own clock edges, inside the same `run_micros`*,
 /// so this chain runs synchronously from the MCU's GPIO-output hook (via the
@@ -1318,7 +1318,7 @@ mod tests {
         pin_nets.insert(('B', 5), n_srclk);
         pin_nets.insert(('D', 6), n_rclk);
 
-        // shiftOut two known bytes MSB-first, then latch — the firmware shape.
+        // shiftOut two known bytes MSB-first, then latch; the firmware shape.
         let (first, second) = (0x9Du8, 0x3Cu8);
         let mut log: Vec<PinEdge> = Vec::new();
         let mut cyc = 0u64;

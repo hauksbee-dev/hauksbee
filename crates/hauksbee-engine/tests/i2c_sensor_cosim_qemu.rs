@@ -36,7 +36,7 @@
 //!
 //! ## Firmware
 //!
-//! `testdata/firmware/esp32_i2c_thermostat/flash.bin` — built with
+//! `testdata/firmware/esp32_i2c_thermostat/flash.bin`, built with
 //! `./build.sh` (requires esp-idf v5.x). Source in that directory.
 //!
 //! ## Running
@@ -133,7 +133,7 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
 /// The modeled temperature reaches the firmware through the machine's own
 /// emulated tmp105 (`set_i2c_device_temperature` each chunk); if that push
 /// path breaks, the firmware reads 0xFF bytes, decodes them as ~-0.125 C, and
-/// never sets the flag — so this fails with a clear assertion message.
+/// never sets the flag, so this fails with a clear assertion message.
 #[test]
 fn esp32_i2c_firmware_drives_gpio_from_temperature() {
     if !is_available(QemuArch::Xtensa) {

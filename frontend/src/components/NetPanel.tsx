@@ -37,7 +37,7 @@ export function NetPanel({ frame, selectedNet, onSelectNet }: NetPanelProps) {
 
       {entries.length === 0 ? (
         <div className="px-3 pb-2.5 text-[10px]" style={{ color: '#334155' }}>
-          No data — start simulation
+          No data, start simulation
         </div>
       ) : (
         <div className="overflow-y-auto" style={{ maxHeight: 280 }}>

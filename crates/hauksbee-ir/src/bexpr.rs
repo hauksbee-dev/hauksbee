@@ -9,7 +9,7 @@
 //! * every `V(node)` / `V(a,b)` / `I(vname)` reference becomes a synthetic
 //!   dependency variable `__d{k}` (a differential `V(a,b)` becomes
 //!   `(__d{i} - __d{j})`), with the meaning of slot `k` recorded in the
-//!   device's `deps: Vec<BDep>` — positionally aligned with the `__d{k}`
+//!   device's `deps: Vec<BDep>`, positionally aligned with the `__d{k}`
 //!   names;
 //! * `.param` names are folded to numeric literals (round-trip-exact `{:?}`
 //!   formatting), so a [`CompiledExpr`] never needs the parameter
@@ -31,18 +31,18 @@
 //! Operators: `+ - * / % ^` (`^` is exponentiation; the loader also rewrites
 //! `**` to `^`), comparisons `== != < <= > >=` and boolean `&& ||` (useful
 //! inside `if`), numeric literals with optional exponent (`1e-3`; SPICE
-//! engineering suffixes are NOT valid inside `{...}` — the suffix rule of
+//! engineering suffixes are NOT valid inside `{...}`; the suffix rule of
 //! §4.2 applies).
 //!
 //! Functions (mapped onto evalexpr builtins): `ln`, `log10`, `log2`, `exp`,
 //! `pow(x,y)`, `sqrt`, `cbrt`, `abs`, `sin`, `cos`, `tan`, `asin`, `acos`,
 //! `atan`, `atan2(y,x)`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,
 //! `hypot(x,y)`, `floor`, `ceil`, `round`, `min(...)`, `max(...)`, and
-//! `if(cond, then, else)` (evalexpr's ternary builtin — this is the one
+//! `if(cond, then, else)` (evalexpr's ternary builtin; this is the one
 //! conditional form that ships).
 //!
 //! Refused loudly, with line numbers, by the loader: bare `log` (ambiguous
-//! between ln and log10 across SPICE dialects — write `ln` or `log10`),
+//! between ln and log10 across SPICE dialects, write `ln` or `log10`),
 //! `POLY(...)`, `TABLE`, `VALUE`, any unknown function or identifier, and
 //! un-braced expressions.
 
@@ -58,7 +58,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// difference Jacobian in `hauksbee-solve` calls [`CompiledExpr::eval`]
 /// `1 + n_deps` times per Newton iteration per B-source. Evaluation lives
 /// HERE, on the IR type, so `hauksbee-solve` needs no `evalexpr` dependency
-/// edge of its own — a deliberate Cargo decision (04 §2.5 flags the edge).
+/// edge of its own, a deliberate Cargo decision (04 §2.5 flags the edge).
 #[derive(Clone)]
 pub struct CompiledExpr {
     /// Canonical source text (what serializes; see the module doc).
@@ -75,7 +75,7 @@ pub struct CompiledExpr {
 
 impl CompiledExpr {
     /// Parse a CANONICAL expression (identifiers restricted to `__d{k}` and
-    /// `time`). Anything else — a syntax error, an unknown identifier — is an
+    /// `time`). Anything else, a syntax error, an unknown identifier, is an
     /// `Err(String)`; the loader wraps it with a line number, serde with a
     /// deserialization error.
     pub fn compile(src: &str) -> Result<CompiledExpr, String> {
@@ -123,8 +123,8 @@ impl CompiledExpr {
     /// exactly that long by construction). Returns `Err` on an evaluation
     /// fault (evalexpr error, or a non-float result); the caller decides what
     /// a fault means (the stamp turns it into a device-named solver refusal).
-    /// NOTE: IEEE float semantics apply inside — `1/0` is `inf`, `ln(-1)` is
-    /// NaN, not an error — so callers must ALSO guard the returned value with
+    /// NOTE: IEEE float semantics apply inside, `1/0` is `inf`, `ln(-1)` is
+    /// NaN, not an error, so callers must ALSO guard the returned value with
     /// `is_finite()`; this function reports only structural faults.
     pub fn eval(&self, deps: &[f64], time: f64) -> Result<f64, String> {
         if deps.len() < self.dep_names.len() {
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn ieee_semantics_are_reported_by_value_not_error() {
-        // Structural contract: ln(-1) is a NaN VALUE, not an Err — the stamp
+        // Structural contract: ln(-1) is a NaN VALUE, not an Err; the stamp
         // guards finiteness itself. Pin that so the guard's placement is a
         // documented behavior, not an accident.
         let e = CompiledExpr::compile("math::ln(__d0)").unwrap();

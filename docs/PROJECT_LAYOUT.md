@@ -3,19 +3,19 @@
 You do **not** need a CI pipeline to use hauksbee. The core workflow is one local
 command pointed at a few files that live in your hardware repo. GitHub Actions, a
 KiCad plugin, and a pre-commit hook are optional wrappers around that same
-command — start local, add them later if you want.
+command, start local, add them later if you want.
 
 ## The minimum you need
 
 To boot-and-check a board, hauksbee needs, at most, three things:
 
-1. **A board file** — the design hauksbee extracts the circuit from. Any
+1. **A board file**: the design hauksbee extracts the circuit from. Any
    supported format: `*.kicad_pcb`, `*.kicad_sch`, Eagle `*.brd`, Altium
    `*.PcbDoc`, IPC-D-356 `*.d356`, or a gerber set.
-2. **Firmware (optional)** — a compiled `*.elf` (or `*.hex`) for the board's MCU,
+2. **Firmware (optional)**: a compiled `*.elf` (or `*.hex`) for the board's MCU,
    if you want the firmware co-simulated in lockstep with the analogue circuit.
    Omit it for a purely electrical check.
-3. **A spec** — a small TOML file listing the power supplies to attach and the
+3. **A spec**: a small TOML file listing the power supplies to attach and the
    assertions that must hold. This is what turns "simulate the board" into "pass
    or fail the build."
 
@@ -37,7 +37,7 @@ my-board/
 └── README.md
 ```
 
-Nothing here is mandatory — hauksbee takes explicit paths, so you can arrange
+Nothing here is mandatory, hauksbee takes explicit paths, so you can arrange
 files however you like. This layout is just the one the examples assume.
 
 ## The spec file
@@ -74,7 +74,7 @@ The available supply kinds, scenario/load profiles, and assertion kinds (`rail`,
 comparison, …) are documented in [`CI.md`](ci/CI.md), with runnable examples in
 [`EXAMPLES.md`](ci/EXAMPLES.md) and under [`../examples/ci-specs/`](../examples/ci-specs/).
 
-## Running it — locally, one command
+## Running it, locally, one command
 
 ```bash
 hauksbee-ci run ci/power-up.toml
@@ -83,7 +83,7 @@ echo $?          # 0 = green, 1 = red
 
 That is the whole loop. It extracts the circuit from the board file, binds every
 component to a device model, attaches the supplies, boots the firmware on the
-emulated MCU (if given), runs the simulation, and evaluates the assertions —
+emulated MCU (if given), runs the simulation, and evaluates the assertions,
 exiting non-zero if any fail, and writing a JUnit XML report and inline
 annotations any CI system can ingest.
 
@@ -99,9 +99,9 @@ hauksbee run hardware/my_board.kicad_pcb --firmware firmware/build/my_board.elf 
 When you want the check to run on every push, the same spec drops into CI
 unchanged:
 
-- **GitHub Actions** — see [`../integrations/github-action/`](../integrations/github-action/).
-- **KiCad plugin** — run it from the PCB editor: [`../integrations/kicad-plugin/`](../integrations/kicad-plugin/).
-- **pre-commit hook** — gate commits locally: [`../integrations/pre-commit/`](../integrations/pre-commit/).
+- **GitHub Actions**: see [`../integrations/github-action/`](../integrations/github-action/).
+- **KiCad plugin**: run it from the PCB editor: [`../integrations/kicad-plugin/`](../integrations/kicad-plugin/).
+- **pre-commit hook**: gate commits locally: [`../integrations/pre-commit/`](../integrations/pre-commit/).
 
-Each of these just invokes `hauksbee-ci run <spec>` — the same command you
+Each of these just invokes `hauksbee-ci run <spec>`; the same command you
 already run by hand.

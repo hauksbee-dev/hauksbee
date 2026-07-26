@@ -1,8 +1,8 @@
 # Hauksbee capabilities and scope
 
 > Read this first if you are integrating, evaluating, or building automation
-> around hauksbee. The two most common mistakes — treating it as "just a DRC
-> wrapper" and assuming firmware co-simulation is ATmega-only — are addressed
+> around hauksbee. The two most common mistakes, treating it as "just a DRC
+> wrapper" and assuming firmware co-simulation is ATmega-only, are addressed
 > explicitly in the [Common misconceptions](#common-misconceptions) section at
 > the end.
 
@@ -12,7 +12,7 @@
 
 | Capability | What it catches | Commodity or differentiated? | Needs external simulator? |
 |---|---|---|---|
-| Copper short / clearance DRC (`--drc`) | Net-to-net copper touches and below-clearance gaps | **Commodity** — KiCad's built-in DRC finds these too | No |
+| Copper short / clearance DRC (`--drc`) | Net-to-net copper touches and below-clearance gaps | **Commodity**: KiCad's built-in DRC finds these too | No |
 | Lint (`--lint`) | Connectivity, strap-pin boot states, designator / footprint / value sanity, MCU resource conflicts | Differentiated (strap-pin and resource-conflict logic is hauksbee's own) | No |
 | Bind report (`--report`) | Component → device-model mapping for every part on the board | Utility / transparency | No |
 | Signal integrity (`--si`) | SI physics: controlled-impedance USB/Ethernet estimates, stubs, series termination | Differentiated | No |
@@ -45,7 +45,7 @@ Geometric copper short and clearance report. Detects net-to-net copper touches
 (gap ≤ 0) and below-clearance gaps.
 
 **This is commodity.** KiCad's built-in DRC finds exactly the same class of
-fault. A DRC short found by hauksbee is confirmable — and should be confirmed —
+fault. A DRC short found by hauksbee is confirmable, and should be confirmed,
 with `kicad-cli pcb drc`. hauksbee's differentiator is not finding shorts; it
 is running the rest of the pipeline (analog solve, firmware co-sim, behavioral
 assertions) after finding them.
@@ -103,11 +103,11 @@ loop. Outputs to terminal or to CSV with `--ac-csv`. Full details in
 
 hauksbee cross-checks its own results against independent authoritative tools:
 
-- **KiCad `kicad-cli pcb drc`** — DRC oracle. Invoked with `--oracle` on a
+- **KiCad `kicad-cli pcb drc`**: DRC oracle. Invoked with `--oracle` on a
   `--drc` run. Not bundled: KiCad is ~1.4 GB and GPL-3.0. hauksbee
   auto-detects an existing install (PATH, standard application locations,
   prefers the highest version found).
-- **ngspice** — analog oracle. hauksbee's transient and AC results are
+- **ngspice**: analog oracle. hauksbee's transient and AC results are
   cross-checked against ngspice; every solver speed claim is gated behind an
   accuracy check. Not required at runtime; used for validation.
 
@@ -117,7 +117,7 @@ pattern. Full rationale and install instructions: [`docs/cosim/ORACLES.md`](../c
 
 ---
 
-## Layer 3: Firmware co-simulation — the differentiator
+## Layer 3: Firmware co-simulation; the differentiator
 
 This is what no other tool does from the layout. hauksbee boots real firmware on
 an emulated MCU and its GPIO and peripheral edges drive currents and voltages
@@ -132,7 +132,7 @@ The entry point is `hauksbee run <board> --firmware <img> --headless [--seconds 
 When firmware co-sim runs, hauksbee reports a power-up hazard the netlist alone
 cannot adjudicate: a **control net that switches a transistor/relay, is driven
 (or pulled) HIGH and held from reset, and has no bias resistor** setting a safe
-default — a MOSFET gate / relay / motor enable / igniter energised at power-up.
+default, a MOSFET gate / relay / motor enable / igniter energised at power-up.
 *"control net 'X' switches a transistor/relay and is driven HIGH and held from
 the moment the board powers up … confirm the polarity and that this is
 intended."*
@@ -150,7 +150,7 @@ it; by default it does not affect the exit code.
 
 **The boot-state panel (`--plain` / `--json`).** Alongside the held-high warning,
 co-sim prints an informational panel of every MOSFET/transistor gate it can
-identify and what the firmware does to it at power-up — `driven HIGH and held`,
+identify and what the firmware does to it at power-up, `driven HIGH and held`,
 `driven LOW and held`, or `never driven (floating)`:
 
 ```
@@ -162,16 +162,16 @@ switch the moment the board powers up. Verify each is the level you intend:
 ```
 
 It distinguishes a strong push-pull `driven HIGH` from a weak `pulled HIGH (weak
-internal pull-up)` — the latter is exactly the igniter case (a serial RX pin
+internal pull-up)`; the latter is exactly the igniter case (a serial RX pin
 mis-mapped onto the gate enables its pull-up), and naming the *mechanism* tells a
 non-engineer the gate went high by accident, not by design.
 
-This is **reported, not judged** — which is what makes it safe for a non-engineer
+This is **reported, not judged**: which is what makes it safe for a non-engineer
 and lets it cover the cases the *warning* can't. The held-high **warning** is a
 verdict (and the only thing `--strict-boot` gates on), so it must be zero-FP. The
 **panel** is data: it shows the floating case (a forgotten gate-drive) and the
 held-low case without ever asserting a fault, so an ambiguous net is just a line
-the user reads against what they know the board is for — no false alarm, no CI
+the user reads against what they know the board is for, no false alarm, no CI
 break. It deliberately makes no channel-type safety claim (a HIGH gate is "on"
 for a low-side N-MOSFET but "off" for a high-side P-MOSFET, which the copper can't
 disambiguate); it reports the level and flags the active/undefined ones to
@@ -194,24 +194,24 @@ scheduler couples to any of them without change. The trait lives in
 `crates/hauksbee-mcu/src/traits.rs`; the backends in
 `crates/hauksbee-mcu/src/`.
 
-#### AVR — `AvrMcu` (libsimavr, linked in-process)
+#### AVR, `AvrMcu` (libsimavr, linked in-process)
 
-Backed by libsimavr, linked directly into the engine — the AVR co-sim runs
+Backed by libsimavr, linked directly into the engine; the AVR co-sim runs
 in-process, with no separate simulator to launch. simavr is GPL-3.0 and this
 MIT repo deliberately does **not** vendor it, so a source build links it from
 the system. Get there one of three ways:
 
-- install it with one command — `scripts/install-sims.sh --avr` (builds and
+- install it with one command, `scripts/install-sims.sh --avr` (builds and
   installs libsimavr + libelf into the prefix the build links against);
 - point the build at an existing copy via `SIMAVR_INCLUDE_DIR` /
   `SIMAVR_LIB_DIR`; or
-- build the GPL-free subset without AVR —
+- build the GPL-free subset without AVR,
   `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.
 
 Supported parts (anything simavr knows by name, two shipped convenience
 constructors):
 
-- **ATmega328P** at 16 MHz (`AvrMcu::atmega328p_16mhz()`) — the Arduino Uno /
+- **ATmega328P** at 16 MHz (`AvrMcu::atmega328p_16mhz()`); the Arduino Uno /
   Nano class
 - **ATmega2560** and other simavr-known AVR MCUs via `AvrMcu::new("atmega2560",
   freq)`
@@ -222,7 +222,7 @@ UART, I2C (TWI), and SPI all bidirectional.
 Licensing note: a binary built with the `avr` feature links libsimavr (GPL-3.0)
 and is subject to the GPL.
 
-#### Renode — `RenodeBackend` (external, GPL-free over sockets)
+#### Renode, `RenodeBackend` (external, GPL-free over sockets)
 
 Drives a headless Renode process over its Monitor TCP protocol and a UART socket
 terminal. Links no GPL code; a `--no-default-features --features renode,qemu`
@@ -233,10 +233,10 @@ and [`docs/cosim/MCU.md`](../cosim/MCU.md)):
 
 | Config constructor | Platform | Proven on this branch |
 |---|---|---|
-| `RenodeConfig::stm32f103()` | STM32F103C8 (Cortex-M3, "blue pill") — PA–PG, USART1, 8 MHz HSI | **Proven**: UART boot banner, GPIO toggle, solved LED current |
-| `RenodeConfig::stm32f4_discovery()` | STM32F4 Discovery (STM32F407, Cortex-M4) — PA–PE, USART2, 16 MHz | Config shipped; not run on this branch |
-| `RenodeConfig::nrf52840()` | nRF52840 (Cortex-M4, two 32-bit GPIO ports) — gpio0/gpio1, uart0, 64 MHz | **Proven (UART boot)**: Zephyr shell `uart:~$` |
-| `RenodeConfig::sifive_fe310()` | SiFive FE310 / HiFive1 (RISC-V RV32) — gpio0, uart0, 16 MHz | **Proven (UART boot)**: Zephyr shell boot with PRCI clock fix |
+| `RenodeConfig::stm32f103()` | STM32F103C8 (Cortex-M3, "blue pill"), PA–PG, USART1, 8 MHz HSI | **Proven**: UART boot banner, GPIO toggle, solved LED current |
+| `RenodeConfig::stm32f4_discovery()` | STM32F4 Discovery (STM32F407, Cortex-M4), PA–PE, USART2, 16 MHz | Config shipped; not run on this branch |
+| `RenodeConfig::nrf52840()` | nRF52840 (Cortex-M4, two 32-bit GPIO ports), gpio0/gpio1, uart0, 64 MHz | **Proven (UART boot)**: Zephyr shell `uart:~$` |
+| `RenodeConfig::sifive_fe310()` | SiFive FE310 / HiFive1 (RISC-V RV32), gpio0, uart0, 16 MHz | **Proven (UART boot)**: Zephyr shell boot with PRCI clock fix |
 
 RP2040 (Cortex-M0+) is in the device model DB (strap-pin lint works) but no
 `RenodeConfig::rp2040()` constructor is shipped; RP2040 firmware co-sim is not
@@ -252,9 +252,9 @@ fires per-bit edge callbacks. STM32F1 ODR offset `0x0C`, STM32F4 `0x14`, nRF52
 GPIO input: `sysbus.<port> OnGPIO <bit> <bool>`.
 
 GPIO drive **direction** is also observable on the dir-mapped platforms: the
-backend reads each port's direction/mode register alongside the ODR — STM32F103
+backend reads each port's direction/mode register alongside the ODR, STM32F103
 CRL/CRH, STM32F4 MODER, nRF52840 DIR, each verified against the live Renode
-model's read-back — decodes a per-pin output mask, and reports it through the
+model's read-back, decodes a per-pin output mask, and reports it through the
 same `pins_configured_output` surface the AVR DDR hooks feed. On those parts
 the boot-state panel and `boot-coverage` can therefore tell a **held-LOW
 output from a floating input**, just as on AVR. Platforms without a verified
@@ -266,7 +266,7 @@ command or result-word write). **No shipped Renode platform carries a map**:
 the stock STM32F103/F4/nRF52840 Renode 1.16.1 platform descriptions model no
 ADC peripheral at all (verified live), and shipping a wrong-layout model or an
 invented RAM word would be fake fidelity. An unmapped channel's injections are
-therefore DROPPED — and, since the U3 honesty round, that drop is surfaced on
+therefore DROPPED, and, since the U3 honesty round, that drop is surfaced on
 **every** report surface (`hauksbee run` text, `--plain`, `--json`
 `CosimJson.adc_dropped` + coverage notes, and all hauksbee-ci report formats),
 naming the channel, MCU, and net. A board that knows its counts' landing spot
@@ -274,10 +274,10 @@ adds `[[soc.adc]]` to its own descriptor (no recompile).
 
 I2C and SPI peripheral interception: wired through generated C# bridge
 peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave address), so a
-hardware-TWI/SPI sensor co-simulates on Renode exactly as it does on simavr —
+hardware-TWI/SPI sensor co-simulates on Renode exactly as it does on simavr,
 see the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode` integration
 tests. Controllers by platform: STM32F103 (`i2c1`, `spi1`), STM32F4 Discovery
-(`i2c1`, `spi1-3`), nRF52840 (`twi0`/`twi1`, `spi2` — names live-verified with
+(`i2c1`, `spi1-3`), nRF52840 (`twi0`/`twi1`, `spi2`, names live-verified with
 bridge registration; an end-to-end nRF sensor round-trip awaits an nRF bus
 firmware fixture). FE310 and RP2040 model no bus controllers; a sensor bound
 on such a platform is recorded as **unexercised** and surfaced on every report
@@ -288,7 +288,7 @@ the run summary, flagged as a `--plain` heads-up and `--json` note when
 heuristic, and attached to each CI peripheral assertion's detail. See
 `docs/cosim/MCU.md` ("ADC / bus coverage by platform") for the full matrix.
 
-#### Espressif QEMU — `QemuBackend` (external, ESP32 family)
+#### Espressif QEMU, `QemuBackend` (external, ESP32 family)
 
 Drives a headless Espressif QEMU process (the fork with full ESP32 SoC
 peripheral models) over QMP + gdbstub control channels and a UART socket.
@@ -386,14 +386,14 @@ Board files: `.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or gerbers.
 | `peripheral` | A simulated peripheral's state: EEPROM byte sequence, sensor field in a range |
 | `rail_window` | Voltage bounds within a named scenario's load window; dip duration and recovery time |
 | `protection_trip` | Whether a battery BMS protection circuit trips (or must not trip) |
-| `boot-coverage` | A control net is driven to ≥ `min` volts within `deadline_ms` of reset, with no fault during the boot window — answers whether firmware drives a Hi-Z control input in time |
+| `boot-coverage` | A control net is driven to ≥ `min` volts within `deadline_ms` of reset, with no fault during the boot window, answers whether firmware drives a Hi-Z control input in time |
 | `phase_margin` | Loop phase margin from the AC sweep is within `[min, max]` degrees |
 | `ac_gain` | A net's AC gain is within `[min, max]` dB at an optional `freq_hz` |
 
 Additional spec features: `[[supply]]` (ideal / bench / wall / USB / battery
 models with ripple and BMS protection); `[[net_drive]]` (force a net to a fixed
 voltage); `[[peripheral]]` (attach pushbuttons, toggles, potentiometers,
-encoders, stimulus sources, I2C/SPI device models, VCD sinks — with event
+encoders, stimulus sources, I2C/SPI device models, VCD sinks, with event
 timelines); `[[scenario]]` (transient load profiles for inrush / sag / brownout
 dynamics); `[fuzz]` (run across N random initial-state seeds; all assertions
 must hold on every seed); `[ac]` (drive the `phase_margin` and `ac_gain`
@@ -404,13 +404,13 @@ assertions).
 These two specs in `crates/hauksbee-ci/examples/` are the canonical demo of
 the behavioral layer. Both point at the same board (a bare ATmega328P driving a
 2N7002 MOSFET gate with no pull resistor on the gate net, so at reset the net
-is genuinely undefined — a case the netlist alone cannot adjudicate). They
+is genuinely undefined, a case the netlist alone cannot adjudicate). They
 differ only in firmware:
 
-- `boot_gate_pass.toml` — firmware A configures PB0 as an output and drives it
+- `boot_gate_pass.toml`, firmware A configures PB0 as an output and drives it
   HIGH promptly. The `boot-coverage` assertion passes: `GATE_CTRL` reaches
   ≥ 3.0 V within 20 ms of reset.
-- `boot_gate_fail.toml` — firmware B never configures PB0. The gate floats for
+- `boot_gate_fail.toml`, firmware B never configures PB0. The gate floats for
   the whole run. The `boot-coverage` assertion fails, naming `GATE_CTRL` as the
   net the firmware never drove. `hauksbee-ci run boot_gate_fail.toml` exits 1.
 
@@ -434,11 +434,11 @@ how `rail_window` can observe voltage sag under a transient load.
 
 Three commands form the edit–simulate loop:
 
-- **`hauksbee to-code <board>`** — decompile a `.kicad_pcb` into editable
+- **`hauksbee to-code <board>`**: decompile a `.kicad_pcb` into editable
   Board-as-Code text.
-- **`hauksbee from-code <code>`** — recompile Board-as-Code back into a
+- **`hauksbee from-code <code>`**: recompile Board-as-Code back into a
   `.kicad_pcb`.
-- **`hauksbee check-code <code> [--seconds N] [--destructive]`** — recompile,
+- **`hauksbee check-code <code> [--seconds N] [--destructive]`**: recompile,
   bind, run the stress monitor for `--seconds` of simulated time (default 0.2 s),
   and print a fault report. Exits non-zero if a fault is raised. Add
   `--destructive` to let the stress monitor destroy parts (shows consequences
@@ -451,9 +451,9 @@ Three commands form the edit–simulate loop:
 ## Input formats
 
 `hauksbee run` and `hauksbee-ci` accept `.kicad_pcb`, `.kicad_sch`,
-`.brd` (Eagle), `.PcbDoc` (Altium — see [`docs/ingest/ALTIUM.md`](../ingest/ALTIUM.md)),
+`.brd` (Eagle), `.PcbDoc` (Altium, see [`docs/ingest/ALTIUM.md`](../ingest/ALTIUM.md)),
 `.d356` (IPC-D-356 netlist), or a directory of gerbers
-(reverse-extracted from copper geometry alone — see [`docs/ingest/GERBER.md`](../ingest/GERBER.md)).
+(reverse-extracted from copper geometry alone, see [`docs/ingest/GERBER.md`](../ingest/GERBER.md)).
 
 ---
 
@@ -464,16 +464,16 @@ Three commands form the edit–simulate loop:
 **Wrong.**
 
 The AVR backend (ATmega328P, ATmega2560, and anything else simavr knows) links
-libsimavr in-process — installed with `scripts/install-sims.sh --avr`, or
+libsimavr in-process, installed with `scripts/install-sims.sh --avr`, or
 skipped entirely (see the AVR section above). But hauksbee's co-sim layer has three
 backends behind one uniform `Mcu` trait, and the other two cover a wide range
 of modern architectures:
 
-- **STM32F103 (Cortex-M3), STM32F407 (Cortex-M4)** — via Renode
-- **nRF52840 (Cortex-M4, Bluetooth)** — via Renode
-- **SiFive FE310 / HiFive1 (RISC-V RV32)** — via Renode
-- **ESP32 (Xtensa LX6), ESP32-S3 (Xtensa LX7)** — via Espressif QEMU
-- **ESP32-C3 (RISC-V RV32IMC)** — via Espressif QEMU
+- **STM32F103 (Cortex-M3), STM32F407 (Cortex-M4)**: via Renode
+- **nRF52840 (Cortex-M4, Bluetooth)**: via Renode
+- **SiFive FE310 / HiFive1 (RISC-V RV32)**: via Renode
+- **ESP32 (Xtensa LX6), ESP32-S3 (Xtensa LX7)**: via Espressif QEMU
+- **ESP32-C3 (RISC-V RV32IMC)**: via Espressif QEMU
 
 STM32, nRF52840, ESP32, and ESP32-C3 are all proven end-to-end on this branch
 (see `crates/hauksbee-engine/tests/stm32_renode_cosim.rs`,
@@ -489,13 +489,13 @@ Espressif QEMU).**
 **Wrong.**
 
 DRC (copper shorts and clearance) is one report flag (`--drc`), it is
-commodity — KiCad's built-in DRC finds the same class of fault — and it is
+commodity, KiCad's built-in DRC finds the same class of fault, and it is
 explicitly labelled as such in the scope table above.
 
 hauksbee's differentiator is the firmware co-simulation and behavioral
 assertion pipeline. It boots real firmware on an emulated MCU, drives the MCU's
 GPIO and peripheral outputs through an analog circuit solver in lockstep, and
-lets you assert — in a file that lives next to your hardware repo — that the
+lets you assert, in a file that lives next to your hardware repo, that the
 firmware makes the hardware behave correctly. A DRC run never touches firmware.
 A `hauksbee-ci` run boots the firmware, measures rails, checks UART output,
 watches GPIO blink rates, and gates CI on the result.
@@ -507,17 +507,17 @@ simulated board. That is the scope of this tool.
 
 ## Adding your own parts & chips
 
-The stock model library will not know every part on your board — an unmodelled
+The stock model library will not know every part on your board, an unmodelled
 active part binds OPEN, and the report says so ("N of M critical parts modelled",
 "simulated as OPEN"). Closing that gap is deliberately data-only (no recompile,
 validated fail-loud at load):
 
-- **an analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) — one
+- **an analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator), one
   `[[models]]` TOML entry: [`extending/add-an-analog-part.md`](../extending/add-an-analog-part.md).
-- **an I2C/SPI sensor** (register map) — one TOML file:
+- **an I2C/SPI sensor** (register map), one TOML file:
   [`extending/add-a-sensor.md`](../extending/add-a-sensor.md).
 - **a whole MCU / chip**, so its firmware co-simulates on the *exact* part rather
-  than a substitute core — a SoC descriptor + a routing entry, two TOML files:
+  than a substitute core, a SoC descriptor + a routing entry, two TOML files:
   [`extending/add-an-mcu-variant.md`](../extending/add-an-mcu-variant.md). Run
   `hauksbee models list --builtin` to see the chips already shipped, and copy the
   closest one as a template. When co-sim runs on a substitute core it says so and
@@ -528,12 +528,12 @@ Share a bundle of any of the above as a versioned [model pack](../models/PACKS.m
 
 ## Where to go next
 
-- [`docs/cosim/SIMULATORS.md`](../cosim/SIMULATORS.md) — install Renode and Espressif QEMU,
+- [`docs/cosim/SIMULATORS.md`](../cosim/SIMULATORS.md), install Renode and Espressif QEMU,
   discovery order, env-var overrides
-- [`docs/cosim/ORACLES.md`](../cosim/ORACLES.md) — the DRC and analog oracles
-- [`docs/cosim/MCU.md`](../cosim/MCU.md) — full co-simulation architecture, per-board recipes,
+- [`docs/cosim/ORACLES.md`](../cosim/ORACLES.md); the DRC and analog oracles
+- [`docs/cosim/MCU.md`](../cosim/MCU.md), full co-simulation architecture, per-board recipes,
   proven integration test results
-- [`docs/ci/CI.md`](../ci/CI.md) — GitHub Action, KiCad plugin, pre-commit hook
-- [`docs/ci/EXAMPLES.md`](../ci/EXAMPLES.md) — runnable examples
-- [`docs/analysis/AC_ANALYSIS.md`](../analysis/AC_ANALYSIS.md) — AC sweep and loop-stability details
-- [`docs/checks/THERMAL.md`](../checks/THERMAL.md) — thermal analysis details
+- [`docs/ci/CI.md`](../ci/CI.md), GitHub Action, KiCad plugin, pre-commit hook
+- [`docs/ci/EXAMPLES.md`](../ci/EXAMPLES.md), runnable examples
+- [`docs/analysis/AC_ANALYSIS.md`](../analysis/AC_ANALYSIS.md), AC sweep and loop-stability details
+- [`docs/checks/THERMAL.md`](../checks/THERMAL.md), thermal analysis details

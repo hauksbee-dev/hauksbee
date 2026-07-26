@@ -62,7 +62,7 @@ enum Command {
     ///
     /// Accepts a KiCad `.kicad_pcb`/`.kicad_sch`, Eagle `.brd`, IPC-D-356,
     /// gerbers, Altium `.PcbDoc`, a KiCad `.net`, or Board-as-Code (`.board`,
-    /// detected by extension or its DSL header) — all analysed identically.
+    /// detected by extension or its DSL header), all analysed identically.
     ///
     /// With no flag on a terminal, bare `run` opens the interactive full-screen
     /// dashboard (TUI); piped/redirected (CI) it prints a hint. Pass `--serve` (or
@@ -133,7 +133,7 @@ enum Command {
     /// a transient, otherwise the DC operating point (`.op`).
     ///
     /// All four analyses run: operating point (`--op`), transient (`--tran`),
-    /// AC small-signal sweep (`--ac`), and DC sweep (`--dc`) — force one with
+    /// AC small-signal sweep (`--ac`), and DC sweep (`--dc`), force one with
     /// its flag, or let the deck's own directives choose. Output is CSV by
     /// default; `--format raw` writes an ngspice ASCII rawfile (the format
     /// `ngnutmeg`/`gaw`/`spicelib` read) and `--format both` writes CSV and
@@ -141,8 +141,8 @@ enum Command {
     ///
     /// Honesty: the tool refuses loudly rather than fake a number. `--format
     /// both` needs `--out` to name its two files and refuses (exit 2) without
-    /// it. A well-formed deck we cannot honestly answer — e.g. `.ac` with no AC
-    /// source — exits 3 explaining why. A malformed deck prints the loader's
+    /// it. A well-formed deck we cannot honestly answer, e.g. `.ac` with no AC
+    /// source, exits 3 explaining why. A malformed deck prints the loader's
     /// line-numbered error and exits 2. Only the ngspice *ASCII* rawfile is
     /// emitted (the binary rawfile variant is not written). The exact
     /// supported/refused card list is the drift-tested compatibility statement,
@@ -159,7 +159,7 @@ enum Command {
     /// Opens a local web server with no board pre-loaded. Point a browser at the
     /// printed URL, drop a .kicad_pcb / .kicad_sch / .brd / gerber zip on the
     /// page, and get the plain-language verdict, the full report, and a 2D map
-    /// of the parts — no terminal needed beyond this command. Nothing is
+    /// of the parts, no terminal needed beyond this command. Nothing is
     /// uploaded off the machine; the analysis runs in this process.
     ///
     /// Example:
@@ -168,8 +168,8 @@ enum Command {
 
     /// Report which co-simulation backends this build can actually locate.
     ///
-    /// Runs the ENGINE's own backend discovery — the same `find_qemu` /
-    /// `find_renode` a co-sim would use — and prints, for each backend, the
+    /// Runs the ENGINE's own backend discovery; the same `find_qemu` /
+    /// `find_renode` a co-sim would use, and prints, for each backend, the
     /// resolved binary path or that it is absent. This is the authoritative
     /// probe `scripts/doctor.sh` calls, so the shell tool can never disagree
     /// with the engine: a Homebrew mainline `qemu-system-xtensa` that has no
@@ -191,7 +191,7 @@ enum Command {
     /// plus each entry's `[models.logic]` block: schema validation, expression
     /// compilation, and the exhaustive combinational-cycle convergence check)
     /// or a `[sensor]` register-map spec. Every failure is a NAMED error tied
-    /// to its entry — the same validation binding performs, runnable
+    /// to its entry; the same validation binding performs, runnable
     /// standalone so a spec author (or an LLM extraction pipeline) fails fast.
     ///
     /// `models add <path|url>` installs a model pack (a directory with a
@@ -430,8 +430,8 @@ struct RunArgs {
     strict_thermal: bool,
 
     /// Opt-in: escalate the co-sim boot-safety advisories to exit 2. By default,
-    /// heads-up notes about MCU control nets driven HIGH at boot — or left
-    /// floating the whole run — with no bias resistor are advisory only and do
+    /// heads-up notes about MCU control nets driven HIGH at boot, or left
+    /// floating the whole run, with no bias resistor are advisory only and do
     /// not affect the exit code. Pass --strict-boot to fail CI on any such note.
     #[arg(long, help_heading = "Advanced / analyses")]
     strict_boot: bool,

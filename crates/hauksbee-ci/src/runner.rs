@@ -45,7 +45,7 @@ impl NetWindow {
     }
     /// Widen the min/max window with an intra-frame extreme WITHOUT touching
     /// `last_v`. The settled report value must stay the last-chunk voltage
-    /// (`observe`), not the peak excursion — folding the extremes through
+    /// (`observe`), not the peak excursion, folding the extremes through
     /// `observe` used to leave `last_v` reporting the max of the final frame.
     fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
@@ -117,7 +117,7 @@ pub struct RunOutcome {
     pub ambient_c: f64,
     /// Total simulated time (ms).
     pub sim_ms: f64,
-    /// Boot-coverage tracking — first time (ms) each watched (net, level-bits)
+    /// Boot-coverage tracking, first time (ms) each watched (net, level-bits)
     /// pair was seen at or above its level, i.e. when the firmware first drove
     /// the control net to its defined level. NEVER forgotten once set, so a later
     /// drop cannot erase the fact that the net was reached: this is what lets the
@@ -130,7 +130,7 @@ pub struct RunOutcome {
     /// The first time (ms) each pair fell back BELOW its level AFTER first
     /// crossing it (absent = it never dropped after crossing). With the first
     /// cross this decides "reached by the deadline AND held continuously through
-    /// the deadline" purely from the boot window — independent of end-of-run
+    /// the deadline" purely from the boot window, independent of end-of-run
     /// state, so a legitimate post-deadline release no longer fails the check and
     /// a late analog-failed frame cannot flip the verdict.
     pub boot_drop_after_cross_ms: HashMap<(String, u64), f64>,
@@ -142,7 +142,7 @@ pub struct RunOutcome {
     /// Whether every MCU backend in this run can report pin drive *direction*.
     /// True for the in-process AVR backend (reads DDR) and for Renode parts
     /// whose SoC descriptor maps each port's direction register (STM32F103
-    /// CRL/CRH, STM32F4 MODER, nRF52840 DIR) — on those a held-LOW pin is known
+    /// CRL/CRH, STM32F4 MODER, nRF52840 DIR), on those a held-LOW pin is known
     /// driven. False for QEMU and unmapped Renode parts (drive state comes only
     /// from observed edges, so absence from `driven_nets` is ambiguous, not
     /// proof of Hi-Z). Keeps the "undriven" diagnosis from over-claiming on
@@ -174,7 +174,7 @@ pub struct RunOutcome {
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
     /// every other analog aggregate). Empty when the spec has no hwtrace
-    /// assertions — recording every net's series unconditionally would cost
+    /// assertions, recording every net's series unconditionally would cost
     /// memory on long runs for nothing.
     pub net_series: HashMap<String, Vec<(f64, f64)>>,
     /// One message per MCU whose requested part was co-simulated on a substitute
@@ -306,7 +306,7 @@ pub fn run_spec_with_lib(
 
     // Small-signal AC analysis linearises about the DC operating point. That
     // point is seed-independent only when NEITHER toleranced values NOR per-seed
-    // fuzz straps move the bias — then the sweep can be computed once and shared.
+    // fuzz straps move the bias, then the sweep can be computed once and shared.
     // Toleranced values move the bias (each member gets its own sweep); so do
     // fuzz straps, which strap nets high/low per seed. Sharing one AC across
     // seeds that strap different nets would silently pin every member's AC to the
@@ -368,7 +368,7 @@ fn compute_ac(
         drive_net(&mut bound, &d.net, d.volts);
     }
     // Per-seed fuzz straps also move the DC bias the small-signal model
-    // linearises about, so they must be applied here too — otherwise every fuzz
+    // linearises about, so they must be applied here too, otherwise every fuzz
     // seed's AC would linearise about the unstrapped nominal point. Applied after
     // the spec net-drives (fuzz wins on an overlapping net), matching run_one.
     for (net, volts) in fuzz_drives {
@@ -594,7 +594,7 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
     // A `[[decoupling.override]]` keyed by a ref that names no board capacitor is
     // silently dropped in apply_decoupling (the per-cap lookup never matches), so
     // the parasitics the user opted into are never applied and a rail_window
-    // check sees a cleaner-than-real rail — a false GREEN. Validate the ref like
+    // check sees a cleaner-than-real rail, a false GREEN. Validate the ref like
     // every other, so a typo fails loud.
     if let Some(dec) = &spec.decoupling {
         for ov in &dec.overrides {
@@ -635,7 +635,7 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
 /// Add each scenario-scoped `protection_trip` assertion's `supply_net` to that
 /// scenario's window `nets`. The scoped-trip verdict map only carries
 /// (scenario, net) keys for a window's `nets`, seeded from the scenario's own
-/// supply and rail_window nets — but a protection_trip may name a BATTERY rail the
+/// supply and rail_window nets, but a protection_trip may name a BATTERY rail the
 /// scenario's load pulls current from, which is neither. Without adding it,
 /// scope_protection_trips has no key and check_protection_trip returns a false RED
 /// ("<net> was not a supply net in scenario window ... (nothing to trip)")
@@ -658,7 +658,7 @@ fn merge_protection_trip_nets(windows: &mut [ScenarioWindow], asserts: &[crate::
 
 /// A bound device `name` belongs to the bare spec ref `r`: an exact match, or a
 /// multi-unit array unit `r_q<n>` / `r_s<n>` / `r_e<n>` (transistor / switch /
-/// passive arrays). Mirrors thermally_tracked so max_current and max_temp agree —
+/// passive arrays). Mirrors thermally_tracked so max_current and max_temp agree,
 /// before this, a package-level max_current on a resistor array (units RN1_e*)
 /// was rejected as untrackable while the identical max_temp was accepted.
 fn ref_or_unit_matches(r: &str, device_name: &str) -> bool {
@@ -685,7 +685,7 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
     // A multi-unit resistor/passive array (ref RN1) stamps per-unit devices
     // RN1_e1..RN1_e4, so `current_tracked` holds the unit names but NOT the bare
     // "RN1". Accept a bare ref whose units are tracked, matching thermally_tracked
-    // below — otherwise a package-level max_current on an array is wrongly rejected
+    // below, otherwise a package-level max_current on an array is wrongly rejected
     // as untrackable while the identical max_temp is accepted.
     let is_current_tracked =
         |r: &str| current_tracked.iter().any(|name| ref_or_unit_matches(r, name));
@@ -772,7 +772,7 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
 ///
 /// The value is serialized with `{:?}` (not `{}`): `format!("{}", 1210.0)`
 /// yields "1210", which the component-value parser reads as a 4-digit imperial
-/// footprint SIZE CODE (1206, 1210, 2512, ...) and rejects — silently leaving
+/// footprint SIZE CODE (1206, 1210, 2512, ...) and rejects, silently leaving
 /// the nominal member at its original value. `{:?}` always emits a decimal
 /// point ("1210.0"), so the size-code heuristic never fires and the value
 /// round-trips. `{:?}` is round-trippable for f64 and its scientific form (for
@@ -803,7 +803,7 @@ fn run_one(
     let mut bound = bind_board(&board, lib);
 
     // The as-built overlay comes first: it is BOARD state (the physical rework
-    // record — cuts, jumpers, fitted values), so it lands before any harness
+    // record, cuts, jumpers, fitted values), so it lands before any harness
     // attachment, at the same post-bind seam the engine CLI's --asbuilt uses.
     if let Some(asbuilt_path) = spec.asbuilt_path() {
         let overlay = hauksbee_engine::asbuilt::AsBuiltOverlay::load(&asbuilt_path)
@@ -872,7 +872,7 @@ fn run_one(
     let firmware = match spec.firmware_path() {
         Some(p) => {
             // The spec's `firmware` may be a PlatformIO project directory, a
-            // built .pio tree, or a zip of either — parity with `run
+            // built .pio tree, or a zip of either, parity with `run
             // --firmware` and the web drop zone, so the same repo layout works
             // in a pipeline. Resolve it to the compiled image first; a bare
             // .elf/.hex passes through untouched (resolve returns None).
@@ -920,7 +920,7 @@ fn run_one(
     // `from_bound`. We use these below to warn when bus-slave peripherals or
     // declarative sensors are attached to a QEMU-backed board: the QEMU I2C/SPI
     // bridge is deferred, so those slaves will silently not respond.
-    // AVR (simavr) and Renode backends have a working bus bridge — no warning.
+    // AVR (simavr) and Renode backends have a working bus bridge, no warning.
     let qemu_backends: Vec<String> = bound
         .mcus
         .iter()
@@ -952,7 +952,7 @@ fn run_one(
     // missing sensor. Surface the mismatch now, before the co-sim starts, so the
     // user doesn't spend 45 minutes chasing an unrelated assertion failure.
     //
-    // AVR (simavr) and Renode backends have a working bus bridge — no warning.
+    // AVR (simavr) and Renode backends have a working bus bridge, no warning.
     for msg in qemu_bus_slave_warnings(spec, &qemu_backends) {
         eprintln!("{msg}");
     }
@@ -990,8 +990,8 @@ fn run_one(
     // scenario-scoped `protection_trip` assertion can tell a pre-scenario trip
     // apart from one that fires inside its window.
     // Every sim-time at which a supply's protection NEWLY latched, per net. A
-    // battery BMS runs in hiccup mode — it trips, the load drops below reset so
-    // it re-arms, and it can trip again — so a supply shared across sequential
+    // battery BMS runs in hiccup mode; it trips, the load drops below reset so
+    // it re-arms, and it can trip again, so a supply shared across sequential
     // scenarios may latch once per window. Recording only the first latch time
     // (the old `or_insert`) attributed a re-trip to the earliest window and lost
     // it in every later one. We keep the full list of latch instants and per-net
@@ -1063,7 +1063,7 @@ fn run_one(
         // Boot-coverage: record each watched net's FIRST crossing of its level
         // and its first drop back below level AFTER that crossing. The assertion
         // decides "reached by the deadline and held continuously through it" from
-        // those two times — a one-frame glitch that collapses leaves a drop
+        // those two times, a one-frame glitch that collapses leaves a drop
         // record, and a legitimate post-deadline release (drop after the
         // deadline) still passes. Skipped on a held-stale frame so a stale
         // voltage cannot fake a reach or a drop.
@@ -1116,7 +1116,7 @@ fn run_one(
 
             // Peak current for monitored components. Fold the scheduler's
             // per-frame peak (accumulated across every sub-chunk of this frame),
-            // not just the frame's final-chunk operating point — an inrush surge
+            // not just the frame's final-chunk operating point, an inrush surge
             // that peaks mid-frame and settles by the last chunk would otherwise
             // be invisible to the over-current check.
             for (name, &i) in engine.scheduler().frame_peak_current() {
@@ -1138,7 +1138,7 @@ fn run_one(
             // record the referenced rails' voltages into the window timeseries.
             // Bounded [start_s, end_s): scenarios are sequential phases, so a
             // rail_window scoped to an earlier scenario must stop sampling when the
-            // next scenario begins — otherwise a later phase's excursion bleeds
+            // next scenario begins, otherwise a later phase's excursion bleeds
             // into this window's min/max/dip/recovery aggregates and produces a
             // false verdict (the same later-scenario bleed r28 fixed for
             // protection_trip). The run-wide window keeps end_s = +∞.
@@ -1152,7 +1152,7 @@ fn run_one(
                             w.observe(frame.t, v);
                             // Fold the scheduler's per-frame intra-frame extremes
                             // into the min/max envelope, exactly as the plain
-                            // `voltage` assertion path above does — otherwise a sag
+                            // `voltage` assertion path above does, otherwise a sag
                             // that recovers by the frame's last chunk is invisible
                             // and a brownout-floor rail_window assertion false-
                             // passes the fault it exists to catch.
@@ -1174,7 +1174,7 @@ fn run_one(
         // not lost. Two edges signal a new latch:
         //   * the non-sticky `protection_tripped()` rising false→true (a re-trip
         //     the sampler actually observed), and
-        //   * the sticky `protection_ever_tripped()` rising for the first time —
+        //   * the sticky `protection_ever_tripped()` rising for the first time,
         //     catching a trip+re-arm that happened entirely within one coarse
         //     frame, which the non-sticky sample would miss (the reason the sticky
         //     flag was read here originally).
@@ -1246,7 +1246,7 @@ fn run_one(
     // actually drove to a defined level, and whether the backends can report drive
     // direction. The in-process AVR backend always can (DDR hooks); a Renode
     // backend can once its SoC descriptor maps every polled port's direction
-    // register (MODER / CRL+CRH / DIR — see db/mcu/*.soc.toml); QEMU and
+    // register (MODER / CRL+CRH / DIR, see db/mcu/*.soc.toml); QEMU and
     // unmapped Renode parts cannot, and stay conservative.
     let driven_nets: std::collections::HashSet<String> =
         engine.scheduler().firmware_driven_nets().into_iter().collect();
@@ -1325,7 +1325,7 @@ fn trip_in_window(trip_t: Option<f64>, start_s: f64, end_s: f64) -> bool {
 
 /// True if ANY recorded latch instant for a net falls in `[start_s, end_s)`. A
 /// re-armed (hiccup-mode) supply latches more than once, so a scenario-scoped
-/// verdict must consider every latch, not just the first — otherwise a later
+/// verdict must consider every latch, not just the first, otherwise a later
 /// window's own re-trip is lost (it was attributed to the earliest window that
 /// saw the first latch).
 fn any_trip_in_window(trip_ts: Option<&Vec<f64>>, start_s: f64, end_s: f64) -> bool {
@@ -1333,7 +1333,7 @@ fn any_trip_in_window(trip_ts: Option<&Vec<f64>>, start_s: f64, end_s: f64) -> b
 }
 
 /// Fold the per-net latch times into per-(scenario, net) trip verdicts: a trip
-/// belongs to a window if ANY latch fell WITHIN it — at or after the window's
+/// belongs to a window if ANY latch fell WITHIN it, at or after the window's
 /// start AND before the next scenario begins (`end_s`). The lower bound lets a
 /// scoped `protection_trip` ignore a trip from before the scenario began; the
 /// upper bound stops a LATER scenario's trip from being attributed to this
@@ -1406,7 +1406,7 @@ fn boot_reach_update(
 /// reference for it. `end_s` is the start of the next scenario on the timeline
 /// (`+∞` for the last scenario and for the run-wide window), so a
 /// scenario-scoped `protection_trip` verdict counts only trips that latch within
-/// this scenario's phase — a later scenario's trip must not be attributed here.
+/// this scenario's phase, a later scenario's trip must not be attributed here.
 struct ScenarioWindow {
     id: String,
     start_s: f64,
@@ -1434,7 +1434,7 @@ fn attach_scenarios(
         hauksbee_models::LoadProfile::by_id(name)
     };
 
-    // Each scenario's own (id, supply_net, start) — seeded into the window set
+    // Each scenario's own (id, supply_net, start), seeded into the window set
     // below so a scenario-scoped `protection_trip` assertion has a
     // (scenario, net) verdict to read even when no rail_window names that net.
     // Without this the scoped-trip map only ever covered rail_window nets, so a
@@ -1548,7 +1548,7 @@ fn attach_scenarios(
     // Merge in scenario-scoped `protection_trip` assertions' supply nets. The
     // scoped-trip verdict map only carries (scenario, net) keys for nets in a
     // window's `nets`, but a protection_trip's `supply_net` may be a BATTERY rail
-    // the scenario's load pulls current from — not the scenario's own (possibly
+    // the scenario's load pulls current from, not the scenario's own (possibly
     // downstream) supply net and not named by any rail_window. Without adding it,
     // scope_protection_trips has no key and check_protection_trip returns a false
     // RED ("<net> was not a supply net in scenario window ... (nothing to trip)")
@@ -1560,7 +1560,7 @@ fn attach_scenarios(
     // LATER scenario must not be attributed to an earlier-starting one sharing the
     // same supply net (protection_tripped_scoped keys by net, and an earlier
     // start <= a later start, so without an upper bound the later trip satisfied
-    // every earlier window). The run-wide window (empty id) keeps +∞ — it
+    // every earlier window). The run-wide window (empty id) keeps +∞; it
     // deliberately spans the whole run.
     let mut starts: Vec<f64> = spec.scenarios.iter().map(|s| s.start_ms / 1000.0).collect();
     starts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -2084,7 +2084,7 @@ fn snapshot_peripherals(
                 if let Some((_, path)) = vcd_targets.iter().find(|(id, _)| id == &p.id) {
                     if let Some(sink) = sched.peripherals.get::<VcdSink>(&p.id) {
                         // Surface a write failure (e.g. the output dir doesn't
-                        // exist) — silently dropping it left the user with no
+                        // exist), silently dropping it left the user with no
                         // VCD artifact and no diagnostic on a green run.
                         if let Err(e) = sink.write_to(path) {
                             eprintln!(
@@ -2455,13 +2455,13 @@ fn main {
 
     #[test]
     fn rearmed_supply_second_trip_is_owned_by_its_own_scenario_window() {
-        // R37: a battery BMS runs in hiccup mode — it trips, the load drops below
+        // R37: a battery BMS runs in hiccup mode; it trips, the load drops below
         // reset so it re-arms, and it can trip again. A supply shared by inrush
         // [0, 0.1) and steady [0.1, +inf) that latches at 0.05 (inrush), re-arms,
         // then latches again at 0.15 (steady) must have BOTH windows own their own
         // trip. The old code recorded only the FIRST latch (0.05) and folded with
         // `trip_in_window`, so steady saw `trip_in_window(0.05, 0.1, inf) = false`
-        // — a false GREEN over a window in which the pack demonstrably tripped.
+        //, a false GREEN over a window in which the pack demonstrably tripped.
         let mut trip_t: HashMap<String, Vec<f64>> = HashMap::new();
         trip_t.insert("BATT".into(), vec![0.05, 0.15]);
         let windows = vec![
@@ -2550,19 +2550,19 @@ fn main {
             boot_track(&[(0.0, 0.0), (5.0, 5.0), (10.0, 5.0), (50.0, 5.0)], 3.0),
             (Some(5.0), None)
         );
-        // A one-frame glitch that then collapses: cross at 5, drop at 10 — the
+        // A one-frame glitch that then collapses: cross at 5, drop at 10; the
         // drop record is what lets the assertion refuse a glitch as a pass.
         assert_eq!(
             boot_track(&[(0.0, 0.0), (5.0, 5.0), (10.0, 0.0), (50.0, 0.0)], 3.0),
             (Some(5.0), Some(10.0))
         );
         // Dropped then recovered: cross at 5, FIRST drop at 10 (the recovery does
-        // not erase that it fell — a deadline after 10 sees the break).
+        // not erase that it fell, a deadline after 10 sees the break).
         assert_eq!(
             boot_track(&[(5.0, 5.0), (10.0, 0.0), (30.0, 5.0), (50.0, 5.0)], 3.0),
             (Some(5.0), Some(10.0))
         );
-        // A late (post-deadline) release: cross at 5, drop at 50 — a deadline of,
+        // A late (post-deadline) release: cross at 5, drop at 50, a deadline of,
         // say, 10 ms is held through, so the assertion still passes.
         assert_eq!(
             boot_track(&[(5.0, 5.0), (10.0, 5.0), (50.0, 0.0)], 3.0),
@@ -2624,7 +2624,7 @@ fn main {
         // R33: a `[[decoupling.override]]` keyed by a ref that names no board
         // capacitor was silently dropped (the per-cap lookup never matched), so
         // the parasitics the user opted into were never applied and a rail_window
-        // check saw a cleaner-than-real rail — a false GREEN. The ref must be
+        // check saw a cleaner-than-real rail, a false GREEN. The ref must be
         // validated like every other, so a typo fails loud.
         let spec: Spec = toml::from_str(
             r#"
@@ -2665,7 +2665,7 @@ esr_ohms = 0.5
         let dir = std::env::temp_dir().join("hauksbee_ci_warn_tests");
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Minimal board: a single pull-down resistor. No MCU footprint here —
+        // Minimal board: a single pull-down resistor. No MCU footprint here,
         // `qemu_bus_slave_warnings` receives the backend list as an argument
         // rather than discovering it from the board, so the board content does
         // not need an MCU part.

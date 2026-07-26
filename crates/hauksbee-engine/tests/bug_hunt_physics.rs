@@ -12,20 +12,20 @@
 //! `siblings_membrane_tau...` actually run the transient solver on an RC step and
 //! fit τ from the response. The other three (`...theta0...`, `...adaptation...`,
 //! `...share_one_timing_value_set`) are *value* comparisons against the
-//! calibrated constants — they assert the layout values equal design intent, no
+//! calibrated constants; they assert the layout values equal design intent, no
 //! solver involved. NONE of these tests check *connectivity*: a net swapped
 //! between two equal-value parts would pass. The scope here is values + the
 //! C_stretch τ class, not general topology correctness.
 //!
 //! Findings reproduced here:
 //!   * CONFIRMED (known, excluded): C_stretch = 10 pF on every neuron's pulse
-//!     stretcher (19 instances, one per neuron — NOT per synapse) → τ_pulse =
+//!     stretcher (19 instances, one per neuron, NOT per synapse) → τ_pulse =
 //!     1.5 µs, ~600× too short. The output layer cannot fire. Asserted as a
 //!     *demonstration* that the toolchain reproduces the bug straight from the
 //!     layout value.
 //!   * NEGATIVE RESULT (the "siblings" hunt): every *other* neuron timing
 //!     constant extracted from the layout matches the calibrated reference
-//!     within tolerance — membrane τ_m, threshold-divider θ₀, threshold
+//!     within tolerance, membrane τ_m, threshold-divider θ₀, threshold
 //!     adaptation τ_θ, reset τ. No C_stretch siblings exist.
 //!
 //! Run: `cargo test -p hauksbee-engine --test bug_hunt_physics -- --nocapture`
@@ -153,7 +153,7 @@ fn val(map: &HashMap<String, String>, reference: &str) -> f64 {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// CONFIRMED (known/excluded) — the toolchain reproduces C_stretch from layout
+// CONFIRMED (known/excluded); the toolchain reproduces C_stretch from layout
 // ════════════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -173,7 +173,7 @@ fn confirmed_c_stretch_pulse_is_catastrophically_short() {
         tau * 1e6
     );
     // Design intent (TODO_PCB_FIX.md): τ_pulse must be ~870 µs (C=5.8 nF). The
-    // live 10 pF gives ~1.5 µs — three orders of magnitude short. Assert that
+    // live 10 pF gives ~1.5 µs, three orders of magnitude short. Assert that
     // the layout value IS the broken one (so this test tracks the real board)
     // and that the resulting τ is far below the working threshold.
     assert!(
@@ -194,7 +194,7 @@ fn confirmed_c_stretch_pulse_is_catastrophically_short() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// NEGATIVE RESULT — the sibling hunt: every other timing constant is healthy
+// NEGATIVE RESULT; the sibling hunt: every other timing constant is healthy
 // ════════════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -303,7 +303,7 @@ fn siblings_all_neurons_share_one_timing_value_set() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Finding #14 — INH_Q4: disprove the *gross* mechanisms for the documented
+// Finding #14, INH_Q4: disprove the *gross* mechanisms for the documented
 // "inhibitory 1× branch is broken" defect, from the layout.
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -318,8 +318,8 @@ fn inh_q4_mirror_banks_fully_populated() {
     // un-referenced" failure by confirming both banks are fully populated.
     //
     // What it asserts: the board carries exactly 2 × 90 = 180 of the 10 MΩ
-    // mirror-set resistors — one excitatory (PNP ref) and one inhibitory (NPN
-    // ref) per synapse — even though they are inconsistently NAMED across
+    // mirror-set resistors, one excitatory (PNP ref) and one inhibitory (NPN
+    // ref) per synapse, even though they are inconsistently NAMED across
     // instances (R_Set_G / R_Set_VCC / bare R####). Presence, not name, matters.
     //
     // Caveat (stated, not hidden): this is a board-WIDE count, not a per-synapse

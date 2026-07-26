@@ -142,7 +142,7 @@ impl Server {
     /// React bundle (`static_dir`), the analysis API the React landing calls
     /// (`analyze` -> `/api/analyze` + `/api/analyze-with-firmware`), the
     /// `/api/startup` hint the app reads to choose its landing state, the live
-    /// WebSocket sim (`/ws`), and — when a board was preloaded (`run --serve`) —
+    /// WebSocket sim (`/ws`), and, when a board was preloaded (`run --serve`),
     /// that board's own file so the viewer renders its real geometry.
     ///
     /// `startup_json` is the JSON the frontend fetches from `/api/startup`:
@@ -209,7 +209,7 @@ impl Server {
 
 /// Assemble the unified router from its optional parts. `shared` is present only
 /// when a live engine is available (`run --serve`); `serve` (drop-zone-only, no
-/// preloaded board) passes `None` and simply gets no `/ws` route — the React
+/// preloaded board) passes `None` and simply gets no `/ws` route; the React
 /// landing never opens the socket until the user presses "run it".
 fn unified_router(
     shared: Option<Arc<Shared>>,
@@ -276,7 +276,7 @@ fn unified_router(
 /// Mark HTML responses `Cache-Control: no-cache` so a browser always
 /// revalidates `index.html` against the served `dist/`. Vite's hashed asset
 /// names make everything else safely cacheable, but the entry HTML is served
-/// under a stable name — a cached copy keeps pointing at old asset hashes and
+/// under a stable name, a cached copy keeps pointing at old asset hashes and
 /// resurrects "already fixed" bugs after a rebuild. `no-cache` still allows a
 /// 304 when the file is unchanged (ServeDir handles conditional requests).
 async fn no_cache_html(mut res: axum::response::Response) -> axum::response::Response {
@@ -315,8 +315,8 @@ pub async fn serve_frontdoor(
 /// Bind the front-door address (applying the busy-port fallback) and return the
 /// listener together with the address that was *actually* bound. The requested
 /// port and the bound port differ whenever the requested one was in use, so a
-/// caller must print a URL from this returned address — not from the requested
-/// `addr` — or it advertises a stale port.
+/// caller must print a URL from this returned address, not from the requested
+/// `addr`, or it advertises a stale port.
 pub async fn bind_frontdoor(
     addr: &str,
 ) -> anyhow::Result<(tokio::net::TcpListener, std::net::SocketAddr)> {

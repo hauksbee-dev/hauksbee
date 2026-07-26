@@ -51,7 +51,7 @@ pub struct McuState {
     pub done: bool,
     /// True once the core has crashed and will make no further progress
     /// (simavr's `cpu_Crashed`: illegal opcode, out-of-RAM write, stack death).
-    /// This used to be swallowed — the run loop broke out of its step loop but
+    /// This used to be swallowed; the run loop broke out of its step loop but
     /// still reported a clean `Ok`, so a crashed MCU was indistinguishable from
     /// a healthy chunk. Backends that cannot detect a crash leave it false.
     pub crashed: bool,
@@ -185,7 +185,7 @@ pub trait Mcu {
     ///
     /// On every GPIO output edge (the same edges `on_pin_change` sees) the
     /// responder is invoked with the pin and its new level, and returns a list
-    /// of input pins to drive — applied *immediately*, before the firmware's
+    /// of input pins to drive, applied *immediately*, before the firmware's
     /// next instruction, within the same `run_micros`. This is the mechanism
     /// that lets a firmware bit-bang a clock and `digitalRead` the resulting
     /// serial-out bit in the SAME tight loop: e.g. a 74HC165 presenting its next
@@ -262,7 +262,7 @@ pub trait Mcu {
     /// observation metadata, not a drive: it never affects the analog solve.
     ///
     /// Default empty: a backend that cannot report direction state simply makes
-    /// every pin look "not configured" (the conservative direction — a
+    /// every pin look "not configured" (the conservative direction, a
     /// boot-state panel then reports "unknown/never driven" rather than asserting
     /// "driven low").
     fn pins_configured_output(&self) -> Vec<PinId> {
@@ -291,7 +291,7 @@ pub trait Mcu {
     /// ADC channels whose [`Mcu::set_analog_in`] injections were DROPPED because
     /// this backend has no injection recipe for them (e.g. a Renode platform with
     /// no `AdcChannelMap`). The scheduler reads this after a run to surface a
-    /// coverage warning on every report surface — a dropped injection means the
+    /// coverage warning on every report surface, a dropped injection means the
     /// firmware never saw the modeled voltage, so results on that pin are
     /// meaningless and must never read as a healthy co-sim.
     ///
@@ -301,7 +301,7 @@ pub trait Mcu {
         Vec::new()
     }
 
-    /// Whether this backend can actually host engine-provided I2C slave models —
+    /// Whether this backend can actually host engine-provided I2C slave models,
     /// i.e. whether [`Mcu::on_i2c`] wires the callback to something the firmware's
     /// bus traffic reaches. False means a bound I2C peripheral is silently never
     /// exercised (the Renode backend with an empty `i2c_controllers` list), which

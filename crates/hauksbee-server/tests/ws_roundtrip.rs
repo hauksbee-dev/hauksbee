@@ -113,7 +113,7 @@ async fn ws_protocol_roundtrip() {
 }
 
 /// Minimal websocket reader: handles server frames (FIN, text, no mask),
-/// buffering across reads. Panics on anything unexpected — it's a test.
+/// buffering across reads. Panics on anything unexpected, it's a test.
 async fn read_ws_text(stream: &mut tokio::net::TcpStream, residue: &mut Vec<u8>) -> String {
     use tokio::io::AsyncReadExt;
     loop {

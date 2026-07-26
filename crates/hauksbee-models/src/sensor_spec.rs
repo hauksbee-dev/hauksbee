@@ -7,7 +7,7 @@
 //! spec as an `I2cSlave` / `SpiSlave`; the datasheet extractor
 //! (`model-extract --kind i2c_sensor`) fills the spec in from a datasheet.
 //!
-//! This module owns the *format* and *validation* only — no bus behaviour and
+//! This module owns the *format* and *validation* only, no bus behaviour and
 //! no `evalexpr` evaluation (that lives engine-side, where the expression
 //! evaluator already is). It is the shared contract both the interpreter and
 //! the extractor validate against.
@@ -46,7 +46,7 @@
 //!
 //! ## Write side (05 §3.2)
 //!
-//! Firmware writes are described by three additional block families — see the
+//! Firmware writes are described by three additional block families, see the
 //! "Write side" section below for the full types and the Rust/expression
 //! boundary rationale:
 //!
@@ -81,7 +81,7 @@
 //! For an `spi_reg` sensor the R/W direction bit is folded into bit 7 of the
 //! command byte, and the interpreter recovers the register address as
 //! `cmd & addr_mask` (default `0x7f`). You may therefore write a register `addr`
-//! as the **raw datasheet register address** — e.g. the BMP280 chip-ID register,
+//! as the **raw datasheet register address**, e.g. the BMP280 chip-ID register,
 //! which the datasheet lists as `0xD0`. The interpreter normalizes both stored
 //! keys and the incoming command address by `addr_mask`, so `0xD0` and the
 //! pre-masked `0x50` resolve to the same register (backward compatible). Because
@@ -148,7 +148,7 @@ pub enum Encoding {
     /// implementation uses the LM75A's 11-bit / 0.125 °C resolution, which is a
     /// strict superset: any value expressible in the 9-bit format is also correct
     /// in the 11-bit format (the extra 2 bits of the count are zero for 0.5 °C
-    /// multiples). Do not use this encoding expecting exactly 0.5 °C steps — it
+    /// multiples). Do not use this encoding expecting exactly 0.5 °C steps; it
     /// encodes at 0.125 °C resolution. If you need strict 9-bit / 0.5 °C packing,
     /// apply `scale = 2.0` and use `i16_be` with a right-shift-aware decoder.
     #[serde(rename = "q7.1_be")]
@@ -162,7 +162,7 @@ pub enum Encoding {
     ///
     /// **Why this is a distinct encoding.** The existing integer encodings top
     /// out at 16 bits (`u16_*`/`i16_*`), so a 20-bit ADC count cannot be packed
-    /// by them, and the value expressions (`evalexpr`) operate on scalars — they
+    /// by them, and the value expressions (`evalexpr`) operate on scalars; they
     /// cannot themselves emit a 3-byte MSB/LSB/XLSB frame with a shifted low
     /// nibble. This encoding is the "minor encoding addition" the co-sim-fidelity
     /// plan (05 §6.1) anticipated for BME280. It packs a **raw ADC count** (the
@@ -258,12 +258,12 @@ impl RegisterSpec {
 // ## The Rust/expression boundary (deliberate, documented)
 //
 // evalexpr has NO integer bit operations (the same constraint that makes the
-// BME280 spec expose raw ADC counts — see docs/hunts/specs/bme280.toml). Write
+// BME280 spec expose raw ADC counts, see docs/hunts/specs/bme280.toml). Write
 // decode is bit-field surgery (a 12-bit DAC code straddling two bytes, a 3-bit
 // mux field inside a config word), so the bit extraction lives HERE, in the
 // declarative framing layer, as data ([`BitFieldSpec`]): a named field is a
 // contiguous bit range of the decoded integer. Everything downstream of the
-// extraction — state updates, output voltage laws, read-back expressions — is
+// extraction, state updates, output voltage laws, read-back expressions, is
 // evalexpr over the extracted names. Faking bit ops inside expressions
 // (division/modulo chains) would work for some fields and silently mis-decode
 // others (sign, straddles); a declared bit range cannot.
@@ -315,7 +315,7 @@ pub struct WriteRegisterSpec {
     /// variables are seeded by extracting from this default.
     #[serde(default)]
     pub default: f64,
-    /// Named bit fields extracted from the decoded value (Rust-side — see the
+    /// Named bit fields extracted from the decoded value (Rust-side, see the
     /// module boundary note above).
     #[serde(default, rename = "field")]
     pub fields: Vec<BitFieldSpec>,
@@ -349,7 +349,7 @@ pub enum ChannelSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelSelectSpec {
     pub source: ChannelSource,
-    /// `[high, low]` of the channel field — of the prefix byte for
+    /// `[high, low]` of the channel field, of the prefix byte for
     /// `prefix_bits`, of the group value for `group_bits`. Unused for `auto`.
     #[serde(default)]
     pub bits: Option<[u8; 2]>,
@@ -367,7 +367,7 @@ fn default_channel_select() -> ChannelSelectSpec {
 /// Matching is FIRST-MATCH-WINS in spec order, so a more specific mask (the
 /// MCP4728 Sequential Write, mask 0xF8) must be listed before a broader one it
 /// overlaps (Multi/Single, mask 0xC0). A first byte matching no command makes
-/// the whole transaction accepted-and-ignored — the honest analogue of a real
+/// the whole transaction accepted-and-ignored; the honest analogue of a real
 /// part ACKing a command family the model does not implement; the interpreter
 /// counts these so a test can assert nothing was silently dropped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -424,7 +424,7 @@ pub struct OutputSpec {
 /// that channel's state; reads wrap at the frame end.
 ///
 /// Mutually exclusive with `[[sensor.register]]`: a device either answers
-/// pointered reads or streams a frame — both at once has no defined wire
+/// pointered reads or streams a frame, both at once has no defined wire
 /// meaning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadFrameSpec {
@@ -448,7 +448,7 @@ pub struct ProtocolSpec {
     /// SPI only: the datasheet-declared clock mode, `(CPOL, CPHA)`:
     /// `0 = (0,0)`, `1 = (0,1)`, `2 = (1,0)`, `3 = (1,1)`. Governs the idle
     /// clock level and which edge samples vs. shifts on the bit-banged SPI
-    /// responder. Default `0` (CPOL=0, CPHA=0) — the historical behaviour, so
+    /// responder. Default `0` (CPOL=0, CPHA=0); the historical behaviour, so
     /// specs that omit it are unchanged.
     #[serde(default)]
     pub spi_mode: u8,
@@ -486,7 +486,7 @@ pub struct Sensor {
     #[serde(default, rename = "state")]
     pub states: Vec<StateSpec>,
     /// Pointer-framed writable registers (mutually exclusive with
-    /// `write_command` — the first write byte is either a pointer or a
+    /// `write_command`; the first write byte is either a pointer or a
     /// command, not both).
     #[serde(default, rename = "write_register")]
     pub write_registers: Vec<WriteRegisterSpec>,
@@ -709,7 +709,7 @@ impl SensorSpec {
                     }
                     // Reject `bytes` that disagrees with the encoding's natural width.
                     // Allowing a mismatch silently would make the interpreter return a
-                    // different number of bytes than the declared `bytes` field — either
+                    // different number of bytes than the declared `bytes` field, either
                     // truncating data or padding with unrelated bytes. Validation must
                     // catch this so LLM-extracted specs fail loudly instead of emitting
                     // plausible-but-wrong bus traffic.
@@ -799,7 +799,7 @@ impl SensorSpec {
         // One flat namespace: inputs, stores, write-register fields, states,
         // and each command's fields all coexist in the evaluation context, so
         // every name must be globally unique (command field names may repeat
-        // ACROSS commands — only one command is active per transaction).
+        // ACROSS commands, only one command is active per transaction).
         let mut names: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let declare = |name: &'static str, n: &str| -> Result<(), SensorSpecError> {
             if n == "i2c_address" {
@@ -999,7 +999,7 @@ impl SensorSpec {
 
         // Outputs and the read frame see the states too (a channel context is
         // supplied at evaluation: the output's `channel`, or the frame's
-        // current channel — channel 0 for a non-per_channel frame).
+        // current channel, channel 0 for a non-per_channel frame).
         let mut with_states: std::collections::HashSet<&str> = names.clone();
         with_states.insert("i2c_address");
         let mut seen_outputs = std::collections::HashSet::new();

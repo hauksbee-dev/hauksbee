@@ -10,7 +10,7 @@ This module reconstructs an `ExtractedBoard` (the same nets + components + pads
 the rest of the engine consumes) from those fab files alone, so bind, DRC, lint,
 stress and simulation work on boards that otherwise could not be ingested.
 
-Entry point: `ExtractedBoard::from_gerber(path)` — a job directory or a `.zip`.
+Entry point: `ExtractedBoard::from_gerber(path)`, a job directory or a `.zip`.
 The richer `gerber::from_gerber_dir` returns reconstruction stats alongside the
 board.
 
@@ -69,7 +69,7 @@ simple tool-table + coordinates).
 ### RS-274X dialect normalisation
 
 Real fab gerbers deviate from the textbook form in ways the upstream parser
-rejects outright — which would silently drop a whole layer. Before parsing we
+rejects outright, which would silently drop a whole layer. Before parsing we
 normalise two things (well-formed KiCad/JLCPCB gerbers pass through untouched):
 
 - **Multi-statement extended blocks**: one `%...%` may pack several statements,
@@ -116,7 +116,7 @@ O(n) short sweep) and any pair whose signed copper gap is `<= eps` is unioned
   keyholed single-region pour** KiCad and Allegro emit (the antipad is part of
   the region winding, so even-odd puts a pocketed pad outside). It does *not*
   hold if a fab emits the pour as a dark region plus a *separate* clear (LPC)
-  antipad — we skip clear polarity (see Limitations), so such a pad would read as
+  antipad; we skip clear polarity (see Limitations), so such a pad would read as
   inside the fill and could false-short. KiCad/Allegro don't do that; some tools
   can.
 - **GND heuristic**: the largest pour-touching net is labelled `GND`. This is a
@@ -142,7 +142,7 @@ never counted as component pads.
 Before any real-world claim, the reconstruction is validated against ground
 truth: take corpus KiCad boards, export their gerbers + drill + P&P with
 `kicad-cli pcb export gerbers --no-x2 --no-netlist` (so the gerbers carry **no
-net hints** — the reconstruction must rederive connectivity from copper geometry
+net hints**; the reconstruction must rederive connectivity from copper geometry
 alone, exactly as on a third-party board), reverse-extract, and compare to the
 native KiCad extraction.
 
@@ -154,8 +154,8 @@ different-net) in both extractions. 100% means the recovered electrical graph,
 
 **Read the two columns together.** The partition % is computed *only over pads
 the reconstruction located* (the "located" column). Native pads the
-reconstruction did not place — bottom-side parts the P&P marks, pads the
-footprint window missed — are excluded from the percentage, so a low located
+reconstruction did not place, bottom-side parts the P&P marks, pads the
+footprint window missed, are excluded from the percentage, so a low located
 count caps how much the % actually proves. The located fraction is therefore
 gated alongside the partition %; both are asserted in
 `tests/gerber_closedloop.rs`. Every row below is a corpus-gated regression test
@@ -194,13 +194,13 @@ exported with `--no-protel-ext`, so they carry KiCad long layer names
 (`*-F_Cu.gbr`). The sweep therefore validates the **connectivity engine** (the
 union-find, pour rule, via stitching, pad assignment) on the strongest layer-
 classification path. It does *not* stress the Protel-extension or Allegro
-`.art`-digit layer inference, nor the gerber-format-drill reader — those paths
+`.art`-digit layer inference, nor the gerber-format-drill reader, those paths
 are exercised only by the uConsole, which has no ground truth to score against.
 So "near-exact connectivity" is proven for the engine; the exotic-dialect
 *ingestion* paths are proven only to parse and bind, not to a measured partition
 accuracy. The "comps" column in the table is the *native* count, not how many
 the reconstruction recovered (component recovery is materially lower than net
-agreement — see Limitations).
+agreement, see Limitations).
 
 Per the Tarski meta-lesson, every closed-loop disagreement was treated as our
 bug and chased to the primitive. The two that mattered: a Y-axis sign convention
@@ -212,13 +212,13 @@ moved ring-light from 35% to 100%).
 `board-corpus/famous/uconsole_gerber/` holds the ClockworkPi uConsole mainboard
 (CPI 3.14 Mainboard V5), fetched from `clockworkpi/uConsole`
 (`PCB/CPI_3.14_Mainboard_V5_Gerber.7z`). It has **no native CAD** and ships in
-Allegro `.art` format — a different gerber dialect, role-named layers, a
+Allegro `.art` format, a different gerber dialect, role-named layers, a
 gerber-format drill, and an Allegro `!`-delimited pick-and-place in mils. License
 is **unconfirmed** (GPL-v3 claimed in forum, not asserted in-repo; see
 `SOURCES.md`).
 
 Reverse-extracted (`cargo run --example gerber_report -- <dir>`; figures below
-are a representative run — `tests/gerber_uconsole.rs` asserts floors, not these
+are a representative run, `tests/gerber_uconsole.rs` asserts floors, not these
 exact values, since there is no ground truth to compare against):
 
 ```
@@ -242,7 +242,7 @@ fab-only board in an unfamiliar dialect.
 ### What degrades without each input
 
 - **No pick-and-place**: nets and geometry (DRC) still reconstruct from copper
-  alone, but components cannot be bound — there is nothing to say which pads form
+  alone, but components cannot be bound; there is nothing to say which pads form
   which part. `from_gerber_dir` returns the nets with zero components. (The
   Inkplate 6 gerber set is exactly this case; see docs/record/FAMOUS_SWEEP.md Round 5.)
 - **No BOM**: components still bind; their value/part-number is only the P&P
@@ -309,7 +309,7 @@ sweep on the densest signal layers.
   from the package-name string, with a flat 4.0 mm fallback for unrecognised
   names. This both *inflates* some pad counts (a stitching via inside the window
   is hard to tell from a real pad without the netlist, so a crystal may report
-  its GND vias as extra pads — on the correct net, but over-counted) and *misses*
+  its GND vias as extra pads, on the correct net, but over-counted) and *misses*
   pads (a part whose pads fall outside an under-sized window). Component-name
   match in the closed loop is therefore well below net agreement (e.g. Corne
   82/180); the recovered *connectivity* is what the simulator needs, and that is
@@ -335,7 +335,7 @@ sweep on the densest signal layers.
 - **Inner-layer order is inferred from filename digits** (`gnd02` → stack index
   2). An Allegro-style plane named without a stack number collapses to a single
   default inner slot, so on a board that names its inner planes ambiguously the
-  layer order — and therefore via stitching across the wrong pair — can be wrong.
+  layer order, and therefore via stitching across the wrong pair, can be wrong.
   The mapping-file escape hatch (`copper:<index>`) overrides this when it matters.
 - **GND label is a heuristic** (largest pour-touching net), so the `GND` *name*
   can be wrong on a power-plane-dominant or split-ground board. Connectivity is

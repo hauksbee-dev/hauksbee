@@ -418,7 +418,7 @@ fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintRep
 
                 // Flag a SELECTOR that cannot reach the part's top bands: the
                 // headline capability is unreachable. This only applies to a real
-                // multi-detent selector — a plain fixed divider decodes to exactly
+                // multi-detent selector, a plain fixed divider decodes to exactly
                 // ONE band by construction, so it can NEVER reach both 15 V and
                 // 20 V, and firing the "selector cannot reach" finding on it was
                 // a false positive on every correct fixed-voltage sink.
@@ -678,7 +678,7 @@ mod tests {
         // R13: a CYPD3177 whose VBUS_MAX is a plain fixed pull-up + pull-down
         // with NO selector switch decodes to exactly ONE band and can never
         // reach both 15 V and 20 V by construction. The "selector cannot reach"
-        // reachability gate must NOT fire on it — it applies only to a real
+        // reachability gate must NOT fire on it; it applies only to a real
         // multi-detent selector. (This is the primary/correct EZ-PD BCR use.)
         let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")

@@ -151,7 +151,7 @@ impl RailWindow {
     /// recording a timeseries sample. Each frame is solved in ~10 sub-chunks and
     /// `observe` only sees the settled final-chunk voltage, so a load-step sag
     /// that bottoms out mid-frame and recovers by the last chunk would leave
-    /// `min_v` blind to the excursion — a brownout-floor `rail_window` assertion
+    /// `min_v` blind to the excursion, a brownout-floor `rail_window` assertion
     /// would then false-pass the very sag it exists to catch. The scheduler's
     /// per-frame min/max is folded here so the min/max bounds match what the plain
     /// `voltage` assertion path already sees. (The `samples` timeseries, and hence
@@ -188,7 +188,7 @@ impl RailWindow {
     }
 
     /// Recovery time (s): from the first sample below `threshold` to the moment
-    /// the rail returned to `recover_to` and stayed there — the FIRST sample at or
+    /// the rail returned to `recover_to` and stayed there; the FIRST sample at or
     /// above `recover_to` past which no later sample drops back below it. Returns 0
     /// if the rail never dipped, and `+∞` if it dipped but never climbed back to
     /// `recover_to` (so a `recover_within_ms` assertion FAILS loud rather than
@@ -221,7 +221,7 @@ impl RailWindow {
         // The rail does not actually REACH recover_to until the first sample after
         // last_below: every sample past last_below is at or above recover_to by
         // definition, so that sample is the moment it returned and stayed.
-        // Returning `last_below` itself reported recovery a full frame early — a
+        // Returning `last_below` itself reported recovery a full frame early, a
         // silent false pass of `recover_within_ms` for a rail that only crosses
         // back on the following frame. The +∞ guard above already ensured the
         // final sample is ≥ recover_to, so such a sample always exists.
@@ -276,7 +276,7 @@ mod tests {
     fn recovery_of_a_late_dip_that_never_climbs_back_is_infinite() {
         // R25 (REC-NEVER-RECOVER, HIGH): a rail that dips late in the window and
         // never returns above recover_to must FAIL a recover_within_ms bound. The
-        // old code returned (window_end - t_dip) — a small value that FALSELY
+        // old code returned (window_end - t_dip), a small value that FALSELY
         // passed. recovery_s must report +inf (never recovered).
         let mut w = RailWindow::new();
         for (t, v) in [
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn recovery_measures_to_the_recovery_instant_not_the_last_sub_recover_sample() {
         // Round-27: recovery_s returned `last_below - t_dip`, one full frame short,
-        // because last_below is the LAST sample still BELOW recover_to — the rail
+        // because last_below is the LAST sample still BELOW recover_to; the rail
         // does not actually reach recover_to until the next sample. That under-
         // report is the false-pass direction for recover_within_ms. Here the rail
         // dips at 0 ms, sits below 3.2 through 4 ms, and reaches 3.3 at 6 ms: the

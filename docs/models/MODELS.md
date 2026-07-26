@@ -65,7 +65,7 @@ The extractor pulls two things from the datasheet:
    so on). Where a value is not stated verbatim, the model derives it from a
    stated operating point (e.g. `is` from VBE at a known IC) and says so in a
    comment, or falls back to a family-typical value tagged `# estimated`.
-2. **Absolute-maximum ratings** into `[models.ratings]` — `max_current_a`,
+2. **Absolute-maximum ratings** into `[models.ratings]`, `max_current_a`,
    `max_surge_current_a`, `max_power_w`, `max_voltage_v`,
    `max_junction_temp_c`. These feed the **stress monitor**
    (`crates/hauksbee-engine/src/stress.rs`): the live operating point is checked
@@ -189,7 +189,7 @@ block (see the LTC4020 entry in `db/power_ics.toml` for the pattern).
 
 - **Offline (always run in CI)**:
   - `hauksbee-models` `offline_pipeline_with_mock_reply` drives the whole
-    extractor with a canned reply via `HAUKSBEE_EXTRACT_MOCK_REPLY=<file>` — no
+    extractor with a canned reply via `HAUKSBEE_EXTRACT_MOCK_REPLY=<file>`, no
     codex, no network.
   - `hauksbee-engine` `fixture_*` physical-validation tests simulate canned
     models and assert the datasheet numbers.
@@ -216,7 +216,7 @@ configurable power supplies do: it stamps controllable Thevenin legs and sense
 resistors into the circuit once, and the scheduler calls its `update` between
 solver chunks to recompute each leg from the previous chunk's solved node
 voltages (iterate-to-consistency per chunk). It never adds device kinds to the
-inner Newton loop — every behaviour is expressed with the existing
+inner Newton loop, every behaviour is expressed with the existing
 `Vsource` / `Isource` / `Resistor` primitives, so the partitioned solver is
 untouched.
 
@@ -224,7 +224,7 @@ untouched.
 
 A `[models.behavioral]` block is a bag of optional facts:
 
-1. **Pins with semantics** — `[models.behavioral.pins.<role>]`:
+1. **Pins with semantics**: `[models.behavioral.pins.<role>]`:
    - `pull_to = "<rail role>"` + `pull_ohms = <ohms>`: an internal pull to
      another named pin's rail (the nPM1300 SHPHLD pull to VSYS). The runtime
      stamps a resistor from the pin to the rail node.
@@ -233,7 +233,7 @@ A `[models.behavioral]` block is a bag of optional facts:
    - `enable_threshold_v` / `enable_active_high`: an enable input read against a
      threshold.
 
-2. **Finite state machine** — `[models.behavioral.fsm]`:
+2. **Finite state machine**: `[models.behavioral.fsm]`:
    - `states = [...]`, optional `initial`.
    - `[[models.behavioral.fsm.transitions]]` with `from`, `to`, an `evalexpr`
      `guard` over `v_<pin>` / `t` / `t_in_state` / params, and optional
@@ -242,7 +242,7 @@ A `[models.behavioral]` block is a bag of optional facts:
      (`drive_volts`), assert its open drain (`od_assert`), or tri-state it
      (`hi_z`) while that state is active.
 
-3. **Averaged converter** — `[models.behavioral.converter]`:
+3. **Averaged converter**: `[models.behavioral.converter]`:
    - `topology` (`buck`/`boost`/`buck_boost`), `out_pin`, `in_pin`,
      `vout_setpoint`, `efficiency`, optional `iout_limit_a`.
    - `[models.behavioral.converter.iin_program]`: a programmable input-current
@@ -253,7 +253,7 @@ A `[models.behavioral]` block is a bag of optional facts:
      back under the output limit, and throttles so the reflected input draw never
      exceeds the input limit.
 
-4. **Expression laws** — `[[models.behavioral.laws]]`:
+4. **Expression laws**: `[[models.behavioral.laws]]`:
    - A `current` (from pin `a` to `b`) or `voltage` (forced on pin `a` behind
      `r_ohms`) whose value is an `evalexpr` `expr` over `v_<pin>`, `t`, the param
      keys, and `state_<name>` booleans. Optional `only_in_state`.
@@ -264,7 +264,7 @@ The laws and FSM guards are pure arithmetic / boolean expressions over a bound
 context (pin voltages, the active state, params). `evalexpr` is a small,
 dependency-light evaluator that does exactly that and **nothing else**: no
 functions, loops, closures, filesystem, or network. `rhai` is a full embedded
-scripting language — more power than these declarative laws need and a much
+scripting language, more power than these declarative laws need and a much
 larger surface to sandbox. We pin `evalexpr` with `default-features = false`
 (dropping its optional rand/regex/serde), compile each expression once at stamp
 time, and evaluate it against a fresh per-chunk context, so a law is sandboxed
@@ -284,7 +284,7 @@ the actual board:
   so a law dividing by it contributes ~0.
 
 This is what lets one model produce different behaviour on two board revisions
-with no model edit — the basis of the two-sided fault validations in
+with no model edit; the basis of the two-sided fault validations in
 `docs/record/KNOWN_FAULTS_VALIDATION.md`.
 
 ## Adding a custom part without recompiling
@@ -293,8 +293,8 @@ Models layer `builtin < user TOML < user SPICE` (later wins), and both
 datasheet-extracted and hand-written behavioural models share the user-TOML tier.
 A custom behavioural part is just a TOML file dropped into a user directory:
 
-- `~/.hauksbee/models/` — where datasheet extraction writes.
-- `~/.config/hauksbee/models/` — your own custom models.
+- `~/.hauksbee/models/`, where datasheet extraction writes.
+- `~/.config/hauksbee/models/`, your own custom models.
 - any `--models-dir <dir>` passed to `hauksbee run` (highest priority).
 
 ### Worked example: a "crazy" custom charger
@@ -366,7 +366,7 @@ FSM enters `charging`.
 
 ## The escape hatch: a custom Rust behaviour
 
-Some parts have behaviour no finite declarative schema captures — a closed-loop
+Some parts have behaviour no finite declarative schema captures, a closed-loop
 controller with internal state, a sequencer with data-dependent timing, a part
 whose output depends on an I2C register the firmware wrote. For those, implement
 the `CustomBehavior` trait (`crates/hauksbee-engine/src/behavioral.rs`) in Rust
@@ -413,8 +413,8 @@ let bound = bind_board_with(&board, &ModelLibrary::builtin(), &reg);
 The factory is matched against the component's resolved model id, value, or MPN.
 On a hit the binder builds the custom device instead of the declarative one; the
 scheduler then drives it each chunk exactly like a declarative behavioural
-device. You only ever mutate source values between chunks — the same
-convergence-per-chunk pattern the supplies and declarative devices use — so the
+device. You only ever mutate source values between chunks; the same
+convergence-per-chunk pattern the supplies and declarative devices use, so the
 inner Newton loop is untouched.
 
 ## Extracting a behavioural model from a datasheet
@@ -430,9 +430,9 @@ model-extract --pdf testdata/datasheets/LTC4020.pdf --part LTC4020 --kind charge
 ```
 
 A live codex run against the LTC4020 datasheet produced a model that agreed with
-the hand-written one on the load-bearing structure — base kind `vreg`, the exact
+the hand-written one on the load-bearing structure, base kind `vreg`, the exact
 pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`, `vout_setpoint = 28.8`
-(8S LiFePO4), `efficiency = 0.92`, and a populated `iin_program` block — and
+(8S LiFePO4), `efficiency = 0.92`, and a populated `iin_program` block, and
 honestly left the ILIMIT transfer-function constants at zero because the
 datasheet excerpt did not state the programming equation (those were calibrated
 in the hand model from the documented 60 W/88 W revision evidence, which the

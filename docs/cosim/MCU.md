@@ -20,11 +20,11 @@ uart_write(bytes)         inject UART RX bytes
 on_uart(cb)               callback per UART TX byte
 ```
 
-### `on_input_responder` — closing a readback inside the firmware's bit-bang loop
+### `on_input_responder`, closing a readback inside the firmware's bit-bang loop
 
 `on_pin_change` reports output edges; the scheduler can collapse them and react
 *next* analog chunk. That is too coarse for a firmware that bit-bangs a clock and
-`digitalRead`s the resulting serial-out bit in the SAME tight loop — e.g. the
+`digitalRead`s the resulting serial-out bit in the SAME tight loop, e.g. the
 Tarski `_ReadShiftRegisterWord`, which for 16 bits does `digitalRead(MISO)` then
 pulses SCLK with back-to-back, sub-µs `digitalWrite`s. By the time the chunk
 ends, the firmware has already finished reading; injecting MISO once per chunk
@@ -36,7 +36,7 @@ raised onto their ioport input IRQs *synchronously*, before the firmware's next
 instruction. The engine installs an edge-driven `Hc165Chain` here: on the PL
 falling edge it latches the parallel inputs (the spike latches) into a QH-emit
 bit sequence, and on each SCLK rising edge it presents the next bit on MISO. This
-is the read-direction analogue of the edge-driven `Hc595Chain` write path — both
+is the read-direction analogue of the edge-driven `Hc595Chain` write path, both
 resolve the bit-banged clock per edge, not per chunk. Renode/QEMU keep the
 default no-op (they push state once per chunk).
 
@@ -66,7 +66,7 @@ A *part* (an STM32F103, an ESP32-C3) is no longer a hand-written Rust
 constructor. Each is a reviewed descriptor file under
 `crates/hauksbee-mcu/db/mcu/<part>.soc.toml`, loaded through one validated path
 (`RenodeConfig::from_soc_toml` / `QemuConfig::from_soc_toml`) with fail-loud,
-named errors — the same discipline as `sensor_spec.rs`. The descriptor carries
+named errors; the same discipline as `sensor_spec.rs`. The descriptor carries
 everything the constructor used to embed: the platform `.repl` path, the CPU
 path, the per-port register offsets (the F1-vs-F4 ODR footgun lives here as
 `odr_offset` data, not scattered logic), the UART/I2C/SPI controller names, the
@@ -74,7 +74,7 @@ expected ISA (`expected_e_machine = "EM_ARM"`), and the awkward per-part fixups
 (`post_load_setup` for the FE310 PRCI/`vinit` bring-up, `[soc.spi].extra_repl`
 for the F103 SPI1 fragment, `[[soc.adc]]` injection recipes). The shipped
 descriptors are embedded via `include_str!` (the binary stays self-contained,
-the file stays the single source of truth — the `mcp4728.toml` precedent), and
+the file stays the single source of truth; the `mcp4728.toml` precedent), and
 `RenodeConfig::stm32f103()` and friends are now thin accessors that load their
 descriptor. Validation refuses rather than fakes: unknown/mismatched backend,
 empty `platform_repl`, zero-width or overlapping ports, duplicate controllers,
@@ -89,8 +89,8 @@ pattern below). The scheduler's backend instantiation resolves every
 `renode:<part>` / `qemu:<part>` string through `SocConfig::resolve`, so the
 override directories are the product path, not just a library function: an
 override directory wins over a built-in of the same name, and an *invalid*
-override for a part in use aborts the run naming the file and field — never a
-silent fallback to the built-in. That is the 06 §6.4 acceptance bar — a new
+override for a part in use aborts the run naming the file and field, never a
+silent fallback to the built-in. That is the 06 §6.4 acceptance bar, a new
 Renode MCU added without touching hauksbee's source. The equivalence and
 validation tests live in `crates/hauksbee-mcu/tests/soc_descriptors.rs`, the
 product-path wiring test in `hauksbee-engine`'s `soc_wiring_tests`;
@@ -101,13 +101,13 @@ descriptors.
 **What honestly stays Rust.** A descriptor only *configures* one of the three
 existing backends. A wholly new emulator backend is a new `Mcu` trait
 implementation, not a descriptor; and simavr part support is not data here
-either — simavr's own part database does the work, and the descriptor would only
+either, simavr's own part database does the work, and the descriptor would only
 name the part. Those two remain code changes by design.
 
 ### Peripheral-coupling coverage (what each backend actually implements)
 
 The `Mcu` trait above is the full contract, and all three backends now
-implement every coupling — at different fidelity tiers, stated honestly below.
+implement every coupling, at different fidelity tiers, stated honestly below.
 GPIO (both directions) and UART co-sim work identically on all three; ADC
 injection and I2C/SPI byte interception are exact on the in-process AVR
 backend and bridged/contracted on the external emulators.
@@ -117,7 +117,7 @@ backend and bridged/contracted on the external emulators.
 | GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
 | GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
-| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write); **no shipped Renode platform carries a map** (their stock `.repl`s model no ADC — verified live), so injections there are DROPPED and surfaced as a coverage warning on every report surface (see "ADC / bus coverage by platform") | yes, RAM-mailbox count slots (firmware contract) |
+| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write); **no shipped Renode platform carries a map** (their stock `.repl`s model no ADC, verified live), so injections there are DROPPED and surfaced as a coverage warning on every report surface (see "ADC / bus coverage by platform") | yes, RAM-mailbox count slots (firmware contract) |
 | I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED and surfaced on every report surface, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
 | SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi1-3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
 | Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
@@ -140,17 +140,17 @@ injected per chunk through a per-platform recipe (`RenodeConfig::adc_channels`)
 — either a modeled ADC's feed command or a `WriteDoubleWord` into the result
 word the firmware reads; the stock STM32F103/F4/nRF52/FE310 configs ship no map
 because those Renode platforms model no ADC peripheral. An unmapped channel's
-injections are recorded as DROPPED and surfaced on every report surface — the
+injections are recorded as DROPPED and surfaced on every report surface; the
 run text, `--plain`, `--json` (`CosimJson.adc_dropped` + a coverage note), and
-all hauksbee-ci formats — naming the channel, MCU, and board net, so a run
+all hauksbee-ci formats, naming the channel, MCU, and board net, so a run
 whose firmware never received its analog inputs can never read as healthy. Espressif QEMU exposes no
 host hook for its I2C RX FIFO, GPSPI transfers, or SAR ADC, so all three ride
 the RAM mailbox (`qemu/mod.rs::mailbox`, the same contract as the GPIO words):
 ADC counts land in fixed slots, and I2C/SPI transactions go through
 request/response cells with a sequence handshake, serviced once per chunk and
 surfaced through the same `on_i2c`/`on_spi` callbacks as the other backends.
-That is a **firmware contract, not general firmware support** — unmodified
-vendor firmware sees none of it (the cells are gated on a `BUS_MAGIC` word) —
+That is a **firmware contract, not general firmware support**: unmodified
+vendor firmware sees none of it (the cells are gated on a `BUS_MAGIC` word),
 and each mailbox function is retired the day the fork grows the corresponding
 peripheral hook (05 §5.3).
 
@@ -158,7 +158,7 @@ peripheral hook (05 §5.3).
 
 An external co-sim can degrade silently: the platform has no ADC injection
 path, or no bus controller for a bound sensor, GPIO/UART still work, and the
-report reads healthy. Since the U3 honesty round that is impossible to miss —
+report reads healthy. Since the U3 honesty round that is impossible to miss,
 every hole below is surfaced on **all** report surfaces: `hauksbee run`
 default text, `--plain` heads-ups, `--json` (`CosimJson.adc_dropped` /
 `CosimJson.unexercised_buses` plus `notes[]` coverage entries), and every
@@ -169,15 +169,15 @@ warnings). A CI `peripheral` assertion against an unexercised bus device
 | Platform | ADC injection map | I2C controllers | SPI controllers |
 |----------|-------------------|-----------------|-----------------|
 | `simavr:atmega328p` | exact (in-process, always) | native TWI decode | native |
-| `renode:stm32f103` | **none** — stock `stm32f103.repl` models no ADC (verified live); injections drop + warn | `i2c1` | `spi1` (via `extra_repl`) |
-| `renode:stm32f4_discovery` | **none** — same reason | `i2c1` | `spi1`, `spi2`, `spi3` |
-| `renode:nrf52840` | **none** — the live repl models no ADC/SAADC | `twi0`, `twi1` (live-verified: bridge registers on both) | `spi2` (live-verified registration) |
-| `renode:sifive_fe310` / `renode:rp2040` | none | none (unverified peripherals — a bound slave warns + fails CI assertions) | none |
+| `renode:stm32f103` | **none**: stock `stm32f103.repl` models no ADC (verified live); injections drop + warn | `i2c1` | `spi1` (via `extra_repl`) |
+| `renode:stm32f4_discovery` | **none**: same reason | `i2c1` | `spi1`, `spi2`, `spi3` |
+| `renode:nrf52840` | **none**: the live repl models no ADC/SAADC | `twi0`, `twi1` (live-verified: bridge registers on both) | `spi2` (live-verified registration) |
+| `renode:sifive_fe310` / `renode:rp2040` | none | none (unverified peripherals, a bound slave warns + fails CI assertions) | none |
 | `qemu:esp32/-s3/-c3` | RAM-mailbox contract | RAM-mailbox contract + machine tmp105 | RAM-mailbox contract |
 
 Why no Renode ADC maps: Renode 1.16.1's shipped STM32F1/F4/nRF52840 platform
 descriptions register no ADC peripheral at all, and Renode's `Analog.STM32_ADC`
-speaks the F0/L0 register layout — registering it at an F1/F4 address would let
+speaks the F0/L0 register layout, registering it at an F1/F4 address would let
 firmware read a wrongly-laid-out peripheral (fake fidelity), and inventing a
 RAM result word is a firmware contract, not the real converter. So the honest
 state is: no map, loud drop, warning on every surface. A board that knows where
@@ -186,7 +186,7 @@ its counts must land supplies `[[soc.adc]]` in its own descriptor
 
 The nRF52840 controller names were verified against the live Renode 1.16.1
 (`peripherals` lists `twi0`/`twi1`/`spi2`, and the Hauksbee bridge peripherals
-register on them — `tests/renode_nrf52840_bus.rs`). Renode models the
+register on them, `tests/renode_nrf52840_bus.rs`). Renode models the
 pre-EasyDMA TWI/SPI register interfaces there; TWIM/SPIM (EasyDMA-only)
 firmware drives registers the model does not implement, and an end-to-end nRF
 sensor round-trip awaits an nRF bus firmware fixture.
@@ -297,16 +297,16 @@ control and the peripheral models, so the firmware runs unmodified.
   the scheduler sees identical behaviour. ODR offsets per family: STM32F1 `0x0C`,
   STM32F4 `0x14`, nRF52 `0x4` (peripheral-relative: Renode registers `gpio0/1`
   at the `0x…500` register window, so the datasheet's block-relative `0x504`
-  reads as unhandled — see `db/mcu/nrf52840.soc.toml`), FE310 `0x0C`. **RP2040
+  reads as unhandled, see `db/mcu/nrf52840.soc.toml`), FE310 `0x0C`. **RP2040
   is the exception**: it is not a memory-mapped GPIO port bank, so the poll
   targets the SIO block's `GPIO_OUT` (offset `0x10` from `SIO_BASE =
   0xD000_0000`), which is where the driven output levels actually live
   (datasheet §2.3.1.7).
 
 - **GPIO drive direction (poll)**: on dir-mapped platforms the backend reads
-  each polled port's direction/mode register alongside the ODR — STM32F1
+  each polled port's direction/mode register alongside the ODR, STM32F1
   CRL+CRH (4-bit nibbles, MODE≠0 = output), STM32F4 MODER (2 bits/pin, `0b01`
-  = GP output), nRF52 DIR (1 bit/pin) — decodes it to a per-pin output mask,
+  = GP output), nRF52 DIR (1 bit/pin), decodes it to a per-pin output mask,
   masks the ODR diff with it, and surfaces it through
   `Mcu::pins_configured_output` (the same trait surface the AVR DDR hooks
   feed). Each map was verified against the installed Renode's peripheral model
@@ -344,8 +344,8 @@ first column; the built-in constructors load these files.
 | STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not run on this branch |
 | ESP32-S3 (Xtensa LX7) | `qemu:esp32s3` | Espressif QEMU `esp32s3` | **Wiring proven (machine boots, channels connect); app proof pending an S3 image.** The builtin `esp32s3` model entry binds to `qemu:esp32s3` (regression: `mcu_family_router.rs`), and `esp32_qemu_cosim.rs` boots the fork's real `esp32s3` machine from a blank flash (the ROM idles), connects QMP + gdbstub + UART, and steps the lockstep. The full app-level proof (UART banner + solved LED current, like the ESP32/C3 rows) needs a merged S3 flash image, which requires esp-idf with the esp32s3 Xtensa toolchain (`idf.py set-target esp32s3`; recipe in `testdata/firmware/esp32_blinky/build.sh`). |
 | RP2040 (dual Cortex-M0+, Raspberry Pi Pico) | `renode:rp2040` | Renode `rp2040.repl` | Config shipped + unit-tested; **platform ABSENT in installed Renode 1.16.1**; smoke skip-gated (see note below) |
-| ESP32-C6, ESP32-H2 | — | — | Not in the Espressif QEMU fork's machine list; out of scope |
-| nRF5340 (ZSWatch-class) | — | — | See note below |
+| ESP32-C6, ESP32-H2 |, |, | Not in the Espressif QEMU fork's machine list; out of scope |
+| nRF5340 (ZSWatch-class) |, |, | See note below |
 
 ### nRF5340 / ZSWatch, honestly
 
@@ -365,7 +365,7 @@ data-driven descriptor (05-cosim-fidelity §5.4/§5.5, 06 §2), and it is unit-t
 suite). What is **proven** is the config shape and the datasheet-grounded register
 offsets; what is **not** proven
 is a real boot, for one honest reason: the Renode build installed here (portable
-**v1.16.1.16858**) ships **no rp2040 platform** — `platforms/cpus/` carries only
+**v1.16.1.16858**) ships **no rp2040 platform**: `platforms/cpus/` carries only
 `picosoc` and `litex_picorv32` (unrelated RISC-V soft cores), no `rp2040.repl`
 and no Raspberry Pi Pico board. The integration smoke `tests/renode_rp2040.rs`
 therefore checks for the platform `.repl` first and **skips loudly** with that
@@ -378,7 +378,7 @@ called out in `db/mcu/rp2040.soc.toml`'s header comment:
   it lives in the SIO (single-cycle IO) block. The output-state register is SIO
   `GPIO_OUT` at `0xD000_0010` (offset `0x10` from `SIO_BASE`), with `GPIO_OE` at
   `0xD000_0020` and `GPIO_IN` at `0xD000_0004` (datasheet §2.3.1.7). The ODR-poll
-  is pointed at SIO `GPIO_OUT` — the faithful adaptation of the F1-vs-F4
+  is pointed at SIO `GPIO_OUT`; the faithful adaptation of the F1-vs-F4
   ODR-offset discipline to a part that has no port ODR.
 - **Unverified Renode modeling.** The SIO peripheral's *name* in Renode's
   `rp2040.repl` (assumed `sio`) and whether Renode's SIO model reads `GPIO_OUT`
@@ -388,7 +388,7 @@ called out in `db/mcu/rp2040.soc.toml`'s header comment:
 Deliberately **not** wired, to refuse rather than fake: **ADC** (RP2040 has a SAR
 ADC, but no Renode ADC model is verified, so `adc_channels` is empty → an
 unmapped channel is the merged policy's loud once-per-channel drop, never a fake
-count); **I2C/SPI** (`i2c_controllers`/`spi_controllers` empty — the RP2040
+count); **I2C/SPI** (`i2c_controllers`/`spi_controllers` empty; the RP2040
 Renode peripheral set is unverified, so no bridge is installed rather than
 claiming an unproven bus).
 
@@ -451,11 +451,11 @@ building software; only hand hauksbee projects you would build yourself.
 
 ### STM32F103 blue pill (the proven demo)
 
-Board: `testdata/boards/stm32_bluepill_demo.kicad_pcb` — U1 STM32F103C8, PA5 ->
+Board: `testdata/boards/stm32_bluepill_demo.kicad_pcb`, U1 STM32F103C8, PA5 ->
 330 Ohm R1 -> LED -> GND (the analog current path the solver computes), PC13 ->
 4k7 -> GND (the blink indicator), USART1 on PA9/PA10.
 
-Firmware: `testdata/firmware/stm32_blinky/` — bare-metal C (no vendor SDK), builds
+Firmware: `testdata/firmware/stm32_blinky/`, bare-metal C (no vendor SDK), builds
 with `arm-none-eabi-gcc`. Blinks PC13 at ~5 Hz, drives PA5 HIGH at boot, prints
 `hello from stm32` on USART1 at boot and answers `i`/`v` commands.
 
@@ -480,11 +480,11 @@ power). The scheduler's `instantiate_renode` turns `renode:stm32f103` into
 
 ### ESP32 (the proven QEMU demo)
 
-Board: `testdata/boards/esp32_devkit_demo.kicad_pcb` — U1 ESP32-WROOM-32, GPIO2 ->
+Board: `testdata/boards/esp32_devkit_demo.kicad_pcb`, U1 ESP32-WROOM-32, GPIO2 ->
 330 Ohm R1 -> LED -> GND (the analog current path the solver computes), GPIO4 ->
 4k7 -> GND (the blink indicator), UART0 on the module's U0TXD/U0RXD.
 
-Firmware: `testdata/firmware/esp32_blinky/` — esp-idf C app. Drives GPIO2 HIGH at
+Firmware: `testdata/firmware/esp32_blinky/`, esp-idf C app. Drives GPIO2 HIGH at
 boot, toggles GPIO4 at ~5 Hz, prints `hello from esp32` on UART0 and answers
 `i`/`v` commands. Because the Espressif QEMU `esp32.gpio` model does not expose
 GPIO output register read-back, the firmware mirrors its GPIO output word to a
@@ -529,7 +529,7 @@ esp32c3 build`, merged to `flash_c3.bin`). Backend `qemu:esp32c3` uses
 
 ### nRF52840 (works out of the box)
 
-The nRF52840 ships **built in** — no `db/mcu.toml` edit, no `--models-dir`. Any
+The nRF52840 ships **built in**: no `db/mcu.toml` edit, no `--models-dir`. Any
 component whose value matches `nRF52840` binds to the `renode:nrf52840` backend
 directly (`hauksbee models resolve <board>` prints `nrf52840  builtin(0)  mcu`).
 
@@ -544,7 +544,7 @@ hauksbee run testdata/firmware/renode_demos/nrf52840-zephyr_shell.board \
 This boots the bundled Zephyr shell to the `uart:~$` prompt through Renode. The
 board is a minimal nRF52840-DK-style skeleton: the SoC on a 3V3 rail, P0.13
 driving LED1 through a 330R resistor, and P0.06/P0.08 broken out as the UART. The
-LED stays dark — the shell firmware never toggles P0.13, so 0 V is the correct,
+LED stays dark; the shell firmware never toggles P0.13, so 0 V is the correct,
 predicted result, not a miss.
 
 Backend: `RenodeConfig::nrf52840()` (ports gpio0/gpio1, OUT register at 0x504,
@@ -631,11 +631,11 @@ proving the backend is ISA-agnostic.
   STM32F103/F4/nRF52/FE310 platform descriptions model no ADC at all, so
   `set_analog_in` delivers counts only where a `RenodeConfig::adc_channels`
   recipe says how (a Monitor feed command for a modeled ADC, or a
-  `WriteDoubleWord` into the result word the firmware reads — 05-cosim-fidelity
+  `WriteDoubleWord` into the result word the firmware reads, 05-cosim-fidelity
   §5.1). An unmapped channel's drop is recorded and surfaced on EVERY report
   surface (run text, `--plain`, `--json` `CosimJson.adc_dropped` + notes, and
   the hauksbee-ci human/JUnit/GitHub reports), naming the channel, MCU, and
-  net — never a stderr-only whisper. The STM32 demo couples through the
+  net, never a stderr-only whisper. The STM32 demo couples through the
   GPIO/LED path, not the ADC, so it carries no map. The AVR backend's ADC
   injection is fully wired and exact.
 
@@ -677,7 +677,7 @@ proving the backend is ISA-agnostic.
   cells (gated on a `BUS_MAGIC` word; sequence handshake; one transaction per
   bus per chunk) and the backend surfaces each byte through the standard
   `on_i2c`/`on_spi` callbacks, writing replies back into guest RAM. Unmodified
-  vendor firmware is untouched — and its real-controller bus traffic remains
+  vendor firmware is untouched, and its real-controller bus traffic remains
   host-invisible until the fork grows a peripheral hook (05 §5.3). Temperature
   sensors additionally reach unmodified firmware through the machine's own
   emulated tmp105 via `set_i2c_device_temperature`.

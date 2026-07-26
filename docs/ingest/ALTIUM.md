@@ -8,12 +8,12 @@ DRC + lint + simulation pipeline.
 
 Entry points:
 
-- `ExtractedBoard::from_altium_pcb(bytes)` — connectivity (nets, components,
+- `ExtractedBoard::from_altium_pcb(bytes)`, connectivity (nets, components,
   netted pads), the same `ExtractedBoard` the KiCad / Eagle / IPC / gerber paths
   produce.
-- `ExtractedBoard::altium_drc(bytes)` — the geometric short / clearance DRC over
+- `ExtractedBoard::altium_drc(bytes)`; the geometric short / clearance DRC over
   the board's copper (the binary twin of `ExtractedBoard::drc(text)`).
-- `ExtractedBoard::from_auto_bytes(bytes)` — content sniff: an Altium `.PcbDoc`
+- `ExtractedBoard::from_auto_bytes(bytes)`, content sniff: an Altium `.PcbDoc`
   is auto-detected from the OLE2 magic (`D0 CF 11 E0`) plus the presence of
   Altium record streams, then dispatched. The CLI (`hauksbee run <board>`) reads
   the file as bytes and routes binary boards here automatically, exactly as the
@@ -71,7 +71,7 @@ Two record encodings live inside the `Data` streams:
 The connectivity extractor (`crates/hauksbee-extract/src/altium.rs`) builds the
 nets, components, and netted pads. The DRC geometry extractor (the `altium_drc`
 submodule in `drc.rs`) reads copper geometry per net and feeds it to
-`sweep_buckets` — the exact same R-tree short / clearance engine the KiCad and
+`sweep_buckets`; the exact same R-tree short / clearance engine the KiCad and
 Eagle paths use, so there is one detection engine, not three.
 
 Channel-replicated designs (the same `SOURCEDESIGNATOR` reused across identical
@@ -108,10 +108,10 @@ violations reported on the dense ones (e.g. the EBAZ4205 BGA fanout) as expected
 
 Test coverage:
 
-- `tests/altium.rs` — synthetic in-memory `.PcbDoc` fixtures (built with `cfb`),
+- `tests/altium.rs`, synthetic in-memory `.PcbDoc` fixtures (built with `cfb`),
   exercising the properties decoder, the `Pads6` / `Tracks6` binary layouts,
   net / component index resolution, auto-detection, and a deliberate-short DRC.
-- `tests/altium_corpus.rs` — the real-board sweep (extraction + short-clean DRC)
+- `tests/altium_corpus.rs`; the real-board sweep (extraction + short-clean DRC)
   and the KiCad cross-validation (corpus-gated; `HAUKSBEE_REQUIRE_CORPUS=1`).
 
 Corpus boards, sources and licenses: `board-corpus/famous/SOURCES.md` (the
@@ -123,12 +123,12 @@ under `board-corpus/altium_xval/`.
 The binary record layouts are ported field-by-field from KiCad's open-source
 Altium importer (KiCad master tree), principally:
 
-- `pcbnew/pcb_io/altium/altium_parser_pcb.cpp` — the `APAD6`, `AVIA6`,
+- `pcbnew/pcb_io/altium/altium_parser_pcb.cpp`; the `APAD6`, `AVIA6`,
   `ATRACK6`, `AARC6`, `ACOMPONENT6`, `ANET6`, `APOLYGON6` parsers and the
   `ALTIUM_LAYER` enum.
-- `common/io/altium/altium_binary_parser.cpp` — `ReadProperties` (the
+- `common/io/altium/altium_binary_parser.cpp`, `ReadProperties` (the
   pipe/equals decoder) and the stream reader primitives.
-- `pcbnew/pcb_io/altium/altium_props_utils.cpp` — `ConvertToKicadUnit` (the unit
+- `pcbnew/pcb_io/altium/altium_props_utils.cpp`, `ConvertToKicadUnit` (the unit
   factor).
 
 Cross-checked against the `altium2kicad` project (thesourcerer8) and a Python
@@ -140,7 +140,7 @@ Cross-checked against the `altium2kicad` project (thesourcerer8) and a Python
 An early version reported 42 "shorts" on the EBAZ4205. Per `docs/record/BUG_HUNT.md`
 the rule is: chase every short to the data before believing it. All 42 were on
 `In2.Cu` and every one involved a copper-pour polygon. The board has split
-power planes (10 solid pours of different nets — VCC, GND, VCCA, VCC-DDR — on one
+power planes (10 solid pours of different nets (VCC, GND, VCCA, VCC-DDR) on one
 inner layer), and foreign-net vias pass through each plane via antipad voids that
 Altium carves in `Regions6`, which the extractor does not parse. So a via legally
 sitting inside a foreign pour read as a short against the pour outline.
@@ -168,7 +168,7 @@ five cross-validated boards stay at 100% partition agreement.
   the refdes lives in a `WideStrings6`-indexed `Texts6` designator label whose
   byte layout is version-specific. On those boards the component *references*
   come out blank. The **electrical model is unaffected** (the EBAZ4205 still
-  extracts 392 nets and 1742 netted pins, and its DRC is short-clean) — only the
+  extracts 392 nets and 1742 netted pins, and its DRC is short-clean), only the
   human-facing labels are missing, which is why its KiCad cross-validation can
   not perform the label-keyed join. Resolving `WideStrings6` would lift this.
 

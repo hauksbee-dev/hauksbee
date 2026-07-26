@@ -215,7 +215,7 @@ pub struct CheckReport {
     pub active_nets: usize,
     /// The non-ignored components the binder could NOT resolve to a model, as
     /// `(reference, value)`. These are simulated as OPEN, so any firmware/analog
-    /// result on their nets is incomplete — naming them makes "N% resolved"
+    /// result on their nets is incomplete, naming them makes "N% resolved"
     /// actionable instead of a bare number.
     pub unresolved: Vec<(String, String)>,
 }
@@ -455,7 +455,7 @@ mod render_tests {
 
     #[test]
     fn unresolved_parts_are_named_not_just_counted() {
-        // U1: "84% resolved" was a bare number — the check must NAME the parts it
+        // U1: "84% resolved" was a bare number; the check must NAME the parts it
         // could not model (they simulate as OPEN), so the user knows what to add.
         let mut r = report(0.5);
         r.unresolved = vec![

@@ -17,7 +17,7 @@
  *       threeZ = -y_mm * 0.001
  *
  *   Verified empirically: pic_programmer has an axial cap C1 at KiCad (110.49, 78.867) mm.
- *   In the loaded GLB that footprint appears at approx (0.1105, ~0.002, -0.0789) m — matching
+ *   In the loaded GLB that footprint appears at approx (0.1105, ~0.002, -0.0789) m, matching
  *   this formula within floating-point rounding.
  */
 
@@ -52,7 +52,7 @@ export class Board3DViewer {
   private composer: EffectComposer
 
   constructor(canvas: HTMLCanvasElement) {
-    // Renderer — alpha:true so the CSS gradient underneath is visible through the canvas
+    // Renderer, alpha:true so the CSS gradient underneath is visible through the canvas
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     const rW = canvas.width > 0 ? canvas.width : (canvas.clientWidth > 0 ? canvas.clientWidth : 1280)
@@ -67,11 +67,11 @@ export class Board3DViewer {
 
     // Scene
     this.scene = new THREE.Scene()
-    // No scene.background — let the CSS radial gradient show through the alpha channel
-    // Subtle depth fog — colour matched to background so it doesn't tint the board
+    // No scene.background, let the CSS radial gradient show through the alpha channel
+    // Subtle depth fog, colour matched to background so it doesn't tint the board
     this.scene.fog = new THREE.FogExp2(0x020617, 1.5)
 
-    // Environment map (RoomEnvironment — cheap PMREM IBL, transforms PBR soldermask from flat to shiny)
+    // Environment map (RoomEnvironment, cheap PMREM IBL, transforms PBR soldermask from flat to shiny)
     const pmremGen = new THREE.PMREMGenerator(this.renderer)
     pmremGen.compileEquirectangularShader()
     const roomEnv = new RoomEnvironment()
@@ -80,7 +80,7 @@ export class Board3DViewer {
     roomEnv.dispose()
     pmremGen.dispose()
 
-    // Camera — use canvas pixel dimensions (set by attribute) with safe fallback
+    // Camera, use canvas pixel dimensions (set by attribute) with safe fallback
     const initW = canvas.width > 0 ? canvas.width : (canvas.clientWidth > 0 ? canvas.clientWidth : 1280)
     const initH = canvas.height > 0 ? canvas.height : (canvas.clientHeight > 0 ? canvas.clientHeight : 800)
     this.camera = new THREE.PerspectiveCamera(45, initW / initH, 0.001, 10)
@@ -116,7 +116,7 @@ export class Board3DViewer {
     fill.position.set(0.1, 0.5, 0.6)
     this.scene.add(fill)
 
-    // Under-bounce fill (simulates light bouncing off the desk — warms up board underside)
+    // Under-bounce fill (simulates light bouncing off the desk, warms up board underside)
     const underFill = new THREE.DirectionalLight(0xffeecc, 0.4)
     underFill.position.set(0, -1, 0)
     this.scene.add(underFill)
@@ -156,7 +156,7 @@ export class Board3DViewer {
     }
 
     // Post-processing composer: SSAO for per-component ambient occlusion
-    // Modest settings — boards are well under 500k tris so this is cheap
+    // Modest settings, boards are well under 500k tris so this is cheap
     // on real GPUs.
     this.composer = new EffectComposer(this.renderer)
     const renderPass = new RenderPass(this.scene, this.camera)
@@ -288,7 +288,7 @@ export class Board3DViewer {
       const geo = mesh.geometry as THREE.BufferGeometry
       const pos = geo.attributes.position
       if (pos) {
-        // Approximate area via bounding box volume — large flat board has large XZ area
+        // Approximate area via bounding box volume, large flat board has large XZ area
         geo.computeBoundingBox()
         const bb = geo.boundingBox!
         const sz = new THREE.Vector3()
@@ -349,11 +349,11 @@ export class Board3DViewer {
           })
 
           if (isGreenFamily) {
-            // Saturated PCB green — #0d5c2e in linear sRGB
+            // Saturated PCB green, #0d5c2e in linear sRGB
             physical.color.set(0x0d5c2e)
           } else {
             // Cream board (stickhub): deepen and saturate the original color, keep identity
-            // Shift toward a richer warm off-white — darken ~25% and bump saturation
+            // Shift toward a richer warm off-white, darken ~25% and bump saturation
             physical.color.setRGB(lr * 0.75, lg * 0.68, lb * 0.60)
           }
 

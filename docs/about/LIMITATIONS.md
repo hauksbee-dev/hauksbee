@@ -74,22 +74,22 @@ to be hauksbee defects.
 ### 4. Crystal / resonator mis-bound as a gigafarad capacitor, silently collapsing co-sim
 
 - **Was** (`crates/hauksbee-engine/src/binder.rs`): a 2-pin crystal whose
-  reference starts with `C` (`Crystal1`) hit the passive first-char fallback —
-  `C` → capacitor — and `parse_value("16Mhz")` read `16M` as 16e6 while dropping
+  reference starts with `C` (`Crystal1`) hit the passive first-char fallback,
+  `C` → capacitor, and `parse_value("16Mhz")` read `16M` as 16e6 while dropping
   the `hz`, binding the part as a **16-megafarad** capacitor (the `--report`
   table literally showed `analog C 16000000000000.000µF`). A capacitor that
   large makes the MNA solve singular/ill-conditioned, collapsing every node
   voltage to ~0. In firmware co-sim that reads as **every** MCU-driven net
-  "never driven / Hi-Z" — a silent, board-wide false negative on essentially any
+  "never driven / Hi-Z", a silent, board-wide false negative on essentially any
   crystal-clocked MCU board.
 - **Chased to ground** on `explosion33/RocketryIgniter` (see
   [`hunts/HUNT_2026-06-30.md`](../hunts/HUNT_2026-06-30.md)): a strong-output test
   firmware on the same pin also read 0 V (ruling out the firmware), and a board
   with the crystals stripped drove the pin to 5 V (isolating the cause).
 - **Fix** (`39128bb`): detect crystals/resonators **before** the passive
-  heuristic — a frequency-valued part (`value_is_frequency`, a whole-value match
+  heuristic, a frequency-valued part (`value_is_frequency`, a whole-value match
   so a `600@100MHz` ferrite bead is *not* caught) or a crystal reference prefix
-  (`Y`/`CRYSTAL`/`XTAL`/`RESONATOR`) — and bind them `ComponentKind::Ignore`
+  (`Y`/`CRYSTAL`/`XTAL`/`RESONATOR`), and bind them `ComponentKind::Ignore`
   (high-impedance). The clock comes from the MCU model and a crystal's motional
   R-L-C is negligible at the solver's operating point, so removal is exact here;
   load caps (genuine passives) stay. Genuine capacitors are untouched.
@@ -127,7 +127,7 @@ those boards' layouts; only their legacy schematics are out of scope.
   (see `docs/cosim/MCU.md`).
 - **QEMU ESP32 SAR ADC** is not modelled by the Espressif QEMU fork (a
   silicon-model gap), so `set_analog_in` writes the count into a RAM-mailbox
-  slot instead (05 §5.1) — a firmware contract like the GPIO mailbox below:
+  slot instead (05 §5.1), a firmware contract like the GPIO mailbox below:
   only mailbox-aware firmware reads it. The same applies to the I2C/SPI byte
   callbacks (05 §5.2): request/response mailbox cells gated on `BUS_MAGIC`,
   serviced once per chunk, surfacing through the standard `on_i2c`/`on_spi`
@@ -138,16 +138,16 @@ those boards' layouts; only their legacy schematics are out of scope.
   the latest build** (QEMU 9.2.2 `esp_develop`, 2026-06-30): a host read of
   `GPIO_OUT_REG` (0x3FF44004) returns 0 via QMP `xp`, gdbstub `m`, *and*
   `qom-get` (the `esp32.gpio` object exposes no value property), and a host
-  *write* to those registers is discarded — the model is write-effect-only with
+  *write* to those registers is discarded; the model is write-effect-only with
   no host-visible state, while a RAM address round-trips perfectly. TCG memory
   plugins are disabled in the prebuilt (`-plugin help` → not enabled), and there
   is no QEMU source tree on disk, so the only real fix is a ~15-line device-model
   patch to the fork's `hw/gpio/esp32_gpio.c` (store + return `GPIO_OUT`/`ENABLE`,
-  handling the W1TS/W1TC aliases) plus a rebuild — fully specified, with the
+  handling the W1TS/W1TC aliases) plus a rebuild, fully specified, with the
   exact registers and the matching backend change, in
   [`hunts/esp32-qemu-i2c-status.md`](../hunts/esp32-qemu-i2c-status.md). Shipping the
   register-read backend path *without* a patched QEMU to validate it against
-  would violate the no-unvalidatable-fixes rule, so it stays deferred — now with
+  would violate the no-unvalidatable-fixes rule, so it stays deferred, now with
   an exact, actionable spec rather than an open question. (The orthogonal
   discovery-path bug the spike surfaced is fixed: the loader now probes the
   current `~/.hauksbee-qemu-esp` first, with the legacy `~/.galvani-qemu-esp`
@@ -197,7 +197,7 @@ test against the current trunk. The still-open entries follow.
 
 Closed since recorded (verified by re-run, 2026-07-08):
 
-- **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs) — **CLOSED**. The
+- **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs), **CLOSED**. The
   MCP4728 IS an I2C slave now: a spec-driven `RegisterMapSensor`
   (`docs/hunts/specs/mcp4728.toml`), three instances auto-attached at
   0x60/0x61/0x62 with VOUT PinDrivers into the analog solve. Covered by
@@ -211,7 +211,7 @@ Closed since recorded (verified by re-run, 2026-07-08):
   section above); the Tarski DACs sit on the AVR/simavr path, which
   intercepts I2C fully. Dated closure notes in
   `docs/record/TARSKI_RESULTS.md` §5.3 and `docs/record/TEST_CAMPAIGN.md`.
-- **Bit-banged SPI at sub-chunk timing collapses in full co-sim** — **CLOSED**.
+- **Bit-banged SPI at sub-chunk timing collapses in full co-sim**: **CLOSED**.
   The scheduler resolves ordered pin edges within a chunk; firmware-driven
   bit-banged buses work end-to-end. Covered by
   `crates/hauksbee-engine/tests/bitbang_spi_cosim.rs`

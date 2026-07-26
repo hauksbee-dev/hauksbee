@@ -95,8 +95,8 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
 
     let mut nets = Vec::new();
     // Fresh unique ids for nets whose `(code ...)` is missing or unparseable.
-    // Sharing one fixed sentinel (-1) fused every such net — and every pin on
-    // them — into a single electrically-shorted net. KiCad codes are
+    // Sharing one fixed sentinel (-1) fused every such net, and every pin on
+    // them, into a single electrically-shorted net. KiCad codes are
     // non-negative, so a decreasing negative counter never collides with a real
     // code or with another synthetic id.
     let mut synthetic_net_id: i64 = -1;

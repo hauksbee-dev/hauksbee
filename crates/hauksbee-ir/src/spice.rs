@@ -10,12 +10,12 @@
 //!
 //! # Element-name references (dev-plan 04 §2.2, resolve-by-name)
 //!
-//! `F`/`H` cards name ANOTHER ELEMENT — the voltage source whose branch current
+//! `F`/`H` cards name ANOTHER ELEMENT; the voltage source whose branch current
 //! controls them: `F1 n+ n- Vsense gain`. The referent may appear later in the
 //! deck, so these resolve in a deferred second pass: parsing records a
 //! [`NameFixup`] with a placeholder id, and after the whole (flattened) deck is
 //! parsed, [`resolve_name_fixups`] builds one case-insensitive name index and
-//! patches each reference — a dangling name, an ambiguous name (two devices
+//! patches each reference, a dangling name, an ambiguous name (two devices
 //! differing only in case), or a referent that is not an independent `V` source
 //! is a line-numbered error. SPICE allows only V-source control; to read the
 //! current of anything else, insert the idiomatic zero-volt ammeter
@@ -23,7 +23,7 @@
 //! (any card kind can defer any device-name field) because the behavioral
 //! B-source (§2.5) will reuse it.
 //!
-//! **Scoping across subckts:** a `vname` inside a `.subckt` body is LOCAL —
+//! **Scoping across subckts:** a `vname` inside a `.subckt` body is LOCAL,
 //! flattening prefixes it with the instance path exactly like a refdes
 //! (`Vsense` in instance `X3` resolves to `X3.Vsense`), matching ngspice's
 //! subckt name translation. There is no fallback to a same-named global source:
@@ -31,7 +31,7 @@
 //! subckt, and a subckt that wants a global control current should take it in
 //! through a port with a local ammeter. (Dotted references compose: `X9.Vs`
 //! written inside a body becomes `X3.X9.Vs`.) A TOP-LEVEL card may reference a
-//! source inside an instance by its flattened name (`F1 a b X3.Vsense 2`) —
+//! source inside an instance by its flattened name (`F1 a b X3.Vsense 2`),
 //! unambiguous, though not portable to other SPICE dialects.
 //!
 //! Conventions: the first line is a title (ignored), `*` begins a comment,
@@ -46,7 +46,7 @@
 //! cycle or an undefined name is a line-numbered error. **Suffix rule:** SPICE
 //! engineering suffixes (`k`, `u`, ...) apply only to bare value tokens (an
 //! element value or a `.param` right-hand side written *without* braces). Inside
-//! `{...}` the text is pure `evalexpr` arithmetic over bare `f64`s — a parameter
+//! `{...}` the text is pure `evalexpr` arithmetic over bare `f64`s, a parameter
 //! referenced there is its already-resolved bare number. This keeps one rule:
 //! a braced expression yields a bare `f64`; suffixes are a tokenizer convenience
 //! outside braces only. A mixed `1k*2` (suffix inside arithmetic) refuses loudly
@@ -75,7 +75,7 @@
 //! `.include <file>` splices another file's text in place; `.lib <file>
 //! <section>` splices only the named `.lib <section> ... .endl` block from a
 //! library file. Inclusion happens FIRST, at the physical-line level, before
-//! any other pass — so included `.model`/`.subckt`/`.param` cards and elements
+//! any other pass, so included `.model`/`.subckt`/`.param` cards and elements
 //! participate in every later pass exactly as if they had been typed inline.
 //!
 //! **Search path:** a relative include resolves against the INCLUDING file's
@@ -98,7 +98,7 @@
 //!
 //! `.ic V(node)=val` seeds transient node voltages; `.nodeset V(node)=val`
 //! seeds the DC Newton start vector. Both are parsed AFTER subckt flattening so
-//! a node name resolves against the final (flattened) node table — including a
+//! a node name resolves against the final (flattened) node table, including a
 //! mangled internal node like `.ic V(X1.out)=2` (the flattened-name contract).
 //! Values accept `{expr}` and suffixed numbers through the same [`ParamEnv`] as
 //! element values. An unknown node is a line-numbered error with did-you-mean
@@ -107,8 +107,8 @@
 //! `.ic` semantics: with `uic` on the `.tran` card the named node voltages seed
 //! the power-on start directly (the solver's `FromZero` path, extended to read
 //! these values). WITHOUT `uic`, SPICE pins the named nodes DURING the DC solve
-//! — machinery the solver does not have (only device-level capacitor `ic=`
-//! pinning exists) — so the loader REFUSES `.ic` without `uic` loudly rather
+//!, machinery the solver does not have (only device-level capacitor `ic=`
+//! pinning exists), so the loader REFUSES `.ic` without `uic` loudly rather
 //! than silently downgrading it to a start-vector seed. `.nodeset` is a
 //! convergence GUESS only: it influences which root Newton finds but is never
 //! enforced (the final voltage may differ from the seed).
@@ -128,7 +128,7 @@ use thiserror::Error;
 /// The resolved parameter environment: parameter name (lowercased, SPICE is
 /// case-insensitive) to its numeric value. Built once from `.param` cards and
 /// re-scoped per subckt instance during expansion. This is the shared
-/// environment dev-plan 04 §4.2 calls for — the future B-source (§2.5) consumes
+/// environment dev-plan 04 §4.2 calls for; the future B-source (§2.5) consumes
 /// the same map.
 type ParamEnv = HashMap<String, f64>;
 
@@ -151,7 +151,7 @@ pub struct Directives {
     pub dc: Option<DcDirective>,
     /// `.print`/`.plot ANALYSIS var...` output requests, in source order.
     pub prints: Vec<PrintRequest>,
-    /// Whether any `.plot` card was seen (treated as `.print` — no ASCII plot).
+    /// Whether any `.plot` card was seen (treated as `.print`, no ASCII plot).
     pub saw_plot: bool,
 }
 
@@ -207,7 +207,7 @@ pub struct DcDirective {
 
 /// A `.print`/`.plot ANALYSIS var...` request. Variable expressions are carried
 /// verbatim (e.g. `V(out)`, `V(a,b)`, `I(V1)`) and parsed into probes by the
-/// consumer (`hauksbee_solve::Probe::parse`) — the loader does not duplicate that
+/// consumer (`hauksbee_solve::Probe::parse`); the loader does not duplicate that
 /// parser.
 #[derive(Debug, Clone)]
 pub struct PrintRequest {
@@ -610,10 +610,10 @@ fn collect_line(
 /// unimplemented directive; this splits the residue three ways:
 ///
 /// * a short, explicit ALLOWLIST of directives whose omission cannot change any
-///   value the solver computes — accepted as a genuine no-op;
+///   value the solver computes, accepted as a genuine no-op;
 /// * the ENUMERATED unsupported analyses (`.tf`/`.noise`/`.disto`/`.pz`/`.sens`/
-///   `.four`/`.meas`) — each refuses with its own reason;
-/// * everything else — an unknown `.`-card, refused generically rather than
+///   `.four`/`.meas`), each refuses with its own reason;
+/// * everything else, an unknown `.`-card, refused generically rather than
 ///   silently ignored (this also catches a `.control` block, refused at its
 ///   `.control` line before the body is misread as elements).
 fn classify_unhandled_directive(line: usize, trimmed: &str, raw: &str) -> Result<(), SpiceError> {
@@ -660,7 +660,7 @@ fn classify_unhandled_directive(line: usize, trimmed: &str, raw: &str) -> Result
 // --- element-name references (§2.2) ------------------------------------------
 
 /// A deferred element-name reference: `device`'s control slot `slot` names
-/// `name`, to be resolved once the whole deck is parsed. Generic on purpose —
+/// `name`, to be resolved once the whole deck is parsed. Generic on purpose,
 /// F/H defer their single `ctrl_src` (slot 0), and the behavioral B-source
 /// defers each distinct `I(vname)` dependency through its own slot (the index
 /// into [`Device::controlling_sources`] order).
@@ -672,7 +672,7 @@ struct NameFixup {
     slot: usize,
     /// The referenced element name, as written (matched case-insensitively).
     name: String,
-    /// What the referent must BE — the type check
+    /// What the referent must BE; the type check
     /// [`resolve_name_fixups`] enforces once the name resolves.
     referent: Referent,
     /// Line of the referring card, for errors.
@@ -700,7 +700,7 @@ enum Referent {
 /// Errors, all line-numbered against the referring card:
 /// * the name matches nothing (dangling reference);
 /// * the name matches two devices differing only in case (SPICE names are
-///   case-insensitive, so this is genuinely ambiguous — refuse, don't pick);
+///   case-insensitive, so this is genuinely ambiguous, refuse, don't pick);
 /// * the referent is not an independent `V` source. Every branch-current
 ///   carrier (an `E`, an inductor, another `H`) is refused with the same
 ///   pointer: SPICE control semantics are V-source-only, and the zero-volt
@@ -783,7 +783,7 @@ fn resolve_name_fixups(circuit: &mut Circuit, fixups: &[NameFixup]) -> Result<()
         circuit.devices[fx.device.0 as usize].retarget_controlling_source_slot(fx.slot, target);
     }
     // Duplicate-pair refusal: two K cards over the same winding pair would
-    // silently SUM their mutual terms in the solver's coupling map — refuse
+    // silently SUM their mutual terms in the solver's coupling map, refuse
     // with the second card's line instead (ngspice also rejects redefinition).
     {
         let mut seen: HashMap<(u32, u32), ()> = HashMap::new();
@@ -906,7 +906,7 @@ fn strip_braces(s: &str) -> &str {
 
 /// A strict SPICE value number: the existing lenient parser, but the suffix must
 /// be purely alphabetic (a unit like `ohm`/`f`/`h`, or empty). This rejects
-/// `1k*2` — a suffix mixed with an operator — so it refuses loudly at the value
+/// `1k*2`, a suffix mixed with an operator, so it refuses loudly at the value
 /// site instead of silently parsing `1000` and dropping the `*2`.
 fn parse_value_number(tok: &str) -> Option<f64> {
     let v = parse_spice_number(tok)?;
@@ -998,7 +998,7 @@ fn eval_tree(
 /// Append `.0` to every bare integer literal in an arithmetic expression so
 /// `evalexpr` evaluates it with floating-point (not integer) semantics. A SPICE
 /// numeric literal is a real number, but `evalexpr` parses a literal with no
-/// `.`/exponent as an `i64` and then does integer arithmetic — `/` truncates
+/// `.`/exponent as an `i64` and then does integer arithmetic, `/` truncates
 /// (`{6/4}` → 1 instead of 1.5) and `+ - *` overflow-error on large products.
 /// Identifiers (which may carry digits, e.g. `r1`) and literals already floating
 /// (`.`/`e`) are left untouched. The B-source canonicalizer applies the same
@@ -1061,7 +1061,7 @@ fn float_force_literals(expr: &str) -> String {
 /// a bare suffix number. Braces are optional and stripped first.
 fn eval_scalar(line: usize, s: &str, raw: &str, env: &ParamEnv) -> Result<f64, SpiceError> {
     let inner = strip_braces(s);
-    // A bare suffix number (`2k`, `4.7`) is a value, not an expression — try it
+    // A bare suffix number (`2k`, `4.7`) is a value, not an expression, try it
     // first, because `evalexpr` would otherwise read the `k` in `2k` as a
     // variable. Only genuinely non-numeric text is handed to the expression
     // parser.
@@ -1081,7 +1081,7 @@ fn eval_scalar(line: usize, s: &str, raw: &str, env: &ParamEnv) -> Result<f64, S
 /// Evaluate a single element-value TOKEN. A `{expr}` token is arithmetic over
 /// the environment; a bare token is a suffix number or (failing that) a
 /// parameter name. Unlike [`eval_scalar`], a bare token is NOT treated as an
-/// expression — element values use `{...}` for expressions by convention.
+/// expression, element values use `{...}` for expressions by convention.
 fn eval_value(line: usize, tok: &str, raw: &str, env: &ParamEnv) -> Result<f64, SpiceError> {
     if let Some(inner) = braced_inner(tok) {
         let tree = build_operator_tree::<DefaultNumericTypes>(&float_force_literals(inner))
@@ -1112,7 +1112,7 @@ fn eval_value(line: usize, tok: &str, raw: &str, env: &ParamEnv) -> Result<f64, 
 fn resolve_params(cards: &[ParamCard], base: &ParamEnv) -> Result<ParamEnv, SpiceError> {
     // Refuse a parameter defined more than once (names are already lowercased,
     // so this also catches case-differing duplicates). Otherwise which
-    // definition wins depends silently on topological resolution order —
+    // definition wins depends silently on topological resolution order,
     // `.param x={y}` / `.param x=2` resolve to different values by luck. (R7 #12)
     let mut first_line: HashMap<&str, usize> = HashMap::new();
     for card in cards {
@@ -1154,7 +1154,7 @@ fn resolve_params(cards: &[ParamCard], base: &ParamEnv) -> Result<ParamEnv, Spic
                         .map(|s| s.to_ascii_lowercase())
                         .collect();
                     // A dependency that is neither resolvable nor a declared
-                    // parameter is undefined — report immediately.
+                    // parameter is undefined, report immediately.
                     if let Some(u) = deps
                         .iter()
                         .find(|d| !env.contains_key(*d) && !names.contains(*d))
@@ -1293,7 +1293,7 @@ fn parse_subckt_header(line: usize, raw: &str) -> Result<SubcktDef, SpiceError> 
             // and duplicate `.param` cards are refused. The port map in
             // `expand_instance` is a HashMap keyed on the lowercased port name,
             // so a repeated port silently keeps only the LAST caller node and
-            // discards the earlier connection — the arity check passes (list
+            // discards the earlier connection; the arity check passes (list
             // lengths match) and the flattened netlist is mis-wired with no
             // diagnostic. Port matching is case-insensitive there, so compare
             // case-insensitively here too.
@@ -1339,7 +1339,7 @@ fn map_node(tok: &str, port_map: &HashMap<String, String>, inst_path: &str) -> S
 /// (see the `kind == 'B'` arm of [`expand_instance`]): `v(node)` arguments go
 /// through [`map_node`] (formal port -> caller node, internal -> instance-
 /// prefixed, ground stays global), `i(vname)` arguments get the instance
-/// prefix like an F/H `vname`. Purely a rewrite — validation happens later in
+/// prefix like an F/H `vname`. Purely a rewrite, validation happens later in
 /// [`parse_behavioral`], with this line's provenance attached. Identifiers
 /// other than a call-shaped `v`/`i` (function names, params, `time`) pass
 /// through verbatim, as does anything malformed (whose refusal message should
@@ -1416,7 +1416,7 @@ fn mangle_behavioral_token(
 fn node_indices_for(kind: char) -> &'static [usize] {
     match kind {
         'R' | 'C' | 'L' | 'V' | 'I' | 'D' => &[1, 2],
-        // F/H: only the output pair are nodes — token 3 is an ELEMENT NAME
+        // F/H: only the output pair are nodes, token 3 is an ELEMENT NAME
         // (the controlling V source), rewritten separately in
         // `expand_instance` under the local-scope rule.
         'F' | 'H' => &[1, 2],
@@ -1426,7 +1426,7 @@ fn node_indices_for(kind: char) -> &'static [usize] {
         'B' => &[1, 2],
         'Q' => &[1, 2, 3],
         'M' | 'S' | 'E' | 'G' => &[1, 2, 3, 4],
-        // K: NO node tokens — positions 1 and 2 are INDUCTOR NAMES, rewritten
+        // K: NO node tokens, positions 1 and 2 are INDUCTOR NAMES, rewritten
         // in `expand_instance` under the local-scope rule like F/H vnames.
         'K' => &[],
         _ => &[],
@@ -1541,7 +1541,7 @@ fn expand_instance(
     // Instance parameter environment (per-instance; siblings never share).
     // Base = the global params carried by the caller. X-line overrides are
     // evaluated in the CALLER's environment (so a value can thread down) and
-    // applied FIRST — an override always wins. Defaults then fill in only the
+    // applied FIRST, an override always wins. Defaults then fill in only the
     // params the caller did not override, evaluated top to bottom against the
     // growing instance env (so a default may reference globals, an override, or
     // an earlier default).
@@ -1662,8 +1662,8 @@ fn expand_instance(
                 .to_ascii_uppercase();
             let mut new_toks = btoks.clone();
             new_toks[0] = format!("{}.{}", inst_name, btoks[0]);
-            // An E/G (VCVS/VCCS) POLY/VALUE/TABLE form has a keyword — not a
-            // node — at index 3. Mangling it as a node ("X1.POLY") turned the
+            // An E/G (VCVS/VCCS) POLY/VALUE/TABLE form has a keyword, not a
+            // node, at index 3. Mangling it as a node ("X1.POLY") turned the
             // clean "POLY controlled-source unsupported" refusal into a cryptic
             // "malformed number". Skip node-mapping for these so the verbatim
             // line reaches parse_controlled and is refused by name. (R8 #16)
@@ -1684,7 +1684,7 @@ fn expand_instance(
             // module doc's scoping rule): prefix the vname with the instance
             // path exactly like a refdes, so `Vsense` written in the body of
             // instance `X3` resolves to the spliced `X3.Vsense`. Unconditional
-            // on purpose — no fallback to a same-named global source, so a
+            // on purpose, no fallback to a same-named global source, so a
             // typo'd local name dangles and fails loudly at resolution instead
             // of silently binding outside the subckt. (Skip `poly`: it must
             // survive verbatim for the parser's refusal to name it.)
@@ -1695,7 +1695,7 @@ fn expand_instance(
                 new_toks[3] = format!("{}.{}", inst_name, btoks[3]);
             }
             // K couplings reference two INDUCTOR names (tokens 1 and 2, no
-            // node tokens at all — `node_indices_for('K')` is empty): both
+            // node tokens at all, `node_indices_for('K')` is empty): both
             // are local to the subckt body under the same scoping rule as an
             // F/H vname, so prefix them unconditionally and let a typo dangle
             // loudly at resolution.
@@ -1710,7 +1710,7 @@ fn expand_instance(
             // their braced token (`v={2*v(mid)+i(Vs)}` survives tokenize_kv as
             // one `v={...}` token): rewrite every `v(...)` argument through
             // the port map / instance prefix and every `i(...)` argument
-            // through the instance prefix — the same local-scope rules as
+            // through the instance prefix; the same local-scope rules as
             // element nodes and F/H vnames. Ground stays global via map_node.
             if kind == 'B' {
                 for t in new_toks.iter_mut().skip(3) {
@@ -1734,7 +1734,7 @@ fn expand_instance(
 
 /// Insert a `.model` card, hoisting subckt-local models to one global table.
 /// An identical redefinition is silently accepted; a conflicting same-name
-/// definition refuses loudly (never a silent shadow — honesty doctrine §4.3).
+/// definition refuses loudly (never a silent shadow, honesty doctrine §4.3).
 fn insert_model(
     models: &mut HashMap<String, ModelCard>,
     card: ModelCard,
@@ -1819,7 +1819,7 @@ pub const MAX_INCLUDE_DEPTH: usize = 50;
 /// One physical source line tagged with where it came from. `origin` is a
 /// provenance breadcrumb (empty for the top deck) appended to any error raised
 /// from this line, so a failure inside an included file names the file, its
-/// own line, and the inclusion site — the same discipline subckt splicing uses.
+/// own line, and the inclusion site; the same discipline subckt splicing uses.
 #[derive(Clone)]
 struct PhysLine {
     /// Line number within the file the line came from (1-based).
@@ -1832,7 +1832,7 @@ struct PhysLine {
 
 /// State threaded through the recursive include expansion.
 struct IncludeCtx {
-    /// The top deck's directory — the second search location for every include.
+    /// The top deck's directory; the second search location for every include.
     top_dir: PathBuf,
     /// (canonical path, section) pairs currently open on the include stack, for
     /// the cycle check. Keying on the SECTION as well as the path means two
@@ -1916,7 +1916,7 @@ fn resolve_include(arg: &str, this_dir: &Path, top_dir: &Path) -> Result<PathBuf
 }
 
 /// Read a source file's lines, expanding `.include`/`.lib` inline into `out`.
-/// `is_top` drops the SPICE title line (line 1) of the TOP deck only — included
+/// `is_top` drops the SPICE title line (line 1) of the TOP deck only, included
 /// files have no title. `origin` is the breadcrumb for lines from this file.
 fn read_source(
     text: &str,
@@ -1935,7 +1935,7 @@ fn read_source(
         let trimmed = raw.trim_start();
         let tok = first_token(trimmed);
         if tok.eq_ignore_ascii_case(".include") || tok.eq_ignore_ascii_case(".inc") {
-            // Strip an inline comment first — `.include sub.cir ; note` must not
+            // Strip an inline comment first, `.include sub.cir ; note` must not
             // read the comment words as extra file-path arguments.
             let rest = strip_inline_comment(&trimmed[tok.len()..]);
             let args = parse_directive_args(&rest);
@@ -2008,7 +2008,7 @@ fn include_file(
     splice_file(&path, &args[0], child_origin, None, site, raw, origin, ctx, out)
 }
 
-/// Handle a `.lib <file> <section>` call — or refuse the ambiguous one-arg form.
+/// Handle a `.lib <file> <section>` call, or refuse the ambiguous one-arg form.
 #[allow(clippy::too_many_arguments)]
 fn lib_call(
     args: &[String],
@@ -2153,7 +2153,7 @@ fn read_section(
         let trimmed = raw.trim_start();
         let tok = first_token(trimmed);
         if tok.eq_ignore_ascii_case(".lib") {
-            // Strip an inline comment first — `.lib nmos ; 3.3V models` must not
+            // Strip an inline comment first, `.lib nmos ; 3.3V models` must not
             // read the comment words as extra section/file arguments.
             let args = parse_directive_args(&strip_inline_comment(&trimmed[tok.len()..]));
             if args.len() == 1 {
@@ -2402,7 +2402,7 @@ fn strip_inline_comment(line: &str) -> String {
 
 /// Split a line into tokens, treating whitespace, `(`, `)`, `,` (and, when
 /// `keep_eq` is false, `=`) as separators that vanish. A `{...}` curly-brace
-/// expression is kept ATOMIC — its interior (which may contain spaces, parens,
+/// expression is kept ATOMIC; its interior (which may contain spaces, parens,
 /// `=`, and operators, e.g. `{ (a+b) * 2 }`) is copied verbatim as one token,
 /// braces included, so downstream can recognize and evaluate it. Nesting is
 /// tracked so nested braces do not close early.
@@ -2533,7 +2533,7 @@ fn scale_suffix(suffix: &str) -> f64 {
         1e-15
     } else {
         // No `a`=atto branch: atto is NOT in SPICE3/ngspice's scale set
-        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit — a
+        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit, a
         // current source "I1 1 0 5A" must read 5 A, not 5e-18. Trailing unit
         // letters (A/V/H/F/Ohm/S) fall through here to the identity multiplier.
         1.0
@@ -2598,7 +2598,7 @@ fn parse_model_card(line: usize, raw: &str) -> Result<ModelCard, SpiceError> {
                 c.is_ascii_digit() || c == '+' || c == '-' || c == '.' || c == '{'
             }) {
                 // A value that LOOKS numeric (or is a `{expr}`) but won't parse
-                // is a malformed number, not string metadata — refuse it loudly
+                // is a malformed number, not string metadata, refuse it loudly
                 // rather than silently dropping the key so downstream `get_or`
                 // fills a default (the §4.3 misparse sin the LEVEL check below
                 // also guards). Model cards don't get `{expr}` evaluation; those
@@ -2615,7 +2615,7 @@ fn parse_model_card(line: usize, raw: &str) -> Result<ModelCard, SpiceError> {
     }
     // LEVEL refusal (dev-plan 04 §3.3/§4.3): the stamp implements exactly
     // level 1 (Shichman-Hodges + switch-relevant gate charge / body diode).
-    // A card asking for LEVEL=2/3/… used to be SILENTLY stamped as level 1 —
+    // A card asking for LEVEL=2/3/… used to be SILENTLY stamped as level 1,
     // the misparse sin §4.3 names. Refuse it at load, with the line.
     if kind == "mos" {
         if let Some(lv) = params.get("level").copied() {
@@ -2726,7 +2726,7 @@ fn parse_rcl(
     let value = eval_value(line, &toks[3], raw, env)?;
     let name = toks[0].clone();
 
-    // Trailing key=value options (tc1=, ic=) — re-scan with `=` kept,
+    // Trailing key=value options (tc1=, ic=), re-scan with `=` kept,
     // resolving params/exprs and refusing malformed numeric values.
     let kv = scan_trailing_kv_eval(line, raw, env)?;
 
@@ -2778,7 +2778,7 @@ fn scan_trailing_kv(raw: &str) -> HashMap<String, f64> {
 }
 
 /// Collect trailing `key=value` element options (R tc1=, C/L ic=, MOSFET W=/L=)
-/// evaluating each value through the parameter environment — so a braced
+/// evaluating each value through the parameter environment, so a braced
 /// `{expr}` or a bare `.param` name resolves, exactly like the main device
 /// value does. A value that looks numeric or braced but will NOT evaluate (a
 /// typo, an unresolved param/expr) is REFUSED with the line, rather than being
@@ -2976,8 +2976,8 @@ fn parse_diode(
     // a wrong parse"): a NAMED model that does not exist refuses with
     // `MissingModel`, and one that exists but is not a diode `.model` refuses
     // rather than silently inheriting a BJT/MOS card's parameters. There is no
-    // bare `Dxxx a k` no-model form in this loader — the model token is required
-    // by the arity check above — so every diode names a model that must resolve.
+    // bare `Dxxx a k` no-model form in this loader; the model token is required
+    // by the arity check above, so every diode names a model that must resolve.
     let card = models
         .get(&model_name.to_ascii_lowercase())
         .ok_or_else(|| SpiceError::MissingModel {
@@ -3150,7 +3150,7 @@ fn mosfet_from_card(card: &ModelCard, kv: &HashMap<String, f64>) -> MosfetModel 
     // Gate capacitances (dev-plan 04 §3.3): overlap capacitances CGSO/CGDO
     // are per meter of width; TOX yields the total intrinsic oxide
     // capacitance Cox·W·L. An omitted TOX leaves c_ox = 0 (no intrinsic gate
-    // charge) — a DOCUMENTED deviation from ngspice, which materializes
+    // charge), a DOCUMENTED deviation from ngspice, which materializes
     // default TOX/W/L; see `MosfetModel::c_ox`.
     const EPS_OX: f64 = 3.9 * 8.854_214_871e-12; // SiO2 permittivity (F/m)
     let c_ox = match card.get("tox") {
@@ -3161,7 +3161,7 @@ fn mosfet_from_card(card: &ModelCard, kv: &HashMap<String, f64>) -> MosfetModel 
     // PMOS); the solver stores it polarity-FOLDED (positive = enhancement for
     // either polarity, see `MosfetModel::vto`). Fold here. Before this fix a
     // SPICE-convention PMOS card (VTO=-1.1) was read as a folded threshold of
-    // -1.1 V — a depletion-mode device, permanently on. NMOS cards
+    // -1.1 V, a depletion-mode device, permanently on. NMOS cards
     // (sign = +1) are bit-identical across the fix.
     let fold = polarity.sign();
     MosfetModel {
@@ -3338,7 +3338,7 @@ fn parse_current_controlled(
     // F<name> n+ n- vname gain       (CCCS: I(n+ -> n-) = gain * I(vname))
     // H<name> n+ n- vname transres   (CCVS: V(n+, n-) = transres * I(vname))
     //
-    // POLY is recognized and refused like the E/G behavioral forms — but ONLY
+    // POLY is recognized and refused like the E/G behavioral forms, but ONLY
     // at the vname position: unlike E/G there is no VALUE/TABLE form for F/H,
     // and a blanket token scan would refuse a legitimately named source (a
     // `Vtable`, or literally `Value`). `poly` cannot be a vname (a V-source
@@ -3371,7 +3371,7 @@ fn parse_current_controlled(
     if !is_cccs && p == n {
         // A CCVS with a shorted output port has an indeterminate branch
         // current (its constraint row collapses and its branch column cancels
-        // to zero) — the same singularity as the shorted VCVS, refused with a
+        // to zero); the same singularity as the shorted VCVS, refused with a
         // name instead of dying at a zero pivot. The CCCS variant is harmless:
         // `F a a ...` injects and withdraws the same current at one node (a
         // no-op, like the legal self-referential VCCS idiom).
@@ -3422,11 +3422,11 @@ fn parse_current_controlled(
 /// two inductors named elsewhere in the deck. Both names defer through the
 /// same resolve-by-name pass as an F/H control (slot 0 = L1, slot 1 = L2),
 /// with [`Referent::Inductor`] making the type check refuse anything that is
-/// not an `L` element. `k` must satisfy `0 < k <= 1` — `k == 1` (a perfect
+/// not an `L` element. `k` must satisfy `0 < k <= 1`, `k == 1` (a perfect
 /// transformer) is LEGAL and the solver's L-matrix companion handles the
 /// singular group without inverting it; `k <= 0` and `k > 1` are refused with
 /// the line (a negative k in ngspice flips a winding's dot; supporting that
-/// is a polarity feature this loader does not fake — swap the winding's
+/// is a polarity feature this loader does not fake, swap the winding's
 /// terminals in the netlist instead).
 fn parse_coupling(
     line: usize,
@@ -3493,7 +3493,7 @@ fn parse_coupling(
 ///
 /// The expression is REQUIRED to be brace-wrapped (the tokenizer keeps a
 /// `{...}` atomic; an un-braced expression would shatter into node-looking
-/// tokens and misparse silently — exactly the failure §4.3 forbids). The raw
+/// tokens and misparse silently, exactly the failure §4.3 forbids). The raw
 /// text is rewritten to canonical form by [`rewrite_behavioral_expr`]:
 /// `V(node)`/`V(a,b)` and `I(vname)` become positional `__d{k}` dependency
 /// slots, `.param` names fold to constants, function names map onto evalexpr
@@ -3660,7 +3660,7 @@ fn rewrite_behavioral_expr(
             }
             if i < b.len() && (b[i].is_ascii_alphabetic() || b[i] == '_') {
                 // `2k` inside braces: the §4.2 suffix rule says braces hold
-                // pure arithmetic — refuse rather than drop the suffix.
+                // pure arithmetic, refuse rather than drop the suffix.
                 return Err(syn(format!(
                     "engineering suffix inside a braced expression \
                      (`{}{}...`); write the bare value (`2000` not `2k`)",
@@ -3670,7 +3670,7 @@ fn rewrite_behavioral_expr(
             }
             // SPICE numeric literals are REAL numbers, but evalexpr parses a
             // literal with no `.` or exponent as an integer and then does integer
-            // arithmetic — `/` truncates and `+ - *` error on overflow. Force
+            // arithmetic, `/` truncates and `+ - *` error on overflow. Force
             // float semantics by appending `.0` to a bare integer literal, so
             // e.g. `3/2` evaluates to 1.5 (not 1) and large products don't
             // overflow-error.
@@ -3960,7 +3960,7 @@ fn parse_ac(line: usize, raw: &str) -> Result<AcDirective, SpiceError> {
 }
 
 /// Split a `.print`/`.plot` card into whitespace-separated tokens, but keep a
-/// parenthesized group (`V(out)`, `V(a,b)`, `I(V1)`) intact — the general
+/// parenthesized group (`V(out)`, `V(a,b)`, `I(V1)`) intact; the general
 /// tokenizer strips parentheses, which would shatter `V(out)` into `V` + `out`.
 fn split_print_tokens(s: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -4113,7 +4113,7 @@ fn parse_dc_group(
     }
     // A step must actually march from start toward stop. Zero step, or a sign
     // that points away from stop, would loop forever or emit a single point that
-    // silently ignores the range — refuse rather than fake it.
+    // silently ignores the range, refuse rather than fake it.
     if step == 0.0 {
         return Err(SpiceError::Syntax {
             line,
@@ -4145,7 +4145,7 @@ mod tests {
     use super::*;
 
     /// Dev-plan 04 §3.3/§4.3: a `.model` card asking for a MOS level the
-    /// stamp does not implement must REFUSE at load, with the line — it used
+    /// stamp does not implement must REFUSE at load, with the line; it used
     /// to be silently stamped as level 1 (the misparse sin). An explicit
     /// `LEVEL=1` (and no LEVEL at all) parses as before.
     #[test]
@@ -4166,8 +4166,8 @@ mod tests {
         assert!(SpiceLoader::load(ok).is_ok(), "LEVEL=1 must stay accepted");
     }
 
-    /// Round-6 #5: a `.model` parameter whose value LOOKS numeric — a stray
-    /// sign, a bare `.`, or an unresolved `{expr}` — but does not parse used to
+    /// Round-6 #5: a `.model` parameter whose value LOOKS numeric, a stray
+    /// sign, a bare `.`, or an unresolved `{expr}`, but does not parse used to
     /// be SILENTLY dropped, so the stamp filled a default and the device
     /// behaved nothing like the card said. The loader now refuses it, with the
     /// card's line. Model cards don't get `{expr}` evaluation, so an unresolved
@@ -4175,7 +4175,7 @@ mod tests {
     /// metadata (mfg=, type=) still passes through untouched.
     #[test]
     fn unparseable_numeric_model_param_is_refused_not_dropped() {
-        // `VTO={VT0}` — an unresolved brace expression, not metadata. It looks
+        // `VTO={VT0}`, an unresolved brace expression, not metadata. It looks
         // numeric (leading `{`) but the number parser can't read it.
         let bad = "m\nM1 d g 0 0 MX\n.model MX NMOS(LEVEL=1 VTO={VT0})\n.end\n";
         match SpiceLoader::load(bad).unwrap_err() {
@@ -4199,7 +4199,7 @@ mod tests {
 
     /// Round-7 #2: trailing element options (MOSFET W=/L=, R tc1=, C/L ic=) must
     /// evaluate braced `{expr}` and bare `.param` names, exactly like the main
-    /// device value — they used to be scanned with a number-only parser that
+    /// device value; they used to be scanned with a number-only parser that
     /// silently dropped anything non-numeric, so the device fell back to a
     /// default. A numeric-looking-but-unevaluable option is now refused.
     #[test]
@@ -4245,7 +4245,7 @@ mod tests {
     }
 
     /// Round-7 #11: a duplicate element refdes (case-insensitive) must be
-    /// refused — two devices sharing a name were silently stamped in parallel.
+    /// refused, two devices sharing a name were silently stamped in parallel.
     #[test]
     fn duplicate_refdes_is_refused() {
         let deck = "dup\nR1 a 0 1k\nR1 a 0 2k\n.end\n";
@@ -4259,7 +4259,7 @@ mod tests {
     }
 
     /// Round-7 #12: a parameter defined twice (including case-differing) must be
-    /// refused — the winner otherwise depended silently on resolution order.
+    /// refused; the winner otherwise depended silently on resolution order.
     #[test]
     fn duplicate_param_is_refused() {
         let deck = "dupp\n.param val=1\n.param val=2\nR1 a 0 {val}\n.end\n";
@@ -4277,7 +4277,7 @@ mod tests {
     }
 
     /// Round-8 #7: a subckt body-local `.param` that shadows a name already in
-    /// scope (a global here) resolves order-dependently — refuse it.
+    /// scope (a global here) resolves order-dependently, refuse it.
     #[test]
     fn subckt_local_param_shadowing_outer_is_refused() {
         let deck = "d\n.param vdd=10\n.subckt amp in out\n.param bias={vdd*0.5}\n\
@@ -4294,7 +4294,7 @@ mod tests {
     }
 
     /// Round-8 #16: the E/G POLY/VALUE/TABLE refusal must survive subckt
-    /// expansion — the POLY keyword must not be mangled as a node, which
+    /// expansion; the POLY keyword must not be mangled as a node, which
     /// degraded the clean refusal into a cryptic "malformed number".
     #[test]
     fn subckt_eg_poly_refusal_names_poly() {
@@ -4332,7 +4332,7 @@ mod tests {
     /// R18: a `.subckt` header that lists the same port name twice must be
     /// refused, not silently accepted. The port map is a HashMap keyed on the
     /// lowercased port name, so a repeated port keeps only the LAST caller node
-    /// and drops the earlier connection while the arity check still passes —
+    /// and drops the earlier connection while the arity check still passes,
     /// mis-wiring the flattened netlist with no diagnostic. Matches the loud
     /// refusal of duplicate defaults / duplicate `.param` cards.
     #[test]
@@ -4358,7 +4358,7 @@ mod tests {
     }
 
     /// Bug-hunt: a 0-Ω resistor is a SHORT (ngspice convention), but the
-    /// solver stamps conductance 1/R and skips a non-positive R — so an
+    /// solver stamps conductance 1/R and skips a non-positive R, so an
     /// unclamped `ohms: 0.0` reached the stamp as an OPEN and silently broke
     /// the jumper's net. The loader clamps to the same 1e-6 Ω floor the
     /// engine's board binder applies, so wrong topology can never reach the
@@ -4445,7 +4445,7 @@ mod tests {
         assert_eq!(m.mj, 0.4);
         // The bit-identity contract: a card WITHOUT the §3.3 fields yields a
         // charge-free, body-diode-free model (ngspice would default TOX and
-        // IS; hauksbee deliberately does not — documented on the fields).
+        // IS; hauksbee deliberately does not, documented on the fields).
         let plain = "m\nM1 d g 0 0 MN\n.model MN NMOS(VTO=2 KP=1e-3)\n.end\n";
         let c2 = SpiceLoader::load(plain).unwrap();
         let m2 = match c2.devices.iter().find(|d| matches!(d, Device::Mosfet { .. })) {
@@ -4723,7 +4723,7 @@ mod tests {
     #[test]
     fn refuses_ambiguous_control_name() {
         // Two sources differing only in case are the SAME refdes under SPICE's
-        // case-insensitive names — refuse, never pick one. The duplicate-refdes
+        // case-insensitive names, refuse, never pick one. The duplicate-refdes
         // check (R7 #11) now catches this at definition time, a stronger and
         // earlier diagnosis than the downstream reference ambiguity; either way
         // the load must fail loudly and never silently choose a source.
@@ -4857,7 +4857,7 @@ mod tests {
         }
     }
 
-    /// The subckt-composition rule: a vname inside a body is LOCAL — it
+    /// The subckt-composition rule: a vname inside a body is LOCAL; it
     /// resolves to the instance-mangled source (`X3.Vsense`), per instance.
     #[test]
     fn subckt_local_control_name_resolves_to_mangled_instance() {
@@ -4990,7 +4990,7 @@ mod tests {
     #[test]
     fn suffix_mixed_with_operator_refuses() {
         // `1k*2` is neither a valid expression (evalexpr rejects `1k`) nor a
-        // pure suffix number — it must refuse, not silently parse 1000.
+        // pure suffix number; it must refuse, not silently parse 1000.
         let net = "p\nR1 a 0 {1k*2}\n.end\n";
         let err = SpiceLoader::load(net).unwrap_err().to_string();
         assert!(err.contains("line 2"), "loud, line-numbered refusal: {err}");
@@ -5287,7 +5287,7 @@ mod tests {
     #[test]
     fn lib_section_open_inline_comment_is_stripped() {
         // R11: a `.lib fast ; comment` section-open line inside a library file
-        // must have its comment stripped before the section token is read — else
+        // must have its comment stripped before the section token is read, else
         // the extra words make it len != 1 and the section never opens.
         let d = TmpDir::new("libsec_cmt");
         d.write(
@@ -5307,7 +5307,7 @@ mod tests {
     fn two_sections_from_one_lib_file_is_not_a_cycle() {
         // R11: the include-cycle guard must key on (file, SECTION), not the file
         // alone. Section `fast` legitimately pulls a *different* section `pmos`
-        // from the SAME library file — that is not a cycle. Path-only keying
+        // from the SAME library file, that is not a cycle. Path-only keying
         // rejected it with a spurious "include cycle".
         let d = TmpDir::new("libsec_xsec");
         d.write(
@@ -5440,7 +5440,7 @@ mod tests {
     /// The canonical rewrite: V(node) / differential V(a,b) / I(vname) become
     /// positional `__d{k}` slots (deduped), params fold to constants, `time`
     /// survives, function names map onto evalexpr builtins, and the I(...)
-    /// reference resolves through the same deferred pass as an F/H control —
+    /// reference resolves through the same deferred pass as an F/H control,
     /// including a FORWARD reference to a source defined later in the deck.
     #[test]
     fn parses_behavioral_with_all_dep_kinds() {

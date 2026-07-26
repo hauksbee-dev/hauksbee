@@ -1,7 +1,7 @@
 //! Regression proof for R8 #5 against a REAL Espressif QEMU guest: the run
 //! window's 8 ms floor is BOOT-ONLY.
 //!
-//! Before the fix, `run_micros(100)` always advanced the guest ~8 ms — an ~80x
+//! Before the fix, `run_micros(100)` always advanced the guest ~8 ms, an ~80x
 //! over-advance versus the scheduler's requested chunk, desyncing the QEMU MCU
 //! from the analog solve and the lockstep peers. The floor exists so the ROM +
 //! 2nd-stage bootloader clear boot in a few hundred chunks; once the firmware

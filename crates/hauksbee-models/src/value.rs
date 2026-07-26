@@ -73,13 +73,13 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
     // fallback (which keys off parse_value() == None for non-passive values),
     // silently deleting a conducting rectifier/Schottky/zener path. A real RKM
     // value has a SHORT fractional part ("4n7", "1n5"); a JEDEC number is a single
-    // leading digit, then N, then 3+ serial digits — reject that whole form.
+    // leading digit, then N, then 3+ serial digits, reject that whole form.
     if is_jedec_semiconductor(v) {
         return None;
     }
     // A value expressed purely in volts ("5V1", "3V3", "12V") OR amperes ("5A",
     // "500mA") is a RATING, not an R/C/L magnitude. Returning Some() for it defeats
-    // the callers that key off `parse_value() == None` for non-passive values — the
+    // the callers that key off `parse_value() == None` for non-passive values; the
     // signal-diode fallback (leaving the part open) and the connector-Ignore
     // classification (binder.rs excludes BOTH V and A). It also lets a leading
     // current token be mis-picked as the magnitude ("2A_22u" → 2 F instead of 22 uF).
@@ -90,7 +90,7 @@ pub fn parse_value(s: &str) -> Option<ParsedValue> {
 /// A JEDEC semiconductor part number of the `<digit>N<serial>` family (1N4007,
 /// 2N3904, 3N201): exactly one leading digit, then `N`/`n`, then 3 or more serial
 /// digits and nothing else. The 3-digit floor keeps genuine RKM nano values
-/// ("4n7", "1n5", "2n2" — 1–2 fractional digits) parsing normally while catching
+/// ("4n7", "1n5", "2n2", 1–2 fractional digits) parsing normally while catching
 /// the part numbers that would otherwise read as ~1.4 nF.
 fn is_jedec_semiconductor(v: &str) -> bool {
     let b = v.as_bytes();
@@ -105,7 +105,7 @@ fn is_jedec_semiconductor(v: &str) -> bool {
         return false;
     }
     // The serial is a digit run optionally followed by a suffix letter (1N4148W,
-    // 1N914B, 1N34A) — allow the trailing letters, require the rest all-digit.
+    // 1N914B, 1N34A), allow the trailing letters, require the rest all-digit.
     let serial = &b[2..];
     let ndigits = serial.iter().take_while(|c| c.is_ascii_digit()).count();
     if !serial[ndigits..].iter().all(u8::is_ascii_alphabetic) {
@@ -114,7 +114,7 @@ fn is_jedec_semiconductor(v: &str) -> bool {
     // An UPPERCASE 'N' is the JEDEC spelling (1N34, 1N60, 1N21, 2N3904), so a
     // 2+-digit serial there is a part number and must return None (a bare
     // `parse_inner` would read it as the RKM nano form ~1.x nF and defeat the
-    // binder's generic-diode fallback — the R33 failure mode, previously left
+    // binder's generic-diode fallback; the R33 failure mode, previously left
     // open for the short 2-digit germanium detectors). RKM nano values only ever
     // use LOWERCASE 'n' ("4n7", "1n5"), so a lowercase form still needs 3+ serial
     // digits before it is treated as a part number rather than a 1–2-digit value.
@@ -123,7 +123,7 @@ fn is_jedec_semiconductor(v: &str) -> bool {
 }
 
 /// EIA imperial chip-size codes that leak into BOM value fields ("0402",
-/// "0402_47k"). `"0402".parse::<f64>()` is 402 — silently accepting one binds
+/// "0402_47k"). `"0402".parse::<f64>()` is 402, silently accepting one binds
 /// a 47 kΩ part at 402 Ω.
 const FOOTPRINT_SIZE_CODES: [&str; 9] = [
     "0201", "0402", "0603", "0805", "1206", "1210", "1812", "2010", "2512",
@@ -151,7 +151,7 @@ fn strip_size_code(s: &str) -> Option<&str> {
 /// Normalise commas: a European decimal separator ("5,1K" -> "5.1K") vs a
 /// thousands grouping ("10,000" -> "10000", "1,000,000" -> "1000000"). A
 /// 3-digit group after the comma is treated as a thousands separator, a 1-2
-/// digit group as a decimal — so "10,000" is 10000, not 10.0.
+/// digit group as a decimal, so "10,000" is 10000, not 10.0.
 fn normalise_comma_decimal(s: &str) -> String {
     let comma_count = s.bytes().filter(|&b| b == b',').count();
     // Multiple commas are thousands grouping if each is followed by 3 digits.
@@ -175,7 +175,7 @@ fn normalise_comma_decimal(s: &str) -> String {
         if prev_digit && run >= 1 {
             // A single comma is a thousands separator for a grouped integer: a
             // nonzero integer part with no leading zero and a 3-digit group. The
-            // presence of a trailing UNIT after the group does not change that —
+            // presence of a trailing UNIT after the group does not change that,
             // "4,700uF" is 4700 uF, exactly as "4,700" is 4700. The leading-zero
             // guard (`int_grouped`) is what separates thousands from a European
             // decimal: "0,047uF" is 0.047 uF (leading-zero integer part), while
@@ -193,7 +193,7 @@ fn normalise_comma_decimal(s: &str) -> String {
     s.to_string()
 }
 
-/// True when every comma in `s` is followed by exactly three digits — the
+/// True when every comma in `s` is followed by exactly three digits; the
 /// signature of thousands grouping ("1,000,000").
 fn is_thousands_grouped(s: &str) -> bool {
     for (i, b) in s.bytes().enumerate() {
@@ -245,14 +245,14 @@ fn normalise_unicode(s: &str) -> String {
 /// ```
 fn parse_inner(s: &str) -> Option<ParsedValue> {
     // RKM / IEC 60062 leading-letter form: when the magnitude is < 1 the
-    // decimal-point letter comes FIRST — "R47" = 0.47 Ω, "R1" = 0.1 Ω,
+    // decimal-point letter comes FIRST, "R47" = 0.47 Ω, "R1" = 0.1 Ω,
     // "R047" = 0.047 Ω (exactly the marking on a current-sense shunt). The
     // grammar below requires a leading digit, so this form was silently
     // rejected (returning None => the part read as an OPEN / vanished) even
     // though the middle-letter ("2R2", "4R7") and leading-zero ("0R47") forms
     // already parse. Rewrite the leading-R form to its "0R47" equivalent so it
     // reuses the already-correct path. Scoped to 'R' (ohms) with an immediately
-    // following digit — the only unambiguous leading-letter marking — so a
+    // following digit; the only unambiguous leading-letter marking, so a
     // unit-prefixed token is never mis-read.
     let rewritten;
     let s = {
@@ -292,7 +292,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
     }
     // Optional scientific-notation exponent ("4.7e3", "1e-6"): e/E, optional
     // sign, one or more digits. Only consumed after a real mantissa (i > start)
-    // and only when digits actually follow the 'e' — otherwise a lone 'e' is
+    // and only when digits actually follow the 'e', otherwise a lone 'e' is
     // left for the tail (no unit token begins with 'E', so it fails loudly
     // rather than silently eating a bad char). f64::parse handles the exponent.
     if i > start && i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
@@ -309,7 +309,7 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         }
     }
     if i == start {
-        // No leading digits — not a numeric value.
+        // No leading digits, not a numeric value.
         return None;
     }
     let before = &s[..i];
@@ -350,8 +350,8 @@ fn parse_inner(s: &str) -> Option<ParsedValue> {
         let combined = format!("{}.{}", before, frac_digits);
         let mut unit = parse_tail(after_frac)?;
         if unit.is_none() {
-            // An RKM decimal-point letter that is ITSELF a unit — H in "4H7",
-            // F in "4F7" — leaves nothing after the fraction, so parse_tail
+            // An RKM decimal-point letter that is ITSELF a unit, H in "4H7",
+            // F in "4F7", leaves nothing after the fraction, so parse_tail
             // returns no unit and the H/F was silently dropped. The value then
             // read as unitless and downstream (parse_ohms) accepted a henry /
             // farad part as a resistance. Recover the unit from the suffix letter.
@@ -410,7 +410,7 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     // 'F' are a genuine fractional part and not a voltage rating attached to a
     // bare-Farad value: "10F2V7" / "10F50V" are a 10 F supercap rated 2.7 V / 50 V,
     // NOT 10.2 F / 10.50 F. If a 'V' immediately follows the digit run, 'F' was the
-    // Farad UNIT and the tail is a rating — fall through so parse_tail handles it,
+    // Farad UNIT and the tail is a rating, fall through so parse_tail handles it,
     // matching the prefixed "10uF2V7" path (which never reaches this branch).
     let f_is_rkm_decimal = bytes[0] == b'F' && next_is_digit && {
         let mut j = 1;
@@ -427,7 +427,7 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
     match s.as_bytes()[0] {
         // Lowercase 'f' is femto; UPPERCASE 'F' is the Farad UNIT, not a
         // multiplier. Consuming 'F' as femto turned a bare-Farad value ("1F",
-        // a supercap) into 1e-15 F — off by 10^15. Femto essentially never
+        // a supercap) into 1e-15 F, off by 10^15. Femto essentially never
         // appears bare-uppercase in BOMs, so 'F' falls through to parse_tail,
         // which recognises it as the Farad unit (×1). ("100nF" is unaffected:
         // the explicit 'n' multiplier is consumed first, then 'F' is the unit.)
@@ -449,9 +449,9 @@ fn parse_suffix(s: &str) -> (f64, Option<&str>, &str) {
 }
 
 /// Parse the tail of a value string (everything after the numeric part and
-/// SI suffix). Returns `Some(unit)` when the WHOLE tail is accounted for — a
+/// SI suffix). Returns `Some(unit)` when the WHOLE tail is accounted for, a
 /// unit token, an ignorable annotation (voltage rating, tolerance,
-/// dielectric), or both — and `None` when unparsed garbage remains. The
+/// dielectric), or both, and `None` when unparsed garbage remains. The
 /// caller must then reject the string: silently dropping the tail is exactly
 /// how "0402_47k" once read as 402 Ω.
 fn parse_tail(t: &str) -> Option<Option<String>> {
@@ -535,8 +535,8 @@ fn is_annotation_start(c: char) -> bool {
 
 /// If `t` begins with a lone EIA tolerance-code letter (G=±2%, J=±5%, K=±10%,
 /// M=±20%), return the remainder after it; otherwise `None`. These only reach
-/// [`parse_tail`] as a SECOND letter — the first SI multiplier is already
-/// consumed by [`parse_suffix`] — so a leading k/m/g here is a tolerance code,
+/// [`parse_tail`] as a SECOND letter; the first SI multiplier is already
+/// consumed by [`parse_suffix`], so a leading k/m/g here is a tolerance code,
 /// never a multiplier (a real "10k" never gets here with a leading 'k'). 'F' is
 /// excluded: it means Farad and is handled by [`fixup_tolerance_unit`].
 fn strip_eia_tolerance_letter(t: &str) -> Option<&str> {
@@ -610,7 +610,7 @@ mod tests {
         check("4F7", 4.7); // 4.7 F
         check("1H5", 1.5); // 1.5 H
         check("2R2", 2.2); // resistor form still works
-        // R36: the H/F decimal-letter IS the unit — it must not be dropped, or
+        // R36: the H/F decimal-letter IS the unit; it must not be dropped, or
         // downstream parse_ohms accepts a henry/farad part as a resistance. Only
         // the ohmic 'R' form is legitimately unitless.
         assert_eq!(parse_value("4H7").unwrap().unit.as_deref(), Some("H"));
@@ -648,7 +648,7 @@ mod tests {
     fn test_sampled_value_debug_format_round_trips_past_size_codes() {
         // Round-8 #8: a nominal like 1210 Ω formatted with `{}` becomes "1210",
         // which the parser reads as a 4-digit imperial footprint SIZE CODE and
-        // rejects — so `apply_sampled_values` must serialize with `{:?}`, which
+        // rejects, so `apply_sampled_values` must serialize with `{:?}`, which
         // always emits a decimal point. Verify both halves of that reasoning.
         for si in [1210.0_f64, 1206.0, 2512.0, 2010.0, 1812.0] {
             let plain = format!("{si}");
@@ -733,7 +733,7 @@ mod tests {
     #[test]
     fn test_rkm_leading_letter_below_one_ohm() {
         // R18: the RKM leading-letter form (magnitude < 1) puts the decimal
-        // letter first — the exact marking on a current-sense shunt. It was
+        // letter first; the exact marking on a current-sense shunt. It was
         // silently rejected (None => read as an OPEN) while "0R47"/"2R2" parsed.
         check("R47", 0.47);
         check("R1", 0.1);
@@ -797,7 +797,7 @@ mod tests {
 
     #[test]
     fn jedec_diode_part_numbers_are_not_passive_values() {
-        // R33: "1N4007" collided with the RKM nano form — parse_inner read it as
+        // R33: "1N4007" collided with the RKM nano form, parse_inner read it as
         // 1 + nano + ".4007" = ~1.4 nF, so parse_value returned Some(). That
         // defeated the binder's generic-diode fallback (which keys off
         // parse_value() == None), silently deleting a conducting rectifier /
@@ -810,7 +810,7 @@ mod tests {
             );
         }
         // R38: short 2-digit-serial JEDEC diodes (germanium detectors) use the
-        // same uppercase-N spelling and must ALSO return None — they were parsed
+        // same uppercase-N spelling and must ALSO return None; they were parsed
         // as ~1.x nF and their conducting path silently deleted.
         for pn in ["1N34", "1N60", "1N21", "1N34A"] {
             assert!(
@@ -820,7 +820,7 @@ mod tests {
             );
         }
         // The short RKM nano values it must NOT reject still parse correctly.
-        // These use LOWERCASE 'n' — the discriminator that separates them from
+        // These use LOWERCASE 'n'; the discriminator that separates them from
         // the uppercase-N JEDEC parts above.
         check("4n7", 4.7e-9);
         check("1n5", 1.5e-9);
@@ -836,7 +836,7 @@ mod tests {
     }
 
     /// Bug regression: bare EIA chip-size codes must not read as magnitudes
-    /// ("0402".parse::<f64>() is 402 — a 47 kΩ part bound at 402 Ω), and a
+    /// ("0402".parse::<f64>() is 402, a 47 kΩ part bound at 402 Ω), and a
     /// leading size code is a naming prefix to strip, not the value.
     #[test]
     fn test_footprint_size_codes() {
@@ -925,7 +925,7 @@ mod tests {
             );
         }
         // R45: a pure-CURRENT rating ("5A", "500mA") is likewise NOT an R/C/L
-        // magnitude — the binder excludes both V and A as non-passive, so a
+        // magnitude; the binder excludes both V and A as non-passive, so a
         // current-rated power connector ("J1 = 5A") must key off parse_value()==None
         // just like a "12V" one, and a leading current token must not be mis-picked
         // as the magnitude ("2A_22u" → 2 F). Filter A the same as V.
@@ -942,7 +942,7 @@ mod tests {
     }
 
     /// Bug regression: a 3-digit group after a comma is a thousands separator,
-    /// not a decimal — "10,000" is 10000, not 10.0. 1-2 digits stay decimal.
+    /// not a decimal, "10,000" is 10000, not 10.0. 1-2 digits stay decimal.
     #[test]
     fn test_comma_thousands_vs_decimal() {
         check("10,000", 10_000.0);
@@ -952,7 +952,7 @@ mod tests {
     }
 
     /// Bug regression: an EIA tolerance letter 'F' after a resistance-scale
-    /// multiplier is ±1%, not the Farad unit — "10KF" is a 10 kΩ resistor, not
+    /// multiplier is ±1%, not the Farad unit, "10KF" is a 10 kΩ resistor, not
     /// a 10-kilofarad capacitor.
     #[test]
     fn test_tolerance_letter_is_not_farad() {

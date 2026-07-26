@@ -2,7 +2,7 @@
 //!
 //! A multi-unit package (dual MOSFET, quad switch, ...) stamps one device per
 //! unit, so `RunOutcome.peak_temp_c` and the fault list carry per-unit keys
-//! ("SW1_q1", "SW1_s0") — never the bare package ref the spec's `max_temp`
+//! ("SW1_q1", "SW1_s0"), never the bare package ref the spec's `max_temp`
 //! names. The trackability gate (`check_trackable_assert_refs`) accepts the
 //! bare ref because its units ARE monitored, so before the fix `check_max_temp`
 //! looked up `peak_temp_c["SW1"]`, always found nothing, and a safety ceiling

@@ -41,7 +41,7 @@ export default function App() {
         }
       } catch {
         // No startup endpoint (a stale/odd deployment). Degrade to the
-        // drop-a-board Landing — never the live-sim view, which would sit
+        // drop-a-board Landing, never the live-sim view, which would sit
         // "offline" with no way to load a board. The Landing's own upload
         // path (/api/analyze) is the recovery affordance.
         if (alive) setView({ kind: 'landing', report: null, boardName: null, canRunLive: false })

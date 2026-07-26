@@ -165,12 +165,12 @@ enum NameScope {
 }
 
 /// The schematic item behind a [`NamedAnchor`], for net-*naming* precedence
-/// only — unification reach stays with [`NameScope`]. KiCad picks a net's name
+/// only, unification reach stays with [`NameScope`]. KiCad picks a net's name
 /// from its highest-priority driver (`CONNECTION_SUBGRAPH::PRIORITY`): a
 /// global label beats a power pin, which beats a local label, which beats a
 /// hierarchical label. Collapsing these onto the two unification scopes
 /// (Power→Global, Hier→Local) let the wrong name win whenever a net carried
-/// two kinds from the same scope bucket — e.g. "+5V" outranked a global label
+/// two kinds from the same scope bucket, e.g. "+5V" outranked a global label
 /// alphabetically instead of losing to it.
 #[derive(Clone, Copy, PartialEq)]
 enum AnchorKind {
@@ -240,7 +240,7 @@ struct NetlistBuilder {
     bus_boundaries: Vec<BusBoundary>,
     /// Union-find nodes carrying an explicit `(no_connect ...)` flag. A pin whose
     /// net root matches one of these is a DELIBERATE no-connect, so netlint's
-    /// floating-pin suppression must honor it — mirroring the KiCad-netlist
+    /// floating-pin suppression must honor it, mirroring the KiCad-netlist
     /// loader, which preserves KiCad's own `pintype "…+no_connect"` /
     /// `unconnected-(…)` signal. Without this the two loaders disagree and the
     /// schematic path cries wolf on a deliberately-unconnected control pin.
@@ -378,7 +378,7 @@ impl NetlistBuilder {
         // -- Buses: a bus is a thick wire that carries several member nets at
         //    once. It is electrically *cosmetic*: members travel by name
         //    (every member wire entering a bus carries its own label, and a bus
-        //    cannot be connected to a pin without one — KiCad's rule). We must
+        //    cannot be connected to a pin without one, KiCad's rule). We must
         //    therefore NOT union anything through bus geometry: if we did,
         //    every member's bus-entry landing point would collapse into one
         //    node and the whole bus would short into a single net. We record
@@ -696,7 +696,7 @@ impl NetlistBuilder {
                     // exactly as a plain global label globalizes its one net:
                     // `D[0..7]` as a global label means each of D0..D7 connects
                     // across the whole design. Each member gets a fresh node
-                    // anchored twice under the member's name — Local scope, so
+                    // anchored twice under the member's name, Local scope, so
                     // it joins the member's own labelled net on *this* sheet,
                     // and Global scope, so same-named members unify design-wide
                     // through `global_by_name`. A local bus label must NOT do
@@ -1135,7 +1135,7 @@ impl NetlistBuilder {
             // dedups union-find nodes by coordinate, so a no_connect placed on a
             // pin yields the same node id as that pin's site. Keying on the root
             // instead blanketed a whole net when an (ERC-invalid) no_connect fell
-            // on a connected multi-pin net — suppressing genuine floating-pin
+            // on a connected multi-pin net, suppressing genuine floating-pin
             // findings and dropping a driven power-rail pin. Match the pin the
             // marker actually sits on, mirroring KiCad's per-pin `+no_connect`.
             let nc_set: std::collections::HashSet<usize> = nc_nodes.into_iter().collect();
@@ -1313,7 +1313,7 @@ fn merge_units(components: Vec<Component>) -> (Vec<Component>, Vec<(i64, i64)>) 
         let mut seen: HashMap<String, usize> = HashMap::new();
         let mut deduped: Vec<Pin> = Vec::with_capacity(c.pins.len());
         for p in std::mem::take(&mut c.pins) {
-            // Empty pad numbers are never a shared identity — only consult and
+            // Empty pad numbers are never a shared identity, only consult and
             // record `seen` for non-empty numbers so blanks never dedup/bridge.
             let prior = (!p.number.is_empty())
                 .then(|| seen.get(&p.number).copied())
@@ -1584,8 +1584,8 @@ fn expand_bus_aliased_depth(
     }
     // Group bus: optional prefix then `{ ... }`.
     if let Some(open) = name.find('{') {
-        // KiCad text markup — overbar `~{X}`, subscript `_{X}`, superscript
-        // `^{X}` — is NOT bus syntax: the char immediately before `{` is the
+        // KiCad text markup, overbar `~{X}`, subscript `_{X}`, superscript
+        // `^{X}`, is NOT bus syntax: the char immediately before `{` is the
         // markup marker and KiCad keeps the literal text (`~{RST}`) as the net
         // name. Treating it as a group bus (prefix `~`, member `~.RST`) silently
         // splits ubiquitous active-low nets like `~{RESET}` / `~{CS}`. Only a
@@ -1751,7 +1751,7 @@ mod tests {
     #[test]
     fn empty_pin_numbers_are_never_bridged_or_dropped() {
         // R23 (SCH-EMPTY-PINNO-BRIDGE): pins with empty pad numbers were deduped
-        // together — the second was dropped and its net silently merged onto the
+        // together; the second was dropped and its net silently merged onto the
         // first. Two blank-numbered pins on two DIFFERENT nets must each survive
         // and must NOT bridge those nets. (A lib pin with no `(number)` yields "".)
         let c = comp("J1", vec![pin("", 1), pin("", 2)]);
@@ -1916,8 +1916,8 @@ mod tests {
 
     #[test]
     fn text_markup_labels_are_not_group_buses() {
-        // KiCad text markup — overbar `~{...}`, subscript `_{...}`, superscript
-        // `^{...}` — is a single net name, NOT a group bus. Reading `~{RST}` as
+        // KiCad text markup, overbar `~{...}`, subscript `_{...}`, superscript
+        // `^{...}`, is a single net name, NOT a group bus. Reading `~{RST}` as
         // bus prefix `~` with member `~.RST` silently split ubiquitous active-low
         // nets. These must be plain labels (None), keeping their literal text as
         // the net name.
@@ -1947,7 +1947,7 @@ mod tests {
         // A pathological brace-nested label must TERMINATE (the depth cap stops
         // the recursion; the over-deep inner token then falls back to a literal)
         // rather than recurse to a stack overflow. The exact members don't matter
-        // — that the call returns at all is the guarantee under test.
+        //, that the call returns at all is the guarantee under test.
         let deep = format!("{}{}", "A{".repeat(64), "}".repeat(64));
         let out = expand_bus(&deep).expect("depth-capped expansion still terminates");
         assert!(!out.is_empty());

@@ -95,7 +95,7 @@ fn engine_si_chokepoint_adds_ampacity_missing_from_bare_si_checks() {
     );
     let lib = ModelLibrary::builtin();
     // The bare extractor call cannot attribute the regulator's current, so it has
-    // no ampacity finding — exactly what every aggregate surface used to call.
+    // no ampacity finding, exactly what every aggregate surface used to call.
     let bare = board.si_checks(Some(&text));
     assert!(
         findings_of(&bare, SiCheck::TraceAmpacity).is_empty(),

@@ -1,4 +1,4 @@
-//! Resolve a firmware *input* — whatever the user handed us — into a bootable
+//! Resolve a firmware *input*, whatever the user handed us, into a bootable
 //! image the MCU backends can load.
 //!
 //! The co-sim loaders want one compiled `.elf`/`.hex`. Users have a PlatformIO
@@ -16,11 +16,11 @@
 //!    `platformio.ini` but no built image is built with the user's own `pio`
 //!    (detect-don't-bundle, exactly like the Renode / ngspice / kicad-cli
 //!    oracles). A missing `pio` or a failing build is a loud, actionable error
-//!    — never a silent fallback.
+//!, never a silent fallback.
 //!
 //! Asymmetry, stated on purpose: a CLI **directory** with a `platformio.ini`
-//! is always (re)built — it is the user's live project and `pio run` is
-//! incremental — while a **zip** prefers an image it already contains, because
+//! is always (re)built; it is the user's live project and `pio run` is
+//! incremental, while a **zip** prefers an image it already contains, because
 //! an upload should not kick off a multi-minute toolchain download when the
 //! snapshot already carries the artifact.
 //!
@@ -81,7 +81,7 @@ fn pio_bin() -> String {
 /// Resolve uploaded firmware bytes (the web drop zone's firmware part).
 ///
 /// Non-zip inputs pass through untouched. Zips resolve to the best built image
-/// inside, or — if the archive is a PlatformIO project with no built image —
+/// inside, or, if the archive is a PlatformIO project with no built image,
 /// to a `pio run` build of it. Errors are user-facing strings (they land in
 /// the co-sim card verbatim).
 pub fn resolve_firmware_bytes(fw_name: &str, fw_bytes: &[u8]) -> Result<ResolvedFirmware, String> {
@@ -190,7 +190,7 @@ fn resolve_firmware_bytes_limited(
 }
 
 /// Resolve a CLI `--firmware` path that is a directory or a zip. Returns
-/// `Ok(None)` for a plain file that is not a zip — the caller keeps its
+/// `Ok(None)` for a plain file that is not a zip; the caller keeps its
 /// existing path untouched.
 pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwareFile>> {
     if path.is_dir() {

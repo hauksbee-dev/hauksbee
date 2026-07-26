@@ -106,7 +106,7 @@ impl WebSection {
 /// browser uses `active_path_unresolved` to refuse a false "Looks healthy".
 #[derive(Debug, Clone, Serialize)]
 pub struct BindSummaryWeb {
-    /// `"M/N"` — active ICs that bound, over the total active ICs on the board.
+    /// `"M/N"`, active ICs that bound, over the total active ICs on the board.
     pub critical_parts_bound: String,
     /// References of active ICs left open on the live circuit (unresolved active
     /// ICs + resolved-but-open active ICs). Non-empty => analog/AC/thermal on
@@ -133,7 +133,7 @@ impl BindSummaryWeb {
         }
     }
 
-    /// Whether an active IC is open on the live circuit — the predicate that must
+    /// Whether an active IC is open on the live circuit; the predicate that must
     /// override a "Looks healthy" verdict on the web report.
     pub fn active_path_open(&self) -> bool {
         !self.active_path_unresolved.is_empty()
@@ -201,7 +201,7 @@ pub struct WebCosimSection {
     /// common JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boot_gates: Vec<WebBootGate>,
-    /// False when the firmware ran but produced zero GPIO toggles and no UART —
+    /// False when the firmware ran but produced zero GPIO toggles and no UART,
     /// it was not meaningfully exercised, so the run cannot vouch for firmware
     /// behaviour. Drives the headline demotion (a statically-clean board must not
     /// read "Looks healthy" over a co-sim that proved nothing). Always serialized
@@ -283,12 +283,12 @@ pub struct WebReport {
     /// JSON schema stays backward-compatible.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<JsonNote>,
-    /// Every net name on the board, sorted — the checks builder's pickers.
+    /// Every net name on the board, sorted; the checks builder's pickers.
     /// Empty (and omitted) on an error report; additive for compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nets: Vec<String>,
     /// Binder-detected power supplies (rail net → nominal volts): the checks
-    /// builder prefills `[[supply]]` rows from these — the same data
+    /// builder prefills `[[supply]]` rows from these; the same data
     /// `hauksbee-ci init` scaffolds from.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supplies: Vec<WebSupply>,
@@ -371,7 +371,7 @@ fn analyze_normalized(
 
     // DRC reads copper geometry from the raw input: the bytes twin
     // (`altium_drc`) for a binary board, the KiCad layout text otherwise. A
-    // gerber archive has neither — its DRC section says so below instead of
+    // gerber archive has neither; its DRC section says so below instead of
     // reporting a vacuous "no problems".
     let drc = if is_binary {
         ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
@@ -395,7 +395,7 @@ fn analyze_normalized(
     // SI needs the layout text for the geometry-bearing checks; a binary board
     // has none, so it gets the netlist-only subset (`None`). Route through the SI
     // chokepoint so the web report carries the trace-ampacity + input-cap-ripple
-    // findings too — the bare `si_checks` left the web "Signal integrity" section
+    // findings too; the bare `si_checks` left the web "Signal integrity" section
     // silently missing an under-width power trace the CLI `--si` flags.
     let si = crate::checks::engine_si(board, &lib, text_view);
     let si_plain = plain_si(&si);
@@ -403,7 +403,7 @@ fn analyze_normalized(
     let mut sections = vec![
         if is_gerber {
             // An empty default DRC report would render "no copper spacing
-            // problems found" — a vacuous green for input we never checked.
+            // problems found", a vacuous green for input we never checked.
             WebSection {
                 title: "Copper spacing (DRC)".to_string(),
                 verdict: "Not checked: clearance DRC needs the layout file (KiCad/Eagle/Altium), which a gerber archive does not carry.".to_string(),
@@ -419,7 +419,7 @@ fn analyze_normalized(
 
     // USB-C CC compliance: the CLI text/plain/json surfaces all carry this
     // verdict (a Serious shared-CC-pulldown fault gates `--check --strict`), but
-    // the web persona used to omit it entirely — a board with the RPi-4 fault
+    // the web persona used to omit it entirely, a board with the RPi-4 fault
     // read "Looks healthy". Fold it in so all four personas agree: a Serious
     // verdict becomes a serious WebFinding (raising serious/total), an Info
     // verdict becomes a heads-up (suppressing a false "Looks healthy").
@@ -486,7 +486,7 @@ fn analyze_normalized(
         .collect();
 
     // The checks builder's raw material: every net name (for its pickers) and
-    // the binder-detected supplies (for its prefill) — the same data
+    // the binder-detected supplies (for its prefill); the same data
     // `hauksbee-ci init` scaffolds a spec from, so the web builder and the CLI
     // scaffold can never disagree about what powers the board.
     let mut nets: Vec<String> = board.nets.iter().map(|n| n.name.clone()).collect();
@@ -528,7 +528,7 @@ fn analyze_normalized(
 /// [`WebReport::cosim`].
 ///
 /// `fw_bytes` is the raw uploaded firmware (ELF/HEX); it is passed as `&[u8]`
-/// and written verbatim to a temp file — NEVER lossy-decoded, which would
+/// and written verbatim to a temp file, NEVER lossy-decoded, which would
 /// corrupt an ELF. The co-sim is skipped (with a friendly `cosim.ran = false`
 /// note instead of an error) when:
 ///   * the board has no bound MCU (nothing to run firmware on), or
@@ -557,7 +557,7 @@ pub fn analyze_with_firmware(
     let mut report = analyze_normalized(file_name, &norm);
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
-    // project) rather than a bare image — resolve it first. A resolution
+    // project) rather than a bare image, resolve it first. A resolution
     // failure is a co-sim-tier problem, not a board problem: the static report
     // stands, with the reason in the co-sim card.
     let resolved = match crate::firmware_input::resolve_firmware_bytes(fw_name, fw_bytes) {
@@ -587,7 +587,7 @@ pub fn analyze_with_firmware(
     // the firmware co-sim produced otherwise left the badge green and the headline
     // "Looks healthy". A destructive fault (e.g. an overcurrent-killed MOSFET) is
     // SERIOUS; a non-destructive over-stress (a part carrying past its continuous
-    // rating without dying) is a WARNING — but it is still an actionable issue the
+    // rating without dying) is a WARNING, but it is still an actionable issue the
     // CLI counts ("N issues found, none serious. Worth a look.") and that --strict
     // exits 2 on, so it must escalate the web headline too rather than sit silently
     // in the co-sim card under a "Looks healthy" banner. Only note-level honesty
@@ -599,7 +599,7 @@ pub fn analyze_with_firmware(
         report.serious = serious;
         report.headline = headline;
     } else if report.total == 0 {
-        // No fault escalation and the static board is clean — but a co-sim that
+        // No fault escalation and the static board is clean, but a co-sim that
         // proved nothing must not leave a bare "Looks healthy" headline.
         if let Some(demoted) = cosim_caveat_headline(&cosim, &report.headline) {
             report.headline = demoted;
@@ -610,7 +610,7 @@ pub fn analyze_with_firmware(
 }
 
 /// Fold co-sim electrical FAULTS into the static verdict counts. A destructive
-/// fault is SERIOUS; a non-destructive over-stress is a WARNING — both are
+/// fault is SERIOUS; a non-destructive over-stress is a WARNING, both are
 /// actionable issues (the CLI counts them and `--strict` exits 2 on them), so
 /// both raise `total`; only serious ones raise `serious`. Note-level honesty
 /// caveats are excluded (they demote separately via [`cosim_caveat_headline`]).
@@ -638,8 +638,8 @@ fn fold_cosim_faults(
 /// The headline a statically-clean board (`total == 0`, no serious co-sim faults)
 /// should carry once its firmware co-sim is known.
 ///
-/// A co-sim that RAN yet proved nothing — firmware not meaningfully exercised,
-/// ran on a SUBSTITUTE core, or an analog window failed to converge — must not
+/// A co-sim that RAN yet proved nothing, firmware not meaningfully exercised,
+/// ran on a SUBSTITUTE core, or an analog window failed to converge, must not
 /// leave a bare "Looks healthy" verdict: that is the exact false comfort the
 /// co-sim honesty notes exist to prevent, and it would contradict the CLI
 /// `--plain` "worth a look" line for the same inputs. Such a run demotes to the
@@ -710,11 +710,11 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
     let chunk_word = if failed_chunks == 1 { "chunk" } else { "chunks" };
     // Note-level, NOT serious: analog non-convergence is a co-sim HONESTY caveat,
     // not a board defect. Like its sibling caveats (substitute core, firmware not
-    // exercised — both note-level) it must DEMOTE the headline off "Looks healthy"
+    // exercised, both note-level) it must DEMOTE the headline off "Looks healthy"
     // via `cosim_caveat_headline` (whose `!analog_valid` term relies on this) and
     // must NOT fold into the serious/total fault count in `fold_cosim_faults`.
     // Marking it "serious" made the web report a phantom board fault on a run
-    // where only the solver failed to converge — contradicting both this contract
+    // where only the solver failed to converge, contradicting both this contract
     // and the CLI `--plain` path, which surfaces it as a heads-up note. The prose
     // below stays loud (it leads the co-sim card); only the severity is honest.
     WebFinding {
@@ -797,7 +797,7 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
 
     // Build the engine from the board we already extracted and bound above
     // (rather than re-extracting from text via `from_board_file`), so a binary
-    // board — which has no text form to re-parse — co-sims like any other.
+    // board, which has no text form to re-parse, co-sims like any other.
     let mut engine = match HauksbeeEngine::from_bound(bound, Some(tmp.path()), "web-firmware") {
         Ok(e) => e,
         // Architecture mismatch / corrupt firmware: the static analysis still
@@ -818,7 +818,7 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
     let mut faults: Vec<FaultEvent> = Vec::new();
     while t < seconds {
         let frame = engine.step(frame_dt);
-        // Concatenate per-MCU UART in a STABLE (sorted-by-MCU-key) order — plain
+        // Concatenate per-MCU UART in a STABLE (sorted-by-MCU-key) order, plain
         // `values()` is HashMap iteration order, so a multi-MCU board's merged
         // uart_output would interleave nondeterministically run-to-run. Mirrors
         // the CI runner's sorted-by-key concatenation.
@@ -958,7 +958,7 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
     }
     let net_volts = sched.net_voltages();
     // Rank by TOGGLE COUNT descending (name tiebreak), matching the CLI toggle
-    // table and the JSON activity_summary — this field is documented as "top
+    // table and the JSON activity_summary; this field is documented as "top
     // movers first". Sorting by the driven flag then alphabetically (the old
     // order) dropped the genuinely most-active nets whenever more than 15 nets
     // were driven and kept quiet, alphabetically-early ones instead.
@@ -970,7 +970,7 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
     // surface carries the SAME safety warning. Without this, a board that drives a
     // MOSFET-gate/relay/igniter net HIGH and holds it from reset (no bias
     // resistor) reads as "no faults" on the web while the CLI warns it is
-    // energised at power-up — the exact false-comfort divergence this path's own
+    // energised at power-up; the exact false-comfort divergence this path's own
     // honesty notes exist to prevent. The advisory is firmware-derived, so it is
     // computed from the finished co-sim's drive sets; `firmware_ran` reuses the
     // same zero-activity gate the notes above use.
@@ -982,12 +982,12 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
         &sched.firmware_driven_nets(),
         firmware_ran,
     );
-    // Each held-high control net is an ADVISORY (note-level) heads-up — the same
+    // Each held-high control net is an ADVISORY (note-level) heads-up; the same
     // status every CLI surface gives it: `--plain` renders it as a "worth a look"
     // note, `--json` as a boot_control_net note, and `--strict` does not fail on
     // it. It is a real, actionable observation (a switched load possibly energised
     // at power-up) but not a confirmed board fault, so it must NOT fold into the
-    // web serious/total count and flip the headline to "fix the serious ones" — it
+    // web serious/total count and flip the headline to "fix the serious ones"; it
     // demotes a bare "Looks healthy" to the heads-up verdict via
     // `cosim_caveat_headline`. Pushed BEFORE the electrical faults so it leads.
     for net in &boot_advisory.held_high_control_nets {
@@ -1115,7 +1115,7 @@ pub fn analyze_json(file_name: &str, contents: &[u8]) -> String {
 
 /// Serialize an [`analyze_with_firmware`] result to a JSON string for the HTTP
 /// layer (the `/api/analyze-with-firmware` endpoint). Board AND firmware bytes
-/// are passed as `&[u8]` end-to-end — never lossy-decoded — so an uploaded
+/// are passed as `&[u8]` end-to-end, never lossy-decoded, so an uploaded
 /// binary board or ELF stays intact.
 pub fn analyze_with_firmware_json(
     file_name: &str,
@@ -1130,7 +1130,7 @@ pub fn analyze_with_firmware_json(
 }
 
 /// The web co-sim GPIO activity table: the `limit` most-active nets, ranked by
-/// TOGGLE COUNT descending, then VOLTAGE RANGE descending, then name — the exact
+/// TOGGLE COUNT descending, then VOLTAGE RANGE descending, then name; the exact
 /// three-key "top movers first" contract the CLI toggle table and JSON
 /// activity_summary use (see `reports::cosim`). Ranking by the driven flag then
 /// alphabetically (the old order) truncated away the genuinely most-active nets
@@ -1169,7 +1169,7 @@ mod tests {
     use super::*;
 
     /// R15: the web GPIO table must keep the highest-TOGGLE nets and present them
-    /// activity-first, matching the CLI/JSON surfaces — not the 15 alphabetically-
+    /// activity-first, matching the CLI/JSON surfaces, not the 15 alphabetically-
     /// earliest driven nets. A most-active net with a late-sorting name must
     /// survive truncation.
     #[test]
@@ -1313,7 +1313,7 @@ mod tests {
             "a Serious verdict must be a serious finding"
         );
         // R43: the verdict must be a full sentence like every other section (built
-        // via WebSection::from_plain → PlainReport::verdict()), not a bare token —
+        // via WebSection::from_plain → PlainReport::verdict()), not a bare token,
         // a uniform web consumer renders `section.verdict` directly, so "problem"
         // read as a lone word under the USB-C card while siblings showed prose.
         assert!(
@@ -1800,7 +1800,7 @@ fn main {
         );
     }
 
-    /// A clean co-sim section that RAN and vouched for the firmware — the
+    /// A clean co-sim section that RAN and vouched for the firmware; the
     /// baseline the caveat logic must NOT demote.
     fn clean_ran_section() -> WebCosimSection {
         WebCosimSection {
@@ -1822,7 +1822,7 @@ fn main {
     fn empty_cosim_demotes_looks_healthy_but_a_real_run_does_not() {
         // Round-26: a statically-clean board whose firmware co-sim RAN yet proved
         // nothing (no GPIO/UART, a substitute core, or a failed analog window)
-        // must not read "Looks healthy" — that is false comfort, and it disagrees
+        // must not read "Looks healthy", that is false comfort, and it disagrees
         // with the CLI --plain "worth a look" verdict for the same inputs.
         let healthy = overall_headline(0, 0, false, false);
         let demoted = overall_headline(0, 0, true, false);
@@ -1877,7 +1877,7 @@ fn main {
         // Round-27: only SERIOUS co-sim faults folded into the verdict, so a
         // non-destructive over-stress WARNING (a part carrying past its continuous
         // rating without dying) sat silently in the co-sim card under a bare
-        // "Looks healthy" banner — while the CLI --plain counts it ("1 issue found,
+        // "Looks healthy" banner, while the CLI --plain counts it ("1 issue found,
         // none serious. Worth a look.") and --strict exits 2. A warning must
         // escalate total (not serious), matching the CLI verdict.
         let mut warned = clean_ran_section();
@@ -1909,7 +1909,7 @@ fn main {
         assert_eq!((folded.0, folded.1), (1, 1), "1 issue, 1 serious");
         assert!(folded.2.contains("1 serious"), "serious headline, got: {}", folded.2);
 
-        // A clean run with only note-level caveats does NOT fold (returns None) —
+        // A clean run with only note-level caveats does NOT fold (returns None),
         // notes demote via cosim_caveat_headline, not the fault count.
         assert!(
             fold_cosim_faults(0, 0, &clean_ran_section()).is_none(),
@@ -1921,7 +1921,7 @@ fn main {
     fn boot_held_high_advisory_demotes_the_headline_not_folds_as_a_serious_fault() {
         // R32: the web boot held-high advisory was inserted as a SERIOUS finding,
         // so fold_cosim_faults counted it and rewrote a statically-clean board's
-        // headline to "fix the serious ones before ordering boards" — while every
+        // headline to "fix the serious ones before ordering boards", while every
         // CLI surface treats a driven-high control net as an advisory note that
         // exits 0. It is a real, actionable observation but not a confirmed board
         // fault, so it must be note-level: it demotes a bare "Looks healthy" to the
@@ -1958,7 +1958,7 @@ fn main {
         // co-sim HONESTY caveat, not a board defect. The web prepends the loud
         // analog_invalid_finding exactly as run_web_cosim does. It must NOT fold
         // into the serious/total fault count (fold returns None), and the bare
-        // "Looks healthy" headline must instead DEMOTE to the heads-up verdict —
+        // "Looks healthy" headline must instead DEMOTE to the heads-up verdict,
         // matching the CLI --plain "worth a look" note. Before the fix the finding
         // was level "serious", so fold_cosim_faults returned Some((1,1,..)) and the
         // web told the user to "fix the serious ones" for a phantom hardware fault.

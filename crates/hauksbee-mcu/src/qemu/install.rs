@@ -2,8 +2,8 @@
 //!
 //! Downloads Espressif's OFFICIAL prebuilt `qemu-system-xtensa` /
 //! `qemu-system-riscv32` release archives from `github.com/espressif/qemu`
-//! and unpacks them into `~/.hauksbee-qemu-esp/` — the FIRST conventional
-//! location [`find_qemu`](super::find_qemu) checks — then accepts each binary
+//! and unpacks them into `~/.hauksbee-qemu-esp/`; the FIRST conventional
+//! location [`find_qemu`](super::find_qemu) checks, then accepts each binary
 //! only after it passes the same `is_esp_fork` machine-list check discovery
 //! uses. Fetch, never bundle: the fork is GPL-2.0 and deliberately not
 //! vendored into this MIT-licensed tree (the same posture as libsimavr and
@@ -190,7 +190,7 @@ pub struct PlannedAsset {
     /// Expected sha256 (lowercase hex) when the release's checksum manifest
     /// was fetched and lists this asset; `None` means "manifest unavailable",
     /// which the installer reports loudly (it does NOT silently skip a
-    /// mismatch — a wrong hash always aborts).
+    /// mismatch, a wrong hash always aborts).
     pub sha256: Option<String>,
 }
 
@@ -277,7 +277,7 @@ pub fn plan(arches: &[QemuArch], progress: &mut dyn FnMut(&str)) -> Result<Insta
     progress(&format!("release: {tag}"));
 
     // Checksum manifest (best effort to FETCH; a fetched manifest is then
-    // authoritative — a listed hash that mismatches always aborts).
+    // authoritative, a listed hash that mismatches always aborts).
     let manifest = match curl_bytes(&download_url(&tag, &checksum_asset_name(&tag))) {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
         Err(e) => {

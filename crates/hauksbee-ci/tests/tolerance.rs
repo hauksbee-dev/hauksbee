@@ -6,7 +6,7 @@
 //!   max VOUT = 5 * 11k / (9k + 11k)  = 2.75 V   (R1 min, R2 max)
 //! The divider is monotonic in each resistor, so the true worst case is a
 //! corner. These tests assert the Monte-Carlo ensemble lands strictly INSIDE
-//! that envelope and the corner enumeration lands ON it — the analytic
+//! that envelope and the corner enumeration lands ON it; the analytic
 //! spot-check that keeps the sampling and the corner math honest.
 //!
 //! They also pin the two doctrine properties:

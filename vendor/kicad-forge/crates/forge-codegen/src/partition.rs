@@ -210,7 +210,7 @@ fn connected_components(
 /// through shared routing/signal nets. On this kind of board the discriminator
 /// is not fanout (a synapse's internal junction and a bridging net can both be
 /// 2-pin) but **geometry**: a real functional block's internal nets are
-/// physically compact (sub-millimetre to a few mm — pads of adjacent parts),
+/// physically compact (sub-millimetre to a few mm, pads of adjacent parts),
 /// whereas a net that bridges two distant blocks spans tens of millimetres. We
 /// therefore cut every internal net whose pad bounding-box diagonal exceeds
 /// `span_threshold`, then take connected components of what remains and recurse.

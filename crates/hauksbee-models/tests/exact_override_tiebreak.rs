@@ -1,5 +1,5 @@
 //! A dedicated part override whose value_re is an exact literal must beat the
-//! family entry whose character-class regex matches the same string — and the
+//! family entry whose character-class regex matches the same string, and the
 //! winner must not depend on load order. The 1N400x rectifiers are the found
 //! instance: the `1n4004` override (400 V) tied the `1n4001` family (50 V) on
 //! specificity and lost by load order, so 1N4004–1N4007 all simulated with a

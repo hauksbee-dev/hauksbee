@@ -62,7 +62,7 @@ honest [`LIMITATIONS.md`](about/LIMITATIONS.md).
 ## Add your own parts & chips
 
 A part hauksbee doesn't recognise binds OPEN (the report says "N% resolved" and
-names it) — closing that gap is one small TOML file, no recompile:
+names it), closing that gap is one small TOML file, no recompile:
 
 - an **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) →
   [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md)

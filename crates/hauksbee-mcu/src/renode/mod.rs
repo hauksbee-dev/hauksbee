@@ -78,7 +78,7 @@ pub struct PortMap {
     /// A WRONG dir map silently corrupts the co-sim worse than no map (a mask
     /// that reads as 0 suppresses every edge), so a descriptor only carries one
     /// once the register offset AND the Renode model's read-back are verified
-    /// against a live machine — see the per-part notes in `db/mcu/*.soc.toml`.
+    /// against a live machine, see the per-part notes in `db/mcu/*.soc.toml`.
     #[serde(default)]
     pub dir: Option<DirMap>,
 }
@@ -108,7 +108,7 @@ pub enum DirEncoding {
     /// STM32F1-style CRL/CRH: 4 bits per pin, CRL at `offset` covers pins 0-7,
     /// CRH at `offset + 4` covers pins 8-15. The low 2 bits of each nibble are
     /// MODE; any non-`0b00` MODE is an output (GP or AF, push-pull or
-    /// open-drain — the F1 encodes AF *outputs* here, unlike MODER).
+    /// open-drain; the F1 encodes AF *outputs* here, unlike MODER).
     Stm32f1CrlCrh,
     /// One bit per pin, 1 = output (nRF52 `DIR`, RP2040 SIO `GPIO_OE`).
     DirBits,
@@ -151,7 +151,7 @@ fn decode_dir_mask(encoding: DirEncoding, low: u32, high: u32, width: u8) -> u32
 /// engine ADC channel (05-cosim-fidelity §5.1).
 ///
 /// Both variants ride the same Monitor TCP channel the backend already uses
-/// for its ODR diffing — injection is one Monitor command per chunk, issued
+/// for its ODR diffing, injection is one Monitor command per chunk, issued
 /// while the machine is paused between `RunFor` steps, so the firmware sees
 /// the new count before its next instruction runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,7 +167,7 @@ pub enum AdcInject {
     /// Write the modeled count into a fixed word each chunk via
     /// `sysbus WriteDoubleWord <addr> <count>`: the ADC result RAM word (an
     /// address the firmware reads) or a memory-backed data register. This is
-    /// the Monitor/RAM path of 05 §5.1 — the write-direction twin of the ODR
+    /// the Monitor/RAM path of 05 §5.1; the write-direction twin of the ODR
     /// poll.
     MemoryWord(u32),
 }
@@ -252,7 +252,7 @@ pub struct RenodeConfig {
     /// The stock constructors leave this empty on purpose: the Renode 1.16
     /// platform descriptions for the F103 / F4-Discovery / nRF52840 / FE310
     /// model no ADC peripheral at all, and Renode's `Analog.STM32_ADC` speaks
-    /// the F0/L0 register layout — registering it at an F1 address would let
+    /// the F0/L0 register layout, registering it at an F1 address would let
     /// firmware "read" a peripheral whose registers are laid out wrong, which
     /// is fake fidelity ("refuse rather than fake", 00-MASTER-PLAN §5). A
     /// board/test that knows where its counts must land (a modeled ADC's feed
@@ -266,11 +266,11 @@ impl RenodeConfig {
     // These are named accessors over the shipped `db/mcu/*.soc.toml` descriptors:
     // the register offsets, platform paths, and port maps that used to be
     // hand-written here now live in the TOML (the single source of truth,
-    // embedded via `include_str!` so the binary stays self-contained — the
+    // embedded via `include_str!` so the binary stays self-contained; the
     // mcp4728.toml precedent). Each descriptor's header comment carries the
     // hard-won knowledge (the F1-vs-F4 ODR footgun, the RP2040 SIO adaptation,
     // the F4 SPI-redefinition trap, the FE310 PRCI/vinit bring-up). A fresh part
-    // is added purely as data via [`crate::SocConfig::resolve`] — these
+    // is added purely as data via [`crate::SocConfig::resolve`], these
     // constructors exist only for the in-tree callers that name a part directly.
     //
     // `.expect` is correct here: a shipped descriptor failing to load is a build
@@ -301,7 +301,7 @@ impl RenodeConfig {
             .expect("built-in sifive_fe310.soc.toml is valid")
     }
 
-    /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml` — that file
+    /// RP2040 (Raspberry Pi Pico). See `db/mcu/rp2040.soc.toml`, that file
     /// carries the full SIO-footgun and verification-status notes.
     pub fn rp2040() -> Self {
         Self::from_soc_toml(include_str!("../../db/mcu/rp2040.soc.toml"))
@@ -324,7 +324,7 @@ fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
     }
     let frac = (volts / full_scale_volts).clamp(0.0, 1.0);
     // Multiply by 2^n (= max_count + 1), not the top code 2^n-1, then clamp to
-    // the top code — the LSB = Vref/2^n transfer function. Multiplying by
+    // the top code; the LSB = Vref/2^n transfer function. Multiplying by
     // (2^n-1) systematically under-reads by up to ~1 LSB (the same fix applied
     // to the MCP3008 model in peripherals/spi.rs).
     ((frac * (f64::from(max_count) + 1.0)).round() as u32).min(max_count)
@@ -388,7 +388,7 @@ impl<C: Send + 'static> BridgeServer<C> {
     /// `"I2C"`). `handler` services one accepted connection; it owns any
     /// per-thread state (the I2C bridge threads a small transaction state
     /// machine through it). A handler error is logged loudly and the connection
-    /// dropped — a broken bridge must be visible, never silently absorbed.
+    /// dropped, a broken bridge must be visible, never silently absorbed.
     fn start<H>(label: &'static str, cb: C, mut handler: H) -> Result<Self>
     where
         H: FnMut(&mut TcpStream, &Arc<Mutex<C>>) -> Result<()> + Send + 'static,
@@ -470,9 +470,9 @@ struct I2cBridgeState {
     ///
     /// Renode 1.16.1's `STM32F4_I2C` controller model (used by the stock
     /// `stm32f103.repl`) asks the slave for bytes exactly ONCE per read
-    /// transaction — `Read()` at the address phase — and never asks again when
+    /// transaction, `Read()` at the address phase, and never asks again when
     /// its receive fifo drains. Firmware running the RM0008 two-byte receive
-    /// sequence (POS/ACK, then two DR reads gated on RxNE — see
+    /// sequence (POS/ACK, then two DR reads gated on RxNE, see
     /// `testdata/firmware/stm32_i2c_thermostat/main.c`) would therefore time
     /// out waiting for RxNE on the second byte: the model's fifo holds only
     /// the single byte that one `Read()` returned. With this flag set, a
@@ -488,11 +488,11 @@ struct I2cBridgeState {
     /// [`platform_needs_i2c_single_read_prefetch`]).
     ///
     /// WHY `read_count == 1` IS THE ONLY POSSIBLE KEY (proven against the
-    /// pinned model source, renode-infrastructure @ add012af — the exact
+    /// pinned model source, renode-infrastructure @ add012af; the exact
     /// submodule of the Renode v1.16.1 tag, `STM32F4_I2C.cs`):
     ///
     ///   - `DataWrite`, `State.AwaitingAddress`, read bit set:
-    ///     `dataToReceive = new Queue<byte>(selectedSlave.Read());` — the ONE
+    ///     `dataToReceive = new Queue<byte>(selectedSlave.Read());`; the ONE
     ///     call to the slave, with no argument, and
     ///     `II2CPeripheral.Read(int count = 1)`, so every STM32F1 read
     ///     transaction reaches this bridge as a single `read_count == 1`
@@ -501,12 +501,12 @@ struct I2cBridgeState {
     ///     from an empty fifo" and returns 0 when it drains); it never calls
     ///     `selectedSlave.Read()` again, and RxNE is `dataToReceive.Any()`.
     ///   - The model never calls `FinishTransmission()` on the slave, and
-    ///     `StopWrite` touches only controller-side state — a read
+    ///     `StopWrite` touches only controller-side state, a read
     ///     transaction produces NO bridge traffic after the address phase.
     ///
     /// A standalone one-byte read and the RM0008 two-byte receive are
     /// therefore byte-identical on the wire (one `READ count=1` message, then
-    /// silence), so no discriminator — count, framing, or STOP boundary — can
+    /// silence), so no discriminator, count, framing, or STOP boundary, can
     /// separate them here. Serving both correctly at once is impossible with
     /// this controller model; the platform gate plus the
     /// `HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH` override (see
@@ -544,13 +544,13 @@ impl I2cBridgeState {
     ///
     /// FAIL LOUD: a clean EOF *before* any request header is benign (the
     /// drop-time wake-up connection, or a probe) and returns `Ok`. Any failure
-    /// after that — a truncated header/payload, an oversized payload, a response
-    /// write that does not land, or an undefined op code — returns `Err` so the
+    /// after that, a truncated header/payload, an oversized payload, a response
+    /// write that does not land, or an undefined op code, returns `Err` so the
     /// server logs it rather than letting a broken bridge look like quiet,
     /// valid bus traffic.
     ///
     /// Note: a `Read` for which the callback returns `None` is NOT a bridge
-    /// failure — `None` is the model layer's legitimate "no slave here / NACK",
+    /// failure, `None` is the model layer's legitimate "no slave here / NACK",
     /// and `0xFF` is the level a real open-drain I2C bus floats to, so that byte
     /// is the faithful thing to clock back.
     fn handle_stream(
@@ -632,7 +632,7 @@ impl I2cBridgeState {
                     // platform but the gated STM32F1s) a single-byte read
                     // consumes exactly one byte from the slave callback and
                     // returns exactly one byte. With it on, EVERY count==1
-                    // request over-fetches — deliberately: the field docs
+                    // request over-fetches, deliberately: the field docs
                     // prove the wire carries no signal that could separate a
                     // standalone one-byte read from the first half of the
                     // RM0008 two-byte receive under Renode 1.16.1's
@@ -723,8 +723,8 @@ const SPI_OP_FINISH: u8 = 2;
 ///
 /// FAIL LOUD: a clean EOF *before* any op byte is benign (the drop-time wake-up
 /// connection, or a probe), so it returns `Ok`. Any failure *after* committing to
-/// an op — a truncated MOSI byte, a MISO write that does not land, or an op code
-/// the protocol does not define — returns `Err` so the server logs it instead of
+/// an op, a truncated MOSI byte, a MISO write that does not land, or an op code
+/// the protocol does not define, returns `Err` so the server logs it instead of
 /// the firmware silently reading a plausible-but-fake bus byte.
 fn handle_spi_stream(
     stream: &mut TcpStream,
@@ -736,7 +736,7 @@ fn handle_spi_stream(
     match stream.read_exact(&mut op_buf) {
         Ok(()) => {}
         // Empty connection (no bytes at all): the peer connected and closed
-        // without a request. Benign — do not treat as a bridge failure.
+        // without a request. Benign, do not treat as a bridge failure.
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
         Err(e) => return Err(e).context("reading SPI bridge op byte"),
     }
@@ -997,7 +997,7 @@ impl RenodeBackend {
     /// output-direction mask before diffing: an ODR bit on a pin the firmware
     /// has NOT configured as an output is not a drive (on STM32/nRF it is
     /// meaningless until the pin becomes an output), so it must not synthesize
-    /// a driven-level edge. Ports without a dir map keep the old behavior —
+    /// a driven-level edge. Ports without a dir map keep the old behavior,
     /// every ODR change is reported, and direction stays unobservable.
     fn poll_gpio_edges(&mut self) {
         let ports: Vec<PortMap> = match &self.active_ports {
@@ -1116,7 +1116,7 @@ impl RenodeBackend {
                 // The device name must be unique per (controller, address):
                 // Renode's Monitor namespace is machine-global, so a name
                 // keyed only on the address collides the moment a platform
-                // has TWO controllers (nRF52840 twi0+twi1 — caught live by
+                // has TWO controllers (nRF52840 twi0+twi1, caught live by
                 // tests/renode_nrf52840_bus.rs; the single-controller STM32
                 // platforms never exposed it).
                 let sanitized: String = controller
@@ -1251,7 +1251,7 @@ fn platform_needs_i2c_single_read_prefetch(platform: &str) -> bool {
 /// `HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH=1/0` (any other value falls back
 /// to the platform default).
 ///
-/// The override is not a convenience — it is one half of the policy surface.
+/// The override is not a convenience; it is one half of the policy surface.
 /// [`I2cBridgeState::single_read_prefetch`]'s docs prove that under Renode
 /// 1.16.1's `STM32F4_I2C` a standalone one-byte read and the RM0008 two-byte
 /// receive are indistinguishable on the wire, so no per-request heuristic can
@@ -1310,7 +1310,7 @@ namespace Antmicro.Renode.Peripherals.I2C
             // platforms it prefetches two bytes for a count==1 request,
             // because Renode 1.16.1's STM32F4_I2C model asks the slave exactly
             // once per read transaction and never re-asks when its fifo
-            // drains — the STM32F1 two-byte receive sequence would time out
+            // drains; the STM32F1 two-byte receive sequence would time out
             // waiting for RxNE otherwise. Everywhere else the response is
             // exactly `count` bytes, so a genuine single-byte read consumes
             // exactly one byte from the host model. Keeping that policy on the
@@ -1641,7 +1641,7 @@ impl Mcu for RenodeBackend {
         // modeled voltage into a count and deliver it per this channel's
         // config recipe (a modeled-ADC feed command, or a WriteDoubleWord into
         // the result word the firmware reads). The Monitor is idle between
-        // `RunFor` chunks, so the write lands before the next chunk executes —
+        // `RunFor` chunks, so the write lands before the next chunk executes,
         // the same cadence at which the scheduler pushes ADC voltages.
         let Some(map) = self
             .config
@@ -1669,7 +1669,7 @@ impl Mcu for RenodeBackend {
         let cmd = render_adc_inject(&map.inject, count, clamped_mv);
         // FAIL LOUD, matching the on_i2c/on_spi bridge discipline: a failed
         // injection means the firmware quietly reads a stale/zero count as if
-        // it were real — exactly the fake-data mode this backend refuses.
+        // it were real, exactly the fake-data mode this backend refuses.
         match self.monitor.command(&cmd) {
             Ok(resp) if !monitor_failed(&resp) => {}
             Ok(resp) => panic!("Renode ADC injection failed ({cmd}): {resp}"),
@@ -1765,7 +1765,7 @@ impl Mcu for RenodeBackend {
         // From the per-poll direction-register cache. Latest direction wins
         // (the mask IS the current register value), matching the AVR DDR
         // semantics: a pin released back to input drops out of the set. Ports
-        // without a dir map contribute nothing — conservative, and consistent
+        // without a dir map contribute nothing, conservative, and consistent
         // with `drive_direction_observable` reporting false for them.
         let mut out = Vec::new();
         for port in &self.config.ports {
@@ -2099,11 +2099,11 @@ mod tests {
     /// Bit-identity proof for the data-driven config bridge (05 §5.5): every
     /// stock config serializes and deserializes back to a value that is EQUAL to
     /// what the constructor produced. This proves two things at once:
-    ///   1. the struct is a *lossless* plain-data carrier — no field is dropped
+    ///   1. the struct is a *lossless* plain-data carrier, no field is dropped
     ///      or altered on the round trip, so W5's future file load reconstructs
     ///      the exact config the constructor makes today (the whole point of the
     ///      bridge);
-    ///   2. the config VALUE is unchanged by the refactor — the constructors
+    ///   2. the config VALUE is unchanged by the refactor; the constructors
     ///      were not touched (only inert `#[derive]`s were added), and the
     ///      `*_config_shape` tests below still pin the individual field values
     ///      they always pinned, so before == after.
@@ -2127,7 +2127,7 @@ mod tests {
         assert_eq!(c.expected_e_machine, crate::elf::EM_ARM);
         assert_eq!(c.frequency_hz, 125_000_000);
         // One 30-pin bank read at SIO GPIO_OUT (offset 0x10 from SIO_BASE), NOT
-        // a port ODR — the honest SIO adaptation of the ODR-offset discipline.
+        // a port ODR; the honest SIO adaptation of the ODR-offset discipline.
         assert_eq!(c.ports.len(), 1);
         assert_eq!(c.ports[0].letter, '0');
         assert_eq!(c.ports[0].peripheral, "sio");
@@ -2187,7 +2187,7 @@ mod tests {
             let mut client = TcpStream::connect(("127.0.0.1", port)).expect("connect");
             let (mut server, _) = listener.accept().expect("accept");
 
-            // op=READ, addr=0x48, read_count, payload_len=0 — the exact wire
+            // op=READ, addr=0x48, read_count, payload_len=0; the exact wire
             // header the generated C# `Read(count)` now sends (true count).
             let mut request = vec![I2C_OP_READ, 0x48];
             request.extend_from_slice(&read_count.to_be_bytes());
@@ -2211,7 +2211,7 @@ mod tests {
 
     /// BUG #18 regression: a genuine single-byte read must invoke the slave
     /// callback exactly once (the register pointer advances by 1, not 2) and
-    /// return exactly one byte to Renode — no over-fetch, no over-return.
+    /// return exactly one byte to Renode, no over-fetch, no over-return.
     #[test]
     fn single_byte_read_consumes_and_returns_exactly_one_byte() {
         let (response, pointer) = run_bridge_read(false, 1);
@@ -2223,7 +2223,7 @@ mod tests {
     /// a count==1 request fetches and returns two bytes so Renode 1.16.1's
     /// one-shot STM32F4_I2C fifo can satisfy both DR reads. count==1 is the
     /// correct wire shape for this case: the model calls `Read()` (default
-    /// count 1) exactly once at the address phase, never N=2 — see the
+    /// count 1) exactly once at the address phase, never N=2, see the
     /// `single_read_prefetch` field docs for the source-level proof.
     #[test]
     fn stm32f1_prefetch_still_fills_two_byte_receive() {
@@ -2240,7 +2240,7 @@ mod tests {
 
     /// On an STM32F1 platform the wire carries no signal separating a
     /// standalone one-byte read from a two-byte receive (both arrive as one
-    /// `READ count=1` and nothing else — proof in the `single_read_prefetch`
+    /// `READ count=1` and nothing else, proof in the `single_read_prefetch`
     /// field docs), so exact single-byte service for stateful,
     /// auto-incrementing slaves is an explicit opt-out, not a heuristic:
     /// with `HAUKSBEE_RENODE_I2C_SINGLE_READ_PREFETCH=0` resolved, a
@@ -2252,7 +2252,7 @@ mod tests {
         let prefetch = resolve_single_read_prefetch(Some("0"), platform);
         assert!(!prefetch, "override =0 wins over the STM32F1 default");
         // Two sequential single-byte reads against ONE slave: the second must
-        // return the NEXT register (0x11), not the one after (0x12) — i.e.
+        // return the NEXT register (0x11), not the one after (0x12), i.e.
         // the first read consumed exactly one byte, no discarded over-fetch.
         let (responses, pointer) = run_bridge_reads(prefetch, &[1, 1]);
         assert_eq!(responses, vec![vec![0x10], vec![0x11]]);

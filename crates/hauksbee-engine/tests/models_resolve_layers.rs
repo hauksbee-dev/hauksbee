@@ -1,7 +1,7 @@
 //! `hauksbee models resolve <board>`: the per-component
 //! which-entry-won-from-which-layer table (06-extensibility-sdk §3), the
 //! pack-author debugging surface. Asserts the output names layers with their
-//! priorities, using only temp dirs — never the machine's real ~/.hauksbee.
+//! priorities, using only temp dirs, never the machine's real ~/.hauksbee.
 
 use hauksbee_engine::commands::models::resolve_report;
 use hauksbee_extract::{Component, ExtractedBoard};

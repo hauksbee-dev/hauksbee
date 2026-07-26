@@ -64,7 +64,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
   // instead of the dot map. Null for formats the client can't draw (Eagle,
   // Altium, gerber zip, .board DSL).
   const [boardUrl, setBoardUrl] = useState<string | null>(null)
-  // Net last clicked on the board render — the checks panel offers a one-click
+  // Net last clicked on the board render; the checks panel offers a one-click
   // check on it ("click a trace and say what the voltage must be").
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
 
@@ -251,7 +251,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
       </div>
 
       <div className={`${report ? 'max-w-3xl' : 'max-w-xl'} mx-auto px-6 pb-24`} style={{ paddingTop: report ? '2rem' : 'clamp(2.5rem, 9vh, 6rem)' }}>
-        {/* Hero — a calm, centered thesis */}
+        {/* Hero, a calm, centered thesis */}
         {!report && (
           <div className="text-center">
             <h1
@@ -268,7 +268,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           </div>
         )}
 
-        {/* The upload card — the single focal action */}
+        {/* The upload card; the single focal action */}
         {!report && (
           <div className="mt-9">
             <label
@@ -310,7 +310,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
                 or click anywhere in this card to choose a file
               </div>
 
-              {/* primary action — visual only; the label handles activation */}
+              {/* primary action, visual only; the label handles activation */}
               <span
                 className="inline-flex items-center gap-2 mt-6 px-5 py-2.5 rounded-lg text-sm font-semibold"
                 style={{
@@ -333,7 +333,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             {/* Firmware: a quiet secondary jack below the card */}
             <FirmwareJack firmware={firmwareFile} placement="intake" onFile={handleFirmware} />
 
-            {/* Samples — a first report with no file needed at all */}
+            {/* Samples, a first report with no file needed at all */}
             <div className="mt-8 text-center" data-testid="samples">
               <div className="text-[11px] uppercase" style={{ color: 'var(--silk-faint)', letterSpacing: '0.08em' }}>
                 No board handy? Try a sample
@@ -354,19 +354,19 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
               </div>
             </div>
 
-            {/* Prepare your own project — one line per ECAD, no jargon */}
+            {/* Prepare your own project, one line per ECAD, no jargon */}
             <details className="mt-6 mx-auto text-[13px]" style={{ color: 'var(--silk-dim)', maxWidth: '34rem' }}>
               <summary className="cursor-pointer text-center" style={{ listStylePosition: 'inside' }}>
                 Where do I find my board and firmware files?
               </summary>
               <div className="mt-3 space-y-2 leading-relaxed text-left rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}>
                 <div>
-                  <strong style={{ color: 'var(--silk)' }}>KiCad</strong> — drop the{' '}
+                  <strong style={{ color: 'var(--silk)' }}>KiCad</strong>, drop the{' '}
                   <code>.kicad_pcb</code> straight from your project folder. No export step.
                 </div>
                 <div>
-                  <strong style={{ color: 'var(--silk)' }}>Eagle</strong> — the <code>.brd</code>.{' '}
-                  <strong style={{ color: 'var(--silk)' }}>Altium</strong> — the <code>.PcbDoc</code>.
+                  <strong style={{ color: 'var(--silk)' }}>Eagle</strong>; the <code>.brd</code>.{' '}
+                  <strong style={{ color: 'var(--silk)' }}>Altium</strong>; the <code>.PcbDoc</code>.
                 </div>
                 <div>
                   <strong style={{ color: 'var(--silk)' }}>Only fab files?</strong> Zip the folder
@@ -374,21 +374,21 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
                   from the copper itself.
                 </div>
                 <div>
-                  <strong style={{ color: 'var(--silk)' }}>Firmware</strong> — the compiled image.
+                  <strong style={{ color: 'var(--silk)' }}>Firmware</strong>; the compiled image.
                   PlatformIO: <code>.pio/build/&lt;env&gt;/firmware.elf</code>, or just zip the whole
                   project and it is found (or built) for you. ESP-IDF/CMake:{' '}
                   <code>build/&lt;app&gt;.elf</code>. Arduino IDE: Sketch → Export Compiled Binary.
                 </div>
                 <div>
                   Want this in a pipeline instead? <code>hauksbee-ci init your_board.kicad_pcb</code>{' '}
-                  scaffolds a checked-in spec — see <code>docs/ci/CI.md</code>.
+                  scaffolds a checked-in spec, see <code>docs/ci/CI.md</code>.
                 </div>
               </div>
             </details>
 
             {/* Privacy reassurance */}
             <div className="mt-5 text-center text-[12px]" style={{ color: 'var(--silk-faint)' }}>
-              Runs entirely on this machine — nothing is uploaded.
+              Runs entirely on this machine, nothing is uploaded.
             </div>
           </div>
         )}
@@ -414,7 +414,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           </div>
         )}
 
-        {/* Hidden file inputs — OUTSIDE the pre-report card so the report view
+        {/* Hidden file inputs, OUTSIDE the pre-report card so the report view
             can keep offering both jacks. Losing them with the card was the
             "analyzed a board, now I can't add firmware" dead end. */}
         <input
@@ -491,7 +491,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
           </div>
         )}
 
-        {/* What it checks — a calm, secondary row (only before a report). */}
+        {/* What it checks, a calm, secondary row (only before a report). */}
         {!report && (
           <div className="mt-14">
             <div
@@ -502,7 +502,7 @@ export function Landing({ preloadedReport, preloadedBoardName, canRunLive, onRun
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
-                ['As-built circuit', 'Reconstructed from the copper the board actually ships — not the schematic you drew.'],
+                ['As-built circuit', 'Reconstructed from the copper the board actually ships, not the schematic you drew.'],
                 ['Firmware co-sim', 'Your firmware on an emulated MCU, coupled to the live analog solve.'],
                 ['Beyond a test suite', 'Rails, faults, shorts, USB-C, signal integrity, thermal, loop stability.'],
               ].map(([h, b]) => (

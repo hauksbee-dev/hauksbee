@@ -69,26 +69,26 @@ Tarski InputSystem board (`forge-codegen` test `dsl_roundtrip`).
 
 You do not have to start from a decompiled board. The DSL is small enough to
 hand-write. [`examples/board-as-code/starter.board`](../../examples/board-as-code/starter.board)
-is a complete, hand-authored three-part board — a 2-pin header driving an LED
-through a series resistor — written from nothing and richly commented. Build one
+is a complete, hand-authored three-part board, a 2-pin header driving an LED
+through a series resistor, written from nothing and richly commented. Build one
 up the same way:
 
 1. **Header + `fn main`.** Every file starts with `board version <N>` (N is any
    integer tag) and one `fn main { ... }` block that holds the whole board.
 2. **Declare the nets.** List every net with `net "<name>"` before you wire a
-   pad to it — wiring a pad to an undeclared net is a load error, so the net
+   pad to it, wiring a pad to an undeclared net is a load error, so the net
    list is also your connectivity contract.
 3. **Add components.** Each `comp` has a reference, a footprint `lib "<lib_id>"`,
    a `val`, a `layer`, and an `at X Y rot` placement, then a `{ ... }` body of
    pads. A footprint `lib_id` is a KiCad `Library:Footprint` name (e.g.
-   `Resistor_SMD:R_0805_2012Metric`) — the same strings KiCad's footprint chooser
+   `Resistor_SMD:R_0805_2012Metric`); the same strings KiCad's footprint chooser
    shows; the recompiler passes them straight to the `.kicad_pcb`.
 4. **Wire the pads.** Each `pad` carries its number, kind, shape, position
    (relative to the comp origin), size, copper `layers`, and the `net "<name>"`
    it connects to (or `nonet` for an unconnected pad). A `thru_hole` /
    `np_thru_hole` pad also needs a `drill <D>`.
 5. **Check it.** `hauksbee check-code starter.board` recompiles, binds, and
-   simulates it — the fastest way to see "100% resolved" and a clean report (or
+   simulates it; the fastest way to see "100% resolved" and a clean report (or
    find out which pad you mis-wired).
 
 ```bash

@@ -86,7 +86,7 @@ fn find_col(headers: &[String], aliases: &[&str]) -> Option<usize> {
     }
     // Then prefix/contains (e.g. "centerxmm" contains "centerx"). A bare
     // single-character alias ("x"/"y") must NOT latch onto an unrelated column
-    // via `contains` — "index", "maxheight", and "layer" all contain an x/y —
+    // via `contains`, "index", "maxheight", and "layer" all contain an x/y,
     // so single-char aliases match only as a prefix ("xmm"), never mid-word.
     for a in aliases {
         if let Some(i) = normed
@@ -107,7 +107,7 @@ fn cell_is_dnp(s: &str) -> bool {
     )
 }
 
-/// A cell in a "populate/fitted/assemble" column: reversed polarity — a
+/// A cell in a "populate/fitted/assemble" column: reversed polarity, a
 /// negative value means the part is NOT assembled.
 fn cell_says_not_fitted(s: &str) -> bool {
     matches!(
@@ -150,7 +150,7 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     // above advertises cell-named units (mm/mil/inch), but detecting inch only
     // via the "in" abbreviation ("inch" ends in "ch") and mil only via bare "mil"
     // ("mils" ends in "ils") let those spellings fall through as unitless and get
-    // silently re-scaled by the header unit — a 25.4x / 39x coordinate error.
+    // silently re-scaled by the header unit, a 25.4x / 39x coordinate error.
     let mil = lower.ends_with("mil") || lower.ends_with("mils");
     let inch = lower.ends_with("in")
         || lower.ends_with("inch")
@@ -161,7 +161,7 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     let mm = !mil && lower.ends_with("mm");
     // Strip the trailing unit word BEFORE cleaning. The cleaner keeps 'e'/'E' for
     // scientific notation, but the spelled-out "inches" ends in 'e' + 's', so a
-    // cell like "4.25inches" cleaned to "4.25e" and failed to parse — silently
+    // cell like "4.25inches" cleaned to "4.25e" and failed to parse, silently
     // dropping the coordinate and skipping the whole placement row. A unit is
     // trailing letters (and the inch-mark `"`); a real exponent's 'e' is never at
     // the string end, so stripping trailing alphabetics leaves it intact.
@@ -510,7 +510,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
     #[test]
     fn bom_range_preserves_zero_padded_designator_width() {
         // R38: a zero-padded range "C01-C10" (Altium/OrCAD style) must expand to
-        // C01..C10, not C1..C10 — the P&P references keep their padding, so the
+        // C01..C10, not C1..C10; the P&P references keep their padding, so the
         // stripped keys never matched on lookup and value/MPN/DNP enrichment was
         // silently dropped for the single-digit members.
         let csv = "Designator,Value,Fitted\n\"C01-C10\",100n,No\n";
@@ -565,7 +565,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
 
     #[test]
     fn pnp_cell_unit_beats_header_unit() {
-        // A cell that names its own unit wins over the header unit — no
+        // A cell that names its own unit wins over the header unit, no
         // double-scaling (PNP-2 guard).
         let csv = "Ref,PosX (mil),PosY (mil)\nU1,5.0mm,5.0mm\n";
         let p = parse_pnp(csv);
@@ -577,7 +577,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         // The X/Y columns are named just "X (mm)"/"Y (mm)" (norm "xmm"/"ymm"),
         // which no alias matches exactly, so resolution falls to the fuzzy pass.
         // A bare "x" alias must not `contains`-match the earlier "Index" column
-        // (PNP-3) — it must prefix-match "xmm". Were col 0 chosen for X, U1's X
+        // (PNP-3); it must prefix-match "xmm". Were col 0 chosen for X, U1's X
         // would parse as 1, not 12.5.
         let csv = "Index,Ref,X (mm),Y (mm)\n1,U1,12.5,7.5\n";
         let p = parse_pnp(csv);
@@ -631,7 +631,7 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         assert!((v - 0.254).abs() < 1e-9 && had, "10mils -> 0.254 mm, unit named");
         // R33: the plural "inches" spelling ends in 'e'+'s'. The numeric cleaner
         // keeps 'e' (for scientific notation), so "4.25inches" cleaned to "4.25e"
-        // and failed to parse — parse_len returned None and the whole placement
+        // and failed to parse, parse_len returned None and the whole placement
         // row was silently dropped. It must convert like "inch".
         let (v, had) = parse_len("4.25inches").unwrap();
         assert!((v - 107.95).abs() < 1e-9 && had, "4.25inches -> 107.95 mm, unit named");

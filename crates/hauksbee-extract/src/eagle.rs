@@ -105,7 +105,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                                 .parse()
                                 .unwrap_or(0.0),
                             // Eagle can prefix the rotation with 'S' (spin) and
-                            // 'M' (mirror) in either order — "MR90", "SMR90".
+                            // 'M' (mirror) in either order, "MR90", "SMR90".
                             // `starts_with('M')` missed the spin-prefixed
                             // "SMR90" form, disagreeing with drc.rs (contains).
                             mirrored: rot.contains('M'),
@@ -172,7 +172,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     // `package` is required on an Eagle <element>; when it is absent the lookup
     // below misses and the part lands with zero pins (its own connectivity
     // silently lost, though the nets it touched survive via <contactref>). Only
-    // reachable with schema-invalid XML, so surface it rather than fail — a
+    // reachable with schema-invalid XML, so surface it rather than fail, a
     // silent zero-pin component is the confusing symptom.
     let missing_pkg = elements.iter().filter(|e| e.package.is_empty()).count();
     if missing_pkg > 0 {
@@ -186,7 +186,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         .into_iter()
         .map(|el| {
             // A mirrored element (`MR<deg>`) reflects about Y (negate local X)
-            // and then rotates by `-deg` — mirroring flips the sense of
+            // and then rotates by `-deg`, mirroring flips the sense of
             // rotation. Rotating by `+deg` here diverged from the
             // corpus-validated placement in drc.rs (place_pkg_item) for any
             // `MR<deg>` whose deg is not a multiple of 180 (e.g. MR90 put pads

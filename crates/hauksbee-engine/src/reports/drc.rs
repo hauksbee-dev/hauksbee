@@ -203,7 +203,7 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Str
         .and_then(|x| x.as_array())
         .map_or(0, |a| a.len());
     // What "a short" means in each tool: hauksbee = copper of two nets at gap <= 0
-    // (touching). KiCad expresses the same fact two ways — a `shorting_items`
+    // (touching). KiCad expresses the same fact two ways, a `shorting_items`
     // violation (its connectivity merged the nets) OR a `clearance`/`hole_clearance`
     // at actual ~0 mm (geometrically touching but not merged). Count both as the
     // oracle's confirmed touches; KiCad's other violations (annular, mask-bridge,

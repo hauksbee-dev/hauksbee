@@ -155,7 +155,7 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
             }}
           >
             <span style={{ color: '#f87171', display: 'inline-flex' }}><BoltIcon size={14} /></span>
-            <span>FAULT: <strong style={{ color: '#fca5a5' }}>{t.ref}</strong> — {t.kind}</span>
+            <span>FAULT: <strong style={{ color: '#fca5a5' }}>{t.ref}</strong>, {t.kind}</span>
           </div>
         ))}
       </div>
