@@ -119,7 +119,7 @@ fn esp32_spi_adc_drives_flag_below_threshold() {
 // flag never rises. The on_spi callback path itself IS wired (RAM-mailbox bus
 // contract, 05 section 5.2) and tested in hauksbee-mcu/tests/qemu_bus_mailbox.rs;
 // un-ignore with mailbox-aware firmware or a QEMU SPI peripheral hook.
-#[ignore = "esp32_spi_adc firmware drives the real (host-invisible) SPI2 controller; needs the mailbox bus contract or a QEMU SPI hook — see 05-cosim-fidelity.md section 5.2/5.3"]
+#[ignore = "esp32_spi_adc firmware drives the real (host-invisible) SPI2 controller; needs the mailbox bus contract or a QEMU SPI hook; see 05-cosim-fidelity.md section 5.2/5.3"]
 fn esp32_spi_adc_drives_flag_above_threshold() {
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");
@@ -145,7 +145,7 @@ fn esp32_spi_adc_drives_flag_above_threshold() {
 
 #[test]
 // Same cause as above: the real SPI2 controller is host-invisible in QEMU.
-#[ignore = "esp32_spi_adc firmware drives the real (host-invisible) SPI2 controller; needs the mailbox bus contract or a QEMU SPI hook — see 05-cosim-fidelity.md section 5.2/5.3"]
+#[ignore = "esp32_spi_adc firmware drives the real (host-invisible) SPI2 controller; needs the mailbox bus contract or a QEMU SPI hook; see 05-cosim-fidelity.md section 5.2/5.3"]
 fn esp32_spi_adc_flag_follows_voltage_sweep() {
     if !is_available(QemuArch::Xtensa) {
         eprintln!("SKIP: Espressif QEMU (qemu-system-xtensa) not installed");

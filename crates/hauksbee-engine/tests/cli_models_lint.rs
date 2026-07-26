@@ -78,7 +78,7 @@ fn builtin_digital_db_lints_clean() {
             "expected '{id}' ok line in:\n{out}"
         );
     }
-    assert!(out.contains("— clean"), "clean summary line:\n{out}");
+    assert!(out.contains(": clean"), "clean summary line:\n{out}");
 }
 
 /// A file with neither [sensor] nor [[models]] is a usage error (exit 1),

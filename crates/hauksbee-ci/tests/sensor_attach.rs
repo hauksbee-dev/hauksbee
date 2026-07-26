@@ -84,7 +84,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
     );
 
     eprintln!(
-        "sensor_attach_lm75_hot: PASS — declarative LM75 at 40 C drove FLAG HIGH via Renode I2C bridge"
+        "sensor_attach_lm75_hot: PASS: declarative LM75 at 40 C drove FLAG HIGH via Renode I2C bridge"
     );
 }
 
@@ -119,7 +119,7 @@ fn sensor_attach_lm75_cold_flag_stays_low() {
     );
 
     eprintln!(
-        "sensor_attach_lm75_cold: PASS — declarative LM75 at 20 C held FLAG LOW via Renode I2C bridge"
+        "sensor_attach_lm75_cold: PASS: declarative LM75 at 20 C held FLAG LOW via Renode I2C bridge"
     );
 }
 

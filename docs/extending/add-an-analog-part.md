@@ -42,12 +42,12 @@ vout      = 3.3        # regulated output (V)   [range 0.5 .. 30]
 dropout_v = 0.178      # dropout at full load (V) [0 .. 10]
 iq_a      = 0.0000016  # quiescent current (A)   [0 .. 1]
 
-[models.pins]           # SOT-23-3 pinout — map YOUR footprint's pad numbers
+[models.pins]           # SOT-23-3 pinout: map YOUR footprint's pad numbers
 "1" = "gnd"
 "2" = "in"              # VIN
 "3" = "out"             # VOUT  (load-bearing: the regulator sources this net)
 
-[models.ratings]        # optional — enables over-current / over-temp faults
+[models.ratings]        # optional; enables over-current / over-temp faults
 max_current_a = 0.25
 ```
 
@@ -122,7 +122,7 @@ hauksbee models lint my-parts.toml
 #    the full bind and NAMES anything still simulated as OPEN (the surface that
 #    proves your pins connected):
 hauksbee run my_board.kicad_pcb --report --plain --models-dir .
-#    `models resolve` is complementary — it shows which model entry each part
+#    `models resolve` is complementary; it shows which model entry each part
 #    MATCHED and from which priority layer, but it does not exercise pin binding,
 #    so it will not tell you a pin role is wrong:
 #    hauksbee models resolve my_board.kicad_pcb --models-dir .

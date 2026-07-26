@@ -391,7 +391,7 @@ R2 A B 2k
             ("1MegOhm", 1e6),
             ("4.7kOhm", 4.7e3),
             ("15mV", 15e-3),
-            ("4F", 4e-15),   // bare femto, no unit — unchanged from before
+            ("4F", 4e-15),   // bare femto, no unit, unchanged from before
             ("2.52N", 2.52e-9),
             ("80", 80.0),
             ("1e-14", 1e-14),

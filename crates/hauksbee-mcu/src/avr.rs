@@ -836,7 +836,7 @@ impl AvrMcu {
                 libc::free(boot as *mut libc::c_void);
                 bail!(
                     "firmware '{}' does not fit this MCU's flash: the image spans \
-                     0x{:05X}..0x{:05X} but flash is only {} bytes (0x00000..0x{:05X}) — \
+                     0x{:05X}..0x{:05X} but flash is only {} bytes (0x00000..0x{:05X}); \
                      was this hex built for a larger part?",
                     path.display(),
                     base,

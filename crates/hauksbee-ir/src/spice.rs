@@ -391,7 +391,7 @@ fn load_deck(
                         line: sl.lineno,
                         msg: format!(
                             "duplicate element name `{}` (first defined at line {prev}); \
-                             each refdes must be unique — two devices sharing a name are \
+                             each refdes must be unique: two devices sharing a name are \
                              silently stamped in parallel",
                             dev.name()
                         ),
@@ -761,7 +761,7 @@ fn resolve_name_fixups(circuit: &mut Circuit, fixups: &[NameFixup]) -> Result<()
                     return Err(err(format!(
                         "controlling source `{}` is not an independent voltage source; \
                          only a V element's branch current can be read (F/H control, \
-                         B-source `I(...)`) — insert a zero-volt ammeter \
+                         B-source `I(...)`); insert a zero-volt ammeter \
                          (`Vsense a b 0`) in series and name that",
                         fx.name
                     )));
@@ -1121,7 +1121,7 @@ fn resolve_params(cards: &[ParamCard], base: &ParamEnv) -> Result<ParamEnv, Spic
                 line: card.line,
                 msg: format!(
                     "parameter `{}` is defined more than once (first at line {prev}); \
-                     remove the duplicate — which value would win otherwise depends on \
+                     remove the duplicate; which value would win otherwise depends on \
                      resolution order",
                     card.name
                 ),
@@ -1583,7 +1583,7 @@ fn expand_instance(
                 line: card.line,
                 msg: format!(
                     "subckt-local `.param {}` shadows a parameter already in scope \
-                     (a global, an X-line override, or a subckt default); rename it — \
+                     (a global, an X-line override, or a subckt default); rename it; \
                      which value a sibling param sees would otherwise depend on \
                      resolution order",
                     card.name

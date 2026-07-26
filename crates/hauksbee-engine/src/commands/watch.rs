@@ -546,7 +546,7 @@ fn print_banner(target: Target, path: &Path, set: &WatchSet) {
         Target::BoardCode => "Board-as-Code (check-code)",
         Target::Spec => "hauksbee-ci spec",
     };
-    println!("hauksbee watch: {} — {}", path.display(), kind);
+    println!("hauksbee watch: {} ({})", path.display(), kind);
     println!("watching {} file(s) for changes (Ctrl-C to stop):", set.display.len());
     for p in &set.display {
         println!("  - {}", p.display());

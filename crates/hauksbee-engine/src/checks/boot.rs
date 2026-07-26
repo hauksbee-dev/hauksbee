@@ -504,7 +504,7 @@ pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> Strin
     let ref_w = rows.iter().map(|(r, _, _)| r.len()).max().unwrap_or(3).max(2);
     let net_w = rows.iter().map(|(_, n, _)| n.len()).max().unwrap_or(8).max(8);
     let mut s = String::from(
-        "\nPower-up state of MOSFET / transistor gates — what the firmware does to each\n\
+        "\nPower-up state of MOSFET / transistor gates: what the firmware does to each\n\
          switch the moment the board powers up. Verify each is the level you intend\n\
          (a HIGH or floating gate can switch a load on before the firmware means to):\n",
     );

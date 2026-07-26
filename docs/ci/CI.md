@@ -396,7 +396,7 @@ alongside the analysis it drives.
 
 **`rail_window`**: over a transient `[[scenario]]` window, a rail's min/max
 voltage stays within bounds and any dip below a floor recovers within a deadline
-— the brownout/inrush check.
+(the brownout/inrush check).
 
 ```toml
 [[assert]]

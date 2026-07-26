@@ -89,7 +89,7 @@ fn released_gpio_driver_lets_the_net_go() {
     assert!(
         final_v < 0.7,
         "after the firmware releases the pin (DDR -> input) the BUS net must \
-         fall through its pull-down, got {final_v:.2} V — the Thevenin driver \
+         fall through its pull-down, got {final_v:.2} V; the Thevenin driver \
          was left enabled (latched bus)"
     );
 }

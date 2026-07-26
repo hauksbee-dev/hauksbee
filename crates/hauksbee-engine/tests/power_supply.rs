@@ -168,7 +168,7 @@ fn battery_soc_depletes_at_expected_rate() {
     // Sanity: the load actually drew on the order of ~1 A.
     assert!(
         (0.8..=1.2).contains(&i),
-        "battery delivered {i:.3} A (want ~1 A) — load sizing"
+        "battery delivered {i:.3} A (want ~1 A); load sizing"
     );
 
     let soc = engine

@@ -370,7 +370,7 @@ impl InputResponder for BitBangSpiResponder {
             {
                 let sample_rising = self.sample_hold_level(); // sample edge into the hold level
                 self.fault(&format!(
-                    "MOSI changed during the sample phase — declared SPI mode {} samples on \
+                    "MOSI changed during the sample phase: declared SPI mode {} samples on \
                      the SCLK-{} ({}) edge; the firmware is clocking a different mode",
                     self.mode_num(),
                     if sample_rising { "rising" } else { "falling" },
@@ -420,7 +420,7 @@ impl InputResponder for BitBangSpiResponder {
                 if self.nbits != 0 && !self.faulted {
                     eprintln!(
                         "WARN: bit-banged SPI '{}': CS deasserted mid-byte ({} of 8 bits \
-                         clocked) — the firmware aborted a transfer",
+                         clocked); the firmware aborted a transfer",
                         self.bus.lock().unwrap_or_else(|e| e.into_inner()).id(),
                         self.nbits,
                     );
@@ -462,7 +462,7 @@ impl InputResponder for BitBangSpiResponder {
                     Some(p) => {
                         self.fault(&format!(
                             "miso_preview promised 0x{p:02x} but transfer returned \
-                             0x{actual:02x} — the slave's reply depends on the incoming \
+                             0x{actual:02x}; the slave's reply depends on the incoming \
                              byte, which bit-level bridging cannot honor"
                         ));
                         return Vec::new();
@@ -471,7 +471,7 @@ impl InputResponder for BitBangSpiResponder {
                     None => {
                         self.fault(&format!(
                             "slave provides no miso_preview and its reply was 0x{actual:02x}; \
-                             the firmware read LOW bits instead — bit-banged reads from this \
+                             the firmware read LOW bits instead; bit-banged reads from this \
                              slave are refused"
                         ));
                         return Vec::new();
@@ -710,7 +710,7 @@ impl SoftI2cResponder {
                 self.warned_addrs.push(addr);
                 eprintln!(
                     "WARN: soft I2C: firmware addressed 0x{addr:02x} but no attached \
-                     slave models it — NACKing (honest no-answer)"
+                     slave models it; NACKing (honest no-answer)"
                 );
             }
             self.active = known;
@@ -1067,7 +1067,7 @@ addr_mask = 0x7f
         let (mut m, _bus) = spi_master();
         m.edge(PINS.cs_n, true); // idle
         m.select(); // CS low, SCLK low: passes the polarity guard
-        assert!(!m.resp.faulted(), "mode 1 idles SCLK low — not caught at CS assert");
+        assert!(!m.resp.faulted(), "mode 1 idles SCLK low; not caught at CS assert");
 
         // Mode-1 shift phase: raise SCLK (leading edge), THEN drive the bit.
         m.edge(PINS.sclk, true);
@@ -1253,7 +1253,7 @@ addr_mask = 0x7f
         m.select();
         assert!(
             m.resp.faulted(),
-            "mode 2 idles SCLK high — a CS assert with SCLK low must fault"
+            "mode 2 idles SCLK high; a CS assert with SCLK low must fault"
         );
     }
 

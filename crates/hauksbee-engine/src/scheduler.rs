@@ -376,7 +376,7 @@ impl UnexercisedBus {
         };
         format!(
             "co-sim: {} device '{}'{on} is on the board but this MCU platform \
-             models no {} controller — the firmware's bus traffic can never \
+             models no {} controller; the firmware's bus traffic can never \
              reach it, so it was NEVER exercised and its behaviour is \
              unverified (its state is the power-on default). Add [soc.{}] \
              controllers to the SoC descriptor to enable it (docs/cosim/MCU.md).",
@@ -415,7 +415,7 @@ impl AdcDrop {
         };
         format!(
             "co-sim: ADC channel {} on {} (net '{}'{parts}) was driven by the \
-             analog solve but this platform has no ADC injection map — the \
+             analog solve but this platform has no ADC injection map; the \
              firmware NEVER received it, so analog readings on that pin are \
              meaningless. Add an [[soc.adc]] injection recipe to the SoC \
              descriptor to enable it (docs/cosim/MCU.md).",
@@ -569,7 +569,7 @@ impl McuSubstitution {
              firmware behaviour is emulated on the substitute and may differ on \
              the real part (e.g. peripheral set, flash/RAM size, clock tree). \
              To model {} exactly, add a SoC descriptor + a [[models]] routing entry \
-             (two TOML files, no recompile) — see docs/extending/add-an-mcu-variant.md.",
+             (two TOML files, no recompile); see docs/extending/add-an-mcu-variant.md.",
             self.reference, self.requested_part, self.modelled_core, self.requested_part
         )
     }
@@ -5442,7 +5442,7 @@ mod tests {
     fn fractional_microsecond_chunks_do_not_drift_the_mcu_clock() {
         let (mut sched, micros) = sched_with_micros_core(false);
         let mut uart = HashMap::new();
-        let chunk = 1.3e-6; // 1.3 µs — not a whole number of microseconds
+        let chunk = 1.3e-6; // 1.3 µs, not a whole number of microseconds
         for _ in 0..10 {
             sched.run_chunk(chunk, &mut uart);
         }
@@ -5472,7 +5472,7 @@ mod tests {
     fn sub_microsecond_chunks_do_not_race_the_mcu_clock_ahead() {
         let (mut sched, micros) = sched_with_micros_core(false);
         let mut uart = HashMap::new();
-        let chunk = 0.5e-6; // 0.5 µs — persistently under one microsecond
+        let chunk = 0.5e-6; // 0.5 µs, persistently under one microsecond
         for _ in 0..20 {
             sched.run_chunk(chunk, &mut uart);
         }

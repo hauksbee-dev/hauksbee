@@ -365,7 +365,7 @@ pub fn render_check_report(r: &CheckReport) -> String {
     if !r.unresolved.is_empty() {
         let _ = writeln!(
             s,
-            "  {} unresolved (simulated as OPEN — add models with --models-dir):",
+            "  {} unresolved (simulated as OPEN; add models with --models-dir):",
             r.unresolved.len()
         );
         for (reference, value) in &r.unresolved {

@@ -184,7 +184,7 @@ fn resolve_firmware_bytes_limited(
 
     Err(format!(
         "'{fw_name}' is a zip but contains no built firmware (.elf / .hex) and no \
-         platformio.ini to build one from. Upload the compiled image directly — for \
+         platformio.ini to build one from. Upload the compiled image directly; for \
          PlatformIO that is .pio/build/<env>/firmware.elf inside your project."
     ))
 }

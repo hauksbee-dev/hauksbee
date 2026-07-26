@@ -134,7 +134,7 @@ Green looks like:
 
 ```
 model '74hc74': ok
-1 item(s) checked, 0 finding(s) — clean
+1 item(s) checked, 0 finding(s): clean
 ```
 
 Lint compiles the logic block through the **same** `LogicComponent::compile`

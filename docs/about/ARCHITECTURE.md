@@ -31,7 +31,7 @@ hauksbee-models: lib_id/value/part-number ⇒ device model
    (built-in defaults │ user SPICE │ datasheet extraction via codex)
         │
         ▼
-hauksbee-ir: Circuit IR — devices, nodes, parameters, parasitics (optional)
+hauksbee-ir: Circuit IR; devices, nodes, parameters, parasitics (optional)
         │
         ▼
 hauksbee-solve: partitioned hybrid solver           hauksbee-mcu: MCU backends

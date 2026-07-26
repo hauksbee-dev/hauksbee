@@ -379,7 +379,7 @@ pub fn verify_installed(arch: QemuArch, root: &Path) -> Result<PathBuf> {
     if !is_esp_fork(&bin) {
         bail!(
             "{} unpacked but its esp32 machine-list check failed. On a fresh \
-             machine this is usually a missing shared library — run\n  {} -machine help\n\
+             machine this is usually a missing shared library; run\n  {} -machine help\n\
              to see the loader error (on macOS: brew install the named library).",
             arch.binary_name(),
             bin.display()
@@ -450,7 +450,7 @@ pub fn install_esp_qemu(
         .filter(|&a| {
             if let Ok(existing) = super::find_qemu(a) {
                 progress(&format!(
-                    "{} already discoverable at {} — skipping",
+                    "{} already discoverable at {}; skipping",
                     a.binary_name(),
                     existing.display()
                 ));

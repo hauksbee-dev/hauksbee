@@ -487,7 +487,7 @@ pub fn unvalidated_version_warning(text: &str) -> Option<String> {
     Some(format!(
         "board format {v} is newer than hauksbee's validated copper extraction (KiCad 10 changed \
          the net encoding and the baked zone-fill geometry). A ground pour may read as shorting \
-         every net it surrounds, so the shorts here are UNRELIABLE — cross-check with KiCad's own \
+         every net it surrounds, so the shorts here are UNRELIABLE; cross-check with KiCad's own \
          DRC. (kicad-cli \u{2264} 9 cannot load this version to cross-check either.)"
     ))
 }

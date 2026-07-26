@@ -129,7 +129,7 @@ once:
 ```bash
 cd frontend && bun install && bun run build && cd ..
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --serve
-# ...or a real, open-source product board — the SQFMI Watchy (an ESP32-S3
+# ...or a real, open-source product board: the SQFMI Watchy (an ESP32-S3
 # e-paper smartwatch; hardware MIT-licensed, boards/watchy.LICENSE):
 hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --serve
 ```

@@ -353,7 +353,7 @@ pub fn run_web_check(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return err_json(&format!(
                 "hauksbee-ci was not found (looked for '{}'). It installs alongside \
-                 hauksbee — re-run scripts/install.sh, or set HAUKSBEE_CI_BIN.",
+                 hauksbee; re-run scripts/install.sh, or set HAUKSBEE_CI_BIN.",
                 bin.display()
             ));
         }
@@ -370,7 +370,7 @@ pub fn run_web_check(
                 if started.elapsed() > CHECK_TIMEOUT {
                     let _ = child.kill();
                     return err_json(&format!(
-                        "the check run exceeded {}s and was stopped — shorten duration_ms \
+                        "the check run exceeded {}s and was stopped; shorten duration_ms \
                          or run it from the CLI: hauksbee-ci run <spec>",
                         CHECK_TIMEOUT.as_secs()
                     ));

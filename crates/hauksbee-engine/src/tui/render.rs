@@ -180,7 +180,7 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
                 format!("{v:>7.3} V"),
                 Style::default().fg(Color::LightBlue),
             ),
-            None => Span::styled("    —   ", Style::default().fg(Color::DarkGray)),
+            None => Span::styled("    -   ", Style::default().fg(Color::DarkGray)),
         };
         // Probed-net indicator: nets on the scope get a "◉" in their series
         // colour, so the list shows what the scope is tracing (and which trace
@@ -294,7 +294,7 @@ fn draw_findings(f: &mut Frame, area: Rect, state: &AppState) {
     }
     if items.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
-            "No findings — the static checks found nothing worth flagging.",
+            "No findings: the static checks found nothing worth flagging.",
             Style::default().fg(Color::Green),
         ))));
     }
@@ -325,7 +325,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            "Static analysis only — there is no firmware to co-simulate.",
+            "Static analysis only; there is no firmware to co-simulate.",
             Style::default().fg(Color::Gray),
         )));
         lines.push(Line::from(Span::styled(
@@ -341,7 +341,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
             // The no-MCU case returned early above, so here there IS an MCU to
             // co-simulate, show the idle "press [r]" prompt.
             lines.push(Line::from(vec![
-                Span::styled("idle — press ", Style::default().fg(Color::Gray)),
+                Span::styled("idle: press ", Style::default().fg(Color::Gray)),
                 Span::styled("[r]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 Span::styled(" to run co-sim", Style::default().fg(Color::Gray)),
             ]));
@@ -422,7 +422,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                         let (drv, drv_color) = if g.driven {
                             ("drv", Color::Cyan)
                         } else {
-                            ("—  ", Color::DarkGray)
+                            ("-  ", Color::DarkGray)
                         };
                         lines.push(Line::from(vec![
                             Span::raw(format!("  {:<width$}", truncate(&g.name, name_w), width = name_w)),
@@ -488,9 +488,9 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 let quiet = !u.gpio_active && !u.gpio_driven && !u.uart_seen;
                 if quiet && (u.done || u.wall_s > STALL_AFTER_WALL_S) {
                     let head = if u.done {
-                        "no GPIO/UART activity — firmware never drove a peripheral."
+                        "no GPIO/UART activity; firmware never drove a peripheral."
                     } else {
-                        "no GPIO/UART activity yet — firmware may be waiting on a peripheral."
+                        "no GPIO/UART activity yet; firmware may be waiting on a peripheral."
                     };
                     lines.push(Line::from(Span::styled(
                         head,
@@ -577,7 +577,7 @@ fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) 
     let placeholder = match state.scope_view() {
         ScopeView::NoMcu => Some(vec![
             Line::from(Span::styled(
-                "no live signals — run with firmware/co-sim",
+                "no live signals; run with firmware/co-sim",
                 Style::default().fg(Color::Yellow),
             )),
             Line::from(Span::styled(
@@ -605,9 +605,9 @@ fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) 
         ]),
         ScopeView::NoData => {
             let hint = if cosim_running {
-                "co-sim running — waiting for the first samples…"
+                "co-sim running, waiting for the first samples…"
             } else {
-                "no live signals — press [r] to run co-sim"
+                "no live signals; press [r] to run co-sim"
             };
             let mut lines = vec![Line::from(Span::styled(
                 hint,
@@ -759,7 +759,7 @@ fn draw_detail_overlay(f: &mut Frame, state: &AppState) {
     let area = centered_rect(OVERLAY_PCT_X, OVERLAY_PCT_Y, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
-        .title(format!(" {} / {} — detail (Enter/Esc to close) ", fdg.check, fdg.kind))
+        .title(format!(" {} / {}: detail (Enter/Esc to close) ", fdg.check, fdg.kind))
         .borders(Borders::ALL)
         .border_style(severity_style(fdg.severity).add_modifier(Modifier::BOLD));
     let mut lines: Vec<Line> = Vec::new();
@@ -843,7 +843,7 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
             ]));
             if critical_open {
                 lines.push(Line::from(Span::styled(
-                    "‼ Unresolved active IC on the live circuit — analog results on its nets are NOT trustworthy.",
+                    "‼ Unresolved active IC on the live circuit; analog results on its nets are NOT trustworthy.",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )));
             } else if active_ic {
@@ -866,7 +866,7 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
                 )));
             }
             (
-                format!(" part {reference} — detail (Enter/Esc to close) "),
+                format!(" part {reference}: detail (Enter/Esc to close) "),
                 border,
                 lines,
             )
@@ -894,7 +894,7 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
                     ]));
                 }
                 None => lines.push(Line::from(Span::styled(
-                    "DC voltage: (none — solver produced no operating point)",
+                    "DC voltage: (none; solver produced no operating point)",
                     Style::default().fg(Color::DarkGray),
                 ))),
             }
@@ -912,7 +912,7 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
                 )));
             }
             (
-                format!(" net {name} — detail (Enter/Esc to close) "),
+                format!(" net {name}: detail (Enter/Esc to close) "),
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 lines,
             )

@@ -45,7 +45,7 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
     backends.push(Backend {
         name: "avr",
         status: "disabled",
-        detail: "compiled out — rebuild with the default features + libsimavr \
+        detail: "compiled out; rebuild with the default features + libsimavr \
                  (scripts/install-sims.sh --avr)"
             .to_string(),
         summary: "ATmega / ATtiny firmware co-sim",

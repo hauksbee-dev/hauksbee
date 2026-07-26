@@ -1119,7 +1119,7 @@ fn usbc_verdict(
         (
             UsbcLevel::Info,
             "No discrete CC pulldown (Rd) is visible on the receptacle. If a USB-C PD controller / \
-             sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct — \
+             sink IC (e.g. STUSB4500, FUSB302, CYPD) provides Rd internally this is correct: \
              hauksbee cannot see termination inside an IC, so it cannot confirm it from copper."
                 .to_string(),
         )
@@ -1129,7 +1129,7 @@ fn usbc_verdict(
             format!(
                 "CC1 and CC2 are the SAME net, so a single shared pulldown terminates both. With an \
                  e-marked (USB-C-to-C) cable a compliant source classifies the port as {} and \
-                 withholds VBUS — the board will not charge from a modern cable (it would from a \
+                 withholds VBUS; the board will not charge from a modern cable (it would from a \
                  passive A-to-C). This is the Raspberry Pi 4 rev-1.0/1.1 fault.",
                 emarked.as_str()
             ),
