@@ -136,8 +136,8 @@ The tiers (05-cosim-fidelity §5.1/§5.2): `simavr` runs in-process over FFI wit
 cycle-accurate TWI/SPI/ADC IRQ callbacks, so interception is exact. Renode is
 driven over the Monitor TCP channel: I2C/SPI slaves are real Renode peripherals
 (generated C# bridges that call back into the engine), and ADC counts are
-injected per chunk through a per-platform recipe (`RenodeConfig::adc_channels`)
-— either a modeled ADC's feed command or a `WriteDoubleWord` into the result
+injected per chunk through a per-platform recipe (`RenodeConfig::adc_channels`):
+either a modeled ADC's feed command or a `WriteDoubleWord` into the result
 word the firmware reads; the stock STM32F103/F4/nRF52/FE310 configs ship no map
 because those Renode platforms model no ADC peripheral. An unmapped channel's
 injections are recorded as DROPPED and surfaced on every report surface; the

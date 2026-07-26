@@ -607,7 +607,7 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
             let hint = if near.is_empty() {
                 String::new()
             } else {
-                format!(" — did you mean: {}?", near.join(", "))
+                format!("; did you mean: {}?", near.join(", "))
             };
             return Err(SpecError::Invalid(format!(
                 "{ctx} references unknown component '{reference}'{hint}"
@@ -713,7 +713,7 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
                     "max_current assert references '{reference}', but peak current is only \
                      measured for resistors and diodes; this component binds as a kind whose \
                      through-current is never tracked, so the guard would report green without \
-                     ever being evaluated — point the assert at a resistor/diode in the same \
+                     ever being evaluated; point the assert at a resistor/diode in the same \
                      path, or drop it"
                 )));
             }
@@ -749,7 +749,7 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
                 let hint = if near.is_empty() {
                     String::new()
                 } else {
-                    format!(" — did you mean: {}?", near.join(", "))
+                    format!("; did you mean: {}?", near.join(", "))
                 };
                 SpecError::Invalid(format!(
                     "override references unknown component '{}'{hint}",
@@ -2019,8 +2019,8 @@ pub(crate) fn qemu_bus_slave_warnings(spec: &Spec, qemu_backends: &[String]) -> 
         if BUS_SLAVE_KINDS.contains(&p.kind.as_str()) {
             let bus_kind = if p.kind.starts_with("i2c") { "I2C" } else { "SPI" };
             warnings.push(format!(
-                "WARNING: peripheral '{}' ({} {}) is a NO-OP on backend {} \
-                 — I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
+                "WARNING: peripheral '{}' ({} {}) is a NO-OP on backend {}; \
+                 I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
                  Renode backends only. The peripheral will not respond; firmware \
                  that depends on it may fail for that reason.",
                 p.id, bus_kind, p.kind, backend_str
@@ -2030,8 +2030,8 @@ pub(crate) fn qemu_bus_slave_warnings(spec: &Spec, qemu_backends: &[String]) -> 
 
     for sa in &spec.sensors {
         warnings.push(format!(
-            "WARNING: sensor '{}' (declarative bus sensor) is a NO-OP on backend {} \
-             — I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
+            "WARNING: sensor '{}' (declarative bus sensor) is a NO-OP on backend {}; \
+             I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
              Renode backends only. The sensor will not respond; firmware \
              that depends on it may fail for that reason.",
             sa.id, backend_str

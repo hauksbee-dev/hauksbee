@@ -212,7 +212,7 @@ fn siblings_membrane_tau_matches_intent() {
     );
     assert!(
         (tau - intent).abs() / intent < 0.05,
-        "membrane τ {:.4} ms deviates >5% from 1.2 ms — would be a C_stretch sibling",
+        "membrane τ {:.4} ms deviates >5% from 1.2 ms; would be a C_stretch sibling",
         tau * 1e3
     );
 }
@@ -345,8 +345,8 @@ fn inh_q4_mirror_banks_fully_populated() {
     assert_eq!(
         r10m,
         2 * 90,
-        "expected 180 (both mirror banks populated per synapse), found {r10m} \
-         — a deficit would mean a wholesale missing/un-referenced inhibitory bank \
+        "expected 180 (both mirror banks populated per synapse), found {r10m}; \
+         a deficit would mean a wholesale missing/un-referenced inhibitory bank \
          (NOT the same as the documented single-transistor Q4 defect)."
     );
 }

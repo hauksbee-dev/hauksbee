@@ -194,7 +194,7 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
             let hint = if near.is_empty() {
                 String::new()
             } else {
-                format!(" — did you mean: {}?", near.join(", "))
+                format!("; did you mean: {}?", near.join(", "))
             };
             return Err(SpecError::Invalid(format!(
                 "[[tolerance]] ref '{}' matches no component on the board{hint}",

@@ -77,14 +77,14 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         }
     } else {
         anyhow::bail!(
-            "'{}' has neither a [sensor] table nor [[models]] entries — nothing to lint",
+            "'{}' has neither a [sensor] table nor [[models]] entries; nothing to lint",
             file.display()
         );
     }
 
     println!(
         "{checked} item(s) checked, {findings} finding(s){}",
-        if findings == 0 { " — clean" } else { "" }
+        if findings == 0 { ": clean" } else { "" }
     );
     if findings > 0 {
         std::process::exit(2);
@@ -223,7 +223,7 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
             "\n  To add a new MCU (so a board's part co-simulates exactly instead of on a\n  \
              substitute core): drop a <part>.soc.toml in $HAUKSBEE_MCU_DIR or\n  \
              ~/.config/hauksbee/mcu (it overrides the built-in of the same part), plus a\n  \
-             [[models]] kind=\"mcu\" routing entry mapping your board's part value to it — two\n  \
+             [[models]] kind=\"mcu\" routing entry mapping your board's part value to it: two\n  \
              TOML files, no recompile. Copy the closest built-in above as a template; the\n  \
              full recipe is docs/extending/add-an-mcu-variant.md.\n  \
              For the model db as it applies to a board, use `hauksbee models resolve <board>`."

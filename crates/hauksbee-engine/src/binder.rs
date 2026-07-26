@@ -1945,7 +1945,7 @@ fn bind_passive_array(
         // the odd branch does, rather than binding silently.
         notes.push(format!(
             "{}: {}-pad passive array bound as sequential isolated pairs \
-             (1-2, 3-4, …) by convention — verify against the part's datasheet",
+             (1-2, 3-4, …) by convention; verify against the part's datasheet",
             comp.reference,
             pads.len(),
         ));
@@ -1962,7 +1962,7 @@ fn bind_passive_array(
         }
         notes.push(format!(
             "{}: {}-pad passive array is ambiguous; bound as BUSSED by convention \
-             (pad {} common, {} elements) — verify against the part's datasheet",
+             (pad {} common, {} elements); verify against the part's datasheet",
             comp.reference,
             pads.len(),
             pads[0].number,
@@ -2268,7 +2268,7 @@ fn bind_vreg(
             DEFAULT_VCC,
             Some(format!(
                 "{} ({}): vreg model has no `vout` param; regulating its output net to an \
-                 assumed {DEFAULT_VCC:.1} V — verify the regulator's actual output voltage",
+                 assumed {DEFAULT_VCC:.1} V; verify the regulator's actual output voltage",
                 comp.reference, comp.value,
             )),
         ),
@@ -2512,8 +2512,8 @@ fn bind_analog_switch(
                 DEFAULT_VCC,
                 Some(format!(
                     "{} ({}): analog-switch VCC net '{}' has no resolved rail voltage; \
-                     modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail \
-                     — on a lower-voltage board the common<->s0 throw may read as open, \
+                     modeling its SPDT thresholds against an assumed {DEFAULT_VCC} V rail; \
+                     on a lower-voltage board the common<->s0 throw may read as open, \
                      so verify the switch's actual supply",
                     comp.reference,
                     comp.value,
@@ -2842,7 +2842,7 @@ fn bind_digital(
             }
             eprintln!(
                 "ERROR: {}: invalid [models.logic] for model '{}': {e}; the part is left \
-                 unmodeled and its output nets will float — fix the spec (`hauksbee models \
+                 unmodeled and its output nets will float; fix the spec (`hauksbee models \
                  lint`) or override it with --models-dir",
                 comp.reference, model.id
             );

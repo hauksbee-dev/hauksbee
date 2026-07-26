@@ -1089,10 +1089,10 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
 fn overall_headline(total: usize, serious: usize, has_heads_up: bool, bind_open: bool) -> String {
     if total == 0 {
         if bind_open {
-            return "No blocking issues, but active parts are unresolved — analog/AC/thermal results are not trustworthy. See the notes.".to_string();
+            return "No blocking issues, but active parts are unresolved; analog/AC/thermal results are not trustworthy. See the notes.".to_string();
         }
         if has_heads_up {
-            return "No problems found, but there is something worth knowing — see the heads-up note below.".to_string();
+            return "No problems found, but there is something worth knowing; see the heads-up note below.".to_string();
         }
         return "Looks healthy: the static checks found no problems.".to_string();
     }
@@ -1672,7 +1672,7 @@ fn main {
         let lossy = String::from_utf8_lossy(ALTIUM).into_owned();
         assert_ne!(lossy.as_bytes(), ALTIUM, "lossy decode must corrupt the container");
         let r2 = analyze("two_resistor.PcbDoc", lossy.as_bytes());
-        assert!(!r2.ok, "the lossy view must NOT extract — bytes-first routing is load-bearing");
+        assert!(!r2.ok, "the lossy view must NOT extract; bytes-first routing is load-bearing");
     }
 
     // Track D: web firmware drop zone.

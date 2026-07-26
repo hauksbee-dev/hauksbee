@@ -194,7 +194,7 @@ impl Trace {
         for ch in &self.channels {
             if ch.features.is_empty() {
                 return Err(SpecError::Invalid(format!(
-                    "{ctx}: channel '{}' has no [[channel.feature]] blocks — with no \
+                    "{ctx}: channel '{}' has no [[channel.feature]] blocks; with no \
                      features the channel passes vacuously",
                     ch.net
                 )));
@@ -212,7 +212,7 @@ impl Trace {
                 }
                 if f.abstol.is_none() && f.reltol.is_none() {
                     return Err(SpecError::Invalid(format!(
-                        "{ctx}: channel '{}' feature '{}' needs an `abstol` and/or `reltol` — \
+                        "{ctx}: channel '{}' feature '{}' needs an `abstol` and/or `reltol`: \
                          a hardware trace carries its own error bars and must state them",
                         ch.net, f.kind
                     )));
@@ -302,7 +302,7 @@ fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
             // comparison passes vacuously.
             if !t.is_finite() || !v.is_finite() {
                 return Err(SpecError::Invalid(format!(
-                    "{}: non-finite sample ({t}, {v}) in capture — not a valid waveform",
+                    "{}: non-finite sample ({t}, {v}) in capture; not a valid waveform",
                     path.display()
                 )));
             }
@@ -311,7 +311,7 @@ fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
     }
     if out.len() < 8 {
         return Err(SpecError::Invalid(format!(
-            "{}: only {} numeric (time, value) rows found — not a waveform capture",
+            "{}: only {} numeric (time, value) rows found; not a waveform capture",
             path.display(),
             out.len()
         )));
@@ -426,7 +426,7 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
     }
     if out.len() < 2 {
         return Err(SpecError::Invalid(format!(
-            "{ctx}: VCD signal has {} value changes — not enough to extract any feature",
+            "{ctx}: VCD signal has {} value changes; not enough to extract any feature",
             out.len()
         )));
     }
@@ -546,7 +546,7 @@ pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
                 .collect();
             if rising.len() < 2 {
                 return Err(format!(
-                    "only {} rising edge(s) in the window — need >= 2 for a period",
+                    "only {} rising edge(s) in the window; need >= 2 for a period",
                     rising.len()
                 ));
             }
@@ -593,7 +593,7 @@ pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
                 i += 1 + next_rise;
             }
             if total <= 0.0 {
-                return Err("no complete period in the window — cannot compute duty".to_string());
+                return Err("no complete period in the window; cannot compute duty".to_string());
             }
             Ok(high / total)
         }
@@ -646,7 +646,7 @@ pub fn compare(
         let (cs, ss) = (span(captured), span(simulated));
         if cs > 0.0 && (cs - ss).abs() / cs > 0.10 {
             return fail(format!(
-                "{net} edge_count: window mismatch — capture spans {:.1} ms but the sim \
+                "{net} edge_count: window mismatch: capture spans {:.1} ms but the sim \
                  spans {:.1} ms; edge counts over different windows are not comparable \
                  (match `duration_ms` to the capture, or trim the capture)",
                 cs * 1e3,

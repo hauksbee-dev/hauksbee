@@ -161,7 +161,7 @@ fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &
             .reason
             .as_deref()
             .unwrap_or("no resolved dissipating devices");
-        eprintln!("WARNING: thermal result not valid — {reason}");
+        eprintln!("WARNING: thermal result not valid: {reason}");
         eprintln!(
             "  (a thermal table covering no dissipating devices is NOT a 'runs cool' pass. \
              Bind the power ICs with --models-dir, then re-run.)"

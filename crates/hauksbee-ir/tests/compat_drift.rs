@@ -103,22 +103,22 @@ const fn refuse(
 fn claims() -> Vec<Claim> {
     vec![
         // --- Elements -------------------------------------------------------
-        accept(Cat::Element, "`R` resistor", "`Rxxx a b value [tc1=]` — linear resistor, optional linear temp-coefficient.", "t\nR1 a b 1k tc1=0.001\nV1 a 0 1\n.end\n"),
-        accept(Cat::Element, "`C` capacitor", "`Cxxx a b value [ic=]` — capacitor, optional initial voltage (honored under `uic`).", "t\nC1 a b 1u ic=2\nV1 a 0 1\n.end\n"),
-        accept(Cat::Element, "`L` inductor", "`Lxxx a b value [ic=]` — inductor, optional initial current.", "t\nL1 a b 1m ic=0\nV1 a 0 1\n.end\n"),
-        accept(Cat::Element, "`V` voltage source", "`Vxxx p n <dc|sin|pulse|pwl> [AC mag phase]` — independent voltage source.", "t\nV1 a 0 DC 5\n.end\n"),
-        accept(Cat::Element, "`I` current source", "`Ixxx p n <dc|sin|pulse|pwl> [AC mag phase]` — independent current source.", "t\nI1 a 0 1m\nR1 a 0 1k\n.end\n"),
-        accept(Cat::Element, "`D` diode", "`Dxxx a k model` — Shockley diode with junction cap / transit time / breakdown from its `.model` (the model is required and must be a diode model).", "t\nV1 a 0 1\nD1 a 0 DM\n.model DM D(IS=1e-14 CJO=2p TT=5n BV=50)\n.end\n"),
-        accept(Cat::Element, "`Q` BJT", "`Qxxx c b e model` — Gummel-Poon BJT with charge storage (cje/cjc/tf/tr) and series rb/re/rc.", "t\nQ1 c b e QM\n.model QM NPN(BF=100 CJE=2p CJC=1p TF=1n RB=10)\nV1 c 0 5\n.end\n"),
-        accept(Cat::Element, "`M` MOSFET", "`Mxxx d g s b model [L= W=]` — LEVEL-1 MOSFET (see caveats) with gate charge and body diode.", "t\nM1 d g 0 0 MM L=1u W=10u\n.model MM NMOS(VTO=1 KP=2e-5 GAMMA=0.5)\nV1 d 0 5\n.end\n"),
-        accept(Cat::Element, "`S` voltage switch", "`Sxxx a b nc+ nc- model` — voltage-controlled switch (`.model SW/VSWITCH`, defaults if absent).", "t\nS1 a b cp cn SM\n.model SM SW(VT=1 VH=0.2 RON=1 ROFF=1e9)\nV1 a 0 5\n.end\n"),
-        accept(Cat::Element, "`E` VCVS", "`Exxx n+ n- nc+ nc- gain` — linear voltage-controlled voltage source.", "t\nE1 out 0 in 0 2\nV1 in 0 1\n.end\n"),
-        accept(Cat::Element, "`G` VCCS", "`Gxxx n+ n- nc+ nc- gm` — linear voltage-controlled current source.", "t\nG1 out 0 in 0 1m\nV1 in 0 1\nR1 out 0 1k\n.end\n"),
-        accept(Cat::Element, "`F` CCCS", "`Fxxx n+ n- vname gain` — current-controlled current source (controlled by a named V-source's branch current).", "t\nF1 out 0 Vs 2\nVs cp cn 0\nV1 cp cn 1\nR1 out 0 1k\n.end\n"),
-        accept(Cat::Element, "`H` CCVS", "`Hxxx n+ n- vname transres` — current-controlled voltage source.", "t\nH1 out 0 Vs 100\nVs cp cn 0\nV1 cp cn 1\n.end\n"),
+        accept(Cat::Element, "`R` resistor", "`Rxxx a b value [tc1=]`: linear resistor, optional linear temp-coefficient.", "t\nR1 a b 1k tc1=0.001\nV1 a 0 1\n.end\n"),
+        accept(Cat::Element, "`C` capacitor", "`Cxxx a b value [ic=]`: capacitor, optional initial voltage (honored under `uic`).", "t\nC1 a b 1u ic=2\nV1 a 0 1\n.end\n"),
+        accept(Cat::Element, "`L` inductor", "`Lxxx a b value [ic=]`: inductor, optional initial current.", "t\nL1 a b 1m ic=0\nV1 a 0 1\n.end\n"),
+        accept(Cat::Element, "`V` voltage source", "`Vxxx p n <dc|sin|pulse|pwl> [AC mag phase]`: independent voltage source.", "t\nV1 a 0 DC 5\n.end\n"),
+        accept(Cat::Element, "`I` current source", "`Ixxx p n <dc|sin|pulse|pwl> [AC mag phase]`: independent current source.", "t\nI1 a 0 1m\nR1 a 0 1k\n.end\n"),
+        accept(Cat::Element, "`D` diode", "`Dxxx a k model`: Shockley diode with junction cap / transit time / breakdown from its `.model` (the model is required and must be a diode model).", "t\nV1 a 0 1\nD1 a 0 DM\n.model DM D(IS=1e-14 CJO=2p TT=5n BV=50)\n.end\n"),
+        accept(Cat::Element, "`Q` BJT", "`Qxxx c b e model`: Gummel-Poon BJT with charge storage (cje/cjc/tf/tr) and series rb/re/rc.", "t\nQ1 c b e QM\n.model QM NPN(BF=100 CJE=2p CJC=1p TF=1n RB=10)\nV1 c 0 5\n.end\n"),
+        accept(Cat::Element, "`M` MOSFET", "`Mxxx d g s b model [L= W=]`: LEVEL-1 MOSFET (see caveats) with gate charge and body diode.", "t\nM1 d g 0 0 MM L=1u W=10u\n.model MM NMOS(VTO=1 KP=2e-5 GAMMA=0.5)\nV1 d 0 5\n.end\n"),
+        accept(Cat::Element, "`S` voltage switch", "`Sxxx a b nc+ nc- model`: voltage-controlled switch (`.model SW/VSWITCH`, defaults if absent).", "t\nS1 a b cp cn SM\n.model SM SW(VT=1 VH=0.2 RON=1 ROFF=1e9)\nV1 a 0 5\n.end\n"),
+        accept(Cat::Element, "`E` VCVS", "`Exxx n+ n- nc+ nc- gain`: linear voltage-controlled voltage source.", "t\nE1 out 0 in 0 2\nV1 in 0 1\n.end\n"),
+        accept(Cat::Element, "`G` VCCS", "`Gxxx n+ n- nc+ nc- gm`: linear voltage-controlled current source.", "t\nG1 out 0 in 0 1m\nV1 in 0 1\nR1 out 0 1k\n.end\n"),
+        accept(Cat::Element, "`F` CCCS", "`Fxxx n+ n- vname gain`: current-controlled current source (controlled by a named V-source's branch current).", "t\nF1 out 0 Vs 2\nVs cp cn 0\nV1 cp cn 1\nR1 out 0 1k\n.end\n"),
+        accept(Cat::Element, "`H` CCVS", "`Hxxx n+ n- vname transres`: current-controlled voltage source.", "t\nH1 out 0 Vs 100\nVs cp cn 0\nV1 cp cn 1\n.end\n"),
         accept(Cat::Element, "`B` behavioral source", "`Bxxx n+ n- V={expr}` or `I={expr}` over `v()/i()/time/param` (evalexpr subset).", "t\nB1 out 0 V={2*v(in) + tanh(v(in))}\nV1 in 0 1\n.end\n"),
-        accept(Cat::Element, "`K` coupled inductors", "`Kxxx L1 L2 k` — lossless mutual coupling, `0 < k <= 1` (k=1 legal).", "t\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 0.99\nV1 a 0 1\n.end\n"),
-        accept(Cat::Element, "`X` subcircuit call", "`Xxxx nodes... NAME [p=v]` — instantiates a `.subckt`, flattened at load with mangled internal names.", "t\n.subckt SUB a b\nR1 a b 1k\n.ends\nX1 in 0 SUB\nV1 in 0 1\n.end\n"),
+        accept(Cat::Element, "`K` coupled inductors", "`Kxxx L1 L2 k`: lossless mutual coupling, `0 < k <= 1` (k=1 legal).", "t\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 0.99\nV1 a 0 1\n.end\n"),
+        accept(Cat::Element, "`X` subcircuit call", "`Xxxx nodes... NAME [p=v]`: instantiates a `.subckt`, flattened at load with mangled internal names.", "t\n.subckt SUB a b\nR1 a b 1k\n.ends\nX1 in 0 SUB\nV1 in 0 1\n.end\n"),
         // --- .model types ---------------------------------------------------
         accept(Cat::Model, "`.model ... D`", "Diode model: `is n rs cjo vj m tt bv xti eg` (aliases `cj0`, `pb`).", "t\nV1 a 0 1\nD1 a 0 DM\n.model DM D(IS=1e-14 N=1 RS=0.1 CJO=2p VJ=0.7 M=0.5 TT=5n BV=75)\n.end\n"),
         accept(Cat::Model, "`.model ... NPN/PNP`", "BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr xti eg`.", "t\nQ1 c b e QM\n.model QM PNP(BF=150 VAF=80 CJE=2p TF=1n)\nV1 c 0 -5\n.end\n"),
@@ -126,25 +126,25 @@ fn claims() -> Vec<Claim> {
         accept(Cat::Model, "`.model ... SW/VSWITCH`", "Voltage-switch model: `vt vh ron roff`.", "t\nS1 a b cp cn SM\n.model SM VSWITCH(VT=2.5 VH=0.5 RON=0.5 ROFF=1e12)\nV1 a 0 5\n.end\n"),
         // --- analyses -------------------------------------------------------
         accept(Cat::Analysis, "`.op`", "DC operating point (also the default when no analysis card is present).", "t\nV1 a 0 1\nR1 a 0 1k\n.op\n.end\n"),
-        accept(Cat::Analysis, "`.tran`", "`.tran tstep tstop [tstart] [tmax] [uic]` — transient analysis.", "t\nV1 a 0 SIN(0 1 1k)\nR1 a 0 1k\n.tran 1u 1m\n.end\n"),
-        accept(Cat::Analysis, "`.dc`", "`.dc src start stop step [src2 ...]` — DC sweep of a V/I source, optional nested second sweep.", "t\nV1 a 0 1\nR1 a 0 1k\n.dc V1 0 5 0.1\n.end\n"),
-        accept(Cat::Analysis, "`.ac`", "`.ac <dec|oct|lin> n fstart fstop` — small-signal AC sweep (needs an `AC` source stimulus).", "t\nV1 a 0 AC 1\nR1 a b 1k\nC1 b 0 1u\n.ac dec 10 1 100k\n.end\n"),
+        accept(Cat::Analysis, "`.tran`", "`.tran tstep tstop [tstart] [tmax] [uic]`: transient analysis.", "t\nV1 a 0 SIN(0 1 1k)\nR1 a 0 1k\n.tran 1u 1m\n.end\n"),
+        accept(Cat::Analysis, "`.dc`", "`.dc src start stop step [src2 ...]`: DC sweep of a V/I source, optional nested second sweep.", "t\nV1 a 0 1\nR1 a 0 1k\n.dc V1 0 5 0.1\n.end\n"),
+        accept(Cat::Analysis, "`.ac`", "`.ac <dec|oct|lin> n fstart fstop`: small-signal AC sweep (needs an `AC` source stimulus).", "t\nV1 a 0 AC 1\nR1 a b 1k\nC1 b 0 1u\n.ac dec 10 1 100k\n.end\n"),
         // --- directives -----------------------------------------------------
         accept(Cat::Directive, "`.print` / `.plot`", "`.print ANALYSIS var...` selects outputs (`V(a)`, `V(a,b)`, `I(V1)`); `.plot` is treated as `.print`.", "t\nV1 a 0 1\nR1 a 0 1k\n.op\n.print op V(a) I(V1)\n.plot op V(a)\n.end\n"),
         accept(Cat::Directive, "`.ic` (with `uic`)", "`.ic V(node)=val` seeds transient node voltages; requires `uic` on `.tran`.", "t\nV1 a 0 1\nC1 a 0 1u\n.tran 1u 1m uic\n.ic V(a)=2\n.end\n"),
-        accept(Cat::Directive, "`.nodeset`", "`.nodeset V(node)=val` — DC Newton start guess (never pinned/enforced).", "t\nV1 a 0 1\nR1 a 0 1k\n.nodeset V(a)=1\n.end\n"),
-        accept(Cat::Directive, "`.param`", "`.param name=expr` — named parameters, order-independent topological resolve.", "t\n.param rl=1k gain={rl/500}\nR1 a 0 {rl}\nV1 a 0 {gain}\n.end\n"),
+        accept(Cat::Directive, "`.nodeset`", "`.nodeset V(node)=val`: DC Newton start guess (never pinned/enforced).", "t\nV1 a 0 1\nR1 a 0 1k\n.nodeset V(a)=1\n.end\n"),
+        accept(Cat::Directive, "`.param`", "`.param name=expr`: named parameters, order-independent topological resolve.", "t\n.param rl=1k gain={rl/500}\nR1 a 0 {rl}\nV1 a 0 {gain}\n.end\n"),
         accept(Cat::Directive, "`.include` / `.inc`", "`.include <file>` splices another file inline before every other pass.", "t\n.include sub.inc\nX1 in 0 SUB\nV1 in 0 1\n.end\n"),
         accept(Cat::Directive, "`.lib <file> <section>`", "`.lib <file> <section>` splices one named `.lib/.endl` section (bare one-arg form is refused).", "t\n.lib models.lib npn\nQ1 c b e QM\nV1 c 0 5\n.end\n"),
-        accept(Cat::Directive, "`.options` / `.option`", "`.options reltol= abstol= vntol=` — solver tolerance overrides (other keys ignored).", "t\n.options reltol=1e-4 abstol=1e-12 vntol=1e-6\nV1 a 0 1\nR1 a 0 1k\n.end\n"),
-        accept(Cat::Directive, "`.temp`", "`.temp <celsius>` — one global circuit temperature.", "t\n.temp 50\nV1 a 0 1\nR1 a 0 1k\n.end\n"),
-        accept(Cat::Directive, "`.subckt` / `.ends`", "`.subckt NAME ports [p=v]` ... `.ends` — subcircuit definition (nestable calls, per-instance params).", "t\n.subckt DIV a b out r=1k\nR1 a out {r}\nR2 out b {r}\n.ends\nX1 in 0 mid DIV r=2k\nV1 in 0 1\n.end\n"),
+        accept(Cat::Directive, "`.options` / `.option`", "`.options reltol= abstol= vntol=`: solver tolerance overrides (other keys ignored).", "t\n.options reltol=1e-4 abstol=1e-12 vntol=1e-6\nV1 a 0 1\nR1 a 0 1k\n.end\n"),
+        accept(Cat::Directive, "`.temp`", "`.temp <celsius>`: one global circuit temperature.", "t\n.temp 50\nV1 a 0 1\nR1 a 0 1k\n.end\n"),
+        accept(Cat::Directive, "`.subckt` / `.ends`", "`.subckt NAME ports [p=v]` ... `.ends`: subcircuit definition (nestable calls, per-instance params).", "t\n.subckt DIV a b out r=1k\nR1 a out {r}\nR2 out b {r}\n.ends\nX1 in 0 mid DIV r=2k\nV1 in 0 1\n.end\n"),
         // --- source functions ----------------------------------------------
-        accept(Cat::SourceFn, "`DC`", "`DC value` (or a bare value) — constant source level.", "t\nV1 a 0 DC 5\n.end\n"),
-        accept(Cat::SourceFn, "`SIN`", "`SIN(offset amp freq [delay theta phase])` — damped sinusoid.", "t\nV1 a 0 SIN(0 1 1k 0 0 0)\n.end\n"),
-        accept(Cat::SourceFn, "`PULSE`", "`PULSE(v1 v2 delay rise fall width period)` — pulse train.", "t\nV1 a 0 PULSE(0 5 0 1n 1n 1u 2u)\n.end\n"),
-        accept(Cat::SourceFn, "`PWL`", "`PWL(t1 v1 t2 v2 ...)` — piecewise-linear waveform.", "t\nV1 a 0 PWL(0 0 1u 5 2u 0)\n.end\n"),
-        accept(Cat::SourceFn, "`AC` stimulus", "`AC [mag] [phase]` on a source card — the small-signal drive for `.ac` (bare `AC` = mag 1, phase 0).", "t\nV1 a 0 AC 1 90\nR1 a 0 1k\n.end\n"),
+        accept(Cat::SourceFn, "`DC`", "`DC value` (or a bare value): constant source level.", "t\nV1 a 0 DC 5\n.end\n"),
+        accept(Cat::SourceFn, "`SIN`", "`SIN(offset amp freq [delay theta phase])`: damped sinusoid.", "t\nV1 a 0 SIN(0 1 1k 0 0 0)\n.end\n"),
+        accept(Cat::SourceFn, "`PULSE`", "`PULSE(v1 v2 delay rise fall width period)`: pulse train.", "t\nV1 a 0 PULSE(0 5 0 1n 1n 1u 2u)\n.end\n"),
+        accept(Cat::SourceFn, "`PWL`", "`PWL(t1 v1 t2 v2 ...)`: piecewise-linear waveform.", "t\nV1 a 0 PWL(0 0 1u 5 2u 0)\n.end\n"),
+        accept(Cat::SourceFn, "`AC` stimulus", "`AC [mag] [phase]` on a source card: the small-signal drive for `.ac` (bare `AC` = mag 1, phase 0).", "t\nV1 a 0 AC 1 90\nR1 a 0 1k\n.end\n"),
         // --- expressions ----------------------------------------------------
         accept(Cat::Expression, "`{expr}` values", "Curly-brace arithmetic over `.param` names anywhere a numeric value is taken (evalexpr, bare f64s).", "t\n.param w=3\nR1 a 0 {1000*w}\nV1 a 0 {w-1}\n.end\n"),
 
@@ -170,7 +170,7 @@ fn claims() -> Vec<Claim> {
         refuse("`.dc` on a non-source", "`.dc` can only sweep an independent V or I source.", "t\nV1 a 0 1\nR1 a 0 1k\n.dc R1 0 1 0.1\n.end\n", "can only sweep an independent V or I source"),
         refuse("degenerate VCVS", "A VCVS shorting its own output port (or unity self-sense) is singular and refuses by name.", "t\nE1 out out in 0 2\nV1 in 0 1\n.end\n", "shorts its own output port"),
         refuse("undefined subckt", "An `X` call to a subcircuit that was never defined refuses with the name.", "t\nX1 a b MISSING\nV1 a 0 1\n.end\n", "undefined subckt"),
-        refuse("missing BJT/MOS `.model`", "A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way — see below).", "t\nQ1 c b e NOPE\nV1 c 0 5\n.end\n", "references undefined .model"),
+        refuse("missing BJT/MOS `.model`", "A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way; see below).", "t\nQ1 c b e NOPE\nV1 c 0 5\n.end\n", "references undefined .model"),
         refuse("unknown `.ac` sweep type", "`.ac` accepts only `dec`, `oct`, or `lin`.", "t\nV1 a 0 AC 1\nR1 a 0 1k\n.ac log 10 1 100k\n.end\n", "unknown `.ac` sweep type"),
         refuse("`.param` dependency cycle", "Parameters that reference each other circularly are refused.", "t\n.param a={b}\n.param b={a}\nR1 a 0 {a}\nV1 a 0 1\n.end\n", "dependency cycle"),
         // Diode model resolution now matches Q/M: a named model that is missing
@@ -259,7 +259,7 @@ fn refused_claims_refuse() {
         n += 1;
         match load_claim(&claim) {
             Ok(()) => panic!(
-                "REFUSED claim `{}` was accepted — the loader no longer refuses it:\n{}",
+                "REFUSED claim `{}` was accepted; the loader no longer refuses it:\n{}",
                 claim.syntax, claim.deck
             ),
             Err(e) => assert!(

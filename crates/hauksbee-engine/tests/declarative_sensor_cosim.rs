@@ -414,7 +414,7 @@ fn declarative_lm75_i2c_thermostat_cosim() {
     }
 
     eprintln!(
-        "declarative_lm75_i2c_thermostat_cosim: PASS — \
+        "declarative_lm75_i2c_thermostat_cosim: PASS: \
          declarative LM75 drove the STM32 thermostat firmware correctly"
     );
 }

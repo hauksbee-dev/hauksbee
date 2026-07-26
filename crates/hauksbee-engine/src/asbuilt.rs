@@ -100,7 +100,7 @@ pub enum AsBuiltError {
     },
     #[error(
         "as-built overlay {origin}:{line}: {entry} matched {got} but the overlay declares \
-         expect_matches = {expected} — the file no longer describes this board; refusing to apply"
+         expect_matches = {expected}; the file no longer describes this board; refusing to apply"
     )]
     MatchCount {
         origin: String,
@@ -111,7 +111,7 @@ pub enum AsBuiltError {
     },
     #[error(
         "as-built overlay {origin}:{line}: [[replace]] ref \"{reference}\": key `{key}` does not \
-         apply to matched device \"{device}\" ({variant}) — ohms needs a resistor, farads a \
+         apply to matched device \"{device}\" ({variant}): ohms needs a resistor, farads a \
          capacitor, von/voff a vswitch"
     )]
     KeyVariantMismatch {
@@ -122,7 +122,7 @@ pub enum AsBuiltError {
         device: String,
         variant: &'static str,
     },
-    #[error("as-built overlay {origin}:{line}: [[replace]] ref \"{reference}\": `set` is empty — an entry that changes nothing documents nothing")]
+    #[error("as-built overlay {origin}:{line}: [[replace]] ref \"{reference}\": `set` is empty; an entry that changes nothing documents nothing")]
     EmptySet {
         origin: String,
         line: usize,
@@ -134,7 +134,7 @@ pub enum AsBuiltError {
          floating nodes"
     )]
     NodeSpace { origin: String, max_seen: u32 },
-    #[error("as-built overlay {origin}:{line}: [[jumper]] from and to name the same net \"{net}\" — a jumper to itself is a no-op and therefore a documentation error")]
+    #[error("as-built overlay {origin}:{line}: [[jumper]] from and to name the same net \"{net}\"; a jumper to itself is a no-op and therefore a documentation error")]
     JumperSelf {
         origin: String,
         line: usize,
@@ -146,7 +146,7 @@ fn render_suggestions(suggestions: &[String]) -> String {
     if suggestions.is_empty() {
         String::new()
     } else {
-        format!(" — did you mean: {}?", suggestions.join(", "))
+        format!("; did you mean: {}?", suggestions.join(", "))
     }
 }
 

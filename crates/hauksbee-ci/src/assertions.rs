@@ -98,7 +98,7 @@ fn evaluate_hwtrace(
     // The provenance banner: a synthetic trace must announce itself in the
     // report so a green run can never be mistaken for hardware validation.
     let provenance = if trace.trace.provenance == "synthetic" {
-        " [SYNTHETIC trace — validates the harness, not the hardware]"
+        " [SYNTHETIC trace: validates the harness, not the hardware]"
     } else {
         ""
     };
@@ -139,7 +139,7 @@ fn evaluate_hwtrace(
                     failures.push((
                         out.seed,
                         format!(
-                            "net '{}' was never sampled by the run — check the net name in \
+                            "net '{}' was never sampled by the run; check the net name in \
                              the trace against the board",
                             ch.net
                         ),
@@ -376,11 +376,11 @@ fn all_green_detail(
             let sampled = n.saturating_sub(1);
             format!(
                 "{last_detail} (passed all {n} members: {sampled} sampled tolerance \
-                 seed(s) + nominal — statistical coverage, not worst-case proof)"
+                 seed(s) + nominal: statistical coverage, not worst-case proof)"
             )
         }
         (n, Some(crate::tolerance::Mode::Corners)) => format!(
-            "{last_detail} (held on all {n} min/max tolerance corners — bounds the \
+            "{last_detail} (held on all {n} min/max tolerance corners: bounds the \
              worst case only where the response is monotonic in each value)"
         ),
     }
@@ -582,7 +582,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             false,
             format!(
                 "boot deadline {deadline} ms is past the end of the {:.2} ms simulation, \
-                 so boot coverage for control net '{net}' cannot be confirmed — extend the run duration",
+                 so boot coverage for control net '{net}' cannot be confirmed; extend the run duration",
                 out.sim_ms
             ),
         );
@@ -729,7 +729,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 "peripheral '{id}' was bound but NEVER exercised: this MCU platform \
                  models no matching bus controller, so the firmware's bus traffic \
                  never reached it and its state is the power-on default. A pass \
-                 here would vouch for a co-sim path that never ran — add the bus \
+                 here would vouch for a co-sim path that never ran; add the bus \
                  controller to the SoC descriptor (docs/cosim/MCU.md) or drop this \
                  assertion."
             ),
@@ -744,7 +744,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // in the report itself, not a code comment.
     let framing_flag = match out.spi_framing.get(&id).map(String::as_str) {
         Some("heuristic") => {
-            " [SPI framing: HEURISTIC — transaction boundaries guessed at chunk \
+            " [SPI framing: HEURISTIC; transaction boundaries guessed at chunk \
              edges; two transactions in one chunk merge and a boundary-spanning \
              one is truncated. Wire cs_net for exact framing]"
         }
@@ -1853,18 +1853,18 @@ mod tests {
 
         // Unscoped: the run-wide flag shows a trip → an expect-trip passes.
         let (ok, _) = expect_trip(None);
-        assert!(ok, "unscoped expect_trip should pass — BATT did trip run-wide");
+        assert!(ok, "unscoped expect_trip should pass; BATT did trip run-wide");
 
         // Scoped to the window where the trip happened → still passes.
         let (ok_inrush, _) = expect_trip(Some("inrush"));
-        assert!(ok_inrush, "expect_trip scoped to 'inrush' should pass — that is where it latched");
+        assert!(ok_inrush, "expect_trip scoped to 'inrush' should pass; that is where it latched");
 
         // Scoped to a LATER window where no trip occurred → must FAIL, even
         // though the run-wide flag is set. This is the round-6 #8 bug.
         let (ok_steady, msg) = expect_trip(Some("steady"));
         assert!(
             !ok_steady,
-            "expect_trip scoped to 'steady' must FAIL — no trip in that window; got pass: {msg}"
+            "expect_trip scoped to 'steady' must FAIL; no trip in that window; got pass: {msg}"
         );
     }
 

@@ -193,7 +193,7 @@ fn cmd_init(args: InitArgs) -> ExitCode {
             // relocating the file, so a scaffolded spec is actually discovered.
             println!(
                 "\nto have the pre-commit hook run this automatically, put the spec where it\n\
-                 searches — `ci/` or the repo root by default (override with HAUKSBEE_CI_SPECS,\n\
+                 searches: `ci/` or the repo root by default (override with HAUKSBEE_CI_SPECS,\n\
                  colon-separated). Either move it into `ci/` (and fix the `board = \"...\"` path\n\
                  to stay relative to it), or add its directory to HAUKSBEE_CI_SPECS."
             );

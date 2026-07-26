@@ -253,7 +253,7 @@ impl BindSummary {
         if self.active_ics_unresolved() || self.active_open_on_live_circuit() {
             let _ = writeln!(
                 s,
-                "WARNING: active part(s) unresolved or left open on the live circuit — \
+                "WARNING: active part(s) unresolved or left open on the live circuit; \
                  analog/AC/thermal results on their nets are NOT trustworthy."
             );
         }
@@ -813,7 +813,7 @@ impl DrcStructured {
                         "{} shorts {} on {} at ({:.2}, {:.2}) mm (gap {:.3} mm)",
                         f.net_a_name, f.net_b_name, f.layer, f.x, f.y, f.gap_mm
                     ),
-                    fix: "separate the two nets' copper — widen the gap or reroute so \
+                    fix: "separate the two nets' copper: widen the gap or reroute so \
                           the trace/pad spacing clears the clearance rule"
                         .to_string(),
                 }),
@@ -864,7 +864,7 @@ impl DrcStructured {
                  clearance rule"
                     .to_string()
             } else {
-                "no margin — widen the spacing above the rule for manufacturing \
+                "no margin: widen the spacing above the rule for manufacturing \
                  tolerance"
                     .to_string()
             };

@@ -39,7 +39,7 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     eprintln!(
         "This downloads Espressif's official prebuilt QEMU fork (GPL-2.0, \
          built and published by Espressif at https://github.com/espressif/qemu/releases)\n\
-         and unpacks it into {} — it is a separate program hauksbee talks to \
+         and unpacks it into {}; it is a separate program hauksbee talks to \
          over sockets, not a part of hauksbee.",
         root.display()
     );

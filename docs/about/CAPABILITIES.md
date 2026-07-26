@@ -154,7 +154,7 @@ identify and what the firmware does to it at power-up, `driven HIGH and held`,
 `driven LOW and held`, or `never driven (floating)`:
 
 ```
-Power-up state of MOSFET / transistor gates — what the firmware does to each
+Power-up state of MOSFET / transistor gates: what the firmware does to each
 switch the moment the board powers up. Verify each is the level you intend:
   Q1  IgnitOne   pulled HIGH (weak internal pull-up)  <- switched at power-up
   Q2  IgnitTwo   driven LOW and held
@@ -354,7 +354,7 @@ A spec is a TOML file checked in alongside the hardware design:
 name = "power-up sanity"
 board  = "hardware/board.kicad_pcb"
 firmware = "firmware/build/app.elf"
-mcu    = "atmega328p"   # informational label only — nothing reads it; the MCU is
+mcu    = "atmega328p"   # informational label only: nothing reads it; the MCU is
                         # detected from the board part value + [[models]] kind="mcu"
                         # routing (this field cannot force a backend). See docs/ci/CI.md.
 duration_ms = 200

@@ -38,7 +38,7 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode) -> any
                     println!(
                         "Bottom line: {n} of {m} critical parts modelled. {open} active IC(s) above are \
                          unresolved/open, so firmware/analog/AC/thermal results on their nets would be \
-                         INCOMPLETE — but the copper checks are unaffected (run --drc). Add models with \
+                         INCOMPLETE, but the copper checks are unaffected (run --drc). Add models with \
                          --models-dir to cover them."
                     );
                 } else if m > 0 {

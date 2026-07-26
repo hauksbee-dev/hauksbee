@@ -409,7 +409,7 @@ impl ModelLibrary {
                             warnings.push(format!(
                                 "same-layer conflict: model id '{id}' is shipped by both \
                                  pack '{other}' and pack '{origin}'; within the pack layer \
-                                 nothing orders them — remove one pack or rename the entry"
+                                 nothing orders them; remove one pack or rename the entry"
                             ));
                         }
                     } else {

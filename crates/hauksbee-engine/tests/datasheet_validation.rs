@@ -557,7 +557,7 @@ fn bjt_is_rejected(m: &ModelEntry) -> bool {
 #[test]
 fn extracted_bc847_physical() {
     let Some(m) = load_extracted("BC847.toml") else {
-        eprintln!("no testdata/extracted/BC847.toml — run model-extract; skipping");
+        eprintln!("no testdata/extracted/BC847.toml: run model-extract; skipping");
         return;
     };
     assert_bjt_physical(&m);
@@ -570,7 +570,7 @@ fn extracted_bc847_physical() {
 #[test]
 fn extracted_1n4148_physical() {
     let Some(m) = load_extracted("1N4148.toml") else {
-        eprintln!("no testdata/extracted/1N4148.toml — run model-extract; skipping");
+        eprintln!("no testdata/extracted/1N4148.toml: run model-extract; skipping");
         return;
     };
     assert_diode_physical(&m);
@@ -581,7 +581,7 @@ fn extracted_ams1117_physical() {
     // model-extract sanitises '.' in the part name to '_' for the filename.
     let m = load_extracted("AMS1117-3_3.toml").or_else(|| load_extracted("AMS1117-3.3.toml"));
     let Some(m) = m else {
-        eprintln!("no testdata/extracted/AMS1117-3_3.toml — run model-extract; skipping");
+        eprintln!("no testdata/extracted/AMS1117-3_3.toml: run model-extract; skipping");
         return;
     };
     assert_ldo_physical(&m, 3.3, 0.15);

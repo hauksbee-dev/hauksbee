@@ -229,11 +229,11 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Str
     let verdict = if shorts == 0 && confirmed == 0 {
         "agree: neither finds touching copper".to_string()
     } else if shorts > 0 && confirmed == 0 {
-        format!("hauksbee finds {shorts} short(s) the oracle does not — likely false positives, investigate")
+        format!("hauksbee finds {shorts} short(s) the oracle does not; likely false positives, investigate")
     } else if shorts == 0 && confirmed > 0 {
-        format!("oracle finds {confirmed} touching-copper violation(s) hauksbee missed — investigate")
+        format!("oracle finds {confirmed} touching-copper violation(s) hauksbee missed; investigate")
     } else if shorts > confirmed * 2 {
-        format!("both find touching copper, but hauksbee's {shorts} >> the oracle's {confirmed} — hauksbee likely over-reports; compare by location")
+        format!("both find touching copper, but hauksbee's {shorts} >> the oracle's {confirmed}: hauksbee likely over-reports; compare by location")
     } else {
         format!("agree: both find touching copper ({shorts} hauksbee / {confirmed} oracle; counts differ by decomposition)")
     };

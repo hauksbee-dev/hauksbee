@@ -1140,7 +1140,7 @@ impl Mcu for QemuBackend {
             self.unbridged_gpio_warned = true;
             eprintln!(
                 "qemu: DROPPING digital-input injection for port '{}' bit {}: \
-                 no such bank in the '{}' SoC descriptor — the firmware read of \
+                 no such bank in the '{}' SoC descriptor; the firmware read of \
                  this pin will see nothing (e.g. ESP32 GPIO>=32).",
                 pin.port, pin.bit, self.config.machine
             );
@@ -1287,7 +1287,7 @@ impl Mcu for QemuBackend {
                 self.unbridged_gpio_warned = true;
                 eprintln!(
                     "qemu: GPIO port(s) {:?} have no bank in the '{}' SoC descriptor \
-                     (banks present: {:?}) — pins on them are NOT co-simulated; firmware \
+                     (banks present: {:?}); pins on them are NOT co-simulated; firmware \
                      drives/reads of those pins are invisible (e.g. ESP32 GPIO>=32).",
                     unbridged, self.config.machine, known
                 );

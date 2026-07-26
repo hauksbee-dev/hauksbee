@@ -60,7 +60,7 @@ testdata/hwtraces/avr-blinky/led-blink-scope/
 [trace]
 board = "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
 scenario = "demo firmware blinking D13 every 100 ms, USB 5v0.5a supply"
-provenance = "real"            # or "synthetic" — MANDATORY, see the trap below
+provenance = "real"            # or "synthetic"; MANDATORY, see the trap below
 instrument = "Rigol DS1054Z, 10x passive probe"
 date = "2026-07-08"
 
@@ -71,7 +71,7 @@ probe = "U1 pin 19"
 
 [[channel.feature]]
 kind = "period"                # level|min|max|period|duty|pulse_width|edge_count
-reltol = 0.10                  # ±10% — the MCU's RC clock tolerance, not a guess
+reltol = 0.10                  # ±10%: the MCU's RC clock tolerance, not a guess
 ```
 
 Every feature needs an `abstol` and/or `reltol` (the loader refuses one
@@ -92,7 +92,7 @@ normal `hauksbee-ci` spec with one new assertion kind:
 name = "avr-blinky vs hardware trace"
 board = "../../../../crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
 firmware = "../../../firmware/demo/demo.hex"
-duration_ms = 1000             # match the capture window — edge_count needs it
+duration_ms = 1000             # match the capture window; edge_count needs it
 
 [[supply]]
 net = "+5V"
