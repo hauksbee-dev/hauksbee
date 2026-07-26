@@ -264,7 +264,7 @@ fn qemu_spi_mailbox_surfaces_byte_events() {
     assert_eq!(mcu.debug_read_u32(mailbox::SPI_RSP_SEQ).unwrap(), 2);
 }
 
-/// Bit-identical-when-off (00-MASTER-PLAN §5): with callbacks registered but
+/// Bit-identical when off: with callbacks registered but
 /// the firmware never raising BUS_MAGIC (every firmware that exists today),
 /// the backend must not touch the bus cells, no events, no acknowledgement.
 #[test]
