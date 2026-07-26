@@ -240,7 +240,7 @@ Upstream repo [`kicad-forge`](https://github.com/ETM-Code/kicad-forge): lossless
 
 Hauksbee was built for one board no simulation tool could honestly check: Tarski, a 3,443-component analogue neuromorphic accelerator (Project Tarski, University of Galway). That board got a bespoke emulator, fast because it integrated the *intended* circuit in closed form, which was exactly its blind spot: it could never see a base wired where a collector should be. Hauksbee simulates the board you actually drew, device by device, and finds the bugs the bespoke one was structurally incapable of finding.
 
-That board is not ours to publish, so it is not in this repository and neither are the 56 tests that run against it. [`docs/about/PRIVATE_SUITE.md`](docs/about/PRIVATE_SUITE.md) lists them by name and says what each one covered, because a suite that quietly shrinks reads as a suite that was always this size.
+That board is not ours to publish, so it is not in this repository and neither are the 60 tests that run against it. [`docs/about/PRIVATE_SUITE.md`](docs/about/PRIVATE_SUITE.md) lists them by name and says what each one covered, because a suite that quietly shrinks reads as a suite that was always this size.
 
 The name is for [Francis Hauksbee](https://en.wikipedia.org/wiki/Francis_Hauksbee), who built the first machine to make the electrostatic spark on demand. Bringing a dead board to life is roughly the same trick.
 
