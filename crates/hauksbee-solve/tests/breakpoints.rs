@@ -159,16 +159,16 @@ fn pulse_source_corners_are_registered() {
 
 /// R15 efficiency regression: a breakpoint LANDING must not collapse the
 /// adaptive controller's dt. The truncation comment promises "dt itself is not
-/// reduced, so after the corner the controller resumes at its own rhythm" —
+/// reduced, so after the corner the controller resumes at its own rhythm",
 /// but the LTE accept used to recompute `next_dt = (h*factor).clamp(..)` from
 /// the TRUNCATED trial h (the sliver `bp - t`), so a corner landing collapsed
 /// dt to ~2x the sliver (the sliver's tiny LTE saturates the growth factor at
-/// 2.0) and forced a geometric regrow after every corner. Waveform-neutral —
-/// every step was still LTE-accepted — but each corner cost a regrow ramp
+/// 2.0) and forced a geometric regrow after every corner. Waveform-neutral,
+/// every step was still LTE-accepted, but each corner cost a regrow ramp
 /// instead of exactly one exact landing.
 ///
 /// Fixture: a dead-flat board (source constant, cap pre-charged to the DC
-/// point) whose only feature is a FLAT PWL vertex at 130 us — a mandatory
+/// point) whose only feature is a FLAT PWL vertex at 130 us, a mandatory
 /// landing with no value change, so the LTE is ~0 everywhere and the dt
 /// trajectory is pure controller behavior: dt doubles each accepted step
 /// (1, 2, 4, ... 64 us), making the landing sliver a small, known fraction of
@@ -243,7 +243,7 @@ fn breakpoint_landing_does_not_collapse_controller_dt() {
         2.0 * sliver
     );
     // Waveform sanity: the board is dead flat, so the fix must not have
-    // touched the accepted solution — every sample sits at the DC point.
+    // touched the accepted solution, every sample sits at the DC point.
     let vout = wf.node(&c, "out").expect("out waveform");
     for (k, &v) in vout.iter().enumerate() {
         // 1e-6 absolute: the only deviation on a settled board is the gmin

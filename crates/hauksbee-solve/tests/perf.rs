@@ -5,7 +5,7 @@
 //! sparse solver's home turf (a tridiagonal-plus pattern), and the reusable
 //! ordering means each step is a cheap numeric refactor + two triangular
 //! sweeps. We also print the rectifier wall-clock next to ngspice's for the
-//! same circuit (no assertion — environments vary).
+//! same circuit (no assertion, environments vary).
 
 use hauksbee_ir::{BjtModel, Circuit, Device, NodeId, Polarity, SourceKind};
 use hauksbee_solve::{Integration, Partitioning, SolverOptions, StepControl, Transient};
@@ -162,7 +162,7 @@ fn small_rc_exact_with_fewer_steps() {
     let ref_t = t0.elapsed();
     let ref_final = ref_wf.final_node(&c, "out").unwrap();
 
-    // Coarse partitioned (closed-form exact) — 50 steps only.
+    // Coarse partitioned (closed-form exact), 50 steps only.
     let coarse = SolverOptions {
         integration: Integration::Trapezoidal,
         step: StepControl::Fixed { dt: tstop / 50.0 },

@@ -3,15 +3,15 @@
 //! A series-resistance BJT owns device-private INTERNAL unknowns that exist
 //! only in a `Layout`, never in the netlist: the partitioner cannot see them,
 //! so a torn island containing the BJT re-allocates them locally in its own
-//! sub-layout (`Layout::new` on the sub-circuit) — island membership is by
+//! sub-layout (`Layout::new` on the sub-circuit), island membership is by
 //! construction, not by analysis. A charge-storing BJT additionally banks two
 //! junction charges in `ReactiveState`, which the partitioned driver must
 //! seed and advance exactly like the monolithic one (a sub-island BJT reading
 //! zero charge history every step is the failure mode the diode arc's §3.1
 //! mirror arms guard against).
 //!
-//! This builds the flagship rail-tear shape — PNP mirrors with emitters on a
-//! shunt-fed ANALOG_VDD — but with models carrying rb/re/rc AND cje/cjc/tf,
+//! This builds the flagship rail-tear shape, PNP mirrors with emitters on a
+//! shunt-fed ANALOG_VDD, but with models carrying rb/re/rc AND cje/cjc/tf,
 //! so the torn path exercises internal-node sub-layouts and both charge banks
 //! at once (PNP polarity also pins the charge sign-folding). The tear must
 //! fire, the array must fragment, and the torn transient must match the

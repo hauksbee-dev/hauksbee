@@ -598,7 +598,7 @@ fn zero_ohm_jumper_is_a_short_in_ac() {
 
 /// The AC resistor takes the SAME tc1 temperature derating as the DC path:
 /// at 77 C with tc1 = 4e-3, R = 1k derates to 1.2k and the RC corner moves to
-/// 1/(2π·1.2k·C) — where the response must be exactly -3.01 dB / -45 deg.
+/// 1/(2π·1.2k·C), where the response must be exactly -3.01 dB / -45 deg.
 #[test]
 fn ac_resistor_gets_the_dc_paths_tc1_derating() {
     let r = 1.0e3_f64;
@@ -737,7 +737,7 @@ fn cold_bjt_base_is_not_coupled_through_a_floored_gmu() {
 }
 
 /// SPDT break-before-make parity: two paired legs (`*_s0`/`*_s1`, shared
-/// common node) both nominally on — the DC stamp's winner-take-all collapses
+/// common node) both nominally on; the DC stamp's winner-take-all collapses
 /// the lower-margin leg to roff. The AC quiescent conductance must match:
 /// the losing rail-side leg must NOT short the injection node in `.ac`.
 #[test]
@@ -854,7 +854,7 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
         farads: 1e-9,
         ic: None,
     });
-    // 1 uHz: ωL ~ 6e-9 Ω, ωC ~ 6e-15 S — the DC limit for both elements.
+    // 1 uHz: ωL ~ 6e-9 Ω, ωC ~ 6e-15 S; the DC limit for both elements.
     let spec = AcSpec {
         fstart: 1e-6,
         fstop: 1e-6,
@@ -876,7 +876,7 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
 /// on the CONTROL node must appear at the output (the switch-as-VGA path the
 /// transient stamp captures via `gm_ctrl = vab * dgsw/dvctrl`). Regression for
 /// the AC arm stamping only the quiescent conductance and dropping the
-/// control transconductance entirely — `.ac` then reported the transfer
+/// control transconductance entirely, `.ac` then reported the transfer
 /// function of a fixed resistor (output ~0 here, since the through path is
 /// AC-grounded) while transient saw the modulation. The AC answer must match
 /// the DC sensitivity d v_out / d v_ctrl (the same tangent the transient

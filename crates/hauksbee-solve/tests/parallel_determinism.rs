@@ -3,7 +3,7 @@
 //! The parallel island sweep is an explicit double-buffered Jacobi exchange:
 //! every island reads a frozen previous-generation buffer and writes owned
 //! outputs to disjoint slots, so the accepted waveforms must be BIT-IDENTICAL
-//! across thread counts — not close, identical. If this test ever fails, a
+//! across thread counts, not close, identical. If this test ever fails, a
 //! write is aliasing between islands or a read is leaking across the buffer
 //! swap; that is a real bug in the sweep, never noise to explain away.
 //!

@@ -3,7 +3,7 @@
 //! A rawfile is the on-disk format ngspice's own tooling (`ngnutmeg`, `gaw`,
 //! the Python `spicelib`) reads. Emitting one makes hauksbee a *drop-in*: a
 //! downstream tool that reads a rawfile does not care which engine produced it.
-//! This writer consumes the very same [`SimOutput`] the CSV writer does — it
+//! This writer consumes the very same [`SimOutput`] the CSV writer does; it
 //! adds no physics, it only reshapes.
 //!
 //! ## The format (verified against ngspice-46 `write` output)
@@ -36,7 +36,7 @@
 //!
 //! ## Determinism (repo doctrine: reproducible bytes)
 //!
-//! ngspice stamps a wall-clock `Date:`. We do not — a rawfile that changes
+//! ngspice stamps a wall-clock `Date:`. We do not, a rawfile that changes
 //! every run is not diff-able. `Date:` is a **fixed epoch placeholder**
 //! (`Thu Jan  1 00:00:00  1970`): date-shaped so any tool that parses the field
 //! succeeds, constant so two runs of the same deck produce identical bytes.
@@ -52,14 +52,14 @@
 
 use crate::SimOutput;
 
-/// Fixed, deterministic `Date:` placeholder — see the module doc-comment.
+/// Fixed, deterministic `Date:` placeholder, see the module doc-comment.
 /// Date-shaped so tools parse it; constant so output is byte-reproducible.
 const RAW_DATE: &str = "Thu Jan  1 00:00:00  1970";
 
 /// The `Command:` line. ngspice-aware readers (e.g. `spicelib`) auto-detect the
 /// rawfile *dialect* from this line: they look for the substring `ngspice`.
 /// We name hauksbee honestly *and* carry that token, so a reader picks the
-/// ngspice dialect (double-`time`, complex-AC layout — which is what we emit)
+/// ngspice dialect (double-`time`, complex-AC layout, which is what we emit)
 /// without the caller having to pass a dialect hint. Deterministic: no version
 /// churn, so the bytes stay reproducible.
 const RAW_COMMAND: &str = "hauksbee sim (ngspice-compatible rawfile)";
@@ -117,7 +117,7 @@ fn fmt_e(x: f64) -> String {
 }
 
 /// A normalized view of one plot for serialization: the ordered variable
-/// definitions (name, type) — including the scale as index 0 when present — and
+/// definitions (name, type), including the scale as index 0 when present, and
 /// the per-point value matrix in the same column order. `im` is 0 for real
 /// plots; `complex` decides whether it is written.
 struct RawTable {

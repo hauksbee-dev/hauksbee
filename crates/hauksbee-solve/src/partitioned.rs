@@ -5,11 +5,11 @@
 //! driver advances each island with the cheapest method that fits it:
 //!
 //! * **Linear islands** ([`LinearIsland`]) advance by the cached matrix
-//!   exponential — exact for the fixed step, one dense mat-vec per step. This is
+//!   exponential, exact for the fixed step, one dense mat-vec per step. This is
 //!   the Tarski closed-form trick generalized to an arbitrary linear subnetwork.
 //! * **Nonlinear islands** are extracted into a small sub-circuit (boundary
 //!   nodes become pinned voltage sources carrying the exchanged value) and
-//!   solved with the existing MNA + Newton engine on their *own* small matrix —
+//!   solved with the existing MNA + Newton engine on their *own* small matrix,
 //!   far cheaper than one global factorization.
 //!
 //! Islands exchange boundary node voltages once per step in a DOUBLE-BUFFERED
@@ -17,7 +17,7 @@
 //! frozen previous-generation buffer and writes the nodes it owns into a write
 //! buffer; the buffers swap at sweep end. No island ever reads another's
 //! this-sweep output, so the sweep result is a pure function of (previous
-//! buffer, island state) — bit-for-bit independent of the order islands run
+//! buffer, island state), bit-for-bit independent of the order islands run
 //! in, and therefore of thread count and scheduling when the compute phase is
 //! parallelized ([`crate::ParallelPolicy`]). Sweeps repeat until the largest
 //! weighted boundary change drops below the Newton tolerance convention
@@ -30,8 +30,8 @@
 //!
 //! Splitting the solve introduces a one-step lag in the inter-island coupling
 //! (a node shared by two islands is updated by one island using the other's
-//! previous-sweep value). For weakly-coupled partitions — the common case, since
-//! we only cut at low-impedance source boundaries — the error is O(dt) per shared
+//! previous-sweep value). For weakly-coupled partitions; the common case, since
+//! we only cut at low-impedance source boundaries; the error is O(dt) per shared
 //! node and vanishes with the step, well inside the documented 0.5% target. When
 //! the cut would be strongly coupled, [`Partition`] keeps the devices in one
 //! island (a nonlinear device taints its whole island), so the strongly-coupled
@@ -49,8 +49,8 @@
 //! trade is convergence rate (Jacobi is the weaker relaxation), which is why the
 //! sweep count is convergence-gated rather than fixed. In every partition the
 //! current analyzer produces, island inputs are outer-written nodes (source pins
-//! and torn rails), never another island's owned node — the union-find fuses any
-//! shared free node into one island — so on real boards today the Jacobi sweep
+//! and torn rails), never another island's owned node; the union-find fuses any
+//! shared free node into one island, so on real boards today the Jacobi sweep
 //! computes bit-for-bit what the Gauss-Seidel sweep did.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
@@ -97,7 +97,7 @@ struct NonlinearIsland {
     first_step: bool,
     /// Spacing of the reactive history pair (previous COMMITTED step): the
     /// Gear-2 variable-step BDF2 stencil needs it on the one non-uniform step
-    /// this fixed-step path takes — the truncated final step onto tstop.
+    /// this fixed-step path takes; the truncated final step onto tstop.
     /// 0.0 until the first commit ("assume uniform").
     h_prev: f64,
 }
@@ -108,7 +108,7 @@ const SMALL_ISLAND_STATES: usize = 48;
 
 /// If, after tearing a shunt-fed rail, the largest nonlinear block is still
 /// bigger than this, the tear did not genuinely fragment the core (something
-/// else — e.g. an analog-switch mesh — keeps it fused). Tearing then buys nothing
+/// else, e.g. an analog-switch mesh, keeps it fused). Tearing then buys nothing
 /// and we fall back to the monolithic path. Sized well above a real per-neuron
 /// block (~65 devices on the Tarski board) but far below the fused 5k-device
 /// island, so the win is taken only when it is real.
@@ -120,7 +120,7 @@ const TEAR_MAX_BLOCK_DEVICES: usize = 600;
 /// coupling that has not relaxed to tolerance within this many sweeps is a sign
 /// the cut is stronger than the partitioner believed, and the step FAILS over
 /// to the caller's escalation path (the staged orchestrator re-solves the group
-/// fused/monolithic — see `orchestrate::staged::solve_group`) rather than
+/// fused/monolithic, see `orchestrate::staged::solve_group`) rather than
 /// silently accepting a half-converged exchange. 16 is the plan's starting
 /// value; every real partition today converges in <= 2 sweeps (island inputs
 /// are outer-written pins/rails), so the cap only bites on imposed partitions
@@ -132,7 +132,7 @@ const COUPLING_SWEEP_CAP: usize = 16;
 /// (the graded boards, plan §9.1): a warm per-block re-solve at quiescence is
 /// sub-microsecond, so the 24-block array LOSES to pool coordination at any
 /// worker count, the 90-block array breaks even, and the 240-block array wins
-/// — the threshold sits between 24 and 90. Boards whose islands carry real
+///; the threshold sits between 24 and 90. Boards whose islands carry real
 /// per-step Newton work clear the per-task overhead far earlier; explicit
 /// `Threads(n)` bypasses this gate for them.
 const PAR_MIN_NONLINEAR_ISLANDS: usize = 32;
@@ -145,7 +145,7 @@ const PAR_MIN_NONLINEAR_ISLANDS: usize = 32;
 /// balance march alone in the cleanest probe window), 4 workers only break
 /// even, 8 lose outright (efficiency cores, plus spin-waiting workers taxing
 /// the serial sections between passes). Auto therefore sizes a QUARTER of
-/// the logical CPUs — the measured optimum here, conservative everywhere —
+/// the logical CPUs; the measured optimum here, conservative everywhere,
 /// floored at 2 and capped here. `Threads(n)` overrides both for callers who
 /// know their machine and their board's per-island weight.
 const PAR_MAX_THREADS: usize = 4;
@@ -153,7 +153,7 @@ const PAR_MAX_THREADS: usize = 4;
 /// Minimum islands per parallel task. A warm-started per-block Newton solve
 /// on a mirror-array island is sub-microsecond (a handful of devices, an
 /// ~8x8 factorization, 1-2 iterations), far below rayon's per-task dispatch
-/// cost, so task-per-island dispatch LOSES to the sequential loop — measured
+/// cost, so task-per-island dispatch LOSES to the sequential loop, measured
 /// directly on the 240-block array. Batching islands per task restores the
 /// arithmetic-to-overhead ratio; the value is tuned on the graded mirror
 /// arrays (see the S4 measurement commit).
@@ -218,7 +218,7 @@ pub struct PartitionedTransient {
     /// Per linear island: the ACCEPTED state at step entry, snapshotted on the
     /// first sweep. The exact ZOH advance x(t+dt) = Ad·x(t) + Bd·u depends on
     /// the boundary input u, and u moves across relaxation sweeps on a coupled
-    /// partition — so every sweep must re-advance from this snapshot with the
+    /// partition, so every sweep must re-advance from this snapshot with the
     /// CURRENT u (reset then step). Advancing only on the first sweep froze
     /// the Ad·x + Bd·u term at the seed exchange's u and committed that stale
     /// state into the island's history, an accumulating error.
@@ -234,9 +234,9 @@ pub struct PartitionedTransient {
     nonlinear: Vec<NonlinearIsland>,
     /// Global voltage source ids (cut points), each paired with the terminal
     /// the source *fixes* (decided once by [`order_sources`]): a cut source can
-    /// be emitted in either orientation — its already-resolved reference may be
+    /// be emitted in either orientation; its already-resolved reference may be
     /// `n` (the common rail-to-ground case) or `p` (a supply stacked below an
-    /// already-pinned node) — and `apply_sources` must pin the floating
+    /// already-pinned node), and `apply_sources` must pin the floating
     /// terminal, never blindly `p`.
     sources: Vec<(DeviceId, SourcePins)>,
     /// Detected shunt-fed rail tears, solved by scalar balance each step.
@@ -247,8 +247,8 @@ pub struct PartitionedTransient {
     /// island's this-sweep output (the double-buffered Jacobi discipline).
     vbuf: Vec<f64>,
     /// The write half of the double buffer. Only `sweep` touches it: seeded
-    /// each sweep by copying `vbuf` (so unowned slots — source pins, torn
-    /// rails, ground — carry through unchanged), overlaid with every island's
+    /// each sweep by copying `vbuf` (so unowned slots, source pins, torn
+    /// rails, ground, carry through unchanged), overlaid with every island's
     /// owned outputs, then swapped into place.
     vbuf_next: Vec<f64>,
     /// True iff some island READS a node another island OWNS, i.e. the Jacobi
@@ -256,11 +256,11 @@ pub struct PartitionedTransient {
     /// make progress. False for every partition the analyzer produces today
     /// (inputs are outer-written source pins / torn rails), in which case one
     /// sweep is exact coupling-wise and the relaxation loop is skipped rather
-    /// than measured — a re-solved Newton island jitters by its own step
+    /// than measured, a re-solved Newton island jitters by its own step
     /// tolerance, which would flap a measured gate without conveying anything.
     coupled: bool,
     /// Per-engine rayon pool (plan §3.4): `Some` when the policy engaged.
-    /// Owned by THIS engine — never a global pool — so a caller that runs
+    /// Owned by THIS engine, never a global pool, so a caller that runs
     /// many engines concurrently cannot oversubscribe through us. Entered
     /// ONCE per step (`in_pool`), because entry from an outside thread is a
     /// blocking handoff whose cost rivals a whole quiescent island pass; the
@@ -294,7 +294,7 @@ impl PartitionedTransient {
 
         // A tear only helps if it actually FRAGMENTS the fused core into small
         // blocks. If a giant nonlinear island survives the tear (e.g. the array
-        // is still fused through another path — analog switches that the static
+        // is still fused through another path, analog switches that the static
         // graph can't cut), tearing buys nothing and only risks a harder per-block
         // seed. In that case drop the tears and fall back to the plain analysis,
         // so the monolithic path handles the board correctly (no regression).
@@ -416,7 +416,7 @@ impl PartitionedTransient {
                 // `model_temp()` (not raw `temperature_c`): the reducer bakes
                 // resistor values into A/B at compile time, and the effective
                 // temperature is what the monolithic stamp derates tc1
-                // resistors with — TNOM when the temperature effect is off.
+                // resistors with, TNOM when the temperature effect is off.
                 match LinearIsland::compile(circuit, isl, opts.gmin, opts.model_temp()) {
                     Some(li) => {
                         let n = li.n_states();
@@ -522,7 +522,7 @@ impl PartitionedTransient {
     /// pool-entry point: callers wrap a whole step's solve so the blocking
     /// outside-thread handoff is paid once per step, not once per relaxation
     /// sweep or balance pass, and the phase-(a) `par_iter`s inside execute on
-    /// the ambient — that is, this engine's own — pool.
+    /// the ambient (that is, this engine's own) pool.
     fn in_pool<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
         match self.pool.take() {
             Some(pool) => {
@@ -572,7 +572,7 @@ impl PartitionedTransient {
 
             // The cached exponential is exact only for the step it was built
             // at. The truncated FINAL step (`h < dt`, whenever `tstop` is not
-            // an integer multiple of `dt` — the common case) must rebuild it,
+            // an integer multiple of `dt`; the common case) must rebuild it,
             // or the last sample (and a co-sim chunk's exit state) silently
             // replays a full-dt advance over a shorter interval.
             // `ensure_cache` is a no-op while `h == dt`, so every interior
@@ -691,7 +691,7 @@ impl PartitionedTransient {
     }
 
     /// Advance one step on the tear-free path: the exact time-advance sweep,
-    /// then — only when the partition carries real inter-island coupling —
+    /// then, only when the partition carries real inter-island coupling,
     /// convergence-gated relaxation sweeps until the boundary exchange settles
     /// under the reltol/vntol convention (replacing the old fixed 3/2/1
     /// counts, which could silently under- or over-relax).
@@ -725,7 +725,7 @@ impl PartitionedTransient {
         Err(format!(
             "inter-island coupling failed to relax within {COUPLING_SWEEP_CAP} sweeps at \
              t={tnext:.6e}: weighted boundary change {:.3e} (tolerance 1.0) still moving at \
-             node {} — the cut is stronger than the partitioner believed; refusing the \
+             node {}; the cut is stronger than the partitioner believed; refusing the \
              partitioned step",
             last.0, last.1
         ))
@@ -751,13 +751,13 @@ impl PartitionedTransient {
     /// Jacobi exchange (plan §3.3), in two phases:
     ///
     /// * **Compute** (phase a): every island reads the frozen `vbuf` and
-    ///   computes its owned outputs into private scratch — `lin_vfree` for
+    ///   computes its owned outputs into private scratch, `lin_vfree` for
     ///   linear islands (the S1 buffer, plan §4.2), the island's own workspace
     ///   for nonlinear ones. No shared writes anywhere, so island order cannot
     ///   affect a single bit of the result; this is the phase
     ///   [`crate::ParallelPolicy`] may hand to the thread pool.
     /// * **Scatter** (phase b): `vbuf_next` is seeded from `vbuf` (unowned
-    ///   slots — source pins, torn rails, ground — carry through unchanged),
+    ///   slots (source pins, torn rails, ground) carry through unchanged),
     ///   every island's owned scratch lands in its disjoint slots, and the
     ///   buffers swap. Kept serial: it is a memcpy plus scattered stores, and
     ///   the disjointness that would make it safely parallel also makes it too
@@ -1028,7 +1028,7 @@ impl PartitionedTransient {
     ///
     /// A source pins `v(p) - v(n) = val`. Whichever terminal is *not* already
     /// pinned (ground or a previously-resolved source node) is the one this
-    /// source fixes — and that can be EITHER terminal: pinned-ness propagates
+    /// source fixes, and that can be EITHER terminal: pinned-ness propagates
     /// through a Vsource in both directions (see `partition.rs`), so a stacked
     /// supply may reach us with `p` already resolved and `n` floating. Writing
     /// `vbuf[p]` unconditionally would clobber the resolved reference with a
@@ -1109,8 +1109,8 @@ impl RailLoads for PartitionedRailLoads<'_> {
         let rail = self.tears[i].rail;
         self.vbuf[rail.0 as usize] = v_rail;
         // Phase (a): every block touching the rail re-solves against the
-        // frozen buffer (boundary slots are outer-written — never any block's
-        // owned slot, enforced at build — so compute order is unobservable).
+        // frozen buffer (boundary slots are outer-written, never any block's
+        // owned slot, enforced at build, so compute order is unobservable).
         // Phase (b): scatter owned outputs back, serially. Splitting the
         // phases is what lets (a) run on the pool; on the sequential arm the
         // split is bit-neutral for the same reason it is safe in parallel.
@@ -1178,7 +1178,7 @@ impl RailLoads for PartitionedRailLoads<'_> {
 
 /// Phase (a) of the Jacobi sweep for one linear island: gather inputs from the
 /// frozen read buffer (boundary voltages, then current-source values evaluated
-/// at the end of the step — ZOH over the interval), advance the exact
+/// at the end of the step, ZOH over the interval), advance the exact
 /// matrix-exponential state from the ACCEPTED snapshot, and reconstruct
 /// free-node voltages into the island's private `vfree` scratch (pre-allocated
 /// per S1, plan §4.2; `node_voltages` overwrites every entry, so no clearing
@@ -1189,7 +1189,7 @@ impl RailLoads for PartitionedRailLoads<'_> {
 /// partition u moves as the relaxation exchange settles. `li.step` mutates the
 /// state in place, so the first sweep snapshots the accepted x(t) into `prev`
 /// and every sweep resets to that snapshot before re-advancing with the
-/// current u — otherwise the committed state would carry the seed exchange's
+/// current u, otherwise the committed state would carry the seed exchange's
 /// stale u into all subsequent steps (bug-hunt: stale boundary input in the
 /// Jacobi relaxation).
 ///
@@ -1239,8 +1239,8 @@ fn linear_phase_a(
 /// detect whether any island READS an island-owned slot (the `coupled` flag).
 ///
 /// The baseline "ideal Vsources are the only cut points" partition satisfies
-/// disjointness by construction — the union-find fuses any shared free node
-/// into one island — but [`Partition`]'s fields are public and
+/// disjointness by construction; the union-find fuses any shared free node
+/// into one island, but [`Partition`]'s fields are public and
 /// [`PartitionedTransient::try_build_from_partition`] accepts partitions from
 /// external decision layers (the decompose analysis, tests, future tearing
 /// passes), so the invariant is CHECKED rather than assumed.
@@ -1297,7 +1297,7 @@ enum SourcePins {
 /// Order cut voltage sources so each source's *reference* terminal is resolved
 /// before the source is applied, and record WHICH terminal each source fixes.
 /// A source resolves `v(p)` when `n` is ground/resolved, but equally `v(n)`
-/// when `p` is ground/resolved — pinned-ness propagates through a Vsource in
+/// when `p` is ground/resolved, pinned-ness propagates through a Vsource in
 /// both directions during partitioning, so both orientations genuinely occur
 /// (e.g. `V1 A→GND` pins A, then `V2 p=A n=B` reaches us with `p` resolved and
 /// must fix `v(B) = v(A) - val`, not overwrite `v(A)`). We greedily emit
@@ -1324,7 +1324,7 @@ fn order_sources(circuit: &Circuit, sources: &[DeviceId]) -> Vec<(DeviceId, Sour
                     return false;
                 }
                 if pr && nr {
-                    // Redundant (both pinned) — emit and drop. Orient away
+                    // Redundant (both pinned), emit and drop. Orient away
                     // from ground so apply_sources re-asserts consistency
                     // without writing the ground slot.
                     let pins = if p.is_ground() {
@@ -1423,7 +1423,7 @@ impl NonlinearIsland {
         // partitioner demotes a control Vsource from cut to island member
         // precisely so it is present here; if a partition from an external
         // decision layer split them anyway, there is no column for the stamp
-        // to write and the only honest move is to refuse the build —
+        // to write and the only honest move is to refuse the build,
         // `try_build*` then falls back to the exact monolithic path.
         for li in 0..isl.devices.len() {
             for (slot, gctrl) in sub.devices[li].controlling_sources().into_iter().enumerate() {
@@ -1572,12 +1572,12 @@ impl NonlinearIsland {
             opts,
             // The trial time must be the REAL tnext, exactly as the monolithic
             // per-step Newton passes `t + h`. Only the synthesized boundary
-            // pins are time-invariant (SourceKind::Dc by construction — build,
+            // pins are time-invariant (SourceKind::Dc by construction, build,
             // seed and refresh all write Dc, so tnext cannot move them); an
             // independent source that is a genuine MEMBER of this island was
             // copied verbatim by clone_remapped and keeps its Sin/Pulse/Pwl
             // kind, and its stamp evaluates kind.eval(ctx.time). Passing 0.0
-            // here froze such members at their t=0 value for the whole march —
+            // here froze such members at their t=0 value for the whole march,
             // a silently wrong waveform on the default Auto path (the linear
             // islands already evaluate their isources at tnext).
             tnext,
@@ -1625,8 +1625,8 @@ impl NonlinearIsland {
 
     /// Phase (a) of the Jacobi sweep for this island: refresh the boundary
     /// pins from the frozen read buffer and solve the sub-circuit trial state
-    /// on this island's own workspace. Writes nothing shared — the owned
-    /// outputs stay in `ws.x` until the scatter phase reads them — so every
+    /// on this island's own workspace. Writes nothing shared; the owned
+    /// outputs stay in `ws.x` until the scatter phase reads them, so every
     /// island's phase (a) can run concurrently.
     fn phase_a(
         &mut self,
@@ -1712,7 +1712,7 @@ fn seed_sub_reactive(
             // sub-workspace's own layout allocated any internal nodes, so
             // the resolution rule is the monolithic one verbatim). Without
             // this arm a torn-island BJT would read zero charge history on
-            // every step — the failure the diode arm already guards against.
+            // every step; the failure the diode arm already guards against.
             Device::Bjt { c, b, e, model, .. }
                 if crate::stamp::bjt_has_charge(model, &opts.effects) =>
             {
@@ -1726,7 +1726,7 @@ fn seed_sub_reactive(
             }
             // Charge-storing MOSFET (dev-plan 04 §3.3): all four charges
             // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs) seeded at
-            // the island's DC junction voltages — the monolithic driver's
+            // the island's DC junction voltages; the monolithic driver's
             // arm, mirrored for the same reason as the diode's and BJT's.
             Device::Mosfet { d, g, s, b, model, .. }
                 if crate::stamp::mos_has_charge(model, &opts.effects) =>
@@ -1743,7 +1743,7 @@ fn seed_sub_reactive(
             }
             // Op-amp with output dynamics (pole_hz/slew): its reactive slot is
             // the internal drive EMF, seeded at the island's DC-point clipped
-            // ideal target — the monolithic seed arm (transient.rs), mirrored
+            // ideal target; the monolithic seed arm (transient.rs), mirrored
             // here for the same reason as the diode/BJT/MOSFET arms above. A
             // torn-island op-amp with a finite pole or nonzero slew otherwise
             // read a zero EMF history and its output collapsed toward 0 instead
@@ -2021,7 +2021,7 @@ mod tests {
 
     /// Build the cross-coupled comparator ring: an ODD-inversion feedback loop
     /// split at its (current-free) sense couplings. U1 is non-inverting from x
-    /// to y; U2 is inverting from y to x — so no consistent discrete state
+    /// to y; U2 is inverting from y to x, so no consistent discrete state
     /// exists and a Jacobi relaxation between the two islands flips forever.
     /// This is precisely the hazard the divergence guard exists for: a
     /// FEEDBACK loop imposed on the exchange as if it were feedforward.
@@ -2077,7 +2077,7 @@ mod tests {
     }
 
     /// DIVERGENCE GUARD (plan §3.3): a coupling that cannot relax within the
-    /// sweep cap must FAIL the step loudly — never hang, never silently accept
+    /// sweep cap must FAIL the step loudly, never hang, never silently accept
     /// a half-converged exchange. The comparator ring flips generation after
     /// generation, so the guard must trip at the cap and name the stalled
     /// node; the error leaves through the same channel as a per-island Newton
@@ -2161,7 +2161,7 @@ mod tests {
     /// FEEDFORWARD partition (linear RC island driving a comparator island
     /// through a current-free sense boundary) relaxes within the cap and
     /// reproduces the monolithic solve. This exercises the relaxation loop for
-    /// real — the analyzer's own partitions never couple islands, so without
+    /// real; the analyzer's own partitions never couple islands, so without
     /// an imposed partition the loop would be dead code in the test suite.
     #[test]
     fn coupled_feedforward_partition_converges_and_matches_monolithic() {
@@ -2261,7 +2261,7 @@ mod tests {
     /// Bug-hunt (R8 #2): a cut source emitted with its POSITIVE terminal as
     /// the already-resolved reference must pin the floating `n`, not clobber
     /// `p`. Pinned-ness propagates through a Vsource in both directions, so
-    /// `V1 A→GND` pins A and then `V2 p=A n=B (2 V)` pins B — but the old
+    /// `V1 A→GND` pins A and then `V2 p=A n=B (2 V)` pins B, but the old
     /// `apply_sources` hard-assumed `n` was the reference: it overwrote
     /// `vbuf[A]` with `vbuf[B] + 2` and never wrote `vbuf[B]` at all. With
     /// pure DC sources the whole-circuit DC seed masks this (the stale
@@ -2375,7 +2375,7 @@ mod tests {
     ///
     /// The fixture makes the defect ORDERS OF MAGNITUDE, not fractions: a
     /// VCVS island A owns `s` (pinned to `V(vin)`, so island B's current draw
-    /// cannot move it — the partition is physically exact), and the linear
+    /// cannot move it; the partition is physically exact), and the linear
     /// island B owns `m` (one cap state fed from `s` through R) with `s` as
     /// its boundary input. `vin` steps 0 -> 1 V exactly at a sample boundary
     /// (t1, riser width 1 ns << dt). On the riser step, sweep 1 runs before
@@ -2384,11 +2384,11 @@ mod tests {
     /// input the exact-exponential ZOH advance is EXACT, so against the
     /// analytic waveform the fixed engine sits at ~2e-10 while the stale-input
     /// defect loses the riser step's entire charge (~(1 - e^{-dt/tau}) ~ 1e-2
-    /// absolute, measured 9.9e-3) — a 1e-4 gate separates them by two orders
+    /// absolute, measured 9.9e-3), a 1e-4 gate separates them by two orders
     /// each way. (An Auto-vs-Off differential can't gate this tightly: with a
     /// smoothly varying input both the trapezoidal oracle and the end-of-step
     /// ZOH carry O(dt) input-placement error of the same scale as the defect
-    /// — measured 3.8e-3 fixed vs 5.2e-3 broken on an RC feedback fixture —
+    ///, measured 3.8e-3 fixed vs 5.2e-3 broken on an RC feedback fixture,
     /// so the analytic oracle is the honest referee.)
     #[test]
     fn coupled_linear_island_readvances_with_fresh_boundary_input() {
@@ -2437,7 +2437,7 @@ mod tests {
         });
         let part = Partition {
             islands: vec![
-                // Island A: the VCVS owning `s` — flagged non-linear so it is
+                // Island A: the VCVS owning `s`, flagged non-linear so it is
                 // solved as an MNA sub-block (the state-space reducer refuses
                 // E/G anyway).
                 Island {
@@ -2446,7 +2446,7 @@ mod tests {
                     linear: false,
                     boundary_in: vec![vin],
                 },
-                // Island B: the linear island under test — one cap state,
+                // Island B: the linear island under test, one cap state,
                 // boundary input `s` owned by island A.
                 Island {
                     devices: vec![r2, c1],

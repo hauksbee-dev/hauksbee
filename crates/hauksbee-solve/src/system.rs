@@ -18,7 +18,7 @@ use hauksbee_ir::{BOutput, Circuit, Device, DeviceId};
 ///
 /// Device-private INTERNAL nodes (dev-plan 04 §3.2): a BJT whose model carries
 /// a positive series resistance (`rb`/`re`/`rc`) owns one internal unknown per
-/// nonzero terminal resistance — the intrinsic base/emitter/collector the
+/// nonzero terminal resistance; the intrinsic base/emitter/collector the
 /// Gummel-Poon core moves onto, with the ohmic resistor stamped between the
 /// external node and the internal one. These unknowns live INSIDE the node
 /// block (`< n_nodes`), never in the branch block, because they are KCL rows:
@@ -27,11 +27,11 @@ use hauksbee_ir::{BOutput, Circuit, Device, DeviceId};
 /// `branch_reg` term. They have NO [`hauksbee_ir::NodeId`]: the netlist,
 /// `Device::nodes`, `conduction_nodes`, `map_nodes` and the partition/tear
 /// layers never see them, so a partitioner keeps a BJT and its internal nodes
-/// in one island BY CONSTRUCTION — each sub-circuit's own `Layout::new`
+/// in one island BY CONSTRUCTION, each sub-circuit's own `Layout::new`
 /// re-allocates them locally. Allocation is keyed on the MODEL FIELDS ONLY
 /// (a zero-valued resistance allocates nothing, so the common default-model
 /// case pays nothing and stays bit-identical); the `series_resistance`
-/// effects toggle is honored at STAMP time — when it is off, the core stamps
+/// effects toggle is honored at STAMP time, when it is off, the core stamps
 /// on the external nodes and any allocated internal unknown is pinned to 0 by
 /// a unit diagonal, an isolated row that couples to nothing.
 #[derive(Debug, Clone)]
@@ -53,7 +53,7 @@ pub struct Layout {
     /// unknowns in terminal order `[d_int, s_int]` (`None` per terminal whose
     /// resistance is zero: `d_int` exists iff `rd > 0`, `s_int` iff `rs > 0`).
     /// The transistor intrinsic (channel, body junctions, gate charges) moves
-    /// onto these — the datasheet-Rds(on) split — with the ohmic resistor
+    /// onto these, the datasheet-Rds(on) split, with the ohmic resistor
     /// stamped between the external terminal and the internal one, exactly the
     /// BJT `rb`/`re`/`rc` machinery above. Empty when the circuit has no such
     /// MOSFET, so existing circuits pay one `is_empty` check and nothing else;
@@ -65,10 +65,10 @@ pub struct Layout {
     /// windings it couples to as `(partner, M)` with `M = k·sqrt(L1·L2)`
     /// precomputed from the deck's `Device::Coupling` relationships. Chained
     /// K cards compose pairwise, so a row here IS the off-diagonal of the
-    /// group's inductance matrix — the inductor stamp sums over it directly.
+    /// group's inductance matrix; the inductor stamp sums over it directly.
     /// EMPTY (zero-length outer vec) when the circuit has no coupling, so a
     /// K-free deck pays one `is_empty` branch per inductor stamp and not one
-    /// float op — the bit-identity fast path.
+    /// float op; the bit-identity fast path.
     couplings: Vec<Vec<(DeviceId, f64)>>,
 }
 
@@ -146,7 +146,7 @@ impl Layout {
             // stamp is a pure transconductance with no extra unknown). The CCVS
             // is the H-card analogue of the VCVS: it too fixes its output-port
             // voltage, so it owns a branch; the CCCS, like the VCCS/Isource,
-            // adds no unknown — it only WRITES into its control source's branch
+            // adds no unknown; it only WRITES into its control source's branch
             // column, which `Layout::branch(ctrl_src)` resolves after this
             // freeze (that is the `branch_index_of` accessor the F/H stamps and
             // `reserve_pattern` consume).
@@ -224,7 +224,7 @@ impl Layout {
 
     /// Mutual-inductance partners of an inductor: `(other winding, M)` per
     /// coupling it participates in. The empty slice for every device in a
-    /// K-free circuit (one `is_empty` branch, no allocation, no float math —
+    /// K-free circuit (one `is_empty` branch, no allocation, no float math,
     /// the fast path the bit-identity bar demands), and for non-inductors.
     #[inline]
     pub fn mutual_partners(&self, id: DeviceId) -> &[(DeviceId, f64)] {
@@ -276,7 +276,7 @@ impl Layout {
 /// stamping code stays stateless.
 ///
 /// Slot packing for multi-state devices (dev-plan 04 §3.2/§3.3): the primary
-/// bank (`x1`/`dx1`/`x2`) holds ONE state per device — capacitor voltage,
+/// bank (`x1`/`dx1`/`x2`) holds ONE state per device, capacitor voltage,
 /// inductor current, a charge-storing diode's junction charge, a BJT's
 /// BASE-EMITTER charge, or a MOSFET's GATE-SOURCE charge. Devices with more
 /// independent charges spill into the SECONDARY banks `xb[k]`, one extra
@@ -288,7 +288,7 @@ impl Layout {
 ///
 /// (The §3.2 arc introduced a single named secondary bank for "the one
 /// device with two charges"; the MOSFET's four charges are why it is now an
-/// indexed array — bank letters do not scale, indices do.) All banks are
+/// indexed array, bank letters do not scale, indices do.) All banks are
 /// indexed by `DeviceId.0` and roll forward together; a device leaves the
 /// banks it does not use at zero.
 #[derive(Debug, Clone, Default)]

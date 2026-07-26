@@ -255,7 +255,7 @@ fn temperature_toggle_changes_diode_drop() {
 /// The §3.4 `DeviceEffects` contract for `junction_caps` (dev-plan 04):
 /// flipping the toggle on a diode model that carries charge fields must CHANGE
 /// the solution (charge terms appear in the stamp), and on a model without
-/// them the two runs must be BIT-IDENTICAL — the physics only activates when
+/// them the two runs must be BIT-IDENTICAL; the physics only activates when
 /// the model asks for it AND the toggle allows it.
 #[test]
 fn junction_caps_toggle_is_honored_for_diodes() {
@@ -306,7 +306,7 @@ fn junction_caps_toggle_is_honored_for_diodes() {
 /// The §3.4 `DeviceEffects` contract for `junction_caps` on BJTs (dev-plan 04
 /// §3.2): flipping the toggle on a model carrying cje/cjc/tf must CHANGE the
 /// solution (both junction-charge companions appear), and on a default model
-/// the two runs must be BIT-IDENTICAL — the diode's contract, extended.
+/// the two runs must be BIT-IDENTICAL; the diode's contract, extended.
 #[test]
 fn junction_caps_toggle_is_honored_for_bjts() {
     // A saturated switching transistor driven off: the stored base charge
@@ -356,7 +356,7 @@ fn junction_caps_toggle_is_honored_for_bjts() {
 /// (dev-plan 04 §3.3): flipping the toggle on a model carrying gate-charge
 /// fields (overlap CGSO/CGDO + TOX intrinsic) must CHANGE the solution (both
 /// gate-charge companions appear and reshape the switching edges), and on a
-/// default model the two runs must be BIT-IDENTICAL — the diode's and BJT's
+/// default model the two runs must be BIT-IDENTICAL; the diode's and BJT's
 /// contract, extended to the third junction device.
 #[test]
 fn junction_caps_toggle_is_honored_for_mosfets() {
@@ -406,7 +406,7 @@ fn junction_caps_toggle_is_honored_for_mosfets() {
     }
 }
 
-/// The MOS body diode is STRUCTURAL physics like the BJT's junctions — no
+/// The MOS body diode is STRUCTURAL physics like the BJT's junctions, no
 /// toggle gates its DC branch, only the model fields do (`IS` on the card;
 /// deliberately default-OFF, unlike ngspice's 1e-14 default, so pre-§3.3
 /// decks are bit-identical). This pins both halves: a card with IS conducts
@@ -420,7 +420,7 @@ fn mos_body_diode_is_structural_and_model_gated() {
     // BELOW ground by less than vth: any deeper (e.g. -5 V) and the
     // symmetric Level-1 channel itself conducts in INVERTED mode (the
     // grounded source becomes the effective drain and vgd = +5 exceeds the
-    // threshold) — real physics ngspice reproduces, but not the body-diode
+    // threshold), real physics ngspice reproduces, but not the body-diode
     // observable this test isolates.
     let net = |model: &str| {
         format!(
@@ -457,7 +457,7 @@ fn mos_body_diode_is_structural_and_model_gated() {
 fn series_resistance_toggle_is_honored_for_bjts() {
     // A saturating common-emitter stage (10k base drive, the same shape the
     // junction_caps deck uses): the collector's saturation floor rises by
-    // ic·rc and the base path gains rb — a >10 mV waveform contrast. The
+    // ic·rc and the base path gains rb, a >10 mV waveform contrast. The
     // drive is deliberately NOT stiffer (e.g. a 2k base): hard saturation
     // sits on a legacy-Jacobian Newton marginality that predates this arc
     // (the default-model deck itself fails there at the base commit's

@@ -193,7 +193,7 @@ pub fn settle_rails<L: RailLoads>(
 /// Enforce the caller contract on a [`BalanceReport`]: `settle_rails` returns
 /// `Ok` even when it exhausts its pass budget without converging (it reports the
 /// fact rather than erroring), so a caller that can escalate MUST refuse a
-/// non-converged balance rather than stream a silently-unbalanced rail — or the
+/// non-converged balance rather than stream a silently-unbalanced rail, or the
 /// torn path quietly violates the 1e-6 torn-vs-monolithic exactness gate. This
 /// turns that non-convergence into the same `Err(String)` channel a per-island
 /// Newton failure travels, which the staged orchestrator escalates by

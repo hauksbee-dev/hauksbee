@@ -34,7 +34,7 @@ fn rc(farads: f64) -> Circuit {
 /// Bug-hunt #2: the final Fixed step must not overshoot `tstop`. With dt = 1 ns
 /// and tstop = 3.5 ns (not a multiple of dt), the last emitted sample used to
 /// land at 4 ns, because the `dt_min` floor was applied AFTER the `tstop` clamp
-/// — forcing the sub-dt final step back up to a full dt past the stop time.
+///, forcing the sub-dt final step back up to a full dt past the stop time.
 #[test]
 fn fixed_step_does_not_overshoot_tstop() {
     let c = rc(1e-9);
@@ -74,7 +74,7 @@ fn zero_farad_cap_yields_finite_waveform() {
 
 /// Bug-hunt (solver r2 #3): a 0-Ω resistor is a SHORT, not an open. The
 /// resistor stamp computes conductance 1/R and used to SKIP a non-positive R,
-/// leaving the two nodes coupled only through the 1e-12 gmin shunt — a 0-Ω
+/// leaving the two nodes coupled only through the 1e-12 gmin shunt, a 0-Ω
 /// jumper silently broke its net (node 2 floated near 0 V instead of
 /// following node 1). ngspice treats R=0 as a short; hauksbee now clamps to a
 /// 1e-6 Ω floor in the SPICE loader AND stamps a stiff conductance for any
@@ -184,7 +184,7 @@ fn run_out(c: &Circuit, opts: SolverOptions, tstop: f64) -> (Vec<f64>, Vec<f64>)
 /// island compiler used to bake the NOMINAL ohms into its A/B matrices, so at
 /// `temperature_c` != 27 the default `Partitioning::Auto` waveform silently
 /// disagreed with the `Partitioning::Off` reference (~95% relative error on
-/// this fixture) — a wrong thermal-derating sweep with no error anywhere.
+/// this fixture), a wrong thermal-derating sweep with no error anywhere.
 #[test]
 fn tc1_resistor_matches_monolithic_in_linear_island() {
     // tc1 = 4000 ppm/K at 100 C scales R by 1 + 0.004 * 73 = 1.292: the two
@@ -218,7 +218,7 @@ fn tc1_resistor_matches_monolithic_in_linear_island() {
 }
 
 /// Bug-hunt #5: when `tstop` is not an integer multiple of `dt`, the linear
-/// island's step loop truncates the FINAL step to `h = tstop - t < dt` — but
+/// island's step loop truncates the FINAL step to `h = tstop - t < dt`, but
 /// the cached matrix exponential was built for the full `dt`, so the last
 /// sample (and a co-sim chunk's exit state) replayed a full-dt advance over
 /// the short interval (~9.5% relative error on this fixture, ~170x the
@@ -262,9 +262,9 @@ fn truncated_final_step_matches_monolithic() {
 /// built from nf·Vt while limiting on the nr·Vt scale, so an NF != NR model
 /// gated/clamped the reverse junction at the wrong threshold on every Newton
 /// iteration. Black-box gate for the fix (the vcrit arithmetic itself is
-/// pinned by a unit test in stamp.rs): a DEEPLY SATURATED NF != NR BJT — base
+/// pinned by a unit test in stamp.rs): a DEEPLY SATURATED NF != NR BJT, base
 /// overdriven so vbc is a forward junction voltage and the reverse limiter is
-/// exercised on the way in — must converge to a sane saturation point.
+/// exercised on the way in, must converge to a sane saturation point.
 #[test]
 fn saturated_bjt_with_nf_ne_nr_converges() {
     use hauksbee_ir::BjtModel;
@@ -301,7 +301,7 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
     let vb = out.rows[0][1];
     // The NR = 1.5 root: solving ic = (cf-cr) - cr/br, ib = cf/bf + cr/br at
     // ib ~ 0.42 mA / ic ~ 5 mA gives cf ~ 5.7 mA, cr ~ 0.36 mA, so
-    // vbe = Vt·ln(cf/is) ~ 0.82 V and vbc = 1.5·Vt·ln(cr/is) ~ 1.12 V — the
+    // vbe = Vt·ln(cf/is) ~ 0.82 V and vbc = 1.5·Vt·ln(cr/is) ~ 1.12 V; the
     // widened reverse junction puts vce slightly NEGATIVE (~-0.30 V), unlike
     // the familiar NR = 1 saturation floor. The gate here is convergence to
     // that sane root, not a particular millivolt.
@@ -321,7 +321,7 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
 }
 
 /// Bug-hunt r6 #F7: `IntegCoeffs::for_step` built the Gear2/BDF2 stencil from
-/// the CURRENT h alone, assuming a uniform grid — but the adaptive controller
+/// the CURRENT h alone, assuming a uniform grid, but the adaptive controller
 /// changes h at almost every step (growth factor up to 2x), so the 2nd-order
 /// stencil was applied to unequally spaced history and silently degraded to
 /// FIRST order exactly where Gear2 is selected. The fix threads the previous
@@ -368,9 +368,9 @@ fn adaptive_gear2_rc_tracks_analytic() {
 /// a partitioned NONLINEAR island (an Isource is `is_linear()`, so it joins the
 /// island the moment it shares a node with a nonlinear device) must advance
 /// with the march. `NonlinearIsland::step` used to hardcode `time = 0.0` into
-/// its per-step Newton — behind a comment claiming every sub-source is
+/// its per-step Newton, behind a comment claiming every sub-source is
 /// DC-pinned, which is true only of the SYNTHESIZED boundary pins; a member
-/// source is copied verbatim with its Sin/Pulse/Pwl kind intact — freezing the
+/// source is copied verbatim with its Sin/Pulse/Pwl kind intact, freezing the
 /// member at its t = 0 value for the whole march: a silently wrong waveform on
 /// the default `Partitioning::Auto` path. (The linear islands were always
 /// correct: `linear_phase_a` evaluates their isources at `tnext`.)
@@ -410,7 +410,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
         // The island under test: a SIN current source driving a resistor in
         // parallel with a diode. The diode makes the island nonlinear; the
         // Isource shares node `d` with it, so the partitioner takes the source
-        // as an island MEMBER (never a cut — only ideal Vsources cut). The
+        // as an island MEMBER (never a cut, only ideal Vsources cut). The
         // 1 mA..9 mA swing across 200 ohm wants 0.2 V..1.8 V, so the diode
         // clamp is genuinely engaged over part of every cycle.
         let d = c.node("d");
@@ -461,7 +461,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
     let w_auto = auto.node(&c, "d").unwrap();
 
     // (a) The internal source visibly ACTS under Auto. Frozen at its t = 0
-    // value (sin(0) = 0, so a constant 5 mA — exactly the DC operating point)
+    // value (sin(0) = 0, so a constant 5 mA, exactly the DC operating point)
     // the island would hold v(d) dead flat for the whole march; the live SIN
     // swings it by over a volt peak-to-peak.
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);

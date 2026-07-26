@@ -1,5 +1,5 @@
 //! Linear-island fast path: state-space `x' = A x + B u` advanced by a cached
-//! matrix exponential — the Tarski closed-form trick, generalized.
+//! matrix exponential; the Tarski closed-form trick, generalized.
 //!
 //! A purely linear island (resistors, capacitors, inductors, current sources)
 //! has a finite-dimensional linear state: every capacitor contributes its
@@ -81,7 +81,7 @@ pub struct LinearIsland {
 
 /// Above this state count, a dense `exp(A dt)` (O(n^3) to build, O(n^2)/step to
 /// apply) loses to a matrix-free sparse advance, so we switch modes. Small
-/// islands keep the dense cached exponential — one mat-vec per step, unbeatable.
+/// islands keep the dense cached exponential, one mat-vec per step, unbeatable.
 const DENSE_EXPM_MAX: usize = 48;
 
 /// Compressed sparse row matrix (square, `n x n`).
@@ -300,7 +300,7 @@ impl LinearIsland {
         // dangerous line in the solver: a device that `is_linear()` but is not
         // assembled below (a VCVS in an RC chain) would leave the island on the
         // matrix-exponential path with that device silently absent from the A
-        // matrix — a plausible wrong waveform, not a crash (see
+        // matrix, a plausible wrong waveform, not a crash (see
         // `docs/dev-plans/04-spice-compat.md` §1, the compile row). Modeling
         // controlled sources inside the state-space reduction is future
         // optimization work with its own exactness gate; refusing is exact
@@ -311,8 +311,8 @@ impl LinearIsland {
                 Device::Capacitor { a, b, farads, .. } => {
                     // A non-positive capacitance would divide the A/B rows below
                     // (`w[..] / *c`) by zero/negative, poisoning the discretized
-                    // matrices with Inf/NaN and — because this fast path skips
-                    // Newton's per-iterate finite check — streaming a silently
+                    // matrices with Inf/NaN and, because this fast path skips
+                    // Newton's per-iterate finite check, streaming a silently
                     // wrong waveform. Refuse; the MNA sub-solve stamps c<=0 as an
                     // open (geq = 0) exactly, the same honest-answer discipline
                     // as the E/G/coupled refusals below.
@@ -350,11 +350,11 @@ impl LinearIsland {
                 Device::Resistor { .. } | Device::Isource { .. } => {}
                 // Linear but NOT modeled by this reducer: force the island to
                 // the MNA path. (Ideal Vsources are cut by the partitioner and
-                // never land in an island — EXCEPT one demoted to island
+                // never land in an island, EXCEPT one demoted to island
                 // member because an F/H reads its branch current; refusing is
                 // the only honest answer for it too.) F/H join E/G here:
                 // constant-gain, linear, and absent from the reducer's
-                // A-matrix vocabulary — compiling past them would be the
+                // A-matrix vocabulary, compiling past them would be the
                 // silent-drop hazard of 04-spice-compat.md §1; the MNA
                 // sub-solve stamps them exactly.
                 Device::Vcvs { .. }
@@ -367,7 +367,7 @@ impl LinearIsland {
                 // Coupled inductors are linear-with-state but NOT modeled by
                 // this reducer: its inductor states assume `di/dt = v/L` per
                 // winding, and a coupled group's `di/dt = L⁻¹·v` needs the
-                // group inductance matrix INVERTED — which k = 1 (legal on
+                // group inductance matrix INVERTED, which k = 1 (legal on
                 // the K card) makes singular. The MNA path stamps L directly
                 // and never inverts it, so refusing the island is both exact
                 // and the only shape that survives perfect coupling. Modeling
@@ -379,7 +379,7 @@ impl LinearIsland {
                 // `None`), but the match stays exhaustive so a future variant
                 // must be placed deliberately. The behavioral B-source is
                 // nonlinear by construction (`is_linear() == false` taints the
-                // island), so it can only reach this walk through that gate —
+                // island), so it can only reach this walk through that gate,
                 // and refusing is still the only honest answer here.
                 Device::Diode { .. }
                 | Device::Bjt { .. }

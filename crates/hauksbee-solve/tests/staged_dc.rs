@@ -55,7 +55,7 @@ fn stiff_diode_dc_converges_to_finite_physical_root() {
     let opts = SolverOptions::default();
 
     // Diodes-off relaxed reference (Is ~ 0): the physical operating point with
-    // every junction reverse-biased — rail at 5 V, stretch nodes floating ~0.
+    // every junction reverse-biased, rail at 5 V, stretch nodes floating ~0.
     let (cref, rail_n, nref) = build(40, 1e-18);
     let mut wref = Workspace::new(&cref);
     dc_operating_point(&mut wref, &cref, &opts).expect("relaxed reference converges");
@@ -114,7 +114,7 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
     // vctrl = bias - v(out). As out rises the switch turns OFF, so the loop has a
     // single self-consistent operating point sitting in the tanh knee. Stiff
     // (1e6 on/off ratio) so the self-deciding tanh chatters between staged passes
-    // (out flips the switch which flips out) — the limit cycle the freeze cures.
+    // (out flips the switch which flips out); the limit cycle the freeze cures.
     let out = c.node("OUT");
     c.add(Device::VSwitch {
         name: "Smain".into(),
@@ -202,7 +202,7 @@ fn multi_switch_core_converges_via_event_freeze() {
 /// rung of the homotopy/staged ladder limit-cycles. The RELAXED no-diode solve
 /// converges (the 1 GΩ diode stand-in cuts the feedback, the input rests at 0 V
 /// below the 2 V reference, out sits consistently HIGH), so `dc_solve` adopts
-/// it as the power-on surrogate and returns Ok — the right contract for
+/// it as the power-on surrogate and returns Ok; the right contract for
 /// transient seeding. At that adopted point the real diode is forward-biased by
 /// nearly the full 5 V rail, so the KCL residual is astronomically wrong.
 fn build_comparator_diode_chatter() -> Circuit {
