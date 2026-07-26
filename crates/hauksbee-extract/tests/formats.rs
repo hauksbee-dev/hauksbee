@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 fn read(rel: &str) -> Option<String> {
-    let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus");
+    let corpus = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default();
     std::fs::read_to_string(corpus.join(rel)).ok()
 }
 

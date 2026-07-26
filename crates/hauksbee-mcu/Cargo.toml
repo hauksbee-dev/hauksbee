@@ -44,6 +44,7 @@ bindgen = "0.71"
 pkg-config = "0.3"
 
 [dev-dependencies]
+hauksbee-testkit = { path = "../hauksbee-testkit" }
 # Round-trip (serialize -> deserialize -> equal) proof that the config structs
 # are a lossless data carrier, i.e. W5's future file load reconstructs the exact
 # config a constructor produces.

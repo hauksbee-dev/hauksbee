@@ -287,7 +287,9 @@ fn si_ripple_attributes_and_compares_without_false_firing() {
 // ===========================================================================
 
 fn famous_root() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus/famous");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous");
     if p.exists() {
         return Some(p);
     }

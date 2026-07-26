@@ -127,8 +127,9 @@ fn the_repair_is_what_distinguishes_them() {
 // ---------------------------------------------------------------------------
 
 fn reconstruction_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus/famous/rpi4_usbc_reconstruction")
+    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous/rpi4_usbc_reconstruction")
 }
 
 fn load_board(file: &str) -> Option<ExtractedBoard> {

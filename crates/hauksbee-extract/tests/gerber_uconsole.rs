@@ -18,8 +18,9 @@ use std::path::PathBuf;
 use hauksbee_extract::gerber::from_gerber_dir;
 
 fn uconsole_dir() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus/famous/uconsole_gerber");
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous/uconsole_gerber");
     p.exists().then_some(p)
 }
 
@@ -154,8 +155,9 @@ fn uconsole_per_net_copper_is_reconstructed_and_planes_are_poured() {
 fn cm4_adapter_reconstructs_and_planes_are_poured() {
     use hauksbee_extract::gerber::connect::GerberCopperKind;
 
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus/famous/uconsole_cm4_adapter_gerber");
+    let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
+        .join("famous/uconsole_cm4_adapter_gerber");
     if !dir.exists() {
         if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
             panic!("corpus required but uconsole_cm4_adapter_gerber missing");

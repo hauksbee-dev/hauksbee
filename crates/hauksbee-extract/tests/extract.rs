@@ -2,8 +2,8 @@ use hauksbee_extract::ExtractedBoard;
 use std::path::PathBuf;
 
 fn corpus(rel: &str) -> Option<String> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../board-corpus")
+    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_default()
         .join(rel);
     std::fs::read_to_string(p).ok()
 }
@@ -233,13 +233,14 @@ fn tarski_netlist() {
 
 #[test]
 fn tarski_pcb_full_board() {
-    let p = PathBuf::from(
-        "/Users/hauksbee-user/Tarski/Tarski-Repos/Tarski-Schematics/Neuron/InputSystem/InputSystem.kicad_pcb",
-    );
-    let Ok(src) = std::fs::read_to_string(p) else {
-        eprintln!("tarski pcb missing; skipping");
+    let Some(p) = hauksbee_testkit::private_asset(
+        "HAUKSBEE_TARSKI_DIR",
+        "Neuron/InputSystem/InputSystem.kicad_pcb",
+        "tarski_pcb_full_board",
+    ) else {
         return;
     };
+    let src = std::fs::read_to_string(p).expect("readable once located");
     let t0 = std::time::Instant::now();
     let board = ExtractedBoard::from_kicad_pcb(&src).unwrap();
     let dt = t0.elapsed();

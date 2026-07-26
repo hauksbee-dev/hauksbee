@@ -1,9 +1,10 @@
 //! Integration tests for hauksbee-mcu using the T1-devboard firmware.
 //!
-//! These tests require the pre-built firmware hex at:
-//!   /Users/hauksbee-user/Tarski/Tarski-Repos/Project-Tarski/T1-devboard/interface/.pio/build/nanoatmega328new/firmware.hex
+//! These tests need a pre-built firmware hex from the private T1-devboard
+//! repository. Point HAUKSBEE_T1_DIR at a checkout of it to run them.
 //!
-//! When the hex is absent (CI without the firmware repo), all tests skip gracefully.
+//! Absent, they report as not run. Under HAUKSBEE_REQUIRE_CORPUS=1 they fail
+//! instead, so a CI run cannot go green by skipping everything.
 
 // The whole file drives the in-process simavr core, so it only exists on
 // builds with the GPL-gated `avr` feature (the MIT-clean renode/qemu build
@@ -29,10 +30,13 @@ const PORT_LOAD_SYN: u8 = b'S';
 // ---------------------------------------------------------------------------
 
 fn t1_firmware_hex() -> Option<PathBuf> {
-    let p = PathBuf::from(
-        "/Users/hauksbee-user/Tarski/Tarski-Repos/Project-Tarski/T1-devboard/interface\
-         /.pio/build/nanoatmega328new/firmware.hex",
-    );
+    let Some(p) = hauksbee_testkit::private_asset(
+        "HAUKSBEE_T1_DIR",
+        "interface/.pio/build/nanoatmega328new/firmware.hex",
+        "avr_mcu_tests",
+    ) else {
+        return None;
+    };
     if p.exists() {
         Some(p)
     } else {

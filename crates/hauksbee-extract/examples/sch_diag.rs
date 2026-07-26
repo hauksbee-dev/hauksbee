@@ -9,7 +9,6 @@
 
 use hauksbee_extract::ExtractedBoard;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
 
 fn partition(b: &ExtractedBoard) -> usize {
     let mut by: BTreeMap<i64, usize> = BTreeMap::new();
@@ -36,7 +35,7 @@ fn pin_to_net(b: &ExtractedBoard) -> HashMap<(String, String), i64> {
 }
 
 fn main() {
-    let corpus = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus");
+    let corpus = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (dir, stem) = (&args[0], &args[1]);
     let schp = corpus.join(dir).join(format!("{stem}.kicad_sch"));

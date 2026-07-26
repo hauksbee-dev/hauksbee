@@ -1,0 +1,20 @@
+[package]
+name = "hauksbee-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Test-asset location for hauksbee's suites."
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+# A dev-only helper: it exists so every suite shares one answer about where the
+# board corpus lives, and has no business on crates.io.
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

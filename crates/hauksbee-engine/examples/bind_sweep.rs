@@ -12,7 +12,9 @@ fn main() {
     let corpus = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../board-corpus"));
+        .unwrap_or_else(|| {
+            hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
+        });
     let mut boards: Vec<PathBuf> = Vec::new();
     collect(&corpus, &mut boards);
     boards.sort();
