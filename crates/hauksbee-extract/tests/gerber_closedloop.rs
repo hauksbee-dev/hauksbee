@@ -83,7 +83,7 @@ fn kicad_cli() -> Option<PathBuf> {
 
 /// Export gerbers + drill + P&P for `pcb` into a fresh temp dir; return it.
 fn export_fab(cli: &Path, pcb: &Path, tag: &str) -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("hauksbee_cl_{tag}"));
+    let dir = std::env::temp_dir().join(format!("hauksbee_cl_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).ok()?;
     let ok = Command::new(cli)
