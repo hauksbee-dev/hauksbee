@@ -118,3 +118,5 @@ you cannot share the board, a minimal reconstruction is the next best thing, and
 enough to paste.
 
 For security issues, see `SECURITY.md`; please do not open a public issue.
+
+Participation is covered by `CODE_OF_CONDUCT.md`.
