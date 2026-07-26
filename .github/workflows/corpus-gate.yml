@@ -1,0 +1,52 @@
+# The zero-false-positive board gate: do the checks stay quiet on real hardware
+# that is fine?
+#
+# Nightly rather than per-push because it fetches a hundred-odd boards from
+# their upstream projects. HAUKSBEE_REQUIRE_CORPUS=1 turns a missing board into
+# a hard failure, so the job cannot degrade into a green run that checked
+# nothing.
+
+name: corpus-gate
+
+on:
+  schedule:
+    # 04:00 UTC daily, after the day's pushes have settled.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  gate:
+    name: zero-false-positive gate
+    runs-on: ubuntu-latest
+    # Fetching and simulating a hundred boards is not a five-minute job.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      # The corpus is pinned by commit in corpus.toml, so this cache key only
+      # changes when the manifest does. A board changing upstream cannot
+      # silently change our results.
+      - name: Cache the board corpus
+        id: corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: board-corpus
+          key: corpus-${{ hashFiles('corpus.toml') }}
+
+      - name: Fetch the corpus
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        run: scripts/fetch-corpus.sh
+
+      - name: Run the gate
+        env:
+          HAUKSBEE_CORPUS_DIR: ${{ github.workspace }}/board-corpus
+          HAUKSBEE_REQUIRE_CORPUS: "1"
+        run: cargo test --workspace --features avr
