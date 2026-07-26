@@ -1,0 +1,43 @@
+name: Bug report
+description: hauksbee got something wrong, crashed, or refused a board it should accept.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A board file that reproduces the problem is worth more than any
+        description. If you cannot share the board, `hauksbee to-code <board>`
+        produces an editable text form that is often small enough to paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed. Paste output rather than describing it.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `hauksbee --version` (it carries the git hash).
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      options: [Linux, macOS, Windows, Docker, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: board
+    attributes:
+      label: Board file
+      description: Attach it, or paste the `to-code` form. Say so if you cannot share it.

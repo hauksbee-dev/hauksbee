@@ -1,0 +1,5 @@
+# Circuit and geometry code carries genuinely long argument lists (a stamp
+# needs its nodes, its model parameters, and its solver context), so the
+# default arity threshold fires constantly on correct code. Everything else
+# stays at clippy's defaults.
+too-many-arguments-threshold = 12

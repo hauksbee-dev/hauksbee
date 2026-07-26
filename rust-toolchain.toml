@@ -1,0 +1,10 @@
+# Pin the toolchain so a build is reproducible and a CI run and a laptop agree.
+# Without this, "stable" moves under the project and a green build can turn red
+# on someone else's machine for reasons unrelated to any change they made.
+#
+# Bumping: raise this, run the full suite plus the corpus gate, and raise
+# `rust-version` in Cargo.toml only when the code actually needs the newer
+# language or library feature.
+[toolchain]
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]
