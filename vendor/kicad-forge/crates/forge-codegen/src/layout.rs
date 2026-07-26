@@ -28,7 +28,7 @@
 //! Manhattan tracks on one layer, avoiding placed component bodies. The A*
 //! router is honestly a v1: it routes one layer, does not rip-up-and-retry, and
 //! will leave a net unrouted (reported, not silently dropped) rather than
-//! violate a keep-out. See `galvani/docs/BOARD_AS_CODE.md` for the rationale and
+//! violate a keep-out. See `docs/ingest/BOARD_AS_CODE.md` for the rationale and
 //! the freerouting path.
 
 use crate::dsl::{Comp, Outline, Program, Stmt};
