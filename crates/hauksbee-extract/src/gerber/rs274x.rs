@@ -920,8 +920,8 @@ M02*
     fn single_quadrant_g74_arc_uses_correct_center() {
         // R6: a quarter arc from (1,0) to (0,1). Under G74 the I/J offset is an
         // unsigned magnitude (I1 J0); the true centre is the origin (radius 1).
-        // The old multi-quadrant formula used centre = start + (I,J) = (2,0),
-        // throwing every arc point up to 2 mm off its real position.
+        // The multi-quadrant formula would put the centre at start + (I,J) =
+        // (2,0), throwing every arc point up to 2 mm off its real position.
         let g = "\
 %FSLAX46Y46*%
 %MOMM*%
@@ -953,10 +953,10 @@ M02*
     #[test]
     fn region_arc_segment_is_flattened_not_chorded() {
         // A filled circle drawn as a G36 region of two G03 semicircles (centre
-        // at the origin, radius 1 mm). The old region branch recorded only each
-        // D01's ENDPOINT, ignoring the circular interpolation mode and the I/J
-        // offset, so the contour collapsed to the degenerate chord polygon
-        // [(-1,0),(1,0),(-1,0)]: zero area, whole pour vanished from
+        // at the origin, radius 1 mm). Recording only each D01's ENDPOINT,
+        // ignoring the circular interpolation mode and the I/J offset, collapses
+        // the contour to the degenerate chord polygon
+        // [(-1,0),(1,0),(-1,0)]: zero area, and the whole pour vanishes from
         // connectivity (false OPEN for anything connecting through it).
         let g = "\
 %FSLAX46Y46*%
@@ -1002,10 +1002,10 @@ M02*
     fn region_disjoint_contours_do_not_bridge() {
         // One G36 region holding TWO disjoint square islands (RS-274X 4.10.4:
         // each contour begins with a D02 move): [0,5]x[0,5] and [95,100]x[0,5],
-        // 90 mm apart. The old flat contour vector never split on the second
-        // D02, dropped that contour's start vertex, and emitted ONE polygon
+        // 90 mm apart. A flat contour vector never splits on the second
+        // D02: it drops that contour's start vertex and emits ONE polygon
         // with a phantom bridge edge, reading two electrically-isolated pads
-        // (one per island) onto the same net: a false SHORT.
+        // (one per island) onto the same net, a false SHORT.
         let g = "\
 %FSLAX46Y46*%
 %MOMM*%
@@ -1069,10 +1069,10 @@ M02*
     fn region_hole_contour_is_cut_out_not_filled() {
         // A region with a hole: outer square [0,20]x[0,20], inner square hole
         // [8,12]x[8,12] as a second contour. The ring is copper; the hole
-        // interior is NOT. The old flat concatenation bridged the two contours
-        // and dropped the hole's start vertex, so the two non-coincident bridge
-        // edges enclosed a sliver of RING copper, (0,0)-(12,8)-(8,8), whose
-        // parity read OUTSIDE (false open through the ring).
+        // interior is NOT. A flat concatenation bridges the two contours
+        // and drops the hole's start vertex, so two non-coincident bridge
+        // edges enclose a sliver of RING copper, (0,0)-(12,8)-(8,8), whose
+        // parity reads OUTSIDE (false open through the ring).
         let g = "\
 %FSLAX46Y46*%
 %MOMM*%
@@ -1164,8 +1164,8 @@ M02*
         // R14: when an aperture macro can't be instantiated (here a Circle whose
         // diameter references an undefined variable), the flash falls back to a
         // small anchor disc. Its radius is a fixed 0.25 mm, NOT scaled by the
-        // document's unit factor. On an inch board (to_mm = 25.4) the old
-        // `0.25 * to_mm` bloated it to 6.35 mm, big enough to merge nets.
+        // document's unit factor. On an inch board (to_mm = 25.4) a scaled
+        // `0.25 * to_mm` bloats it to 6.35 mm, big enough to merge nets.
         let g = "\
 %FSLAX46Y46*%
 %MOIN*%

@@ -108,8 +108,8 @@ impl ClearanceRules {
         // Keep a class that carries ANY usable rule, an explicit clearance OR a
         // diff-pair gap. A KiCad class routinely leaves `clearance` at 0 ("inherit
         // board default") while still defining a `diff_pair_gap`; dropping it
-        // wholesale (the old `clearance_mm > 0.0` gate) discarded the gap AND made
-        // `assign_net` reject its nets, so a diff pair routed at its own gap was
+        // wholesale (a bare `clearance_mm > 0.0` gate) discards the gap AND makes
+        // `assign_net` reject its nets, so a diff pair routed at its own gap gets
         // checked against the wider board default and falsely flagged. A class
         // with clearance 0 is retained and resolves to the board default for
         // spacing (see `clearance_for_net`) while still contributing its gap.
@@ -231,8 +231,8 @@ pub fn clearance_rules_from_kicad_pro<'a>(
     let mut rules = ClearanceRules::default();
     for class in classes {
         // Skip a nameless/malformed class entry rather than aborting the whole
-        // parse. The old `?` propagated None out of the function, so one bad
-        // object (e.g. in a hand-edited .kicad_pro) silently discarded EVERY
+        // parse. A bare `?` here propagates None out of the function, so one bad
+        // object (e.g. in a hand-edited .kicad_pro) silently discards EVERY
         // class, default clearance, and diff-pair gap, dropping DRC to the bare
         // default everywhere, a KiCad 10 board keeps its clearances only here.
         // The sibling assignment/pattern loops already skip bad entries; match
@@ -305,7 +305,7 @@ fn kicad_netclass_pattern_matches(pattern: &str, net: &str) -> bool {
     // recent `*` and let it absorb one more net character. Each retry advances
     // that star's anchor, so matching is O(len(pattern) · len(net)), no
     // exponential backtracking on `*`-heavy patterns from a crafted .kicad_pro
-    // (the old recursive `inner(&p[1..], n) || inner(p, &n[1..])` was).
+    // (a recursive `inner(&p[1..], n) || inner(p, &n[1..])` does backtrack).
     fn inner(p: &[char], n: &[char]) -> bool {
         let (mut pi, mut ni) = (0usize, 0usize);
         // Resume point: (pattern index after the last `*`, net index the next
@@ -3519,7 +3519,7 @@ mod netclass_glob_tests {
 
     #[test]
     fn pathological_star_pattern_terminates() {
-        // The old recursive matcher was exponential here (catastrophic
+        // A recursive matcher is exponential here (catastrophic
         // backtracking on `*`-heavy patterns from a crafted .kicad_pro); the
         // two-pointer matcher is O(pattern · net). Correctness only: it
         // terminates and returns false.

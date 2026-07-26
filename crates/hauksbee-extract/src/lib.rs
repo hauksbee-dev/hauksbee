@@ -73,7 +73,7 @@ pub enum ExtractError {
     },
     /// No registered [`reader::BoardReader`] recognised the input. `tried`
     /// enumerates every reader that was offered the bytes, in order, a more
-    /// actionable failure than the old "last fallback's error" behaviour.
+    /// actionable failure than surfacing only the last fallback's error.
     #[error("unrecognized board format; tried {tried}")]
     Unrecognized { tried: String },
     /// A caller-supplied reference designator does not exist on the board.
@@ -294,8 +294,8 @@ impl ExtractedBoard {
     /// Sniff the format from content and extract accordingly.
     ///
     /// Delegates to the [`reader::Registry`]: each format is a
-    /// [`reader::BoardReader`] that owns its own detection, replacing the old
-    /// hard-coded substring ladder. An input no reader recognises now fails with
+    /// [`reader::BoardReader`] that owns its own detection, rather than one
+    /// hard-coded substring ladder. An input no reader recognises fails with
     /// [`ExtractError::Unrecognized`], which names every reader that was tried.
     pub fn from_auto(text: &str) -> Result<Self, ExtractError> {
         reader::Registry::builtin().read(text.as_bytes(), None)

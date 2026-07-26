@@ -123,8 +123,8 @@ fn routed_length_sums_segments() {
 fn routed_length_resolves_name_only_nets() {
     // A KiCad-10 board that references the net by name on the segment - `(net
     // "USB_DP")` with no numeric id. arg_i64(0) is None on the string token, so
-    // the old code counted zero length for net 1. The name must resolve through
-    // the (net 1 "USB_DP") table.
+    // a numeric-only lookup counts zero length for net 1. The name must resolve
+    // through the (net 1 "USB_DP") table.
     let doc = root_of(
         r#"(net 1 "USB_DP")
            (segment (start 0 0) (end 3 0) (width 0.2) (layer "F.Cu") (net "USB_DP"))
@@ -415,8 +415,8 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
     // A bus terminated at BOTH ends: two 10k pull-ups to +3V3 (one per end),
     // 15 sensor pins (~150 pF). Two pull-ups sit in PARALLEL, so the effective
     // R is 5k (not 10k): t_r ~ 0.8473*5000*150e-3 = 635 ns, comfortably under the
-    // 1000 ns standard-mode limit -> silent. The old code took the SMALLEST single
-    // resistor (10k), computing ~1271 ns and firing a false-positive finding on a
+    // 1000 ns standard-mode limit -> silent. Taking the SMALLEST single
+    // resistor (10k) computes ~1271 ns and fires a false-positive finding on a
     // bus that is actually in spec. min-of-parallel-resistors over-reports t_r.
     let mut body = String::from(
         r#"(net 1 "SDA") (net 2 "+3V3")
@@ -497,12 +497,12 @@ fn antenna_keepout_ground_pour_inside_fires_high() {
 
 #[test]
 fn antenna_keepout_ground_pour_fires_even_when_module_has_a_bonded_gnd_pad() {
-    // R39: a real WROOM module bonds many pads to the board GND net. The old code
-    // built `own_nets` from ALL of the antenna's pad nets and skipped any intrusion
-    // on an own net, so with a GND pad present the board GND landed in own_nets and
-    // a ground pour flooding the keepout was silently skipped, a false all-clear on
-    // the exact detuning case. Excluding only the NON-ground own nets, a ground pour
-    // must still fire even though the module has a GND pad.
+    // R39: a real WROOM module bonds many pads to the board GND net. Building
+    // `own_nets` from ALL of the antenna's pad nets and skipping any intrusion
+    // on an own net puts the board GND in own_nets whenever a GND pad exists, so
+    // a ground pour flooding the keepout is silently skipped, a false all-clear
+    // on the exact detuning case. Only the NON-ground own nets are excluded, so a
+    // ground pour still fires even though the module has a GND pad.
     let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT")
         (footprint "OLIMEX_Cases-FP:ESP-WROOM-32_MODULE"
           (at 50 50 0) (layer "F.Cu")
@@ -575,9 +575,9 @@ fn antenna_keepout_nonconvex_engulfing_pour_fires_high() {
     // A REAL KiCad pour outline is deeply non-convex (it weaves around vias, pads
     // and thermal reliefs). This plane covers the whole antenna keepout (board x
     // 41..59, y 22.25..37.25) but carries a notch far from it (x 85..95, y 60..100),
-    // giving the outline reflex vertices. The old convex-only `point_in_poly`
+    // giving the outline reflex vertices. A convex-only `point_in_poly`
     // winding test returns false for a point inside such a polygon the moment two
-    // edges disagree in sign, so it silently missed the engulf and reported a
+    // edges disagree in sign, silently missing the engulf and reporting a
     // false all-clear on exactly the copper-under-antenna geometry the check
     // exists to catch. The even-odd ray cast handles arbitrary polygons.
     let intruder = r#"(zone (net 1) (net_name "GND") (layers "F.Cu")

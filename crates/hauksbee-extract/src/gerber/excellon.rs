@@ -358,9 +358,9 @@ M30
     #[test]
     fn absurd_file_format_width_does_not_panic() {
         // A corrupt/hostile FILE_FORMAT must not drive the implicit-decimal
-        // format! width past its limit, `;FILE_FORMAT=99999:1` used to panic
-        // with "Formatting argument out of range". Integer coordinates (no
-        // decimal point) exercise the width path.
+        // format! width past its limit; unclamped, `;FILE_FORMAT=99999:1`
+        // panics with "Formatting argument out of range". Integer coordinates
+        // (no decimal point) exercise the width path.
         let drill = "\
 M48
 FMAT,2

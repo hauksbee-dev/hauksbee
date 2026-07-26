@@ -816,14 +816,14 @@ mod tests {
         assert_eq!(grid_hint("crystal_smd_3225-2pin_3.2x2.5mm"), None);
         assert_eq!(grid_hint("2.0x1.6mm"), None);
         assert_eq!(grid_hint("5.0x3.2mm"), None);
-        // Integer "mm" body sizes were already rejected; still are.
+        // Integer "mm" body sizes are rejected too.
         assert_eq!(grid_hint("12x12mm"), None);
         // Genuine pin grids (integer counts, no '.') still parse.
         assert_eq!(grid_hint("2x18"), Some((2, 18)));
         assert_eq!(grid_hint("01x02"), Some((1, 2)));
 
-        // The decimal crystal body no longer inflates the pad-search half-extent:
-        // it must take the largest-dimension path (3.2/2 + 1 = 2.6 mm), not the
+        // The decimal crystal body must not inflate the pad-search half-extent:
+        // it takes the largest-dimension path (3.2/2 + 1 = 2.6 mm), not the
         // 2x2-grid path (~7.62 mm).
         let he = footprint_half_extent("Crystal_SMD_3225-2Pin_3.2x2.5mm");
         assert!(
