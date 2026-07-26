@@ -431,7 +431,7 @@ fn is_rail_or_ground(name: &str) -> bool {
         let b = t.as_bytes();
         b.len() >= 2
             && b[0].is_ascii_digit()
-            && b.iter().any(|&c| c == b'V')
+            && b.contains(&b'V')
             && b.iter().all(|&c| c.is_ascii_digit() || c == b'V')
     };
     let is_supply_token = |t: &str| {
@@ -818,6 +818,61 @@ fn report_qspi_group_conflicts(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Debug introspection (used by examples/resource_probe.rs and tests). Returns,
+// for the first matched non-routable MCU, the per-pad (label, net, inferred
+// function) so a silent board can be chased to ground truth.
+// ---------------------------------------------------------------------------
+#[doc(hidden)]
+pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, String, String)> {
+    let tables = load_resources();
+    let mut out = Vec::new();
+    for mcu in &board.components {
+        let Some(table) = tables.iter().find(|t| t.matches(mcu)) else {
+            continue;
+        };
+        out.push((
+            format!("MATCH {}", table.id),
+            mcu.reference.clone(),
+            mcu.value.clone(),
+            mcu.lib_id.clone(),
+            format!("fully_routable={}", table.fully_routable),
+        ));
+        if table.fully_routable {
+            continue;
+        }
+        for pin in &mcu.pins {
+            let Some(res) = table.pins.get(&pin.number) else {
+                continue;
+            };
+            let Some(net_id) = pin.net else { continue };
+            let net_name = board
+                .net(net_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let mut seen = Vec::new();
+            let mcu_ref = mcu.reference.clone();
+            let is_mcu = move |c: &Component| c.reference == mcu_ref;
+            let inf = infer_target(board, &is_mcu, net_id, 0, &mut seen)
+                .and_then(|(t, ev)| function_for(t, &net_name).map(|f| (f, ev)));
+            out.push((
+                res.label.clone(),
+                pin.number.clone(),
+                net_name,
+                res.pwm
+                    .clone()
+                    .or(res.qspi_group.clone())
+                    .unwrap_or_default(),
+                match inf {
+                    Some((f, ev)) => format!("{} [{:?}] <= {ev}", f.class, f.peripheral),
+                    None => "(no function inferred)".into(),
+                },
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,59 +1144,4 @@ mod tests {
             "a correctly-wired QSPI flash must NOT fire, got {m:#?}"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Debug introspection (used by examples/resource_probe.rs and tests). Returns,
-// for the first matched non-routable MCU, the per-pad (label, net, inferred
-// function) so a silent board can be chased to ground truth.
-// ---------------------------------------------------------------------------
-#[doc(hidden)]
-pub fn debug_demands(board: &ExtractedBoard) -> Vec<(String, String, String, String, String)> {
-    let tables = load_resources();
-    let mut out = Vec::new();
-    for mcu in &board.components {
-        let Some(table) = tables.iter().find(|t| t.matches(mcu)) else {
-            continue;
-        };
-        out.push((
-            format!("MATCH {}", table.id),
-            mcu.reference.clone(),
-            mcu.value.clone(),
-            mcu.lib_id.clone(),
-            format!("fully_routable={}", table.fully_routable),
-        ));
-        if table.fully_routable {
-            continue;
-        }
-        for pin in &mcu.pins {
-            let Some(res) = table.pins.get(&pin.number) else {
-                continue;
-            };
-            let Some(net_id) = pin.net else { continue };
-            let net_name = board
-                .net(net_id)
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
-            let mut seen = Vec::new();
-            let mcu_ref = mcu.reference.clone();
-            let is_mcu = move |c: &Component| c.reference == mcu_ref;
-            let inf = infer_target(board, &is_mcu, net_id, 0, &mut seen)
-                .and_then(|(t, ev)| function_for(t, &net_name).map(|f| (f, ev)));
-            out.push((
-                res.label.clone(),
-                pin.number.clone(),
-                net_name,
-                res.pwm
-                    .clone()
-                    .or(res.qspi_group.clone())
-                    .unwrap_or_default(),
-                match inf {
-                    Some((f, ev)) => format!("{} [{:?}] <= {ev}", f.class, f.peripheral),
-                    None => "(no function inferred)".into(),
-                },
-            ));
-        }
-    }
-    out
 }

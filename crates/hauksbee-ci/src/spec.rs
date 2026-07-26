@@ -544,7 +544,7 @@ impl PeripheralSpec {
         // ONLY `p.nets` (never `net`/`ref`/`net_a`). A singular `net = "CLK"` (the
         // natural mistake, since every other control uses `net`) would validate
         // here and then log an EMPTY waveform with no diagnostic. Require `nets`.
-        if self.kind == "vcd_sink" && self.nets.as_ref().map_or(true, |n| n.is_empty()) {
+        if self.kind == "vcd_sink" && self.nets.as_ref().is_none_or(|n| n.is_empty()) {
             return Err(SpecError::Invalid(format!(
                 "peripheral '{}' (vcd_sink) needs `nets = [...]` (the signals to log); a singular `net` is not read by the sink",
                 self.id

@@ -700,7 +700,7 @@ fn solve_group(
             // continuation stalls, take a bolder step. Windows are clamped
             // to a tenth of the record (a mid-ramp waveform must never be
             // the bulk of a "successful" solve) and floored at 2 steps.
-            let mut errors = format!("{e}");
+            let mut errors = e.to_string();
             for scale in [200.0, 20.0, 2.0] {
                 let ramp_window = (scale * dt).min(tstop / 10.0);
                 if ramp_window < 2.0 * dt {
@@ -1281,7 +1281,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model: model.clone(),
+                model,
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),
@@ -1580,7 +1580,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model: model.clone(),
+                model,
             });
             if k == 0 {
                 // Pulse block 0's bias THROUGH its base resistor so the rail
@@ -1759,7 +1759,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model: model.clone(),
+                model,
             });
             if k == 0 {
                 // Base return via the gated switch: the block's bias, and
@@ -1905,7 +1905,7 @@ mod tests {
                 c: NodeId::GROUND,
                 b,
                 e: joint,
-                model: model.clone(),
+                model,
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),

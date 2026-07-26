@@ -114,8 +114,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     // misleading diagnosis on a net the firmware actually drives LOW (or via an
     // unmodelled peripheral bus), so the assertion is emitted commented-out with
     // an honest note naming the gap and the user opts in deliberately.
-    let boot_coverage_supported = mcu_backend.as_deref().map_or(
-        true,
+    let boot_coverage_supported = mcu_backend.as_deref().is_none_or(
         hauksbee_engine::scheduler::backend_reports_drive_direction,
     );
 

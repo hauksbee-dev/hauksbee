@@ -187,8 +187,8 @@ fn detection_matrix_every_fixture() {
         names.join(", ")
     );
     eprintln!(
-        "{:<58} {:<16} {}",
-        "fixture", "expected", "readers-that-claim"
+        "{:<58} {:<16} readers-that-claim",
+        "fixture", "expected"
     );
     eprintln!("{}", "-".repeat(96));
     let mut per_format: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();

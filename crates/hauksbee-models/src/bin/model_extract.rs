@@ -183,7 +183,7 @@ OUTPUT (TOML only, starting with [sensor]):
         part = part,
         bus = bus,
         bus_specifics = bus_specifics,
-        pdf_text = truncate_to_chars(&pdf_text, 40_000),
+        pdf_text = truncate_to_chars(pdf_text, 40_000),
     )
 }
 
@@ -437,7 +437,7 @@ OUTPUT (TOML only, starting with [[models]]):
         part = part,
         part_lower = part.to_lowercase(),
         kind = kind,
-        pdf_text = truncate_to_chars(&pdf_text, 40_000),
+        pdf_text = truncate_to_chars(pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),

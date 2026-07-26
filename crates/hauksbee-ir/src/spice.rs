@@ -3636,7 +3636,7 @@ fn parse_behavioral(
         )));
     }
     let (canon, deps, branch_names) = rewrite_behavioral_expr(line, raw, inner, env, circuit)?;
-    let expr = CompiledExpr::compile(&canon).map_err(|e| syn(e))?;
+    let expr = CompiledExpr::compile(&canon).map_err(syn)?;
     debug_assert_eq!(
         expr.n_slots(),
         deps.len(),

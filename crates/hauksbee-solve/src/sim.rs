@@ -220,7 +220,7 @@ pub fn run_tran(
     tstop: f64,
     probes: &[Probe],
 ) -> Result<SimOutput, String> {
-    let wf = Transient::new(opts.clone()).run(circuit, tstop)?;
+    let wf = Transient::new(*opts).run(circuit, tstop)?;
     let n = wf.time.len();
 
     let node_series = |name: &str| -> Result<Vec<f64>, String> {
@@ -398,7 +398,7 @@ pub fn run_ac(
         points: ac.points,
         sweep,
     };
-    let resp = AcAnalysis::new(opts.clone()).run(circuit, &spec)?;
+    let resp = AcAnalysis::new(*opts).run(circuit, &spec)?;
 
     // Resolve each probe's node id(s) once, up front, so a typo fails cleanly.
     enum AcTarget {

@@ -472,7 +472,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model: model.clone(),
+                model,
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),

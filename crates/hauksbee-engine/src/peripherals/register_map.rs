@@ -1540,7 +1540,7 @@ addr_mask = 0x7f
     ) -> u32 {
         let mut var1 = (t_fine >> 1) - 64000;
         let mut var2 = ((var1 >> 2).wrapping_mul(var1 >> 2) >> 11).wrapping_mul(p6);
-        var2 = var2 + (var1.wrapping_mul(p5) << 1);
+        var2 += var1.wrapping_mul(p5) << 1;
         var2 = (var2 >> 2) + (p4 << 16);
         let a = p3.wrapping_mul((var1 >> 2).wrapping_mul(var1 >> 2) >> 13) >> 3;
         let b = p2.wrapping_mul(var1) >> 1;
