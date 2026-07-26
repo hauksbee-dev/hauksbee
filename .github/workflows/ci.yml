@@ -1,25 +1,8 @@
-# Fast PR/push CI for hauksbee. Deliberately CHECK-only (no test run) so it
-# stays quick; the heavier build/test paths live in the Docker and release
-# workflows and in local `scripts/ci.sh`.
+# PR/push CI for hauksbee: format, lints, tests, and the MIT-clean build shape.
 #
-# Primary job: exercise the MIT-clean (GPL-free) build shape. An earlier ledger
-# noted that nothing in CI ever built `--no-default-features --features
-# renode,qemu`, so a regression that made that shape stop compiling — or that
-# quietly pulled the GPL `avr`/libsimavr backend back into it — would go
-# unnoticed until release time. This job closes that gap.
-#
-# It is also a genuine GPL-freeness ASSERTION, not just a compile check: it
-# points simavr discovery at a nonexistent path (SIMAVR_*_DIR). If the
-# renode+qemu shape is truly avr-free, hauksbee-mcu/build.rs early-returns and
-# ignores those paths and the check passes with zero system dependencies. If
-# `avr` leaks in, build.rs panics ("the avr co-sim feature needs a system
-# libsimavr") and this job fails — telling us the "MIT-clean" release would in
-# fact be GPL-encumbered. See docs/about/release-and-licensing.md.
-#
-# Expected GREEN: the feature graph is clean (hauksbee-server gates its AvrMcu
-# usage on `avr`; every hauksbee-* path dependency uses default-features =
-# false with explicit per-feature forwarding). A red here means a feature-graph
-# regression re-enabled avr — fix the graph, never weaken this check.
+# The board-corpus gate runs nightly instead (corpus-gate.yml): it fetches a
+# hundred-odd boards from their upstream projects, which is too slow to put in
+# front of every push.
 
 name: ci
 
@@ -35,7 +18,51 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # A failing test should print its assertion, not spend a minute on backtraces.
+  RUST_BACKTRACE: 1
+
 jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No toolchain pinned here on purpose: rust-toolchain.toml decides, so
+      # CI and a laptop format with the same rustfmt and cannot disagree.
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # The allow-list of known findings lives in Cargo.toml's
+      # [workspace.lints.clippy]. Anything outside it fails here.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux is the CI workhorse; macOS is included because the project is
+        # developed there and several paths (dynamic library discovery for the
+        # emulator backends, Gatekeeper) differ enough to break in one place
+        # while passing in the other.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # No corpus here: these are the tests that run from the fixtures bundled
+      # in testdata/. Corpus-dependent tests report as ignored, and the nightly
+      # gate runs them for real with HAUKSBEE_REQUIRE_CORPUS=1.
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
   gpl-free-check:
     name: cargo check (MIT-clean renode+qemu shape)
     runs-on: ubuntu-latest
@@ -45,17 +72,16 @@ jobs:
       SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ci-gplfree-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ci-gplfree-
+      - uses: Swatinem/rust-cache@v2
+      # This is a licensing ASSERTION, not a compile check. simavr discovery is
+      # pointed at a nonexistent path: if the renode+qemu shape is truly
+      # avr-free, hauksbee-mcu/build.rs early-returns and ignores it. If `avr`
+      # leaks back into the graph, build.rs panics and this job fails, telling
+      # us the "MIT-clean" release would in fact be GPL-encumbered.
+      #
+      # A red here means a feature-graph regression re-enabled avr. Fix the
+      # graph, never weaken this check.
+      # See docs/about/release-and-licensing.md.
       - name: cargo check --workspace --no-default-features --features renode,qemu
         run: |
           if ! cargo check --workspace --no-default-features --features renode,qemu; then
