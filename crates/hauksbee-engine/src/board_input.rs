@@ -31,13 +31,19 @@
 //! Board-as-Code compilation ([`crate::boardcode::code_to_board_text`]) needs
 //! forge-codegen, which the extract crate must not depend on.
 
+// This module reads board files the user did not write, and `hauksbee serve`
+// exposes it to a browser, so a panic here is a denial of service rather than
+// a crash in a CLI. Failures must be typed errors that the caller can report.
+// Test code below is exempt: an unwrap in a test is an assertion.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use std::borrow::Cow;
 use std::path::Path;
 
 use hauksbee_extract::ExtractedBoard;
 
 /// What kind of input the normalizer recognised. Call sites use this where
-/// they previously kept `is_binary` / `is_gerber` flags; the two
+/// they would otherwise keep `is_binary` / `is_gerber` flags; the two
 /// `layout_text == None` kinds (Altium, Gerber) need different DRC handling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {

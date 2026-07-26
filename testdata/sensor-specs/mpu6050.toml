@@ -1,0 +1,124 @@
+# MPU-6050 6-axis IMU (3-axis accel + 3-axis gyro + temp) — declarative I2C spec
+# -----------------------------------------------------------------------------
+# Part: InvenSense / TDK MPU-6050.
+# Bus:  I2C. 7-bit address 0x68 (AD0 = 0) or 0x69 (AD0 = 1). This spec uses 0x68.
+# Ref:  MPU-6000/MPU-6050 Register Map and Descriptions rev 4.2 (RM-MPU-6000A).
+#       MPU-6000/MPU-6050 Product Specification rev 3.4 (scale factors §6.1/§6.2).
+#
+# ── Why the "compensation" here IS a forward evalexpr value expression ─────────
+# Unlike the BME280, the MPU6050 is linear: each physical quantity is `raw / scale`
+# (or `raw/scale + offset` for temperature), so the FORWARD map physical → raw is
+# just `raw = physical * scale (+ offset)` — directly expressible with the
+# register `expr` + `scale`/`offset` fields and the existing `i16_be` encoding.
+# No encoding addition is needed for this part.
+#
+# Default full-scale ranges (the power-on defaults; product spec §6.1/§6.2):
+#   accel ±2 g      → 16384 LSB/g          → raw = accel_g   * 16384
+#   gyro  ±250 °/s  → 131   LSB/(°/s)      → raw = gyro_dps  * 131
+#   temp            → T = raw/340 + 36.53  → raw = temp_c*340 - 12420.2
+# All data words are signed 16-bit BIG-ENDIAN (high byte first): `i16_be`.
+
+[sensor]
+name        = "MPU6050"
+bus         = "i2c"
+i2c_address = 0x68   # AD0=GND. Use 0x69 for AD0=VDD.
+
+# ── Physical inputs (driven by the engine / a sweep test) ─────────────────────
+[[sensor.input]]
+name    = "accel_x_g"
+default = 0.0
+[[sensor.input]]
+name    = "accel_y_g"
+default = 0.0
+[[sensor.input]]
+name    = "accel_z_g"
+default = 1.0        # +1 g at rest (Z up)
+[[sensor.input]]
+name    = "temp_c"
+default = 25.0
+[[sensor.input]]
+name    = "gyro_x_dps"
+default = 0.0
+[[sensor.input]]
+name    = "gyro_y_dps"
+default = 0.0
+[[sensor.input]]
+name    = "gyro_z_dps"
+default = 0.0
+
+# ── Identity + control registers ──────────────────────────────────────────────
+
+# WHO_AM_I (0x75) — THE identity gate. MPU-6050 returns 0x68 (register map §4.32:
+# WHO_AM_I holds bits [6:1] of the I2C address, default 0b110100 → 0x68).
+[[sensor.register]]
+addr  = 0x75
+const = [0x68]
+
+# SMPLRT_DIV (0x19), CONFIG (0x1A), GYRO_CONFIG (0x1B), ACCEL_CONFIG (0x1C) —
+# written during init; return power-on default 0x00 (config words are write-only
+# to firmware, no readback gate). GYRO/ACCEL_CONFIG default 0x00 = ±250°/s, ±2 g.
+[[sensor.register]]
+addr  = 0x19
+const = [0x00]
+[[sensor.register]]
+addr  = 0x1A
+const = [0x00]
+[[sensor.register]]
+addr  = 0x1B
+const = [0x00]
+[[sensor.register]]
+addr  = 0x1C
+const = [0x00]
+
+# PWR_MGMT_1 (0x6B) — firmware writes 0x00 to wake from sleep (default 0x40 =
+# SLEEP set). Read path returns 0x00 (awake), so a wake-then-verify loop passes.
+[[sensor.register]]
+addr  = 0x6B
+const = [0x00]
+
+# ── Sensor data: burst read 0x3B..0x48 (register map §4.17..§4.19) ────────────
+# A firmware BURST read of 14 bytes from 0x3B returns, in order:
+#   ACCEL_XOUT (0x3B), ACCEL_YOUT (0x3D), ACCEL_ZOUT (0x3F)  — i16_be each
+#   TEMP_OUT   (0x41)                                        — i16_be
+#   GYRO_XOUT  (0x43), GYRO_YOUT  (0x45), GYRO_ZOUT (0x47)   — i16_be each
+# Each is ONE 2-byte register; the burst auto-increments across the seven
+# (0x3B→0x3D→…→0x47) because each register's read length covers its low byte.
+[[sensor.register]]
+addr     = 0x3B   # ACCEL_XOUT_H/L
+encoding = "i16_be"
+expr     = "accel_x_g"
+scale    = 16384.0
+[[sensor.register]]
+addr     = 0x3D   # ACCEL_YOUT_H/L
+encoding = "i16_be"
+expr     = "accel_y_g"
+scale    = 16384.0
+[[sensor.register]]
+addr     = 0x3F   # ACCEL_ZOUT_H/L
+encoding = "i16_be"
+expr     = "accel_z_g"
+scale    = 16384.0
+[[sensor.register]]
+addr     = 0x41   # TEMP_OUT_H/L: raw = temp_c*340 - 12420.2  (T = raw/340 + 36.53)
+encoding = "i16_be"
+expr     = "temp_c"
+scale    = 340.0
+offset   = -12420.2
+[[sensor.register]]
+addr     = 0x43   # GYRO_XOUT_H/L
+encoding = "i16_be"
+expr     = "gyro_x_dps"
+scale    = 131.0
+[[sensor.register]]
+addr     = 0x45   # GYRO_YOUT_H/L
+encoding = "i16_be"
+expr     = "gyro_y_dps"
+scale    = 131.0
+[[sensor.register]]
+addr     = 0x47   # GYRO_ZOUT_H/L
+encoding = "i16_be"
+expr     = "gyro_z_dps"
+scale    = 131.0
+
+[sensor.protocol]
+style = "i2c_pointer"

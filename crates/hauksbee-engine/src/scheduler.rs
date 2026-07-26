@@ -881,7 +881,7 @@ impl Scheduler {
         /// The shipped declarative MCP4728 spec. Embedded (rather than loaded
         /// from disk at runtime) so an engine binary is self-contained; the
         /// unit fixtures include the same file, keeping one source of truth.
-        const MCP4728_SPEC: &str = include_str!("../../../docs/hunts/specs/mcp4728.toml");
+        const MCP4728_SPEC: &str = include_str!("../../../testdata/sensor-specs/mcp4728.toml");
 
         let mut bus = I2cBus::new("MCP4728_BUS");
         for d in dacs {
