@@ -1,15 +1,14 @@
 //! Declarative digital-logic specification (`[models.logic]`).
 //!
-//! Instead of hand-coding each digital IC's behaviour in Rust (formerly the
-//! `DigitalKind::{Hc595, Hc165, Buffer, NorLatch}` enum in `hauksbee-engine`),
+//! Instead of hand-coding each digital IC's behaviour in Rust,
 //! a part's logic is described DECLARATIVELY here: its input/output pins,
 //! combinational expressions, clocked registers, and tri-state groups. The
 //! engine's generic `LogicComponent` evaluator realizes the spec against a
 //! board's nets; this module owns the *format* and *validation* only, no
 //! evaluation and no `evalexpr` (that lives engine-side, where the expression
 //! evaluator already is, same split as `sensor_spec.rs`).
-//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/logic_spec.md.
+//!
 //!
 //! ## TOML shape
 //!
@@ -79,6 +78,7 @@
 //!    resolution order), seeded from the previous stable values (`init` at
 //!    power-on). Convergence is verified exhaustively at bind time; the
 //!    runtime iteration bound is a backstop, not a correctness knob.
+//!
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

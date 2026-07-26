@@ -619,7 +619,7 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
 /// Call codex non-interactively and return its (validated) TOML reply.
 ///
 /// Invocation notes learned the hard way:
-///   * `--sandbox workspace-write` (the old `--full-auto` is deprecated).
+///   * `--sandbox workspace-write` (`--full-auto` is deprecated).
 ///   * `--skip-git-repo-check`, codex otherwise refuses to run outside a repo.
 ///   * `--cd <pdf_dir>` so codex can open the datasheet PDF / extracted text
 ///     directly when pdftotext was unavailable.
