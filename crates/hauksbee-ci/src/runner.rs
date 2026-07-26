@@ -46,7 +46,7 @@ impl NetWindow {
     /// Widen the min/max window with an intra-frame extreme WITHOUT touching
     /// `last_v`. The settled report value must stay the last-chunk voltage
     /// (`observe`), not the peak excursion, folding the extremes through
-    /// `observe` used to leave `last_v` reporting the max of the final frame.
+    /// `observe` would leave `last_v` reporting the max of the final frame.
     fn fold(&mut self, v: f64) {
         self.min_v = self.min_v.min(v);
         self.max_v = self.max_v.max(v);
@@ -131,7 +131,7 @@ pub struct RunOutcome {
     /// crossing it (absent = it never dropped after crossing). With the first
     /// cross this decides "reached by the deadline AND held continuously through
     /// the deadline" purely from the boot window, independent of end-of-run
-    /// state, so a legitimate post-deadline release no longer fails the check and
+    /// state, so a legitimate post-deadline release does not fail the check and
     /// a late analog-failed frame cannot flip the verdict.
     pub boot_drop_after_cross_ms: HashMap<(String, u64), f64>,
     /// Nets the firmware drove to a *defined* level (HIGH or LOW) during the run,
@@ -998,9 +998,9 @@ fn run_one(
     // battery BMS runs in hiccup mode; it trips, the load drops below reset so
     // it re-arms, and it can trip again, so a supply shared across sequential
     // scenarios may latch once per window. Recording only the first latch time
-    // (the old `or_insert`) attributed a re-trip to the earliest window and lost
-    // it in every later one. We keep the full list of latch instants and per-net
-    // edge state to detect each new latch.
+    // (an `or_insert` keyed by net) would attribute a re-trip to the earliest
+    // window and lose it in every later one. We keep the full list of latch
+    // instants and per-net edge state to detect each new latch.
     let mut protection_trip_t: HashMap<String, Vec<f64>> = HashMap::new();
     let mut prot_prev_tripped: HashMap<String, bool> = HashMap::new();
     let mut prot_prev_ever: HashMap<String, bool> = HashMap::new();
@@ -1149,8 +1149,9 @@ fn run_one(
             // rail_window scoped to an earlier scenario must stop sampling when the
             // next scenario begins, otherwise a later phase's excursion bleeds
             // into this window's min/max/dip/recovery aggregates and produces a
-            // false verdict (the same later-scenario bleed r28 fixed for
-            // protection_trip). The run-wide window keeps end_s = +∞.
+            // false verdict (the same later-scenario bleed the scoped
+            // protection_trip windows guard against). The run-wide window keeps
+            // end_s = +∞.
             for sw in &scenario_windows {
                 if time_in_window(frame.t, sw.start_s, sw.end_s) {
                     for net in &sw.nets {
@@ -1577,7 +1578,7 @@ fn attach_scenarios(
     // timeline: scenarios are sequential phases, so a trip that latches during a
     // LATER scenario must not be attributed to an earlier-starting one sharing the
     // same supply net (protection_tripped_scoped keys by net, and an earlier
-    // start <= a later start, so without an upper bound the later trip satisfied
+    // start <= a later start, so without an upper bound the later trip satisfies
     // every earlier window). The run-wide window (empty id) keeps +∞; it
     // deliberately spans the whole run.
     let mut starts: Vec<f64> = spec.scenarios.iter().map(|s| s.start_ms / 1000.0).collect();
@@ -2335,11 +2336,12 @@ fn main {
 
     #[test]
     fn load_board_accepts_board_as_code() {
-        // B5: hauksbee-ci used to REJECT `.board` with a "compile it yourself
-        // with from-code --route first" error, even though the web checks panel
-        // told .board uploaders the downloaded spec would run. The compiled
-        // text carries full net connectivity (net-named pads), and CI is
-        // entirely netlist-driven, so no routing step is needed.
+        // B5: hauksbee-ci loads `.board` directly, with no "compile it yourself
+        // with from-code --route first" detour. The compiled text carries full
+        // net connectivity (net-named pads), and CI is entirely netlist-driven,
+        // so no routing step is needed. Rejecting `.board` here would also
+        // contradict the web checks panel, which tells .board uploaders the
+        // downloaded spec will run.
         let dir = std::env::temp_dir().join(format!("hauksbee-ci-bac-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("cell.board");
@@ -2493,9 +2495,9 @@ fn main {
         // reset so it re-arms, and it can trip again. A supply shared by inrush
         // [0, 0.1) and steady [0.1, +inf) that latches at 0.05 (inrush), re-arms,
         // then latches again at 0.15 (steady) must have BOTH windows own their own
-        // trip. The old code recorded only the FIRST latch (0.05) and folded with
-        // `trip_in_window`, so steady saw `trip_in_window(0.05, 0.1, inf) = false`
-        //, a false GREEN over a window in which the pack demonstrably tripped.
+        // trip. Recording only the FIRST latch (0.05) and folding it with
+        // `trip_in_window` gives steady `trip_in_window(0.05, 0.1, inf) = false`,
+        // a false GREEN over a window in which the pack demonstrably tripped.
         let mut trip_t: HashMap<String, Vec<f64>> = HashMap::new();
         trip_t.insert("BATT".into(), vec![0.05, 0.15]);
         let windows = vec![
@@ -2523,7 +2525,7 @@ fn main {
             Some(&true),
             "inrush still owns its first trip at 0.05"
         );
-        // The first-latch-only view (what the old f64 map gave) loses the re-trip:
+        // The first-latch-only view (a single f64 per net) loses the re-trip:
         assert!(
             !trip_in_window(trip_t["BATT"].first().copied(), 0.1, f64::INFINITY),
             "the first-trip-only fold was the bug: steady wrongly saw no trip"

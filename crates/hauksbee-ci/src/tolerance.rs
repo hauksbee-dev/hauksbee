@@ -601,9 +601,9 @@ mod tests {
 
     #[test]
     fn corner_cap_refusal_does_not_overflow_at_64_tolerances() {
-        // 64+ toleranced components blow the cap; the refusal message used to
-        // compute 1u64 << n, which overflows (debug panic / wrong number in
-        // release) for n >= 64. It must refuse cleanly instead. (round-7 #15)
+        // 64+ toleranced components blow the cap, and the refusal must come out
+        // cleanly. Reporting the corner count as 1u64 << n overflows for n >= 64
+        // (a debug panic, or a wrong number in release). (round-7 #15)
         let ts: Vec<ResolvedTolerance> = (0..64)
             .map(|i| rule(&format!("R{i}"), 1_000.0, 5.0, Distribution::Uniform))
             .collect();

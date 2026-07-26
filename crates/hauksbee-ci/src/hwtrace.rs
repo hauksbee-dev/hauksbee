@@ -408,8 +408,8 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
             continue;
         }
         // Scalar change: '0<id>' / '1<id>' (x/z are skipped, undefined levels
-        // carry no honest edge information). Split on the first CHAR, not byte 1
-        //, a body line beginning with a multibyte UTF-8 char would panic a
+        // carry no honest edge information). Split on the first CHAR, not byte 1,
+        // a body line beginning with a multibyte UTF-8 char would panic a
         // byte-index split_at(1).
         let mut cs = l.chars();
         if let Some(val) = cs.next() {
@@ -723,9 +723,10 @@ mod tests {
 
     #[test]
     fn load_vcd_survives_multibyte_body_line() {
-        // A VCD body line beginning with a multibyte UTF-8 char used to panic
-        // the parser's byte-index split_at(1) (not on a char boundary). It must
-        // skip the junk line and still read the real 0/1 edges. (round-7 #10)
+        // A VCD body line beginning with a multibyte UTF-8 char must be skipped
+        // as junk, leaving the real 0/1 edges readable. Splitting such a line
+        // with a byte-index split_at(1) lands off a char boundary and panics the
+        // parser. (round-7 #10)
         let vcd = "$timescale 1us $end\n\
                    $var wire 1 ! sig $end\n\
                    $enddefinitions $end\n\
@@ -750,7 +751,7 @@ mod tests {
     #[test]
     fn load_csv_rejects_non_finite_samples() {
         // Rust's f64 parser accepts "inf"/"nan", so a capture row like `1e-3,inf`
-        // used to slip through and make the feature comparison pass vacuously
+        // would slip through and make the feature comparison pass vacuously
         // (band = reltol*|cap| becomes inf/NaN). load_csv must fail loud instead.
         let csv = "0.0,1.0\n1e-4,2.0\n2e-4,inf\n3e-4,3.0\n4e-4,4.0\n\
                    5e-4,5.0\n6e-4,6.0\n7e-4,7.0\n8e-4,8.0\n";

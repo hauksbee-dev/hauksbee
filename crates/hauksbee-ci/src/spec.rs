@@ -1961,9 +1961,9 @@ after_ms = nan
         // R35: check_rail_window only evaluates a recovery when all three of
         // dip_below/recover_to/recover_within_ms are present. A spec that sets a
         // recovery intent (dip_below + recover_to) but omits recover_within_ms
-        // used to be ACCEPTED whenever a min/max was also present; the recovery
-        // clause then silently never ran (a false GREEN on the recovery
-        // dimension). Validation must now reject the incomplete recovery spec.
+        // must be REJECTED, even when a min/max is also present. Accepting it
+        // would let the recovery clause silently never run, a false GREEN on the
+        // recovery dimension.
         let spec = spec_from(
             r#"
 name = "t"
@@ -2139,8 +2139,8 @@ min = 5
     #[test]
     fn peripheral_assertion_with_unknown_id_is_rejected_at_load() {
         // U2: a peripheral assertion whose `id` names no declared [[peripheral]]/
-        // [[sensor]] used to fail only after a full co-sim (or read nothing). It
-        // must be caught at load, naming the declared ids.
+        // [[sensor]] must be caught at load, naming the declared ids. Left to the
+        // runner it would fail only after a full co-sim, or read nothing at all.
         let spec = spec_from(
             "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n\
              [[peripheral]]\nid=\"EE1\"\ntype=\"i2c_eeprom\"\n\n\

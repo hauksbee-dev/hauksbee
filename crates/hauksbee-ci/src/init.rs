@@ -241,8 +241,8 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     // *firmware* does, and `firmware = ...` is itself commented above, so the
     // starter spec has no image to boot. Left live it would go RED out of the
     // box on every board (the control net is never driven / the MCU never runs),
-    // which is exactly the false-red first-run the persona panel hit. So the
-    // starter is GREEN on `no_faults` alone; the user opts into boot-coverage
+    // handing the user a false red on their very first run. So the starter is
+    // GREEN on `no_faults` alone; the user opts into boot-coverage
     // deliberately, after wiring up their firmware. The `cc` prefix stays a
     // variable so the two `[[assert]]` blocks below read the same as the other
     // assertion sections.
