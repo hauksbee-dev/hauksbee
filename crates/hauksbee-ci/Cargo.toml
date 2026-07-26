@@ -57,3 +57,6 @@ hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features =
 # The firmware-input parity test zips a committed .hex to prove a spec's
 # `firmware = "fw.zip"` resolves exactly like `run --firmware` does.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

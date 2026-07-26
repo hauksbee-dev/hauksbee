@@ -1332,8 +1332,13 @@ fn run_one(
 
 /// Whether a protection trip at `trip_t` (if any) latched inside a scenario
 /// window `[start_s, end_s)`. Half-open: a trip exactly at the next scenario's
-/// start belongs to that later scenario, not this one. `end_s == +∞` means the
+/// start belongs to that later scenario, not this one. `end_s == +inf` means the
 /// window runs to end-of-run (the last scenario and the run-wide window).
+///
+/// The runner itself uses `any_trip_in_window`, since a hiccup-mode supply
+/// latches more than once. This single-latch form is what the tests pin the
+/// half-open boundary against, so it is compiled only for them.
+#[cfg(test)]
 fn trip_in_window(trip_t: Option<f64>, start_s: f64, end_s: f64) -> bool {
     trip_t.is_some_and(|t| time_in_window(t, start_s, end_s))
 }

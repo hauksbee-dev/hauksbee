@@ -32,3 +32,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 toml = "0.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

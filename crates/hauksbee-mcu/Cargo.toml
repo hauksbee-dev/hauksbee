@@ -51,3 +51,6 @@ serde_json = { workspace = true }
 # The esp-qemu installer's acceptance-boundary tests build fake release
 # archives in scratch dirs.
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

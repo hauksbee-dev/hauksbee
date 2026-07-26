@@ -1977,6 +1977,11 @@ pub mod eagle_drc {
                 // Unescape XML entities in the value (quick-xml leaves them raw),
                 // consistent with the eagle.rs reader; fall back to raw bytes on
                 // a decode error.
+                // quick-xml deprecates this in favour of `normalized_value`, which takes an
+                // `XmlVersion` the crate does not export, so the replacement is not
+                // callable from outside quick-xml. Staying on the deprecated call
+                // until upstream makes the successor reachable.
+                #[allow(deprecated)]
                 let value = a
                     .unescape_value()
                     .map(|c| c.into_owned())
