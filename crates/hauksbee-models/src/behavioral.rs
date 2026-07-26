@@ -188,17 +188,14 @@ pub struct StatePinBehaviour {
 /// Switching topology of an averaged converter block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Topology {
+    #[default]
     Buck,
     Boost,
     BuckBoost,
 }
 
-impl Default for Topology {
-    fn default() -> Self {
-        Topology::Buck
-    }
-}
 
 /// An averaged (cycle-averaged) switching-converter block. The runtime realises
 /// it as a controllable source on the output pin behind a measurable series

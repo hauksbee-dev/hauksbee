@@ -509,7 +509,7 @@ fn is_pin_array_package(fp: &str) -> bool {
 }
 
 /// All (component, pin) members of a net id.
-fn members<'a>(board: &'a ExtractedBoard, net_id: i64) -> Vec<(&'a Component, &'a Pin)> {
+fn members(board: &ExtractedBoard, net_id: i64) -> Vec<(&Component, &Pin)> {
     board.net_members(net_id)
 }
 
@@ -557,16 +557,11 @@ fn footprint_family(footprint: &str) -> Option<char> {
 
 fn package_code(footprint: &str) -> Option<&'static str> {
     let fp = footprint.to_ascii_lowercase();
-    for code in ["0201", "0402", "0603", "0805", "1206", "1210"] {
-        if fp.contains(code) {
-            return Some(code);
-        }
-    }
-    None
+    ["0201", "0402", "0603", "0805", "1206", "1210"].into_iter().find(|&code| fp.contains(code)).map(|v| v as _)
 }
 
 fn parse_capacitance_uf(value: &str) -> Option<f64> {
-    let s = value.trim().replace('µ', "u").replace('μ', "u");
+    let s = value.trim().replace(['µ', 'μ'], "u");
     if s.is_empty() {
         return None;
     }

@@ -1177,7 +1177,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
             .pins
             .iter()
             .filter_map(|p| p.net)
-            .filter(|id| id_to_name.get(id).map_or(true, |n| !is_ground(n)))
+            .filter(|id| id_to_name.get(id).is_none_or(|n| !is_ground(n)))
             .collect();
 
         let mut intrusions: Vec<Intrusion> = Vec::new();

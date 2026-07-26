@@ -482,8 +482,7 @@ fn converter_harness(prog_ohms: f64, r_load: f64) -> Harness {
     //   prog = 400k => v_sense = 0.05*1.0 = 0.05  => iin = 5.0 A (full scale)
     // i.e. a LARGER programming resistor RAISES the limit, the LTC4020 ILIMIT
     // direction the concrete model uses (100k over budget, 7.15k at budget).
-    let toml = format!(
-        r#"
+    let toml = r#"
 [converter]
 topology = "buck_boost"
 out_pin = "bat"
@@ -497,8 +496,7 @@ prog_ref = "R8"
 vprog_ref = 0.05
 prog_ref_ohms = 400000.0
 v_sense_full = 0.05
-"#
-    );
+"#.to_string();
     let model: Behavioral = toml::from_str(&toml).unwrap();
     let mut roles = BTreeMap::new();
     roles.insert("pvin".to_string(), pvin);

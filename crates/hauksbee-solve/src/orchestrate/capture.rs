@@ -2162,7 +2162,7 @@ mod tests {
             c: NodeId::GROUND,
             b: mb,
             e: m,
-            model: model.clone(),
+            model,
         });
         c.add(Device::Resistor {
             name: "Rmb".into(),
@@ -2364,7 +2364,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model: model.clone(),
+                model,
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),
@@ -2739,7 +2739,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model: model.clone(),
+                model,
             });
             c.add(Device::Resistor {
                 name: format!("Rb{tag}"),
@@ -3326,7 +3326,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: NodeId::GROUND,
-                model: model.clone(),
+                model,
             });
             // Cross-coupling: this collector drives the OTHER base.
             c.add(Device::Resistor {

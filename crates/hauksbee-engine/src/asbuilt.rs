@@ -652,7 +652,7 @@ impl AsBuiltOverlay {
             leg.net = remap(leg.net);
         }
         for b in bound.behavioral.iter_mut() {
-            b.remap_node(&remap);
+            b.remap_node(remap);
         }
         // Digital components cache raw NodeIds the same way: `roles` maps each
         // wired pin to its net node (read at tick to SAMPLE input levels via
