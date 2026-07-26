@@ -2,7 +2,7 @@
 //!
 //! The single most important primitive of the tearing engine, generalized from
 //! the hand-written `conduction_terminals` that made the Tarski feedforward
-//! decomposition exact (`docs/learn/tarski-saga.md` §2b).
+//! decomposition exact.
 //!
 //! ## Why two kinds of terminal
 //!
@@ -96,7 +96,7 @@ impl ConductionGraph {
             // one-directionality proof cannot catch (it reasons about node
             // replays). Fusing the output island with the control source's
             // island is the honest conservative encoding, mirroring the
-            // partitioner's demote-and-union rule (04-spice-compat.md §2.2).
+            // partitioner's demote-and-union rule for the same shape.
             // Plural since the behavioral B-source: each `I(vname)` dep is one
             // such branch-current coupling (its `V(node)` deps, by contrast,
             // surface as ordinary sense edges below via `sense_nodes`).

@@ -4,10 +4,10 @@
 //! feeds them through one series impedance; the feedforward pass
 //! ([`super::feedforward`]) finds boundaries that carry information but no
 //! current. Between the two sits a shape neither catches. On the flagship
-//! Tarski board (`docs/dev-plans/02-tearing-architecture.md` §2.2.1, the
-//! route-4 mechanics distilled from the analysis probe) the ten output columns
-//! fuse through nine hidden `V_out` nets. Those nets are CONDUCTED on both
-//! sides: the neuron drives them and the synapse ladders draw from them. So
+//! Tarski board the ten output columns fuse through nine hidden `V_out` nets,
+//! and the route-4 mechanics come straight off that shape. Those nets are
+//! CONDUCTED on both sides: the neuron drives them and the synapse ladders
+//! draw from them. So
 //! they are not sense-only (free-tear discovery walks right past them) and they
 //! are not shunt-fed rails (no single series feed pins them). They are the
 //! canonical stiff node: a high-fanout conducted node whose voltage barely
@@ -34,8 +34,10 @@
 //! candidate's waveform with its load attached, probe the small-signal output
 //! impedance, and certify `sag_v = max_t |I_replay - I_capture| * Z_out`
 //! against `stiff_tol`, escalating to a fused or balance treatment when the
-//! bound is exceeded (`02-tearing-architecture.md` §2.2.1, the verification and
-//! cross-coupled-capture bullets). Detection only nominates the nodes worth
+//! bound is exceeded. Candidates that couple to each other are re-captured
+//! against each other's waveforms, so the certified sag is a round-to-round
+//! residual rather than an artifact of pinning them at rest. Detection only
+//! nominates the nodes worth
 //! that measurement. A candidate this pass returns is a hypothesis about where
 //! the board fragments cheaply, nothing more; every honesty claim is deferred
 //! to the certificate the orchestrator fills in.
@@ -125,8 +127,7 @@ pub struct StiffCandidate {
 /// The score is the balance tear's ratio with one term removed. A balance tear
 /// pays `outer_iters * sum(b^alpha)` because it reconciles the torn node with a
 /// scalar KCL balance loop; a stiff tear pins the node to its settled voltage
-/// with NO coupling equation at all (`02-tearing-architecture.md` §1, the
-/// stiff-tear vocabulary), so it pays only `sum(b^alpha)`. Applying
+/// with NO coupling equation at all, so it pays only `sum(b^alpha)`. Applying
 /// `rails.outer_iters` here would charge the cheaper tear for a loop it never
 /// runs and would wrongly refuse every two-way split (`2^alpha < outer_iters`).
 /// The `alpha` exponent is still read from [`RailPolicy`] so the fill model

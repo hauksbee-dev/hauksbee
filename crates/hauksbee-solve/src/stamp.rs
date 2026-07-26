@@ -1418,12 +1418,13 @@ fn sigmoid(x: f64) -> f64 {
 /// threshold `vov_eff -> vov` (the square law, exponentially fast); below,
 /// `vov_eff -> 2·n·Vt·e^(vov/(2·n·Vt))`, so the saturation current tends to
 /// `2·beta·(n·Vt)²·e^(vov/(n·Vt))`, an exponential subthreshold tail with
-/// slope n·Vt, which is what the old two-branch form MEANT its
-/// "continuity scale" to buy. That form matched neither value nor slope at
-/// `vgs == vth` (the exponential branch carried `beta·(n·Vt)²·e` where the
-/// square law carries 0), so a gate sweep saw `id` drop by the full
-/// `i0` and `gm` collapse to 0 crossing threshold, a Newton limit-cycle trap
-/// and a lie against the model's "smooth subthreshold tail" doc. The blended
+/// slope n·Vt. Blending the OVERDRIVE rather than switching between an
+/// exponential branch and a square-law branch is what buys that continuity:
+/// the two-branch form matches neither value nor slope at `vgs == vth` (the
+/// exponential branch carries `beta·(n·Vt)²·e` where the square law carries
+/// 0), so a gate sweep sees `id` drop by the full `i0` and `gm` collapse to 0
+/// crossing threshold, a Newton limit-cycle trap and a lie against the
+/// model's promised smooth subthreshold tail. The blended
 /// overdrive is C-infinity in `vgs`, so `id` and `gm` are continuous
 /// everywhere by construction (`gm` picks up the `sigmoid` chain factor
 /// d vov_eff/d vgs). Channel-length modulation multiplies every region
@@ -1654,10 +1655,10 @@ fn stamp_diode<S: StampSink>(
     // ngspice's region test) the per-iteration move is limited in mirrored
     // coordinates vdtemp = -(vd + bv), pnjlim toward the same vcrit, and
     // mapped back. Without this, one Newton iterate landing volts past -bv
-    // evaluates exp() at full depth and poisons the step exactly the way the
-    // unlimited forward branch used to. `bv == INFINITY` (the default) makes
-    // the region test unsatisfiable, keeping every existing deck on the
-    // byte-for-byte identical pnjlim path.
+    // evaluates exp() at full depth and poisons the step exactly the way an
+    // unlimited forward branch would. `bv == INFINITY` (the default) makes
+    // the region test unsatisfiable, keeping every deck without a breakdown
+    // voltage on the plain pnjlim path.
     let mut vd = if model.bv.is_finite() && vd_raw < (10.0 * nvt - model.bv).min(0.0) {
         -(pnjlim(-(vd_raw + model.bv), -(vd_last + model.bv), nvt, vc) + model.bv)
     } else {
@@ -1808,14 +1809,14 @@ fn stamp_bjt<S: StampSink>(
     // which is > 1 in forward-active (vbc < 0), so ic grows with vce and
     // ro = VAF/IC, the classic Early slope; the -vbe/VAR term is the REVERSE
     // Early voltage, shrinking ic as the forward junction charges the base
-    // (it dominates in saturation/reverse-active, where VAR-carrying models
-    // used to mis-simulate silently: the field was parsed and dropped here).
-    // (This arc FIXED an inversion here: the previous code divided by
-    // (1 - vbc/VAF), shrinking ic with vce, undetected because the bias
-    // decks' collector points are bias-network-set, exposed by the §3.2
-    // amplifier-gain cross-check against ngspice. For the default model both
-    // `vaf` and `var` are infinite, `early == 1.0`, and `1/1.0 == 1.0`
-    // exactly: default-model decks are bit-identical across both fixes.)
+    // (it dominates in saturation/reverse-active, so a model that parses VAR
+    // and drops it mis-simulates there silently).
+    // (The sign is easy to get backwards: DIVIDING by (1 - vbc/VAF) shrinks ic
+    // with vce, and no bias deck catches it, their collector points are
+    // bias-network-set; only the §3.2 amplifier-gain cross-check against
+    // ngspice exposes it. For the default model both `vaf` and `var` are
+    // infinite, `early == 1.0`, and `1/1.0 == 1.0` exactly, so default-model
+    // decks are insensitive to the whole factor.)
     let early = if ctx.opts.effects.early_effect {
         let mut e = 1.0;
         if model.vaf.is_finite() {
@@ -2148,11 +2149,10 @@ fn stamp_mosfet<S: StampSink>(
         // them (`bNode` to `dNodePrime`/`sNodePrime`, mos1set.c). The short
         // test therefore compares ELECTRICAL unknowns, not physical terminals:
         // with rd/rs the internal drain/source is a distinct unknown, so a
-        // netlist body tie (the discrete bulk-to-source default) no longer
-        // shorts the junction and the diode must be stamped between the
+        // netlist body tie (the discrete bulk-to-source default) does NOT
+        // short the junction, and the diode must be stamped between the
         // external bulk and the internal terminal. At rd == rs == 0 both sides
-        // resolve to the same unknown and the junction is skipped exactly as
-        // before.
+        // resolve to the same unknown and the junction is skipped.
         let junctions = [(d_eff, model.cbd, 1usize), (s_eff, model.cbs, 2usize)];
         for (term_i, cbx, bank) in junctions {
             if term_i == bulk_i {
@@ -2298,7 +2298,7 @@ fn stamp_vswitch<S: StampSink>(
     let mut s = 0.5 * (1.0 + th);
 
     // BREAK-BEFORE-MAKE for SPDT legs (effects.spdt_bbm, the device-model
-    // default; the typed compat field restores the old bridging model). A real
+    // default; clearing that field restores the plain bridging model). A real
     // SN74LVC1G3157 SPDT is NEVER low-Z to both throws at
     // once: as the SELECT crosses its threshold the leaving throw opens before the
     // entering throw closes. The bare smooth-tanh model breaks this -- at the
@@ -2795,7 +2795,7 @@ mod diode_physics_tests {
         let (i_deep, g_deep) = diode_eval(&m, -1e6, 27.0, false);
         assert!(i_deep.is_finite() && g_deep.is_finite());
         assert!((i_deep + m.is * 40.0f64.exp()).abs() < 1e-6 * m.is * 40.0f64.exp());
-        // bv = INFINITY keeps the old reverse branch bit-identical.
+        // bv = INFINITY leaves the plain reverse branch untouched.
         let m_inf = DiodeModel::default();
         let (i_rev, g_rev) = diode_eval(&m_inf, -100.0, 27.0, false);
         assert_eq!(i_rev, -m_inf.is);
@@ -2871,11 +2871,11 @@ mod diode_physics_tests {
         assert_eq!(r_on0.to_bits(), r_off0.to_bits());
     }
 
-    /// §3.4 contract: the one toggle the stamps still cannot honor (diode RS
-    ///, deliberately deferred, see `effect_log::DIODE_SERIES_R`) LOGS ONCE
-    /// instead of silently ignoring the parsed model field. The BJT flags
-    /// this test used to read are GONE: cje/cjc/tf/tr and rb/re/rc are real
-    /// stamps now (§3.2), asserted by the toggle tests below.
+    /// §3.4 contract: the one toggle the stamps still cannot honor (diode RS,
+    /// deliberately deferred, see `effect_log::DIODE_SERIES_R`) LOGS ONCE
+    /// instead of silently ignoring the parsed model field. RS is the only
+    /// such field: cje/cjc/tf/tr and rb/re/rc are real stamps (§3.2), asserted
+    /// by the toggle tests below.
     #[test]
     fn dishonored_effects_log_once() {
         let mut c = Circuit::new();
@@ -3208,7 +3208,7 @@ mod bjt_physics_tests {
             "ic ratio {ratio} != q1 ratio {}",
             q_fin / q_inf
         );
-        // VAR = ∞ is the old VAF-only physics exactly: analytic collector
+        // VAR = ∞ reduces to the VAF-only physics exactly: analytic collector
         // current at this iterate (br = 1, sign conventions folded out).
         let is = m_inf.is;
         let cf = is * ((vbe / vt).clamp(-40.0, 40.0).exp() - 1.0);
@@ -3248,9 +3248,9 @@ mod bjt_physics_tests {
         // a limited junction contributes its tangent extrapolated back to the
         // raw voltage: F_b = ib(limited) + gpi·(vbe_raw - vbe_lim)
         //                               + gmu·(vbc_raw - vbc_lim).
-        // With the fix vbc passes UNLIMITED (vbc_lim == 1.0, its term is 0);
-        // the old wiring clamped vbc near 0.95 V, shifting cr/gmu well past
-        // this tolerance.
+        // vbc passes UNLIMITED here (vbc_lim == 1.0, so its term is 0);
+        // clamping vbc near 0.95 V instead shifts cr/gmu well past this
+        // tolerance.
         let (fb, _) = bjt_residual(m, 1.0, 0.0, 0.9);
         let (nvf, nvr) = (m.nf * vt, m.nr * vt);
         let vbe_lim = pnjlim(1.0, 0.9, nvf, vcrit_f);
@@ -3298,11 +3298,11 @@ mod bjt_physics_tests {
 mod mos_channel_tests {
     use super::*;
 
-    /// Bug-hunt r4 #10: the old two-branch channel had a genuine downward id
-    /// jump of the full `i0 = beta·(n·Vt)²·e` at `vgs == vth` (and gm
-    /// collapsed from `i0/(n·Vt)` to 0); the "continuity scale" matched
-    /// nothing. The blended overdrive must give id and gm with NO jump across
-    /// threshold: consecutive fine-sweep deltas bounded by the local slope,
+    /// Bug-hunt r4 #10: a two-branch channel has a genuine downward id jump
+    /// of the full `i0 = beta·(n·Vt)²·e` at `vgs == vth` (with gm collapsing
+    /// from `i0/(n·Vt)` to 0), and a "continuity scale" fixes neither the
+    /// value nor the slope. The blended overdrive must give id and gm with NO
+    /// jump across threshold: fine-sweep deltas bounded by the local slope,
     /// one-sided limits at vth agreeing tightly, and gm equal to the true
     /// derivative d id/d vgs (C1 by finite difference). Swept for a
     /// signal-scale beta AND a power-scale kp, with and without CLM, and for
@@ -3778,8 +3778,8 @@ mod gear2_varstep_tests {
 
     /// R6 #F7 regression, part 2: 2nd-order CONSISTENCY on a non-uniform
     /// grid. A 2nd-order backward-difference stencil must differentiate any
-    /// quadratic exactly; the old uniform-grid coefficients fail this the
-    /// moment r != 1 (that failure IS the silent first-order degradation).
+    /// quadratic exactly; uniform-grid coefficients fail this the moment
+    /// r != 1 (that failure IS the silent first-order degradation).
     /// The companion form under test: dq/dt = g·q_n - (a1·q_{n-1} - a2·q_{n-2}).
     #[test]
     fn nonuniform_stencil_is_exact_on_quadratics() {
@@ -3804,8 +3804,8 @@ mod gear2_varstep_tests {
                 (got - want).abs() <= 1e-9 * want.abs().max(1.0),
                 "stencil not exact on quadratic at h={h}, r={r}: got {got}, want {want}"
             );
-            // And the OLD uniform coefficients really do get this wrong when
-            // r != 1, documents what the fix repairs.
+            // And uniform coefficients really do get this wrong when r != 1,
+            // which is what makes the non-uniform stencil load-bearing.
             let cu = IntegCoeffs::for_step(Integration::Gear2, h, h, false);
             let bad = cu.g * q(tn) - (cu.a1 * q(t1) - cu.a2 * q(t2));
             assert!(

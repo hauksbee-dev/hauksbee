@@ -381,7 +381,8 @@ pub fn run_staged(
             // certificate and telemetry. A rail outcome (note "balanced rail")
             // becomes a Balance record (round-off exact); a signal becomes a
             // Stiff record with its measured sag. Every pinned node joins the
-            // supply-integrity refusal, lore #12 generalized off the rails.
+            // supply-integrity refusal: a pinned node cannot sag, so questions
+            // about its loading have had their physics removed.
             // (Built lazily: most groups have no stiff nominations at all.)
             let l2g: HashMap<u32, u32> =
                 if imposed.is_empty() && (!composed_rails.is_empty() || !signal_local.is_empty()) {
@@ -437,7 +438,7 @@ pub fn run_staged(
                         // Certificate: one measured record per boundary, and
                         // the pinned nodes join the supply-integrity refusal
                         // (questions about their loading beyond sag_v must be
-                        // refused, lore #12 generalized off the rails).
+                        // refused: pinning removed the sag they ask about).
                         let mut refused_nodes = Vec::new();
                         for o in &exec.outcomes {
                             let gnode = NodeId(l2g[&o.node.0]);
@@ -1537,9 +1538,9 @@ mod tests {
 
     /// The bypass-cap exactness gate: a decoupling cap on a balance-torn
     /// rail rides in a boundary-only island whose current enters the
-    /// balance books. This is the shape the old detector REFUSED because
-    /// its island analysis dropped the cap; the refusal is lifted, and this
-    /// gate is the proof the lift is exact rather than merely permitted.
+    /// balance books. A detector whose island analysis drops the cap REFUSES
+    /// this shape; carrying the current instead is what permits it, and this
+    /// gate is the proof that permission is exact.
     /// A pulsed base drive keeps dv/dt nonzero so the cap's current is a
     /// live term, not a settled zero.
     #[test]

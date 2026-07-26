@@ -3,10 +3,9 @@
 //!
 //! Detection ([`crate::decompose::stiff`]) nominates conducted cut nodes that
 //! fragment a fused block cheaply; whether any nominee is actually STIFF is a
-//! measured property, and this module does the measuring, per plan
-//! `02-tearing-architecture.md` §2.2.1. The mechanism generalizes the bespoke
-//! `tarski_decomp` stage A/B, with one simplification the spec's Gauss-Seidel
-//! bullet turns out to imply:
+//! measured property, and this module does the measuring. The mechanism
+//! generalizes the bespoke `tarski_decomp` stage A/B, with one simplification
+//! the Gauss-Seidel structure turns out to imply:
 //!
 //! * **Round 0 (capture with the load attached).** Each candidate's waveform
 //!   is solved on its CAPTURE GROUP: the fragment blocks adjacent to it, with
@@ -353,9 +352,8 @@ pub fn execute_stiff_group_held_capped(
     // output stage sensing a membrane in a non-adjacent block) then relaxes flat
     // on that load-only group, because the generation is pinned/absent. This
     // pre-pass grows each candidate's block set past the load to pull that
-    // generation in, generalizing the bespoke two-seed island walk (the
-    // reference tear's hidden-capture BFS, deleted 2026-07-04 with the rest
-    // of the bespoke path; docs/dev-plans/research/tarski-decomp-deletion-package.md)
+    // generation in, generalizing the reference tear's two-seed island walk
+    // (a hidden-capture BFS seeded from both the drive net and the output net)
     // to an arbitrary decomposition.
     // Two coupling kinds pull a block B (not yet in the set):
     //   (b) SENSE: a device already IN the capture senses a node of B, OR a
@@ -1559,10 +1557,8 @@ fn dead_capture_outcomes(
 /// the captured node, not only its load. Returns cand -> block reps (the
 /// plain-adjacency blocks plus any pulled generator blocks), sorted.
 ///
-/// This generalizes the bespoke two-seed island walk (the reference tear's
-/// hidden-capture BFS, which seeded from BOTH the drive net and the output
-/// net; deleted 2026-07-04 with the rest of the bespoke path, see
-/// `docs/dev-plans/research/tarski-decomp-deletion-package.md`) to an
+/// This generalizes the reference tear's two-seed island walk (a
+/// hidden-capture BFS seeded from BOTH the drive net and the output net) to an
 /// arbitrary conduction decomposition. The walk is
 /// a targeted SENSE-follow, seeded from the devices that DRIVE `c` (its
 /// conductors: the output stage, plus any orphan output comparator whose only

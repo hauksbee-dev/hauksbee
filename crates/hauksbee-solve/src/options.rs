@@ -48,11 +48,10 @@ pub enum Partitioning {
 /// device list per iteration, every matrix write finding its slot by binary
 /// search. It is the bit-for-bit oracle path and the default.
 ///
-/// `Planned` routes assembly through the compiled [`crate::StampPlan`]
-/// (`docs/dev-plans/03-solver-performance.md` §5): the constant backbone
-/// (resistors, source/inductor incidence, per-dt reactive conductances) is
-/// replayed as a flat list of pre-resolved slot writes, and only the
-/// nonlinear / time-varying devices are re-evaluated, writing through
+/// `Planned` routes assembly through the compiled [`crate::StampPlan`]: the
+/// constant backbone (resistors, source/inductor incidence, per-dt reactive
+/// conductances) is replayed as a flat list of pre-resolved slot writes, and
+/// only the nonlinear / time-varying devices are re-evaluated, writing through
 /// pre-resolved per-device slot tables instead of per-write binary searches.
 /// The accumulation ORDER differs from `Interpreted`, so results match to
 /// solver tolerance (reltol/vntol), not bit-for-bit; contexts the plan does
@@ -185,13 +184,12 @@ pub struct DeviceEffects {
     /// driven toward `roff` by a winner-take-all on select margin. This is a
     /// CORRECTNESS fix to the switch model (the bare smooth-tanh model bridges
     /// both throws at mid-band, injecting a weight-independent common-mode
-    /// current; a real SN74LVC1G3157 never does that), promoted from the
-    /// HAUKSBEE_SPDT_BBM env knob to the default per dev-plan 02 section 2.6.
-    /// `false` is the explicit compat switch restoring the bridging model.
+    /// current; a real SN74LVC1G3157 never does that), so it is on by default
+    /// per dev-plan 02 section 2.6. `false` is the explicit compat switch
+    /// restoring the bridging model.
     #[serde(default = "default_true")]
     pub spdt_bbm: bool,
-    /// Break-before-make winner-take-all sharpness (per unit select margin);
-    /// formerly HAUKSBEE_SPDT_BBM_K.
+    /// Break-before-make winner-take-all sharpness (per unit select margin).
     #[serde(default = "default_spdt_bbm_k")]
     pub spdt_bbm_k: f64,
     /// Stamp the switch control-node transconductance (the Newton tangent
@@ -199,13 +197,11 @@ pub struct DeviceEffects {
     /// correctness (the same root is reached without it, with more
     /// iterations); on a torn column whose gate control is a high-Z boundary
     /// node the summed back-coupling throttles the control's slew (measured
-    /// ~15x slower than its RC), so such callers set this `false`. Formerly
-    /// HAUKSBEE_SW_NO_CTRL_GM (inverted).
+    /// ~15x slower than its RC), so such callers set this `false`.
     #[serde(default = "default_true")]
     pub switch_ctrl_gm: bool,
     /// Gain (1/V) of the smooth logistic comparator transfer the STAGED solve
-    /// path uses (every normal solve keeps the discrete bang-bang model);
-    /// formerly HAUKSBEE_CMP_K.
+    /// path uses (every normal solve keeps the discrete bang-bang model).
     #[serde(default = "default_cmp_smooth_gain")]
     pub cmp_smooth_gain: f64,
 }
@@ -236,41 +232,37 @@ impl Default for DeviceEffects {
 }
 
 /// One rung of the robustness ladder: a named permission for an escalation
-/// mechanism the solver may engage when the plain path is not enough. Each
-/// maps one-to-one onto a formerly-`HAUKSBEE_*` env knob (noted per variant),
-/// and each is BIT-IDENTICAL to baseline when not reached: granting a
-/// strategy that never fires changes nothing. That is the plan's invariant
-/// (dev-plan 02 section 2.6) and what the migration gates pin.
+/// mechanism the solver may engage when the plain path is not enough. Each is
+/// BIT-IDENTICAL to baseline when not reached: granting a strategy that never
+/// fires changes nothing. That is the invariant (dev-plan 02 section 2.6) the
+/// gates pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Strategy {
     /// Global Armijo line search in the per-step transient Newton (the
-    /// globalization for traveling mesh overshoots). Formerly
-    /// HAUKSBEE_NEWTON_LINESEARCH; the transient driver also arms it
-    /// automatically as part of [`Strategy::TransientDyn`].
+    /// globalization for traveling mesh overshoots). The transient driver also
+    /// arms it automatically as part of [`Strategy::TransientDyn`].
     LineSearch,
     /// Markowitz dynamic re-pivot fallback when the frozen LU ordering hits a
-    /// singular pivot, in the DC / staged solves. Formerly HAUKSBEE_DC_DYN.
+    /// singular pivot, in the DC / staged solves.
     DynamicPivot,
-    /// Force the dynamic-pivot fallback on for EVERY transient step (the old,
+    /// Force the dynamic-pivot fallback on for EVERY transient step (the blunt,
     /// slower lever kept for stubborn boards; the event-freeze retry arms it
-    /// locally where needed). Formerly HAUKSBEE_TRANSIENT_DYN_GLOBAL.
+    /// locally where needed).
     DynamicPivotEveryStep,
     /// The event-driven staged DC solve: freeze comparator/switch states per
-    /// inner Newton solve, re-derive Gauss-Seidel until consistent. Formerly
-    /// HAUKSBEE_CMP_EVENT.
+    /// inner Newton solve, re-derive Gauss-Seidel until consistent.
     EventFreeze,
-    /// Pseudo-transient continuation rescue in the staged DC ladder. Formerly
-    /// HAUKSBEE_PTC.
+    /// Pseudo-transient continuation rescue in the staged DC ladder.
     Ptc,
     /// Accept a DC iterate whose KCL residual is below
     /// [`SolverOptions::residual_accept_tol`] even though the Newton step
     /// tolerance was never met (the diode-mesh limit-cycle backstop; a sub-nA
-    /// residual IS an operating point). Formerly HAUKSBEE_DC_RESID_ACCEPT.
+    /// residual IS an operating point).
     ResidualAccept,
     /// The stiff-transient bundle the spike-path marches need: staged
     /// regularizers on every step, the per-step event-freeze retry, and the
-    /// Armijo line search. Formerly HAUKSBEE_TRANSIENT_DYN. (A bundle because
-    /// that is exactly what the env var armed; round 2 may split it.)
+    /// Armijo line search. Granted as one unit because stiff marches need all
+    /// three together; a later round may split it.
     TransientDyn,
 }
 
@@ -300,29 +292,27 @@ impl Strategy {
     ];
 }
 
-/// The typed escalation ladder that replaces the `HAUKSBEE_*` control-flow
-/// env vars (dev-plan 02 section 2.6). Round-1 semantics: MEMBERSHIP is the
-/// permission, consulted by the existing solve paths exactly where the env
-/// reads used to sit; the insertion order documents the intended escalation
-/// order (round 2, the partitioner selecting ladder aggressiveness per
-/// island, builds on that). `Copy` because `SolverOptions` is copied through
+/// The typed escalation ladder: the explicit, per-run control-flow permission
+/// set (dev-plan 02 section 2.6). MEMBERSHIP is the permission, consulted by
+/// the solve paths at each escalation point; the insertion order documents the
+/// intended escalation order (the partitioner selecting ladder aggressiveness
+/// per island builds on that). `Copy` because `SolverOptions` is copied through
 /// every orchestration layer, which is also how the ladder reaches nested
-/// sub-solves: the job the process-global env vars used to do covertly.
+/// sub-solves without any process-global state.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct RobustnessLadder {
     steps: [Option<Strategy>; 8],
 }
 
 impl RobustnessLadder {
-    /// The empty ladder: the plain solver, bit-identical to the classic
-    /// no-env-vars-set behavior. This is the default.
+    /// The empty ladder: the plain solver with no escalation granted. This is
+    /// the default.
     pub const fn none() -> Self {
         RobustnessLadder { steps: [None; 8] }
     }
 
     /// The full ladder in canonical order: every escalation the solver has.
-    /// This is the substrate the flagship spike paths run on (the exact set
-    /// `tarski_decomp::solve_inference` used to arm via env).
+    /// This is the substrate the flagship spike paths run on.
     pub fn full() -> Self {
         let mut l = RobustnessLadder::none();
         for s in Strategy::ALL {
@@ -381,16 +371,14 @@ pub struct EventRetryTuning {
     /// Inner Newton budget per frozen solve. `None` uses
     /// `max(max_newton, 400)` (the frozen inner circuit converges linearly in
     /// its tail, so it legitimately needs more than the outer budget).
-    /// Formerly HAUKSBEE_TRAN_INNER_MAXIT.
     pub inner_max_newton: Option<usize>,
     /// Switch-flip budget per Gauss-Seidel pass: large enough to flip a
     /// neuron's whole gate fan-out in one pass, small enough to stop discrete
-    /// thrash. Formerly HAUKSBEE_TRAN_FLIP_BUDGET.
+    /// thrash.
     pub flip_budget: usize,
     /// Try the SMOOTH-comparator retry mode before the frozen mode (the
     /// membrane-crosses-up FIRE regime prefers smooth, the refractory reset
     /// prefers frozen; both are always tried, this is only the order).
-    /// Formerly HAUKSBEE_TRAN_CMP_SMOOTH.
     pub smooth_comparator_first: bool,
 }
 
@@ -452,10 +440,10 @@ pub struct SolverOptions {
     pub parallel: ParallelPolicy,
     /// Fidelity granularity in `[0, 1]`, consumed by the engine layer to scale
     /// tolerances and physics fidelity (1.0 = full). The partitioned path's
-    /// relaxation sweep count is no longer derived from it: since S4 the
-    /// inter-island exchange iterates until the boundary change relaxes under
-    /// the reltol/vntol convention (which granularity already loosens through
-    /// the tolerances themselves), replacing the old fixed 3/2/1 sweep counts.
+    /// relaxation sweep count is NOT derived from it: the inter-island exchange
+    /// iterates until the boundary change relaxes under the reltol/vntol
+    /// convention, which granularity already loosens through the tolerances
+    /// themselves.
     #[serde(default = "default_granularity")]
     pub granularity: f64,
     /// The robustness escalations this run may use. Empty (the default) is the
@@ -466,7 +454,7 @@ pub struct SolverOptions {
     #[serde(default)]
     pub event_retry: EventRetryTuning,
     /// KCL-residual bar (A) for [`Strategy::ResidualAccept`]; ignored unless
-    /// that strategy is granted. Formerly HAUKSBEE_DC_RESID_TOL.
+    /// that strategy is granted.
     #[serde(default = "default_residual_accept_tol")]
     pub residual_accept_tol: f64,
 }

@@ -21,7 +21,7 @@
 //! in, and therefore of thread count and scheduling when the compute phase is
 //! parallelized ([`crate::ParallelPolicy`]). Sweeps repeat until the largest
 //! weighted boundary change drops below the Newton tolerance convention
-//! (reltol/vntol), replacing the old fixed 3/2/1 counts; a coupling that
+//! (reltol/vntol) rather than a fixed sweep count; a coupling that
 //! cannot converge within [`COUPLING_SWEEP_CAP`] sweeps fails the step loudly
 //! (see [`PartitionedTransient::relax_step`]) instead of accepting a
 //! half-relaxed exchange.
@@ -131,8 +131,8 @@ const COUPLING_SWEEP_CAP: usize = 16;
 /// many NONLINEAR islands exist. Measured on the shunt-fed mirror arrays
 /// (the graded boards, plan §9.1): a warm per-block re-solve at quiescence is
 /// sub-microsecond, so the 24-block array LOSES to pool coordination at any
-/// worker count, the 90-block array breaks even, and the 240-block array wins
-///; the threshold sits between 24 and 90. Boards whose islands carry real
+/// worker count, the 90-block array breaks even, and the 240-block array wins;
+/// the threshold sits between 24 and 90. Boards whose islands carry real
 /// per-step Newton work clear the per-task overhead far earlier; explicit
 /// `Threads(n)` bypasses this gate for them.
 const PAR_MIN_NONLINEAR_ISLANDS: usize = 32;
@@ -696,8 +696,9 @@ impl PartitionedTransient {
     /// Advance one step on the tear-free path: the exact time-advance sweep,
     /// then, only when the partition carries real inter-island coupling,
     /// convergence-gated relaxation sweeps until the boundary exchange settles
-    /// under the reltol/vntol convention (replacing the old fixed 3/2/1
-    /// counts, which could silently under- or over-relax).
+    /// under the reltol/vntol convention. A fixed sweep count is what that
+    /// gate replaces: it silently under- or over-relaxes depending on the
+    /// board.
     ///
     /// The divergence guard mirrors the tear-refusal doctrine: a coupling that
     /// cannot prove itself within [`COUPLING_SWEEP_CAP`] sweeps is refused
@@ -2375,10 +2376,10 @@ mod tests {
 
     /// Bug-hunt (solver r2 #4): a linear island's exact ZOH advance must see
     /// the CURRENT boundary input on every relaxation sweep, not the seed
-    /// exchange's. `linear_phase_a` used to call `li.step` only on the first
-    /// sweep; later sweeps refreshed the Su·u reconstruction term but the
-    /// Ad·x + Bd·u state advance stayed frozen at the first sweep's stale u,
-    /// and the committed state carried that error into every subsequent step.
+    /// exchange's. Calling `li.step` on the first sweep alone leaves later
+    /// sweeps refreshing the Su·u reconstruction term while the Ad·x + Bd·u
+    /// state advance stays frozen at the first sweep's stale u, and the
+    /// committed state carries that error into every subsequent step.
     ///
     /// The fixture makes the defect ORDERS OF MAGNITUDE, not fractions: a
     /// VCVS island A owns `s` (pinned to `V(vin)`, so island B's current draw
@@ -2394,8 +2395,8 @@ mod tests {
     /// absolute, measured 9.9e-3), a 1e-4 gate separates them by two orders
     /// each way. (An Auto-vs-Off differential can't gate this tightly: with a
     /// smoothly varying input both the trapezoidal oracle and the end-of-step
-    /// ZOH carry O(dt) input-placement error of the same scale as the defect
-    ///, measured 3.8e-3 fixed vs 5.2e-3 broken on an RC feedback fixture,
+    /// ZOH carry O(dt) input-placement error of the same scale as the defect,
+    /// measured 3.8e-3 fixed vs 5.2e-3 broken on an RC feedback fixture,
     /// so the analytic oracle is the honest referee.)
     #[test]
     fn coupled_linear_island_readvances_with_fresh_boundary_input() {
