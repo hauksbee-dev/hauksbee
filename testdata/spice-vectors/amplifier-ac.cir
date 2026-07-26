@@ -1,5 +1,5 @@
 .title KiCad schematic
-.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/amplifier-ac/2n2222.model"
+.include "models/2n2222.model"
 .ac dec 100 10 1Meg
 C3 Net-_C3-Pad1_ GND 10n
 R12 Net-_L2-Pad1_ Net-_Q1-E_ 100

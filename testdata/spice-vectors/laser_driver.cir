@@ -1,7 +1,7 @@
 .title KiCad schematic
-.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/laser_driver/ad8009.lib"
-.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/laser_driver/fzt1049a.lib"
-.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/laser_driver/laser.lib"
+.include "models/ad8009.lib"
+.include "models/fzt1049a.lib"
+.include "models/laser.lib"
 .tran 10p 150n
 R2 Net-_U1-+_ /in 160
 R1 Net-_U1--_ GND 220
