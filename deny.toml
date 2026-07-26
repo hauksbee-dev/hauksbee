@@ -13,10 +13,13 @@ yanked = "deny"
 # a link to whatever would let it be removed again.
 ignore = []
 
-[licences]
+[licenses]
 version = 2
 # Permissive licences, plus the ones the Rust ecosystem uses widely and that
-# impose no obligation on a binary we ship.
+# impose no obligation on a binary we ship. The table key is the American
+# spelling because that is what cargo-deny reads; a misspelled section is
+# silently ignored, which would leave this file looking enforced while checking
+# nothing.
 allow = [
     "MIT",
     "Apache-2.0",
