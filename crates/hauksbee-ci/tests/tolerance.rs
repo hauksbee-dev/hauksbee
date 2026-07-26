@@ -70,7 +70,10 @@ max = 2.6
 
 /// Write the board + a spec into a per-test temp dir and load the spec.
 fn write_spec(test: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("hauksbee_ci_tolerance_{test}"));
+    let dir = std::env::temp_dir().join(format!(
+        "hauksbee_ci_tolerance_{test}_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let board = dir.join("divider.kicad_pcb");
     std::fs::write(&board, BOARD).unwrap();

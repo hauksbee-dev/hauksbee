@@ -41,7 +41,7 @@ fn require_corpus() -> bool {
 
 /// Write a spec body to a temp file and run it.
 fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
-    let dir = std::env::temp_dir().join("hauksbee_ci_powerup_fuzz");
+    let dir = std::env::temp_dir().join(format!("hauksbee_ci_powerup_fuzz_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
     std::fs::write(&p, body).unwrap();
