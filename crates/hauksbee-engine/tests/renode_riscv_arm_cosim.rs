@@ -23,7 +23,7 @@
 
 use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, RenodeBackend, RenodeConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 fn demo_elf(name: &str) -> Option<PathBuf> {
@@ -39,7 +39,7 @@ fn demo_elf(name: &str) -> Option<PathBuf> {
 
 /// Boot `elf` under `config` through the RenodeBackend and collect UART for a
 /// short window. Returns the UART text.
-fn boot_and_collect_uart(config: RenodeConfig, elf: &PathBuf) -> String {
+fn boot_and_collect_uart(config: RenodeConfig, elf: &Path) -> String {
     let mut be = RenodeBackend::new(config).expect("spawn Renode backend");
     be.load_firmware(elf).expect("load firmware ELF");
     let uart = Arc::new(Mutex::new(Vec::<u8>::new()));

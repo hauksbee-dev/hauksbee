@@ -35,3 +35,6 @@ tokio = { version = "1.52.3", features = ["full"] }
 # body: ReceiverStream adapts the worker's mpsc channel into the axum Body.
 tokio-stream = "0.1"
 tower-http = { version = "0.6.11", features = ["fs", "compression-gzip"] }
+
+[lints]
+workspace = true

@@ -5717,6 +5717,11 @@ mod tests {
 
     /// Zero-dependency expressions are legal (a constant / time-only source).
     #[test]
+    // The 6.28 here is the literal in the deck under test (`sin(6.28*time)`),
+    // not a rounded tau. The assertion has to evaluate exactly what the parser
+    // was given, so substituting the real constant would check a different
+    // expression than the one being parsed.
+    #[allow(clippy::approx_constant)]
     fn behavioral_constant_and_time_only() {
         let net =
             "b\nB1 out 0 V={3.3}\nB2 0 d I={0.001*sin(6.28*time)}\nRL out 0 1k\nRd d 0 1k\n.end\n";

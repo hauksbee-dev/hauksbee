@@ -51,6 +51,11 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                             // `&amp;`/`&lt;`/`&#38;` in an Eagle net name, value,
                             // or reference would be stored literally. Unescape it,
                             // falling back to the raw bytes only on a decode error.
+                            // quick-xml deprecates this in favour of `normalized_value`, which takes an
+                            // `XmlVersion` the crate does not export, so the replacement is not
+                            // callable from outside quick-xml. Staying on the deprecated call
+                            // until upstream makes the successor reachable.
+                            #[allow(deprecated)]
                             let value = a
                                 .unescape_value()
                                 .map(|c| c.into_owned())

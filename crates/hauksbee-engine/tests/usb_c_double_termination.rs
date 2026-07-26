@@ -21,7 +21,7 @@
 //! Corpus-gated like the other corpus tests: absent corpus skips, but
 //! HAUKSBEE_REQUIRE_CORPUS=1 makes absence a hard fail.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hauksbee_engine::checks::usb_c::audit_cc_termination;
 use hauksbee_extract::ExtractedBoard;
@@ -41,7 +41,7 @@ fn famous_root() -> Option<PathBuf> {
     None
 }
 
-fn load(root: &PathBuf, rel: &str) -> ExtractedBoard {
+fn load(root: &Path, rel: &str) -> ExtractedBoard {
     let path = root.join(rel);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
     if rel.ends_with(".kicad_sch") {

@@ -425,20 +425,6 @@ pub fn extract_sink_termination(board: &ExtractedBoard) -> Option<SinkTerminatio
     })
 }
 
-/// The primary GND net id (the net named GND / GNDPWR), if any.
-///
-/// Kept for the single-ground classifier path. The CC Rd audit uses
-/// [`ground_net_ids`] instead, because a USB-C Rd can legitimately return to a
-/// secondary ground (GNDA / DGND / a split shield ground) rather than the one
-/// net literally named "GND".
-fn gnd_net_id(board: &ExtractedBoard) -> Option<i64> {
-    board
-        .nets
-        .iter()
-        .find(|n| n.name.eq_ignore_ascii_case("GND") || n.name.eq_ignore_ascii_case("GNDPWR"))
-        .map(|n| n.id)
-}
-
 /// Whether a net name denotes a ground reference. Recognises the common
 /// ground-family names a USB-C Rd can return to: GND, the analog/digital splits
 /// (GNDA/AGND, GNDD/DGND), power/earth grounds (GNDPWR/PGND/EGND), shield/USB
@@ -592,15 +578,6 @@ fn all_receptacle_cc_nets(board: &ExtractedBoard) -> Vec<ReceptacleNets> {
     // describe two different physical connectors.
     out.sort_by(|a, b| b.0.cmp(&a.0));
     out.into_iter().map(|(_, rec)| rec).collect()
-}
-
-/// Parallel resistance (ohms) of every two-pin resistor that connects `from_net`
-/// to `gnd_net`. `None` if no such resistor exists (or GND is unknown).
-fn net_resistance_to(board: &ExtractedBoard, from_net: i64, gnd_net: Option<i64>) -> Option<f64> {
-    let gnd = gnd_net?;
-    let mut set = std::collections::HashSet::new();
-    set.insert(gnd);
-    net_resistance_to_grounds(board, from_net, &set)
 }
 
 /// Parallel resistance (ohms) of every two-pin resistor that bridges `from_net`
