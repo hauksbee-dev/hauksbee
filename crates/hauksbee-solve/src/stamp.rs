@@ -2440,26 +2440,55 @@ fn stamp_opamp<S: StampSink>(
     let vp = ctx.v(inp);
     let vn = ctx.v(inn);
     let vref = reference.map(|n| ctx.v(n)).unwrap_or(0.0);
-    let target = (vref + gain * (vp - vn)).clamp(rail_lo, rail_hi);
+    let raw = vref + gain * (vp - vn);
+    let target = raw.clamp(rail_lo, rail_hi);
     // Linearize: out = target + gain*(d vp - d vn) within rails.
     let in_rail = target > rail_lo && target < rail_hi;
+    // Rail-crossing limiting, the op-amp's analogue of pnjlim. When the raw
+    // (unclamped) target leaps from one side of the rail band clear to the
+    // other between Newton iterates, the iterate has jumped OVER the linear
+    // region, whose width in input volts is only (rail_hi-rail_lo)/gain. With
+    // the saturated flat stamp on both sides, a follower (out tied to inn)
+    // driven near a rail then degenerates to the Picard map
+    // v_out <- clamp(gain*(vp - v_out)), which flips rail to rail forever and
+    // the solve never converges (the stormduino LM358 on /D13 under GPIO
+    // drive). The cure is the same as pnjlim's: evaluate the device on the
+    // segment the iterate skipped, here the interior linear segment, by
+    // keeping the raw target and the input tangents. Inside the band the
+    // segment is one straight line, so this is an exact linearization, not a
+    // model change: any point the solve CONVERGES to has raw_prev == raw,
+    // which cannot cross, so converged results are untouched and both the
+    // in-rail and the steadily-saturated stamps stay bit-identical.
+    let crossed = !in_rail && {
+        let vp0 = ctx.v_prev(inp);
+        let vn0 = ctx.v_prev(inn);
+        let vref0 = reference.map(|n| ctx.v_prev(n)).unwrap_or(0.0);
+        let raw0 = vref0 + gain * (vp0 - vn0);
+        (raw >= rail_hi && raw0 <= rail_lo) || (raw <= rail_lo && raw0 >= rail_hi)
+    };
+    // On a crossing the EMF is the raw target: the RHS then cancels against
+    // the tangent terms so the stamped row is exactly out = vref+gain*(vp-vn)
+    // at the NEXT iterate, the interior segment itself. Feeding the clamped
+    // target with live tangents instead would stamp the segment offset by
+    // (clamp(raw)-raw), volts to megavolts of error at the crossing point.
+    let lin_target = if crossed { raw } else { target };
     let dynamics = if ctx.dc {
         None
     } else {
         let v_prev = ctx.state.x1[id.0 as usize];
-        opamp_transient_output(v_prev, target, pole_hz, slew, ctx.coeffs.dt)
+        opamp_transient_output(v_prev, lin_target, pole_hz, slew, ctx.coeffs.dt)
     };
     // `dscale` scales every input-coupling tangent: the linearized output is
     // v_out(op) + dscale * d(target), so the classic couplings (∂target/∂vp =
     // gain, ∂/∂vn = -gain, ∂/∂vref = 1) each pick up the same factor. The
     // no-dynamics path keeps dscale = 1 and emf = target: bit-identical to
     // the classic instantaneous stamp.
-    let (emf, dscale) = dynamics.unwrap_or((target, 1.0));
+    let (emf, dscale) = dynamics.unwrap_or((lin_target, 1.0));
     let oi = ctx.layout.node(out);
     if let Some(oi) = oi {
         sink.g(oi, oi, gout);
         sink.i(oi, gout * emf);
-        if in_rail && dscale != 0.0 {
+        if (in_rail || crossed) && dscale != 0.0 {
             if let Some(ri) = reference.and_then(|n| ctx.layout.node(n)) {
                 sink.g(oi, ri, -gout * dscale);
                 sink.i(oi, -(gout * dscale * vref));
