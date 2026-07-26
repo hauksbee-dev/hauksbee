@@ -2,9 +2,9 @@ $ scripts/doctor.sh
 ==> hauksbee environment doctor
 
 ==> Required (the toolchain that builds hauksbee)
-  ok cargo  /Users/hauksbee-user/.cargo/bin/cargo
+  ok cargo  <home>
          unlocks: build + install the hauksbee / hauksbee-ci binaries (https://rustup.rs)
-  ok rustc  /Users/hauksbee-user/.cargo/bin/rustc
+  ok rustc  <home>
          unlocks: the Rust compiler cargo drives
       hauksbee not yet on PATH (run scripts/install.sh)
       hauksbee-ci not yet on PATH (run scripts/install.sh)
