@@ -195,7 +195,14 @@ pub fn execute_stiff_group(
     tstop: f64,
     refusal_report: &mut Vec<StiffOutcome>,
 ) -> Result<Option<StiffExecution>, String> {
-    execute_stiff_group_held(sub, candidates, &HashMap::new(), opts, tstop, refusal_report)
+    execute_stiff_group_held(
+        sub,
+        candidates,
+        &HashMap::new(),
+        opts,
+        tstop,
+        refusal_report,
+    )
 }
 
 /// [`execute_stiff_group`] with a set of EXTRA nodes HELD (not relaxed): each
@@ -261,8 +268,10 @@ pub fn execute_stiff_group_held_capped(
                 islands.insert(i);
             }
             None => {
-                refusal_report
-                    .extend(out_of_scope_outcomes(candidates, "a candidate nobody conducts"));
+                refusal_report.extend(out_of_scope_outcomes(
+                    candidates,
+                    "a candidate nobody conducts",
+                ));
                 return Ok(None);
             }
         }
@@ -280,9 +289,7 @@ pub fn execute_stiff_group_held_capped(
     // dead-membrane bug returns wearing a stiff certificate).
     let companions: Vec<DeviceId> = (0..sub.devices.len() as u32)
         .map(DeviceId)
-        .filter(|id| {
-            !graph.islands[island].contains(id)
-        })
+        .filter(|id| !graph.islands[island].contains(id))
         .collect();
 
     let n_nodes = sub.max_node() as usize;
@@ -373,7 +380,10 @@ pub fn execute_stiff_group_held_capped(
         .iter()
         .map(|c| {
             let base = adjacent.get(&c.0).map(|v| v.len()).unwrap_or(0);
-            (c.0, capture_blocks.get(&c.0).map(|v| v.len()).unwrap_or(base) - base)
+            (
+                c.0,
+                capture_blocks.get(&c.0).map(|v| v.len()).unwrap_or(base) - base,
+            )
         })
         .collect();
     if std::env::var("HAUKSBEE_CAPTURE_DEBUG").is_ok() {
@@ -396,7 +406,12 @@ pub fn execute_stiff_group_held_capped(
             if grew.get(&c.0).copied().unwrap_or(0) == 0 {
                 continue;
             }
-            let adj: HashSet<usize> = adjacent.get(&c.0).cloned().unwrap_or_default().into_iter().collect();
+            let adj: HashSet<usize> = adjacent
+                .get(&c.0)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
             let pulled: Vec<(usize, usize, String)> = capture_blocks[&c.0]
                 .iter()
                 .filter(|b| !adj.contains(b))
@@ -445,7 +460,12 @@ pub fn execute_stiff_group_held_capped(
             .collect();
         let plain: Vec<HashSet<usize>> = candidates
             .iter()
-            .map(|c| adjacent.get(&c.0).map(|v| v.iter().copied().collect()).unwrap_or_default())
+            .map(|c| {
+                adjacent
+                    .get(&c.0)
+                    .map(|v| v.iter().copied().collect())
+                    .unwrap_or_default()
+            })
             .collect();
         let mut parent: Vec<usize> = (0..n).collect();
         fn find(parent: &mut [usize], mut i: usize) -> usize {
@@ -502,7 +522,11 @@ pub fn execute_stiff_group_held_capped(
             candidates.len(),
             clusters
                 .iter()
-                .map(|cl| (sub.node_name(cl[0]), cl.len(), cluster_blocks[&cl[0].0].len()))
+                .map(|cl| (
+                    sub.node_name(cl[0]),
+                    cl.len(),
+                    cluster_blocks[&cl[0].0].len()
+                ))
                 .collect::<Vec<_>>()
         );
     }
@@ -530,8 +554,14 @@ pub fn execute_stiff_group_held_capped(
                 // Pins default to Dc(0.0): exactly the zeros bootstrap, except
                 // held rails, which start at their train's t=0 estimate.
                 let (mut cap, g2l) = capture_circuit(
-                    sub, &frag, &cluster_blocks[&cluster[0].0], &members, &conducts_cand,
-                    &companions, candidates, held,
+                    sub,
+                    &frag,
+                    &cluster_blocks[&cluster[0].0],
+                    &members,
+                    &conducts_cand,
+                    &companions,
+                    candidates,
+                    held,
                 );
                 for dev in cap.devices.iter_mut() {
                     if let Device::Vsource { name, kind, .. } = dev {
@@ -582,12 +612,19 @@ pub fn execute_stiff_group_held_capped(
     // bare rest values.
     let rest_trains: HashMap<u32, Vec<f64>> = candidates
         .iter()
-        .map(|c| (c.0, vec![rest.get(&c.0).copied().unwrap_or(0.0); grid.len()]))
+        .map(|c| {
+            (
+                c.0,
+                vec![rest.get(&c.0).copied().unwrap_or(0.0); grid.len()],
+            )
+        })
         .collect();
     for cluster in &clusters {
         let rep = cluster[0];
         let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
-        let cluster_grown = cluster.iter().any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
+        let cluster_grown = cluster
+            .iter()
+            .any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
         // Merge: already-captured candidates by train, the rest by rest.
         let mut boundary = rest_trains.clone();
         for (k, v) in &trains {
@@ -595,12 +632,31 @@ pub fn execute_stiff_group_held_capped(
         }
         let t_solve = std::time::Instant::now();
         let wf = match solve_capture(
-            sub, &frag, &cluster_blocks[&rep.0], &members, &conducts_cand, &companions, rep,
-            candidates, &rest, held, Some((&boundary, &grid)), None, cluster_grown, opts, tstop,
+            sub,
+            &frag,
+            &cluster_blocks[&rep.0],
+            &members,
+            &conducts_cand,
+            &companions,
+            rep,
+            candidates,
+            &rest,
+            held,
+            Some((&boundary, &grid)),
+            None,
+            cluster_grown,
+            opts,
+            tstop,
         ) {
             Ok(wf) => wf,
             Err(_) => {
-                refusal_report.extend(dead_capture_outcomes(candidates, rep, &rest, opts.reltol, bootstrapped));
+                refusal_report.extend(dead_capture_outcomes(
+                    candidates,
+                    rep,
+                    &rest,
+                    opts.reltol,
+                    bootstrapped,
+                ));
                 return Ok(None);
             }
         };
@@ -644,13 +700,26 @@ pub fn execute_stiff_group_held_capped(
         for cluster in &clusters {
             let rep = cluster[0];
             let members: HashSet<u32> = cluster.iter().map(|c| c.0).collect();
-            let cluster_grown =
-                cluster.iter().any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
+            let cluster_grown = cluster
+                .iter()
+                .any(|c| grew.get(&c.0).copied().unwrap_or(0) > 0);
             let t_solve = std::time::Instant::now();
             let wf = match solve_capture(
-                sub, &frag, &cluster_blocks[&rep.0], &members, &conducts_cand, &companions, rep,
-                candidates, &rest, held, Some((&trains, &grid)), runs.get(&rep.0), cluster_grown,
-                opts, tstop,
+                sub,
+                &frag,
+                &cluster_blocks[&rep.0],
+                &members,
+                &conducts_cand,
+                &companions,
+                rep,
+                candidates,
+                &rest,
+                held,
+                Some((&trains, &grid)),
+                runs.get(&rep.0),
+                cluster_grown,
+                opts,
+                tstop,
             ) {
                 Ok(wf) => wf,
                 Err(_) => {
@@ -946,7 +1015,12 @@ pub fn execute_composed_group(
     // Signal trains, rail trains (constant seeds to start).
     let mut signal_trains: HashMap<u32, Vec<f64>> = signal_cuts
         .iter()
-        .map(|s| (s.0, vec![rest.get(&s.0).copied().unwrap_or(0.0); grid.len()]))
+        .map(|s| {
+            (
+                s.0,
+                vec![rest.get(&s.0).copied().unwrap_or(0.0); grid.len()],
+            )
+        })
         .collect();
     let mut rail_trains: HashMap<u32, Vec<f64>> = rails
         .iter()
@@ -998,7 +1072,13 @@ pub fn execute_composed_group(
         // 1. Rail balance on the whole group (exact) when it fragments.
         if whole_group_balances {
             let rail_wf = match solve_composed(
-                sub, rails, signal_cuts, &signal_trains, &grid, &sub_opts, tstop,
+                sub,
+                rails,
+                signal_cuts,
+                &signal_trains,
+                &grid,
+                &sub_opts,
+                tstop,
             ) {
                 Ok(Some(wf)) => wf,
                 other => {
@@ -1006,7 +1086,13 @@ pub fn execute_composed_group(
                         eprintln!("COMPOSED rail balance died: {:?}", other.as_ref().err());
                     }
                     refusal_report.extend(composed_refusal_outcomes(
-                        signal_cuts, rails, rail_kind, None, &rest, &rail_vnom, reltol,
+                        signal_cuts,
+                        rails,
+                        rail_kind,
+                        None,
+                        &rest,
+                        &rail_vnom,
+                        reltol,
                         bootstrapped,
                     ));
                     return Ok(None);
@@ -1029,7 +1115,12 @@ pub fn execute_composed_group(
         }
         let mut inner_refusals = Vec::new();
         let exec = match execute_stiff_group_held(
-            sub, signal_cuts, &rail_trains, &sub_opts, tstop, &mut inner_refusals,
+            sub,
+            signal_cuts,
+            &rail_trains,
+            &sub_opts,
+            tstop,
+            &mut inner_refusals,
         )? {
             Some(exec) => exec,
             None => {
@@ -1059,7 +1150,11 @@ pub fn execute_composed_group(
             let new: Vec<f64> = grid
                 .iter()
                 .map(|&t| {
-                    lerp_at(&exec.waveforms.time, &exec.waveforms.node_voltages[c.0 as usize], t)
+                    lerp_at(
+                        &exec.waveforms.time,
+                        &exec.waveforms.node_voltages[c.0 as usize],
+                        t,
+                    )
                 })
                 .collect();
             let old = &signal_trains[&c.0];
@@ -1093,7 +1188,14 @@ pub fn execute_composed_group(
 
     if !outer_converged && !signal_cuts.is_empty() {
         refusal_report.extend(composed_refusal_outcomes(
-            signal_cuts, rails, rail_kind, None, &rest, &rail_vnom, reltol, bootstrapped,
+            signal_cuts,
+            rails,
+            rail_kind,
+            None,
+            &rest,
+            &rail_vnom,
+            reltol,
+            bootstrapped,
         ));
         return Ok(None);
     }
@@ -1108,7 +1210,13 @@ pub fn execute_composed_group(
     if whole_group_balances {
         // One exact whole-group rail-balance solve at the converged trains.
         let full = match solve_composed(
-            sub, rails, signal_cuts, &signal_trains, &grid, &sub_opts, tstop,
+            sub,
+            rails,
+            signal_cuts,
+            &signal_trains,
+            &grid,
+            &sub_opts,
+            tstop,
         ) {
             Ok(Some(wf)) => wf,
             other => {
@@ -1116,7 +1224,13 @@ pub fn execute_composed_group(
                     eprintln!("COMPOSED final assembly died: {:?}", other.as_ref().err());
                 }
                 refusal_report.extend(composed_refusal_outcomes(
-                    signal_cuts, rails, rail_kind, None, &rest, &rail_vnom, reltol,
+                    signal_cuts,
+                    rails,
+                    rail_kind,
+                    None,
+                    &rest,
+                    &rail_vnom,
+                    reltol,
                     bootstrapped,
                 ));
                 return Ok(None);
@@ -1127,7 +1241,8 @@ pub fn execute_composed_group(
                 continue;
             }
             for (k, &t) in grid.iter().enumerate() {
-                waveforms.node_voltages[node][k] = lerp_at(&full.time, &full.node_voltages[node], t);
+                waveforms.node_voltages[node][k] =
+                    lerp_at(&full.time, &full.node_voltages[node], t);
             }
         }
     } else {
@@ -1137,7 +1252,8 @@ pub fn execute_composed_group(
         if let Some(wf) = held_waveforms {
             for node in 1..n_out.min(wf.node_voltages.len()) {
                 for (k, &t) in grid.iter().enumerate() {
-                    waveforms.node_voltages[node][k] = lerp_at(&wf.time, &wf.node_voltages[node], t);
+                    waveforms.node_voltages[node][k] =
+                        lerp_at(&wf.time, &wf.node_voltages[node], t);
                 }
             }
         } else {
@@ -1420,7 +1536,11 @@ fn dead_capture_outcomes(
             StiffOutcome {
                 node: *c,
                 kind: BoundaryKind::Signal,
-                sag_v: if c.0 == dead.0 { f64::INFINITY } else { f64::NAN },
+                sag_v: if c.0 == dead.0 {
+                    f64::INFINITY
+                } else {
+                    f64::NAN
+                },
                 tol_v: 10.0 * reltol * vnom,
                 accepted: false,
                 bootstrapped,
@@ -1493,7 +1613,12 @@ fn grow_capture_blocks(
 
     let mut out: HashMap<u32, Vec<usize>> = HashMap::new();
     for c in candidates {
-        let mut set: BTreeSet<usize> = adjacent.get(&c.0).cloned().unwrap_or_default().into_iter().collect();
+        let mut set: BTreeSet<usize> = adjacent
+            .get(&c.0)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         // Frontier devices: every device already in c's plain capture, i.e. the
         // adjacency blocks' members plus everything that conducts c (the orphan
         // conductors whose terminals are all bound). The output stage that
@@ -1684,8 +1809,16 @@ fn solve_capture(
     opts: &SolverOptions,
     tstop: f64,
 ) -> Result<CaptureRun, String> {
-    let (mut cap, g2l) =
-        capture_circuit(sub, frag, blocks, members, conducts_cand, companions, candidates, held);
+    let (mut cap, g2l) = capture_circuit(
+        sub,
+        frag,
+        blocks,
+        members,
+        conducts_cand,
+        companions,
+        candidates,
+        held,
+    );
     // Set the pins: PWL trains when supplied, else the DC rest values.
     for dev in cap.devices.iter_mut() {
         if let Device::Vsource { name, kind, .. } = dev {
@@ -1917,12 +2050,7 @@ fn solve_capture(
 }
 
 /// Sample one (global) node from a capture run onto the uniform grid.
-fn sample_node(
-    wf: &Waveforms,
-    g2l: &HashMap<u32, u32>,
-    node: NodeId,
-    grid: &[f64],
-) -> Vec<f64> {
+fn sample_node(wf: &Waveforms, g2l: &HashMap<u32, u32>, node: NodeId, grid: &[f64]) -> Vec<f64> {
     match g2l.get(&node.0) {
         Some(&ln) => grid
             .iter()
@@ -2100,11 +2228,7 @@ mod tests {
             .unwrap_or_else(|| panic!("stiff boundaries must be accepted: {refusals:?}"));
         assert!(refusals.is_empty());
         assert_eq!(exec.outcomes.len(), 2);
-        let max_sag = exec
-            .outcomes
-            .iter()
-            .map(|o| o.sag_v)
-            .fold(0.0f64, f64::max);
+        let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
         for o in &exec.outcomes {
             assert!(o.accepted, "{o:?}");
             assert!(!o.bootstrapped, "whole-group DC converges here");
@@ -2153,11 +2277,7 @@ mod tests {
         let exec = execute_stiff_group(&c, &[x, y], &opts, tstop, &mut refusals)
             .expect("mechanical success")
             .unwrap_or_else(|| panic!("contracting boundaries must converge: {refusals:?}"));
-        let max_sag = exec
-            .outcomes
-            .iter()
-            .map(|o| o.sag_v)
-            .fold(0.0f64, f64::max);
+        let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
         let mut mono_opts = opts;
         mono_opts.partitioning = Partitioning::Off;
         let mono = Transient::new(mono_opts).run(&c, tstop).expect("monolith");
@@ -2381,9 +2501,17 @@ mod tests {
             extra_loads: Vec::new(),
         }];
         let mut refusals = Vec::new();
-        let exec = execute_composed_group(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop, &mut refusals)
-            .expect("mechanical success")
-            .unwrap_or_else(|| panic!("composed execution must succeed: {refusals:?}"));
+        let exec = execute_composed_group(
+            &c,
+            &[mid],
+            &rails,
+            &ComposedPolicy::default(),
+            &opts,
+            tstop,
+            &mut refusals,
+        )
+        .expect("mechanical success")
+        .unwrap_or_else(|| panic!("composed execution must succeed: {refusals:?}"));
 
         // Balance + Stiff outcomes both present.
         assert!(
@@ -2482,11 +2610,19 @@ mod tests {
         }];
         let run = || {
             let mut refusals = Vec::new();
-            let exec = execute_composed_group(&c, &[mid], &rails, &ComposedPolicy::default(), &opts, tstop, &mut refusals)
-                .expect("mechanical success")
-                .unwrap_or_else(|| {
-                    panic!("composed execution must run via the seed fallback: {refusals:?}")
-                });
+            let exec = execute_composed_group(
+                &c,
+                &[mid],
+                &rails,
+                &ComposedPolicy::default(),
+                &opts,
+                tstop,
+                &mut refusals,
+            )
+            .expect("mechanical success")
+            .unwrap_or_else(|| {
+                panic!("composed execution must run via the seed fallback: {refusals:?}")
+            });
             exec
         };
         let a = run();
@@ -2496,7 +2632,8 @@ mod tests {
         // voltages across two runs.
         for node in 0..c.node_count() {
             assert_eq!(
-                a.waveforms.node_voltages[node], b.waveforms.node_voltages[node],
+                a.waveforms.node_voltages[node],
+                b.waveforms.node_voltages[node],
                 "composed waveform at {} drifted between runs (fallback not deterministic)",
                 c.node_name(NodeId(node as u32))
             );
@@ -2513,7 +2650,10 @@ mod tests {
         let vr = &a.waveforms.node_voltages[rail.0 as usize];
         let swing = vr.iter().cloned().fold(f64::MIN, f64::max)
             - vr.iter().cloned().fold(f64::MAX, f64::min);
-        assert!(swing > 1e-3, "the rail never moved; the astable load is dead: {swing}");
+        assert!(
+            swing > 1e-3,
+            "the rail never moved; the astable load is dead: {swing}"
+        );
 
         // The astable actually oscillated in the assembled waveforms.
         let osc = a
@@ -2666,7 +2806,8 @@ mod tests {
         // Determinism through two held rails (the sorted-VRAIL fix's gate).
         for node in 0..c.node_count() {
             assert_eq!(
-                a.waveforms.node_voltages[node], b.waveforms.node_voltages[node],
+                a.waveforms.node_voltages[node],
+                b.waveforms.node_voltages[node],
                 "held waveform at {} drifted between runs",
                 c.node_name(NodeId(node as u32))
             );
@@ -2735,7 +2876,9 @@ mod tests {
 
     /// Count up-crossings of a series through `level`: one per spike.
     fn up_crossings(v: &[f64], level: f64) -> usize {
-        v.windows(2).filter(|w| w[0] < level && w[1] >= level).count()
+        v.windows(2)
+            .filter(|w| w[0] < level && w[1] >= level)
+            .count()
     }
 
     /// A toy generator-capture fixture mirroring the flagship's hidden `V_out`
@@ -2930,7 +3073,9 @@ mod tests {
         // ideal source, exactly the executor's hold value).
         let mut mono_opts = opts;
         mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts).run(&c, tstop).expect("monolith oracle");
+        let mono = Transient::new(mono_opts)
+            .run(&c, tstop)
+            .expect("monolith oracle");
         let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
         let mono_vsyn = up_crossings(mono.node(&c, "vsyn").unwrap(), 2.5);
         assert!(
@@ -2950,9 +3095,16 @@ mod tests {
             ..CapturePolicy::default()
         };
         let mut neg_refusals = Vec::new();
-        let neg =
-            execute_stiff_group_held_capped(&c, &[vspk], &held, &off, &opts, tstop, &mut neg_refusals)
-                .expect("mechanical success");
+        let neg = execute_stiff_group_held_capped(
+            &c,
+            &[vspk],
+            &held,
+            &off,
+            &opts,
+            tstop,
+            &mut neg_refusals,
+        )
+        .expect("mechanical success");
         if let Some(exec) = &neg {
             let v = &exec.waveforms.node_voltages[vspk.0 as usize];
             let ptp = v.iter().cloned().fold(f64::MIN, f64::max)
@@ -3079,7 +3231,9 @@ mod tests {
 
         let mut mono_opts = opts;
         mono_opts.partitioning = Partitioning::Off;
-        let mono = Transient::new(mono_opts).run(&c, tstop).expect("monolith oracle");
+        let mono = Transient::new(mono_opts)
+            .run(&c, tstop)
+            .expect("monolith oracle");
         let mono_vspk = up_crossings(mono.node(&c, "vspk").unwrap(), 2.5);
         let mono_vspk2 = up_crossings(mono.node(&c, "vspk2").unwrap(), 2.5);
         assert!(
@@ -3110,7 +3264,11 @@ mod tests {
         .unwrap_or_else(|| panic!("merged generator captures must succeed: {refusals:?}"));
 
         for cand in [vspk, vspk2] {
-            let o = exec.outcomes.iter().find(|o| o.node == cand).expect("outcome");
+            let o = exec
+                .outcomes
+                .iter()
+                .find(|o| o.node == cand)
+                .expect("outcome");
             assert!(o.accepted, "{o:?}");
             assert!(
                 o.capture_growth > 0,
@@ -3198,11 +3356,7 @@ mod tests {
             let mut mono_opts = opts;
             mono_opts.partitioning = Partitioning::Off;
             let mono = Transient::new(mono_opts).run(&c, 2e-6).expect("monolith");
-            let max_sag = exec
-                .outcomes
-                .iter()
-                .map(|o| o.sag_v)
-                .fold(0.0f64, f64::max);
+            let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
             let tol = (3.0 * max_sag).max(1e-4);
             for node in 1..c.node_count() {
                 for (k, &t) in exec.waveforms.time.iter().enumerate() {

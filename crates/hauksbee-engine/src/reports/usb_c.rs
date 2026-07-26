@@ -12,14 +12,16 @@ use super::OutputMode;
 /// non-zero on a serious finding.
 pub fn emit(board: &ExtractedBoard, mode: OutputMode, strict: bool) -> anyhow::Result<()> {
     match crate::usb_c_report(board) {
-        None => match mode {
-            OutputMode::Json => {
-                println!("{{\"check\":\"usb_c_cc\",\"level\":\"info\",\"headline\":\"no USB-C receptacle detected\"}}");
+        None => {
+            match mode {
+                OutputMode::Json => {
+                    println!("{{\"check\":\"usb_c_cc\",\"level\":\"info\",\"headline\":\"no USB-C receptacle detected\"}}");
+                }
+                OutputMode::Plain | OutputMode::Text => {
+                    println!("USB-C CC compliance: no USB-C receptacle with CC nets found on this board.");
+                }
             }
-            OutputMode::Plain | OutputMode::Text => {
-                println!("USB-C CC compliance: no USB-C receptacle with CC nets found on this board.");
-            }
-        },
+        }
         Some(report) => {
             match mode {
                 OutputMode::Json => println!("{}", report.to_json()),

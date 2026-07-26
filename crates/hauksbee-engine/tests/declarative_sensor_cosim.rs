@@ -56,7 +56,6 @@
 use hauksbee_engine::{I2cBus, Lm75, RegisterMapSensor};
 use hauksbee_mcu::I2cEvent;
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // TOML specs used across tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,11 +133,20 @@ rw_read_is_high = false
 
 fn i2c_read_register(bus: &mut I2cBus, device_addr: u8, reg: u8, n_bytes: usize) -> Vec<u8> {
     // Write phase: send pointer byte.
-    bus.dispatch(I2cEvent::Start { addr: device_addr, read: false });
-    bus.dispatch(I2cEvent::Write { addr: device_addr, data: reg });
+    bus.dispatch(I2cEvent::Start {
+        addr: device_addr,
+        read: false,
+    });
+    bus.dispatch(I2cEvent::Write {
+        addr: device_addr,
+        data: reg,
+    });
     bus.dispatch(I2cEvent::Stop { addr: device_addr });
     // Read phase: repeated-start then clock N bytes.
-    bus.dispatch(I2cEvent::Start { addr: device_addr, read: true });
+    bus.dispatch(I2cEvent::Start {
+        addr: device_addr,
+        read: true,
+    });
     let mut out = Vec::with_capacity(n_bytes);
     for _ in 0..n_bytes {
         if let Some(b) = bus.dispatch(I2cEvent::Read { addr: device_addr }) {
@@ -173,8 +181,7 @@ fn declarative_lm75_equivalence() {
 
     for &t in &temps {
         // ── Reference: hand-coded Lm75 ───────────────────────────────────
-        let mut ref_bus = I2cBus::new("REF")
-            .with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, t)));
+        let mut ref_bus = I2cBus::new("REF").with_slave(Box::new(Lm75::new(Lm75::DEFAULT_ADDR, t)));
         let ref_bytes = i2c_read_register(&mut ref_bus, 0x48, 0x00, 2);
 
         // ── System under test: declarative RegisterMapSensor ─────────────
@@ -185,8 +192,7 @@ fn declarative_lm75_equivalence() {
             .unwrap_or_else(|e| panic!("declarative LM75 from_toml failed: {e}"));
         sensor.set_input("temperature_c", t);
 
-        let mut sut_bus = I2cBus::new("SUT")
-            .with_slave(Box::new(sensor));
+        let mut sut_bus = I2cBus::new("SUT").with_slave(Box::new(sensor));
         let sut_bytes = i2c_read_register(&mut sut_bus, 0x48, 0x00, 2);
 
         // Bytes must be identical, same encoding, same rounding, same byte order.
@@ -295,8 +301,8 @@ fn declarative_lm75_i2c_thermostat_cosim() {
     use hauksbee_engine::binder::bind_board;
     use hauksbee_engine::HauksbeeEngine;
     use hauksbee_extract::ExtractedBoard;
-    use hauksbee_models::ModelLibrary;
     use hauksbee_mcu::renode::is_available;
+    use hauksbee_models::ModelLibrary;
     use hauksbee_server::engine::Engine;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -355,8 +361,7 @@ fn declarative_lm75_i2c_thermostat_cosim() {
         let lib = ModelLibrary::builtin();
         let bound = bind_board(&board, &lib);
 
-        let mut engine =
-            HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine");
+        let mut engine = HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine");
         engine.scheduler_mut().chunk_s = 5e-3;
 
         // ── The declarative sensor under test (NOT the hand-coded Lm75) ──
@@ -368,9 +373,7 @@ fn declarative_lm75_i2c_thermostat_cosim() {
             .unwrap_or_else(|e| panic!("declarative LM75 from_toml failed: {e}"));
         sensor.set_input("temperature_c", temp_c);
 
-        let bus = Arc::new(Mutex::new(
-            I2cBus::new("U2").with_slave(Box::new(sensor)),
-        ));
+        let bus = Arc::new(Mutex::new(I2cBus::new("U2").with_slave(Box::new(sensor))));
         engine.scheduler_mut().attach_i2c_bus(bus.clone());
 
         let frame_dt = 5e-3_f64;
@@ -406,7 +409,8 @@ fn declarative_lm75_i2c_thermostat_cosim() {
         let high = v > 2.0;
         let expect = t >= 30.0;
         assert_eq!(
-            high, expect,
+            high,
+            expect,
             "at {t} °C (declarative LM75): expected FLAG {}, got {:.3} V",
             if expect { "HIGH" } else { "LOW" },
             v

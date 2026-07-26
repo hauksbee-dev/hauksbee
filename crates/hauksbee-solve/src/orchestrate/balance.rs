@@ -358,8 +358,15 @@ mod tests {
             resolves: 0,
         };
         let ch = channels(1, r_shunt);
-        let rep =
-            settle_rails(&mut loads, &ch, GMIN, VNTOL, ABSTOL, &BalancePolicy::default()).unwrap();
+        let rep = settle_rails(
+            &mut loads,
+            &ch,
+            GMIN,
+            VNTOL,
+            ABSTOL,
+            &BalancePolicy::default(),
+        )
+        .unwrap();
         assert!(rep.converged, "{rep:?}");
         let expect = loads.monolithic_v(0, r_shunt);
         let err = (loads.v[0] - expect).abs();
@@ -389,8 +396,15 @@ mod tests {
             resolves: 0,
         };
         let ch = channels(1, r_shunt);
-        let rep =
-            settle_rails(&mut loads, &ch, GMIN, VNTOL, ABSTOL, &BalancePolicy::default()).unwrap();
+        let rep = settle_rails(
+            &mut loads,
+            &ch,
+            GMIN,
+            VNTOL,
+            ABSTOL,
+            &BalancePolicy::default(),
+        )
+        .unwrap();
         assert!(rep.converged);
         let expect = loads.monolithic_v(0, r_shunt);
         let err = (loads.v[0] - expect).abs();
@@ -414,8 +428,15 @@ mod tests {
             resolves: 0,
         };
         let ch = channels(2, r_shunt);
-        let rep =
-            settle_rails(&mut loads, &ch, GMIN, VNTOL, ABSTOL, &BalancePolicy::default()).unwrap();
+        let rep = settle_rails(
+            &mut loads,
+            &ch,
+            GMIN,
+            VNTOL,
+            ABSTOL,
+            &BalancePolicy::default(),
+        )
+        .unwrap();
         assert!(rep.converged, "{rep:?}");
         for i in 0..2 {
             let expect = loads.monolithic_v(i, r_shunt);
@@ -514,9 +535,15 @@ mod tests {
                 children: Vec::new(),
             },
         ];
-        let rep =
-            settle_rails(&mut loads, &channels, GMIN, VNTOL, ABSTOL, &BalancePolicy::default())
-                .unwrap();
+        let rep = settle_rails(
+            &mut loads,
+            &channels,
+            GMIN,
+            VNTOL,
+            ABSTOL,
+            &BalancePolicy::default(),
+        )
+        .unwrap();
         assert!(rep.converged, "{rep:?}");
         let (mv, iv) = loads.monolithic();
         // The two rails couple, so this is block Gauss-Seidel and the outer
@@ -618,7 +645,10 @@ mod tests {
             ..BalancePolicy::default()
         };
         let rep = settle_rails(&mut FlatLoads, &ch, GMIN, VNTOL, ABSTOL, &policy).unwrap();
-        assert!(!rep.converged, "scaffold must produce a non-converged report");
+        assert!(
+            !rep.converged,
+            "scaffold must produce a non-converged report"
+        );
         let err = ensure_balanced(&rep)
             .expect_err("a non-converged balance must be refused, not accepted");
         assert!(

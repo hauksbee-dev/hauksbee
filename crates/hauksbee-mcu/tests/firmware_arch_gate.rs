@@ -142,9 +142,9 @@ fn qemu_backend_refuses_xtensa_sibling_on_riscv_board_before_spawn() {
 
     std::fs::remove_dir_all(&dir).ok();
 
-    let err = res.err().expect(
-        "QemuBackend::new must refuse an Xtensa sibling ELF on the RISC-V ESP32-C3 board",
-    );
+    let err = res
+        .err()
+        .expect("QemuBackend::new must refuse an Xtensa sibling ELF on the RISC-V ESP32-C3 board");
     let msg = format!("{err:#}");
     assert!(msg.contains("Xtensa"), "msg: {msg}");
     assert!(msg.contains("ESP32-C3"), "msg: {msg}");

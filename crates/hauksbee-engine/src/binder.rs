@@ -1336,7 +1336,6 @@ fn diode_1n4148_params() -> hauksbee_models::Params {
     p.set_f64("tt", 3.48e-9);
     p.set_f64("bv", 110.0);
     p
-
 }
 
 /// Construct a [`ModelEntry`] for an engine-layer fallback. Centralised so a
@@ -1540,15 +1539,7 @@ fn bind_component(
         }
         Mcu => {
             let backend = mcu_backend_string(comp, model);
-            let warning = bind_mcu(
-                comp,
-                model,
-                circuit,
-                node_of,
-                &pad_nodes,
-                power_nets,
-                mcus,
-            );
+            let warning = bind_mcu(comp, model, circuit, node_of, &pad_nodes, power_nets, mcus);
             (BindOutcome::Mcu { backend }, warning)
         }
         Connector => (
@@ -1608,8 +1599,11 @@ fn role_node_map_guessed(
     let pad_count = comp.pins.len();
     // The set of roles already filled by an explicit source, never overwritten.
     for pin in &comp.pins {
-        let Some(node) = node_of(pin.net) else { continue };
-        let Some(inf) = pin_rules.role_for_pad(&comp.footprint, Some(model.kind), pad_count, &pin.number)
+        let Some(node) = node_of(pin.net) else {
+            continue;
+        };
+        let Some(inf) =
+            pin_rules.role_for_pad(&comp.footprint, Some(model.kind), pad_count, &pin.number)
         else {
             continue;
         };
@@ -2923,7 +2917,9 @@ fn bind_nor_latches(
                 continue;
             };
             let reset_in = if q_gate == i { in_j } else { in_i };
-            let (Some(set_n), Some(reset_n)) = (set_in, reset_in) else { continue };
+            let (Some(set_n), Some(reset_n)) = (set_in, reset_in) else {
+                continue;
+            };
             let q_net = gates[q_gate].y;
             if q_net.is_ground() {
                 continue;
@@ -3219,7 +3215,15 @@ pub(crate) fn fmt_eng(value: f64, unit: &str) -> String {
     let (mut scale, mut prefix) = PREFIXES[idx];
     let mut mantissa = v / scale;
     // 3 significant figures: more decimals for small mantissas, fewer for large.
-    let decimals = |m: f64| if m >= 100.0 { 0 } else if m >= 10.0 { 1 } else { 2 };
+    let decimals = |m: f64| {
+        if m >= 100.0 {
+            0
+        } else if m >= 10.0 {
+            1
+        } else {
+            2
+        }
+    };
     // Decade carry: rounding the mantissa to its significant figures can push it
     // to 1000 (e.g. 999.6 -> "1000"), which renders "1000 kΩ", outside the
     // promised [1,1000) range and inconsistent with the sibling format_engineering
@@ -3776,7 +3780,10 @@ mod canonical_ground_tests {
         // The deliberately-split ground families stay distinct so bridges
         // (ferrite bead / 0 Ω link / star point) are preserved.
         for split in ["AGND", "DGND", "PGND", "ISOGND", "CHASSIS_GND"] {
-            assert!(!is_canonical_ground(split), "{split} must stay a distinct node");
+            assert!(
+                !is_canonical_ground(split),
+                "{split} must stay a distinct node"
+            );
         }
         // VEE is a negative supply rail on bipolar-supply analog boards; pinning
         // it to 0 V would be a hard fault, so it is NOT canonical ground.
@@ -3853,11 +3860,18 @@ mod digital_ro_tests {
         // applied, every stamped Thevenin driver used DEFAULT_RO. Bind a 74HC595
         // whose model declares a custom ro and assert the driver carries it.
         let mut model = ModelLibrary::builtin()
-            .resolve(&ComponentQuery::new(None, Some("74HC595".to_string()), None))
+            .resolve(&ComponentQuery::new(
+                None,
+                Some("74HC595".to_string()),
+                None,
+            ))
             .model
             .expect("builtin 74HC595");
         let custom_ro = 123.0;
-        assert_ne!(custom_ro, DEFAULT_RO, "the test value must differ from the default");
+        assert_ne!(
+            custom_ro, DEFAULT_RO,
+            "the test value must differ from the default"
+        );
         model.params.set_f64("ro", custom_ro);
 
         let mut circuit = Circuit::new();
@@ -3873,7 +3887,10 @@ mod digital_ro_tests {
             .drivers
             .get("qa")
             .expect("qa output driver stamped");
-        assert_eq!(drv.ron, custom_ro, "driver must carry the model's ro, not DEFAULT_RO");
+        assert_eq!(
+            drv.ron, custom_ro,
+            "driver must carry the model's ro, not DEFAULT_RO"
+        );
     }
 
     /// R23 (vreg-silent-5v-default): a vreg model with no `vout` param used to
@@ -3895,8 +3912,7 @@ mod digital_ro_tests {
         let mut roles: HashMap<String, NodeId> = HashMap::new();
         roles.insert("out".into(), circuit.node("VOUT"));
 
-        let (_outcome, warning) =
-            bind_vreg(&bare_comp("U9"), &model, &mut circuit, &roles, true);
+        let (_outcome, warning) = bind_vreg(&bare_comp("U9"), &model, &mut circuit, &roles, true);
         let warning = warning.expect("a missing vout must produce a warning");
         assert!(
             warning.contains("vout") && warning.contains("5.0"),
@@ -3908,8 +3924,7 @@ mod digital_ro_tests {
         let mut circuit2 = Circuit::new();
         let mut roles2: HashMap<String, NodeId> = HashMap::new();
         roles2.insert("out".into(), circuit2.node("VOUT"));
-        let (outcome, warning) =
-            bind_vreg(&bare_comp("U9"), &model, &mut circuit2, &roles2, true);
+        let (outcome, warning) = bind_vreg(&bare_comp("U9"), &model, &mut circuit2, &roles2, true);
         assert!(warning.is_none(), "a present vout must not warn");
         assert!(
             matches!(outcome, BindOutcome::Behavioral { device } if device.contains("3.3")),
@@ -3932,12 +3947,17 @@ mod digital_ro_tests {
         // fallback's throw candidates and could be stamped as a switch terminal,
         // shorting a signal net onto a control net. Every control spelling must be
         // excluded.
-        for r in ["ctrl", "ctrl_1", "ctrl_2", "ctrl_3", "ctrl_4", "in", "s", "sel"] {
+        for r in [
+            "ctrl", "ctrl_1", "ctrl_2", "ctrl_3", "ctrl_4", "in", "s", "sel",
+        ] {
             assert!(is_ctrl_role(r), "{r} must be recognised as a control role");
         }
         // Throw terminals and power roles are NOT control roles.
         for r in ["s0", "s1", "in_out_1a", "in_out_2b", "com", "vcc", "vss"] {
-            assert!(!is_ctrl_role(r), "{r} must NOT be treated as a control role");
+            assert!(
+                !is_ctrl_role(r),
+                "{r} must NOT be treated as a control role"
+            );
         }
     }
 
@@ -4003,15 +4023,23 @@ mod digital_ro_tests {
             .devices
             .iter()
             .find_map(|d| match d {
-                Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } => {
-                    Some((*ctrl_p, *ctrl_n, *von, *voff))
-                }
+                Device::VSwitch {
+                    ctrl_p,
+                    ctrl_n,
+                    von,
+                    voff,
+                    ..
+                } => Some((*ctrl_p, *ctrl_n, *von, *voff)),
                 _ => None,
             })
             .expect("a VSwitch for the com<->s0 throw");
         // Inverted sense: ctrl_p is the vss/ground reference and ctrl_n is the gate,
         // with negative thresholds; the switch closes when V(gate) is LOW.
-        assert_eq!(cp, NodeId::GROUND, "s0 throw senses (vss - ctrl): ctrl_p is vss");
+        assert_eq!(
+            cp,
+            NodeId::GROUND,
+            "s0 throw senses (vss - ctrl): ctrl_p is vss"
+        );
         assert_eq!(cn, gate, "ctrl_n is the control net");
         assert!(
             von < 0.0 && voff < von,
@@ -4074,9 +4102,10 @@ mod crystal_fallback_tests {
         // connected but not a complete c/b/e) was silently dropped with warning
         // None, unlike a single BJT or a passive-array element which each warn
         // "left open". A partial unit must now surface a diagnostic.
-        let model: ModelEntry =
-            toml::from_str("id = \"bcm847bs\"\nkind = \"bjt_npn\"\n[match]\nvalue_re = \"BCM847\"\n")
-                .unwrap();
+        let model: ModelEntry = toml::from_str(
+            "id = \"bcm847bs\"\nkind = \"bjt_npn\"\n[match]\nvalue_re = \"BCM847\"\n",
+        )
+        .unwrap();
         let mut circuit = Circuit::new();
         let (c1, b1, e1, b2) = (
             circuit.node("C1"),
@@ -4090,7 +4119,10 @@ mod crystal_fallback_tests {
         roles.insert("emitter_q1".to_string(), e1);
         roles.insert("base_q2".to_string(), b2); // Q2 partial: only the base wired
         let (outcome, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
-        assert!(matches!(outcome, BindOutcome::Analog { .. }), "Q1 still stamps");
+        assert!(
+            matches!(outcome, BindOutcome::Analog { .. }),
+            "Q1 still stamps"
+        );
         let w = warning.expect("a partially-wired Q2 must warn, not drop silently");
         assert!(
             w.contains("left open") && w.contains("q2"),
@@ -4103,12 +4135,22 @@ mod crystal_fallback_tests {
         roles.insert("collector_q2".to_string(), c2);
         roles.insert("emitter_q2".to_string(), e2);
         let (_o, warning) = bind_bjt(&comp("Q1", "BCM847BS"), &model, &mut circuit, &roles);
-        assert!(warning.is_none(), "a fully-wired pair must not warn: {warning:?}");
+        assert!(
+            warning.is_none(),
+            "a fully-wired pair must not warn: {warning:?}"
+        );
     }
 
     #[test]
     fn frequency_values_are_recognised() {
-        for v in ["16MHz", "8Mhz", "16.000MHz", "32.768kHz", "100 Hz", "12000000Hz"] {
+        for v in [
+            "16MHz",
+            "8Mhz",
+            "16.000MHz",
+            "32.768kHz",
+            "100 Hz",
+            "12000000Hz",
+        ] {
             assert!(value_is_frequency(v), "{v} should read as a frequency");
         }
         // R52: the SPACE-separated SI-prefixed form ("16 MHz") left a trailing
@@ -4117,13 +4159,25 @@ mod crystal_fallback_tests {
         // heuristic (a gigafarad cap that collapses the solve). The doc comment
         // even lists "8 Mhz" as accepted. These must all read as frequencies.
         for v in ["16 MHz", "8 Mhz", "32.768 kHz", "1 GHz", "16 mhz"] {
-            assert!(value_is_frequency(v), "{v} (space-separated) should read as a frequency");
+            assert!(
+                value_is_frequency(v),
+                "{v} (space-separated) should read as a frequency"
+            );
         }
         // Real passive values, and ferrite-bead impedance@frequency values
         // (which end in "hz" but are NOT crystals) must not trip it.
         for v in [
-            "22pF", "10k", "4k7", "100nF", "BCM857BS", "Hz", "Choke", "",
-            "600@100MHz", "1k@100MHz", "120@100MHz",
+            "22pF",
+            "10k",
+            "4k7",
+            "100nF",
+            "BCM857BS",
+            "Hz",
+            "Choke",
+            "",
+            "600@100MHz",
+            "1k@100MHz",
+            "120@100MHz",
         ] {
             assert!(!value_is_frequency(v), "{v} must NOT read as a frequency");
         }
@@ -4443,11 +4497,17 @@ mod mcu_route_tests {
         // The Xtensa parts still route to their cores.
         assert!(matches!(
             route_mcu_family_str("ESP32-C3"),
-            Some(McuFamilyRoute::Backend { backend: "qemu:esp32c3", .. })
+            Some(McuFamilyRoute::Backend {
+                backend: "qemu:esp32c3",
+                ..
+            })
         ));
         assert!(matches!(
             route_mcu_family_str("ESP32-WROOM-32E"),
-            Some(McuFamilyRoute::Backend { backend: "qemu:esp32", .. })
+            Some(McuFamilyRoute::Backend {
+                backend: "qemu:esp32",
+                ..
+            })
         ));
     }
 }
@@ -4478,11 +4538,14 @@ mod gpio_role_tests {
         assert_eq!(apin_gpio_of_role("a6", true), None, "A6 is ADC-only");
         // The combined lookup the reporters now use resolves the A-pin.
         let combined = |r: &str| gpio_of_role(r, true).or_else(|| apin_gpio_of_role(r, true));
-        assert_eq!(combined("a2"), Some(('C', 2)), "A2 = OE_S resolves for hazard reports");
+        assert_eq!(
+            combined("a2"),
+            Some(('C', 2)),
+            "A2 = OE_S resolves for hazard reports"
+        );
         // A digital "d13" role still resolves the ordinary way, unaffected.
         assert_eq!(combined("d13"), gpio_of_role("d13", true));
     }
-
 
     /// R11: STM32 GPIO banks run past port E, an F4/F7 in a large package has
     /// PF/PG/PH/PI. Both the pin-role stage (capped at E) and the role→(port,bit)
@@ -4490,8 +4553,14 @@ mod gpio_role_tests {
     #[test]
     fn stm32_ports_past_e_map() {
         // Pin-function → role: F/G/H/I now survive (previously capped at E).
-        assert_eq!(role_from_mcu_pinfunction_token("PF9"), Some("pf9".to_string()));
-        assert_eq!(role_from_mcu_pinfunction_token("PI15"), Some("pi15".to_string()));
+        assert_eq!(
+            role_from_mcu_pinfunction_token("PF9"),
+            Some("pf9".to_string())
+        );
+        assert_eq!(
+            role_from_mcu_pinfunction_token("PI15"),
+            Some("pi15".to_string())
+        );
         assert_eq!(role_from_mcu_pinfunction_token("PZ0"), None);
         // Role → (port, bit): the same banks resolve to a GPIO driver target
         // (gpio_of_role returns the uppercase port letter).

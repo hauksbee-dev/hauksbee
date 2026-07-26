@@ -403,8 +403,7 @@ fn is_rail_name(name: &str) -> bool {
     // V-prefixed rails (VCC/VDD/VBAT/VMOT/VSYS/VIN/VIO/VREF…) and bare voltage
     // names starting with a digit and carrying a 'V' ("12V", "3V3", "9V").
     let v_named = n.starts_with('V') && n.len() >= 2;
-    let voltage_named =
-        n.contains('V') && n.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let voltage_named = n.contains('V') && n.chars().next().is_some_and(|c| c.is_ascii_digit());
     v_named || voltage_named
 }
 
@@ -635,7 +634,11 @@ mod tests {
         let text = stm32_boot0_board(true).replace("+3V3", "VBAT");
         let r = strap_findings(&text);
         let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(strap.len(), 1, "BOOT0 pulled high to VBAT is wrong (needs low)");
+        assert_eq!(
+            strap.len(),
+            1,
+            "BOOT0 pulled high to VBAT is wrong (needs low)"
+        );
         assert!(matches!(strap[0].severity, Severity::Medium));
         assert!(strap[0].message.contains("boot0"));
         assert!(strap[0].message.contains("wrong level"));
@@ -684,7 +687,11 @@ mod tests {
 )"#;
         let r = strap_findings(text);
         let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();
-        assert_eq!(strap.len(), 1, "a floating BOOT0 with no internal pull must fire");
+        assert_eq!(
+            strap.len(),
+            1,
+            "a floating BOOT0 with no internal pull must fire"
+        );
         assert!(matches!(strap[0].severity, Severity::High));
         assert!(strap[0].message.contains("floating"));
         assert!(strap[0].nets.iter().any(|n| n.contains("Pad44")));

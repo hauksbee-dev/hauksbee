@@ -48,9 +48,7 @@ fn value_d_diode_binds_conducting_1n4148() {
         .devices
         .iter()
         .find_map(|d| match d {
-            Device::Diode { name, model, a, k } if name == "D_stretch601" => {
-                Some((*model, *a, *k))
-            }
+            Device::Diode { name, model, a, k } if name == "D_stretch601" => Some((*model, *a, *k)),
             _ => None,
         })
         .expect("value-\"D\" diode must bind to a Device::Diode (not OPEN)");
@@ -74,7 +72,11 @@ fn value_d_diode_binds_conducting_1n4148() {
         "N = 1N4148 emission 1.906, got {}",
         model.n
     );
-    assert!(model.rs > 0.0, "1N4148 has a nonzero series Rs, got {}", model.rs);
+    assert!(
+        model.rs > 0.0,
+        "1N4148 has a nonzero series Rs, got {}",
+        model.rs
+    );
 
     // Polarity: anode is the pinfunction-"A" net, cathode the "K" net.
     assert_eq!(

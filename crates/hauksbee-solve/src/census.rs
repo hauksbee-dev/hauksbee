@@ -514,7 +514,9 @@ impl Drop for StepCensus {
             self.event_resolved,
             attempts,
         );
-        let labels = ["<1e-12", "1e-12", "1e-11", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", ">=1e-5"];
+        let labels = [
+            "<1e-12", "1e-12", "1e-11", "1e-10", "1e-9", "1e-8", "1e-7", "1e-6", ">=1e-5",
+        ];
         let hist: Vec<String> = labels
             .iter()
             .zip(self.dt_hist.iter())
@@ -592,8 +594,8 @@ impl Drop for StepCensus {
                 exits[0], exits[1], exits[2], exits[3], exits[4], exits[5], exits[6],
             );
             let iter_labels = [
-                "1", "2", "3", "4", "5", "6", "7", "8", "9-12", "13-16", "17-24", "25-40",
-                "41-64", "65+",
+                "1", "2", "3", "4", "5", "6", "7", "8", "9-12", "13-16", "17-24", "25-40", "41-64",
+                "65+",
             ];
             let ih: Vec<String> = iter_labels
                 .iter()

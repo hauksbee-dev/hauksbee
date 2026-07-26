@@ -93,7 +93,10 @@ pub fn instantiate_macro(
                 // segment, or a rotated bar/cross arm is reconstructed at the
                 // wrong angle and location (same defect the CenterLine fix
                 // addressed for its sibling).
-                let (sin, cos) = decimal(&l.angle, &vars).unwrap_or(0.0).to_radians().sin_cos();
+                let (sin, cos) = decimal(&l.angle, &vars)
+                    .unwrap_or(0.0)
+                    .to_radians()
+                    .sin_cos();
                 let (rx0, ry0) = (x0 * cos - y0 * sin, x0 * sin + y0 * cos);
                 let (rx1, ry1) = (x1 * cos - y1 * sin, x1 * sin + y1 * cos);
                 push_thick_segment(&mut pts, rx0, ry0, rx1, ry1, w / 2.0);
@@ -120,7 +123,10 @@ pub fn instantiate_macro(
                 // center reconstructed an off-origin rotated pad at the wrong
                 // location; the two agree only when the center is at the origin
                 // or the angle is zero.
-                let (sin, cos) = decimal(&l.angle, &vars).unwrap_or(0.0).to_radians().sin_cos();
+                let (sin, cos) = decimal(&l.angle, &vars)
+                    .unwrap_or(0.0)
+                    .to_radians()
+                    .sin_cos();
                 for (dx, dy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
                     let (ax, ay) = (x + dx, y + dy);
                     pts.push((ax * cos - ay * sin, ax * sin + ay * cos));
@@ -135,7 +141,10 @@ pub fn instantiate_macro(
                 // reorients AND (for an off-origin outline) translates the shape.
                 // Dropping it; the sibling of the CenterLine bug, reconstructed
                 // a rotated custom pad at the wrong orientation and location.
-                let (sin, cos) = decimal(&o.angle, &vars).unwrap_or(0.0).to_radians().sin_cos();
+                let (sin, cos) = decimal(&o.angle, &vars)
+                    .unwrap_or(0.0)
+                    .to_radians()
+                    .sin_cos();
                 for (px, py) in &o.points {
                     if let (Some(x), Some(y)) = (decimal(px, &vars), decimal(py, &vars)) {
                         pts.push((x * cos - y * sin, x * sin + y * cos));
@@ -467,7 +476,11 @@ mod tests {
             content: vec![MacroContent::Polygon(poly)],
         };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
-        assert!(pts.len() <= 12, "vertex count must be clamped, got {}", pts.len());
+        assert!(
+            pts.len() <= 12,
+            "vertex count must be clamped, got {}",
+            pts.len()
+        );
     }
 
     #[test]
@@ -513,12 +526,27 @@ mod tests {
             center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro { name: "CL".to_string(), content: vec![MacroContent::CenterLine(cl)] };
+        let m = ApertureMacro {
+            name: "CL".to_string(),
+            content: vec![MacroContent::CenterLine(cl)],
+        };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
-        let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-        assert!((maxx - minx - 2.0).abs() < 1e-6, "x span {} (expected ~2 after 90° rotation)", maxx - minx);
-        assert!((maxy - miny - 4.0).abs() < 1e-6, "y span {} (expected ~4 after 90° rotation)", maxy - miny);
+        let (minx, maxx) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!(
+            (maxx - minx - 2.0).abs() < 1e-6,
+            "x span {} (expected ~2 after 90° rotation)",
+            maxx - minx
+        );
+        assert!(
+            (maxy - miny - 4.0).abs() < 1e-6,
+            "y span {} (expected ~4 after 90° rotation)",
+            maxy - miny
+        );
     }
 
     #[test]
@@ -535,12 +563,25 @@ mod tests {
             center: (MacroDecimal::Value(3.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro { name: "CL".to_string(), content: vec![MacroContent::CenterLine(cl)] };
+        let m = ApertureMacro {
+            name: "CL".to_string(),
+            content: vec![MacroContent::CenterLine(cl)],
+        };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
-        let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-        assert!((minx + 1.0).abs() < 1e-6 && (maxx - 1.0).abs() < 1e-6, "x∈[-1,1], got [{minx},{maxx}]");
-        assert!((miny - 2.0).abs() < 1e-6 && (maxy - 4.0).abs() < 1e-6, "y∈[2,4], got [{miny},{maxy}]");
+        let (minx, maxx) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!(
+            (minx + 1.0).abs() < 1e-6 && (maxx - 1.0).abs() < 1e-6,
+            "x∈[-1,1], got [{minx},{maxx}]"
+        );
+        assert!(
+            (miny - 2.0).abs() < 1e-6 && (maxy - 4.0).abs() < 1e-6,
+            "y∈[2,4], got [{miny},{maxy}]"
+        );
     }
 
     #[test]
@@ -554,15 +595,34 @@ mod tests {
         let pt = |x: f64, y: f64| (MacroDecimal::Value(x), MacroDecimal::Value(y));
         let outline = OutlinePrimitive {
             exposure: MacroBoolean::Value(true),
-            points: vec![pt(1.0, 0.0), pt(3.0, 0.0), pt(3.0, 2.0), pt(1.0, 2.0), pt(1.0, 0.0)],
+            points: vec![
+                pt(1.0, 0.0),
+                pt(3.0, 0.0),
+                pt(3.0, 2.0),
+                pt(1.0, 2.0),
+                pt(1.0, 0.0),
+            ],
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro { name: "OUT".to_string(), content: vec![MacroContent::Outline(outline)] };
+        let m = ApertureMacro {
+            name: "OUT".to_string(),
+            content: vec![MacroContent::Outline(outline)],
+        };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
-        let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-        assert!((minx + 2.0).abs() < 1e-6 && maxx.abs() < 1e-6, "x∈[-2,0] after rotation, got [{minx},{maxx}]");
-        assert!((miny - 1.0).abs() < 1e-6 && (maxy - 3.0).abs() < 1e-6, "y∈[1,3] after rotation, got [{miny},{maxy}]");
+        let (minx, maxx) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!(
+            (minx + 2.0).abs() < 1e-6 && maxx.abs() < 1e-6,
+            "x∈[-2,0] after rotation, got [{minx},{maxx}]"
+        );
+        assert!(
+            (miny - 1.0).abs() < 1e-6 && (maxy - 3.0).abs() < 1e-6,
+            "y∈[1,3] after rotation, got [{miny},{maxy}]"
+        );
     }
 
     #[test]
@@ -578,11 +638,26 @@ mod tests {
             end: (MacroDecimal::Value(4.0), MacroDecimal::Value(0.0)),
             angle: MacroDecimal::Value(90.0),
         };
-        let m = ApertureMacro { name: "VL".to_string(), content: vec![MacroContent::VectorLine(vl)] };
+        let m = ApertureMacro {
+            name: "VL".to_string(),
+            content: vec![MacroContent::VectorLine(vl)],
+        };
         let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
-        let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
-        let (miny, maxy) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
-        assert!((maxx - minx - 1.0).abs() < 1e-6, "x span ~1 (the width) after 90°, got {}", maxx - minx);
-        assert!((maxy - miny - 4.0).abs() < 1e-6, "y span ~4 (the length) after 90°, got {}", maxy - miny);
+        let (minx, maxx) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (miny, maxy) = pts
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        assert!(
+            (maxx - minx - 1.0).abs() < 1e-6,
+            "x span ~1 (the width) after 90°, got {}",
+            maxx - minx
+        );
+        assert!(
+            (maxy - miny - 4.0).abs() < 1e-6,
+            "y span ~4 (the length) after 90°, got {}",
+            maxy - miny
+        );
     }
 }

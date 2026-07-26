@@ -36,7 +36,11 @@ fn find_ngspice() -> Option<PathBuf> {
             return Some(pb);
         }
     }
-    let exe = if cfg!(windows) { "ngspice.exe" } else { "ngspice" };
+    let exe = if cfg!(windows) {
+        "ngspice.exe"
+    } else {
+        "ngspice"
+    };
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             let cand = dir.join(exe);
@@ -178,7 +182,10 @@ fn parse_indexed_table(text: &str) -> Option<NgTable> {
             }
             continue;
         };
-        let vals: Vec<f64> = c[2..].iter().filter_map(|s| s.parse::<f64>().ok()).collect();
+        let vals: Vec<f64> = c[2..]
+            .iter()
+            .filter_map(|s| s.parse::<f64>().ok())
+            .collect();
         if cols.is_empty() {
             ncol = vals.len();
             cols = vec![Vec::new(); ncol];
@@ -518,8 +525,8 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
     let expect: Expect = toml::from_str(&expect_text)
         .unwrap_or_else(|e| panic!("parse {}: {e}", expect_path.display()));
 
-    let (circuit, directives) = SpiceLoader::load_with_directives(&deck)
-        .unwrap_or_else(|e| panic!("load {name}: {e}"));
+    let (circuit, directives) =
+        SpiceLoader::load_with_directives(&deck).unwrap_or_else(|e| panic!("load {name}: {e}"));
     let opts = opts_from_directives(&directives);
 
     let probes: Vec<Probe> = expect
@@ -765,7 +772,11 @@ fn ngspice_corpus() {
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("cir"))
         .collect();
     cirs.sort();
-    assert!(!cirs.is_empty(), "no decks found in {}", decks_dir().display());
+    assert!(
+        !cirs.is_empty(),
+        "no decks found in {}",
+        decks_dir().display()
+    );
 
     let mut results = Vec::new();
     for cir in &cirs {

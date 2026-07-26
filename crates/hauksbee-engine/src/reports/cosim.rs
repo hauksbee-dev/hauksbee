@@ -220,7 +220,11 @@ pub fn nearest_nets(target: &str, known: &[String], limit: usize) -> Vec<String>
             let n = name.to_ascii_lowercase();
             let contains = n.contains(&t) || t.contains(&n);
             let dist = levenshtein(&t, &n);
-            let score = if contains { dist.saturating_sub(3) } else { dist };
+            let score = if contains {
+                dist.saturating_sub(3)
+            } else {
+                dist
+            };
             (score, name)
         })
         .collect();
@@ -294,7 +298,11 @@ pub fn run_headless(
         .mcu_identities()
         .iter()
         .any(|(_, backend, _)| backend.starts_with("renode:") || backend.starts_with("qemu:"));
-    let mut frame_dt = if external { 10.0 / 1000.0 } else { 1.0 / 1000.0 };
+    let mut frame_dt = if external {
+        10.0 / 1000.0
+    } else {
+        1.0 / 1000.0
+    };
     if external {
         engine.scheduler_mut().chunk_s = frame_dt;
         eprintln!(
@@ -505,7 +513,11 @@ pub fn run_headless(
         std::fs::write(path, csv)
             .map_err(|e| anyhow::anyhow!("writing probe CSV to {}: {e}", path.display()))?;
         if !quiet {
-            eprintln!("wrote {} probe row(s) to {}", probe_rows.len(), path.display());
+            eprintln!(
+                "wrote {} probe row(s) to {}",
+                probe_rows.len(),
+                path.display()
+            );
         }
     }
 

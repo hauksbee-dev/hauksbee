@@ -30,9 +30,7 @@
 //! emits an *info* note (the negative is on the record) and does not fire. It
 //! never invents a current or a rating.
 
-use hauksbee_extract::{
-    ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity,
-};
+use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
 use hauksbee_models::value::parse_value;
 use hauksbee_models::ModelLibrary;
 
@@ -54,7 +52,11 @@ pub fn buck_input_cap_ripple_rms(i_out_a: f64, d: f64) -> f64 {
 /// brackets 0.5 the worst case is exactly there; otherwise it is at the nearer
 /// endpoint. This returns the worst-case ripple over a duty range `[d_lo, d_hi]`.
 pub fn worst_case_ripple_over_duty(i_out_a: f64, d_lo: f64, d_hi: f64) -> f64 {
-    let (lo, hi) = if d_lo <= d_hi { (d_lo, d_hi) } else { (d_hi, d_lo) };
+    let (lo, hi) = if d_lo <= d_hi {
+        (d_lo, d_hi)
+    } else {
+        (d_hi, d_lo)
+    };
     if lo <= 0.5 && hi >= 0.5 {
         return buck_input_cap_ripple_rms(i_out_a, 0.5);
     }
@@ -103,11 +105,16 @@ fn input_cap_ripple_rating(
     cap_farads: Option<f64>,
 ) -> Option<(f64, bool)> {
     if let Some(comp) = board.component(cap_ref) {
-        if let Some(r) = resolve(lib, comp).model.and_then(|m| m.ratings.max_ripple_current_a) {
+        if let Some(r) = resolve(lib, comp)
+            .model
+            .and_then(|m| m.ratings.max_ripple_current_a)
+        {
             return Some((r, true)); // datasheet-sourced
         }
     }
-    cap_farads.and_then(default_ripple_rating_a).map(|r| (r, false))
+    cap_farads
+        .and_then(default_ripple_rating_a)
+        .map(|r| (r, false))
 }
 
 /// Attribute the converter's output current `I_out` (A) from a citeable source
@@ -154,7 +161,10 @@ fn attribute_i_out(
             }
         }
         if let Some(i) = candidate {
-            let cite = format!("{} ({}) rated {:.1} A on the output rail [datasheet]", comp.reference, model.id, i);
+            let cite = format!(
+                "{} ({}) rated {:.1} A on the output rail [datasheet]",
+                comp.reference, model.id, i
+            );
             best = match best {
                 Some((b, _)) if b >= i => best,
                 _ => Some((i, cite)),
@@ -177,7 +187,9 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
         let Some(cap) = &stage.input_bulk_cap else {
             continue;
         };
-        let cap_farads = cap.farads.or_else(|| parse_value(cap.value.trim()).map(|v| v.si));
+        let cap_farads = cap
+            .farads
+            .or_else(|| parse_value(cap.value.trim()).map(|v| v.si));
 
         let rating = input_cap_ripple_rating(board, lib, &cap.reference, cap_farads);
         let i_out = attribute_i_out(board, lib, stage);
@@ -250,7 +262,11 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
                     i_rms,
                     i_out_a,
                     rating_a,
-                    if from_datasheet { " [datasheet]" } else { " [conservative per-class default]" },
+                    if from_datasheet {
+                        " [datasheet]"
+                    } else {
+                        " [conservative per-class default]"
+                    },
                     ratio,
                     i_cite,
                 ),
@@ -306,9 +322,15 @@ mod tests {
         let i_out = 10.0;
         let rating = 3.0; // UCC EKYB630ELL122MLN3S, 3.0 A_rms at 100 kHz / 105 C.
         let i_rms = buck_input_cap_ripple_rms(i_out, 0.5);
-        assert!((i_rms - 5.0).abs() < 1e-9, "worst-case ripple ~5.0 A_rms, got {i_rms}");
+        assert!(
+            (i_rms - 5.0).abs() < 1e-9,
+            "worst-case ripple ~5.0 A_rms, got {i_rms}"
+        );
         let ratio = i_rms / rating;
-        assert!((ratio - 1.6667).abs() < 0.01, "overstress ~1.66x, got {ratio}");
+        assert!(
+            (ratio - 1.6667).abs() < 0.01,
+            "overstress ~1.66x, got {ratio}"
+        );
         assert!(i_rms > rating, "must register as overstress");
     }
 
@@ -319,7 +341,10 @@ mod tests {
         // do not model the output cap here, but assert the input-pulse magnitude
         // is the large one so the check is aimed at the right cap.
         let input_pulse = buck_input_cap_ripple_rms(10.0, 0.5); // 5.0 A
-        assert!(input_pulse >= 4.0, "input cap carries the large pulsed ripple");
+        assert!(
+            input_pulse >= 4.0,
+            "input cap carries the large pulsed ripple"
+        );
     }
 
     #[test]
@@ -334,8 +359,14 @@ mod tests {
         // The division the guard prevents, for a zero rating, is the Inf that
         // formatted as "~infx"; a real positive rating stays finite and sane.
         let i_rms = buck_input_cap_ripple_rms(10.0, 0.5); // 5.0 A_rms
-        assert!(!(i_rms / 0.0).is_finite(), "zero rating divides to a non-finite ratio");
-        assert!((i_rms / 3.0).is_finite(), "a real rating yields a finite ratio");
+        assert!(
+            !(i_rms / 0.0).is_finite(),
+            "zero rating divides to a non-finite ratio"
+        );
+        assert!(
+            (i_rms / 3.0).is_finite(),
+            "a real rating yields a finite ratio"
+        );
     }
 
     #[test]
@@ -344,7 +375,13 @@ mod tests {
         // is in the DB; the real UCC part is 3.0 A. The default under-states, so
         // the check is honest (it will not over-fire on an undocumented cap).
         let d = default_ripple_rating_a(1200e-6).unwrap();
-        assert!(d <= 3.0, "default {d} should not exceed the real ~3.0 A rating");
-        assert!(default_ripple_rating_a(50e-6).is_none(), "decline sub-100uF (MLCC/no default)");
+        assert!(
+            d <= 3.0,
+            "default {d} should not exceed the real ~3.0 A rating"
+        );
+        assert!(
+            default_ripple_rating_a(50e-6).is_none(),
+            "decline sub-100uF (MLCC/no default)"
+        );
     }
 }

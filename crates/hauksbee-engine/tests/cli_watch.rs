@@ -50,7 +50,10 @@ fn watch_reruns_on_change() {
         loop {
             match out.read(&mut chunk) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => buf_thread.lock().unwrap().push_str(&String::from_utf8_lossy(&chunk[..n])),
+                Ok(n) => buf_thread
+                    .lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&chunk[..n])),
             }
         }
     });
@@ -68,7 +71,11 @@ fn watch_reruns_on_change() {
     };
 
     // Run #1 fires immediately at startup.
-    assert!(wait_for("run #1", 30), "startup run did not appear:\n{}", buf.lock().unwrap());
+    assert!(
+        wait_for("run #1", 30),
+        "startup run did not appear:\n{}",
+        buf.lock().unwrap()
+    );
 
     // Now change the file (repeatedly, to ride out filesystem-event latency) and
     // wait for run #2. Re-touch every 700ms so a missed/coalesced event retries.
@@ -87,11 +94,23 @@ fn watch_reruns_on_change() {
     let _ = reader.join();
 
     let captured = buf.lock().unwrap().clone();
-    assert!(saw_run2, "watch did not re-run after the file changed:\n{captured}");
+    assert!(
+        saw_run2,
+        "watch did not re-run after the file changed:\n{captured}"
+    );
     // The stream shows a separator and per-run headers for both runs.
-    assert!(captured.contains("run #1"), "missing run #1 header:\n{captured}");
-    assert!(captured.contains("run #2"), "missing run #2 header:\n{captured}");
-    assert!(captured.contains("changed: blinky.kicad_pcb"), "missing change note:\n{captured}");
+    assert!(
+        captured.contains("run #1"),
+        "missing run #1 header:\n{captured}"
+    );
+    assert!(
+        captured.contains("run #2"),
+        "missing run #2 header:\n{captured}"
+    );
+    assert!(
+        captured.contains("changed: blinky.kicad_pcb"),
+        "missing change note:\n{captured}"
+    );
 }
 
 /// Poll a shared buffer for `needle` for up to `ms` milliseconds.
@@ -117,10 +136,16 @@ fn watch_once_runs_a_single_check_and_exits() {
         .output()
         .expect("run hauksbee watch --once");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("run #1"), "once mode should print the single run:\n{stdout}");
+    assert!(
+        stdout.contains("run #1"),
+        "once mode should print the single run:\n{stdout}"
+    );
     // It exits with the check's own code (0 or 2 for a board), never hanging.
     let code = out.status.code().unwrap_or(-1);
-    assert!(code == 0 || code == 2, "unexpected exit code {code}:\n{stdout}");
+    assert!(
+        code == 0 || code == 2,
+        "unexpected exit code {code}:\n{stdout}"
+    );
 }
 
 #[test]
@@ -135,7 +160,16 @@ fn watch_refuses_unknown_target() {
         .expect("run hauksbee watch on a .txt");
     assert!(!out.status.success(), "watching a .txt must fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("don't know how to watch"), "stderr: {stderr}");
-    assert!(stderr.contains(".board"), "accepted targets listed: {stderr}");
-    assert!(stderr.contains(".toml"), "accepted targets listed: {stderr}");
+    assert!(
+        stderr.contains("don't know how to watch"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(".board"),
+        "accepted targets listed: {stderr}"
+    );
+    assert!(
+        stderr.contains(".toml"),
+        "accepted targets listed: {stderr}"
+    );
 }

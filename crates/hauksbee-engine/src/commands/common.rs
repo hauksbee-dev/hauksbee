@@ -31,7 +31,10 @@ pub fn is_board_code_header(text: &str) -> bool {
 }
 
 pub fn file_name(p: &Path) -> String {
-    p.file_name().and_then(|s| s.to_str()).unwrap_or("board").to_string()
+    p.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("board")
+        .to_string()
 }
 
 /// The dependency panel's backend hooks, shared by `hauksbee serve` and
@@ -79,7 +82,9 @@ pub fn serve(
         // Same checks backend as `hauksbee serve`, so the web checks panel works
         // in the preloaded (`run --serve`) flow too.
         let check: hauksbee_server::frontdoor::CheckRunner =
-            Arc::new(|name, contents, fw, spec| crate::webcheck::run_web_check(name, contents, fw, spec));
+            Arc::new(|name, contents, fw, spec| {
+                crate::webcheck::run_web_check(name, contents, fw, spec)
+            });
 
         // Bind FIRST, then print. The requested port may be busy, in which case
         // the bind falls back to another port; printing `addr` before binding
@@ -96,7 +101,9 @@ pub fn serve(
             // clone has no dist/ yet. Serve the websocket + API regardless (so an
             // external viewer still works) but tell the user how to get the live
             // view rather than leaving them on a blank 404 page.
-            println!("\n  hauksbee websocket server is live at ws://{bound}/ws  (Ctrl-C to stop)\n");
+            println!(
+                "\n  hauksbee websocket server is live at ws://{bound}/ws  (Ctrl-C to stop)\n"
+            );
             println!("  The live viewer at http://{bound} needs the frontend built once:\n");
             println!("      cd frontend && bun install && bun run build\n");
             println!("  then re-run this command. For a quick non-visual check, try:\n");
@@ -126,8 +133,13 @@ pub fn serve(
 /// `dist/index.html`, say so, loudly enough to act on, quietly enough not to
 /// block anything.
 pub fn warn_if_dist_stale(dist_dir: &Path) {
-    let Some(frontend) = dist_dir.parent() else { return };
-    if let Some(msg) = dist_stale_message(dist_dir, &[frontend.join("src"), frontend.join("index.html")]) {
+    let Some(frontend) = dist_dir.parent() else {
+        return;
+    };
+    if let Some(msg) = dist_stale_message(
+        dist_dir,
+        &[frontend.join("src"), frontend.join("index.html")],
+    ) {
         eprintln!("{msg}");
     }
 }
@@ -141,7 +153,9 @@ pub fn dist_stale_message(dist_dir: &Path, source_paths: &[PathBuf]) -> Option<S
     let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
     let mut stack: Vec<PathBuf> = source_paths.to_vec();
     while let Some(p) = stack.pop() {
-        let Ok(meta) = std::fs::metadata(&p) else { continue };
+        let Ok(meta) = std::fs::metadata(&p) else {
+            continue;
+        };
         if meta.is_dir() {
             if let Ok(entries) = std::fs::read_dir(&p) {
                 stack.extend(entries.flatten().map(|e| e.path()));
@@ -200,11 +214,17 @@ mod tests {
             &src.join("components/App.tsx"),
             std::time::SystemTime::now(),
         );
-        let msg = dist_stale_message(&dist, &[src.clone()])
-            .expect("stale dist must produce a warning");
+        let msg =
+            dist_stale_message(&dist, &[src.clone()]).expect("stale dist must produce a warning");
         assert!(msg.contains("STALE"), "message names the condition: {msg}");
-        assert!(msg.contains("App.tsx"), "message names the newer file: {msg}");
-        assert!(msg.contains("bun run build"), "message says how to fix: {msg}");
+        assert!(
+            msg.contains("App.tsx"),
+            "message names the newer file: {msg}"
+        );
+        assert!(
+            msg.contains("bun run build"),
+            "message says how to fix: {msg}"
+        );
 
         // No dist at all (fresh clone): nothing to compare, no warning here
         // (the serve commands already print the build instructions).

@@ -282,19 +282,37 @@ fn saturated_bjt_with_nf_ne_nr_converges() {
     });
     // Rb sets ib ~ 0.42 mA; bf·ib far exceeds the ~4.8 mA Rc allows: hard
     // saturation, vbc forward.
-    c.add(Device::Resistor { name: "RB".into(), a: vcc, b: nb, ohms: 10e3, tc1: None });
-    c.add(Device::Resistor { name: "RC".into(), a: vcc, b: nc, ohms: 1e3, tc1: None });
+    c.add(Device::Resistor {
+        name: "RB".into(),
+        a: vcc,
+        b: nb,
+        ohms: 10e3,
+        tc1: None,
+    });
+    c.add(Device::Resistor {
+        name: "RC".into(),
+        a: vcc,
+        b: nc,
+        ohms: 1e3,
+        tc1: None,
+    });
     c.add(Device::Bjt {
         name: "Q1".into(),
         c: nc,
         b: nb,
         e: NodeId::GROUND,
-        model: BjtModel { nr: 1.5, ..BjtModel::default() },
+        model: BjtModel {
+            nr: 1.5,
+            ..BjtModel::default()
+        },
     });
     let out = run_op(
         &c,
         &SolverOptions::default(),
-        &[Probe::NodeVoltage("c".into()), Probe::NodeVoltage("b".into())],
+        &[
+            Probe::NodeVoltage("c".into()),
+            Probe::NodeVoltage("b".into()),
+        ],
     )
     .expect("NF != NR saturated BJT must converge");
     let vc = out.rows[0][0];

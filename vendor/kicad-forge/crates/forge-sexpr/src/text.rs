@@ -64,7 +64,11 @@ impl Text {
     #[inline]
     pub const fn empty() -> Text {
         // Dangling but well-aligned; len 0 so the pointer is never read.
-        Text { ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(), len: 0, cap: 0 }
+        Text {
+            ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: 0,
+            cap: 0,
+        }
     }
 
     /// A borrowed view of `s`. The caller guarantees `s` lives in a buffer that
@@ -73,7 +77,11 @@ impl Text {
     #[inline]
     pub fn view(s: &str) -> Text {
         debug_assert!(s.len() as u64 <= u32::MAX as u64 - 1);
-        Text { ptr: s.as_ptr(), len: s.len() as u32, cap: SPAN }
+        Text {
+            ptr: s.as_ptr(),
+            len: s.len() as u32,
+            cap: SPAN,
+        }
     }
 
     #[inline]
@@ -82,8 +90,14 @@ impl Text {
             return Text::empty();
         }
         let mut s = std::mem::ManuallyDrop::new(s);
-        debug_assert!(s.capacity() as u64 <= u32::MAX as u64 - 1 && s.len() as u64 <= u32::MAX as u64);
-        let t = Text { ptr: s.as_mut_ptr(), len: s.len() as u32, cap: s.capacity() as u32 };
+        debug_assert!(
+            s.capacity() as u64 <= u32::MAX as u64 - 1 && s.len() as u64 <= u32::MAX as u64
+        );
+        let t = Text {
+            ptr: s.as_mut_ptr(),
+            len: s.len() as u32,
+            cap: s.capacity() as u32,
+        };
         t
     }
 
@@ -120,7 +134,11 @@ impl Drop for Text {
             // SAFETY: these are the raw parts of a String we took ownership of
             // in `from_string`, never freed elsewhere.
             unsafe {
-                drop(String::from_raw_parts(self.ptr as *mut u8, self.len as usize, self.cap as usize));
+                drop(String::from_raw_parts(
+                    self.ptr as *mut u8,
+                    self.len as usize,
+                    self.cap as usize,
+                ));
             }
         }
     }

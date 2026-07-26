@@ -20,7 +20,9 @@
 //! catch every unmodelled chip.) It is `Severity::Low`: a coverage gap, not a
 //! board defect, so it informs without failing a `--strict` gate.
 
-use hauksbee_extract::{Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
+use hauksbee_extract::{
+    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+};
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::resolve;
@@ -35,27 +37,18 @@ const MCU_FAMILY_PREFIXES: &[&str] = &[
     // ARM Cortex-M from ST and pin-compatible clones, plus 8-bit STM8.
     "STM32", "STM8", "GD32", "APM32", "AT32", "PY32", "CKS32", "HK32",
     // Atmel/Microchip AVR.
-    "ATMEGA", "ATTINY", "ATXMEGA", "AT90",
-    // Microchip SAM (Cortex-M).
-    "ATSAM", "SAMD", "SAML", "SAME", "SAMC", "SAMG",
-    // Espressif.
-    "ESP32", "ESP8266", "ESP8285",
-    // Raspberry Pi.
-    "RP2040", "RP2350",
-    // Nordic.
-    "NRF51", "NRF52", "NRF53", "NRF54", "NRF91",
-    // TI MSP.
-    "MSP430", "MSPM0", "MSP432",
-    // Microchip PIC / dsPIC.
+    "ATMEGA", "ATTINY", "ATXMEGA", "AT90", // Microchip SAM (Cortex-M).
+    "ATSAM", "SAMD", "SAML", "SAME", "SAMC", "SAMG", // Espressif.
+    "ESP32", "ESP8266", "ESP8285", // Raspberry Pi.
+    "RP2040", "RP2350", // Nordic.
+    "NRF51", "NRF52", "NRF53", "NRF54", "NRF91", // TI MSP.
+    "MSP430", "MSPM0", "MSP432", // Microchip PIC / dsPIC.
     "PIC10", "PIC12", "PIC16", "PIC18", "PIC24", "PIC32", "DSPIC",
     // NXP LPC / Kinetis / i.MX RT.
-    "LPC8", "LPC11", "LPC15", "LPC17", "LPC18", "LPC40", "LPC43", "LPC54", "LPC55",
-    "MK20", "MK22", "MK64", "MK66", "MKL", "MKE", "MKW", "IMXRT", "MIMXRT", "S32K",
-    // Silicon Labs.
-    "EFM32", "EFR32",
-    // WCH.
-    "CH32", "CH56", "CH57", "CH58", "CH59",
-    // Renesas RA, RISC-V, Nuvoton, misc.
+    "LPC8", "LPC11", "LPC15", "LPC17", "LPC18", "LPC40", "LPC43", "LPC54", "LPC55", "MK20", "MK22",
+    "MK64", "MK66", "MKL", "MKE", "MKW", "IMXRT", "MIMXRT", "S32K", // Silicon Labs.
+    "EFM32", "EFR32", // WCH.
+    "CH32", "CH56", "CH57", "CH58", "CH59", // Renesas RA, RISC-V, Nuvoton, misc.
     "RA2", "RA4", "RA6", "FE310", "GD32VF", "NUC1", "MM32", "HT32", "HC32",
 ];
 
@@ -79,8 +72,8 @@ fn is_active_ic_refdes(reference: &str) -> bool {
 const STRAP_BEARING_PREFIXES: &[&str] = &[
     // STM32 + pin-compatible BOOT0 clones. NB "AT32F" (Artery), NOT "AT32": the
     // bare prefix would also swallow Atmel's AVR32 (AT32UC3…), which has no BOOT0.
-    "STM32", "GD32", "APM32", "AT32F", "CKS32", "HK32", "PY32", "MM32",
-    "ESP32", "ESP8266", "ESP8285", // Espressif strapping pins
+    "STM32", "GD32", "APM32", "AT32F", "CKS32", "HK32", "PY32", "MM32", "ESP32", "ESP8266",
+    "ESP8285", // Espressif strapping pins
 ];
 
 /// True when `s`, uppercased and leading-trimmed, starts with a known MCU family.
@@ -246,7 +239,11 @@ mod tests {
     #[test]
     fn recognises_mcu_by_value_family() {
         assert!(is_probable_mcu(&comp("U4", "STM32WL55CCU6", "Package:QFN")));
-        assert!(is_probable_mcu(&comp("U1", "ATmega328P-AU", "Package:TQFP")));
+        assert!(is_probable_mcu(&comp(
+            "U1",
+            "ATmega328P-AU",
+            "Package:TQFP"
+        )));
         assert!(is_probable_mcu(&comp("IC2", "ESP32-S3", "Module:WROOM")));
         assert!(is_probable_mcu(&comp("U7", "RP2040", "Package:QFN-56")));
         assert!(is_probable_mcu(&comp("U9", "STM8S003F3", "Package:TSSOP")));
@@ -260,14 +257,21 @@ mod tests {
 
         // A description/datasheet that merely opens with a family name is not an MPN.
         let mut by_desc = comp("U6", "buck reg", "Package:QFN");
-        by_desc.properties = vec![("Description".into(), "STM32-compatible level shifter".into())];
+        by_desc.properties = vec![(
+            "Description".into(),
+            "STM32-compatible level shifter".into(),
+        )];
         assert!(!is_probable_mcu(&by_desc));
     }
 
     #[test]
     fn recognises_mcu_by_kicad_symbol_library() {
         // Odd / empty value but the MCU_* symbol library is authoritative.
-        assert!(is_probable_mcu(&comp("U2", "~", "MCU_ST_STM32WL:STM32WL55CCUx")));
+        assert!(is_probable_mcu(&comp(
+            "U2",
+            "~",
+            "MCU_ST_STM32WL:STM32WL55CCUx"
+        )));
     }
 
     #[test]
@@ -275,9 +279,17 @@ mod tests {
         assert!(!is_probable_mcu(&comp("R1", "10k", "Device:R")));
         assert!(!is_probable_mcu(&comp("C5", "100n", "Device:C")));
         // A connector whose value mentions a chip must not trip the active-IC guard.
-        assert!(!is_probable_mcu(&comp("J2", "STM32_DEBUG_HDR", "Connector:Conn_01x04")));
+        assert!(!is_probable_mcu(&comp(
+            "J2",
+            "STM32_DEBUG_HDR",
+            "Connector:Conn_01x04"
+        )));
         // A description that merely *contains* a family name (not at the start).
-        assert!(!is_probable_mcu(&comp("U9", "Level shifter for STM32", "Package:SOT")));
+        assert!(!is_probable_mcu(&comp(
+            "U9",
+            "Level shifter for STM32",
+            "Package:SOT"
+        )));
     }
 
     #[test]
@@ -393,7 +405,11 @@ mod tests {
         };
         let report = mcu_coverage_lint(&board, &lib);
         assert_eq!(
-            report.findings.iter().map(|f| f.refs[0].as_str()).collect::<Vec<_>>(),
+            report
+                .findings
+                .iter()
+                .map(|f| f.refs[0].as_str())
+                .collect::<Vec<_>>(),
             vec!["U1"],
             "a fallback-routed ESP32 (strapless model) must be flagged"
         );
@@ -403,9 +419,17 @@ mod tests {
     /// the bare "AT32" prefix would swallow it, but it has no BOOT0.
     #[test]
     fn avr32_at32uc3_is_not_strap_bearing() {
-        assert!(!is_strap_bearing_family(&comp("U1", "AT32UC3A0512", "Package:TQFP")));
+        assert!(!is_strap_bearing_family(&comp(
+            "U1",
+            "AT32UC3A0512",
+            "Package:TQFP"
+        )));
         // An Artery AT32F403 IS strap-bearing.
-        assert!(is_strap_bearing_family(&comp("U2", "AT32F403ACGU7", "Package:QFN")));
+        assert!(is_strap_bearing_family(&comp(
+            "U2",
+            "AT32F403ACGU7",
+            "Package:QFN"
+        )));
     }
 
     /// A non-strap-bearing MCU must NOT be flagged, even when unmodelled. SAMD

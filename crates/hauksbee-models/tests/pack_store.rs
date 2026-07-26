@@ -42,7 +42,10 @@ fn install_list_remove_round_trip() {
     write_pack(src.path());
 
     let store = PackStore::in_home(home.path());
-    assert!(store.list().unwrap().is_empty(), "fresh store lists nothing");
+    assert!(
+        store.list().unwrap().is_empty(),
+        "fresh store lists nothing"
+    );
 
     // Install: dir contents copied, record written.
     let rec = store.install(src.path(), "local-test").unwrap();
@@ -51,7 +54,10 @@ fn install_list_remove_round_trip() {
     let installed = home.path().join(".hauksbee/packs/acme-diodes@1.2.0");
     assert!(installed.join("pack.toml").is_file());
     assert!(installed.join("models/diodes.toml").is_file());
-    assert!(installed.join("firmware/fixture.txt").is_file(), "fixtures copied");
+    assert!(
+        installed.join("firmware/fixture.txt").is_file(),
+        "fixtures copied"
+    );
     // The installed copy is itself a loadable pack.
     Pack::load(&installed).expect("installed pack must re-validate");
 
@@ -59,8 +65,14 @@ fn install_list_remove_round_trip() {
     let record_path = home.path().join(".hauksbee/packs.toml");
     assert_eq!(store.record_path(), record_path.as_path());
     let record_text = std::fs::read_to_string(&record_path).unwrap();
-    assert!(record_text.contains("acme-diodes"), "packs.toml: {record_text}");
-    assert!(record_text.contains("local-test"), "source recorded: {record_text}");
+    assert!(
+        record_text.contains("acme-diodes"),
+        "packs.toml: {record_text}"
+    );
+    assert!(
+        record_text.contains("local-test"),
+        "source recorded: {record_text}"
+    );
 
     // List sees it.
     let listed = store.list().unwrap();

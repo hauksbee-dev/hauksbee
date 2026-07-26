@@ -37,7 +37,10 @@ fn asbuilt_field_parses_and_resolves_beside_the_spec() {
     );
     let spec = Spec::load(&p).unwrap();
     let resolved = spec.asbuilt_path().expect("asbuilt path");
-    assert!(resolved.ends_with("hauksbee_ci_tests/b.asbuilt.toml"), "got: {resolved:?}");
+    assert!(
+        resolved.ends_with("hauksbee_ci_tests/b.asbuilt.toml"),
+        "got: {resolved:?}"
+    );
 }
 
 #[test]
@@ -88,7 +91,11 @@ fn unknown_net_lists_near_matches() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let err = run(&RunConfig {
+        spec: p,
+        ..Default::default()
+    })
+    .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("not found"), "got: {msg}");
     assert!(
@@ -108,7 +115,11 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let err = run(&RunConfig {
+        spec: p,
+        ..Default::default()
+    })
+    .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("unknown component"), "got: {msg}");
     assert!(
@@ -122,8 +133,7 @@ fn max_current_on_untracked_component_kind_is_rejected_not_green() {
     // C1 is a real capacitor on the board, so the typo check passes, but peak
     // current is only measured for resistors and diodes, so the guard would
     // never be evaluated. That must be a loud rejection, never a green pass.
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
     let p = write_tmp(
         "untracked_current.toml",
         &format!(
@@ -131,7 +141,11 @@ fn max_current_on_untracked_component_kind_is_rejected_not_green() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let err = run(&RunConfig {
+        spec: p,
+        ..Default::default()
+    })
+    .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("C1"), "should name the ref: {msg}");
     assert!(
@@ -145,8 +159,7 @@ fn max_temp_on_component_without_thermal_model_is_rejected_not_green() {
     // U1 (the ESP32 module) is a real component, but MCUs are not
     // stress-monitored, so no junction temperature is ever estimated for it: a
     // max_temp guard on it would report green without being evaluated.
-    let board =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
+    let board = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/inkplate_class.net");
     let p = write_tmp(
         "untracked_temp.toml",
         &format!(
@@ -154,7 +167,11 @@ fn max_temp_on_component_without_thermal_model_is_rejected_not_green() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let err = run(&RunConfig {
+        spec: p,
+        ..Default::default()
+    })
+    .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("U1"), "should name the ref: {msg}");
     assert!(
@@ -262,7 +279,11 @@ fn main {
             board.display()
         ),
     );
-    let result = run(&RunConfig { spec: p, ..Default::default() }).expect(".board spec runs");
+    let result = run(&RunConfig {
+        spec: p,
+        ..Default::default()
+    })
+    .expect(".board spec runs");
     assert!(
         result.passed(),
         "the supplied rail on the compiled .board must hold 3.3 V:\n{}",
@@ -282,7 +303,11 @@ fn boot_coverage_requires_net_min_and_deadline() {
             board.display()
         ),
     );
-    let err = run(&RunConfig { spec: p, ..Default::default() }).unwrap_err();
+    let err = run(&RunConfig {
+        spec: p,
+        ..Default::default()
+    })
+    .unwrap_err();
     assert!(err.to_string().contains("deadline_ms"), "got: {err}");
 }
 

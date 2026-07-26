@@ -33,11 +33,7 @@ impl Pcb {
     /// Parse a `.kicad_pcb` file, verifying the root node is `kicad_pcb`.
     pub fn parse(text: &str) -> Result<Pcb, Error> {
         let doc = parse(text)?;
-        let root_name = doc
-            .root()
-            .and_then(|l| l.name())
-            .unwrap_or("")
-            .to_string();
+        let root_name = doc.root().and_then(|l| l.name()).unwrap_or("").to_string();
         if root_name != "kicad_pcb" {
             return Err(Error::NotPcb(root_name));
         }
@@ -171,10 +167,23 @@ impl Pcb {
     }
 
     /// Add a routed segment. The new node is appended to the root list.
-    pub fn add_segment(&mut self, start: (f64, f64), end: (f64, f64), width: f64, layer: &str, net: Option<i64>) {
+    pub fn add_segment(
+        &mut self,
+        start: (f64, f64),
+        end: (f64, f64),
+        width: f64,
+        layer: &str,
+        net: Option<i64>,
+    ) {
         let mut args = vec![
-            Sexpr::list("start", vec![Sexpr::atom(fmt_f64(start.0)), Sexpr::atom(fmt_f64(start.1))]),
-            Sexpr::list("end",   vec![Sexpr::atom(fmt_f64(end.0)),   Sexpr::atom(fmt_f64(end.1))]),
+            Sexpr::list(
+                "start",
+                vec![Sexpr::atom(fmt_f64(start.0)), Sexpr::atom(fmt_f64(start.1))],
+            ),
+            Sexpr::list(
+                "end",
+                vec![Sexpr::atom(fmt_f64(end.0)), Sexpr::atom(fmt_f64(end.1))],
+            ),
             Sexpr::list("width", vec![Sexpr::atom(fmt_f64(width))]),
             Sexpr::list("layer", vec![Sexpr::Token(Token::string(layer))]),
         ];
@@ -186,11 +195,24 @@ impl Pcb {
     }
 
     /// Add a via. `layers` should be `["F.Cu", "B.Cu"]` for standard vias.
-    pub fn add_via(&mut self, at: (f64, f64), size: f64, drill: f64, layers: &[&str], net: Option<i64>) {
-        let layers_nodes: Vec<Sexpr> = layers.iter().map(|l| Sexpr::Token(Token::string(l))).collect();
+    pub fn add_via(
+        &mut self,
+        at: (f64, f64),
+        size: f64,
+        drill: f64,
+        layers: &[&str],
+        net: Option<i64>,
+    ) {
+        let layers_nodes: Vec<Sexpr> = layers
+            .iter()
+            .map(|l| Sexpr::Token(Token::string(l)))
+            .collect();
         let mut args = vec![
-            Sexpr::list("at",    vec![Sexpr::atom(fmt_f64(at.0)), Sexpr::atom(fmt_f64(at.1))]),
-            Sexpr::list("size",  vec![Sexpr::atom(fmt_f64(size))]),
+            Sexpr::list(
+                "at",
+                vec![Sexpr::atom(fmt_f64(at.0)), Sexpr::atom(fmt_f64(at.1))],
+            ),
+            Sexpr::list("size", vec![Sexpr::atom(fmt_f64(size))]),
             Sexpr::list("drill", vec![Sexpr::atom(fmt_f64(drill))]),
             Sexpr::list("layers", layers_nodes),
         ];
@@ -277,7 +299,12 @@ impl Layer {
         let name = l.arg_value(0)?;
         let kind = l.arg_value(1).unwrap_or_default();
         let canonical_name = l.arg_value(2);
-        Some(Layer { id, name, kind, canonical_name })
+        Some(Layer {
+            id,
+            name,
+            kind,
+            canonical_name,
+        })
     }
 }
 
@@ -348,10 +375,7 @@ impl<'a> Footprint<'a> {
 
     /// All `(pad ...)` children.
     pub fn pads(&self) -> Vec<Pad<'_>> {
-        self.list
-            .find_all("pad")
-            .map(|l| Pad { list: l })
-            .collect()
+        self.list.find_all("pad").map(|l| Pad { list: l }).collect()
     }
 
     /// All `(property "key" "value" ...)` children.
@@ -421,9 +445,7 @@ impl FootprintMut<'_> {
         // Try v6+ property first.
         for l in self.list.children.iter_mut() {
             if let Sexpr::List(l) = l {
-                if l.name() == Some("property")
-                    && l.arg_value(0).as_deref() == Some("Reference")
-                {
+                if l.name() == Some("property") && l.arg_value(0).as_deref() == Some("Reference") {
                     if let Some(Sexpr::Token(t)) = l.children.get_mut(2) {
                         t.raw = forge_sexpr::quote(reference).into();
                         return;
@@ -434,9 +456,7 @@ impl FootprintMut<'_> {
         // Fall back to v5 fp_text.
         for l in self.list.children.iter_mut() {
             if let Sexpr::List(l) = l {
-                if l.name() == Some("fp_text")
-                    && l.arg_value(0).as_deref() == Some("reference")
-                {
+                if l.name() == Some("fp_text") && l.arg_value(0).as_deref() == Some("reference") {
                     if let Some(Sexpr::Token(t)) = l.children.get_mut(2) {
                         t.raw = forge_sexpr::quote(reference).into();
                         return;
@@ -842,7 +862,10 @@ mod pad_transform_tests {
         let fp = pcb.footprints().into_iter().next().expect("one footprint");
         let pad = fp.pads().into_iter().next().expect("one pad");
         let (x, y) = pad.absolute_pos(&fp);
-        assert!((x - 15.0).abs() < 1e-9, "x = {x}, expected 15.0 (y-down rotation)");
+        assert!(
+            (x - 15.0).abs() < 1e-9,
+            "x = {x}, expected 15.0 (y-down rotation)"
+        );
         assert!((y - 20.0).abs() < 1e-9, "y = {y}, expected 20.0");
 
         // 270° sends +Y local onto −X: world (5, 20).

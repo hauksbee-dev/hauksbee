@@ -129,7 +129,8 @@ impl Qmp {
         let req = format!(
             "{{\"execute\":\"qom-set\",\"arguments\":{{\"path\":\"{path}\",\"property\":\"{property}\",\"value\":{value_json}}}}}\n"
         );
-        self.send_and_collect(&req, Duration::from_secs(5)).map(|_| ())
+        self.send_and_collect(&req, Duration::from_secs(5))
+            .map(|_| ())
     }
 
     /// Get a QOM object property via `qom-get`, returning the raw `return` field

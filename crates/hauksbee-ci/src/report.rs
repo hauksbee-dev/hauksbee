@@ -72,16 +72,27 @@ impl EnsembleCoverage {
                  {components} toleranced component(s): statistical coverage, not \
                  worst-case proof"
             ),
-            EnsembleCoverage::Corners { corners, components } => format!(
+            EnsembleCoverage::Corners {
+                corners,
+                components,
+            } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) over \
                  {components} component(s): bounds the worst case only where the \
                  response is monotonic in each value"
             ),
-            EnsembleCoverage::SingleMember { seed, components, corners: true } => format!(
+            EnsembleCoverage::SingleMember {
+                seed,
+                components,
+                corners: true,
+            } => format!(
                 "single corner: corner {seed} over {components} toleranced \
                  component(s): one pinned deterministic corner, not full corner coverage"
             ),
-            EnsembleCoverage::SingleMember { seed, components, corners: false } => format!(
+            EnsembleCoverage::SingleMember {
+                seed,
+                components,
+                corners: false,
+            } => format!(
                 "single ensemble member: seed {seed} over {components} toleranced \
                  component(s): one pinned draw, not ensemble coverage"
             ),
@@ -245,7 +256,11 @@ impl CiResult {
         let synthetic_abort = self.analog_abort && self.invalid_count() == 0;
         let errors = self.invalid_count() + usize::from(synthetic_abort);
         let tests = self.results.len() + usize::from(synthetic_abort);
-        let failures = self.results.iter().filter(|r| !r.passed && !r.invalid).count();
+        let failures = self
+            .results
+            .iter()
+            .filter(|r| !r.passed && !r.invalid)
+            .count();
         let mut out = String::new();
         out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         out.push_str(&format!(
@@ -418,33 +433,55 @@ pub fn render_junit_error(message: &str) -> String {
 /// that have no useful generic pointer.
 fn failure_hint(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "voltage" => "the rail left its window; check the supply feeding this net \
-            and the load pulling it down (docs/ci/CI.md, \"voltage\").",
-        "rail_window" => "the rail dipped/recovered outside the window; check the \
+        "voltage" => {
+            "the rail left its window; check the supply feeding this net \
+            and the load pulling it down (docs/ci/CI.md, \"voltage\")."
+        }
+        "rail_window" => {
+            "the rail dipped/recovered outside the window; check the \
             scenario's load step and the decoupling on this net (docs/ci/CI.md, \
-            \"rail_window\").",
-        "boot-coverage" => "the firmware never drove the control net in time; check \
+            \"rail_window\")."
+        }
+        "boot-coverage" => {
+            "the firmware never drove the control net in time; check \
             `firmware = ...` points at the right image and the net is a GPIO the \
-            firmware actually drives (docs/ci/CI.md, \"boot-coverage\" caveat).",
-        "no_faults" => "the stress monitor tripped; the named component exceeded a \
+            firmware actually drives (docs/ci/CI.md, \"boot-coverage\" caveat)."
+        }
+        "no_faults" => {
+            "the stress monitor tripped; the named component exceeded a \
             rating (over-current / -voltage / -power / -temp / reverse-bias); check \
-            its part value and supply (docs/ci/CI.md, \"no_faults\").",
-        "max_current" => "the part drew more than its limit; check its load and the \
-            override value (docs/ci/CI.md, \"max_current\").",
-        "max_temp" => "the junction ran hotter than the limit; check dissipation and \
-            the `ambient_c` assumption (docs/ci/CI.md, \"max_temp\").",
-        "uart" => "the expected UART text never appeared; check the firmware image \
-            and baud, and that the MCU booted (docs/ci/CI.md, \"uart\").",
-        "toggle" => "the net toggled the wrong number of times; check the firmware's \
-            drive rate and the deadline window (docs/ci/CI.md, \"toggle\").",
-        "protection_trip" => "the supply's protection did/did not latch as asserted; \
+            its part value and supply (docs/ci/CI.md, \"no_faults\")."
+        }
+        "max_current" => {
+            "the part drew more than its limit; check its load and the \
+            override value (docs/ci/CI.md, \"max_current\")."
+        }
+        "max_temp" => {
+            "the junction ran hotter than the limit; check dissipation and \
+            the `ambient_c` assumption (docs/ci/CI.md, \"max_temp\")."
+        }
+        "uart" => {
+            "the expected UART text never appeared; check the firmware image \
+            and baud, and that the MCU booted (docs/ci/CI.md, \"uart\")."
+        }
+        "toggle" => {
+            "the net toggled the wrong number of times; check the firmware's \
+            drive rate and the deadline window (docs/ci/CI.md, \"toggle\")."
+        }
+        "protection_trip" => {
+            "the supply's protection did/did not latch as asserted; \
             check the supply's limits and the load that triggers it (docs/ci/CI.md, \
-            \"protection_trip\").",
-        "phase_margin" => "the loop's phase margin missed the bound; check the \
+            \"protection_trip\")."
+        }
+        "phase_margin" => {
+            "the loop's phase margin missed the bound; check the \
             compensation network and the `[ac]` sweep range (docs/ci/CI.md, \
-            \"phase_margin\").",
-        "ac_gain" => "the small-signal gain missed the band; check the AC stimulus \
-            net and the sweep points (docs/ci/CI.md, \"ac_gain\").",
+            \"phase_margin\")."
+        }
+        "ac_gain" => {
+            "the small-signal gain missed the band; check the AC stimulus \
+            net and the sweep points (docs/ci/CI.md, \"ac_gain\")."
+        }
         _ => return None,
     })
 }
@@ -473,10 +510,24 @@ mod ensemble_coverage_tests {
         // `seeds` is the SAMPLED count (nominal baseline excluded). A one-member
         // Monte-Carlo ran only the nominal → 0 sampled seeds, and the wording
         // must say so rather than claim it sampled one.
-        let one = EnsembleCoverage::MonteCarlo { seeds: 0, components: 3 }.describe();
-        assert!(one.contains("nominal baseline + 0 sampled seed(s)"), "{one}");
-        let many = EnsembleCoverage::MonteCarlo { seeds: 31, components: 3 }.describe();
-        assert!(many.contains("nominal baseline + 31 sampled seed(s)"), "{many}");
+        let one = EnsembleCoverage::MonteCarlo {
+            seeds: 0,
+            components: 3,
+        }
+        .describe();
+        assert!(
+            one.contains("nominal baseline + 0 sampled seed(s)"),
+            "{one}"
+        );
+        let many = EnsembleCoverage::MonteCarlo {
+            seeds: 31,
+            components: 3,
+        }
+        .describe();
+        assert!(
+            many.contains("nominal baseline + 31 sampled seed(s)"),
+            "{many}"
+        );
     }
 
     #[test]
@@ -484,10 +535,17 @@ mod ensemble_coverage_tests {
         // R12: `--seed N` runs exactly one member; the banner must name it and
         // NOT report "nominal baseline + 0 sampled" (the nominal didn't run) or
         // "1 corner" (over-claiming one of 2^n corners).
-        let d =
-            EnsembleCoverage::SingleMember { seed: 7, components: 3, corners: false }.describe();
+        let d = EnsembleCoverage::SingleMember {
+            seed: 7,
+            components: 3,
+            corners: false,
+        }
+        .describe();
         assert!(d.contains("seed 7"), "{d}");
-        assert!(!d.contains("nominal baseline"), "must not claim the nominal ran: {d}");
+        assert!(
+            !d.contains("nominal baseline"),
+            "must not claim the nominal ran: {d}"
+        );
         assert!(!d.contains("corner"), "must not claim corner coverage: {d}");
     }
 
@@ -496,11 +554,24 @@ mod ensemble_coverage_tests {
         // R41: a pinned `--seed N` in CORNERS mode is a deterministic corner, not
         // a random draw. The banner must say "corner N" (matching the mode-aware
         // per-assertion FAIL/INVALID wording), never "seed"/"draw".
-        let d =
-            EnsembleCoverage::SingleMember { seed: 2, components: 2, corners: true }.describe();
-        assert!(d.contains("corner 2"), "corners member must be named a corner: {d}");
-        assert!(!d.contains("seed"), "a corner must not be called a seed: {d}");
-        assert!(!d.contains("draw"), "a corner is deterministic, not a draw: {d}");
+        let d = EnsembleCoverage::SingleMember {
+            seed: 2,
+            components: 2,
+            corners: true,
+        }
+        .describe();
+        assert!(
+            d.contains("corner 2"),
+            "corners member must be named a corner: {d}"
+        );
+        assert!(
+            !d.contains("seed"),
+            "a corner must not be called a seed: {d}"
+        );
+        assert!(
+            !d.contains("draw"),
+            "a corner is deterministic, not a draw: {d}"
+        );
     }
 }
 
@@ -544,7 +615,10 @@ mod substitution_tests {
             "github annotations must warn on the substitution: {gh}"
         );
         // No substitution → none of the surfaces mention it.
-        let clean = CiResult { substitutions: Vec::new(), ..result };
+        let clean = CiResult {
+            substitutions: Vec::new(),
+            ..result
+        };
         assert!(!clean.render_human().contains("SUBSTITUTE"));
     }
 
@@ -583,7 +657,10 @@ mod substitution_tests {
             "github annotations must warn on the coverage hole: {gh}"
         );
         // No hole → no mention on any surface.
-        let clean = CiResult { coverage_warnings: Vec::new(), ..result };
+        let clean = CiResult {
+            coverage_warnings: Vec::new(),
+            ..result
+        };
         assert!(!clean.render_human().contains("COVERAGE HOLE"));
         assert!(!clean.render_junit().contains("COVERAGE HOLE"));
         assert!(!clean.render_github_annotations().contains("COVERAGE HOLE"));

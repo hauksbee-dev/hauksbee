@@ -390,8 +390,14 @@ fn vcvs_dc_matches_analytic() {
     // Tolerances sit above the solver's gmin regularization (1e-12 S shunts
     // perturb the exact answer at the 1e-9 level) but far below any real
     // stamp error.
-    assert!((v_a - 0.5).abs() < 1e-6, "divider: expected 0.5 V, got {v_a}");
-    assert!((v_out - 2.0).abs() < 1e-6, "VCVS: expected 2 V, got {v_out}");
+    assert!(
+        (v_a - 0.5).abs() < 1e-6,
+        "divider: expected 0.5 V, got {v_a}"
+    );
+    assert!(
+        (v_out - 2.0).abs() < 1e-6,
+        "VCVS: expected 2 V, got {v_out}"
+    );
     // Ideal control port: NO current is drawn from the divider (v_a stays at
     // exactly half despite the finite divider impedance).
     let i_br = ws.x[ws.layout.branch(e1).unwrap()];
@@ -656,7 +662,10 @@ fn linear_island_with_current_controlled_source_forces_mna() {
         let p = Partition::analyze(&c);
         assert_eq!(p.islands.len(), 1);
         let isl = &p.islands[0];
-        assert!(isl.linear, "the hazard precondition holds: island is linear");
+        assert!(
+            isl.linear,
+            "the hazard precondition holds: island is linear"
+        );
         assert!(
             LinearIsland::compile(&c, isl, 1e-12, 27.0).is_none(),
             "{}-containing island must refuse state-space reduction",
@@ -873,7 +882,10 @@ fn ccvs_dc_matches_analytic() {
         (i_ctrl - 2e-3).abs() < 1e-9,
         "ammeter current: expected 2 mA, got {i_ctrl}"
     );
-    assert!((v_out - 4.0).abs() < 1e-6, "CCVS: expected 4 V, got {v_out}");
+    assert!(
+        (v_out - 4.0).abs() < 1e-6,
+        "CCVS: expected 4 V, got {v_out}"
+    );
     assert!(
         (i_h + 4e-3).abs() < 1e-9,
         "CCVS branch current: expected -4 mA (sourcing), got {i_h}"
@@ -915,6 +927,12 @@ RL2 d 0 1k
     // Instance 2: i = 3V/1k = 3 mA -> v_d = +6 V. Cross-bound references
     // would show 6 V on b or 2 V on d.
     let (v_b, v_d) = (node("b"), node("d"));
-    assert!((v_b - 2.0).abs() < 1e-6, "X1 output: expected 2 V, got {v_b}");
-    assert!((v_d - 6.0).abs() < 1e-6, "X2 output: expected 6 V, got {v_d}");
+    assert!(
+        (v_b - 2.0).abs() < 1e-6,
+        "X1 output: expected 2 V, got {v_b}"
+    );
+    assert!(
+        (v_d - 6.0).abs() < 1e-6,
+        "X2 output: expected 6 V, got {v_d}"
+    );
 }

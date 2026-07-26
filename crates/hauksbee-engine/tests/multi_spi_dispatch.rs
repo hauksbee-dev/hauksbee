@@ -30,7 +30,10 @@ struct WhoAmISlave {
 
 impl WhoAmISlave {
     fn new(who_am_i: u8) -> Self {
-        WhoAmISlave { who_am_i, pending: false }
+        WhoAmISlave {
+            who_am_i,
+            pending: false,
+        }
     }
 }
 
@@ -56,8 +59,12 @@ impl SpiSlave for WhoAmISlave {
         self.pending = false;
     }
 
-    fn as_any(&self) -> &dyn std::any::Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,8 +109,12 @@ fn per_controller_spi_routing_no_crosstalk() {
     // Verify the controller map lookup: spi2 -> bus_aa, spi3 -> bus_bb.
     // Arc::ptr_eq checks physical identity, not just value equality, so a
     // cross-talk defect (spi3 returning bus_aa) would fail here.
-    let got_spi2 = sched.spi_bus_for_controller("spi2").expect("spi2 registered");
-    let got_spi3 = sched.spi_bus_for_controller("spi3").expect("spi3 registered");
+    let got_spi2 = sched
+        .spi_bus_for_controller("spi2")
+        .expect("spi2 registered");
+    let got_spi3 = sched
+        .spi_bus_for_controller("spi3")
+        .expect("spi3 registered");
 
     assert!(
         Arc::ptr_eq(got_spi2, &bus_aa),
@@ -121,9 +132,12 @@ fn per_controller_spi_routing_no_crosstalk() {
     // Drive the WHO_AM_I read sequence on each bus and verify the response.
     // Command byte 0x75 puts the slave into "pending" state; the following
     // 0x00 dummy byte returns the identity value.
-    let miso_aa_1 = bus_aa.lock().unwrap().transfer(0x75);  // send command
-    let miso_aa_2 = bus_aa.lock().unwrap().transfer(0x00);  // read response
-    assert_eq!(miso_aa_1, 0xFF, "command byte should return 0xFF (bus lines idle)");
+    let miso_aa_1 = bus_aa.lock().unwrap().transfer(0x75); // send command
+    let miso_aa_2 = bus_aa.lock().unwrap().transfer(0x00); // read response
+    assert_eq!(
+        miso_aa_1, 0xFF,
+        "command byte should return 0xFF (bus lines idle)"
+    );
     assert_eq!(miso_aa_2, 0xAA, "spi2 slave (ICM) WHO_AM_I should be 0xAA");
 
     let miso_bb_1 = bus_bb.lock().unwrap().transfer(0x75);
@@ -135,11 +149,21 @@ fn per_controller_spi_routing_no_crosstalk() {
     bus_aa.lock().unwrap().slave_deselect();
     bus_aa.lock().unwrap().transfer(0x75);
     let cross = bus_aa.lock().unwrap().transfer(0x00);
-    assert_ne!(cross, 0xBB, "spi2 bus returned spi3's 0xBB -- cross-talk detected!");
-    assert_eq!(cross, 0xAA, "spi2 should still return 0xAA after deselect+re-read");
+    assert_ne!(
+        cross, 0xBB,
+        "spi2 bus returned spi3's 0xBB -- cross-talk detected!"
+    );
+    assert_eq!(
+        cross, 0xAA,
+        "spi2 should still return 0xAA after deselect+re-read"
+    );
 
     // spi_buses() must contain both (for chunk-boundary deselects).
-    assert_eq!(sched.spi_buses().len(), 2, "both buses must be in spi_buses()");
+    assert_eq!(
+        sched.spi_buses().len(),
+        2,
+        "both buses must be in spi_buses()"
+    );
 }
 
 #[test]
@@ -164,9 +188,14 @@ fn attach_spi_bus_on_coexists_with_legacy_attach_spi_bus() {
     assert_eq!(sched.spi_buses().len(), 2);
 
     // The named one is findable by controller name.
-    let found = sched.spi_bus_for_controller("spi2").expect("spi2 registered");
+    let found = sched
+        .spi_bus_for_controller("spi2")
+        .expect("spi2 registered");
     assert!(Arc::ptr_eq(found, &named_bus));
 
     // The legacy one is NOT findable by any controller name (no key inserted).
-    assert!(sched.spi_bus_for_controller("spi1").is_none(), "legacy bus has no controller key");
+    assert!(
+        sched.spi_bus_for_controller("spi1").is_none(),
+        "legacy bus has no controller key"
+    );
 }

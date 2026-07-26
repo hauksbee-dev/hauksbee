@@ -655,7 +655,11 @@ mod tests {
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x1E], 0xA0);
         assert_eq!(ee.contents()[0x1F], 0xA1);
-        assert_eq!(ee.contents()[0x00], 0xA2, "third byte wraps to the page start");
+        assert_eq!(
+            ee.contents()[0x00],
+            0xA2,
+            "third byte wraps to the page start"
+        );
         assert_eq!(ee.contents()[0x01], 0xA3);
         assert_eq!(
             ee.contents()[0x20],
@@ -670,8 +674,8 @@ mod tests {
         // wraps to 0x00. (With the default 32-byte page it would wrap to 0x20
         // instead, asserted untouched below, so this proves the configured
         // size is honored, not just that some wrap happened.)
-        let mut bus = I2cBus::new("I2C")
-            .with_slave(Box::new(Eeprom24c::new(0x50, 4096).with_page_size(64)));
+        let mut bus =
+            I2cBus::new("I2C").with_slave(Box::new(Eeprom24c::new(0x50, 4096).with_page_size(64)));
         for ev in [
             I2cEvent::Start {
                 addr: 0x50,
@@ -700,8 +704,16 @@ mod tests {
         let ee = bus.slave::<Eeprom24c>(0x50).unwrap();
         assert_eq!(ee.contents()[0x3F], 0xB0);
         assert_eq!(ee.contents()[0x00], 0xB1, "wraps at the 64-byte page end");
-        assert_eq!(ee.contents()[0x20], 0xFF, "a default-32-byte-page wrap would land here");
-        assert_eq!(ee.contents()[0x40], 0xFF, "no spill into the next 64-byte page");
+        assert_eq!(
+            ee.contents()[0x20],
+            0xFF,
+            "a default-32-byte-page wrap would land here"
+        );
+        assert_eq!(
+            ee.contents()[0x40],
+            0xFF,
+            "no spill into the next 64-byte page"
+        );
     }
 
     /// Records `on_stop` deliveries, to prove STOP routing across a
@@ -740,15 +752,30 @@ mod tests {
         use hauksbee_ir::Circuit;
 
         let mut bus = I2cBus::new("I2C")
-            .with_slave(Box::new(StopSpy { addr: 0x60, stops: 0 }))
-            .with_slave(Box::new(StopSpy { addr: 0x48, stops: 0 }));
+            .with_slave(Box::new(StopSpy {
+                addr: 0x60,
+                stops: 0,
+            }))
+            .with_slave(Box::new(StopSpy {
+                addr: 0x48,
+                stops: 0,
+            }));
 
         // Leg 1: write to 0x60. Leg 2 (repeated START, no STOP between): read
         // from 0x48. One physical STOP, naming the last-addressed slave.
         for ev in [
-            I2cEvent::Start { addr: 0x60, read: false },
-            I2cEvent::Write { addr: 0x60, data: 0x08 },
-            I2cEvent::Start { addr: 0x48, read: true },
+            I2cEvent::Start {
+                addr: 0x60,
+                read: false,
+            },
+            I2cEvent::Write {
+                addr: 0x60,
+                data: 0x08,
+            },
+            I2cEvent::Start {
+                addr: 0x48,
+                read: true,
+            },
             I2cEvent::Read { addr: 0x48 },
             I2cEvent::Stop { addr: 0x48 },
         ] {
@@ -756,7 +783,12 @@ mod tests {
         }
         let mut circuit = Circuit::default();
         let volts: Vec<f64> = Vec::new();
-        let mut ctx = TickCtx { circuit: &mut circuit, node_volts: &volts, t: 0.0, dt: 1e-3 };
+        let mut ctx = TickCtx {
+            circuit: &mut circuit,
+            node_volts: &volts,
+            t: 0.0,
+            dt: 1e-3,
+        };
         bus.flush_stops(&mut ctx);
         assert_eq!(
             bus.slave::<StopSpy>(0x60).unwrap().stops,
@@ -768,18 +800,40 @@ mod tests {
         // Same-address repeated START (the register-read idiom): exactly one
         // delivery, not one per leg.
         for ev in [
-            I2cEvent::Start { addr: 0x48, read: false },
-            I2cEvent::Write { addr: 0x48, data: 0x00 },
-            I2cEvent::Start { addr: 0x48, read: true },
+            I2cEvent::Start {
+                addr: 0x48,
+                read: false,
+            },
+            I2cEvent::Write {
+                addr: 0x48,
+                data: 0x00,
+            },
+            I2cEvent::Start {
+                addr: 0x48,
+                read: true,
+            },
             I2cEvent::Read { addr: 0x48 },
             I2cEvent::Stop { addr: 0x48 },
         ] {
             bus.dispatch(ev);
         }
-        let mut ctx = TickCtx { circuit: &mut circuit, node_volts: &volts, t: 0.0, dt: 1e-3 };
+        let mut ctx = TickCtx {
+            circuit: &mut circuit,
+            node_volts: &volts,
+            t: 0.0,
+            dt: 1e-3,
+        };
         bus.flush_stops(&mut ctx);
-        assert_eq!(bus.slave::<StopSpy>(0x48).unwrap().stops, 2, "one more, not two");
-        assert_eq!(bus.slave::<StopSpy>(0x60).unwrap().stops, 1, "untouched slave stays at 1");
+        assert_eq!(
+            bus.slave::<StopSpy>(0x48).unwrap().stops,
+            2,
+            "one more, not two"
+        );
+        assert_eq!(
+            bus.slave::<StopSpy>(0x60).unwrap().stops,
+            1,
+            "untouched slave stays at 1"
+        );
     }
 
     #[test]

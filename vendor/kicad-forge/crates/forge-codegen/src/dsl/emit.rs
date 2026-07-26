@@ -151,13 +151,9 @@ fn read_comps(pcb: &Pcb) -> Vec<Comp> {
         let (x, y, rot) = fp.at();
         let mut pads = Vec::new();
         for pad in fp.pads() {
-            let net = pad.net().and_then(|(_, name)| {
-                if name.is_empty() {
-                    None
-                } else {
-                    Some(name)
-                }
-            });
+            let net =
+                pad.net()
+                    .and_then(|(_, name)| if name.is_empty() { None } else { Some(name) });
             let (px, py, _) = pad.at();
             pads.push(Pad {
                 number: pad.number(),
@@ -256,7 +252,10 @@ impl Program {
             s,
             "# {ncomps} components, {} block(s), {} net(s).",
             self.blocks.len(),
-            self.body.iter().filter(|st| matches!(st, Stmt::Net(_))).count()
+            self.body
+                .iter()
+                .filter(|st| matches!(st, Stmt::Net(_)))
+                .count()
         );
         let _ = writeln!(s, "board version {}", self.version);
         if let Some(o) = &self.outline {

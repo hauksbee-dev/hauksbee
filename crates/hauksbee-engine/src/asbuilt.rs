@@ -430,7 +430,10 @@ impl AsBuiltOverlay {
             return Err(AsBuiltError::MatchCount {
                 origin: self.origin.clone(),
                 line,
-                entry: format!("[[replace]] ref \"{reference}\" matched {} device(s)", hits.len()),
+                entry: format!(
+                    "[[replace]] ref \"{reference}\" matched {} device(s)",
+                    hits.len()
+                ),
                 expected,
                 got: hits.len(),
             });
@@ -731,7 +734,11 @@ fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String> {
             scored.insert((d, k.as_str()), ());
         }
     }
-    scored.keys().take(limit).map(|(_, k)| k.to_string()).collect()
+    scored
+        .keys()
+        .take(limit)
+        .map(|(_, k)| k.to_string())
+        .collect()
 }
 
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -754,9 +761,18 @@ mod tests {
 
     #[test]
     fn glob_matches_star_and_literals() {
-        assert!(glob_match("Net-(ANALOG_SWITCH*05-A)", "Net-(ANALOG_SWITCH1205-A)"));
-        assert!(!glob_match("Net-(ANALOG_SWITCH*05-A)", "Net-(ANALOG_SWITCH1205-B)"));
-        assert!(!glob_match("Net-(ANALOG_SWITCH*05-A)", "Net-(ANALOG_SWITCH1206-A)"));
+        assert!(glob_match(
+            "Net-(ANALOG_SWITCH*05-A)",
+            "Net-(ANALOG_SWITCH1205-A)"
+        ));
+        assert!(!glob_match(
+            "Net-(ANALOG_SWITCH*05-A)",
+            "Net-(ANALOG_SWITCH1205-B)"
+        ));
+        assert!(!glob_match(
+            "Net-(ANALOG_SWITCH*05-A)",
+            "Net-(ANALOG_SWITCH1206-A)"
+        ));
         assert!(glob_match("abc", "abc"));
         assert!(!glob_match("abc", "abcd"));
         assert!(glob_match("*", "anything"));
@@ -771,7 +787,10 @@ mod tests {
         )
         .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("bogus"), "parse error must name the unknown key: {msg}");
+        assert!(
+            msg.contains("bogus"),
+            "parse error must name the unknown key: {msg}"
+        );
     }
 
     #[test]
@@ -903,7 +922,11 @@ mod tests {
         let m = &bound.mcus[0];
         assert_eq!(m.role_nets["adc0"], bus, "role_nets remapped");
         assert_eq!(m.adc_nets[&0], bus, "adc_nets remapped");
-        assert_eq!(m.gpio_drivers[&('A', 5)].net, bus, "gpio driver net remapped");
+        assert_eq!(
+            m.gpio_drivers[&('A', 5)].net,
+            bus,
+            "gpio driver net remapped"
+        );
         assert_eq!(
             bound.dacs[0].vout_drivers[0].as_ref().unwrap().net,
             bus,
@@ -911,6 +934,9 @@ mod tests {
         );
         let d = &bound.digital[0];
         assert_eq!(d.roles["a0"], bus, "digital input role NodeId remapped");
-        assert_eq!(d.drivers["y0"].net, bus, "digital output driver net remapped");
+        assert_eq!(
+            d.drivers["y0"].net, bus,
+            "digital output driver net remapped"
+        );
     }
 }

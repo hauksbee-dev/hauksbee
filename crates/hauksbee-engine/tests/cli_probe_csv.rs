@@ -101,11 +101,17 @@ fn unknown_probe_net_fails_before_run_with_suggestion() {
         "--probe-csv",
         csv.to_str().unwrap(),
     ]);
-    assert!(!out.status.success(), "an unknown probed net must fail the run");
+    assert!(
+        !out.status.success(),
+        "an unknown probed net must fail the run"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("did you mean") && stderr.contains("+5V"),
         "the error should suggest the near-match +5V; got:\n{stderr}"
     );
-    assert!(!csv.exists(), "no CSV should be written when validation fails");
+    assert!(
+        !csv.exists(),
+        "no CSV should be written when validation fails"
+    );
 }

@@ -105,7 +105,10 @@ fn transaction_spanning_a_chunk_boundary_is_not_reset() {
     // Resolve a CS pin: the bus now frames itself, so the scheduler must NOT
     // deselect it at the chunk boundary.
     bus.set_cs_pin(Some(('B', 2)));
-    assert!(bus.frames_itself(), "a resolved CS pin means the bus frames itself");
+    assert!(
+        bus.frames_itself(),
+        "a resolved CS pin means the bus frames itself"
+    );
     assert_eq!(bus.framing_mode(), SpiFramingMode::Exact);
 
     // Begin a READ transaction and clock the first two bytes (instruction + high
@@ -127,7 +130,11 @@ fn transaction_spanning_a_chunk_boundary_is_not_reset() {
     let o = bus.transfer(0x00);
     let k = bus.transfer(0x00);
     bus.cs_deassert();
-    assert_eq!([o, k], [b'O', b'K'], "the boundary-spanning READ returns 'OK' intact");
+    assert_eq!(
+        [o, k],
+        [b'O', b'K'],
+        "the boundary-spanning READ returns 'OK' intact"
+    );
 
     // Contrast: a HEURISTIC bus (no CS pin) is NOT skipped, so the boundary
     // deselect truncates the transaction and the read is corrupted.
@@ -147,7 +154,7 @@ fn transaction_spanning_a_chunk_boundary_is_not_reset() {
     assert_eq!(heuristic.framing_mode(), SpiFramingMode::Heuristic);
     heuristic.transfer(0x03); // READ
     heuristic.transfer(0x00); // addr hi
-    // Boundary: the heuristic path DOES deselect, truncating the transaction.
+                              // Boundary: the heuristic path DOES deselect, truncating the transaction.
     assert!(
         simulate_chunk_boundary_deselect(&mut heuristic),
         "a heuristic bus is deselected at the chunk boundary"

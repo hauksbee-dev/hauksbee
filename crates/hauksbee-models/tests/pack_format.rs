@@ -71,7 +71,13 @@ fn manifest_parse_error_is_named() {
 
 #[test]
 fn each_missing_field_is_named() {
-    for field in ["name", "version", "license", "min_hauksbee_version", "provenance"] {
+    for field in [
+        "name",
+        "version",
+        "license",
+        "min_hauksbee_version",
+        "provenance",
+    ] {
         let src: String = GOOD_MANIFEST
             .lines()
             .filter(|l| !l.trim_start().starts_with(&format!("{field} =")))
@@ -118,7 +124,10 @@ fn min_version_newer_than_build_is_named() {
         "min_hauksbee_version = \"999.0.0\"",
     );
     let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
-    assert!(matches!(e, PackError::IncompatibleVersion { .. }), "got {e:?}");
+    assert!(
+        matches!(e, PackError::IncompatibleVersion { .. }),
+        "got {e:?}"
+    );
 }
 
 #[test]

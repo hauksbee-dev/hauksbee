@@ -126,11 +126,7 @@ mod tests {
     fn empty_net_is_never_suggested() {
         // KiCad's unnamed "no net" bucket must not leak into the suggestion list
         // (it renders as a leading comma). A near-miss of a real net still wins.
-        let known = vec![
-            String::new(),
-            "+5V".to_string(),
-            "GND".to_string(),
-        ];
+        let known = vec![String::new(), "+5V".to_string(), "GND".to_string()];
         let s = near_matches("+5W", &known, 5);
         assert!(!s.iter().any(|n| n.is_empty()), "empty net leaked: {s:?}");
         assert_eq!(s.first().map(String::as_str), Some("+5V"));

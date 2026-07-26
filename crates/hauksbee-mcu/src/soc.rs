@@ -112,7 +112,9 @@ pub enum SocError {
     /// A GPIO port/bank declared `width > 32`. The engine observes a bank as a
     /// single `u32` word (edge detection shifts `1u32 << bit`), so a wider bank
     /// would overflow the shift; refuse it at load rather than panic on poll.
-    #[error("port/bank {letter:?} width {width} exceeds 32; a GPIO bank maps onto one 32-bit word")]
+    #[error(
+        "port/bank {letter:?} width {width} exceeds 32; a GPIO bank maps onto one 32-bit word"
+    )]
     PortTooWide { letter: char, width: u8 },
 
     /// Two GPIO ports/banks claim the same letter; the engine keys on the
@@ -529,13 +531,22 @@ fn validate_controllers(bus: &'static str, controllers: &[String]) -> Result<(),
 /// file stays the single source of truth (the `mcp4728.toml` precedent). Keyed
 /// by the `backend:part` spec [`SocConfig::resolve`] accepts.
 const EMBEDDED: &[(&str, &str)] = &[
-    ("renode:stm32f103", include_str!("../db/mcu/stm32f103.soc.toml")),
+    (
+        "renode:stm32f103",
+        include_str!("../db/mcu/stm32f103.soc.toml"),
+    ),
     (
         "renode:stm32f4_discovery",
         include_str!("../db/mcu/stm32f4_discovery.soc.toml"),
     ),
-    ("renode:nrf52840", include_str!("../db/mcu/nrf52840.soc.toml")),
-    ("renode:sifive_fe310", include_str!("../db/mcu/sifive_fe310.soc.toml")),
+    (
+        "renode:nrf52840",
+        include_str!("../db/mcu/nrf52840.soc.toml"),
+    ),
+    (
+        "renode:sifive_fe310",
+        include_str!("../db/mcu/sifive_fe310.soc.toml"),
+    ),
     ("renode:rp2040", include_str!("../db/mcu/rp2040.soc.toml")),
     ("qemu:esp32", include_str!("../db/mcu/esp32.soc.toml")),
     ("qemu:esp32s3", include_str!("../db/mcu/esp32s3.soc.toml")),
@@ -558,7 +569,9 @@ impl SocConfig {
             Backend::Renode => {
                 #[cfg(feature = "renode")]
                 {
-                    Ok(SocConfig::Renode(crate::renode::RenodeConfig::from_soc_toml(src)?))
+                    Ok(SocConfig::Renode(
+                        crate::renode::RenodeConfig::from_soc_toml(src)?,
+                    ))
                 }
                 #[cfg(not(feature = "renode"))]
                 {
@@ -568,7 +581,9 @@ impl SocConfig {
             Backend::Qemu => {
                 #[cfg(feature = "qemu")]
                 {
-                    Ok(SocConfig::Qemu(crate::qemu::QemuConfig::from_soc_toml(src)?))
+                    Ok(SocConfig::Qemu(crate::qemu::QemuConfig::from_soc_toml(
+                        src,
+                    )?))
                 }
                 #[cfg(not(feature = "qemu"))]
                 {
@@ -644,7 +659,7 @@ impl SocConfig {
                         .map_err(|source| SocError::InvalidDescriptor {
                             path: path.display().to_string(),
                             source: Box::new(source),
-                        })
+                        });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(source) => {
@@ -881,7 +896,10 @@ mod not_found_honesty_tests {
             "stm32f407 must suggest the F4 Discovery descriptor: {hint}"
         );
         for b in &builtins {
-            assert!(hint.contains(b), "hint must list every built-in ({b}): {hint}");
+            assert!(
+                hint.contains(b),
+                "hint must list every built-in ({b}): {hint}"
+            );
         }
         assert!(
             hint.contains("hauksbee models list --builtin"),
@@ -922,15 +940,19 @@ mod not_found_honesty_tests {
     // does not (pure-core test, no env mutation).
     #[test]
     fn missing_explicit_override_dir_warns_and_existing_one_does_not() {
-        let tmp = std::env::temp_dir().join(format!(
-            "hauksbee-soc-test-missing-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("hauksbee-soc-test-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let w = env_dir_missing_warning(&tmp).expect("a missing dir must warn");
-        assert!(w.contains("HAUKSBEE_MCU_DIR") && w.contains("does not exist"), "{w}");
+        assert!(
+            w.contains("HAUKSBEE_MCU_DIR") && w.contains("does not exist"),
+            "{w}"
+        );
         std::fs::create_dir_all(&tmp).unwrap();
-        assert!(env_dir_missing_warning(&tmp).is_none(), "an existing dir must not warn");
+        assert!(
+            env_dir_missing_warning(&tmp).is_none(),
+            "an existing dir must not warn"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -938,18 +960,15 @@ mod not_found_honesty_tests {
     // OTHER descriptors hints at the exact expected filename.
     #[test]
     fn builtin_fallback_names_the_expected_descriptor_filename() {
-        let tmp = std::env::temp_dir().join(format!(
-            "hauksbee-soc-test-fallback-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("hauksbee-soc-test-fallback-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(tmp.join("stm32f103-mine.soc.toml"), "x").unwrap();
         let hints = builtin_fallback_hints("stm32f103", &[tmp.clone()]);
         assert_eq!(hints.len(), 1, "{hints:?}");
         assert!(
-            hints[0].contains("stm32f103.soc.toml")
-                && hints[0].contains("stm32f103-mine.soc.toml"),
+            hints[0].contains("stm32f103.soc.toml") && hints[0].contains("stm32f103-mine.soc.toml"),
             "hint must name both the expected filename and what IS there: {}",
             hints[0]
         );
@@ -958,11 +977,7 @@ mod not_found_honesty_tests {
         std::fs::create_dir_all(&empty).unwrap();
         assert!(builtin_fallback_hints("stm32f103", &[empty]).is_empty());
         // A missing dir produces no hint either.
-        assert!(builtin_fallback_hints(
-            "stm32f103",
-            &[tmp.join("no-such-subdir")]
-        )
-        .is_empty());
+        assert!(builtin_fallback_hints("stm32f103", &[tmp.join("no-such-subdir")]).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
@@ -977,7 +992,13 @@ mod width_validation_tests {
     #[test]
     fn width_over_32_is_refused() {
         let err = validate_ports([('A', 40)].into_iter()).unwrap_err();
-        assert!(matches!(err, SocError::PortTooWide { letter: 'A', width: 40 }));
+        assert!(matches!(
+            err,
+            SocError::PortTooWide {
+                letter: 'A',
+                width: 40
+            }
+        ));
         // 32 is the maximum legal width and must pass.
         assert!(validate_ports([('A', 32)].into_iter()).is_ok());
         // A normal 16-bit port still validates.

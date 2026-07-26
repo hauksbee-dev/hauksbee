@@ -24,7 +24,12 @@ use std::time::Instant;
 mod fixtures;
 use fixtures::build_shunt_array;
 
-fn run(c: &Circuit, part: Partitioning, tstop: f64, dt: f64) -> (Transientish, std::time::Duration) {
+fn run(
+    c: &Circuit,
+    part: Partitioning,
+    tstop: f64,
+    dt: f64,
+) -> (Transientish, std::time::Duration) {
     let opts = SolverOptions {
         integration: Integration::Trapezoidal,
         step: StepControl::Fixed { dt },
@@ -90,9 +95,7 @@ fn solve_both(blocks: usize, tstop: f64) -> (f64, f64, f64, usize, usize) {
 #[test]
 fn rail_tear_matches_monolithic_exactly() {
     let (max_abs, _mono_t, _part_t, nl, steps) = solve_both(24, 60e-6);
-    println!(
-        "rail tear vs monolithic: {nl} blocks, {steps} steps, max |Δv| = {max_abs:.3e}"
-    );
+    println!("rail tear vs monolithic: {nl} blocks, {steps} steps, max |Δv| = {max_abs:.3e}");
     assert!(
         max_abs <= 1e-6,
         "rail-tear diverged from monolithic: {max_abs:.3e} (must be <= 1e-6)"
@@ -139,7 +142,10 @@ fn rail_with_ground_bypass_cap_is_not_torn() {
     let a = mono.0.final_node(&c, "ANALOG_VDD").unwrap_or(0.0);
     let b = auto.0.final_node(&c, "ANALOG_VDD").unwrap_or(0.0);
     max_abs = max_abs.max((a - b).abs());
-    assert!(max_abs <= 1e-6, "fallback diverged from monolithic: {max_abs:.3e}");
+    assert!(
+        max_abs <= 1e-6,
+        "fallback diverged from monolithic: {max_abs:.3e}"
+    );
 }
 
 /// Speed/scaling benchmark (ignored: prints, no assert beyond exactness). The
@@ -156,6 +162,9 @@ fn rail_tear_speed_scaling() {
             std::time::Duration::from_secs_f64(part_t),
             mono_t / part_t.max(1e-9),
         );
-        assert!(max_abs <= 1e-6, "exactness broke at {blocks} blocks: {max_abs:.3e}");
+        assert!(
+            max_abs <= 1e-6,
+            "exactness broke at {blocks} blocks: {max_abs:.3e}"
+        );
     }
 }

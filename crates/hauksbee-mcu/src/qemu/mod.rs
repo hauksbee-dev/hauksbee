@@ -95,9 +95,9 @@ pub use process::{find_qemu, is_available, QemuArch};
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
-use serde::{Deserialize, Serialize};
 use process::QemuProcess;
 use qmp::Qmp;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -345,11 +345,7 @@ impl QemuConfig {
 /// mismatching sibling, so the message is the most relevant one.
 ///
 /// Returns `Err` only on a genuine architecture mismatch.
-fn validate_flash_image_arch(
-    flash_image: &Path,
-    expected: u16,
-    mcu_label: &str,
-) -> Result<()> {
+fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str) -> Result<()> {
     // Case 1: the image is itself an ELF.
     if let Some(found) = crate::elf::read_e_machine(flash_image)? {
         if found != expected {
@@ -745,8 +741,7 @@ impl QemuBackend {
         // (Honest caveat: the guest also runs during the cont/stop QMP round
         // trips, so the true advance is `window` plus some control latency;
         // without icount that slack is unmeasurable and left uncredited.)
-        self.cycles +=
-            (window.as_secs_f64() * self.config.frequency_hz as f64).round() as u64;
+        self.cycles += (window.as_secs_f64() * self.config.frequency_hz as f64).round() as u64;
 
         // Boot-complete detection (one word read per chunk, only until seen):
         // the demo firmware writes MAGIC_VALUE into the mailbox as the first
@@ -1324,11 +1319,19 @@ mod tests {
         let fs = mailbox::ADC_FULL_SCALE_VOLTS;
         assert_eq!(adc_count(0.0, fs, max), 0);
         assert_eq!(adc_count(fs, fs, max), max, "full scale reads the top code");
-        assert_eq!(adc_count(2.0 * fs, fs, max), max, "over-range clamps to the top code");
+        assert_eq!(
+            adc_count(2.0 * fs, fs, max),
+            max,
+            "over-range clamps to the top code"
+        );
         // Near-full-scale: 2^n scaling rounds up to the top code where the old
         // 2^n-1 scaling (round(0.99976*4095)) stuck one code low at 4094.
         let near_full = fs * (f64::from(max) - 0.5) / f64::from(max);
-        assert_eq!(adc_count(near_full, fs, max), max, "the top LSB band reaches 4095");
+        assert_eq!(
+            adc_count(near_full, fs, max),
+            max,
+            "the top LSB band reaches 4095"
+        );
         // A guard against a zero/negative reference.
         assert_eq!(adc_count(1.0, 0.0, max), 0);
     }

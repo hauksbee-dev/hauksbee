@@ -140,9 +140,9 @@ fn firmware_reads_spi_sensor_over_bitbanged_gpios() {
     }
     let text = String::from_utf8_lossy(&out);
     let mut lines = text.lines().filter(|l| !l.is_empty());
-    let line = lines.next().unwrap_or_else(|| {
-        panic!("firmware produced no UART report; raw = {text:?}")
-    });
+    let line = lines
+        .next()
+        .unwrap_or_else(|| panic!("firmware produced no UART report; raw = {text:?}"));
 
     // WHO_AM_I = 0x42; GYRO_CONFIG1 burst = 0x06 then (auto-increment) 0x06.
     assert_eq!(

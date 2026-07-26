@@ -46,7 +46,10 @@ impl Outline {
         self.max_y - self.min_y
     }
     pub fn center(&self) -> (f64, f64) {
-        ((self.min_x + self.max_x) * 0.5, (self.min_y + self.max_y) * 0.5)
+        (
+            (self.min_x + self.max_x) * 0.5,
+            (self.min_y + self.max_y) * 0.5,
+        )
     }
 }
 
@@ -197,24 +200,28 @@ impl Comp {
 impl Program {
     /// Iterate every concrete component in deterministic body order.
     pub fn comps(&self) -> impl Iterator<Item = &Comp> {
-        self.body.iter().flat_map(|s| -> Box<dyn Iterator<Item = &Comp>> {
-            match s {
-                Stmt::Instance(inst) => Box::new(inst.comps.iter().flatten()),
-                Stmt::Single(c) => Box::new(std::iter::once(c)),
-                _ => Box::new(std::iter::empty()),
-            }
-        })
+        self.body
+            .iter()
+            .flat_map(|s| -> Box<dyn Iterator<Item = &Comp>> {
+                match s {
+                    Stmt::Instance(inst) => Box::new(inst.comps.iter().flatten()),
+                    Stmt::Single(c) => Box::new(std::iter::once(c)),
+                    _ => Box::new(std::iter::empty()),
+                }
+            })
     }
 
     /// Mutable access to every concrete component in body order.
     pub fn comps_mut(&mut self) -> impl Iterator<Item = &mut Comp> {
-        self.body.iter_mut().flat_map(|s| -> Box<dyn Iterator<Item = &mut Comp>> {
-            match s {
-                Stmt::Instance(inst) => Box::new(inst.comps.iter_mut().flatten()),
-                Stmt::Single(c) => Box::new(std::iter::once(c)),
-                _ => Box::new(std::iter::empty()),
-            }
-        })
+        self.body
+            .iter_mut()
+            .flat_map(|s| -> Box<dyn Iterator<Item = &mut Comp>> {
+                match s {
+                    Stmt::Instance(inst) => Box::new(inst.comps.iter_mut().flatten()),
+                    Stmt::Single(c) => Box::new(std::iter::once(c)),
+                    _ => Box::new(std::iter::empty()),
+                }
+            })
     }
 
     /// Find a component by reference designator (mutable).

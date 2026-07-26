@@ -54,7 +54,9 @@ use hauksbee_models::{ComponentQuery, ModelLibrary};
 fn builtin(id: &str) -> hauksbee_models::ModelEntry {
     let lib = ModelLibrary::builtin();
     let q = ComponentQuery::new(None, Some(id.to_string()), None);
-    lib.resolve(&q).model.unwrap_or_else(|| panic!("builtin {id} model"))
+    lib.resolve(&q)
+        .model
+        .unwrap_or_else(|| panic!("builtin {id} model"))
 }
 
 /// A spec part driven through per-edge ticks from a persistent pin-state map,
@@ -153,11 +155,18 @@ fn hc595_golden_trajectory_from_byte_exact_proof() {
                 Some(shift),
                 "edge {i}: shift golden (captured from the byte-exact proof)"
             );
-            assert_eq!(rig.lc.register("store"), Some(store), "edge {i}: store golden");
+            assert_eq!(
+                rig.lc.register("store"),
+                Some(store),
+                "edge {i}: store golden"
+            );
         }
     }
     // Output mapping: qa..qh = store bits 0..7, qh_serial = shift[7].
-    for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"].iter().enumerate() {
+    for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+        .iter()
+        .enumerate()
+    {
         assert_eq!(rig.lc.output_level(q), Some((0x0Fu8 >> i) & 1 == 1), "{q}");
     }
     println!("[hc595] 89-edge golden trajectory holds (13 checkpoints)");
@@ -178,8 +187,7 @@ fn nor_latch_golden_trajectory_from_byte_exact_proof() {
     roles.insert("set".to_string(), set_n);
     roles.insert("reset".to_string(), reset_n);
     roles.insert("q".to_string(), q_n);
-    let mut latch =
-        DigitalComponent::new_nor_latch("U_L1".into(), levels, roles, HashMap::new());
+    let mut latch = DigitalComponent::new_nor_latch("U_L1".into(), levels, roles, HashMap::new());
 
     // (pin, level, expected q after the edge), captured from the proof run.
     let seq: &[(&str, bool, bool)] = &[
@@ -225,19 +233,38 @@ fn hc165_silicon_direction_matches_datasheet() {
     let model = builtin("74HC165");
     let mut rig = Rig::from_model(&model);
     // Load 0b1010_0001 (a=1, f=1, h=1), emit-order expectation h,g,f,e,d,c,b,a.
-    for (p, h) in [("pl_n", true), ("clk", false), ("clk_inh", false), ("ser", false),
-                   ("a", true), ("f", true), ("h", true)] {
+    for (p, h) in [
+        ("pl_n", true),
+        ("clk", false),
+        ("clk_inh", false),
+        ("ser", false),
+        ("a", true),
+        ("f", true),
+        ("h", true),
+    ] {
         rig.edge(p, h);
     }
     rig.edge("pl_n", false);
     rig.edge("pl_n", true);
     let expected = [true, false, true, false, false, false, false, true];
-    assert_eq!(rig.lc.output_level("qh"), Some(expected[0]), "QH shows H after load");
-    assert_eq!(rig.lc.output_level("qh_n"), Some(!expected[0]), "QH_n complement");
+    assert_eq!(
+        rig.lc.output_level("qh"),
+        Some(expected[0]),
+        "QH shows H after load"
+    );
+    assert_eq!(
+        rig.lc.output_level("qh_n"),
+        Some(!expected[0]),
+        "QH_n complement"
+    );
     for want in &expected[1..] {
         rig.edge("clk", true);
         rig.edge("clk", false);
-        assert_eq!(rig.lc.output_level("qh"), Some(*want), "datasheet emit order");
+        assert_eq!(
+            rig.lc.output_level("qh"),
+            Some(*want),
+            "datasheet emit order"
+        );
     }
     println!("[hc165] datasheet shift direction (SCLS052I) verified: h,g,f,e,d,c,b,a");
 }
@@ -266,7 +293,9 @@ fn passthrough_fallback_mirrors_wired_pairs() {
         pins.insert(nets["a2"], if pat & 2 != 0 { 5.0 } else { 0.0 });
         pins.insert(nets["a3"], if pat & 4 != 0 { 5.0 } else { 0.0 });
         let v = pins.clone();
-        comp.tick(&mut circuit, &move |n: NodeId| v.get(&n).copied().unwrap_or(0.0));
+        comp.tick(&mut circuit, &move |n: NodeId| {
+            v.get(&n).copied().unwrap_or(0.0)
+        });
         for (i, y) in ["y1", "y2", "y3"].iter().enumerate() {
             assert_eq!(
                 comp.output_level(y),
@@ -325,8 +354,7 @@ fn spec_chain_matches_hc595chain_reference() {
     gpio.insert(n_srclr.0 as i64, ('C', 3));
     gpio.insert(n_ser0.0 as i64, ('B', 3));
     let order = hauksbee_engine::digital::order_595_chain(&ref_chips);
-    let mut reference =
-        Hc595Chain::build(&ref_chips, order, &gpio).expect("reference chain binds");
+    let mut reference = Hc595Chain::build(&ref_chips, order, &gpio).expect("reference chain binds");
 
     let mut log: Vec<(&str, bool)> = vec![("srclr_n", true)];
     for &b in &weights {

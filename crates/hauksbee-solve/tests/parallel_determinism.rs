@@ -17,8 +17,8 @@
 
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
-    AssemblyMode, Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl,
-    Transient, Waveforms,
+    AssemblyMode, Integration, ParallelPolicy, Partitioning, SolverOptions, StepControl, Transient,
+    Waveforms,
 };
 
 // Single source of truth for the graded-board topologies (see the header of

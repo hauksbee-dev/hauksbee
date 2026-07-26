@@ -194,7 +194,9 @@ fn rail_voltage(name: &str) -> Option<f64> {
             // mislabeled a 5 V rail.
             if let Some(v) = numeric_rail_magnitude(&n) {
                 Some(v)
-            } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
+            } else if n.contains("5V")
+                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
+            {
                 Some(5.0)
             } else if (n.contains("3V3") || n.contains("3.3V") || n.contains("3P3"))
                 && !has_signal_role_token(&n)
@@ -226,15 +228,26 @@ fn has_signal_role_token(n: &str) -> bool {
         matches!(
             t,
             "EN" | "ENABLE"
-                | "PG" | "PGOOD" | "POWERGOOD" | "GOOD"
-                | "SEL" | "SELECT"
-                | "DET" | "DETECT"
-                | "MON" | "MONITOR"
-                | "STAT" | "STATUS"
-                | "FLT" | "FAULT"
-                | "INT" | "IRQ"
-                | "RST" | "RESET"
-                | "CTRL" | "CTL"
+                | "PG"
+                | "PGOOD"
+                | "POWERGOOD"
+                | "GOOD"
+                | "SEL"
+                | "SELECT"
+                | "DET"
+                | "DETECT"
+                | "MON"
+                | "MONITOR"
+                | "STAT"
+                | "STATUS"
+                | "FLT"
+                | "FAULT"
+                | "INT"
+                | "IRQ"
+                | "RST"
+                | "RESET"
+                | "CTRL"
+                | "CTL"
         )
     })
 }
@@ -338,8 +351,7 @@ fn is_resistor(c: &Component) -> bool {
 /// miscount, so the I2C check must recognise it.
 fn is_resistor_array(c: &Component) -> bool {
     let r = ref_designator(&c.reference);
-    (r.starts_with("RN") || r.starts_with("RP") || r.starts_with("RM"))
-        && connected_pads(c) >= 3
+    (r.starts_with("RN") || r.starts_with("RP") || r.starts_with("RM")) && connected_pads(c) >= 3
 }
 
 /// Is this an I2C level translator that provides its own bus pull-ups, so an
@@ -608,7 +620,9 @@ fn parse_capacitance_uf(value: &str) -> Option<f64> {
     let n: f64 = if frac.is_empty() {
         num.parse().ok()?
     } else {
-        format!("{}.{}", num.trim_end_matches('.'), frac).parse().ok()?
+        format!("{}.{}", num.trim_end_matches('.'), frac)
+            .parse()
+            .ok()?
     };
     if unit.starts_with("pf") || unit == "p" {
         Some(n / 1_000_000.0)
@@ -811,8 +825,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
             // it so it does not inflate `active_devices` and manufacture the
             // two-device "missing pull-up" case.
             let r = c.reference.to_ascii_uppercase();
-            if r.starts_with('U')
-                || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
+            if r.starts_with('U') || (c.pins.len() > 2 && !is_resistor(c) && !is_resistor_array(c))
             {
                 active_refs.insert(c.reference.as_str());
             }
@@ -1291,7 +1304,10 @@ mod pin_array_tests {
             "Package_SO:SOIC-8_3.9x4.9mm",
             "Package_DFN_QFN:QFN-48-1EP_7x7mm",
         ] {
-            assert!(!is_pin_array_package(fp), "{fp} is a body size, not a pin grid");
+            assert!(
+                !is_pin_array_package(fp),
+                "{fp} is a body size, not a pin grid"
+            );
         }
         // A genuine pin grid (integer counts, no unit) still reads as one.
         for fp in ["PinHeader_1x10", "Connector_2x05", "1X10", "2X20_P2.54mm"] {
@@ -1323,7 +1339,10 @@ mod i2c_pullup_dedup_tests {
         // one device stays one and the check must stay silent.
         let board = ExtractedBoard {
             name: "b".into(),
-            nets: vec![Net { id: 1, name: "SDA".into() }],
+            nets: vec![Net {
+                id: 1,
+                name: "SDA".into(),
+            }],
             components: vec![Component {
                 reference: "U1".into(),
                 value: "SENSOR".into(),
@@ -1441,7 +1460,10 @@ mod mirror_and_pad_tests {
             "Capacitor_SMD:C_0402_1005Metric",
             &[("1", Some(1)), ("2", Some(2))],
         );
-        assert!(is_capacitor(&cap), "mirrored-half cap must classify as a capacitor");
+        assert!(
+            is_capacitor(&cap),
+            "mirrored-half cap must classify as a capacitor"
+        );
     }
 
     #[test]
@@ -1454,9 +1476,18 @@ mod mirror_and_pad_tests {
         let r = comp(
             "R1",
             "Resistor_SMD:R_0402",
-            &[("1", Some(5)), ("1", Some(5)), ("2", Some(6)), ("2", Some(6))],
+            &[
+                ("1", Some(5)),
+                ("1", Some(5)),
+                ("2", Some(6)),
+                ("2", Some(6)),
+            ],
         );
-        assert_eq!(connected_pads(&r), 2, "four entries over two pads = two pads");
+        assert_eq!(
+            connected_pads(&r),
+            2,
+            "four entries over two pads = two pads"
+        );
     }
 }
 
@@ -1470,15 +1501,41 @@ mod wired_or_tests {
         // net whose name merely CONTAINED "INT"/"PG"/etc. Genuine open-drain lines
         // must still be recognised; unrelated push-pull signal nets must not be.
         // Recognised (whole-word, incl. active-low N-prefix and digit index):
-        for name in ["IRQ", "EDP_IRQ", "SENSOR_INT", "INT1", "NINT", "NIRQ", "PG", "PGOOD",
-                     "PG_3V3", "ALERT_N", "NMI", "NFLT", "CPU_RDY", "BUSY0"] {
-            assert!(is_wired_or_name(name), "{name} is a wired-OR/open-drain line");
+        for name in [
+            "IRQ",
+            "EDP_IRQ",
+            "SENSOR_INT",
+            "INT1",
+            "NINT",
+            "NIRQ",
+            "PG",
+            "PGOOD",
+            "PG_3V3",
+            "ALERT_N",
+            "NMI",
+            "NFLT",
+            "CPU_RDY",
+            "BUSY0",
+        ] {
+            assert!(
+                is_wired_or_name(name),
+                "{name} is a wired-OR/open-drain line"
+            );
         }
         // NOT recognised, "INT"/"PG" only appear mid-word, so these push-pull
         // signal nets must stay in the contention check:
-        for name in ["SETPOINT_DAC", "PRINT_HEAD", "MIDPOINT", "INTERNAL_CLK",
-                     "SPGND_SENSE", "SPRING_A"] {
-            assert!(!is_wired_or_name(name), "{name} must not be treated as wired-OR");
+        for name in [
+            "SETPOINT_DAC",
+            "PRINT_HEAD",
+            "MIDPOINT",
+            "INTERNAL_CLK",
+            "SPGND_SENSE",
+            "SPRING_A",
+        ] {
+            assert!(
+                !is_wired_or_name(name),
+                "{name} must not be treated as wired-OR"
+            );
         }
     }
 }

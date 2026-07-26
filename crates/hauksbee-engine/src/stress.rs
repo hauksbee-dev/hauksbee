@@ -961,7 +961,10 @@ mod monitor_temp_tests {
     fn thermal_stress_is_rise_based_not_absolute() {
         // Ambient 25 C, Tj_max 125 C.
         // A part barely above ambient reads ~0, not 25/125 = 0.20.
-        assert!(thermal_stress_frac(26.0, 125.0, 25.0) < 0.02, "idle part ~0");
+        assert!(
+            thermal_stress_frac(26.0, 125.0, 25.0) < 0.02,
+            "idle part ~0"
+        );
         // Exactly ambient reads 0.
         assert_eq!(thermal_stress_frac(25.0, 125.0, 25.0), 0.0);
         // Halfway up the rise band reads 0.5.
@@ -1003,7 +1006,10 @@ mod monitor_temp_tests {
         // R13: a passive with a continuous current rating (an inductor's
         // rated/saturation current) must produce an Overcurrent check. It was
         // omitted, only surge was ever checked for passives.
-        let ratings = Ratings { max_current_a: Some(2.0), ..Default::default() };
+        let ratings = Ratings {
+            max_current_a: Some(2.0),
+            ..Default::default()
+        };
         let meta = DeviceMeta {
             reference: "L1".into(),
             device: DeviceId(0),
@@ -1011,7 +1017,11 @@ mod monitor_temp_tests {
             footprint: String::new(),
             ratings,
         };
-        let op = OperatingPoint { current_a: 3.0, voltage_v: 0.1, power_w: 0.0 };
+        let op = OperatingPoint {
+            current_a: 3.0,
+            voltage_v: 0.1,
+            power_w: 0.0,
+        };
         let checks = build_checks(&meta, &op);
         let oc = checks
             .iter()
@@ -1030,14 +1040,23 @@ mod monitor_temp_tests {
         let mut c = Circuit::new();
         let a = c.node("A");
         let g = c.node("GND");
-        let id = c.add(Device::Resistor { name: "R1".into(), a, b: g, ohms: 100.0, tc1: None });
+        let id = c.add(Device::Resistor {
+            name: "R1".into(),
+            a,
+            b: g,
+            ohms: 100.0,
+            tc1: None,
+        });
         let meta = DeviceMeta {
             reference: "R1".into(),
             device: id,
             kind: ComponentKind::Passive,
             // 1/10 W part carrying 10 V / 100 Ω = 1 W: a 10x sustained overpower.
             footprint: String::new(),
-            ratings: Ratings { max_power_w: Some(0.1), ..Default::default() },
+            ratings: Ratings {
+                max_power_w: Some(0.1),
+                ..Default::default()
+            },
         };
         let mut mon = StressMonitor::new(vec![meta]);
         // 10 V across A->GND; the other node reads 0.
@@ -1057,16 +1076,34 @@ mod monitor_temp_tests {
             raises
         };
 
-        assert_eq!(raise_once(&mut mon, &mut c), 1, "first run raises the overpower fault once");
-        assert!(mon.stress_by_ref().get("R1").copied().unwrap_or(0.0) >= 1.0, "stress pegged");
+        assert_eq!(
+            raise_once(&mut mon, &mut c),
+            1,
+            "first run raises the overpower fault once"
+        );
+        assert!(
+            mon.stress_by_ref().get("R1").copied().unwrap_or(0.0) >= 1.0,
+            "stress pegged"
+        );
 
         // Without a reset the fault stays latched (raised) and does not re-fire.
-        assert_eq!(raise_once(&mut mon, &mut c), 0, "latched: no re-raise without reset");
+        assert_eq!(
+            raise_once(&mut mon, &mut c),
+            0,
+            "latched: no re-raise without reset"
+        );
 
         // reset_tracks clears the latch AND the live stress; the replay re-raises.
         mon.reset_tracks();
-        assert!(mon.stress_by_ref().is_empty(), "reset clears the live stress map");
-        assert_eq!(raise_once(&mut mon, &mut c), 1, "after reset the fault re-raises on replay");
+        assert!(
+            mon.stress_by_ref().is_empty(),
+            "reset clears the live stress map"
+        );
+        assert_eq!(
+            raise_once(&mut mon, &mut c),
+            1,
+            "after reset the fault re-raises on replay"
+        );
     }
 
     #[test]
@@ -1099,8 +1136,14 @@ mod monitor_temp_tests {
                 other => panic!("expected a resistor after destruction, got {other:?}"),
             }
         };
-        assert!(ohms_after(FaultKind::Overcurrent) > 1e9, "over-current opens");
-        assert!(ohms_after(FaultKind::Overvoltage) < 1.0, "reverse over-voltage shorts");
+        assert!(
+            ohms_after(FaultKind::Overcurrent) > 1e9,
+            "over-current opens"
+        );
+        assert!(
+            ohms_after(FaultKind::Overvoltage) < 1.0,
+            "reverse over-voltage shorts"
+        );
     }
 
     #[test]

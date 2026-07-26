@@ -286,7 +286,9 @@ mod tests {
         // to slip past the windowed detector and regress to Unrecognized.
         let mut doc = String::new();
         for i in 0..3000 {
-            doc.push_str(&format!("C  a long comment header line number {i} padding padding\n"));
+            doc.push_str(&format!(
+                "C  a long comment header line number {i} padding padding\n"
+            ));
         }
         assert!(doc.len() > 64 * 1024, "header must exceed the old window");
         doc.push_str("317GND              R1    -1    D0472PA00X+019000Y+029450X0945Y0945R180S0\n");

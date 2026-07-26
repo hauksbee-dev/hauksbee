@@ -58,10 +58,9 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
             for prop in comp.find_all("property") {
                 let key = prop.find_value("name");
                 let val = prop.find_value("value");
-                if key
-                    .as_deref()
-                    .is_some_and(|n| n.eq_ignore_ascii_case("dnp") || n.eq_ignore_ascii_case("exclude_from_board"))
-                {
+                if key.as_deref().is_some_and(|n| {
+                    n.eq_ignore_ascii_case("dnp") || n.eq_ignore_ascii_case("exclude_from_board")
+                }) {
                     // KiCad emits this property (usually value-less) only for DNP
                     // parts. Presence => DNP, unless an explicit falsey value overrides.
                     dnp = !matches!(val.as_deref(), Some("no") | Some("false") | Some("0"));

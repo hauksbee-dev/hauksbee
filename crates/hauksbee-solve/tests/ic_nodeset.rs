@@ -40,15 +40,28 @@ fn ic_uic_seeds_rc_initial_voltage_and_decays() {
     let (circuit, directives) = SpiceLoader::load_with_directives(net).unwrap();
     assert!(directives.use_initial_conditions, "deck carries uic");
     let opts = tran_opts(directives.tran.unwrap(), directives.use_initial_conditions);
-    let out = run_tran(&circuit, &opts, directives.tran.unwrap().tstop, &[Probe::NodeVoltage("out".into())])
-        .expect("transient runs");
+    let out = run_tran(
+        &circuit,
+        &opts,
+        directives.tran.unwrap().tstop,
+        &[Probe::NodeVoltage("out".into())],
+    )
+    .expect("transient runs");
     let v = out.column("V(out)").unwrap();
     let t = out.time.clone().unwrap();
 
     // Starts at the initial condition, not zero.
-    assert!((v[0] - 5.0).abs() < 0.05, "t=0 initial condition ~5V, got {}", v[0]);
+    assert!(
+        (v[0] - 5.0).abs() < 0.05,
+        "t=0 initial condition ~5V, got {}",
+        v[0]
+    );
     // Monotonically decays toward zero.
-    assert!(*v.last().unwrap() < 1.0, "decays well below 5V by 3ms, got {}", v.last().unwrap());
+    assert!(
+        *v.last().unwrap() < 1.0,
+        "decays well below 5V by 3ms, got {}",
+        v.last().unwrap()
+    );
     // At one time constant (~1 ms) the RC tail is ~5*e^-1 = 1.84 V.
     let i_tau = t.iter().position(|&x| x >= 1e-3).unwrap();
     let expected = 5.0 * (-1.0f64).exp();
@@ -82,10 +95,16 @@ fn nodeset_selects_bistable_state_but_does_not_pin() {
         let out = run_op(
             &c,
             &opts,
-            &[Probe::NodeVoltage("qa".into()), Probe::NodeVoltage("qb".into())],
+            &[
+                Probe::NodeVoltage("qa".into()),
+                Probe::NodeVoltage("qb".into()),
+            ],
         )
         .expect("op converges");
-        (out.column("V(qa)").unwrap()[0], out.column("V(qb)").unwrap()[0])
+        (
+            out.column("V(qa)").unwrap()[0],
+            out.column("V(qb)").unwrap()[0],
+        )
     };
 
     // Seed qa toward the high state (but at 3 V, a value that is NOT the
@@ -93,7 +112,10 @@ fn nodeset_selects_bistable_state_but_does_not_pin() {
     // the rail). The seed picks the "qa wins" basin; convergence then walks qa
     // AWAY from the 3 V seed, proving the seed is a guess, not a pin.
     let (qa1, qb1) = latch(".nodeset V(qa)=3 V(qb)=0");
-    assert!(qa1 > qb1 + 1.0, "seed qa-high selects qa>qb: qa={qa1:.3} qb={qb1:.3}");
+    assert!(
+        qa1 > qb1 + 1.0,
+        "seed qa-high selects qa>qb: qa={qa1:.3} qb={qb1:.3}"
+    );
     assert!(
         (qa1 - 3.0).abs() > 0.5,
         "NOT pinned: qa converged away from the 3V seed to {qa1:.4}"
@@ -102,5 +124,8 @@ fn nodeset_selects_bistable_state_but_does_not_pin() {
     // Mirror seed -> the mirror state. Same equations; the seed alone flips the
     // root Newton lands on.
     let (qa2, qb2) = latch(".nodeset V(qa)=0 V(qb)=3");
-    assert!(qb2 > qa2 + 1.0, "seed qb-high selects qb>qa: qa={qa2:.3} qb={qb2:.3}");
+    assert!(
+        qb2 > qa2 + 1.0,
+        "seed qb-high selects qb>qa: qa={qa2:.3} qb={qb2:.3}"
+    );
 }

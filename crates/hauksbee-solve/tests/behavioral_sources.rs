@@ -282,7 +282,10 @@ fn behavioral_voltage_dc_matches_analytic() {
     // FD tangent of a linear expression is exact to rounding; the residual
     // tolerance below is the solver's own convergence bar, not FD error.
     assert!((v_a - 0.5).abs() < 1e-6, "divider: {v_a}");
-    assert!((v_out - 2.0).abs() < 1e-6, "B V-out: expected 2 V, got {v_out}");
+    assert!(
+        (v_out - 2.0).abs() < 1e-6,
+        "B V-out: expected 2 V, got {v_out}"
+    );
     let b1 = c
         .iter()
         .find(|(_, d)| d.name() == "B1")
@@ -343,7 +346,10 @@ fn behavioral_self_reference_converges() {
         (lhs - rhs).abs() < 1e-9,
         "KCL balance violated: {lhs:.3e} vs {rhs:.3e} at v={v}"
     );
-    assert!(v > 0.0 && v < 1.0, "root must sit inside the drive range: {v}");
+    assert!(
+        v > 0.0 && v < 1.0,
+        "root must sit inside the drive range: {v}"
+    );
 }
 
 // --- end-to-end: Auto partitioning never drops the device ---------------------

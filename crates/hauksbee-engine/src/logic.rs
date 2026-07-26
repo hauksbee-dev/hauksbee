@@ -75,9 +75,7 @@ use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
     Node as EvalNode, Value,
 };
-use hauksbee_models::logic_spec::{
-    Edge, Level, Logic, LogicExpr, LogicSpecError, RegisterOp,
-};
+use hauksbee_models::logic_spec::{Edge, Level, Logic, LogicExpr, LogicSpecError, RegisterOp};
 
 /// Fixpoint sweep bound for combinational cycles. Part of the semantics
 /// contract: the compile-time exhaustive check verifies every SCC settles
@@ -350,13 +348,20 @@ impl LogicComponent {
             .registers
             .iter()
             .map(|r| {
-                let mask = if r.bits == 64 { u64::MAX } else { (1u64 << r.bits) - 1 };
+                let mask = if r.bits == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << r.bits) - 1
+                };
                 CompReg {
                     name: r.name.clone(),
                     bits: r.bits,
                     mask,
                     state: r.init & mask,
-                    clock: r.clock.as_ref().map(|c| (input_idx[c.pin.as_str()], c.edge)),
+                    clock: r
+                        .clock
+                        .as_ref()
+                        .map(|c| (input_idx[c.pin.as_str()], c.edge)),
                     prev_clock: false,
                     resets: r
                         .resets
@@ -390,7 +395,8 @@ impl LogicComponent {
         let mut comb: Vec<CompComb> = Vec::with_capacity(validated.comb.len());
         let mut deps: Vec<Vec<usize>> = vec![Vec::new(); output_names.len()];
         let mut reg_bit_vars: Vec<(usize, u32, String)> = Vec::new();
-        let mut seen_bits: std::collections::HashSet<(usize, u32)> = std::collections::HashSet::new();
+        let mut seen_bits: std::collections::HashSet<(usize, u32)> =
+            std::collections::HashSet::new();
         for (out_name, ast) in &validated.comb {
             let out = output_idx[out_name.as_str()];
             let mut src = String::new();
@@ -568,9 +574,8 @@ impl LogicComponent {
                     let _ = self.ctx.set_value(var.clone(), Value::Boolean(v));
                 }
                 for seed_bits in 0u64..(1u64 << k) {
-                    let mut levels: Vec<bool> = (0..k as usize)
-                        .map(|i| (seed_bits >> i) & 1 == 1)
-                        .collect();
+                    let mut levels: Vec<bool> =
+                        (0..k as usize).map(|i| (seed_bits >> i) & 1 == 1).collect();
                     for (i, &mi) in members.iter().enumerate() {
                         let _ = self
                             .ctx
@@ -587,10 +592,9 @@ impl LogicComponent {
                             if v != levels[i] {
                                 levels[i] = v;
                                 changed = true;
-                                let _ = self.ctx.set_value(
-                                    self.output_vars[mi].clone(),
-                                    Value::Boolean(v),
-                                );
+                                let _ = self
+                                    .ctx
+                                    .set_value(self.output_vars[mi].clone(), Value::Boolean(v));
                             }
                         }
                         if !changed {
@@ -762,10 +766,7 @@ impl LogicComponent {
         for ri in 0..self.registers.len() {
             let (cur_clock, next) = {
                 let r = &self.registers[ri];
-                let cur_clock = r
-                    .clock
-                    .map(|(p, _)| self.input_levels[p])
-                    .unwrap_or(false);
+                let cur_clock = r.clock.map(|(p, _)| self.input_levels[p]).unwrap_or(false);
                 let edge_fired = match r.clock {
                     Some((_, Edge::Rising)) => cur_clock && !r.prev_clock,
                     Some((_, Edge::Falling)) => !cur_clock && r.prev_clock,
@@ -844,14 +845,16 @@ impl LogicComponent {
     pub fn refresh_outputs(&mut self) {
         // Bind every variable the expressions read.
         for i in 0..self.input_names.len() {
-            let _ = self
-                .ctx
-                .set_value(self.input_vars[i].clone(), Value::Boolean(self.input_levels[i]));
+            let _ = self.ctx.set_value(
+                self.input_vars[i].clone(),
+                Value::Boolean(self.input_levels[i]),
+            );
         }
         for i in 0..self.output_names.len() {
-            let _ = self
-                .ctx
-                .set_value(self.output_vars[i].clone(), Value::Boolean(self.output_levels[i]));
+            let _ = self.ctx.set_value(
+                self.output_vars[i].clone(),
+                Value::Boolean(self.output_levels[i]),
+            );
         }
         for (ri, bit, var) in &self.reg_bit_vars {
             let v = (self.registers[*ri].state >> bit) & 1 == 1;
@@ -977,9 +980,36 @@ data_in = "shift"
     fn shift_out_msb(lc: &mut LogicComponent, byte: u8, srclr: bool, oe: bool) {
         for bit in (0..8).rev() {
             let b = (byte >> bit) & 1 == 1;
-            tick_with(lc, &[("ser", b), ("srclk", false), ("rclk", false), ("srclr_n", srclr), ("oe_n", oe)]);
-            tick_with(lc, &[("ser", b), ("srclk", true), ("rclk", false), ("srclr_n", srclr), ("oe_n", oe)]);
-            tick_with(lc, &[("ser", b), ("srclk", false), ("rclk", false), ("srclr_n", srclr), ("oe_n", oe)]);
+            tick_with(
+                lc,
+                &[
+                    ("ser", b),
+                    ("srclk", false),
+                    ("rclk", false),
+                    ("srclr_n", srclr),
+                    ("oe_n", oe),
+                ],
+            );
+            tick_with(
+                lc,
+                &[
+                    ("ser", b),
+                    ("srclk", true),
+                    ("rclk", false),
+                    ("srclr_n", srclr),
+                    ("oe_n", oe),
+                ],
+            );
+            tick_with(
+                lc,
+                &[
+                    ("ser", b),
+                    ("srclk", false),
+                    ("rclk", false),
+                    ("srclr_n", srclr),
+                    ("oe_n", oe),
+                ],
+            );
         }
     }
 
@@ -987,16 +1017,43 @@ data_in = "shift"
     fn hc595_shifts_and_latches_msb_first() {
         let mut lc = compile(HC595);
         shift_out_msb(&mut lc, 0xA6, true, false);
-        assert_eq!(lc.register("shift"), Some(0xA6), "shift register after 8 clocks");
-        assert_eq!(lc.register("store"), Some(0x00), "store unlatched until RCLK");
+        assert_eq!(
+            lc.register("shift"),
+            Some(0xA6),
+            "shift register after 8 clocks"
+        );
+        assert_eq!(
+            lc.register("store"),
+            Some(0x00),
+            "store unlatched until RCLK"
+        );
         // qh_serial tracks the shift register's top bit before the latch.
-        assert_eq!(lc.output_level("qh_serial"), Some(true), "0xA6 bit7 at the tap");
+        assert_eq!(
+            lc.output_level("qh_serial"),
+            Some(true),
+            "0xA6 bit7 at the tap"
+        );
         // RCLK pulse latches.
-        tick_with(&mut lc, &[("srclk", false), ("rclk", true), ("srclr_n", true), ("oe_n", false)]);
-        assert_eq!(lc.register("store"), Some(0xA6), "RCLK rising latched shift->store");
+        tick_with(
+            &mut lc,
+            &[
+                ("srclk", false),
+                ("rclk", true),
+                ("srclr_n", true),
+                ("oe_n", false),
+            ],
+        );
+        assert_eq!(
+            lc.register("store"),
+            Some(0xA6),
+            "RCLK rising latched shift->store"
+        );
         // qa..qh mirror store bits 0..7.
         let byte = 0xA6u8;
-        for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"].iter().enumerate() {
+        for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+            .iter()
+            .enumerate()
+        {
             assert_eq!(
                 lc.output_level(q),
                 Some((byte >> i) & 1 == 1),
@@ -1012,9 +1069,24 @@ data_in = "shift"
         assert_eq!(lc.register("shift"), Some(0xFF));
         // Assert clear, then clock while held: the register stays cleared
         // (TI SN74HC595 function table: SRCLR L + SRCLK X -> cleared).
-        tick_with(&mut lc, &[("srclk", false), ("srclr_n", false), ("oe_n", false)]);
-        assert_eq!(lc.register("shift"), Some(0x00), "clear wipes the shift register");
-        tick_with(&mut lc, &[("ser", true), ("srclk", true), ("srclr_n", false), ("oe_n", false)]);
+        tick_with(
+            &mut lc,
+            &[("srclk", false), ("srclr_n", false), ("oe_n", false)],
+        );
+        assert_eq!(
+            lc.register("shift"),
+            Some(0x00),
+            "clear wipes the shift register"
+        );
+        tick_with(
+            &mut lc,
+            &[
+                ("ser", true),
+                ("srclk", true),
+                ("srclr_n", false),
+                ("oe_n", false),
+            ],
+        );
         assert_eq!(
             lc.register("shift"),
             Some(0x00),
@@ -1030,9 +1102,22 @@ data_in = "shift"
         let mut lc = compile(HC595);
         shift_out_msb(&mut lc, 0x01, true, false);
         assert_eq!(lc.register("shift"), Some(0x01));
-        tick_with(&mut lc, &[("ser", true), ("srclk", true), ("rclk", true), ("srclr_n", true), ("oe_n", false)]);
+        tick_with(
+            &mut lc,
+            &[
+                ("ser", true),
+                ("srclk", true),
+                ("rclk", true),
+                ("srclr_n", true),
+                ("oe_n", false),
+            ],
+        );
         assert_eq!(lc.register("shift"), Some(0x03), "shift took the new bit");
-        assert_eq!(lc.register("store"), Some(0x01), "store captured the pre-shift value");
+        assert_eq!(
+            lc.register("store"),
+            Some(0x01),
+            "store captured the pre-shift value"
+        );
     }
 
     #[test]
@@ -1040,7 +1125,11 @@ data_in = "shift"
         let mut lc = compile(HC595);
         tick_with(&mut lc, &[("oe_n", true), ("srclr_n", true)]);
         for q in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"] {
-            assert_eq!(lc.output_enabled(q), Some(false), "{q} tri-stated while OE_n high");
+            assert_eq!(
+                lc.output_enabled(q),
+                Some(false),
+                "{q} tri-stated while OE_n high"
+            );
         }
         assert_eq!(
             lc.output_enabled("qh_serial"),
@@ -1075,19 +1164,48 @@ load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g"
         let mut lc = compile(HC165);
         // Parallel-load 0b1010_0001 (a=1, f=1, h=1).
         let hi = [("a", true), ("f", true), ("h", true)];
-        let mut base: Vec<(&str, bool)> = vec![("pl_n", false), ("clk", false), ("clk_inh", false), ("ser", false)];
+        let mut base: Vec<(&str, bool)> = vec![
+            ("pl_n", false),
+            ("clk", false),
+            ("clk_inh", false),
+            ("ser", false),
+        ];
         base.extend_from_slice(&hi);
         tick_with(&mut lc, &base);
         assert_eq!(lc.register("reg"), Some(0b1010_0001));
-        assert_eq!(lc.output_level("qh"), Some(true), "QH shows H right after load");
-        assert_eq!(lc.output_level("qh_n"), Some(false), "QH_n is the complement");
+        assert_eq!(
+            lc.output_level("qh"),
+            Some(true),
+            "QH shows H right after load"
+        );
+        assert_eq!(
+            lc.output_level("qh_n"),
+            Some(false),
+            "QH_n is the complement"
+        );
 
         // Release PL, clock: QH walks H, G, F, ... (silicon direction).
         let expected = [true, false, true, false, false, false, false, true]; // h,g,f,e,d,c,b,a
         assert_eq!(lc.output_level("qh"), Some(expected[0]));
         for want in &expected[1..] {
-            tick_with(&mut lc, &[("pl_n", true), ("clk", true), ("clk_inh", false), ("ser", false)]);
-            tick_with(&mut lc, &[("pl_n", true), ("clk", false), ("clk_inh", false), ("ser", false)]);
+            tick_with(
+                &mut lc,
+                &[
+                    ("pl_n", true),
+                    ("clk", true),
+                    ("clk_inh", false),
+                    ("ser", false),
+                ],
+            );
+            tick_with(
+                &mut lc,
+                &[
+                    ("pl_n", true),
+                    ("clk", false),
+                    ("clk_inh", false),
+                    ("ser", false),
+                ],
+            );
             assert_eq!(lc.output_level("qh"), Some(*want));
         }
     }
@@ -1095,11 +1213,23 @@ load = { pin = "pl_n", active = "low", data = ["a", "b", "c", "d", "e", "f", "g"
     #[test]
     fn hc165_clock_inhibit_blocks_shifts() {
         let mut lc = compile(HC165);
-        tick_with(&mut lc, &[("pl_n", false), ("clk", false), ("clk_inh", false), ("h", true)]);
+        tick_with(
+            &mut lc,
+            &[
+                ("pl_n", false),
+                ("clk", false),
+                ("clk_inh", false),
+                ("h", true),
+            ],
+        );
         assert_eq!(lc.output_level("qh"), Some(true));
         // CLK_INH high: rising clock does nothing.
         tick_with(&mut lc, &[("pl_n", true), ("clk", true), ("clk_inh", true)]);
-        assert_eq!(lc.register("reg"), Some(0x80), "inhibited clock held the register");
+        assert_eq!(
+            lc.register("reg"),
+            Some(0x80),
+            "inhibited clock held the register"
+        );
     }
 
     const NOR_LATCH: &str = r#"
@@ -1132,7 +1262,11 @@ outputs = ["q", "qb"]
         assert_eq!(lc.output_level("q"), Some(false), "SET drives Q LOW");
         // Spike clears: HELD LOW (the latch memory).
         tick_with(&mut lc, &[("set", false), ("reset", false)]);
-        assert_eq!(lc.output_level("q"), Some(false), "held LOW after the pulse");
+        assert_eq!(
+            lc.output_level("q"),
+            Some(false),
+            "held LOW after the pulse"
+        );
         // RESET: back to idle HIGH.
         tick_with(&mut lc, &[("set", false), ("reset", true)]);
         assert_eq!(lc.output_level("q"), Some(true), "RESET returns idle HIGH");
@@ -1207,18 +1341,61 @@ data_in = "d"
 "#,
         );
         // Clock a 1 through D.
-        tick_with(&mut lc, &[("d", true), ("clk", false), ("pre_n", true), ("clr_n", true)]);
-        tick_with(&mut lc, &[("d", true), ("clk", true), ("pre_n", true), ("clr_n", true)]);
-        assert_eq!(lc.output_level("q"), Some(true), "D captured on rising edge");
+        tick_with(
+            &mut lc,
+            &[
+                ("d", true),
+                ("clk", false),
+                ("pre_n", true),
+                ("clr_n", true),
+            ],
+        );
+        tick_with(
+            &mut lc,
+            &[("d", true), ("clk", true), ("pre_n", true), ("clr_n", true)],
+        );
+        assert_eq!(
+            lc.output_level("q"),
+            Some(true),
+            "D captured on rising edge"
+        );
         assert_eq!(lc.output_level("q_n"), Some(false));
         // D changes while clock low: no effect.
-        tick_with(&mut lc, &[("d", false), ("clk", false), ("pre_n", true), ("clr_n", true)]);
-        assert_eq!(lc.output_level("q"), Some(true), "level-insensitive between edges");
+        tick_with(
+            &mut lc,
+            &[
+                ("d", false),
+                ("clk", false),
+                ("pre_n", true),
+                ("clr_n", true),
+            ],
+        );
+        assert_eq!(
+            lc.output_level("q"),
+            Some(true),
+            "level-insensitive between edges"
+        );
         // Async clear dominates the clock.
-        tick_with(&mut lc, &[("d", true), ("clk", true), ("pre_n", true), ("clr_n", false)]);
+        tick_with(
+            &mut lc,
+            &[
+                ("d", true),
+                ("clk", true),
+                ("pre_n", true),
+                ("clr_n", false),
+            ],
+        );
         assert_eq!(lc.output_level("q"), Some(false), "CLR_n forces 0");
         // Async preset.
-        tick_with(&mut lc, &[("d", false), ("clk", false), ("pre_n", false), ("clr_n", true)]);
+        tick_with(
+            &mut lc,
+            &[
+                ("d", false),
+                ("clk", false),
+                ("pre_n", false),
+                ("clr_n", true),
+            ],
+        );
         assert_eq!(lc.output_level("q"), Some(true), "PRE_n forces 1");
     }
 
@@ -1254,8 +1431,16 @@ op = "count_up"
         let seq = [("ser", true), ("srclk", false)];
         tick_with(&mut lc, &seq);
         tick_with(&mut lc, &[("ser", true), ("srclk", true)]);
-        assert_eq!(lc.register("shift"), Some(0x01), "unwired SRCLR_n reads released");
-        assert_eq!(lc.output_enabled("qa"), Some(true), "unwired OE_n stays enabled");
+        assert_eq!(
+            lc.register("shift"),
+            Some(0x01),
+            "unwired SRCLR_n reads released"
+        );
+        assert_eq!(
+            lc.output_enabled("qa"),
+            Some(true),
+            "unwired OE_n stays enabled"
+        );
     }
 
     #[test]
@@ -1275,7 +1460,11 @@ data_in = "d"
 "#,
         );
         tick_with(&mut lc, &[("d", true), ("clkn", true)]);
-        assert_eq!(lc.output_level("q"), Some(false), "rising edge does nothing");
+        assert_eq!(
+            lc.output_level("q"),
+            Some(false),
+            "rising edge does nothing"
+        );
         tick_with(&mut lc, &[("d", true), ("clkn", false)]);
         assert_eq!(lc.output_level("q"), Some(true), "falling edge captures D");
     }
@@ -1285,9 +1474,15 @@ data_in = "d"
         // The chain-mirror / latch_byte path: overwrite store, refresh, read qa..qh.
         let mut lc = compile(HC595);
         assert!(lc.set_register("store", 0x5A));
-        assert!(!lc.set_register("nonexistent", 1), "unknown register refused");
+        assert!(
+            !lc.set_register("nonexistent", 1),
+            "unknown register refused"
+        );
         lc.refresh_outputs();
-        for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"].iter().enumerate() {
+        for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+            .iter()
+            .enumerate()
+        {
             assert_eq!(lc.output_level(q), Some((0x5Au8 >> i) & 1 == 1));
         }
     }

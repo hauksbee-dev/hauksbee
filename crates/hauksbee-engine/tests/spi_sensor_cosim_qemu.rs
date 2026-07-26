@@ -32,16 +32,15 @@ use std::sync::{Arc, Mutex};
 use hauksbee_engine::binder::bind_board;
 use hauksbee_engine::{HauksbeeEngine, Mcp3008, SpiBus};
 use hauksbee_extract::ExtractedBoard;
-use hauksbee_models::ModelLibrary;
 use hauksbee_mcu::qemu::{is_available, QemuArch};
+use hauksbee_models::ModelLibrary;
 use hauksbee_server::engine::Engine;
 use std::path::PathBuf;
 
 fn board_text() -> String {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/boards/esp32_spi_adc_demo.kicad_pcb");
-    std::fs::read_to_string(&p)
-        .unwrap_or_else(|_| panic!("read esp32 SPI ADC board from {p:?}"))
+    std::fs::read_to_string(&p).unwrap_or_else(|_| panic!("read esp32 SPI ADC board from {p:?}"))
 }
 
 fn flash_image() -> Option<PathBuf> {
@@ -66,8 +65,9 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
     let bound = bind_board(&board, &lib);
     let fw = flash_image().expect("flash.bin present");
 
-    let mut engine = HauksbeeEngine::from_bound(bound, Some(&fw), "/boards/esp32_spi_adc_demo.kicad_pcb")
-        .expect("build ESP32 SPI engine");
+    let mut engine =
+        HauksbeeEngine::from_bound(bound, Some(&fw), "/boards/esp32_spi_adc_demo.kicad_pcb")
+            .expect("build ESP32 SPI engine");
 
     // Coarse chunk for QEMU (each cont/stop + mailbox read is a control round-trip).
     engine.scheduler_mut().chunk_s = 5e-3;
@@ -76,7 +76,9 @@ fn run_at_voltage(ch0_volts: f64, ms: u32) -> f64 {
     let mut adc = Mcp3008::new(3.3);
     adc.set_channel(0, ch0_volts);
     let bus = Arc::new(Mutex::new(SpiBus::new("U2", Box::new(adc))));
-    engine.scheduler_mut().attach_spi_bus(bus.clone(), None, None);
+    engine
+        .scheduler_mut()
+        .attach_spi_bus(bus.clone(), None, None);
 
     let frame_dt = 5e-3_f64;
     let n = (ms as f64 / 1000.0 / frame_dt).round() as usize;
@@ -160,19 +162,22 @@ fn esp32_spi_adc_flag_follows_voltage_sweep() {
     // With a working SPI bridge: below threshold -> FLAG LOW, at/above -> FLAG HIGH.
     // With the current no-op bridge: FLAG is always LOW (ADC reads 0 every time).
     let sweep: &[(f64, bool)] = &[
-        (0.5,  false),  // well below threshold
-        (1.0,  false),  // below threshold
-        (1.64, false),  // just below threshold
-        (1.65, true),   // at threshold (counts == 512)
-        (2.0,  true),   // above threshold
-        (3.0,  true),   // near Vref
+        (0.5, false),  // well below threshold
+        (1.0, false),  // below threshold
+        (1.64, false), // just below threshold
+        (1.65, true),  // at threshold (counts == 512)
+        (2.0, true),   // above threshold
+        (3.0, true),   // near Vref
     ];
 
     let mut failures = Vec::new();
     for &(volts, expect_high) in sweep {
         let v = run_at_voltage(volts, 500);
         let got_high = v > 2.0;
-        eprintln!("  {volts:.2} V -> FLAG {v:.3} V ({})", if got_high { "HIGH" } else { "LOW" });
+        eprintln!(
+            "  {volts:.2} V -> FLAG {v:.3} V ({})",
+            if got_high { "HIGH" } else { "LOW" }
+        );
         if got_high != expect_high {
             failures.push((volts, expect_high, v));
         }
@@ -201,8 +206,9 @@ fn esp32_spi_adc_uart_announces_ready() {
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
 
-    let mut engine = HauksbeeEngine::from_bound(bound, Some(&fw), "/boards/esp32_spi_adc_demo.kicad_pcb")
-        .expect("build ESP32 SPI engine for UART check");
+    let mut engine =
+        HauksbeeEngine::from_bound(bound, Some(&fw), "/boards/esp32_spi_adc_demo.kicad_pcb")
+            .expect("build ESP32 SPI engine for UART check");
     engine.scheduler_mut().chunk_s = 5e-3;
 
     let frame_dt = 5e-3_f64;

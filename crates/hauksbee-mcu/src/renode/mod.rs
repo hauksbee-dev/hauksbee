@@ -35,8 +35,8 @@ pub use process::{find_renode, is_available};
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
-use serde::{Deserialize, Serialize};
 use process::RenodeProcess;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -878,7 +878,10 @@ impl RenodeBackend {
         // Bring up the machine.
         let mach = monitor.command(&format!("mach create \"{}\"", config.machine))?;
         if monitor_failed(&mach) {
-            bail!("Renode failed to create machine \"{}\": {mach}", config.machine);
+            bail!(
+                "Renode failed to create machine \"{}\": {mach}",
+                config.machine
+            );
         }
         let plat = monitor.command(&format!(
             "machine LoadPlatformDescription {}",
@@ -971,7 +974,10 @@ impl RenodeBackend {
         let dir = port.dir?;
         let read_word = |monitor: &mut Monitor, offset: u32| -> Option<u32> {
             let cmd = format!("sysbus.{} ReadDoubleWord 0x{:X}", port.peripheral, offset);
-            monitor.command(&cmd).ok().and_then(|r| parse_hex_or_dec(&r))
+            monitor
+                .command(&cmd)
+                .ok()
+                .and_then(|r| parse_hex_or_dec(&r))
         };
         let low = read_word(&mut self.monitor, dir.offset);
         let high = match dir.encoding {
@@ -1186,9 +1192,9 @@ impl RenodeBackend {
         if !self.spi_extra_repl_loaded {
             if let Some(extra) = self.config.spi_extra_repl.clone() {
                 let escaped = extra.replace('"', "\\\"");
-                let resp = self
-                    .monitor
-                    .command(&format!("machine LoadPlatformDescriptionFromString \"{escaped}\""))?;
+                let resp = self.monitor.command(&format!(
+                    "machine LoadPlatformDescriptionFromString \"{escaped}\""
+                ))?;
                 if monitor_failed(&resp) {
                     bail!("Renode failed to add SPI controllers: {resp}");
                 }
@@ -1199,9 +1205,9 @@ impl RenodeBackend {
         // Register the bridge peripheral on just this controller.
         // SPI uses NullRegistrationPoint: no address, just `@ spi2`.
         let repl = format!("{device_name}: SPI.{class_name} @ {controller}");
-        let resp = self
-            .monitor
-            .command(&format!("machine LoadPlatformDescriptionFromString \"{repl}\""))?;
+        let resp = self.monitor.command(&format!(
+            "machine LoadPlatformDescriptionFromString \"{repl}\""
+        ))?;
         if monitor_failed(&resp) {
             bail!("Renode failed to register SPI bridge on {controller}: {resp}");
         }
@@ -1571,10 +1577,8 @@ impl Mcu for RenodeBackend {
         // recorded. The trace is printed to stderr at the end of the run (see
         // `dump_trace` / `Drop`). Zero overhead when the env var is unset.
         if std::env::var_os("HAUKSBEE_RENODE_TRACE").is_some() {
-            let trace_path = std::env::temp_dir().join(format!(
-                "hauksbee-renode-trace-{}.log",
-                std::process::id()
-            ));
+            let trace_path = std::env::temp_dir()
+                .join(format!("hauksbee-renode-trace-{}.log", std::process::id()));
             let path_str = trace_path.to_str().unwrap_or("").to_string();
             // `logFile @<path>` redirects Renode's main log to the file.
             // The `@` prefix is Renode's convention for an absolute path.
@@ -1592,7 +1596,10 @@ impl Mcu for RenodeBackend {
             if monitor_failed(&fn_resp) {
                 eprintln!("[hauksbee-trace] warning: LogFunctionNames command failed: {fn_resp}");
             } else {
-                eprintln!("[hauksbee-trace] function tracing enabled → {}", trace_path.display());
+                eprintln!(
+                    "[hauksbee-trace] function tracing enabled → {}",
+                    trace_path.display()
+                );
                 self.trace_log_path = Some(trace_path);
             }
         }
@@ -1664,8 +1671,7 @@ impl Mcu for RenodeBackend {
             return;
         };
         let count = adc_count(volts, map.full_scale_volts, map.max_count);
-        let clamped_mv =
-            (volts.clamp(0.0, map.full_scale_volts.max(0.0)) * 1000.0).round() as u64;
+        let clamped_mv = (volts.clamp(0.0, map.full_scale_volts.max(0.0)) * 1000.0).round() as u64;
         let cmd = render_adc_inject(&map.inject, count, clamped_mv);
         // FAIL LOUD, matching the on_i2c/on_spi bridge discipline: a failed
         // injection means the firmware quietly reads a stale/zero count as if
@@ -1724,11 +1730,7 @@ impl Mcu for RenodeBackend {
         }
     }
 
-    fn on_spi_controller(
-        &mut self,
-        controller: &str,
-        cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>,
-    ) {
+    fn on_spi_controller(&mut self, controller: &str, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
         if let Err(e) = self.install_spi_bridge_for(controller, cb) {
             panic!("failed to install Renode SPI bridge on {controller}: {e:#}");
         }
@@ -1901,7 +1903,10 @@ impl RenodeBackend {
                 eprintln!("[hauksbee-trace] ── full log: {} ──", path.display());
             }
             Err(e) => {
-                eprintln!("[hauksbee-trace] could not read trace log {}: {e}", path.display());
+                eprintln!(
+                    "[hauksbee-trace] could not read trace log {}: {e}",
+                    path.display()
+                );
             }
         }
     }
@@ -1969,7 +1974,10 @@ mod tests {
             (1 << 1) | (1 << 12)
         );
         // The blinky-style PA5 output: MODER5 = 0b01.
-        assert_eq!(decode_dir_mask(DirEncoding::Moder, 0b01 << 10, 0, 16), 1 << 5);
+        assert_eq!(
+            decode_dir_mask(DirEncoding::Moder, 0b01 << 10, 0, 16),
+            1 << 5
+        );
 
         // STM32F1 CRL/CRH: 4 bits/pin nibbles; MODE (low 2 bits) != 0 means
         // output, in any CNF. 0x3 = GP push-pull 50 MHz, 0xB = AF push-pull

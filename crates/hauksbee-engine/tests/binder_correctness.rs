@@ -76,7 +76,10 @@ fn dnp_component_is_not_stamped() {
         "Resistor_SMD:R_0402_1005Metric",
         vec![pin("1", 2, ""), pin("2", 3, "")],
     );
-    let b = board(&[(1, "NET_A"), (2, "NET_B"), (3, "NET_C")], vec![r_dnp, r2, r3]);
+    let b = board(
+        &[(1, "NET_A"), (2, "NET_B"), (3, "NET_C")],
+        vec![r_dnp, r2, r3],
+    );
     let bound = bind_board(&b, &ModelLibrary::builtin());
 
     // No device for the DNP part at all.
@@ -152,10 +155,19 @@ fn split_grounds_stay_distinct_nodes() {
             _ => None,
         })
         .expect("bridge resistor stamped");
-    assert_ne!(a, b2, "bridge must span two distinct nodes (was a self-loop)");
+    assert_ne!(
+        a, b2,
+        "bridge must span two distinct nodes (was a self-loop)"
+    );
     assert_eq!(
-        [a, b2].iter().copied().collect::<std::collections::BTreeSet<_>>(),
-        [agnd, dgnd].iter().copied().collect::<std::collections::BTreeSet<_>>(),
+        [a, b2]
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [agnd, dgnd]
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
         "bridge connects AGND to DGND"
     );
 }
@@ -198,7 +210,9 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
         .devices
         .iter()
         .find_map(|d| match d {
-            Device::VSwitch { name, von, voff, .. } if name == "SW1_s0" => Some((*von, *voff)),
+            Device::VSwitch {
+                name, von, voff, ..
+            } if name == "SW1_s0" => Some((*von, *voff)),
             _ => None,
         })
         .expect("true-SPDT s0 leg stamped as a VSwitch");
@@ -306,7 +320,11 @@ fn cr_designated_diode_is_not_a_capacitor() {
         })
         .expect("CR1 must bind as a Device::Diode via the diode fallback");
     assert_eq!(bound.node("ANODE_NET"), Some(a), "anode on the A-pin net");
-    assert_eq!(bound.node("CATHODE_NET"), Some(k), "cathode on the K-pin net");
+    assert_eq!(
+        bound.node("CATHODE_NET"),
+        Some(k),
+        "cathode on the K-pin net"
+    );
 }
 
 /// Bug (binder-r3 #1): a multi-element passive array (a 4-pad isolated
@@ -322,7 +340,12 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
         "RN1",
         "10k",
         "Resistor_SMD:R_Array_Concave_2x0603",
-        vec![pin("1", 1, ""), pin("2", 2, ""), pin("3", 3, ""), pin("4", 4, "")],
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("3", 3, ""),
+            pin("4", 4, ""),
+        ],
     );
     let b = board(
         &[(1, "NET_A"), (2, "NET_B"), (3, "NET_C"), (4, "NET_D")],
@@ -335,9 +358,9 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
         .devices
         .iter()
         .filter_map(|d| match d {
-            Device::Resistor { name, a, b, ohms, .. } if name.starts_with("RN1") => {
-                Some((name.clone(), *a, *b, *ohms))
-            }
+            Device::Resistor {
+                name, a, b, ohms, ..
+            } if name.starts_with("RN1") => Some((name.clone(), *a, *b, *ohms)),
             _ => None,
         })
         .collect();
@@ -349,9 +372,9 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
     );
     let node = |n: &str| bound.node(n).unwrap();
     let bridges = |x: &str, y: &str| {
-        resistors
-            .iter()
-            .any(|(_, a, b, _)| (*a == node(x) && *b == node(y)) || (*a == node(y) && *b == node(x)))
+        resistors.iter().any(|(_, a, b, _)| {
+            (*a == node(x) && *b == node(y)) || (*a == node(y) && *b == node(x))
+        })
     };
     assert!(bridges("NET_A", "NET_B"), "element 1 spans pads 1-2");
     assert!(bridges("NET_C", "NET_D"), "element 2 spans pads 3-4");
@@ -551,7 +574,11 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
             _ => None,
         })
         .expect("P$-padded diode must bind as a Device::Diode, not OPEN");
-    assert_eq!(bound.node("ANODE_NET"), Some(a), "P$2 is the anode (1=K 2=A)");
+    assert_eq!(
+        bound.node("ANODE_NET"),
+        Some(a),
+        "P$2 is the anode (1=K 2=A)"
+    );
     assert_eq!(bound.node("CATHODE_NET"), Some(k), "P$1 is the cathode");
 }
 
@@ -664,7 +691,11 @@ fn dual_comparator_stamps_one_device_per_channel() {
             _ => None,
         })
         .collect();
-    assert_eq!(outs.len(), 2, "a dual comparator is exactly two devices: {outs:?}");
+    assert_eq!(
+        outs.len(),
+        2,
+        "a dual comparator is exactly two devices: {outs:?}"
+    );
     assert!(outs.contains(&("U2_q1".to_string(), bound.node("OUT_A").unwrap())));
     assert!(outs.contains(&("U2_q2".to_string(), bound.node("OUT_B").unwrap())));
 }

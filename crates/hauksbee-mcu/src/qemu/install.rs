@@ -112,7 +112,8 @@ where
     let prefix = format!("{}-softmmu-", tool_name(arch));
     let suffix_mid = format!("-{triple}.tar.");
     names.into_iter().find_map(|n| {
-        let compressed = n.ends_with(".tar.xz") || n.ends_with(".tar.bz2") || n.ends_with(".tar.gz");
+        let compressed =
+            n.ends_with(".tar.xz") || n.ends_with(".tar.bz2") || n.ends_with(".tar.gz");
         (n.starts_with(&prefix) && n.contains(&suffix_mid) && compressed).then(|| n.to_string())
     })
 }
@@ -292,14 +293,15 @@ pub fn plan(arches: &[QemuArch], progress: &mut dyn FnMut(&str)) -> Result<Insta
     let mut assets = Vec::new();
     for &arch in arches {
         let asset = match &listed_names {
-            Some(names) => pick_asset(names.iter().map(String::as_str), arch, triple)
-                .ok_or_else(|| {
+            Some(names) => {
+                pick_asset(names.iter().map(String::as_str), arch, triple).ok_or_else(|| {
                     anyhow::anyhow!(
                         "release {tag} publishes no {} asset for {triple}; pick one \
                          manually from https://github.com/{ESP_QEMU_REPO}/releases/tag/{tag}",
                         tool_name(arch)
                     )
-                })?,
+                })?
+            }
             None => constructed_asset_name(arch, &tag, triple),
         };
         let sha256 = manifest.as_deref().and_then(|m| checksum_for(m, &asset));
@@ -316,10 +318,7 @@ pub fn plan(arches: &[QemuArch], progress: &mut dyn FnMut(&str)) -> Result<Insta
 /// sha256 of a file via the system tool (`sha256sum`, else `shasum -a 256`).
 fn sha256_file(path: &Path) -> Result<String> {
     for (bin, args) in [("sha256sum", vec![]), ("shasum", vec!["-a", "256"])] {
-        let out = Command::new(bin)
-            .args(&args)
-            .arg(path)
-            .output();
+        let out = Command::new(bin).args(&args).arg(path).output();
         if let Ok(o) = out {
             if o.status.success() {
                 let text = String::from_utf8_lossy(&o.stdout);
@@ -336,8 +335,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// top-level `qemu/` directory, so this yields `<root>/qemu/bin/...`. The
 /// system `tar` sniffs the compression (xz today, bz2 historically).
 pub fn unpack_archive(archive: &Path, root: &Path) -> Result<()> {
-    std::fs::create_dir_all(root)
-        .with_context(|| format!("creating {}", root.display()))?;
+    std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
     let out = Command::new("tar")
         .arg("xf")
         .arg(archive)
@@ -390,13 +388,16 @@ pub fn verify_installed(arch: QemuArch, root: &Path) -> Result<PathBuf> {
 
 /// Download + verify + unpack one planned asset into `root`, returning the
 /// accepted binary path.
-fn install_one(planned: &PlannedAsset, root: &Path, progress: &mut dyn FnMut(&str)) -> Result<PathBuf> {
+fn install_one(
+    planned: &PlannedAsset,
+    root: &Path,
+    progress: &mut dyn FnMut(&str),
+) -> Result<PathBuf> {
     let staging = tempfile_dir(root)?;
     let archive = staging.join(&planned.asset);
     progress(&format!("downloading {} ...", planned.url));
     let bytes = curl_bytes(&planned.url)?;
-    std::fs::write(&archive, &bytes)
-        .with_context(|| format!("writing {}", archive.display()))?;
+    std::fs::write(&archive, &bytes).with_context(|| format!("writing {}", archive.display()))?;
 
     match &planned.sha256 {
         Some(expected) => {
@@ -473,10 +474,7 @@ pub fn install_esp_qemu(
         .iter()
         .map(|&a| {
             super::find_qemu(a).with_context(|| {
-                format!(
-                    "{} still not discoverable after install",
-                    a.binary_name()
-                )
+                format!("{} still not discoverable after install", a.binary_name())
             })
         })
         .collect()
@@ -588,7 +586,10 @@ bb8c15810565d3df1665dc34962430885e11bc95575b228fb44698146be1e9d6 *qemu-xtensa-so
             json_string_values(pretty, "tag_name"),
             vec!["esp-develop-9.2.2-20260417"]
         );
-        assert_eq!(json_string_values(pretty, "name"), vec!["a.tar.xz", "b.tar.xz"]);
+        assert_eq!(
+            json_string_values(pretty, "name"),
+            vec!["a.tar.xz", "b.tar.xz"]
+        );
         let compact = "{\"tag_name\":\"v1\",\"name\":\"x\"}";
         assert_eq!(json_string_values(compact, "tag_name"), vec!["v1"]);
     }

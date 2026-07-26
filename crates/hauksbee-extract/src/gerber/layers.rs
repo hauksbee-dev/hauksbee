@@ -438,15 +438,27 @@ mod tests {
         // layer to Unknown, silently vanishing it from reconstruction. Every
         // occurrence must be scanned so the genuine layer index is recovered.
         assert!(
-            matches!(role("mainboard-In1_Cu.gbr"), LayerRole::Copper { index: 1, .. }),
+            matches!(
+                role("mainboard-In1_Cu.gbr"),
+                LayerRole::Copper { index: 1, .. }
+            ),
             "the 'in' inside 'mainboard' must not shadow the real In1 token"
         );
-        assert!(matches!(role("mainboard-In2_Cu.gbr"), LayerRole::Copper { index: 2, .. }));
-        assert!(matches!(role("arduino-In1_Cu.gbr"), LayerRole::Copper { index: 1, .. }));
+        assert!(matches!(
+            role("mainboard-In2_Cu.gbr"),
+            LayerRole::Copper { index: 2, .. }
+        ));
+        assert!(matches!(
+            role("arduino-In1_Cu.gbr"),
+            LayerRole::Copper { index: 1, .. }
+        ));
         // A name with the marker but no real inner token stays non-copper.
         assert_ne!(
             role("arduino-F_Silkscreen.gbr"),
-            LayerRole::Copper { index: 1, name: String::new() }
+            LayerRole::Copper {
+                index: 1,
+                name: String::new()
+            }
         );
         assert_eq!(role("board-Edge_Cuts.gbr"), LayerRole::Outline);
         assert_eq!(role("board-PTH.drl"), LayerRole::Drill);

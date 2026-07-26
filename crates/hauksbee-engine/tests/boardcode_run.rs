@@ -11,9 +11,7 @@ mod common;
 
 use std::collections::BTreeSet;
 
-use hauksbee_engine::{
-    bind_board, code_to_board_text, decompile_any_to_code,
-};
+use hauksbee_engine::{bind_board, code_to_board_text, decompile_any_to_code};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 

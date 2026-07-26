@@ -28,7 +28,7 @@
 //! when it is present.
 
 use crate::dsl::Outline;
-use forge_model::{Pcb, PadKind};
+use forge_model::{PadKind, Pcb};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -299,7 +299,9 @@ pub fn write_dsn(pcb: &Pcb, outline: Option<Outline>, rules: &RouteRules) -> Str
             let rel = pad_image_angle_deg(frot, prot);
             let pin_rot = norm_deg(if back { rel } else { -rel });
             let ps = padstack_for(&pad.shape(), pad.size(), through);
-            padstacks.entry(ps.name.clone()).or_insert_with(|| ps.clone());
+            padstacks
+                .entry(ps.name.clone())
+                .or_insert_with(|| ps.clone());
             local_pins.push((num.clone(), (ex, ly), ps.name.clone(), pin_rot));
 
             if let Some((_, net)) = pad.net() {
@@ -462,11 +464,7 @@ fn emit_padstack(s: &mut String, ps: &PadStack) {
                 let _ = writeln!(s, "      (shape (circle {l} {d}))");
             }
             PadBody::Rect(hx, hy) => {
-                let _ = writeln!(
-                    s,
-                    "      (shape (rect {l} {} {} {} {}))",
-                    -hx, -hy, hx, hy
-                );
+                let _ = writeln!(s, "      (shape (rect {l} {} {} {} {}))", -hx, -hy, hx, hy);
             }
             PadBody::Capsule {
                 aperture,
@@ -478,10 +476,7 @@ fn emit_padstack(s: &mut String, ps: &PadStack) {
                 } else {
                     (0, -half_span, 0, half_span)
                 };
-                let _ = writeln!(
-                    s,
-                    "      (shape (path {l} {aperture} {x0} {y0} {x1} {y1}))"
-                );
+                let _ = writeln!(s, "      (shape (path {l} {aperture} {x0} {y0} {x1} {y1}))");
             }
         }
     }
@@ -502,7 +497,11 @@ fn norm_rot(r: f64) -> i64 {
 /// that may legitimately be non-integral (a 22.5 degree pad stays 22.5).
 fn norm_deg(r: f64) -> f64 {
     let v = r.rem_euclid(360.0);
-    if (v - 360.0).abs() < 1e-9 { 0.0 } else { v }
+    if (v - 360.0).abs() < 1e-9 {
+        0.0
+    } else {
+        v
+    }
 }
 
 /// Render an angle for the DSN: integral values print bare (`90`), anything
@@ -768,7 +767,10 @@ pub fn run_freerouting(
     }
 
     if !ses_path.exists() {
-        rbail!("freerouting finished but produced no SES at {}", ses_path.display());
+        rbail!(
+            "freerouting finished but produced no SES at {}",
+            ses_path.display()
+        );
     }
     Ok(FreeroutingRun {
         ses_path: ses_path.to_path_buf(),
@@ -958,12 +960,7 @@ fn parse_wire(
 }
 
 /// Parse a `(via PADSTACK x y ...)` record.
-fn parse_via(
-    toks: &[Tok],
-    open: usize,
-    net: Option<&String>,
-    units_per_mm: f64,
-) -> Option<SesVia> {
+fn parse_via(toks: &[Tok], open: usize, net: Option<&String>, units_per_mm: f64) -> Option<SesVia> {
     // (via "padstack" x y [net?])
     // skip head (open+1) and padstack name (open+2), read two numbers.
     let mut nums: Vec<f64> = Vec::new();
@@ -979,7 +976,10 @@ fn parse_via(
     if nums.len() == 2 {
         Some(SesVia {
             net: net.cloned().unwrap_or_default(),
-            at: (ses_to_mm(nums[0], units_per_mm), ses_to_mm(nums[1], units_per_mm)),
+            at: (
+                ses_to_mm(nums[0], units_per_mm),
+                ses_to_mm(nums[1], units_per_mm),
+            ),
         })
     } else {
         None
@@ -989,11 +989,7 @@ fn parse_via(
 /// Merge parsed SES routes onto the board as copper segments and vias, mapping
 /// net names to the board's numeric net ids. Returns the number of wire
 /// segments and vias added.
-pub fn merge_ses_into_pcb(
-    pcb: &mut Pcb,
-    routes: &SesRoutes,
-    rules: &RouteRules,
-) -> (usize, usize) {
+pub fn merge_ses_into_pcb(pcb: &mut Pcb, routes: &SesRoutes, rules: &RouteRules) -> (usize, usize) {
     // net name -> id
     let mut net_id = std::collections::HashMap::new();
     for n in pcb.nets() {
@@ -1337,7 +1333,11 @@ impl PlacedPadGeo {
                 let (lx, ly) = Self::to_local(dx, dy, angle);
                 lx.abs() <= half.0 + PAD_EPS_MM && ly.abs() <= half.1 + PAD_EPS_MM
             }
-            PadShape::Capsule { half_span, r, angle } => {
+            PadShape::Capsule {
+                half_span,
+                r,
+                angle,
+            } => {
                 let (lx, ly) = Self::to_local(dx, dy, angle);
                 // Distance to the capsule's spine, which runs along local x.
                 let nearest = lx.clamp(-half_span, half_span);
@@ -1413,7 +1413,11 @@ fn placed_pads(pcb: &Pcb, li: &LayerIndex) -> Vec<PlacedPadGeo> {
                 PadShape::Capsule {
                     half_span: (major - minor) * 0.5,
                     r: minor * 0.5,
-                    angle: if horizontal { angle } else { angle + std::f64::consts::FRAC_PI_2 },
+                    angle: if horizontal {
+                        angle
+                    } else {
+                        angle + std::f64::consts::FRAC_PI_2
+                    },
                 }
             } else {
                 PadShape::Rect {
@@ -1493,7 +1497,11 @@ impl PointGrid {
     }
 
     fn query_radius(&self, center: (f64, f64), r: f64, out: &mut Vec<usize>) {
-        self.query_box((center.0 - r, center.1 - r), (center.0 + r, center.1 + r), out);
+        self.query_box(
+            (center.0 - r, center.1 - r),
+            (center.0 + r, center.1 + r),
+            out,
+        );
     }
 }
 
@@ -1767,10 +1775,7 @@ pub fn endpoint_net_violations(pcb: &Pcb) -> usize {
     let pads = placed_pads(pcb, &li);
     let centers: Vec<(f64, f64)> = pads.iter().map(|p| p.center).collect();
     let grid = PointGrid::build(&centers);
-    let max_r = pads
-        .iter()
-        .map(|p| p.bound_r)
-        .fold(0.0_f64, f64::max);
+    let max_r = pads.iter().map(|p| p.bound_r).fold(0.0_f64, f64::max);
 
     let mut cand: Vec<usize> = Vec::new();
     let mut in_foreign_pad = |pt: (f64, f64), net: i64, mask: u32| -> bool {
@@ -2473,7 +2478,10 @@ mod tests {
             msg.contains("<!DOCTYPE html>"),
             "shows what the file starts with: {msg}"
         );
-        assert!(msg.contains("freerouting-1.9.0.jar"), "names the path: {msg}");
+        assert!(
+            msg.contains("freerouting-1.9.0.jar"),
+            "names the path: {msg}"
+        );
 
         let real = dir.join("ok.jar");
         std::fs::write(&real, b"PK\x03\x04rest-of-a-zip").unwrap();

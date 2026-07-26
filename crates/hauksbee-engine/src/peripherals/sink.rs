@@ -309,7 +309,11 @@ mod tests {
             };
             sink.post_solve(&mut ctx);
         }
-        assert_eq!(sink.transitions_for("PWR"), 3, "per-net count drops the initial dump");
+        assert_eq!(
+            sink.transitions_for("PWR"),
+            3,
+            "per-net count drops the initial dump"
+        );
         assert_eq!(
             sink.transition_count(),
             3,
@@ -326,15 +330,20 @@ mod tests {
         const N: usize = 500; // well past 92, into the two-char range
         let codes: Vec<String> = (0..N).map(vcd_code).collect();
         let unique: std::collections::HashSet<&String> = codes.iter().collect();
-        assert_eq!(unique.len(), N, "every net index must get a distinct VCD code");
+        assert_eq!(
+            unique.len(),
+            N,
+            "every net index must get a distinct VCD code"
+        );
         // First 92 are single-char; the 93rd rolls over to two chars.
         assert_eq!(codes[0].len(), 1);
         assert_eq!(codes[91].len(), 1);
         assert_eq!(codes[92].len(), 2);
         // And the allocator wired into a sink never reuses '!' for the 93rd net.
         let mut c = Circuit::new();
-        let nets: Vec<(String, NodeId)> =
-            (0..100).map(|i| (format!("N{i}"), c.node(&format!("N{i}")))).collect();
+        let nets: Vec<(String, NodeId)> = (0..100)
+            .map(|i| (format!("N{i}"), c.node(&format!("N{i}"))))
+            .collect();
         let sink = VcdSink::new("VCD", nets, None);
         let doc = sink.render();
         // The 93rd net's declared code must be the two-char rollover, not '!'.

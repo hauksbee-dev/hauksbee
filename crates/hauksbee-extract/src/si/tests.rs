@@ -131,7 +131,10 @@ fn routed_length_resolves_name_only_nets() {
            (segment (start 3 0) (end 3 4) (width 0.2) (layer "F.Cu") (net "USB_DP"))"#,
     );
     let l = routed_length_mm(doc.root().unwrap(), 1);
-    assert!((l - 7.0).abs() < 1e-9, "name-only nets must resolve: got {l}");
+    assert!(
+        (l - 7.0).abs() < 1e-9,
+        "name-only nets must resolve: got {l}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +418,8 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
     // 1000 ns standard-mode limit -> silent. The old code took the SMALLEST single
     // resistor (10k), computing ~1271 ns and firing a false-positive finding on a
     // bus that is actually in spec. min-of-parallel-resistors over-reports t_r.
-    let mut body = String::from(r#"(net 1 "SDA") (net 2 "+3V3")
+    let mut body = String::from(
+        r#"(net 1 "SDA") (net 2 "+3V3")
         (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
           (property "Reference" "R1") (property "Value" "10k")
           (pad "1" smd rect (at 0 0) (net 1 "SDA"))
@@ -423,7 +427,8 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
         (footprint "Resistor_SMD:R_0402" (at 7 5) (layer "F.Cu")
           (property "Reference" "R2") (property "Value" "10k")
           (pad "1" smd rect (at 0 0) (net 1 "SDA"))
-          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#);
+          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
+    );
     for i in 0..15 {
         body.push_str(&format!(
             r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
@@ -534,7 +539,11 @@ fn antenna_keepout_finding_kinds_are_sorted_deterministically() {
           (filled_polygon (layer "F.Cu")
             (pts (xy 44 24) (xy 56 24) (xy 56 35) (xy 44 35)))))"#;
     let r = run_keepout(text);
-    let msg = &r.findings_only().next().expect("a keepout intrusion finding").message;
+    let msg = &r
+        .findings_only()
+        .next()
+        .expect("a keepout intrusion finding")
+        .message;
     assert!(
         msg.contains("[\"track\", \"via\", \"zone\"]"),
         "intrusion kinds must be sorted for reproducible output, got: {msg}"
@@ -696,8 +705,14 @@ fn usb_polarity_classifier_rejects_non_usb() {
     assert_eq!(super::usb_polarity("USB_DN").map(|(_, p)| p), Some('-'));
     // The stem is what must match between the two legs (the prefix before the
     // polarity token): USB_DP and USB_DN share stem "USB_".
-    assert_eq!(super::usb_polarity("USB_DP").map(|(s, _)| s), Some("USB_".to_string()));
-    assert_eq!(super::usb_polarity("USB_DN").map(|(s, _)| s), Some("USB_".to_string()));
+    assert_eq!(
+        super::usb_polarity("USB_DP").map(|(s, _)| s),
+        Some("USB_".to_string())
+    );
+    assert_eq!(
+        super::usb_polarity("USB_DN").map(|(s, _)| s),
+        Some("USB_".to_string())
+    );
 }
 
 #[test]
@@ -982,7 +997,10 @@ fn double_listed_board(reference: &str, value: &str, copies: usize) -> Extracted
         .collect();
     ExtractedBoard {
         name: "b".into(),
-        nets: vec![crate::Net { id: 1, name: "SDA".into() }],
+        nets: vec![crate::Net {
+            id: 1,
+            name: "SDA".into(),
+        }],
         components: vec![crate::Component {
             reference: reference.into(),
             value: value.into(),
@@ -1004,7 +1022,10 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
     // to fire a spurious fast-mode finding. Dedup by (ref, pad number).
     let board = double_listed_board("U1", "SENSOR", 2);
     let (_pf, devices) = super::bus_capacitance_pf(&board, 1, None);
-    assert_eq!(devices, 1, "a doubly-listed pad must count as one device, not two");
+    assert_eq!(
+        devices, 1,
+        "a doubly-listed pad must count as one device, not two"
+    );
 }
 
 #[test]
@@ -1014,11 +1035,26 @@ fn fast_mode_name_is_whole_token_not_substring() {
     // standard-mode bus was judged against the 3.3x-tighter fast-mode limit,
     // firing a false rise-time finding. Only a whole `FM`/`FAST` token selects
     // fast mode.
-    assert!(super::is_fast_mode_name("I2C_FM_SDA"), "explicit FM token is fast-mode");
-    assert!(super::is_fast_mode_name("SDA_FAST"), "explicit FAST token is fast-mode");
-    assert!(!super::is_fast_mode_name("FMC_SDA"), "FMC (mezzanine connector) is NOT fast-mode");
-    assert!(!super::is_fast_mode_name("CONFIRM_SCL"), "CONFIRM must not match FM");
-    assert!(!super::is_fast_mode_name("SDA"), "a plain SDA bus defaults to standard mode");
+    assert!(
+        super::is_fast_mode_name("I2C_FM_SDA"),
+        "explicit FM token is fast-mode"
+    );
+    assert!(
+        super::is_fast_mode_name("SDA_FAST"),
+        "explicit FAST token is fast-mode"
+    );
+    assert!(
+        !super::is_fast_mode_name("FMC_SDA"),
+        "FMC (mezzanine connector) is NOT fast-mode"
+    );
+    assert!(
+        !super::is_fast_mode_name("CONFIRM_SCL"),
+        "CONFIRM must not match FM"
+    );
+    assert!(
+        !super::is_fast_mode_name("SDA"),
+        "a plain SDA bus defaults to standard mode"
+    );
 }
 
 #[test]

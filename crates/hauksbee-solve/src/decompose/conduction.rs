@@ -141,7 +141,10 @@ impl ConductionGraph {
             }
             for n in dev.sense_nodes() {
                 if !n.is_ground() {
-                    sense_edges.push(SenseEdge { device: id, node: n });
+                    sense_edges.push(SenseEdge {
+                        device: id,
+                        node: n,
+                    });
                 }
             }
         }
@@ -155,9 +158,7 @@ impl ConductionGraph {
 
     /// The island a device was assigned to, if any.
     pub fn island_of_device(&self, id: DeviceId) -> Option<usize> {
-        self.islands
-            .iter()
-            .position(|isl| isl.contains(&id))
+        self.islands.iter().position(|isl| isl.contains(&id))
     }
 
     /// Sense edges that cross islands: `device` lives in one island while the
@@ -170,11 +171,7 @@ impl ConductionGraph {
             .copied()
             .filter(|e| {
                 let dev_island = self.island_of_device(e.device);
-                let node_island = self
-                    .node_island
-                    .get(e.node.0 as usize)
-                    .copied()
-                    .flatten();
+                let node_island = self.node_island.get(e.node.0 as usize).copied().flatten();
                 match (dev_island, node_island) {
                     (Some(d), Some(n)) => d != n,
                     // A sensed node nobody conducts into is exogenous (a
@@ -307,11 +304,7 @@ mod tests {
             let mut all: Vec<_> = d.nodes();
             all.sort_unstable();
             all.dedup();
-            let mut both: Vec<_> = conduction
-                .iter()
-                .chain(sense.iter())
-                .copied()
-                .collect();
+            let mut both: Vec<_> = conduction.iter().chain(sense.iter()).copied().collect();
             both.sort_unstable();
             both.dedup();
             assert_eq!(
@@ -370,10 +363,7 @@ mod tests {
                     stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
 
                     for sn in &sense {
-                        let row = ws
-                            .layout
-                            .node(*sn)
-                            .expect("sense node has an unknown row");
+                        let row = ws.layout.node(*sn).expect("sense node has an unknown row");
                         for &(col, val) in ws.matrix.row(row) {
                             assert!(
                                 val == 0.0,

@@ -30,12 +30,11 @@ pub mod commands;
 pub mod decoupling;
 pub mod deps;
 pub mod digital;
-pub mod logic;
 pub mod drivers;
 pub mod engine;
 pub mod firmware_input;
 pub mod frontdoor;
-pub mod webcheck;
+pub mod logic;
 pub mod peripherals;
 pub mod plain;
 pub mod power_supply;
@@ -51,6 +50,7 @@ pub mod tarski_prep;
 pub mod thermal;
 pub mod tui;
 pub mod web_dist;
+pub mod webcheck;
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{bind_board, bind_board_with, is_ground, power_rail_voltage, BoundBoard};
@@ -69,11 +69,11 @@ pub use engine::HauksbeeEngine;
 // Re-export the firmware-path guard so downstream crates (hauksbee-ci) can
 // validate a spec's firmware path before it reaches the native emulator loader,
 // without taking a direct dependency on hauksbee-mcu.
-pub use hauksbee_mcu::validate_firmware_path;
 pub use frontdoor::{
     analyze, analyze_json, analyze_with_firmware, analyze_with_firmware_json, WebCosimSection,
     WebGpioNet, WebReport, WebSection,
 };
+pub use hauksbee_mcu::validate_firmware_path;
 pub use peripherals::{
     controls::{Encoder, Potentiometer, Pushbutton, Stimulus, StimulusKind, ToggleSwitch},
     i2c::{Eeprom24c, I2cBus, I2cSlave, Lm75},

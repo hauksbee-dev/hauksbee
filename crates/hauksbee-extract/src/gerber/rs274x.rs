@@ -557,8 +557,7 @@ impl<'a> Plotter<'a> {
             let sweep = (a1 - a0).abs();
             // Consistent radius, and penalise a sweep past the 90-degree
             // single-quadrant limit so the correct centre wins.
-            let score = (rs - re).abs()
-                + if sweep > FRAC_PI_2 + 1e-6 { 1e3 } else { 0.0 };
+            let score = (rs - re).abs() + if sweep > FRAC_PI_2 + 1e-6 { 1e3 } else { 0.0 };
             if score < best_score {
                 best_score = score;
                 best = Some((cx, cy));
@@ -645,8 +644,7 @@ impl<'a> Plotter<'a> {
         oy: f64,
         ccw: bool,
     ) -> Vec<(f64, f64)> {
-        let Some((cx, cy, radius, a0, sweep)) = self.arc_params(sx, sy, ex, ey, ox, oy, ccw)
-        else {
+        let Some((cx, cy, radius, a0, sweep)) = self.arc_params(sx, sy, ex, ey, ox, oy, ccw) else {
             return vec![(ex, ey)];
         };
         (1..=ARC_SEGMENTS)
@@ -1026,7 +1024,10 @@ G37*
 M02*
 ";
         let prims = parse_layer(g).unwrap();
-        let regions: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Region).collect();
+        let regions: Vec<_> = prims
+            .iter()
+            .filter(|p| p.kind == PrimKind::Region)
+            .collect();
         assert_eq!(
             regions.len(),
             2,
@@ -1041,7 +1042,10 @@ M02*
         };
         assert!(covered(2.5, 2.5), "inside the first island");
         assert!(covered(97.5, 2.5), "inside the second island");
-        assert!(!covered(50.0, 2.5), "the gap between the islands is NOT copper");
+        assert!(
+            !covered(50.0, 2.5),
+            "the gap between the islands is NOT copper"
+        );
         // Connectivity: a pad on each island must land on DIFFERENT nets. With
         // the bridged single polygon both pads unioned through the one region
         // primitive onto one net.
@@ -1087,7 +1091,10 @@ G37*
 M02*
 ";
         let prims = parse_layer(g).unwrap();
-        let regions: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Region).collect();
+        let regions: Vec<_> = prims
+            .iter()
+            .filter(|p| p.kind == PrimKind::Region)
+            .collect();
         assert_eq!(regions.len(), 1, "outer + its hole is ONE piece of copper");
         let Shape::MultiPolygon { contours } = &regions[0].shape else {
             panic!("a region with a hole must carry both contours, not one flat ring");
@@ -1130,7 +1137,11 @@ M02*
 ";
         let prims = parse_layer(g).unwrap();
         let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
-        assert_eq!(flashes.len(), 2, "SR X2 must emit the base + 1 repeated flash");
+        assert_eq!(
+            flashes.len(),
+            2,
+            "SR X2 must emit the base + 1 repeated flash"
+        );
         let xs: Vec<f64> = flashes
             .iter()
             .filter_map(|p| match &p.shape {
@@ -1138,7 +1149,10 @@ M02*
                 _ => None,
             })
             .collect();
-        assert!(xs.iter().any(|x| x.abs() < 1e-6), "the base flash sits at x≈0, got {xs:?}");
+        assert!(
+            xs.iter().any(|x| x.abs() < 1e-6),
+            "the base flash sits at x≈0, got {xs:?}"
+        );
         assert!(
             xs.iter().any(|x| (x - 10.0).abs() < 1e-6),
             "the repeated flash sits 10 mm along x, got {xs:?}"
@@ -1162,7 +1176,10 @@ X0Y0D03*
 M02*
 ";
         let prims = parse_layer(g).unwrap();
-        let flash = prims.iter().find(|p| p.kind == PrimKind::Flash).expect("a fallback flash");
+        let flash = prims
+            .iter()
+            .find(|p| p.kind == PrimKind::Flash)
+            .expect("a fallback flash");
         let r = match &flash.shape {
             Shape::Capsule(c) => c.r,
             _ => panic!("fallback should be a disc/capsule"),
@@ -1223,9 +1240,14 @@ X0Y0D03*
 M02*
 ";
         let prims = parse_layer(g).unwrap();
-        let f = prims.iter().find(|p| p.kind == PrimKind::Flash).expect("flash");
+        let f = prims
+            .iter()
+            .find(|p| p.kind == PrimKind::Flash)
+            .expect("flash");
         if let Shape::Polygon { pts, .. } = &f.shape {
-            let (minx, maxx) = pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+            let (minx, maxx) = pts
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
             assert!(
                 (maxx - minx - 2.0).abs() < 1e-3,
                 "macro rect width {} (expected ~2 mm; the macro was destroyed if it collapsed)",

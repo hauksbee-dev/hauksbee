@@ -136,7 +136,11 @@ impl Circuit {
         if name == "0" || name.eq_ignore_ascii_case("gnd") {
             return NodeId::GROUND;
         }
-        if let Some(i) = self.node_names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
+        if let Some(i) = self
+            .node_names
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(name))
+        {
             return NodeId(i as u32);
         }
         let id = self.node_names.len() as u32;
@@ -758,7 +762,9 @@ impl Device {
             // (body-diode DC branch and/or depletion caps). A default model
             // (no cap/body fields) keeps the pre-§3.3 [d, s] classification
             // bit-identically, gate stays sense, bulk stays unstamped.
-            Device::Mosfet { d, g, s, b, model, .. } => {
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } => {
                 let mut v = vec![*d, *s];
                 if model.has_gate_charge() {
                     v.push(*g);
@@ -1062,8 +1068,7 @@ impl Device {
                 l2: DeviceId(1),
                 k: 0.9,
             },
-        ]
-        ;
+        ];
         // The derived variant count is the enforcement the match-arm trick
         // could not provide: an OR-arm satisfies a match without shipping an
         // instance, but it cannot satisfy this length check. A new variant
@@ -1077,7 +1082,10 @@ impl Device {
             "Device::examples() must ship exactly one instance per variant"
         );
         debug_assert_eq!(
-            out.iter().map(std::mem::discriminant).collect::<std::collections::HashSet<_>>().len(),
+            out.iter()
+                .map(std::mem::discriminant)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
             out.len(),
             "Device::examples() has a duplicate variant"
         );

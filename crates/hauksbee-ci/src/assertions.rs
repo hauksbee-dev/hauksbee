@@ -113,10 +113,7 @@ fn evaluate_hwtrace(
         let captured = match trace.load_channel(ch) {
             Ok(s) => s,
             Err(e) => {
-                results.push(hard_fail(
-                    format!("hwtrace {}", ch.net),
-                    e.to_string(),
-                ));
+                results.push(hard_fail(format!("hwtrace {}", ch.net), e.to_string()));
                 continue;
             }
         };
@@ -223,8 +220,11 @@ fn evaluate_one(
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
     // its pass/fail is meaningless (05 §3b, "refuse rather than fake").
     let member_invalid = |out: &RunOutcome| -> bool {
-        analog_eval_window(a, out)
-            .is_some_and(|(ws, we)| out.failed_windows.iter().any(|&(fs, fe)| ws < fe && fs < we))
+        analog_eval_window(a, out).is_some_and(|(ws, we)| {
+            out.failed_windows
+                .iter()
+                .any(|&(fs, fe)| ws < fe && fs < we)
+        })
     };
 
     // Precedence is FAIL > INVALID > PASS. Evaluate every ensemble member so the
@@ -1327,7 +1327,10 @@ mod tests {
         assert!(ok_unset, "unset scenario reads the run-wide no-trip flag");
         // Explicit "" must behave identically, not a scoped-miss false RED.
         let (ok_empty, msg) = check_protection_trip(&parse("scenario = \"\"\n"), &out);
-        assert!(ok_empty, "explicit empty scenario must equal unset, got: {msg}");
+        assert!(
+            ok_empty,
+            "explicit empty scenario must equal unset, got: {msg}"
+        );
     }
 
     #[test]
@@ -1348,7 +1351,12 @@ mod tests {
             let mut windows = HashMap::new();
             windows.insert(
                 ("VOUT".to_string(), 0.0f64.to_bits()),
-                crate::runner::NetWindow { min_v: 3.3, max_v: 3.35, last_v: 3.32, samples: 10 },
+                crate::runner::NetWindow {
+                    min_v: 3.3,
+                    max_v: 3.35,
+                    last_v: 3.32,
+                    samples: 10,
+                },
             );
             RunOutcome {
                 seed,
@@ -1382,14 +1390,9 @@ mod tests {
             }
         }
         // A voltage assertion reads the analog window (0..sim). Corner 3 diverged.
-        let a: crate::spec::Assertion = toml::from_str(
-            "kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\nmax = 3.4\n",
-        )
-        .unwrap();
-        let outcomes = vec![
-            outcome(0, Vec::new()),
-            outcome(3, vec![(0.0012, 0.0034)]),
-        ];
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.2\nmax = 3.4\n").unwrap();
+        let outcomes = vec![outcome(0, Vec::new()), outcome(3, vec![(0.0012, 0.0034)])];
         let res = super::evaluate_one(&a, &outcomes, Some(Mode::Corners));
         assert!(res.invalid, "the held-stale corner must be INVALID");
         assert!(
@@ -1416,9 +1419,15 @@ mod tests {
             d.contains("15 sampled tolerance seed(s) + nominal"),
             "16 members => 15 sampled seeds, not 16: {d}"
         );
-        assert!(!d.contains("16/16"), "must not label the nominal a sampled seed: {d}");
+        assert!(
+            !d.contains("16/16"),
+            "must not label the nominal a sampled seed: {d}"
+        );
         // A single-member run (no ensemble) keeps the bare detail unchanged.
-        assert_eq!(all_green_detail(1, Some(Mode::MonteCarlo), "ok".into()), "ok");
+        assert_eq!(
+            all_green_detail(1, Some(Mode::MonteCarlo), "ok".into()),
+            "ok"
+        );
     }
 
     // The base-ref vs per-unit-key rule: a package ref owns itself and its
@@ -1460,7 +1469,12 @@ mod tests {
 
         // A snapshot with several fields inserted in non-alphabetical order.
         let mut snap = PeripheralSnapshot::default();
-        for (k, v) in [("transitions", 3.0), ("temp_c", 42.0), ("position", 1.0), ("duty", 0.5)] {
+        for (k, v) in [
+            ("transitions", 3.0),
+            ("temp_c", 42.0),
+            ("position", 1.0),
+            ("duty", 0.5),
+        ] {
             snap.fields.insert(k.to_string(), v);
         }
         let mut out = RunOutcome::default();
@@ -1529,13 +1543,18 @@ mod tests {
         out.peripherals.insert("ADC1".to_string(), snap);
 
         // Exact framing: no flag.
-        out.spi_framing.insert("ADC1".to_string(), "exact".to_string());
+        out.spi_framing
+            .insert("ADC1".to_string(), "exact".to_string());
         let (ok, msg) = check_peripheral(&assertion, &out);
         assert!(ok);
-        assert!(!msg.contains("HEURISTIC"), "exact framing must not be flagged: {msg}");
+        assert!(
+            !msg.contains("HEURISTIC"),
+            "exact framing must not be flagged: {msg}"
+        );
 
         // Heuristic framing: the detail carries the caveat even on a pass.
-        out.spi_framing.insert("ADC1".to_string(), "heuristic".to_string());
+        out.spi_framing
+            .insert("ADC1".to_string(), "heuristic".to_string());
         let (ok, msg) = check_peripheral(&assertion, &out);
         assert!(ok, "framing tier qualifies, it does not fail: {msg}");
         assert!(
@@ -1549,7 +1568,10 @@ mod tests {
     #[test]
     fn driven_but_below_threshold_says_driven_not_hi_z() {
         let m = boot_below_threshold_msg("FLAG", 2.3, true, true, Some((0.0, 0.4)));
-        assert!(m.contains("was driven but never exceeded 2.3 V"), "got: {m}");
+        assert!(
+            m.contains("was driven but never exceeded 2.3 V"),
+            "got: {m}"
+        );
         assert!(m.contains("observed range [0.000, 0.400] V"), "got: {m}");
         assert!(!m.contains("Hi-Z"), "a driven pin is not Hi-Z, got: {m}");
     }
@@ -1575,22 +1597,34 @@ mod tests {
 
         // (1) reached at 5 ms, held through the 10 ms deadline, released at 50 ms.
         // The 100 ms sim covers the whole boot window.
-        let mut out = RunOutcome { sim_ms: 100.0, ..Default::default() };
+        let mut out = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
         out.boot_first_cross_ms.insert(key.clone(), 5.0);
         out.boot_drop_after_cross_ms.insert(key.clone(), 50.0);
         let (ok, msg) = check_boot_coverage(&assertion, &out);
         assert!(ok, "held-through-deadline then released must pass: {msg}");
 
         // (2) reached at 5 ms but fell back at 8 ms, before the deadline.
-        let mut out = RunOutcome { sim_ms: 100.0, ..Default::default() };
+        let mut out = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
         out.boot_first_cross_ms.insert(key.clone(), 5.0);
         out.boot_drop_after_cross_ms.insert(key.clone(), 8.0);
         let (ok, msg) = check_boot_coverage(&assertion, &out);
         assert!(!ok, "a drop before the deadline must fail");
-        assert!(msg.contains("fell back below"), "distinct dropped message: {msg}");
+        assert!(
+            msg.contains("fell back below"),
+            "distinct dropped message: {msg}"
+        );
 
         // (3) never reached: fails with the below-threshold diagnosis, not a drop.
-        let out = RunOutcome { sim_ms: 100.0, ..Default::default() };
+        let out = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
         let (ok, msg) = check_boot_coverage(&assertion, &out);
         assert!(!ok, "never-reached must fail");
         assert!(
@@ -1619,10 +1653,16 @@ mod tests {
         )
         .unwrap();
 
-        let mut out = RunOutcome { sim_ms: 20.0, ..Default::default() };
+        let mut out = RunOutcome {
+            sim_ms: 20.0,
+            ..Default::default()
+        };
         out.boot_first_cross_ms.insert(key.clone(), 5.0); // crossed early, never dropped in-window
         let (ok, msg) = check_boot_coverage(&assertion, &out);
-        assert!(!ok, "deadline past the sim end must not pass on an unobserved window: {msg}");
+        assert!(
+            !ok,
+            "deadline past the sim end must not pass on an unobserved window: {msg}"
+        );
         assert!(
             msg.contains("past the end") && msg.contains("cannot be confirmed"),
             "must name the sim-too-short cause, not a spurious clean pass: {msg}"
@@ -1656,7 +1696,10 @@ mod tests {
         assert!(m.contains("cannot report pin drive direction"), "got: {m}");
         assert!(m.contains("undriven"), "got: {m}");
         assert!(m.contains("driven LOW"), "got: {m}");
-        assert!(!m.contains("firmware left it Hi-Z"), "must not assert Hi-Z, got: {m}");
+        assert!(
+            !m.contains("firmware left it Hi-Z"),
+            "must not assert Hi-Z, got: {m}"
+        );
     }
 
     // A scenario window shorter than one frame yields a single rail sample; a
@@ -1717,8 +1760,14 @@ mod tests {
         let mut win = RailWindow::new();
         win.observe(0.099, 2.5);
         let (ok, msg) = check_rail_window(&a, &outcome_with_window(win));
-        assert!(!ok, "a 1-sample dip window must not auto-pass; got pass: {msg}");
-        assert!(msg.contains("sample"), "message should explain the degenerate window: {msg}");
+        assert!(
+            !ok,
+            "a 1-sample dip window must not auto-pass; got pass: {msg}"
+        );
+        assert!(
+            msg.contains("sample"),
+            "message should explain the degenerate window: {msg}"
+        );
 
         // Sanity: a proper 2-sample window that never dips below 3 V passes.
         let mut good = RailWindow::new();
@@ -1786,7 +1835,10 @@ mod tests {
                 msg.contains("SW1_q1"),
                 "the tie must resolve to the lowest key deterministically; got: {msg}"
             );
-            assert!(!msg.contains("SW1_q2") && !msg.contains("SW1_q3"), "only one unit reported: {msg}");
+            assert!(
+                !msg.contains("SW1_q2") && !msg.contains("SW1_q3"),
+                "only one unit reported: {msg}"
+            );
         }
     }
 
@@ -1853,11 +1905,17 @@ mod tests {
 
         // Unscoped: the run-wide flag shows a trip → an expect-trip passes.
         let (ok, _) = expect_trip(None);
-        assert!(ok, "unscoped expect_trip should pass; BATT did trip run-wide");
+        assert!(
+            ok,
+            "unscoped expect_trip should pass; BATT did trip run-wide"
+        );
 
         // Scoped to the window where the trip happened → still passes.
         let (ok_inrush, _) = expect_trip(Some("inrush"));
-        assert!(ok_inrush, "expect_trip scoped to 'inrush' should pass; that is where it latched");
+        assert!(
+            ok_inrush,
+            "expect_trip scoped to 'inrush' should pass; that is where it latched"
+        );
 
         // Scoped to a LATER window where no trip occurred → must FAIL, even
         // though the run-wide flag is set. This is the round-6 #8 bug.
@@ -1884,7 +1942,10 @@ mod tests {
             .unwrap()
         };
         // Idle device: no entry in peak_temp_c, ambient 85 C.
-        let hot = RunOutcome { ambient_c: 85.0, ..Default::default() };
+        let hot = RunOutcome {
+            ambient_c: 85.0,
+            ..Default::default()
+        };
 
         let (ok, msg) = check_max_temp(&assertion(70.0), &hot);
         assert!(
@@ -1893,7 +1954,10 @@ mod tests {
         );
         // A ceiling above ambient still passes the idle part.
         let (ok2, msg2) = check_max_temp(&assertion(105.0), &hot);
-        assert!(ok2, "idle U3 at ambient 85C is within a 105C ceiling: {msg2}");
+        assert!(
+            ok2,
+            "idle U3 at ambient 85C is within a 105C ceiling: {msg2}"
+        );
     }
 
     // A max_current assert on a multi-unit package (resistor/diode array) names
@@ -1919,7 +1983,10 @@ mod tests {
         peak_current.insert("RN1_e2".to_string(), 0.12);
         peak_current.insert("RN1_e3".to_string(), 0.08);
         peak_current.insert("RN1_e4".to_string(), 0.11);
-        let out = RunOutcome { peak_current, ..Default::default() };
+        let out = RunOutcome {
+            peak_current,
+            ..Default::default()
+        };
 
         // Within a 0.5 A limit (peak unit is 0.12 A): must PASS. Base bug always
         // reported "no current data … cannot be reported green" here.
@@ -1928,7 +1995,10 @@ mod tests {
             ok,
             "a resistor array within its current limit must pass, not miss its unit keys: {msg}"
         );
-        assert!(msg.contains("RN1_e2"), "message must name the peak unit: {msg}");
+        assert!(
+            msg.contains("RN1_e2"),
+            "message must name the peak unit: {msg}"
+        );
         // And it must still be able to FAIL when a unit exceeds the limit.
         let (ok_over, msg_over) = check_max_current(&assertion(0.10), &out);
         assert!(
@@ -1957,7 +2027,10 @@ mod tests {
 
         let mut rail_windows = std::collections::HashMap::new();
         rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
-        let out = RunOutcome { rail_windows, ..Default::default() };
+        let out = RunOutcome {
+            rail_windows,
+            ..Default::default()
+        };
 
         let a: crate::spec::Assertion = toml::from_str(
             "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n",
@@ -1976,7 +2049,10 @@ mod tests {
         win_ok.fold(3.1);
         let mut rw2 = std::collections::HashMap::new();
         rw2.insert(("load".to_string(), "VBUS".to_string()), win_ok);
-        let out_ok = RunOutcome { rail_windows: rw2, ..Default::default() };
+        let out_ok = RunOutcome {
+            rail_windows: rw2,
+            ..Default::default()
+        };
         let (ok2, _msg2) = check_rail_window(&a, &out_ok);
         assert!(ok2, "a rail that stayed above 3.0V must pass");
     }
@@ -1994,7 +2070,11 @@ mod tests {
             let mut s = Vec::new();
             let mut t = 0.0_f64;
             while t <= 1.0 {
-                let v = if (t / period_s).fract() >= 0.5 { 4.9 } else { 0.05 };
+                let v = if (t / period_s).fract() >= 0.5 {
+                    4.9
+                } else {
+                    0.05
+                };
                 s.push((t, v));
                 t += 0.001;
             }
@@ -2030,7 +2110,12 @@ mod tests {
         // capture, a trustworthy FAIL. Corner 1 diverged (a failed window).
         let mut ns0 = std::collections::HashMap::new();
         ns0.insert("D".to_string(), square(0.5));
-        let corner0 = RunOutcome { seed: 0, net_series: ns0, sim_ms: 1000.0, ..Default::default() };
+        let corner0 = RunOutcome {
+            seed: 0,
+            net_series: ns0,
+            sim_ms: 1000.0,
+            ..Default::default()
+        };
         let mut ns1 = std::collections::HashMap::new();
         ns1.insert("D".to_string(), square(0.2));
         let corner1 = RunOutcome {
@@ -2049,14 +2134,22 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
 
-        let r = results.iter().find(|r| r.kind == "hwtrace").expect("a hwtrace result");
+        let r = results
+            .iter()
+            .find(|r| r.kind == "hwtrace")
+            .expect("a hwtrace result");
         assert!(
             !r.invalid,
             "a converged corner's real mismatch must FAIL, not be masked INVALID: {}",
             r.detail
         );
         assert!(!r.passed, "the feature genuinely disagrees: {}", r.detail);
-        assert_eq!(r.failing_seed, Some(0), "corner 0 (the converged failure) must be named: {}", r.detail);
+        assert_eq!(
+            r.failing_seed,
+            Some(0),
+            "corner 0 (the converged failure) must be named: {}",
+            r.detail
+        );
     }
 
     // A vcd_sink `transitions` field is analog-derived (per-frame threshold
@@ -2069,7 +2162,10 @@ mod tests {
         use super::analog_eval_window;
         use crate::runner::RunOutcome;
 
-        let out = RunOutcome { sim_ms: 100.0, ..Default::default() };
+        let out = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
         let transitions: crate::spec::Assertion = toml::from_str(
             "kind = \"peripheral\"\nid = \"SINK\"\nfield = \"transitions\"\nmin = 100\n",
         )
@@ -2080,10 +2176,9 @@ mod tests {
             "a vcd_sink transitions assertion must expose an analog window so it can be INVALIDated"
         );
         // A digital bus-slave peripheral field is NOT analog-derived → no window.
-        let digital: crate::spec::Assertion = toml::from_str(
-            "kind = \"peripheral\"\nid = \"EE\"\nfield = \"last_addr\"\nmin = 0\n",
-        )
-        .unwrap();
+        let digital: crate::spec::Assertion =
+            toml::from_str("kind = \"peripheral\"\nid = \"EE\"\nfield = \"last_addr\"\nmin = 0\n")
+                .unwrap();
         assert_eq!(
             analog_eval_window(&digital, &out),
             None,
@@ -2104,7 +2199,12 @@ mod tests {
             let mut w = std::collections::HashMap::new();
             w.insert(
                 ("VOUT".to_string(), 0.0f64.to_bits()),
-                NetWindow { min_v, max_v: 3.4, last_v: 3.3, samples: 10 },
+                NetWindow {
+                    min_v,
+                    max_v: 3.4,
+                    last_v: 3.3,
+                    samples: 10,
+                },
             );
             w
         };
@@ -2139,7 +2239,11 @@ mod tests {
             "a real brownout on the converged corner must be reported, not masked as INVALID: {}",
             res.detail
         );
-        assert!(!res.passed, "the assertion is definitively false: {}", res.detail);
+        assert!(
+            !res.passed,
+            "the assertion is definitively false: {}",
+            res.detail
+        );
         assert_eq!(
             res.failing_seed,
             Some(1),
@@ -2174,18 +2278,27 @@ mod tests {
             let mut uart = std::collections::HashMap::new();
             uart.insert(first.to_string(), "BOOT_OK\n".to_string());
             uart.insert(second.to_string(), "READY\n".to_string());
-            let out = RunOutcome { uart, ..Default::default() };
+            let out = RunOutcome {
+                uart,
+                ..Default::default()
+            };
             check_uart(&a, &out).0
         };
         // "A" holds BOOT_OK regardless of insertion order → ^BOOT always matches.
-        assert!(mk("A", "B"), "A-first: sorted haystack starts with A's BOOT_OK");
+        assert!(
+            mk("A", "B"),
+            "A-first: sorted haystack starts with A's BOOT_OK"
+        );
         assert!(mk("A", "B") == mk("A", "B"), "deterministic");
         // If B held BOOT and A held READY, sorted order puts READY first, so
         // ^BOOT must NOT match, and must not match by luck either.
         let mut uart2 = std::collections::HashMap::new();
         uart2.insert("A".to_string(), "READY\n".to_string());
         uart2.insert("B".to_string(), "BOOT_OK\n".to_string());
-        let out2 = RunOutcome { uart: uart2, ..Default::default() };
+        let out2 = RunOutcome {
+            uart: uart2,
+            ..Default::default()
+        };
         assert!(
             !check_uart(&a, &out2).0,
             "sorted order puts A's READY first, so ^BOOT anchored at start must not match"
@@ -2204,43 +2317,59 @@ mod tests {
         // Swept 10 Hz .. 100 kHz; gain -5 dB everywhere for simplicity.
         bode.insert(
             "OUT".to_string(),
-            vec![(10.0, -5.0, 0.0), (1_000.0, -5.0, 0.0), (100_000.0, -5.0, 0.0)],
+            vec![
+                (10.0, -5.0, 0.0),
+                (1_000.0, -5.0, 0.0),
+                (100_000.0, -5.0, 0.0),
+            ],
         );
         let out = RunOutcome {
-            ac: Some(AcOutcome { bode, ..Default::default() }),
+            ac: Some(AcOutcome {
+                bode,
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         // 1 MHz is above the band: interp_db would clamp to -5 dB and pass the
         // max=-20 bound falsely. Must fail with an out-of-band message.
-        let above: crate::spec::Assertion = toml::from_str(
-            "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1e6\nmax = -20.0\n",
-        )
-        .unwrap();
+        let above: crate::spec::Assertion =
+            toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1e6\nmax = -20.0\n")
+                .unwrap();
         let (ok, msg) = check_ac_gain(&above, &out);
-        assert!(!ok, "out-of-band 1 MHz must fail, not clamp-and-pass: {msg}");
-        assert!(msg.contains("outside the swept band"), "msg names the cause: {msg}");
+        assert!(
+            !ok,
+            "out-of-band 1 MHz must fail, not clamp-and-pass: {msg}"
+        );
+        assert!(
+            msg.contains("outside the swept band"),
+            "msg names the cause: {msg}"
+        );
 
         // An in-band frequency evaluates normally (−5 dB is within max=−20? no,
         // −5 > −20 so it fails the bound, but for a real measured reason, not
         // out-of-band).
-        let inband: crate::spec::Assertion = toml::from_str(
-            "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1000.0\nmax = -20.0\n",
-        )
-        .unwrap();
+        let inband: crate::spec::Assertion =
+            toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1000.0\nmax = -20.0\n")
+                .unwrap();
         let (_, msg2) = check_ac_gain(&inband, &out);
-        assert!(!msg2.contains("outside the swept band"), "in-band is measured normally: {msg2}");
+        assert!(
+            !msg2.contains("outside the swept band"),
+            "in-band is measured normally: {msg2}"
+        );
 
         // R38: a non-finite freq_hz slips past the band bounds (every NaN compare
         // is false), so interp_db would clamp to the top-of-band gain and report
         // it "at NaN Hz". Must refuse, not measure a frequency the author never
         // chose.
-        let nan_freq: crate::spec::Assertion = toml::from_str(
-            "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = nan\nmax = -20.0\n",
-        )
-        .unwrap();
+        let nan_freq: crate::spec::Assertion =
+            toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = nan\nmax = -20.0\n")
+                .unwrap();
         let (ok, msg3) = check_ac_gain(&nan_freq, &out);
         assert!(!ok, "a NaN freq_hz must fail, not clamp-and-report: {msg3}");
-        assert!(msg3.contains("non-finite"), "msg names the non-finite freq cause: {msg3}");
+        assert!(
+            msg3.contains("non-finite"),
+            "msg names the non-finite freq cause: {msg3}"
+        );
     }
 }

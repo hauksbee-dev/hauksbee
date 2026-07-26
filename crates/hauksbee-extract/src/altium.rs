@@ -731,7 +731,7 @@ mod tests {
     fn pads_stream(geom_len: u32, geom_have: usize) -> Vec<u8> {
         let mut b = Vec::new();
         b.push(2u8); // record type: PAD
-        // sub-record 1 (name): len=3, payload = [nlen=2, 'P','1'].
+                     // sub-record 1 (name): len=3, payload = [nlen=2, 'P','1'].
         b.extend_from_slice(&3u32.to_le_bytes());
         b.extend_from_slice(&[2, b'P', b'1']);
         // sub-records 2,3,4: empty (len=0), skipped.
@@ -793,12 +793,20 @@ mod tests {
         block.extend_from_slice(&[0xC3, 0xBC]); // UTF-8 'ü'
         block.push(0x00); // block terminator
         let map = parse_properties_bytes(&block);
-        assert_eq!(map.get("NAME").map(String::as_str), Some("Mü"), "CP1252 twin");
+        assert_eq!(
+            map.get("NAME").map(String::as_str),
+            Some("Mü"),
+            "CP1252 twin"
+        );
         assert_eq!(
             map.get("%UTF8%NAME").map(String::as_str),
             Some("Mü"),
             "UTF-8 twin must not be mojibake'd"
         );
-        assert_eq!(prop_str(&map, "NAME"), "Mü", "prop_str prefers the clean %UTF8% twin");
+        assert_eq!(
+            prop_str(&map, "NAME"),
+            "Mü",
+            "prop_str prefers the clean %UTF8% twin"
+        );
     }
 }

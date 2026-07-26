@@ -125,8 +125,8 @@ fn power_inductor_value(comp: &Component) -> Option<f64> {
     // value to carry an inductance unit hint OR be in a plausible henries range.
     let v = comp.value.trim();
     let parsed = parse_value(v)?;
-    let looks_like_henries = v.to_ascii_uppercase().contains('H')
-        || (parsed.si > 1e-9 && parsed.si < 1e-1);
+    let looks_like_henries =
+        v.to_ascii_uppercase().contains('H') || (parsed.si > 1e-9 && parsed.si < 1e-1);
     looks_like_henries.then_some(parsed.si)
 }
 
@@ -156,12 +156,16 @@ fn bulk_cap_on_rail(
             continue;
         }
         let r = c.reference.trim().to_ascii_uppercase();
-        let is_c = r.starts_with('C') && r[1..].chars().next().is_some_and(|ch| ch.is_ascii_digit());
+        let is_c =
+            r.starts_with('C') && r[1..].chars().next().is_some_and(|ch| ch.is_ascii_digit());
         if !is_c || connected_pads(c) != 2 {
             continue;
         }
         let on_rail = c.pins.iter().any(|p| p.net == Some(rail_id));
-        let on_gnd = c.pins.iter().any(|p| p.net.is_some_and(|n| ground_ids.contains(&n)));
+        let on_gnd = c
+            .pins
+            .iter()
+            .any(|p| p.net.is_some_and(|n| ground_ids.contains(&n)));
         if !(on_rail && on_gnd) {
             continue;
         }
@@ -174,7 +178,11 @@ fn bulk_cap_on_rail(
                 continue;
             }
         }
-        let cap = BulkCap { reference: c.reference.clone(), value: c.value.clone(), farads };
+        let cap = BulkCap {
+            reference: c.reference.clone(),
+            value: c.value.clone(),
+            farads,
+        };
         // Prefer the largest parseable cap as "the" bulk element.
         best = match (best, &cap.farads) {
             (None, _) => Some(cap),
@@ -227,8 +235,12 @@ fn pin_is_gate_by_name(p: &Pin) -> bool {
 /// switch node) is distinct and not ground. Boards with no discrete switching
 /// stage (or whose topology is ambiguous) return an empty vector.
 pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<ConverterStage> {
-    let ground_ids: HashSet<i64> =
-        board.nets.iter().filter(|n| is_ground_net(&n.name)).map(|n| n.id).collect();
+    let ground_ids: HashSet<i64> = board
+        .nets
+        .iter()
+        .filter(|n| is_ground_net(&n.name))
+        .map(|n| n.id)
+        .collect();
 
     // Map every FET to its power nets, and every inductor to its two nets.
     let fets: Vec<(&Component, Vec<i64>)> = board
@@ -261,8 +273,11 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
                 continue;
             }
             // FETs whose power nets include this candidate switch node.
-            let switch_fets: Vec<(&Component, &Vec<i64>)> =
-                fets.iter().filter(|(_, nets)| nets.contains(&cand_sw)).map(|(c, n)| (*c, n)).collect();
+            let switch_fets: Vec<(&Component, &Vec<i64>)> = fets
+                .iter()
+                .filter(|(_, nets)| nets.contains(&cand_sw))
+                .map(|(c, n)| (*c, n))
+                .collect();
             if switch_fets.is_empty() {
                 continue;
             }
@@ -342,7 +357,10 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
                 inductor_h: Some(*h),
                 input_bulk_cap,
                 output_bulk_cap,
-                switch_fets: switch_fets.iter().map(|(c, _)| c.reference.clone()).collect(),
+                switch_fets: switch_fets
+                    .iter()
+                    .map(|(c, _)| c.reference.clone())
+                    .collect(),
             });
             break; // one stage per inductor
         }
@@ -367,7 +385,13 @@ fn rail_nominal_v(name: &str) -> Option<f64> {
     let leaf = n.rsplit('/').next().unwrap_or(&n);
     // Explicit numeric voltage tokens are reliable, so they come FIRST, a rail
     // named "+12V" always reports 12 V regardless of any role-name hint below.
-    for (tok, v) in [("+12V", 12.0), ("+5V", 5.0), ("+3V3", 3.3), ("+3.3V", 3.3), ("+1V8", 1.8)] {
+    for (tok, v) in [
+        ("+12V", 12.0),
+        ("+5V", 5.0),
+        ("+3V3", 3.3),
+        ("+3.3V", 3.3),
+        ("+1V8", 1.8),
+    ] {
         if leaf == tok {
             return Some(v);
         }

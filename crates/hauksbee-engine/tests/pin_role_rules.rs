@@ -57,7 +57,9 @@ const NETLIST_DIODE_WITH_PINFUNC: &str = r#"(export (version "E")
       (node (ref "R1") (pin "2") (pintype "passive")))))
 "#;
 
-fn diode_device(bound: &hauksbee_engine::BoundBoard) -> Option<(hauksbee_ir::NodeId, hauksbee_ir::NodeId)> {
+fn diode_device(
+    bound: &hauksbee_engine::BoundBoard,
+) -> Option<(hauksbee_ir::NodeId, hauksbee_ir::NodeId)> {
     bound.circuit.devices.iter().find_map(|d| match d {
         Device::Diode { name, a, k, .. } if name == "D1" => Some((*a, *k)),
         _ => None,
@@ -89,10 +91,20 @@ fn layout_only_diode_binds_via_rule_with_guess_warning() {
         guesses.len() == 2,
         "expected anode+cathode guess-warnings for D1, got {guesses:?}"
     );
-    let joined = guesses.iter().map(|(_, g)| *g).collect::<Vec<_>>().join("\n");
+    let joined = guesses
+        .iter()
+        .map(|(_, g)| *g)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(joined.contains("anode"), "names the anode role: {joined}");
-    assert!(joined.contains("cathode"), "names the cathode role: {joined}");
-    assert!(joined.contains("diode_2pin_k1_a2"), "names the matched rule: {joined}");
+    assert!(
+        joined.contains("cathode"),
+        "names the cathode role: {joined}"
+    );
+    assert!(
+        joined.contains("diode_2pin_k1_a2"),
+        "names the matched rule: {joined}"
+    );
     assert!(joined.contains("pad"), "names a pad: {joined}");
 }
 
@@ -103,8 +115,7 @@ fn explicit_pinfunction_diode_binds_with_no_guess() {
     let bound = bind_board(&board, &lib);
 
     // Binds, polarity from the explicit pinfunction.
-    let (anode, cathode) =
-        diode_device(&bound).expect("diode with explicit A/K must bind");
+    let (anode, cathode) = diode_device(&bound).expect("diode with explicit A/K must bind");
     assert_eq!(bound.net_nodes.get("ANODE_NET").copied(), Some(anode));
     assert_eq!(bound.net_nodes.get("CATHODE_NET").copied(), Some(cathode));
 
@@ -146,8 +157,7 @@ fn user_rule_overrides_builtin_and_is_named_in_guess() {
     let board = ExtractedBoard::from_auto(LAYOUT_DIODE_PCB).expect("parse pcb");
     let bound = bind_board_with(&board, &lib, &custom);
 
-    let (anode, cathode) =
-        diode_device(&bound).expect("diode binds under the user rule");
+    let (anode, cathode) = diode_device(&bound).expect("diode binds under the user rule");
     // Flipped: pad1 (CATHODE_NET) is now the ANODE, pad2 (ANODE_NET) the CATHODE.
     assert_eq!(
         bound.net_nodes.get("CATHODE_NET").copied(),

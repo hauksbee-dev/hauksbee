@@ -10,8 +10,14 @@ fn node_interning_is_case_insensitive() {
     let a = c.node("OUT");
     let b = c.node("Out");
     let d = c.node("out");
-    assert_eq!(a, b, "case variants of one net must intern to the same node");
-    assert_eq!(a, d, "case variants of one net must intern to the same node");
+    assert_eq!(
+        a, b,
+        "case variants of one net must intern to the same node"
+    );
+    assert_eq!(
+        a, d,
+        "case variants of one net must intern to the same node"
+    );
 
     // node() and find_node() must agree.
     assert_eq!(c.find_node("out"), Some(a));

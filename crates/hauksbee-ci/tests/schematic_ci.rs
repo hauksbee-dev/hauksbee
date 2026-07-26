@@ -97,8 +97,16 @@ fn schematic_and_pcb_agree() {
     let sch_spec = write_tmp("agree_sch.toml", &spec_body(&sch.display().to_string()));
     let pcb_spec = write_tmp("agree_pcb.toml", &spec_body(&pcb.display().to_string()));
 
-    let sch_res = run(&RunConfig { spec: sch_spec, ..Default::default() }).expect("schematic spec runs");
-    let pcb_res = run(&RunConfig { spec: pcb_spec, ..Default::default() }).expect("pcb spec runs");
+    let sch_res = run(&RunConfig {
+        spec: sch_spec,
+        ..Default::default()
+    })
+    .expect("schematic spec runs");
+    let pcb_res = run(&RunConfig {
+        spec: pcb_spec,
+        ..Default::default()
+    })
+    .expect("pcb spec runs");
 
     // Same number of assertions, same labels, same pass/fail on each.
     assert_eq!(
@@ -139,7 +147,11 @@ fn pointing_at_subsheet_is_a_clear_error() {
             sub.display()
         ),
     );
-    let err = run(&RunConfig { spec, ..Default::default() }).unwrap_err();
+    let err = run(&RunConfig {
+        spec,
+        ..Default::default()
+    })
+    .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("sub-sheet"), "should flag a sub-sheet: {msg}");
     assert!(
@@ -179,7 +191,10 @@ fn hierarchy_subsheet_components_are_loaded() {
     // "unknown component" means it was not. (This test previously relied on the
     // untracked-kind case silently passing green, that silent pass was bug #18
     // and is now a loud rejection.)
-    match run(&RunConfig { spec, ..Default::default() }) {
+    match run(&RunConfig {
+        spec,
+        ..Default::default()
+    }) {
         Ok(res) => assert!(
             res.passed(),
             "sub-sheet component must be present and within its ceiling"

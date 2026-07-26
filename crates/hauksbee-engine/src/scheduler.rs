@@ -335,7 +335,6 @@ pub struct Scheduler {
     contention_nets: std::collections::HashSet<u32>,
 }
 
-
 /// A chip-substitution event: the board asked for `requested_part` but the
 /// available emulator core models a less-specific platform (`modelled_core`).
 /// Recorded at scheduler-build time so every surface (CLI text, JSON, TUI) can
@@ -552,7 +551,11 @@ impl DriverContention {
              and the firmware's pin-direction writes. The static output-contention lint \
              cannot see firmware pin directions, so this runtime monitor is the only \
              check that can catch the model-vs-MCU case.",
-            self.net, self.t_s, self.mcu_ref, self.port, self.bit,
+            self.net,
+            self.t_s,
+            self.mcu_ref,
+            self.port,
+            self.bit,
             self.parts.join(", "),
         )
     }
@@ -574,7 +577,6 @@ impl McuSubstitution {
         )
     }
 }
-
 
 /// The cycle-stamped GPIO edges one MCU produced during the most recent chunk,
 /// exposed for the analog PWL side (05 §1.1/§1.3).
@@ -627,14 +629,22 @@ impl NetStat {
     /// `NetStat` literal directly; this exposes just enough for those tests.
     #[cfg(test)]
     pub(crate) fn with_toggles(toggles: u64) -> Self {
-        NetStat { toggles, ..Default::default() }
+        NetStat {
+            toggles,
+            ..Default::default()
+        }
     }
 
     /// Test constructor with an explicit voltage range, for the activity-ranking
     /// tie-break (equal toggles, differing swing) the web/CLI/JSON tables share.
     #[cfg(test)]
     pub(crate) fn with_toggles_and_range(toggles: u64, min_v: f64, max_v: f64) -> Self {
-        NetStat { toggles, min_v, max_v, ..Default::default() }
+        NetStat {
+            toggles,
+            min_v,
+            max_v,
+            ..Default::default()
+        }
     }
 }
 
@@ -668,8 +678,7 @@ impl Scheduler {
             // DRC, stress, transient scenarios) working on boards whose MCU
             // happens to have an external backend mapping. The in-process AVR
             // core keeps its historical always-instantiated behaviour.
-            let external =
-                backend_is_external(&binding.backend);
+            let external = backend_is_external(&binding.backend);
             if external && firmware.is_none() {
                 continue;
             }
@@ -812,7 +821,9 @@ impl Scheduler {
                 continue;
             }
             for pin in d.sequential_pins() {
-                let Some(&node) = d.roles.get(pin) else { continue };
+                let Some(&node) = d.roles.get(pin) else {
+                    continue;
+                };
                 let refs = map.entry(node.0).or_default();
                 if !refs.iter().any(|r| r == &d.reference) {
                     refs.push(d.reference.clone());
@@ -899,7 +910,9 @@ impl Scheduler {
             t: self.sim_time,
             dt: self.chunk_s,
         };
-        bus.lock().unwrap_or_else(|e| e.into_inner()).drive_all(&mut ctx);
+        bus.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drive_all(&mut ctx);
     }
 
     /// The synchronous input-responder registry for MCU `mi` (05 §1.5),
@@ -1058,12 +1071,7 @@ impl Scheduler {
     /// loudness as a chip substitution). A board with no live MCUs stays
     /// silent: nothing co-simulates there at all, which the zero-activity /
     /// no-cosim surfaces already report.
-    fn record_bus_if_unexercised(
-        &mut self,
-        id: &str,
-        bus: &'static str,
-        controller: Option<&str>,
-    ) {
+    fn record_bus_if_unexercised(&mut self, id: &str, bus: &'static str, controller: Option<&str>) {
         if self.mcus.is_empty() {
             return;
         }
@@ -1157,9 +1165,15 @@ impl Scheduler {
         cs_pin: Option<(char, u8)>,
         cs_net: Option<NodeId>,
     ) {
-        let id = bus.lock().unwrap_or_else(|e| e.into_inner()).id().to_string();
+        let id = bus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .id()
+            .to_string();
         self.record_bus_if_unexercised(&id, "SPI", None);
-        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
+        bus.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_cs_pin(cs_pin);
         self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
         // Rebuild a MULTIPLEXING `on_spi` across ALL attached buses. `on_spi` is a
@@ -1195,23 +1209,33 @@ impl Scheduler {
         cs_pin: Option<(char, u8)>,
         cs_net: Option<NodeId>,
     ) {
-        let id = bus.lock().unwrap_or_else(|e| e.into_inner()).id().to_string();
+        let id = bus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .id()
+            .to_string();
         self.record_bus_if_unexercised(&id, "SPI", Some(controller));
-        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(cs_pin);
+        bus.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_cs_pin(cs_pin);
         for m in &mut self.mcus {
             let b = bus.clone();
             let ctrl = controller.to_string();
-            m.core.on_spi_controller(&ctrl, Box::new(move |ev| {
-                let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
-                if ev.deselect {
-                    guard.note_backend_deselect();
-                    0xFF
-                } else {
-                    guard.transfer(ev.mosi)
-                }
-            }));
+            m.core.on_spi_controller(
+                &ctrl,
+                Box::new(move |ev| {
+                    let mut guard = b.lock().unwrap_or_else(|e| e.into_inner());
+                    if ev.deselect {
+                        guard.note_backend_deselect();
+                        0xFF
+                    } else {
+                        guard.transfer(ev.mosi)
+                    }
+                }),
+            );
         }
-        self.spi_controller_map.insert(controller.to_string(), bus.clone());
+        self.spi_controller_map
+            .insert(controller.to_string(), bus.clone());
         self.register_cs_frame(&bus, cs_pin, cs_net);
         self.spi_buses.push(bus);
     }
@@ -1299,11 +1323,7 @@ impl Scheduler {
                     pins.sclk
                 )
             })?;
-        for (name, pin) in [
-            ("MOSI", pins.mosi),
-            ("MISO", pins.miso),
-            ("CS", pins.cs_n),
-        ] {
+        for (name, pin) in [("MOSI", pins.mosi), ("MISO", pins.miso), ("CS", pins.cs_n)] {
             if !self.mcus[mi].binding.gpio_drivers.contains_key(&pin) {
                 anyhow::bail!(
                     "bit-banged SPI '{}': {name} pin {:?} is not a wired GPIO of the MCU \
@@ -1353,9 +1373,7 @@ impl Scheduler {
             .mcus
             .iter()
             .position(|m| m.binding.gpio_drivers.contains_key(&scl))
-            .ok_or_else(|| {
-                anyhow::anyhow!("soft I2C: no live MCU drives SCL pin {scl:?}")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("soft I2C: no live MCU drives SCL pin {scl:?}"))?;
         if !self.mcus[mi].binding.gpio_drivers.contains_key(&sda) {
             anyhow::bail!(
                 "soft I2C: SDA pin {sda:?} is not a wired GPIO of the MCU that drives \
@@ -1556,7 +1574,9 @@ impl Scheduler {
     /// (there is no pin whose direction could be misread), matching the old
     /// `!has_external_backend()` proxy this replaces.
     pub fn drive_direction_observable(&self) -> bool {
-        self.mcus.iter().all(|m| m.core.drive_direction_observable())
+        self.mcus
+            .iter()
+            .all(|m| m.core.drive_direction_observable())
     }
 
     /// Advance the co-sim by `dt` seconds in fixed chunks.
@@ -1725,7 +1745,7 @@ impl Scheduler {
                         false
                     } else {
                         match prev {
-                            Some(p) => p, // hysteresis: hold the last level
+                            Some(p) => p,     // hysteresis: hold the last level
                             None => continue, // mid-band, no history: leave power-on
                         }
                     };
@@ -1913,7 +1933,9 @@ impl Scheduler {
                 dt: chunk,
             };
             for b in buses {
-                b.lock().unwrap_or_else(|e| e.into_inner()).flush_stops(&mut ctx);
+                b.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .flush_stops(&mut ctx);
             }
         }
 
@@ -2230,15 +2252,10 @@ impl Scheduler {
         // cold-start gmin/source-stepping homotopy on the full nonlinear board
         // every chunk. Exact (same root, fewer iters); a size-mismatched or
         // failing seed falls back to the cold solve inside the solver.
-        let res = t.run_streaming_seeded(
-            &self.circuit,
-            chunk,
-            self.last_dc_seed.as_deref(),
-            |s| {
-                final_x.clear();
-                final_x.extend_from_slice(s.x);
-            },
-        );
+        let res = t.run_streaming_seeded(&self.circuit, chunk, self.last_dc_seed.as_deref(), |s| {
+            final_x.clear();
+            final_x.extend_from_slice(s.x);
+        });
         let converged = match res {
             Ok(()) => {
                 self.node_volts.resize(n_nodes, 0.0);
@@ -2274,7 +2291,8 @@ impl Scheduler {
                     let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
                     self.branch_x.resize(n_branch, 0.0);
                     for b in 0..n_branch {
-                        self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
+                        self.branch_x[b] =
+                            final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
                     }
                     self.last_dc_seed = Some(final_x);
                 } else {
@@ -2361,7 +2379,11 @@ impl Scheduler {
                     .insert(node.0 as usize, (high_volts, low_volts, t_start, t_end));
                 // Reflect immediately so a same-chunk latch sample sees it too.
                 let t = self.sim_time;
-                let v = if t >= t_start && t < t_end { high_volts } else { low_volts };
+                let v = if t >= t_start && t < t_end {
+                    high_volts
+                } else {
+                    low_volts
+                };
                 if let Some(slot) = self.node_volts.get_mut(node.0 as usize) {
                     *slot = v;
                 }
@@ -2781,7 +2803,9 @@ impl Scheduler {
                 if self.contention_nets.contains(&node) {
                     continue;
                 }
-                let Some(parts) = model_out.get(&node) else { continue };
+                let Some(parts) = model_out.get(&node) else {
+                    continue;
+                };
                 let mut parts = parts.clone();
                 parts.sort();
                 self.contention_nets.insert(node);
@@ -2861,7 +2885,9 @@ impl Scheduler {
                     continue;
                 }
                 let Some(name) = name_of(node) else { continue };
-                let Some(st) = self.stats.get(name) else { continue };
+                let Some(st) = self.stats.get(name) else {
+                    continue;
+                };
                 // Held HIGH: reached a clear logic-high (>= 3.0 V, the same floor
                 // update_stats uses) and is not a busy signal line (<=1 rising
                 // edge = driven once and held; many edges = SPI / UART / PWM / a
@@ -3408,7 +3434,10 @@ pub struct StepResult {
 /// (all deasserted between transactions) the bus is idle and MISO floats high
 /// (`0xFF`). At most one bus lock is held at a time, preserving the
 /// McuShared→SpiBus lock order.
-fn dispatch_spi(buses: &[std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>], ev: hauksbee_mcu::SpiEvent) -> u8 {
+fn dispatch_spi(
+    buses: &[std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>],
+    ev: hauksbee_mcu::SpiEvent,
+) -> u8 {
     let apply = |bus: &std::sync::Arc<std::sync::Mutex<crate::peripherals::SpiBus>>| -> u8 {
         let mut g = bus.lock().unwrap_or_else(|e| e.into_inner());
         if ev.deselect {
@@ -3991,12 +4020,21 @@ mod tests {
         };
         // ch0's own driver is DISABLED: not promoted, even though a neighbour on
         // the same net IS enabled (the old net-keyed check wrongly said promoted).
-        assert!(!adc_channel_promoted(&binding, 0), "a neighbour's driver must not promote ch0");
+        assert!(
+            !adc_channel_promoted(&binding, 0),
+            "a neighbour's driver must not promote ch0"
+        );
         // ch6 is ADC-only (no own pin): never promoted, whatever shares its net.
-        assert!(!adc_channel_promoted(&binding, 6), "an ADC-only channel is never promoted");
+        assert!(
+            !adc_channel_promoted(&binding, 6),
+            "an ADC-only channel is never promoted"
+        );
         // Enable ch0's OWN driver: now it is genuinely promoted to output.
         binding.gpio_drivers.get_mut(&('C', 0)).unwrap().enabled = true;
-        assert!(adc_channel_promoted(&binding, 0), "ch0's own enabled driver promotes it");
+        assert!(
+            adc_channel_promoted(&binding, 0),
+            "ch0's own enabled driver promotes it"
+        );
     }
 
     /// A Nano module driving net CLK from A2 (PC2), with CLK feeding an RC
@@ -4076,24 +4114,51 @@ mod tests {
 
         sched.step(1e-3);
 
-        let r1 = sched.frame_peak_current().get("R1").copied().expect("R1 tracked");
-        let r2 = sched.frame_peak_current().get("R2").copied().expect("R2 tracked");
+        let r1 = sched
+            .frame_peak_current()
+            .get("R1")
+            .copied()
+            .expect("R1 tracked");
+        let r2 = sched
+            .frame_peak_current()
+            .get("R2")
+            .copied()
+            .expect("R2 tracked");
         // 12.5 mA through both legs of the 100/300 divider off the 5 V rail.
-        assert!((r1 - 0.0125).abs() < 5e-4, "R1 current ~12.5 mA, got {r1:.5} A");
-        assert!((r2 - 0.0125).abs() < 5e-4, "R2 current ~12.5 mA, got {r2:.5} A");
+        assert!(
+            (r1 - 0.0125).abs() < 5e-4,
+            "R1 current ~12.5 mA, got {r1:.5} A"
+        );
+        assert!(
+            (r2 - 0.0125).abs() < 5e-4,
+            "R2 current ~12.5 mA, got {r2:.5} A"
+        );
 
         // Per-net voltage window captured MID at ~3.75 V (min == max in steady
         // state, and equal to the last-chunk voltage).
         let &(mn, mx) = sched.frame_v_extremes().get("MID").expect("MID tracked");
         let mid = sched.net_voltages().get("MID").copied().unwrap_or(0.0);
-        assert!((mn - 3.75).abs() < 0.05 && (mx - 3.75).abs() < 0.05, "MID ~3.75 V, got [{mn:.3},{mx:.3}]");
-        assert!(mn <= mid + 1e-9 && mid <= mx + 1e-9, "last-chunk MID must lie within the frame window");
+        assert!(
+            (mn - 3.75).abs() < 0.05 && (mx - 3.75).abs() < 0.05,
+            "MID ~3.75 V, got [{mn:.3},{mx:.3}]"
+        );
+        assert!(
+            mn <= mid + 1e-9 && mid <= mx + 1e-9,
+            "last-chunk MID must lie within the frame window"
+        );
 
         // A second step must not inherit the first frame's peak; the reset makes
         // the accumulator report this frame's current, not the running max.
         sched.step(1e-3);
-        let r1b = sched.frame_peak_current().get("R1").copied().expect("R1 tracked");
-        assert!((r1b - 0.0125).abs() < 5e-4, "post-reset R1 current still ~12.5 mA, got {r1b:.5} A");
+        let r1b = sched
+            .frame_peak_current()
+            .get("R1")
+            .copied()
+            .expect("R1 tracked");
+        assert!(
+            (r1b - 0.0125).abs() < 5e-4,
+            "post-reset R1 current still ~12.5 mA, got {r1b:.5} A"
+        );
     }
 
     #[cfg(feature = "avr")]
@@ -4110,7 +4175,6 @@ mod tests {
         drv.set_volts(&mut bound.circuit, 0.0);
         Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
     }
-
 
     /// The W4 acceptance gate (08 section 2, closes TARSKI_RESULTS 5.1): a
     /// firmware-shaped bit-bang latches a REAL bound 74HC595 through its
@@ -4192,8 +4256,7 @@ mod tests {
             drv.set_volts(&mut bound.circuit, 0.0);
         }
 
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
 
         // The exact edge shape of shiftOut(SER, SRCLK, MSBFIRST, 0xA6) then an
         // RCLK latch pulse, cycle-stamped like the simavr hook would: set SER,
@@ -4205,17 +4268,42 @@ mod tests {
         for i in (0..8).rev() {
             let bit_lv = (byte >> i) & 1 != 0;
             if bit_lv != ser_level {
-                log.push(crate::digital::PinEdge { cycle: cyc, port: 'B', bit: 3, level: bit_lv });
+                log.push(crate::digital::PinEdge {
+                    cycle: cyc,
+                    port: 'B',
+                    bit: 3,
+                    level: bit_lv,
+                });
                 ser_level = bit_lv;
             }
             cyc += 4;
-            log.push(crate::digital::PinEdge { cycle: cyc, port: 'B', bit: 5, level: true });
+            log.push(crate::digital::PinEdge {
+                cycle: cyc,
+                port: 'B',
+                bit: 5,
+                level: true,
+            });
             cyc += 4;
-            log.push(crate::digital::PinEdge { cycle: cyc, port: 'B', bit: 5, level: false });
+            log.push(crate::digital::PinEdge {
+                cycle: cyc,
+                port: 'B',
+                bit: 5,
+                level: false,
+            });
             cyc += 4;
         }
-        log.push(crate::digital::PinEdge { cycle: cyc + 4, port: 'B', bit: 4, level: true });
-        log.push(crate::digital::PinEdge { cycle: cyc + 8, port: 'B', bit: 4, level: false });
+        log.push(crate::digital::PinEdge {
+            cycle: cyc + 4,
+            port: 'B',
+            bit: 4,
+            level: true,
+        });
+        log.push(crate::digital::PinEdge {
+            cycle: cyc + 8,
+            port: 'B',
+            bit: 4,
+            level: false,
+        });
 
         // Replay through the generalized path (what run_chunk does with the
         // drained MCU log), then let the digital layer push latched outputs
@@ -4363,8 +4451,7 @@ mod tests {
         let board = hauksbee_extract::ExtractedBoard::from_auto(RELEASE_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
 
         // Chunk 1: the core reports PC2 configured as an output, last driven
         // HIGH (the DDR-write-no-toggle promotion path). The driver enables
@@ -4379,7 +4466,10 @@ mod tests {
         );
         assert!(sched.solve_chunk(1e-3), "driven solve converges");
         let driven = sched.net_voltage("BUS").expect("BUS solved");
-        assert!(driven > 3.0, "driven-high BUS must read ~5 V, got {driven:.2} V");
+        assert!(
+            driven > 3.0,
+            "driven-high BUS must read ~5 V, got {driven:.2} V"
+        );
 
         // Chunk 2: the pin drops out of the configured set (DDR back to
         // input, no PORT edge). The driver must be DISABLED and the pull-down
@@ -4493,12 +4583,10 @@ mod tests {
     ///     internal pull-up.
     #[test]
     fn plain_digital_inputs_reach_the_core() {
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
 
         // Hand-wire a mock MCU: one tri-stated (input) driver per wired pin,
         // exactly what the binder stamps for a wired digital-capable pin the
@@ -4553,7 +4641,11 @@ mod tests {
 
         let calls = digital_ins.lock().unwrap_or_else(|e| e.into_inner());
         let for_pin = |pin: (char, u8)| -> Vec<bool> {
-            calls.iter().filter(|(p, _)| *p == pin).map(|&(_, l)| l).collect()
+            calls
+                .iter()
+                .filter(|(p, _)| *p == pin)
+                .map(|&(_, l)| l)
+                .collect()
         };
         assert_eq!(
             for_pin(('C', 0)),
@@ -4598,12 +4690,10 @@ mod tests {
             }
         }
 
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
 
         let cs_pin = ('C', 2u8);
         let resp_node = sched.net_nodes["RESP"];
@@ -4643,7 +4733,13 @@ mod tests {
         let total: usize = sched
             .mcus
             .iter()
-            .map(|m| m.shared.lock().unwrap_or_else(|e| e.into_inner()).cs_frames.len())
+            .map(|m| {
+                m.shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .cs_frames
+                    .len()
+            })
             .sum();
         assert_eq!(
             total, 1,
@@ -4666,12 +4762,10 @@ mod tests {
             }
         }
 
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
 
         let cs_pin = ('C', 2u8);
         // R44: two MCUs own the SAME chip-local (C,2) pin, but on DIFFERENT nets.
@@ -4722,8 +4816,16 @@ mod tests {
                 .cs_frames
                 .len()
         };
-        assert_eq!(frames(0), 0, "the unrelated first tuple-owner MCU must NOT be framed");
-        assert_eq!(frames(1), 1, "the MCU that drives the CS net must be framed");
+        assert_eq!(
+            frames(0),
+            0,
+            "the unrelated first tuple-owner MCU must NOT be framed"
+        );
+        assert_eq!(
+            frames(1),
+            1,
+            "the MCU that drives the CS net must be framed"
+        );
     }
 
     // ── Multi-bus on_i2c / on_spi dispatch (R47) ─────────────────────────────
@@ -4785,15 +4887,11 @@ mod tests {
     /// Wire one `CapturingCore` MCU (with GPIO drivers for the given pins, on
     /// per-pin fresh nets) onto a solvable board. Returns the scheduler plus
     /// the captured-callback handles.
-    fn sched_with_capturing_core(
-        pins: &[(char, u8)],
-    ) -> (Scheduler, CapturingCore) {
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+    fn sched_with_capturing_core(pins: &[(char, u8)]) -> (Scheduler, CapturingCore) {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
         let mut gpio_drivers = HashMap::new();
         for &pin in pins {
             let name = format!("CS_{}{}", pin.0, pin.1);
@@ -4959,12 +5057,10 @@ mod tests {
     /// A scheduler whose single live MCU is a [`BusBlindCore`], with ADC
     /// channel 0 bound to the named net.
     fn sched_with_bus_blind_core(adc_net: &str) -> Scheduler {
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
         let node = sched.circuit.node(adc_net);
         sched.net_nodes.insert(adc_net.to_string(), node);
         let mut adc_nets = HashMap::new();
@@ -4980,7 +5076,9 @@ mod tests {
             adc_pin: HashMap::new(),
             module: false,
         };
-        sched.mcus.push(core_with_hooks(Box::new(BusBlindCore), binding));
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(BusBlindCore), binding));
         sched.responder_registries.push(None);
         sched
     }
@@ -5009,7 +5107,11 @@ mod tests {
         sched.attach_spi_bus_on("spi9", spi2, None, None);
 
         let rec = sched.unexercised_buses();
-        assert_eq!(rec.len(), 3, "all three bound slaves are unexercised: {rec:?}");
+        assert_eq!(
+            rec.len(),
+            3,
+            "all three bound slaves are unexercised: {rec:?}"
+        );
         assert_eq!((rec[0].id.as_str(), rec[0].bus), ("TEMP1", "I2C"));
         assert_eq!((rec[1].id.as_str(), rec[1].bus), ("FLASH1", "SPI"));
         assert_eq!(rec[2].controller.as_deref(), Some("spi9"));
@@ -5071,12 +5173,10 @@ mod tests {
     /// pin; the lowest (port, bit), regardless of HashMap iteration order.
     #[test]
     fn pin_driving_node_is_deterministic_when_multiple_pins_share_a_net() {
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
 
         // Six of the MCU's pins all wired to ONE shared net node, inserted in a
         // deliberately non-sorted order so the HashMap cannot accidentally yield
@@ -5104,7 +5204,9 @@ mod tests {
             adc_pin: HashMap::new(),
             module: false,
         };
-        sched.mcus.push(core_with_hooks(Box::new(CapturingCore::default()), binding));
+        sched
+            .mcus
+            .push(core_with_hooks(Box::new(CapturingCore::default()), binding));
         sched.responder_registries.push(None);
 
         // The lowest (port, bit) among the six is ('B', 4).
@@ -5138,7 +5240,11 @@ mod tests {
 
         // TWI address filter: the LAST install (the one the core keeps) must
         // carry BOTH buses' addresses, not just the last-attached bus's.
-        let addrs = h.i2c_addrs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let addrs = h
+            .i2c_addrs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         assert!(
             addrs.contains(&0x50) && addrs.contains(&0x48),
             "TWI filter must be the union of all attached buses' addresses, got {addrs:#04x?}"
@@ -5147,16 +5253,40 @@ mod tests {
         // Firmware writes 0xAB at word address 0 of the FIRST bus's EEPROM.
         let mut slot = h.i2c_cb.lock().unwrap_or_else(|e| e.into_inner());
         let cb = slot.as_mut().expect("on_i2c handler installed");
-        cb(E::Start { addr: 0x50, read: false });
-        cb(E::Write { addr: 0x50, data: 0x00 });
-        cb(E::Write { addr: 0x50, data: 0x00 });
-        cb(E::Write { addr: 0x50, data: 0xAB });
+        cb(E::Start {
+            addr: 0x50,
+            read: false,
+        });
+        cb(E::Write {
+            addr: 0x50,
+            data: 0x00,
+        });
+        cb(E::Write {
+            addr: 0x50,
+            data: 0x00,
+        });
+        cb(E::Write {
+            addr: 0x50,
+            data: 0xAB,
+        });
         cb(E::Stop { addr: 0x50 });
         // ... and reads it back (repeated START read).
-        cb(E::Start { addr: 0x50, read: false });
-        cb(E::Write { addr: 0x50, data: 0x00 });
-        cb(E::Write { addr: 0x50, data: 0x00 });
-        cb(E::Start { addr: 0x50, read: true });
+        cb(E::Start {
+            addr: 0x50,
+            read: false,
+        });
+        cb(E::Write {
+            addr: 0x50,
+            data: 0x00,
+        });
+        cb(E::Write {
+            addr: 0x50,
+            data: 0x00,
+        });
+        cb(E::Start {
+            addr: 0x50,
+            read: true,
+        });
         let read_back = cb(E::Read { addr: 0x50 });
         cb(E::Stop { addr: 0x50 });
         drop(slot);
@@ -5174,7 +5304,11 @@ mod tests {
             "a firmware READ from the first bus's slave must answer"
         );
         assert!(
-            b2.slave::<Eeprom24c>(0x48).expect("eeprom@0x48").contents().iter().all(|&b| b == 0xFF),
+            b2.slave::<Eeprom24c>(0x48)
+                .expect("eeprom@0x48")
+                .contents()
+                .iter()
+                .all(|&b| b == 0xFF),
             "the second bus's slave must be untouched by traffic addressed to the first"
         );
     }
@@ -5192,7 +5326,10 @@ mod tests {
         }
         impl crate::peripherals::spi::SpiSlave for RecSlave {
             fn transfer(&mut self, mosi: u8) -> u8 {
-                self.got.lock().unwrap_or_else(|e| e.into_inner()).push(mosi);
+                self.got
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(mosi);
                 self.miso
             }
             fn as_any(&self) -> &dyn std::any::Any {
@@ -5210,11 +5347,17 @@ mod tests {
         let got2 = Arc::new(Mutex::new(Vec::new()));
         let bus1 = Arc::new(Mutex::new(SpiBus::new(
             "U2",
-            Box::new(RecSlave { got: got1.clone(), miso: 0x5A }),
+            Box::new(RecSlave {
+                got: got1.clone(),
+                miso: 0x5A,
+            }),
         )));
         let bus2 = Arc::new(Mutex::new(SpiBus::new(
             "U3",
-            Box::new(RecSlave { got: got2.clone(), miso: 0xA5 }),
+            Box::new(RecSlave {
+                got: got2.clone(),
+                miso: 0xA5,
+            }),
         )));
         sched.attach_spi_bus(bus1, Some(cs1), None);
         sched.attach_spi_bus(bus2, Some(cs2), None);
@@ -5222,7 +5365,10 @@ mod tests {
         let edge = |pin: (char, u8), high: bool| {
             let mut slot = h.pin_cb.lock().unwrap_or_else(|e| e.into_inner());
             (slot.as_mut().expect("on_pin_change installed"))(
-                PinId { port: pin.0, bit: pin.1 },
+                PinId {
+                    port: pin.0,
+                    bit: pin.1,
+                },
                 high,
                 0,
             );
@@ -5258,9 +5404,20 @@ mod tests {
         edge(cs1, true);
         edge(cs2, false);
         let miso = xfer(0x99);
-        assert_eq!(bytes(&got2), vec![0x99], "byte must follow the newly asserted CS");
-        assert_eq!(bytes(&got1), vec![0x42], "the deselected first slave must see nothing more");
-        assert_eq!(miso, 0xA5, "MISO must come from the selected (second) slave");
+        assert_eq!(
+            bytes(&got2),
+            vec![0x99],
+            "byte must follow the newly asserted CS"
+        );
+        assert_eq!(
+            bytes(&got1),
+            vec![0x42],
+            "the deselected first slave must see nothing more"
+        );
+        assert_eq!(
+            miso, 0xA5,
+            "MISO must come from the selected (second) slave"
+        );
     }
 
     // ── run_micros integer-carry + failure accounting (SCHED-1 / SCHED-2) ────
@@ -5313,12 +5470,10 @@ mod tests {
     /// Wire a bare `MicrosCore` (no drivers) onto a solvable board and return
     /// the scheduler plus the shared micros-log handle.
     fn sched_with_micros_core(fail: bool) -> (Scheduler, Arc<Mutex<Vec<u64>>>) {
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
         let micros = Arc::new(Mutex::new(Vec::new()));
         let core = MicrosCore {
             micros: micros.clone(),
@@ -5389,12 +5544,10 @@ mod tests {
     /// boot-state check must then hedge rather than assert Hi-Z.
     #[test]
     fn drive_direction_observable_ands_across_cores() {
-        let board =
-            hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
         let lib = hauksbee_models::ModelLibrary::builtin();
         let bound = crate::binder::bind_board(&board, &lib);
-        let mut sched =
-            Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
         let binding = |reference: &str| McuBinding {
             reference: reference.into(),
             backend: "simavr:test".into(),
@@ -5412,18 +5565,20 @@ mod tests {
             "no MCUs: vacuously observable (no pin whose direction could be misread)"
         );
 
-        sched
-            .mcus
-            .push(core_with_hooks(Box::new(DirCore { observable: true }), binding("U1")));
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: true }),
+            binding("U1"),
+        ));
         sched.responder_registries.push(None);
         assert!(
             sched.drive_direction_observable(),
             "one direction-reporting core keeps the run observable"
         );
 
-        sched
-            .mcus
-            .push(core_with_hooks(Box::new(DirCore { observable: false }), binding("U2")));
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: false }),
+            binding("U2"),
+        ));
         sched.responder_registries.push(None);
         assert!(
             !sched.drive_direction_observable(),
@@ -5446,7 +5601,11 @@ mod tests {
         for _ in 0..10 {
             sched.run_chunk(chunk, &mut uart);
         }
-        let delivered: u64 = micros.lock().unwrap_or_else(|e| e.into_inner()).iter().sum();
+        let delivered: u64 = micros
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .sum();
         let true_us = 10.0 * 1.3; // 13.0 µs
         assert!(
             (delivered as f64 - true_us).abs() <= 1.0,
@@ -5476,7 +5635,11 @@ mod tests {
         for _ in 0..20 {
             sched.run_chunk(chunk, &mut uart);
         }
-        let delivered: u64 = micros.lock().unwrap_or_else(|e| e.into_inner()).iter().sum();
+        let delivered: u64 = micros
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .sum();
         let true_us = 20.0 * 0.5; // 10.0 µs
         assert!(
             (delivered as f64 - true_us).abs() <= 1.0,
@@ -5552,7 +5715,10 @@ mod tests {
         let (mut sched, _micros) = sched_with_micros_core(true);
         let mut uart = HashMap::new();
         sched.run_chunk(1e-4, &mut uart);
-        assert!(sched.failed_chunk_count() >= 1, "first run recorded a failure");
+        assert!(
+            sched.failed_chunk_count() >= 1,
+            "first run recorded a failure"
+        );
         assert!(!sched.analog_valid(), "first run is not clean");
 
         sched.reset_run_state();
@@ -5601,11 +5767,10 @@ mod soc_wiring_tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // A brand-new part, purely as data (an F101 sibling of the F103).
-        let f101 = include_str!("../../hauksbee-mcu/db/mcu/stm32f103.soc.toml")
-            .replace(
-                "mcu_label = \"STM32F103 (ARM Cortex-M3)\"",
-                "mcu_label = \"STM32F101 (ARM Cortex-M3)\"",
-            );
+        let f101 = include_str!("../../hauksbee-mcu/db/mcu/stm32f103.soc.toml").replace(
+            "mcu_label = \"STM32F103 (ARM Cortex-M3)\"",
+            "mcu_label = \"STM32F101 (ARM Cortex-M3)\"",
+        );
         std::fs::write(dir.join("stm32f101.soc.toml"), &f101).unwrap();
 
         // An INVALID override for the BUILTIN part sifive_fe310 (typo'd
@@ -5633,7 +5798,9 @@ mod soc_wiring_tests {
 
         // The invalid override for a builtin name FAILS LOUDLY (never falls
         // back to the embedded fe310), naming the file and the typo'd field.
-        let err = invalid_override.expect_err("invalid override must fail").to_string();
+        let err = invalid_override
+            .expect_err("invalid override must fail")
+            .to_string();
         assert!(err.contains("sifive_fe310.soc.toml"), "err: {err}");
         assert!(err.contains("platform_rep"), "err: {err}");
 
@@ -5819,7 +5986,14 @@ mod pulse_and_contention_tests {
         );
         assert!((p.chunk_s - DEFAULT_CHUNK_S).abs() < 1e-12);
         let msg = p.message();
-        for needle in ["STROBE", "U5", "2.0 us", "100.0 us", "--chunk-us", "follow-up"] {
+        for needle in [
+            "STROBE",
+            "U5",
+            "2.0 us",
+            "100.0 us",
+            "--chunk-us",
+            "follow-up",
+        ] {
             assert!(msg.contains(needle), "message must name '{needle}': {msg}");
         }
 
@@ -5966,7 +6140,10 @@ mod pulse_and_contention_tests {
         assert_eq!(c.mcu_ref, "A1");
         assert_eq!((c.port, c.bit), ('B', 1));
         assert_eq!(c.parts, vec!["U1.y1".to_string()]);
-        assert!(c.t_s > 0.0, "detection is skipped on the unsolved first chunk");
+        assert!(
+            c.t_s > 0.0,
+            "detection is skipped on the unsolved first chunk"
+        );
         let msg = c.message();
         for needle in ["SHARED", "U1.y1", "PB1", "models resolve", "pin-direction"] {
             assert!(msg.contains(needle), "message must name '{needle}': {msg}");

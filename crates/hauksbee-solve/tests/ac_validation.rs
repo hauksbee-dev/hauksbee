@@ -518,9 +518,17 @@ fn opamp_reference_feedthrough_rolls_off_with_the_bandwidth_pole() {
             .expect("bode has points")
     };
     // Far below the pole: unity feedthrough (~0 dB), so DC agrees with transient.
-    assert!(db_at(1.0).abs() < 0.2, "low-f reference feedthrough ~0 dB: {}", db_at(1.0));
+    assert!(
+        db_at(1.0).abs() < 0.2,
+        "low-f reference feedthrough ~0 dB: {}",
+        db_at(1.0)
+    );
     // ~1 decade above the pole: -20 dB/decade => ~-20 dB (well off the 0 dB flat).
-    assert!(db_at(1000.0) < -15.0, "1 decade past pole rolls off: {} dB", db_at(1000.0));
+    assert!(
+        db_at(1000.0) < -15.0,
+        "1 decade past pole rolls off: {} dB",
+        db_at(1000.0)
+    );
     // Three decades above the pole (100 kHz): ~-60 dB, nowhere near the pre-fix
     // flat 0 dB feedthrough floor.
     assert!(
@@ -592,8 +600,14 @@ fn zero_ohm_jumper_is_a_short_in_ac() {
     assert!(vmid.arg().abs() < 1e-4, "jumper phase shift {}", vmid.arg());
     // And the transfer at out is the untouched analytic RC corner.
     let (_f, db, phase) = resp.bode(&ckt, "out")[0];
-    assert!((db + 3.0103).abs() < 1e-3, "corner gain {db} dB (want -3.01)");
-    assert!((phase + 45.0).abs() < 1e-3, "corner phase {phase} deg (want -45)");
+    assert!(
+        (db + 3.0103).abs() < 1e-3,
+        "corner gain {db} dB (want -3.01)"
+    );
+    assert!(
+        (phase + 45.0).abs() < 1e-3,
+        "corner phase {phase} deg (want -45)"
+    );
 }
 
 /// The AC resistor takes the SAME tc1 temperature derating as the DC path:
@@ -644,7 +658,10 @@ fn ac_resistor_gets_the_dc_paths_tc1_derating() {
         (db + 3.0103).abs() < 1e-3,
         "derated corner gain {db} dB (want -3.01 at fc of the DERATED R)"
     );
-    assert!((phase + 45.0).abs() < 1e-3, "derated corner phase {phase} deg");
+    assert!(
+        (phase + 45.0).abs() < 1e-3,
+        "derated corner phase {phase} deg"
+    );
 }
 
 /// A comparator output is held at its rail through the DC stamp's 1-S output
@@ -868,7 +885,11 @@ fn reactive_stamps_are_regular_at_the_dc_limit() {
         "inductor should be the DC short at f->0: |V(out)|={}",
         vout.norm()
     );
-    assert!(vout.arg().abs() < 1e-4, "phase {} at the DC limit", vout.arg());
+    assert!(
+        vout.arg().abs() < 1e-4,
+        "phase {} at the DC limit",
+        vout.arg()
+    );
 }
 
 /// A voltage switch biased MID-TRANSITION is a modulator: the smooth tanh

@@ -170,7 +170,9 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(id) = net_id_of(seg, &by_name) else { continue };
+        let Some(id) = net_id_of(seg, &by_name) else {
+            continue;
+        };
         let w = seg.find_f64("width").unwrap_or(0.0);
         if w <= 0.0 {
             continue;
@@ -183,7 +185,9 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if !layer.ends_with(".Cu") {
             continue;
         }
-        let Some(id) = net_id_of(arc, &by_name) else { continue };
+        let Some(id) = net_id_of(arc, &by_name) else {
+            continue;
+        };
         let w = arc.find_f64("width").unwrap_or(0.0);
         if w <= 0.0 {
             continue;
@@ -193,7 +197,9 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     // Zones: a net that carries a filled pour has its real cross-section in the
     // pour, not the segments. Record the zone count so the net is marked Poured.
     for zone in root.find_all("zone") {
-        let Some(id) = net_id_of(zone, &by_name) else { continue };
+        let Some(id) = net_id_of(zone, &by_name) else {
+            continue;
+        };
         // Only copper-layer zones count (keepouts on edge cuts do not conduct).
         let on_copper = zone
             .find("layers")

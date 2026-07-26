@@ -102,8 +102,11 @@ fn main {
     std::fs::create_dir_all(&dir).unwrap();
     let zip_path = dir.join("export.zip");
     let mut w = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
-    w.start_file("export/tarski.board", zip::write::SimpleFileOptions::default())
-        .unwrap();
+    w.start_file(
+        "export/tarski.board",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
     w.write_all(dsl).unwrap();
     w.finish().unwrap();
 
@@ -185,7 +188,10 @@ fn route_dsn_export_and_merge_ses_roundtrip() {
         .output()
         .expect("hauksbee runs");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "route-dsn export must exit 0:\n{stderr}");
+    assert!(
+        out.status.success(),
+        "route-dsn export must exit 0:\n{stderr}"
+    );
     let dsn_text = std::fs::read_to_string(&dsn).expect("DSN written");
     assert!(dsn_text.starts_with("(pcb "), "a Specctra DSN:\n{dsn_text}");
     assert!(
@@ -280,10 +286,7 @@ fn merge_ses_strict_fails_on_open_connection_with_one_json_line() {
     let v: serde_json::Value = serde_json::from_str(lines[0]).expect("parseable JSON");
     assert_eq!(v["ok"], false, "{v}");
     assert_eq!(v["unrouted"], 1, "{v}");
-    assert!(
-        v["error"].as_str().unwrap().contains("route-strict"),
-        "{v}"
-    );
+    assert!(v["error"].as_str().unwrap().contains("route-strict"), "{v}");
     assert!(!routed.exists(), "a strict-failed board is not written");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -313,7 +316,10 @@ fn check_code_json_object() {
         serde_json::from_str(stdout.trim()).expect("one JSON object on stdout");
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(v["components"], 1, "{v}");
-    assert!(v["nets"].is_number() && v["resolved_fraction"].is_number(), "{v}");
+    assert!(
+        v["nets"].is_number() && v["resolved_fraction"].is_number(),
+        "{v}"
+    );
     assert!(v["faults"].is_array() && v["unresolved"].is_array(), "{v}");
     assert!(v["simulated_seconds"].is_number(), "{v}");
 
@@ -350,7 +356,10 @@ fn models_resolve_json_object() {
     assert_eq!(comps.len(), 1, "{v}");
     assert_eq!(comps[0]["ref"], "R1", "{v}");
     assert_eq!(comps[0]["value"], "10k", "{v}");
-    assert!(comps[0]["model"].is_string() && comps[0]["layer"].is_string(), "{v}");
+    assert!(
+        comps[0]["model"].is_string() && comps[0]["layer"].is_string(),
+        "{v}"
+    );
     assert!(v["total"].is_number() && v["unresolved"].is_number(), "{v}");
 
     let _ = std::fs::remove_dir_all(&dir);

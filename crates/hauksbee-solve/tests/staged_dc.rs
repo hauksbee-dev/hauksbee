@@ -31,16 +31,48 @@ fn build(n_stage: usize, diode_is: f64) -> (Circuit, NodeId, Vec<NodeId>) {
     // PinDriver topology that produced the singular Vsource branch.
     let drv_hidden = c.node("DRV_H");
     let drv = c.node("DRV");
-    c.add(Device::Vsource { name: "VDRV".into(), p: drv_hidden, n: NodeId::GROUND, kind: SourceKind::Dc(0.0) });
-    c.add(Device::Resistor { name: "RDRV".into(), a: drv_hidden, b: drv, ohms: 50.0, tc1: None });
+    c.add(Device::Vsource {
+        name: "VDRV".into(),
+        p: drv_hidden,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(0.0),
+    });
+    c.add(Device::Resistor {
+        name: "RDRV".into(),
+        a: drv_hidden,
+        b: drv,
+        ohms: 50.0,
+        tc1: None,
+    });
 
-    let model = DiodeModel { is: diode_is, n: 1.9, rs: 0.65, ..DiodeModel::default() };
+    let model = DiodeModel {
+        is: diode_is,
+        n: 1.9,
+        rs: 0.65,
+        ..DiodeModel::default()
+    };
     let mut stage_nodes = Vec::new();
     for i in 0..n_stage {
         let s = c.node(&format!("S{i}")); // stretch node, floating at rest
-        c.add(Device::Diode { name: format!("Dfwd{i}"), a: drv, k: s, model });
-        c.add(Device::Capacitor { name: format!("Cs{i}"), a: s, b: NodeId::GROUND, farads: 5.8e-9, ic: None });
-        c.add(Device::Diode { name: format!("Drev{i}"), a: NodeId::GROUND, k: s, model });
+        c.add(Device::Diode {
+            name: format!("Dfwd{i}"),
+            a: drv,
+            k: s,
+            model,
+        });
+        c.add(Device::Capacitor {
+            name: format!("Cs{i}"),
+            a: s,
+            b: NodeId::GROUND,
+            farads: 5.8e-9,
+            ic: None,
+        });
+        c.add(Device::Diode {
+            name: format!("Drev{i}"),
+            a: NodeId::GROUND,
+            k: s,
+            model,
+        });
         stage_nodes.push(s);
     }
     (c, rail, stage_nodes)
@@ -96,19 +128,45 @@ fn stiff_diode_dc_converges_to_finite_physical_root() {
 fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
     let mut c = Circuit::new();
     let rail = c.node("RAIL");
-    c.add(Device::Vsource { name: "VR".into(), p: rail, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
-    let model = DiodeModel { is: 4.352e-9, n: 1.9, rs: 0.65, ..DiodeModel::default() };
+    c.add(Device::Vsource {
+        name: "VR".into(),
+        p: rail,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0),
+    });
+    let model = DiodeModel {
+        is: 4.352e-9,
+        n: 1.9,
+        rs: 0.65,
+        ..DiodeModel::default()
+    };
 
     // A floating stretch node off the rail through a reverse diode + DC-open cap:
     // forces the staged path (relaxed-seed + branch_reg) to engage, exactly the
     // condition under which the switches limit-cycle on the real board.
     let s = c.node("STRETCH");
-    c.add(Device::Diode { name: "Dr".into(), a: NodeId::GROUND, k: s, model });
-    c.add(Device::Capacitor { name: "Cs".into(), a: s, b: NodeId::GROUND, farads: 5.8e-9, ic: None });
+    c.add(Device::Diode {
+        name: "Dr".into(),
+        a: NodeId::GROUND,
+        k: s,
+        model,
+    });
+    c.add(Device::Capacitor {
+        name: "Cs".into(),
+        a: s,
+        b: NodeId::GROUND,
+        farads: 5.8e-9,
+        ic: None,
+    });
 
     // A fixed bias rail at 3 V for the switch controls.
     let bias = c.node("BIAS");
-    c.add(Device::Vsource { name: "VB".into(), p: bias, n: NodeId::GROUND, kind: SourceKind::Dc(3.0) });
+    c.add(Device::Vsource {
+        name: "VB".into(),
+        p: bias,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(3.0),
+    });
 
     // Main switch: rail -> out through a STIFF switch with NEGATIVE feedback,
     // vctrl = bias - v(out). As out rises the switch turns OFF, so the loop has a
@@ -127,14 +185,25 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
         ron: 1.0,
         roff: 1e6,
     });
-    c.add(Device::Resistor { name: "RL".into(), a: out, b: NodeId::GROUND, ohms: 1.0, tc1: None });
+    c.add(Device::Resistor {
+        name: "RL".into(),
+        a: out,
+        b: NodeId::GROUND,
+        ohms: 1.0,
+        tc1: None,
+    });
 
     // Decoy switches sitting near their own knees with the same negative-feedback
     // control, each fed from `out` through a diode and loaded to ground: they
     // couple to the main node and add discrete states the event loop must settle.
     for i in 0..n_decoy {
         let d = c.node(&format!("DEC{i}"));
-        c.add(Device::Diode { name: format!("Dd{i}"), a: out, k: d, model });
+        c.add(Device::Diode {
+            name: format!("Dd{i}"),
+            a: out,
+            k: d,
+            model,
+        });
         c.add(Device::VSwitch {
             name: format!("Sd{i}"),
             a: d,
@@ -146,7 +215,13 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
             ron: 10.0,
             roff: 1e6,
         });
-        c.add(Device::Resistor { name: format!("Rd{i}"), a: d, b: NodeId::GROUND, ohms: 1e4, tc1: None });
+        c.add(Device::Resistor {
+            name: format!("Rd{i}"),
+            a: d,
+            b: NodeId::GROUND,
+            ohms: 1e4,
+            tc1: None,
+        });
     }
     (c, rail, out)
 }
@@ -175,7 +250,6 @@ fn multi_switch_core_converges_via_event_freeze() {
     let mut ws = Workspace::new(&c);
     let r = dc_operating_point(&mut ws, &c, &opts);
 
-
     r.expect("switched diode core must converge");
 
     let rail = node_v(&ws, rail_n);
@@ -193,7 +267,10 @@ fn multi_switch_core_converges_via_event_freeze() {
 
     // And it is a TRUE root, not a relaxed adoption: KCL closes at the solution.
     let res = ws.dc_residual_inf_norm(&c, &opts);
-    assert!(res < 1e-6, "switched-core root residual should be ~0, got {res:e}");
+    assert!(
+        res < 1e-6,
+        "switched-core root residual should be ~0, got {res:e}"
+    );
 }
 
 /// A circuit whose TRUE nonlinear DC has no consistent comparator state (the
@@ -207,7 +284,12 @@ fn multi_switch_core_converges_via_event_freeze() {
 /// nearly the full 5 V rail, so the KCL residual is astronomically wrong.
 fn build_comparator_diode_chatter() -> Circuit {
     let mut c = Circuit::new();
-    let model = DiodeModel { is: 4.352e-9, n: 1.9, rs: 0.65, ..DiodeModel::default() };
+    let model = DiodeModel {
+        is: 4.352e-9,
+        n: 1.9,
+        rs: 0.65,
+        ..DiodeModel::default()
+    };
 
     let vref = c.node("VREF");
     c.add(Device::Vsource {
@@ -232,9 +314,26 @@ fn build_comparator_diode_chatter() -> Circuit {
     // out -> 1k -> diode -> fb -> 10k -> gnd: with out HIGH the diode conducts
     // and fb rises above vref (flipping out LOW); with out LOW fb rests at 0
     // (flipping out HIGH). No consistent static state exists.
-    c.add(Device::Resistor { name: "RFB".into(), a: out, b: d_a, ohms: 1.0e3, tc1: None });
-    c.add(Device::Diode { name: "DFB".into(), a: d_a, k: fb, model });
-    c.add(Device::Resistor { name: "RPD".into(), a: fb, b: NodeId::GROUND, ohms: 10.0e3, tc1: None });
+    c.add(Device::Resistor {
+        name: "RFB".into(),
+        a: out,
+        b: d_a,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    c.add(Device::Diode {
+        name: "DFB".into(),
+        a: d_a,
+        k: fb,
+        model,
+    });
+    c.add(Device::Resistor {
+        name: "RPD".into(),
+        a: fb,
+        b: NodeId::GROUND,
+        ohms: 10.0e3,
+        tc1: None,
+    });
     c
 }
 
@@ -252,7 +351,10 @@ fn run_op_rejects_staged_dc_relaxed_surrogate() {
     let mut ws = Workspace::new(&c);
     dc_operating_point(&mut ws, &c, &opts)
         .expect("dc_operating_point must still adopt the relaxed surrogate for seeding");
-    assert!(ws.used_staged_dc(), "the staged-DC fallback should have engaged");
+    assert!(
+        ws.used_staged_dc(),
+        "the staged-DC fallback should have engaged"
+    );
     let res = ws.dc_residual_inf_norm(&c, &opts);
     assert!(
         !(res <= 1e-6),
@@ -280,12 +382,33 @@ fn run_op_accepts_genuine_roots_including_staged_ones() {
     let mut c = Circuit::new();
     let a = c.node("A");
     let b = c.node("B");
-    c.add(Device::Vsource { name: "V1".into(), p: a, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
-    c.add(Device::Resistor { name: "R1".into(), a, b, ohms: 1.0e3, tc1: None });
-    c.add(Device::Resistor { name: "R2".into(), a: b, b: NodeId::GROUND, ohms: 1.0e3, tc1: None });
+    c.add(Device::Vsource {
+        name: "V1".into(),
+        p: a,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0),
+    });
+    c.add(Device::Resistor {
+        name: "R1".into(),
+        a,
+        b,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    c.add(Device::Resistor {
+        name: "R2".into(),
+        a: b,
+        b: NodeId::GROUND,
+        ohms: 1.0e3,
+        tc1: None,
+    });
     let out = run_op(&c, &opts, &[Probe::NodeVoltage("B".into())])
         .expect("a convergent divider must pass the .op residual gate");
-    assert!((out.rows[0][0] - 2.5).abs() < 1e-6, "divider mid: {}", out.rows[0][0]);
+    assert!(
+        (out.rows[0][0] - 2.5).abs() < 1e-6,
+        "divider mid: {}",
+        out.rows[0][0]
+    );
 
     // The stiff diode board from `stiff_diode_dc_converges_to_finite_physical_root`:
     // it exercises the staged machinery yet converges to a true root, so the

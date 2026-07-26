@@ -57,12 +57,19 @@ fn oversized_net_id_keeps_declared_name() {
 "#;
     let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
     assert!(
-        board.nets.iter().all(|n| n.name != "99999999999999999999999"),
+        board
+            .nets
+            .iter()
+            .all(|n| n.name != "99999999999999999999999"),
         "raw digit string must never become a net name"
     );
     let gnd = board.net_by_name("GND").expect("GND net survives");
     let pin = &board.components[0].pins[0];
-    assert_eq!(pin.net, Some(gnd.id), "pad resolves to GND through the name");
+    assert_eq!(
+        pin.net,
+        Some(gnd.id),
+        "pad resolves to GND through the name"
+    );
 }
 
 #[test]
@@ -89,16 +96,31 @@ fn numeric_net_zero_means_no_net_not_a_shared_node() {
     assert!(
         board.nets.iter().all(|n| !(n.id == 0 || n.name.is_empty())),
         "net 0 / empty-named net must never be interned: {:?}",
-        board.nets.iter().map(|n| (n.id, &n.name)).collect::<Vec<_>>()
+        board
+            .nets
+            .iter()
+            .map(|n| (n.id, &n.name))
+            .collect::<Vec<_>>()
     );
     // The two `(net 0 "")` pads carry no net; they are NOT fused together.
-    let u1 = board.components.iter().find(|c| c.reference == "U1").unwrap();
-    let h1 = board.components.iter().find(|c| c.reference == "H1").unwrap();
+    let u1 = board
+        .components
+        .iter()
+        .find(|c| c.reference == "U1")
+        .unwrap();
+    let h1 = board
+        .components
+        .iter()
+        .find(|c| c.reference == "H1")
+        .unwrap();
     let u1_p1 = u1.pins.iter().find(|p| p.number == "1").unwrap();
     let u1_p2 = u1.pins.iter().find(|p| p.number == "2").unwrap();
     let h1_p1 = &h1.pins[0];
     assert_eq!(u1_p1.net, None, "U1 pad 1 on (net 0 \"\") must have no net");
-    assert_eq!(h1_p1.net, None, "H1 mounting pad on (net 0 \"\") must have no net");
+    assert_eq!(
+        h1_p1.net, None,
+        "H1 mounting pad on (net 0 \"\") must have no net"
+    );
     // The genuinely-connected pad still resolves.
     assert!(u1_p2.net.is_some(), "U1 pad 2 on SIG must resolve");
 }

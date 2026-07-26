@@ -28,7 +28,11 @@ pub fn render_report(nl: &Netlist, analysis: &Analysis) -> String {
     }
 
     if !analysis.singletons.is_empty() {
-        let _ = writeln!(s, "--- Singleton blocks ({}) ---", analysis.singletons.len());
+        let _ = writeln!(
+            s,
+            "--- Singleton blocks ({}) ---",
+            analysis.singletons.len()
+        );
         // Show only the largest few singletons by component count to avoid noise.
         for c in analysis.singletons.iter().take(15) {
             let refs: Vec<&str> = c.instances[0]

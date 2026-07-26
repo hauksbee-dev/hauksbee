@@ -321,9 +321,18 @@ fn esp32s3_test_board() -> hauksbee_engine::binder::BoundBoard {
     let board = ExtractedBoard {
         name: "esp32s3-wiring-test".to_string(),
         nets: vec![
-            Net { id: 1, name: "BOOT".to_string() },
-            Net { id: 2, name: "+3V3".to_string() },
-            Net { id: 3, name: "GND".to_string() },
+            Net {
+                id: 1,
+                name: "BOOT".to_string(),
+            },
+            Net {
+                id: 2,
+                name: "+3V3".to_string(),
+            },
+            Net {
+                id: 3,
+                name: "GND".to_string(),
+            },
         ],
         components: vec![Component {
             reference: "U1".to_string(),

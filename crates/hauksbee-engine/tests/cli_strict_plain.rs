@@ -325,11 +325,18 @@ fn ac_csv_is_written_even_with_json() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let v: serde_json::Value =
         serde_json::from_str(&stdout).expect("--json must still emit parseable JSON");
-    assert_eq!(v["ac"]["valid"], serde_json::Value::Bool(true), "sweep valid: {stdout}");
+    assert_eq!(
+        v["ac"]["valid"],
+        serde_json::Value::Bool(true),
+        "sweep valid: {stdout}"
+    );
     // AND the CSV file was written with the header and at least one data row.
     let csv = std::fs::read_to_string(&csv_path)
         .unwrap_or_else(|e| panic!("--ac-csv must be written even with --json: {e}"));
-    assert!(csv.starts_with("net,freq_hz,mag_db,phase_deg\n"), "CSV header present: {csv:.80}");
+    assert!(
+        csv.starts_with("net,freq_hz,mag_db,phase_deg\n"),
+        "CSV header present: {csv:.80}"
+    );
     assert!(
         csv.lines().skip(1).any(|l| l.starts_with("OUT,")),
         "CSV carries the requested net's sweep rows: {csv:.200}"
@@ -433,7 +440,10 @@ fn bare_json_strict_gates_a_shorted_board() {
     let stdout = String::from_utf8_lossy(&strict.stdout);
     let v: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("--json --strict still emits valid JSON");
-    assert!(v.get("drc").is_some(), "the combined JSON carries the DRC block: {stdout:.120}");
+    assert!(
+        v.get("drc").is_some(),
+        "the combined JSON carries the DRC block: {stdout:.120}"
+    );
 
     // Without --strict the same command stays exit 0 (the existing contract).
     let lax = run(&["run", b.to_str().unwrap(), "--json"]);
@@ -497,7 +507,9 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
         Some(2),
         "a real short on a validated board must fail --strict"
     );
-    assert!(String::from_utf8_lossy(&out.stdout).to_lowercase().contains("short"));
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .to_lowercase()
+        .contains("short"));
 
     // Unvalidated (KiCad 10): the same short does NOT gate (caveat printed).
     let unvalidated = crossing_short_board(20260206, "unvalidated");
@@ -542,7 +554,16 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
     let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
 
     // Advisory present in JSON, and NOT a gate by default.
-    let out = run(&["run", b, "--firmware", fw, "--headless", "--seconds", "0.05", "--json"]);
+    let out = run(&[
+        "run",
+        b,
+        "--firmware",
+        fw,
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--json",
+    ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("\"boot_control_net\""),
@@ -555,7 +576,14 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
 
     // --strict-boot escalates it to exit 2.
     let strict = run(&[
-        "run", b, "--firmware", fw, "--headless", "--seconds", "0.05", "--strict-boot",
+        "run",
+        b,
+        "--firmware",
+        fw,
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--strict-boot",
     ]);
     assert_eq!(
         strict.status.code(),
@@ -581,7 +609,15 @@ fn default_text_headless_surfaces_the_boot_hazard() {
     }
     let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
     // No --json, no --plain: the plain-text default persona.
-    let out = run(&["run", b, "--firmware", fw, "--headless", "--seconds", "0.05"]);
+    let out = run(&[
+        "run",
+        b,
+        "--firmware",
+        fw,
+        "--headless",
+        "--seconds",
+        "0.05",
+    ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("BOOT HAZARD") && stdout.contains("GATE_CTRL"),
@@ -609,7 +645,15 @@ fn clean_firmware_raises_no_boot_advisory() {
     }
     let (b, fw) = (b.to_str().unwrap(), fw.to_str().unwrap());
     let out = run(&[
-        "run", b, "--firmware", fw, "--headless", "--seconds", "0.1", "--json", "--strict-boot",
+        "run",
+        b,
+        "--firmware",
+        fw,
+        "--headless",
+        "--seconds",
+        "0.1",
+        "--json",
+        "--strict-boot",
     ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -643,15 +687,38 @@ fn boot_state_panel_reports_gate_drive_state() {
 
     // Variant A: gate driven HIGH and held -> plain panel + json say so.
     let plain = run(&[
-        "run", b, "--firmware", fw_a.to_str().unwrap(), "--headless", "--seconds", "0.05", "--plain",
+        "run",
+        b,
+        "--firmware",
+        fw_a.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--plain",
     ]);
     let p = String::from_utf8_lossy(&plain.stdout);
-    assert!(p.contains("Power-up state of MOSFET"), "expected a boot-state panel; got:\n{p}");
-    assert!(p.contains("GATE_CTRL") && p.contains("driven HIGH"), "panel must name the driven-high gate:\n{p}");
-    assert!(plain.status.success(), "the panel is informational and must not gate");
+    assert!(
+        p.contains("Power-up state of MOSFET"),
+        "expected a boot-state panel; got:\n{p}"
+    );
+    assert!(
+        p.contains("GATE_CTRL") && p.contains("driven HIGH"),
+        "panel must name the driven-high gate:\n{p}"
+    );
+    assert!(
+        plain.status.success(),
+        "the panel is informational and must not gate"
+    );
 
     let js = run(&[
-        "run", b, "--firmware", fw_a.to_str().unwrap(), "--headless", "--seconds", "0.05", "--json",
+        "run",
+        b,
+        "--firmware",
+        fw_a.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--json",
     ]);
     let j = String::from_utf8_lossy(&js.stdout);
     assert!(
@@ -661,7 +728,14 @@ fn boot_state_panel_reports_gate_drive_state() {
 
     // Variant B: gate never driven -> floating.
     let floating = run(&[
-        "run", b, "--firmware", fw_b.to_str().unwrap(), "--headless", "--seconds", "0.05", "--plain",
+        "run",
+        b,
+        "--firmware",
+        fw_b.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--plain",
     ]);
     let f = String::from_utf8_lossy(&floating.stdout);
     assert!(
@@ -687,8 +761,14 @@ fn boot_panel_reports_high_even_with_a_gate_pulldown() {
         return;
     }
     let out = run(&[
-        "run", b.to_str().unwrap(), "--firmware", fw.to_str().unwrap(),
-        "--headless", "--seconds", "0.05", "--plain",
+        "run",
+        b.to_str().unwrap(),
+        "--firmware",
+        fw.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.05",
+        "--plain",
     ]);
     let p = String::from_utf8_lossy(&out.stdout);
     // The PANEL row (a GATE_CTRL line carrying a state label), not the activity

@@ -40,7 +40,10 @@ min = 0.0
     )
     .expect("write spec");
 
-    let result = run(&RunConfig { spec: spec_path, ..Default::default() });
+    let result = run(&RunConfig {
+        spec: spec_path,
+        ..Default::default()
+    });
     let err = result.expect_err("a missing firmware file must fail, not run");
     let SpecError::Io(msg) = &err else {
         panic!("expected an Io error naming the firmware path, got {err:?}");
@@ -49,7 +52,10 @@ min = 0.0
     assert!(msg.contains("does_not_exist.hex"), "message: {msg}");
     assert!(msg.contains("no firmware file"), "message: {msg}");
     // Points at the spec field and what the path resolved against.
-    assert!(msg.contains("`firmware ="), "message names the spec field: {msg}");
+    assert!(
+        msg.contains("`firmware ="),
+        "message names the spec field: {msg}"
+    );
     assert!(
         msg.contains("resolved relative to the spec file at"),
         "message explains the resolution base: {msg}"

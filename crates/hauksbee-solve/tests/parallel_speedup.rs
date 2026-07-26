@@ -41,12 +41,20 @@ fn opts(dt: f64, part: Partitioning, parallel: ParallelPolicy) -> SolverOptions 
 /// Best-of-N wall time: the minimum approximates the uncontended cost on a
 /// machine with background load (other harnesses run on this box), which a
 /// single sample or a mean cannot.
-fn timed(c: &Circuit, tstop: f64, dt: f64, part: Partitioning, par: ParallelPolicy) -> (Waveforms, f64) {
+fn timed(
+    c: &Circuit,
+    tstop: f64,
+    dt: f64,
+    part: Partitioning,
+    par: ParallelPolicy,
+) -> (Waveforms, f64) {
     let mut best = f64::INFINITY;
     let mut wf = None;
     for _ in 0..5 {
         let t0 = Instant::now();
-        let w = Transient::new(opts(dt, part, par)).run(c, tstop).expect("run");
+        let w = Transient::new(opts(dt, part, par))
+            .run(c, tstop)
+            .expect("run");
         best = best.min(t0.elapsed().as_secs_f64());
         wf = Some(w);
     }
@@ -88,11 +96,27 @@ fn s4_parallel_speedup_table() {
     // Thread-count scaling on the largest array (informs PAR_MAX_THREADS).
     let (c, _m) = build_shunt_array(240);
     print!("mirror/240 scaling: ");
-    let (_, t1) = timed(&c, tstop, dt, Partitioning::Auto, ParallelPolicy::Threads(1));
+    let (_, t1) = timed(
+        &c,
+        tstop,
+        dt,
+        Partitioning::Auto,
+        ParallelPolicy::Threads(1),
+    );
     for &n in &[1usize, 2, 4, 8, 12] {
-        let (wf, t) = timed(&c, tstop, dt, Partitioning::Auto, ParallelPolicy::Threads(n));
+        let (wf, t) = timed(
+            &c,
+            tstop,
+            dt,
+            Partitioning::Auto,
+            ParallelPolicy::Threads(n),
+        );
         assert_mirror_sane(&c, &wf);
-        print!("{n}t {:.2?} ({:.2}x)  ", std::time::Duration::from_secs_f64(t), t1 / t);
+        print!(
+            "{n}t {:.2?} ({:.2}x)  ",
+            std::time::Duration::from_secs_f64(t),
+            t1 / t
+        );
     }
     println!();
 
@@ -109,7 +133,11 @@ fn s4_parallel_speedup_table() {
         .flatten()
         .zip(wf_auto.node_voltages.iter().flatten())
     {
-        assert_eq!(a.to_bits(), b.to_bits(), "ladder fallback must not see the policy");
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "ladder fallback must not see the policy"
+        );
     }
     println!(
         "rc_ladder/1000: Off {:?} vs Auto {:?} ({:+.1}%)",

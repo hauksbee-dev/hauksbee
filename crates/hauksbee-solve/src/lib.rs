@@ -47,8 +47,8 @@ static AUDIT_ALLOC: alloc_audit::CountingAlloc = alloc_audit::CountingAlloc;
 mod bypass;
 mod census;
 mod cmatrix;
-mod diagnostics;
 pub mod decompose;
+mod diagnostics;
 mod linear;
 mod loop_stability;
 mod newton;
@@ -66,10 +66,10 @@ mod transient;
 
 pub use ac::{has_dedicated_ac_source, AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
 pub use cmatrix::ComplexSystem;
+pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
 pub use linear::LinearIsland;
 pub use loop_stability::{margins_from_bode, phase_margin, LoopStability, StabilityMargins};
 pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};
-pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
 pub use options::{
     AssemblyMode, DcInit, DeviceEffects, EventRetryTuning, Integration, NewtonBypass,
     ParallelPolicy, Partitioning, RobustnessLadder, SolverOptions, StepControl, Strategy,
