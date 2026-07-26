@@ -1,5 +1,5 @@
 .title KiCad schematic
-.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/rectifier/diode.mod"
+.include "models/diode.mod"
 .tran 1u 10m
 
 R1 /signal_in Net-_D1-A_ 1k

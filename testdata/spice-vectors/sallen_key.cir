@@ -1,5 +1,5 @@
 .title KiCad schematic
-.include "/Users/hauksbee-user/Tarski/Tarski-Repos/board-corpus/kicad-demos-src/demos/simulation/sallen_key/ad8051.lib"
+.include "models/ad8051.lib"
 .ac dec 10 1 1Meg
 
 .control

@@ -38,8 +38,18 @@ fn preprocess(path: &Path) -> Option<String> {
         }
         if let Some(rest) = line.trim().strip_prefix(".include") {
             let inc_path = rest.trim().trim_matches('"');
-            let Ok(inc) = std::fs::read_to_string(inc_path) else {
-                eprintln!("include missing: {inc_path}");
+            // SPICE resolves a relative include against the deck that declared
+            // it, not the caller's working directory. Resolving it any other
+            // way ran these vectors without their model cards whenever the cwd
+            // differed, which the "include missing" note reported and nothing
+            // acted on.
+            let resolved = if Path::new(inc_path).is_absolute() {
+                PathBuf::from(inc_path)
+            } else {
+                path.parent().unwrap_or(Path::new(".")).join(inc_path)
+            };
+            let Ok(inc) = std::fs::read_to_string(&resolved) else {
+                eprintln!("include missing: {}", resolved.display());
                 return None;
             };
             out.push_str(&inc);
