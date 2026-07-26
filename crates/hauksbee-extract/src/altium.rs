@@ -747,8 +747,8 @@ mod tests {
     #[test]
     fn truncated_pad_geometry_is_dropped_not_zeroed() {
         // Bug-hunt #4: a geometry sub-record shorter than the 21 bytes the fields
-        // span used to be read as zeros, placing a phantom pad at the origin.
-        // With the guard, the truncated record is dropped entirely.
+        // span would read as zeros, placing a phantom pad at the origin. The
+        // guard drops the truncated record entirely.
         let buf = pads_stream(50, 10);
         assert!(
             parse_pads(&buf).is_empty(),

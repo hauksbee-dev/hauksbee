@@ -554,9 +554,9 @@ mod tests {
         use gerber_types::{CenterLinePrimitive, MacroBoolean};
         // A 2×2 rectangle centred OFF the origin at (3,0), rotated 90° about the
         // macro origin. The center itself must rotate: (3,0)→(0,3), so the hull
-        // spans x∈[-1,1], y∈[2,4]. The old handler rotated only the corner
-        // offsets and kept the center at (3,0), leaving the rect at x∈[2,4],
-        // y∈[-1,1], a pad centroid ~3 units away from where the fab put it.
+        // spans x∈[-1,1], y∈[2,4]. Rotating only the corner offsets and keeping
+        // the center at (3,0) would leave the rect at x∈[2,4], y∈[-1,1], a pad
+        // centroid ~3 units away from where the fab put it.
         let cl = CenterLinePrimitive {
             exposure: MacroBoolean::Value(true),
             dimensions: (MacroDecimal::Value(2.0), MacroDecimal::Value(2.0)),
@@ -629,8 +629,8 @@ mod tests {
     fn vector_line_applies_rotation_about_origin() {
         use gerber_types::{MacroBoolean, VectorLinePrimitive};
         // A horizontal bar from (0,0) to (4,0), width 1, rotated 90°: it becomes
-        // a vertical bar spanning y∈[0,4], x∈[-0.5,0.5]. The old handler ignored
-        // the angle and left it horizontal.
+        // a vertical bar spanning y∈[0,4], x∈[-0.5,0.5]. Ignoring the angle would
+        // leave it horizontal.
         let vl = VectorLinePrimitive {
             exposure: MacroBoolean::Value(true),
             width: MacroDecimal::Value(1.0),

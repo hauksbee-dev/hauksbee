@@ -1961,8 +1961,8 @@ mod tests {
     fn deeply_nested_group_bus_does_not_stack_overflow() {
         // A pathological brace-nested label must TERMINATE (the depth cap stops
         // the recursion; the over-deep inner token then falls back to a literal)
-        // rather than recurse to a stack overflow. The exact members don't matter
-        //, that the call returns at all is the guarantee under test.
+        // rather than recurse to a stack overflow. The exact members don't matter,
+        // that the call returns at all is the guarantee under test.
         let deep = format!("{}{}", "A{".repeat(64), "}".repeat(64));
         let out = expand_bus(&deep).expect("depth-capped expansion still terminates");
         assert!(!out.is_empty());

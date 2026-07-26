@@ -1,12 +1,12 @@
 //! The board-format reader registry.
 //!
-//! Extraction used to pick a format with one hard-coded substring sniff (a
-//! 512-char `head.contains(...)` ladder inside `ExtractedBoard::from_auto`).
-//! Adding or reordering a format meant editing that ladder, and the failure
-//! mode for an unknown file was whatever the last fallback (`ipc356`) happened
-//! to say.
+//! Extraction picks a format through a registry rather than through one
+//! hard-coded substring sniff. A 512-char `head.contains(...)` ladder makes
+//! adding or reordering a format an edit to shared code, and makes the failure
+//! mode for an unknown file whatever the last fallback (`ipc356`) happens to
+//! say.
 //!
-//! This module replaces the ladder with a small registry. Each format is a
+//! So each format is a
 //! [`BoardReader`] that owns its own detection ([`BoardReader::detects`]) and
 //! its own parse ([`BoardReader::read`]). The [`Registry`] holds them in a
 //! documented order and, when nothing matches, reports *what it tried*
@@ -150,8 +150,7 @@ impl BoardReader for EagleReader {
 /// IPC-D-356/356A fab netlist. Detected by its fixed-column test records
 /// (`317`/`327`/`367` at column 0); the same records
 /// [`ExtractedBoard::from_ipc_d356`] requires, so detection and a successful
-/// read coincide exactly (a file with no such record was rejected by the old
-/// fallback too).
+/// read coincide exactly.
 pub struct Ipc356Reader;
 impl BoardReader for Ipc356Reader {
     fn name(&self) -> &str {
@@ -252,8 +251,8 @@ impl Registry {
     }
 
     /// Detect and read in one step. When nothing matches, the error enumerates
-    /// every reader that was tried ([`ReadError::Unrecognized`]); the
-    /// improvement over the old generic fallback failure.
+    /// every reader that was tried ([`ReadError::Unrecognized`]) instead of
+    /// reporting one generic fallback failure.
     pub fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
         match self.detect(bytes, path) {
             Some(r) => r.read(bytes, path),
@@ -282,8 +281,8 @@ mod tests {
     #[test]
     fn ipc356_detected_even_with_a_header_past_64kib() {
         // R13: the parser reads the whole file, so detection must too. A large
-        // `C`-comment header that pushes the first test record past 64 KiB used
-        // to slip past the windowed detector and regress to Unrecognized.
+        // `C`-comment header that pushes the first test record past 64 KiB
+        // slips past a windowed detector and regresses to Unrecognized.
         let mut doc = String::new();
         for i in 0..3000 {
             doc.push_str(&format!(

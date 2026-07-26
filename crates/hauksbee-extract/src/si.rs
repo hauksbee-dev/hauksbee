@@ -18,8 +18,7 @@
 //!
 //! ## Discipline (read before trusting any fire)
 //!
-//! These follow the same calibration rule as the rest of hauksbee
-//! (`docs/record/FAMOUS_SWEEP.md`, `docs/record/KNOWN_FAULTS_VALIDATION.md`): **zero false
+//! These follow the same calibration rule as the rest of hauksbee: **zero false
 //! positives on known-good corpus, or the check does not fire.** Every check has
 //! an explicit "unknown -> info, never a fire" path, so a missing datasheet
 //! constant produces silence (or an informational note), never a confident
@@ -380,8 +379,8 @@ fn is_unconnected_net(name: &str) -> bool {
 /// Parse a resistor value string ("330", "1k", "4k7", "2.2k/R0603", "0R") to
 /// ohms via the single canonical parser in `hauksbee-models`.
 ///
-/// This used to be a hand-rolled parser that drifted from `value::parse_value`
-/// and from net-lint's copy, reading lowercase-`m` milliohms as MEGohms (a 1e9
+/// A parser hand-rolled here would drift from `value::parse_value` and from
+/// net-lint's copy: reading lowercase-`m` milliohms as MEGohms (a 1e9
 /// error), rejecting leading-`R` shunt marks ("R47") and inline annotations
 /// ("10k 1%"), and missing unicode/SPICE forms. Delegating kills that whole
 /// drift class: the canonical parser handles µ/Ω/ohm-sign glyphs, MEG/GIG,
