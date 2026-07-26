@@ -1,244 +1,947 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/ETM-Code/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "hauksbee-ci spec",
-  "description": "A hauksbee-ci TOML spec: one headless board+firmware co-simulation and the assertions that must hold for the build to pass. Hand-written from crates/hauksbee-ci/src/spec.rs and scenarios.rs (schemars is not a workspace dependency); the Rust structs use serde deny_unknown_fields, mirrored here as additionalProperties:false. Keep in sync with spec.rs.",
+  "description": "A hauksbee-ci TOML spec: one headless board+firmware co-simulation and the assertions that must hold for the build to pass. GENERATED from `Spec` in crates/hauksbee-ci/src/spec.rs (doc comments become these descriptions; serde deny_unknown_fields becomes additionalProperties: false). Do not hand-edit; regenerate with: UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["board", "assert"],
   "properties": {
-    "name": {
-      "type": "string",
-      "description": "Human-readable name for the check (appears in reports). Default \"hauksbee-ci\"."
-    },
-    "board": {
-      "type": "string",
-      "description": "Path to the board file, relative to this spec file's directory (.kicad_pcb, .kicad_sch, .net, .brd, .d356)."
-    },
-    "firmware": {
-      "type": "string",
-      "description": "Optional firmware ELF/hex, relative to this spec file's directory."
-    },
-    "mcu": {
-      "type": "string",
-      "description": "Optional MCU-kind hint (informational; the binder detects the MCU)."
-    },
-    "duration_ms": {
-      "type": "number",
-      "exclusiveMinimum": 0,
-      "description": "Simulated duration in milliseconds. Default 100."
-    },
-    "frame_ms": {
-      "type": "number",
-      "description": "Co-sim frame cadence in milliseconds (how often nets are sampled). Default 1."
+    "ac": {
+      "description": "Optional small-signal AC analysis: a frequency sweep run once on the\nbiased circuit, feeding the `phase_margin` / `ac_gain` assertions. The\nanalysis is seed-independent (it linearises about the DC operating point),\nso it is computed once and shared across fuzz seeds.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AcConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "ambient_c": {
+      "description": "Ambient temperature (C) for the steady-state junction-temperature\nestimate (`max_temp` assertions). Default 25 C.",
       "type": "number",
-      "description": "Ambient temperature (C) for the steady-state junction-temperature estimate (max_temp assertions). Default 25."
+      "format": "double",
+      "default": 25.0
     },
-    "suppress_rail": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Supply nets whose binder auto-rail is removed, so they are fed only through on-board components (e.g. a rail behind a sense shunt)."
+    "asbuilt": {
+      "description": "Optional as-built overlay (.asbuilt.toml), relative to the spec file's\ndirectory: the declarative physical delta between the design files and\nthe real reworked board (cut traces, jumpers, lifted pins, fitted\nvalues), applied to the bound board before every run. Distinct from\n`[[override]]`, which swaps a component's VALUE string pre-bind: the\noverlay performs post-bind structural surgery.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     },
-    "supply": {
+    "assert": {
+      "description": "The assertions, all of which must pass. A spec with no `[[assert]]`\nblocks is rejected (it would pass vacuously).",
       "type": "array",
-      "description": "Power-supply legs to attach to named supply nets.",
-      "items": { "$ref": "#/definitions/supply" }
+      "items": {
+        "$ref": "#/definitions/Assertion"
+      },
+      "minItems": 1
+    },
+    "board": {
+      "description": "Path to the board file, relative to the spec file's directory. A\n`.kicad_sch` (schematic-stage CI) is loaded by path so its sheet\nhierarchy resolves; `.kicad_pcb` / `.net` / `.brd` / `.d356` are sniffed\nfrom content.",
+      "type": "string"
+    },
+    "decoupling": {
+      "description": "Opt-in capacitor parasitics (ESR/ESL) for this run. Off by default, so a\nboard's decoupling stays ideal unless realism is explicitly requested.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Decoupling"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dnp": {
+      "description": "What to do with the DNP parts neither `fit` nor `no_fit` names:\n`\"fit-except-links\"` (the default: simulate DNP parts as fitted, since\nmost get placed eventually, but leave near-zero-ohm links open because\nfitting one merges the nets it bridges), `\"fit-all\"`, or `\"honour\"` to\nleave every DNP part out as a fab house would build it.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/DnpMode"
+        }
+      ]
+    },
+    "duration_ms": {
+      "description": "Simulated duration in milliseconds.",
+      "type": "number",
+      "format": "double",
+      "default": 100.0,
+      "exclusiveMinimum": 0
+    },
+    "ensemble": {
+      "description": "Tolerance-ensemble execution config (seed count, monte-carlo vs\ncorners). Only meaningful when tolerances are declared.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/EnsembleSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "firmware": {
+      "description": "Optional firmware ELF/hex, relative to the spec file's directory.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "fit": {
+      "description": "References of Do-Not-Populate parts to simulate as fitted, whatever\n`dnp` says. An unknown reference is a loud spec error.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "frame_ms": {
+      "description": "Co-sim frame cadence in milliseconds (how often nets are sampled).",
+      "type": "number",
+      "format": "double",
+      "default": 1.0,
+      "exclusiveMinimum": 0
+    },
+    "fuzz": {
+      "description": "Initial-state fuzzing: run the sim under several random register/\nundefined-state seeds. An assertion must hold across *all* seeds.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/FuzzSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mcu": {
+      "description": "Optional MCU-kind note. Purely informational, nothing reads it: the\nbinder detects the MCU from the BOARD's part value via the model\nlibrary's `[[models]] kind = \"mcu\"` routing entries (builtin, user\nmodel dirs, or `--models-dir`), and the resulting `backend:part`\nstring selects the emulator + SoC descriptor. To run a spec against a\ndifferent MCU, change the board or add a routing entry; this field\ncannot force a backend.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "name": {
+      "description": "Human-readable name for the check (appears in reports).",
+      "type": "string",
+      "default": "hauksbee-ci"
     },
     "net_drive": {
+      "description": "Nets forced to a fixed voltage for the whole run (external stimulus,\nregister bits, strapping). Stamped as an ideal source.",
       "type": "array",
-      "description": "Nets forced to a fixed voltage for the whole run (external stimulus, register bits, strapping). Stamped as an ideal source.",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["net", "volts"],
-        "properties": {
-          "net": { "type": "string" },
-          "volts": { "type": "number" }
-        }
+        "$ref": "#/definitions/NetDrive"
+      }
+    },
+    "no_fit": {
+      "description": "References of Do-Not-Populate parts to leave open, whatever `dnp` says.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "override": {
+      "description": "Component value overrides applied before binding (e.g. swap a wrong\nresistor value for the documented repair).",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Override"
       }
     },
     "peripheral": {
+      "description": "Peripherals attached to the board for this run (buttons, pots, encoders,\nstimulus, I2C/SPI slaves, VCD sinks), each with type-specific config and\nan optional timeline of press/release/set events.",
       "type": "array",
-      "description": "Peripherals attached to the board for this run (buttons, pots, encoders, stimulus, I2C/SPI slaves, VCD sinks).",
-      "items": { "$ref": "#/definitions/peripheral" }
-    },
-    "override": {
-      "type": "array",
-      "description": "Component value overrides applied before binding (e.g. swap a wrong resistor value for the documented repair).",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["ref", "value"],
-        "properties": {
-          "ref": { "type": "string", "description": "Reference designator, e.g. \"R_Shunt15301\"." },
-          "value": { "type": "string" }
-        }
-      }
-    },
-    "fuzz": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["seeds"],
-      "description": "Initial-state fuzzing: run the sim under several random register/undefined-state seeds. An assertion must hold across ALL seeds.",
-      "properties": {
-        "seeds": { "type": "integer", "minimum": 1 },
-        "nets": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Nets whose initial logic state is randomized per seed. When empty, every net_drive net is fuzzed."
-        },
-        "levels": {
-          "type": "array",
-          "items": { "type": "number" },
-          "minItems": 2,
-          "maxItems": 2,
-          "description": "The two voltage levels a fuzzed net is strapped between (default 0/5 V)."
-        }
-      }
-    },
-    "scenario": {
-      "type": "array",
-      "description": "Transient scenarios: dynamic load profiles attached to parts (drawn as current sinks on supply nets), exercising inrush / sag / brownout that DC cannot see.",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["part", "profile"],
-        "properties": {
-          "id": { "type": "string", "description": "Stable id, referenced by rail_window / protection_trip assertions." },
-          "part": { "type": "string", "description": "The part the load attaches to (reference designator, e.g. \"U5\")." },
-          "profile": { "type": "string", "description": "The named load profile (built-in id, e.g. \"esp32_boot_wifi\", or one defined in [[profile]])." },
-          "supply_net": { "type": "string", "description": "The supply net the load current is drawn from. If omitted, inferred from the part's power pins." },
-          "start_ms": { "type": "number", "description": "When the profile's activity begins (ms into the run). Default 0." },
-          "seed": { "type": "integer", "minimum": 0, "description": "Deterministic seed for profile jitter. Default 0." }
-        }
+        "$ref": "#/definitions/PeripheralSpec"
       }
     },
     "profile": {
+      "description": "Inline (spec-local) load-profile definitions, referenced by a scenario's\n`profile` field in addition to the built-in profile database.",
       "type": "array",
-      "description": "Inline (spec-local) load-profile definitions, referenced by a scenario's profile field.",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id"],
-        "properties": {
-          "id": { "type": "string" },
-          "description": { "type": "string" },
-          "segment": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["level_a"],
-              "properties": {
-                "level_a": { "type": "number" },
-                "rise_s": { "type": "number" },
-                "duration_s": { "type": "number" },
-                "period_s": { "type": "number" },
-                "idle_a": { "type": "number" },
-                "jitter_s": { "type": "number" }
-              }
-            }
-          }
-        }
+        "$ref": "#/definitions/InlineProfile"
       }
     },
-    "decoupling": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Opt-in capacitor parasitics (ESR/ESL) for this run. Off by default.",
-      "properties": {
-        "parasitics": { "type": "boolean", "description": "Turn on ESR/ESL on the board's decoupling capacitors using package/dielectric defaults." },
-        "override": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["ref"],
-            "properties": {
-              "ref": { "type": "string" },
-              "esr_ohms": { "type": "number" },
-              "esl_henries": { "type": "number" }
-            }
-          }
-        }
-      }
-    },
-    "ac": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["fstart", "fstop", "points"],
-      "description": "Small-signal AC analysis: a frequency sweep run once on the biased circuit, feeding phase_margin / ac_gain assertions.",
-      "properties": {
-        "fstart": { "type": "number", "exclusiveMinimum": 0, "description": "Sweep start (Hz)." },
-        "fstop": { "type": "number", "description": "Sweep stop (Hz); must exceed fstart." },
-        "points": { "type": "integer", "minimum": 1, "description": "Points per decade (dec) or total (lin)." },
-        "sweep": { "type": "string", "enum": ["dec", "lin"], "description": "Sweep spacing. Default \"dec\"." }
+    "scenario": {
+      "description": "Transient scenarios: dynamic load profiles attached to parts (drawn as\ncurrent sinks on supply nets), exercising inrush / sag / brownout that DC\ncannot see.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Scenario"
       }
     },
     "sensor": {
+      "description": "Declarative sensors attached to the co-sim for this run. Each entry\ndescribes one I2C or SPI sensor (via an inline spec string or a file\npath) plus optional per-run input overrides.",
       "type": "array",
-      "description": "Declarative I2C/SPI sensors attached to the co-sim for this run.",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id"],
-        "properties": {
-          "id": { "type": "string", "description": "Stable identifier (used in error messages and state assertions)." },
-          "spec": { "type": "string", "description": "Inline sensor spec string (the [sensor] TOML block verbatim). Mutually exclusive with spec_file." },
-          "spec_file": { "type": "string", "description": "Path to a .toml file containing the [sensor] block, relative to this spec file. Mutually exclusive with spec." },
-          "inputs": {
-            "type": "object",
-            "additionalProperties": { "type": "number" },
-            "description": "Input overrides: map from input name to value."
-          },
-          "controller": { "type": "string", "description": "Optional SPI controller name (e.g. \"spi2\") for multi-bus MCUs." }
-        }
+        "$ref": "#/definitions/SensorAttach"
       }
     },
-    "assert": {
+    "supply": {
+      "description": "Power-supply legs to attach to named supply nets.",
       "type": "array",
-      "minItems": 1,
-      "description": "The assertions, all of which must pass. A spec with no [[assert]] blocks is rejected (it would pass vacuously).",
-      "items": { "$ref": "#/definitions/assertion" }
+      "items": {
+        "$ref": "#/definitions/SupplySpec"
+      }
+    },
+    "suppress_rail": {
+      "description": "Supply nets whose binder auto-rail is removed, so they are fed only\nthrough on-board components (e.g. a rail behind a sense shunt).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "tolerance": {
+      "description": "Component-tolerance rules: sampled per ensemble seed so assertions must\nhold across the tolerance ensemble, not just at nominal values.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ToleranceRule"
+      }
     }
   },
+  "additionalProperties": false,
+  "required": [
+    "assert",
+    "board"
+  ],
   "definitions": {
-    "supply": {
+    "AcConfig": {
+      "description": "Small-signal AC analysis configuration.\n\n```toml\n[ac]\nfstart = 10.0        # Hz\nfstop  = 1e6         # Hz\npoints = 20          # per decade (dec) or total (lin)\nsweep  = \"dec\"       # \"dec\" | \"lin\"  (default \"dec\")\n```\n\nEvery independent source in the circuit is driven with unit AC amplitude, so\nnode phasors are the transfer function from that stimulus. A `phase_margin`\nassertion names the loop break/output net; an `ac_gain` assertion names a net\nand bounds its magnitude (dB) at an optional `freq_hz`.",
       "type": "object",
-      "additionalProperties": false,
-      "required": ["net", "kind"],
       "properties": {
-        "net": { "type": "string" },
-        "kind": {
-          "type": "string",
-          "enum": ["ideal", "bench", "wall", "usb", "battery"],
-          "description": "Supply model kind."
+        "fstart": {
+          "description": "Sweep start (Hz).",
+          "type": "number",
+          "format": "double",
+          "exclusiveMinimum": 0
         },
-        "volts": { "type": "number" },
-        "current_limit_a": { "type": "number" },
-        "r_out_ohms": { "type": "number" },
-        "ripple_vpp": { "type": "number" },
-        "ripple_hz": { "type": "number" },
-        "usb": { "type": "string", "enum": ["5v0.5a", "5v1.5a", "5v3a"], "description": "USB profile." },
-        "chemistry": { "type": "string", "enum": ["liion", "alkaline", "nimh", "lifepo4"], "description": "Battery chemistry." },
-        "cells": { "type": "integer", "minimum": 1 },
-        "capacity_mah": { "type": "number" },
-        "soc": { "type": "number" },
-        "r_internal_ohms": { "type": "number" },
-        "protection_trip_a": { "type": "number", "description": "BMS over-current protection trip threshold (A). Present = protected pack." },
-        "protection_delay_ms": { "type": "number", "description": "Sustained time above the trip threshold before the cutoff latches (ms). Default 0." },
-        "protection_reset_a": { "type": "number", "description": "Current the load must fall below to re-arm the cutoff (A). Default: trip." }
-      }
-    },
-    "peripheral": {
-      "type": "object",
+        "fstop": {
+          "description": "Sweep stop (Hz); must exceed `fstart`.",
+          "type": "number",
+          "format": "double"
+        },
+        "points": {
+          "description": "Points per decade (`dec`) or total (`lin`).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "sweep": {
+          "description": "\"dec\" (per-decade, log) or \"lin\" (linear). Default \"dec\".",
+          "type": "string",
+          "default": "dec",
+          "enum": [
+            "dec",
+            "lin"
+          ]
+        }
+      },
       "additionalProperties": false,
-      "required": ["id", "type"],
+      "required": [
+        "fstart",
+        "fstop",
+        "points"
+      ]
+    },
+    "Assertion": {
+      "description": "One assertion over the run.",
+      "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Stable id, used by events / live control / state assertions." },
+        "after_ms": {
+          "description": "Only sample at/after this time (ms), lets the rail settle first.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "amps": {
+          "description": "max_current: ceiling in amps for the component named by `ref`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "bytes": {
+          "description": "EEPROM byte sequence (hex string, e.g. \"48 69\" or \"4869\") that must\nappear in the peripheral's memory.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "celsius": {
+          "description": "max_temp: ceiling in C for the steady-state junction temperature of the\ncomponent named by `ref`. When omitted, the device's own max junction\ntemperature (from the model DB, or the per-package-class default) is used.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "contains": {
+          "description": "uart: substring the UART output must contain.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "deadline_ms": {
+          "description": "boot-coverage: the boot deadline (ms after reset) by which the control\nnet must reach and hold `min` volts.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "dip_below": {
+          "description": "rail_window: the rail is considered \"dipped\" while it is below this\nvoltage. Combined with `for_max_ms` to bound dip duration, and with\n`recover_to` / `recover_within_ms` to bound recovery.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "expect_trip": {
+          "description": "protection_trip: whether a protection trip is expected (true) or must NOT\noccur (false).",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "field": {
+          "description": "A peripheral state field that must lie in [min, max] (e.g. \"transitions\"\non a vcd_sink, \"temp_c\" on a sensor). Uses the assertion's min/max.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "for_max_ms": {
+          "description": "rail_window: the rail must not stay below `dip_below` for longer than\nthis many milliseconds (total, summed over the window).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "freq_hz": {
+          "description": "toggle: expected toggle frequency (Hz); ac_gain: measurement frequency.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "id": {
+          "description": "peripheral: the `id` of the [[peripheral]] / [[sensor]] to read.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "kind": {
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot-coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop\nchecks (need an `[ac]` block). `hwtrace`: the run reproduces a captured\nhardware trace.",
+          "type": "string",
+          "enum": [
+            "voltage",
+            "uart",
+            "toggle",
+            "no_faults",
+            "max_current",
+            "max_temp",
+            "peripheral",
+            "rail_window",
+            "protection_trip",
+            "boot-coverage",
+            "phase_margin",
+            "ac_gain",
+            "hwtrace"
+          ]
+        },
+        "matches": {
+          "description": "uart: regex the UART output must match.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "max": {
+          "description": "Upper bound.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "mcu": {
+          "description": "Which MCU's UART (by reference). Defaults to all MCUs concatenated.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "min": {
+          "description": "Lower bound (volts / dB / degrees / peripheral field). Voltage-class\nassertions need at least one of `min`/`max`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min_toggles": {
+          "description": "Minimum toggle count over the run (alternative to freq_hz).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "name": {
+          "description": "Optional label (defaults to a generated description).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "net": {
+          "description": "Target net (voltage / toggle / rail_window / boot-coverage /\nphase_margin / ac_gain).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "recover_to": {
+          "description": "rail_window: the voltage the rail must climb back to for \"recovered\".",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "recover_within_ms": {
+          "description": "rail_window: the rail must recover (reach `recover_to`) within this many\nmilliseconds of first dipping below `dip_below`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "ref": {
+          "description": "max_current / max_temp: the component to check.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "scenario": {
+          "description": "Scope the assertion to one scenario's window by its `id`. When unset, the\nassertion spans the whole run.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "supply_net": {
+          "description": "protection_trip: the supply net whose battery protection is checked.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "tolerance": {
+          "description": "toggle: relative tolerance on `freq_hz`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "trace": {
+          "description": "hwtrace: path to a `trace.toml` (relative to the spec file) describing a\ncaptured hardware trace whose per-channel features the simulated run must\nreproduce within the trace's stated tolerances (T6; see `hwtrace.rs`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    "CapOverride": {
+      "description": "A per-capacitor ESR/ESL override.",
+      "type": "object",
+      "properties": {
+        "esl_henries": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "esr_ohms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ref"
+      ]
+    },
+    "Decoupling": {
+      "description": "Capacitor-parasitics request for a scenario run. Opt-in: when `decoupling`\nis unset the board's capacitors stay ideal (no behavioural change).",
+      "type": "object",
+      "properties": {
+        "override": {
+          "description": "Per-part ESR/ESL overrides (ohms / henries), keyed by capacitor ref.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CapOverride"
+          }
+        },
+        "parasitics": {
+          "description": "Turn on ESR/ESL on the board's decoupling capacitors using package /\ndielectric defaults inferred from each cap's footprint and value.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "DnpMode": {
+      "description": "What a spec does with the Do-Not-Populate parts it does not name in `fit`\nor `no_fit`. The spec spelling of [`hauksbee_extract::dnp::DnpPolicy`].",
+      "oneOf": [
+        {
+          "description": "Simulate DNP parts as fitted, except near-zero-ohm links.",
+          "type": "string",
+          "const": "fit-except-links"
+        },
+        {
+          "description": "Simulate every DNP part as fitted, links included.",
+          "type": "string",
+          "const": "fit-all"
+        },
+        {
+          "description": "Leave every DNP part out, as a fab house would build the board.",
+          "type": "string",
+          "const": "honour"
+        }
+      ]
+    },
+    "EnsembleSpec": {
+      "description": "Tolerance-ensemble execution configuration.\n\n```toml\n[ensemble]\nseeds = 24                 # Monte-Carlo sample count (default 16)\nmode  = \"monte-carlo\"      # \"monte-carlo\" (default) | \"corners\"\n```\n\n`monte-carlo` runs `seeds` members, each sampling every toleranced\ncomponent from its distribution (seed 0 is the nominal baseline). A pass is\n**sampled coverage, not worst-case proof**. `corners` deterministically\nenumerates every all-min/all-max combination (2^n runs, n ≤ 10), which\nbounds the worst case only for monotonic responses. In corner mode `seeds`\nis ignored and `[fuzz]` must be absent (the two ensembles do not compose).",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "`\"monte-carlo\"` (default) or `\"corners\"`.",
+          "type": "string",
+          "default": "monte-carlo",
+          "enum": [
+            "monte-carlo",
+            "corners"
+          ]
+        },
+        "seeds": {
+          "description": "Monte-Carlo member count. Ignored in corner mode.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 16,
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "FuzzSpec": {
+      "description": "Initial-state fuzzing configuration.",
+      "type": "object",
+      "properties": {
+        "levels": {
+          "description": "The two voltage levels a fuzzed net is strapped between (default 0/5 V).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "nets": {
+          "description": "Nets whose initial logic state is randomized per seed. When empty, the\nfuzzer randomizes every net listed in any `net_drive` (treating those\ndrives as the undefined power-up bits).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "seeds": {
+          "description": "Number of random seeds to run (each perturbs undefined initial states).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "seeds"
+      ]
+    },
+    "InlineProfile": {
+      "description": "A user-defined load profile inline in the spec (mirrors the DB schema), so a\nscenario can carry a bespoke profile without editing the model database.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "id": {
+          "type": "string"
+        },
+        "segment": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/InlineSegment"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "InlineSegment": {
+      "description": "One segment of an inline profile (subset of the model-DB segment schema).",
+      "type": "object",
+      "properties": {
+        "duration_s": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "idle_a": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "jitter_s": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "level_a": {
+          "type": "number",
+          "format": "double"
+        },
+        "period_s": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "rise_s": {
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "level_a"
+      ]
+    },
+    "NetDrive": {
+      "description": "A net forced to a fixed DC voltage for the run.",
+      "type": "object",
+      "properties": {
+        "net": {
+          "type": "string"
+        },
+        "volts": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "net",
+        "volts"
+      ]
+    },
+    "Override": {
+      "description": "A component value override applied before binding. With a `tolerance`, the\n`value` becomes the *nominal* and the component is sampled around it as part\nof the tolerance ensemble (see [`ToleranceRule`]).",
+      "type": "object",
+      "properties": {
+        "distribution": {
+          "description": "Sampling distribution: `\"uniform\"` (default) or `\"gaussian\"` (sigma =\ntolerance/3, truncated at the tolerance bound). Only meaningful with\n`tolerance`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "uniform",
+            "gaussian"
+          ]
+        },
+        "ref": {
+          "description": "Reference designator, e.g. \"R_Shunt15301\".",
+          "type": "string"
+        },
+        "tolerance": {
+          "description": "Optional tolerance, as a percentage of `value` (10.0 = ±10%). Present =\nthis component joins the tolerance ensemble with `value` as nominal.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "exclusiveMaximum": 100,
+          "exclusiveMinimum": 0
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "value"
+      ]
+    },
+    "PeripheralSpec": {
+      "description": "A peripheral attached to the board for one run.\n\n```toml\n[[peripheral]]\nid = \"BTN1\"\ntype = \"pushbutton\"        # pushbutton|toggle|potentiometer|encoder|\n                           # stimulus|i2c_eeprom|i2c_lm75|spi_eeprom|\n                           # spi_mcp3008|vcd_sink\nnet = \"BUTTON\"             # attach by net name (or use ref+pin)\nto = \"GND\"                 # button/toggle: other terminal (default GND)\nbounce_ms = 5.0            # optional contact-bounce model\n[[peripheral.event]]       # timeline: press at 100ms, release at 150ms\nt_ms = 100\nvalue = 1\n[[peripheral.event]]\nt_ms = 150\nvalue = 0\n```",
+      "type": "object",
+      "properties": {
+        "a": {
+          "description": "Potentiometer terminals: a, wiper, b nets (net=wiper if omitted).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "address": {
+          "description": "I2C 7-bit address (eeprom / sensor).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 127,
+          "minimum": 0
+        },
+        "amplitude": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "b": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "bounce_ms": {
+          "description": "Contact-bounce duration (ms) for a pushbutton; 0/absent disables it.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "cs_net": {
+          "description": "Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).\nWhen set and the net resolves to an MCU GPIO pin, the co-sim frames the\nslave's transactions on the real CS edges (exact framing, 05 §2) instead\nof the chunk-boundary heuristic. Absent = heuristic framing.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "event": {
+          "description": "Timeline of events applied during the run.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TimelineEventSpec"
+          }
+        },
+        "freq_hz": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "id": {
+          "description": "Stable id, used by events / live control / state assertions.",
+          "type": "string"
+        },
+        "initial": {
+          "description": "Initial state: button pressed / toggle closed / control position.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "net": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "net_a": {
+          "description": "Encoder quadrature output nets.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "net_b": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "nets": {
+          "description": "Nets a vcd_sink should log.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "offset": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "pin": {
+          "description": "Pin/pad number on the connector for ref+pin attachment.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "pwl": {
+          "description": "PWL points as `[[t_ms, value], ...]`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "r_total": {
+          "description": "Total track resistance for a potentiometer (ohms).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "ref": {
+          "description": "Connector reference designator (e.g. \"J1\") for ref+pin attachment.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "size": {
+          "description": "EEPROM size in bytes.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "temp_c": {
+          "description": "Sensor temperature in Celsius (i2c_lm75).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "to": {
+          "description": "Second terminal net for a button / toggle / two-terminal control.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "type": {
+          "description": "Peripheral type.",
           "type": "string",
           "enum": [
             "pushbutton",
@@ -253,99 +956,367 @@
             "vcd_sink"
           ]
         },
-        "net": { "type": "string", "description": "Attach by net name (or use ref+pin)." },
-        "ref": { "type": "string", "description": "Connector reference designator (e.g. \"J1\") for ref+pin attachment." },
-        "pin": { "type": "string", "description": "Pin/pad number on the connector for ref+pin attachment." },
-        "to": { "type": "string", "description": "Second terminal net for a button / toggle (default GND)." },
-        "a": { "type": "string", "description": "Potentiometer terminal A net." },
-        "wiper": { "type": "string", "description": "Potentiometer wiper net (net= is the wiper if omitted)." },
-        "b": { "type": "string", "description": "Potentiometer terminal B net." },
-        "net_a": { "type": "string", "description": "Encoder quadrature output A net." },
-        "net_b": { "type": "string", "description": "Encoder quadrature output B net." },
-        "bounce_ms": { "type": "number", "description": "Contact-bounce duration (ms) for a pushbutton; 0/absent disables it." },
-        "initial": { "type": "number", "description": "Initial state: button pressed / toggle closed / control position." },
-        "r_total": { "type": "number", "description": "Total track resistance for a potentiometer (ohms)." },
-        "vhigh": { "type": "number", "description": "High-level voltage for an encoder / digital control output." },
-        "address": { "type": "integer", "minimum": 0, "maximum": 127, "description": "I2C 7-bit address (eeprom / sensor)." },
-        "size": { "type": "integer", "minimum": 0, "description": "EEPROM size in bytes." },
-        "temp_c": { "type": "number", "description": "Sensor temperature in Celsius (i2c_lm75)." },
-        "vref": { "type": "number", "description": "ADC reference voltage (spi_mcp3008)." },
-        "cs_net": { "type": "string", "description": "Chip-select net for a SPI slave; enables exact CS-edge framing when it resolves to an MCU GPIO." },
-        "waveform": { "type": "string", "enum": ["dc", "sine", "pwl", "noise"], "description": "Stimulus waveform." },
-        "offset": { "type": "number" },
-        "amplitude": { "type": "number" },
-        "freq_hz": { "type": "number" },
-        "pwl": {
-          "type": "array",
-          "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
-          "description": "PWL points as [[t_ms, value], ...]."
+        "vcd_path": {
+          "description": "Path to write the VCD file (relative to the spec dir).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
-        "nets": { "type": "array", "items": { "type": "string" }, "description": "Nets a vcd_sink should log." },
-        "vcd_path": { "type": "string", "description": "Path to write the VCD file (relative to the spec dir)." },
-        "event": {
-          "type": "array",
-          "description": "Timeline of events applied during the run: at t_ms, set the peripheral to value.",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["t_ms", "value"],
-            "properties": {
-              "t_ms": { "type": "number" },
-              "value": { "type": "number" }
-            }
-          }
+        "vhigh": {
+          "description": "High-level voltage for an encoder / digital control output.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "vref": {
+          "description": "ADC reference voltage (spi_mcp3008).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "waveform": {
+          "description": "Stimulus waveform: \"dc\"|\"sine\"|\"pwl\"|\"noise\".",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "dc",
+            "sine",
+            "pwl",
+            "noise"
+          ]
+        },
+        "wiper": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
-      }
-    },
-    "assertion": {
-      "type": "object",
+      },
       "additionalProperties": false,
-      "required": ["kind"],
+      "required": [
+        "id",
+        "type"
+      ]
+    },
+    "Scenario": {
+      "description": "One transient scenario: a profile attached to a part, plus optional\ndecoupling realism.",
+      "type": "object",
       "properties": {
+        "id": {
+          "description": "Stable id, referenced by `rail_window` / `protection_trip` assertions to\nscope them to this scenario's window (optional; a single-scenario spec\ncan leave it unset).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "part": {
+          "description": "The part the load attaches to (reference designator, e.g. \"U5\").",
+          "type": "string"
+        },
+        "profile": {
+          "description": "The named load profile to apply (built-in id, e.g. \"esp32_boot_wifi\", or\none defined in `profiles` below).",
+          "type": "string"
+        },
+        "seed": {
+          "description": "Deterministic seed for profile jitter. Default 0.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "start_ms": {
+          "description": "When the profile's activity begins (ms into the run). Default 0.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "supply_net": {
+          "description": "The supply net the load current is drawn from. If omitted, the runner\ninfers it from the part's power pins (VDD/VCC/VBAT/3V3/5V class).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "part",
+        "profile"
+      ]
+    },
+    "SensorAttach": {
+      "description": "A declarative I2C or SPI sensor attached to the co-sim for one run.\n\nThe sensor is described by a `[sensor]` TOML spec (parsed by\n`RegisterMapSensor::from_toml`). Exactly one of `spec` (inline string) or\n`spec_file` (path relative to the CI spec file) must be present.\n\n```toml\n[[sensor]]\nid          = \"U2_temp\"\nspec_file   = \"sensors/lm75.toml\"      # or: spec = \"\"\" ... \"\"\"\n\n[sensor.inputs]\ntemperature_c = 40.0                   # override the default for this run\n```",
+      "type": "object",
+      "properties": {
+        "controller": {
+          "description": "Optional SPI controller name (e.g. `\"spi2\"`). When set, the sensor is\nattached to that specific controller via `attach_spi_bus_on` so it only\nreceives traffic from that bus. When absent (the default), `attach_spi_bus`\nis used, which routes to the MCU's first/only SPI controller.\nOnly meaningful for SPI sensors (`bus = \"spi\"` in the sensor spec).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "id": {
+          "description": "Stable identifier (used in error messages and future state assertions).",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Input overrides: map from input name to value. Applied after parsing,\nbefore the run starts. Unknown names are silently ignored (they may be\nvalid for a different sensor or simply pre-set defaults).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {}
+        },
+        "spec": {
+          "description": "Inline sensor spec string (the `[sensor]` TOML block verbatim).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "spec_file": {
+          "description": "Path to a `.toml` file containing the `[sensor]` block, resolved\nrelative to the CI spec file's directory.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "SupplySpec": {
+      "description": "A power-supply leg attached to a supply net. Mirrors the engine's\nbehavioral supplies (bench / wall / USB / battery / ideal).",
+      "type": "object",
+      "properties": {
+        "capacity_mah": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "cells": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 1
+        },
+        "chemistry": {
+          "description": "Battery chemistry: `liion | alkaline | nimh | lifepo4` (aliases `lipo`, `lfp`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "liion",
+            "lipo",
+            "alkaline",
+            "nimh",
+            "lifepo4",
+            "lfp"
+          ]
+        },
+        "current_limit_a": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
         "kind": {
+          "description": "One of `ideal | bench | wall | usb | battery`.",
           "type": "string",
           "enum": [
-            "voltage",
-            "uart",
-            "toggle",
-            "no_faults",
-            "max_current",
-            "max_temp",
-            "peripheral",
-            "rail_window",
-            "protection_trip",
-            "boot-coverage",
-            "phase_margin",
-            "ac_gain"
-          ],
-          "description": "Assertion kind. voltage: net stays in [min,max]. uart: output contains/matches. toggle: net toggles at freq_hz or >= min_toggles. no_faults: no stress faults raised. max_current: I(ref) <= amps. max_temp: Tj(ref) <= celsius (or device max). peripheral: peripheral state check. rail_window: rail dip/recovery bounds over a scenario window. protection_trip: battery protection trips (or must not). boot-coverage: a control net is driven to min volts within deadline_ms of reset. phase_margin / ac_gain: small-signal loop checks (need an [ac] block)."
+            "ideal",
+            "bench",
+            "wall",
+            "usb",
+            "battery"
+          ]
         },
-        "name": { "type": "string", "description": "Optional label (defaults to a generated description)." },
-        "net": { "type": "string", "description": "Target net (voltage / toggle / rail_window / boot-coverage / phase_margin / ac_gain)." },
-        "min": { "type": "number", "description": "Lower bound (volts / dB / degrees / peripheral field)." },
-        "max": { "type": "number", "description": "Upper bound." },
-        "after_ms": { "type": "number", "description": "Only sample at/after this time (ms) — lets the rail settle first. Not supported on toggle." },
-        "contains": { "type": "string", "description": "uart: substring the UART output must contain." },
-        "matches": { "type": "string", "description": "uart: regex the UART output must match." },
-        "mcu": { "type": "string", "description": "uart: which MCU's UART (by reference). Defaults to all MCUs concatenated." },
-        "freq_hz": { "type": "number", "description": "toggle: expected toggle frequency (Hz); ac_gain: measurement frequency." },
-        "tolerance": { "type": "number", "description": "toggle: relative tolerance on freq_hz." },
-        "min_toggles": { "type": "integer", "minimum": 0, "description": "toggle: minimum toggle count over the run (alternative to freq_hz)." },
-        "ref": { "type": "string", "description": "max_current / max_temp: the component to check." },
-        "amps": { "type": "number", "description": "max_current: ceiling in amps." },
-        "celsius": { "type": "number", "description": "max_temp: ceiling in C. When omitted, the device's own max junction temperature is used." },
-        "id": { "type": "string", "description": "peripheral: the peripheral id to check." },
-        "bytes": { "type": "string", "description": "peripheral: EEPROM byte sequence (hex string, e.g. \"48 69\" or \"4869\") that must appear in memory." },
-        "field": { "type": "string", "description": "peripheral: a state field that must lie in [min, max] (e.g. \"transitions\", \"temp_c\")." },
-        "scenario": { "type": "string", "description": "Scope the assertion to one scenario's window by its id. Unset = whole run." },
-        "dip_below": { "type": "number", "description": "rail_window: the rail is 'dipped' while below this voltage." },
-        "for_max_ms": { "type": "number", "description": "rail_window: total time below dip_below must not exceed this (ms)." },
-        "recover_to": { "type": "number", "description": "rail_window: the voltage the rail must climb back to for 'recovered'." },
-        "recover_within_ms": { "type": "number", "description": "rail_window: must recover within this many ms of first dipping. Needs dip_below and recover_to." },
-        "supply_net": { "type": "string", "description": "protection_trip: the supply net whose battery protection is checked." },
-        "expect_trip": { "type": "boolean", "description": "protection_trip: whether a trip is expected (true) or must NOT occur (false)." },
-        "deadline_ms": { "type": "number", "description": "boot-coverage: the boot deadline (ms after reset)." }
-      }
+        "net": {
+          "type": "string"
+        },
+        "protection_delay_ms": {
+          "description": "Sustained time above the trip threshold before the cutoff latches (ms).\nDefault 0 (instant) when `protection_trip_a` is set.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "protection_reset_a": {
+          "description": "Current the load must fall below to re-arm the cutoff (A). Default: trip.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "protection_trip_a": {
+          "description": "BMS over-current protection trip threshold (A). Present = protected pack.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "r_internal_ohms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "r_out_ohms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "ripple_hz": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "ripple_vpp": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "soc": {
+          "description": "State of charge as a fraction in 0..1.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "maximum": 1.0,
+          "minimum": 0.0
+        },
+        "usb": {
+          "description": "USB profile: `5v0.5a | 5v1.5a | 5v3a` (underscore spellings accepted).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "5v0.5a",
+            "5v_0.5a",
+            "5v1.5a",
+            "5v_1.5a",
+            "5v3a",
+            "5v_3a"
+          ]
+        },
+        "volts": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "net",
+        "kind"
+      ]
+    },
+    "TimelineEventSpec": {
+      "description": "One scheduled peripheral event: at `t_ms`, set the peripheral to `value`.",
+      "type": "object",
+      "properties": {
+        "t_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "t_ms",
+        "value"
+      ]
+    },
+    "ToleranceRule": {
+      "description": "A component-tolerance rule: every component whose reference matches `ref`\n(a literal reference, or a pattern where `*` matches any run of characters)\nis sampled within ±`percent` of its value on every ensemble seed.\n\n```toml\n[[tolerance]]\nref = \"R*\"                 # every resistor\npercent = 10.0             # ±10%\ndistribution = \"gaussian\"  # optional; default \"uniform\"\n```\n\nRules apply in order and the last matching rule wins per component, so a\nbroad pattern can be followed by a tighter per-part rule. The nominal is\nthe component's board value (after any `[[override]]`).",
+      "type": "object",
+      "properties": {
+        "distribution": {
+          "description": "`\"uniform\"` (default) or `\"gaussian\"` (sigma = percent/3, truncated at\nthe bound; the standard EDA 3-sigma convention).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "uniform",
+            "gaussian"
+          ]
+        },
+        "percent": {
+          "description": "Tolerance as a percentage of nominal (10.0 = ±10%).",
+          "type": "number",
+          "format": "double",
+          "exclusiveMaximum": 100,
+          "exclusiveMinimum": 0
+        },
+        "ref": {
+          "description": "A literal reference, or a pattern where `*` matches any run of characters.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "percent"
+      ]
     }
   }
 }

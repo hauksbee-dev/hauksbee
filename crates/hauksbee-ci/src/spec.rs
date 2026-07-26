@@ -39,6 +39,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::error::{near_matches, SpecError};
@@ -59,7 +60,7 @@ use crate::error::{near_matches, SpecError};
 /// [sensor.inputs]
 /// temperature_c = 40.0                   # override the default for this run
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SensorAttach {
     /// Stable identifier (used in error messages and future state assertions).
@@ -87,7 +88,7 @@ pub struct SensorAttach {
 
 /// What a spec does with the Do-Not-Populate parts it does not name in `fit`
 /// or `no_fit`. The spec spelling of [`hauksbee_extract::dnp::DnpPolicy`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum DnpMode {
     /// Simulate DNP parts as fitted, except near-zero-ohm links.
@@ -111,7 +112,7 @@ impl From<DnpMode> for hauksbee_extract::dnp::DnpPolicy {
 }
 
 /// A fully-parsed, validated spec.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
     /// Human-readable name for the check (appears in reports).
@@ -158,9 +159,11 @@ pub struct Spec {
     pub mcu: Option<String>,
     /// Simulated duration in milliseconds.
     #[serde(default = "default_duration_ms")]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub duration_ms: f64,
     /// Co-sim frame cadence in milliseconds (how often nets are sampled).
     #[serde(default = "default_frame_ms")]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub frame_ms: f64,
     /// Ambient temperature (C) for the steady-state junction-temperature
     /// estimate (`max_temp` assertions). Default 25 C.
@@ -217,8 +220,15 @@ pub struct Spec {
     /// so it is computed once and shared across fuzz seeds.
     #[serde(default)]
     pub ac: Option<AcConfig>,
-    /// The assertions, all of which must pass.
+    /// The assertions, all of which must pass. A spec with no `[[assert]]`
+    /// blocks is rejected (it would pass vacuously).
+    // `length(min = 1)` mirrors Spec::validate's empty-asserts rejection in the
+    // editor schema; the serde default stays so load() can produce the
+    // friendlier validation error. The schema also lists `assert` as required,
+    // but schemars never marks a defaulted field required, so the generator in
+    // tests/schema_drift.rs adds that.
     #[serde(default, rename = "assert")]
+    #[schemars(length(min = 1))]
     pub asserts: Vec<Assertion>,
     /// Declarative sensors attached to the co-sim for this run. Each entry
     /// describes one I2C or SPI sensor (via an inline spec string or a file
@@ -247,11 +257,16 @@ fn default_ambient_c() -> f64 {
 
 /// A power-supply leg attached to a supply net. Mirrors the engine's
 /// behavioral supplies (bench / wall / USB / battery / ideal).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SupplySpec {
     pub net: String,
     /// One of `ideal | bench | wall | usb | battery`.
+    // The token enums on kind/usb/chemistry are string fields (not Rust enums)
+    // because SupplySpec::validate owns the real acceptance and its error
+    // messages; the extend() lists mirror exactly what validate accepts so the
+    // editor flags a typo the same way the loader would.
+    #[schemars(extend("enum" = ["ideal", "bench", "wall", "usb", "battery"]))]
     pub kind: String,
     #[serde(default)]
     pub volts: Option<f64>,
@@ -263,17 +278,22 @@ pub struct SupplySpec {
     pub ripple_vpp: Option<f64>,
     #[serde(default)]
     pub ripple_hz: Option<f64>,
-    /// USB profile: `5v0.5a | 5v1.5a | 5v3a`.
+    /// USB profile: `5v0.5a | 5v1.5a | 5v3a` (underscore spellings accepted).
     #[serde(default)]
+    #[schemars(extend("enum" = ["5v0.5a", "5v_0.5a", "5v1.5a", "5v_1.5a", "5v3a", "5v_3a"]))]
     pub usb: Option<String>,
-    /// Battery chemistry: `liion | alkaline | nimh | lifepo4`.
+    /// Battery chemistry: `liion | alkaline | nimh | lifepo4` (aliases `lipo`, `lfp`).
     #[serde(default)]
+    #[schemars(extend("enum" = ["liion", "lipo", "alkaline", "nimh", "lifepo4", "lfp"]))]
     pub chemistry: Option<String>,
     #[serde(default)]
+    #[schemars(range(min = 1))]
     pub cells: Option<u32>,
     #[serde(default)]
     pub capacity_mah: Option<f64>,
+    /// State of charge as a fraction in 0..1.
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub soc: Option<f64>,
     #[serde(default)]
     pub r_internal_ohms: Option<f64>,
@@ -303,13 +323,19 @@ pub struct SupplySpec {
 /// node phasors are the transfer function from that stimulus. A `phase_margin`
 /// assertion names the loop break/output net; an `ac_gain` assertion names a net
 /// and bounds its magnitude (dB) at an optional `freq_hz`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AcConfig {
+    /// Sweep start (Hz).
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub fstart: f64,
+    /// Sweep stop (Hz); must exceed `fstart`.
     pub fstop: f64,
+    /// Points per decade (`dec`) or total (`lin`).
+    #[schemars(range(min = 1))]
     pub points: usize,
     /// "dec" (per-decade, log) or "lin" (linear). Default "dec".
+    #[schemars(extend("enum" = ["dec", "lin"]))]
     #[serde(default = "default_sweep")]
     pub sweep: String,
 }
@@ -348,7 +374,7 @@ impl AcConfig {
 }
 
 /// A net forced to a fixed DC voltage for the run.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NetDrive {
     pub net: String,
@@ -373,13 +399,17 @@ pub struct NetDrive {
 /// t_ms = 150
 /// value = 0
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PeripheralSpec {
     /// Stable id, used by events / live control / state assertions.
     pub id: String,
     /// Peripheral type.
     #[serde(rename = "type")]
+    #[schemars(extend("enum" = [
+        "pushbutton", "toggle", "potentiometer", "encoder", "stimulus",
+        "i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008", "vcd_sink"
+    ]))]
     pub kind: String,
 
     // Attachment: by net name, or by connector ref + pin (resolved to a net).
@@ -422,6 +452,7 @@ pub struct PeripheralSpec {
     pub vhigh: Option<f64>,
     /// I2C 7-bit address (eeprom / sensor).
     #[serde(default)]
+    #[schemars(range(max = 127))]
     pub address: Option<u8>,
     /// EEPROM size in bytes.
     #[serde(default)]
@@ -440,6 +471,7 @@ pub struct PeripheralSpec {
     pub cs_net: Option<String>,
     /// Stimulus waveform: "dc"|"sine"|"pwl"|"noise".
     #[serde(default)]
+    #[schemars(extend("enum" = ["dc", "sine", "pwl", "noise"]))]
     pub waveform: Option<String>,
     #[serde(default)]
     pub offset: Option<f64>,
@@ -463,7 +495,7 @@ pub struct PeripheralSpec {
 }
 
 /// One scheduled peripheral event: at `t_ms`, set the peripheral to `value`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineEventSpec {
     pub t_ms: f64,
@@ -567,20 +599,23 @@ impl SensorAttach {
 /// A component value override applied before binding. With a `tolerance`, the
 /// `value` becomes the *nominal* and the component is sampled around it as part
 /// of the tolerance ensemble (see [`ToleranceRule`]).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Override {
+    /// Reference designator, e.g. "R_Shunt15301".
     #[serde(rename = "ref")]
     pub reference: String,
     pub value: String,
     /// Optional tolerance, as a percentage of `value` (10.0 = ±10%). Present =
     /// this component joins the tolerance ensemble with `value` as nominal.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0, "exclusiveMaximum" = 100))]
     pub tolerance: Option<f64>,
     /// Sampling distribution: `"uniform"` (default) or `"gaussian"` (sigma =
     /// tolerance/3, truncated at the tolerance bound). Only meaningful with
     /// `tolerance`.
     #[serde(default)]
+    #[schemars(extend("enum" = ["uniform", "gaussian"]))]
     pub distribution: Option<String>,
 }
 
@@ -598,16 +633,19 @@ pub struct Override {
 /// Rules apply in order and the last matching rule wins per component, so a
 /// broad pattern can be followed by a tighter per-part rule. The nominal is
 /// the component's board value (after any `[[override]]`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ToleranceRule {
+    /// A literal reference, or a pattern where `*` matches any run of characters.
     #[serde(rename = "ref")]
     pub reference: String,
     /// Tolerance as a percentage of nominal (10.0 = ±10%).
+    #[schemars(extend("exclusiveMinimum" = 0, "exclusiveMaximum" = 100))]
     pub percent: f64,
     /// `"uniform"` (default) or `"gaussian"` (sigma = percent/3, truncated at
     /// the bound; the standard EDA 3-sigma convention).
     #[serde(default)]
+    #[schemars(extend("enum" = ["uniform", "gaussian"]))]
     pub distribution: Option<String>,
 }
 
@@ -625,14 +663,16 @@ pub struct ToleranceRule {
 /// enumerates every all-min/all-max combination (2^n runs, n ≤ 10), which
 /// bounds the worst case only for monotonic responses. In corner mode `seeds`
 /// is ignored and `[fuzz]` must be absent (the two ensembles do not compose).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnsembleSpec {
     /// Monte-Carlo member count. Ignored in corner mode.
     #[serde(default = "default_ensemble_seeds")]
+    #[schemars(range(min = 1))]
     pub seeds: u32,
     /// `"monte-carlo"` (default) or `"corners"`.
     #[serde(default = "default_ensemble_mode")]
+    #[schemars(extend("enum" = ["monte-carlo", "corners"]))]
     pub mode: String,
 }
 
@@ -653,10 +693,11 @@ impl Default for EnsembleSpec {
 }
 
 /// Initial-state fuzzing configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FuzzSpec {
     /// Number of random seeds to run (each perturbs undefined initial states).
+    #[schemars(range(min = 1))]
     pub seeds: u32,
     /// Nets whose initial logic state is randomized per seed. When empty, the
     /// fuzzer randomizes every net listed in any `net_drive` (treating those
@@ -669,58 +710,78 @@ pub struct FuzzSpec {
 }
 
 /// One assertion over the run.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
-    /// `voltage | uart | toggle | no_faults | max_current`.
+    /// Assertion kind. `voltage`: net stays in [min, max]. `uart`: output
+    /// contains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.
+    /// `no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.
+    /// `max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral
+    /// state check. `rail_window`: rail dip/recovery bounds over a scenario
+    /// window. `protection_trip`: battery protection trips (or must not).
+    /// `boot-coverage`: a control net is driven to `min` volts within
+    /// `deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop
+    /// checks (need an `[ac]` block). `hwtrace`: the run reproduces a captured
+    /// hardware trace.
+    #[schemars(extend("enum" = [
+        "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
+        "peripheral", "rail_window", "protection_trip", "boot-coverage",
+        "phase_margin", "ac_gain", "hwtrace"
+    ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
     #[serde(default)]
     pub name: Option<String>,
 
-    // voltage / toggle / max_current target net.
+    /// Target net (voltage / toggle / rail_window / boot-coverage /
+    /// phase_margin / ac_gain).
     #[serde(default)]
     pub net: Option<String>,
-    // voltage bounds (at least one of min/max).
+    /// Lower bound (volts / dB / degrees / peripheral field). Voltage-class
+    /// assertions need at least one of `min`/`max`.
     #[serde(default)]
     pub min: Option<f64>,
+    /// Upper bound.
     #[serde(default)]
     pub max: Option<f64>,
     /// Only sample at/after this time (ms), lets the rail settle first.
     #[serde(default)]
     pub after_ms: Option<f64>,
 
-    // uart.
+    /// uart: substring the UART output must contain.
     #[serde(default)]
     pub contains: Option<String>,
+    /// uart: regex the UART output must match.
     #[serde(default)]
     pub matches: Option<String>,
     /// Which MCU's UART (by reference). Defaults to all MCUs concatenated.
     #[serde(default)]
     pub mcu: Option<String>,
 
-    // toggle (blink): expected toggle frequency in Hz, with tolerance.
+    /// toggle: expected toggle frequency (Hz); ac_gain: measurement frequency.
     #[serde(default)]
     pub freq_hz: Option<f64>,
+    /// toggle: relative tolerance on `freq_hz`.
     #[serde(default)]
     pub tolerance: Option<f64>,
     /// Minimum toggle count over the run (alternative to freq_hz).
     #[serde(default)]
     pub min_toggles: Option<u64>,
 
-    // max_current: ceiling in amps for the component named by `ref`.
+    /// max_current / max_temp: the component to check.
     #[serde(rename = "ref", default)]
     pub reference: Option<String>,
+    /// max_current: ceiling in amps for the component named by `ref`.
     #[serde(default)]
     pub amps: Option<f64>,
 
-    // max_temp: ceiling in C for the steady-state junction temperature of the
-    // component named by `ref`. When omitted, the device's own max junction
-    // temperature (from the model DB, or the per-package-class default) is used.
+    /// max_temp: ceiling in C for the steady-state junction temperature of the
+    /// component named by `ref`. When omitted, the device's own max junction
+    /// temperature (from the model DB, or the per-package-class default) is used.
     #[serde(default)]
     pub celsius: Option<f64>,
 
-    // peripheral: reference a peripheral by `id`.
+    /// peripheral: the `id` of the [[peripheral]] / [[sensor]] to read.
     #[serde(default)]
     pub id: Option<String>,
     /// EEPROM byte sequence (hex string, e.g. "48 69" or "4869") that must
@@ -761,9 +822,9 @@ pub struct Assertion {
     #[serde(default)]
     pub expect_trip: Option<bool>,
 
-    // hwtrace: path to a `trace.toml` (relative to the spec file) describing a
-    // captured hardware trace whose per-channel features the simulated run must
-    // reproduce within the trace's stated tolerances (T6; see `hwtrace.rs`).
+    /// hwtrace: path to a `trace.toml` (relative to the spec file) describing a
+    /// captured hardware trace whose per-channel features the simulated run must
+    /// reproduce within the trace's stated tolerances (T6; see `hwtrace.rs`).
     #[serde(default)]
     pub trace: Option<String>,
 
@@ -776,6 +837,8 @@ pub struct Assertion {
     // statically biases the net it reads at level from t=0 and trivially passes:
     // such a board is out of scope, the assertion exists to adjudicate the
     // undefined-default case the netlist cannot.
+    /// boot-coverage: the boot deadline (ms after reset) by which the control
+    /// net must reach and hold `min` volts.
     #[serde(default)]
     pub deadline_ms: Option<f64>,
 }
@@ -885,7 +948,7 @@ impl Spec {
                 let hint = if self.scenarios.is_empty() {
                     "the spec declares no [[scenario]] blocks".to_string()
                 } else if ids.is_empty() {
-                    "the declared [[scenario]] blocks have no `id` — give the scenario an \
+                    "the declared [[scenario]] blocks have no `id`; give the scenario an \
                      `id` and reference it here"
                         .to_string()
                 } else {
@@ -1326,7 +1389,7 @@ impl Assertion {
                 // freq_hz+min_toggles rejection above.
                 if self.bytes.is_some() && self.field.is_some() {
                     return Err(SpecError::Invalid(format!(
-                        "peripheral assertion on '{}' sets both `bytes` and `field`; use one (EEPROM-bytes OR a field range) — a combined spec silently drops the field check",
+                        "peripheral assertion on '{}' sets both `bytes` and `field`; use one (EEPROM-bytes OR a field range); a combined spec silently drops the field check",
                         self.id.as_deref().unwrap_or("?")
                     )));
                 }

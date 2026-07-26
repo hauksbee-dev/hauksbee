@@ -12,11 +12,12 @@
 //! them. The actual wiring (stamping loads, applying ESR/ESL, collecting the
 //! window timeseries) lives in [`crate::runner`], which calls into here.
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 /// One transient scenario: a profile attached to a part, plus optional
 /// decoupling realism.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
     /// Stable id, referenced by `rail_window` / `protection_trip` assertions to
@@ -43,7 +44,7 @@ pub struct Scenario {
 
 /// A user-defined load profile inline in the spec (mirrors the DB schema), so a
 /// scenario can carry a bespoke profile without editing the model database.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InlineProfile {
     pub id: String,
@@ -54,7 +55,7 @@ pub struct InlineProfile {
 }
 
 /// One segment of an inline profile (subset of the model-DB segment schema).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InlineSegment {
     pub level_a: f64,
@@ -95,7 +96,7 @@ impl InlineProfile {
 
 /// Capacitor-parasitics request for a scenario run. Opt-in: when `decoupling`
 /// is unset the board's capacitors stay ideal (no behavioural change).
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Decoupling {
     /// Turn on ESR/ESL on the board's decoupling capacitors using package /
@@ -108,7 +109,7 @@ pub struct Decoupling {
 }
 
 /// A per-capacitor ESR/ESL override.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CapOverride {
     #[serde(rename = "ref")]

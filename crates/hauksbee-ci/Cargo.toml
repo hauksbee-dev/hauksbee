@@ -30,6 +30,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
 regex = "1"
+# The editor-facing JSON Schema for the spec TOML is GENERATED from the `Spec`
+# type (see tests/schema_drift.rs), so the derive lives on the real structs and
+# a new field can never silently miss the schema.
+schemars = "1.2"
 hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
 hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
