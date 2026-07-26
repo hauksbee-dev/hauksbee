@@ -85,7 +85,7 @@ fn init_generates_a_spec_the_loader_accepts() {
     // boot-coverage is scaffolded COMMENTED-OUT on every backend (even the AVR
     // in-process one), because it asserts on firmware behaviour and `firmware =`
     // is itself commented in the starter, left live it goes RED on the first run
-    // (the exact false-red the persona panel hit). The rail voltage asserts also
+    // (the exact false-red this scaffold used to emit). The rail voltage asserts also
     // stay commented. So exactly one assertion loads.
     let kinds: Vec<&str> = spec.asserts.iter().map(|a| a.kind.as_str()).collect();
     assert!(
