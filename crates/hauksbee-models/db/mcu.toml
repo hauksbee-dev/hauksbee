@@ -174,7 +174,7 @@ note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F401C (UFQFPN48): the 48-pin F401 (F401CB/CC/CD/CE). Modelled primarily so
 # the boot strap-pin lint covers its BOOT0 — the rest of the modern STM32 line was
-# otherwise unmodelled (see docs/hunts). Co-sim, when wired, reuses the same
+# otherwise unmodelled. Co-sim, when wired, reuses the same
 # renode STM32F4 platform the binder's family fallback already selects, so adding
 # this DB entry does not change the co-sim path. The pin map is intentionally
 # limited to the strap pin (BOOT0 = UFQFPN48 pad 44, verified against the
