@@ -528,9 +528,8 @@ impl Device {
     /// fail to compile until its nodes are wired in here. The hazard that guards
     /// against is silent, not loud. A catch-all would let a new device's nodes
     /// slip through unremapped and drop the device from every partitioned
-    /// sub-circuit with no error (see `docs/dev-plans/04-spice-compat.md` §1,
-    /// the `clone_remapped` row of the touchpoint table). Optional terminals
-    /// (`Mosfet` bulk, `OpAmp` reference) are remapped only when present.
+    /// sub-circuit with no error. Optional terminals (`Mosfet` bulk, `OpAmp`
+    /// reference) are remapped only when present.
     pub fn map_nodes(&mut self, f: &mut impl FnMut(NodeId) -> NodeId) {
         match self {
             Device::Resistor { a, b, .. }
@@ -738,8 +737,7 @@ impl Device {
     /// Together with [`Device::sense_nodes`] this is the classification the
     /// decomposition engine's tearing proofs rest on: electrical reachability
     /// must traverse conduction terminals only, or two independently solvable
-    /// blocks fuse through a wire that carries no current (see
-    /// `docs/dev-plans/02-tearing-architecture.md` §1, §2.1). The claim made
+    /// blocks fuse through a wire that carries no current. The claim made
     /// here is about the *stamp as implemented today*, not the physical part:
     /// a MOSFET gate conducts no current in the Level-1 stamp, so it is sense,
     /// and the day gate charge lands the classification here must change with
@@ -815,10 +813,9 @@ impl Device {
     ///
     /// A sense terminal is what makes a *free tear* exact: cutting the wire and
     /// replaying its voltage as a source changes nothing electrically, because
-    /// no current ever crossed it (`docs/dev-plans/02-tearing-architecture.md`
-    /// §1). Every node the device touches is in exactly one of
-    /// [`Device::conduction_nodes`] or this set; the solve-side cross-check
-    /// test enforces both the partition and the zero-row property.
+    /// no current ever crossed it. Every node the device touches is in exactly
+    /// one of [`Device::conduction_nodes`] or this set; the solve-side
+    /// cross-check test enforces both the partition and the zero-row property.
     pub fn sense_nodes(&self) -> Vec<NodeId> {
         match self {
             Device::Resistor { .. }

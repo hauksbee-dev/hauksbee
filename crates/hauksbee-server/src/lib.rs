@@ -138,8 +138,9 @@ impl Server {
         Ok(())
     }
 
-    /// The unified web app router (W6 §1): one server path serving the static
-    /// React bundle (`static_dir`), the analysis API the React landing calls
+    /// The unified web app router: one server path, and so one web experience,
+    /// serving the static React bundle (`static_dir`) with no server-rendered
+    /// HTML alternative, the analysis API the React landing calls
     /// (`analyze` -> `/api/analyze` + `/api/analyze-with-firmware`), the
     /// `/api/startup` hint the app reads to choose its landing state, the live
     /// WebSocket sim (`/ws`), and, when a board was preloaded (`run --serve`),
