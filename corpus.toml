@@ -1,0 +1,258 @@
+# The board corpus: real hardware hauksbee's checks are measured against.
+#
+# hauksbee claims its checks stay quiet on boards that are fine. That claim is
+# only worth something if you can check it, so every board here is public open
+# hardware, pinned to the exact revision the gate was measured against.
+#
+# The boards are NOT vendored into this repository. They carry CC BY-SA,
+# GPL-3.0, CERN-OHL-S and CERN-OHL-W terms, and bundling share-alike hardware
+# into an MIT project would drag those obligations along with it. Fetching means
+# you obtain each board directly from its author, under that author's licence.
+# `scripts/fetch-corpus.sh` reads this file and does that.
+#
+# The pin is the point. An upstream board that changes must not silently change
+# our results, so `rev` is a commit or tag, never a branch.
+#
+# Adding a board: record the upstream, the exact revision, and the licence. If
+# you cannot establish the licence, mark it `license_confirmed = false` and it
+# stays out of the default fetch.
+
+[meta]
+# Where fetch-corpus.sh puts things when HAUKSBEE_CORPUS_DIR is unset.
+default_dir = "board-corpus"
+
+# ---------------------------------------------------------------------------
+# Native CAD, git-hosted
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "adafruit_circuit_playground"
+name = "Adafruit Circuit Playground Express"
+url = "https://github.com/adafruit/Adafruit-Circuit-Playground-Express-PCB"
+rev = "2962c0cb"
+license = "CC-BY-SA-3.0"
+
+[[board]]
+id = "adafruit_feather_m0"
+name = "Adafruit Feather M0 Basic"
+url = "https://github.com/adafruit/Adafruit-Feather-M0-Basic-Proto-PCB"
+rev = "1de541ff"
+license = "CC-BY-SA-3.0"
+
+[[board]]
+id = "adafruit_metro_m4"
+name = "Adafruit Metro M4 Express"
+url = "https://github.com/adafruit/Adafruit-Metro-M4-PCB"
+rev = "4aafb2ac"
+license = "CC-BY-SA-3.0"
+
+[[board]]
+id = "adafruit_qtpy"
+name = "Adafruit QT Py (SAMD21)"
+url = "https://github.com/adafruit/Adafruit-QT-Py-PCB"
+rev = "a8caed9a"
+license = "CC-BY-SA-3.0"
+
+[[board]]
+id = "adafruit_trinket_m0"
+name = "Adafruit Trinket M0"
+url = "https://github.com/adafruit/Adafruit-Trinket-M0-PCB"
+rev = "4103b9cd"
+license = "CC-BY-SA-3.0"
+
+[[board]]
+id = "sparkfun_redboard"
+name = "SparkFun RedBoard"
+url = "https://github.com/sparkfun/RedBoard"
+rev = "498b7cf5"
+license = "CC-BY-SA-4.0"
+
+[[board]]
+id = "sparkfun_pro_micro"
+name = "SparkFun Pro Micro (ATmega32U4)"
+url = "https://github.com/sparkfun/Pro_Micro"
+rev = "df836f3b"
+license = "CC-BY-SA-4.0"
+
+[[board]]
+id = "sparkfun_thingplus_samd51"
+name = "SparkFun Thing Plus SAMD51"
+url = "https://github.com/sparkfun/SAMD51_Thing_Plus"
+rev = "ab67e74"
+license = "CC-BY-SA-4.0"
+
+[[board]]
+id = "sparkfun_thingplus_rp2040"
+name = "SparkFun Thing Plus RP2040"
+url = "https://github.com/sparkfun/SparkFun_Thing_Plus-RP2040"
+rev = "38fd2d2"
+license = "CC-BY-SA-4.0"
+
+[[board]]
+id = "mnt_reform"
+name = "MNT Reform laptop (19 PCBs)"
+url = "https://source.mnt.re/reform/reform.git"
+rev = "70468a3b"
+license = "CERN-OHL-S-2.0"
+
+[[board]]
+id = "olimex_esp32"
+name = "Olimex ESP32-EVB (revisions A through L)"
+url = "https://github.com/OLIMEX/ESP32-EVB"
+rev = "a3ec2f44"
+license = "Apache-2.0"
+
+[[board]]
+id = "olimex_rp2040_pico_pc"
+name = "Olimex RP2040-PICO-PC (revisions B, C, D)"
+url = "https://github.com/OLIMEX/RP2040-PICO-PC"
+rev = "ed0402a"
+license = "GPL-3.0"
+
+[[board]]
+id = "watchy"
+name = "Watchy e-paper watch"
+url = "https://github.com/sqfmi/Watchy-Hardware"
+rev = "5f147972"
+license = "MIT"
+
+# Revision PAIRS where a documented electrical fault was fixed between two
+# public releases. The revision history is ground truth for whether hauksbee
+# flags the right thing, so both halves are needed.
+[[board]]
+id = "watchy_history_v1_5"
+name = "Watchy v1.5 (pre-fix: display RES# pull-up, issue #14)"
+url = "https://github.com/sqfmi/Watchy-Hardware"
+rev = "64f4925"
+license = "MIT"
+
+[[board]]
+id = "watchy_history_v2_0"
+name = "Watchy v2.0 (fixed)"
+url = "https://github.com/sqfmi/Watchy-Hardware"
+rev = "9b40304"
+license = "MIT"
+
+[[board]]
+id = "zswatch_mainboard"
+name = "ZSWatch mainboard"
+url = "https://github.com/ZSWatch/Watch-HW"
+rev = "891a3d52"
+license = "GPL-3.0"
+
+[[board]]
+id = "zswatch_devkit_1_2_0"
+name = "ZSWatch DevKit 1.2.0 (pre-fix: I2C pull-ups, PR #158)"
+url = "https://github.com/ZSWatch/Watch-DevKit-HW"
+rev = "5eeee19"
+license = "GPL-3.0"
+
+[[board]]
+id = "zswatch_devkit_1_2_1"
+name = "ZSWatch DevKit 1.2.1 (fixed)"
+url = "https://github.com/ZSWatch/Watch-DevKit-HW"
+rev = "77abae3"
+license = "GPL-3.0"
+
+[[board]]
+id = "lumenpnp"
+name = "Opulo LumenPnP motherboard and ring light"
+url = "https://github.com/opulo-inc/lumenpnp"
+rev = "3eab4d1"
+license = "CERN-OHL-W-2.0"
+
+[[board]]
+id = "crkbd"
+name = "Corne (crkbd) split keyboard"
+url = "https://github.com/foostan/crkbd"
+rev = "63366fb"
+license = "CC-BY-4.0"
+
+[[board]]
+id = "lily58"
+name = "Lily58 split keyboard"
+url = "https://github.com/kata0510/Lily58"
+rev = "58c6497"
+license = "MIT"
+
+[[board]]
+id = "mppt_1210_hus"
+name = "LibreSolar MPPT 1210 HUS solar charge controller"
+url = "https://github.com/LibreSolar/mppt-1210-hus"
+rev = "a0c386ace7cef04c25985b522b478e124d3d936f"
+license = "CERN-OHL-W-2.0"
+
+[[board]]
+id = "kicad_demos"
+name = "KiCad's own demo projects"
+url = "https://gitlab.com/kicad/code/kicad.git"
+rev = "9.0.0"
+subdir = "demos"
+license = "CC0-1.0 / MIT / Apache-2.0 / ISC (mixed, see LICENSE files)"
+
+# ---------------------------------------------------------------------------
+# Native CAD, released as a zip rather than a repository
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "arduino_uno_r3_official"
+name = "Arduino Uno Rev3 (official CAD release)"
+url = "https://docs.arduino.cc/static/6bb7a3ca51ebee82a252f60c0b418787/A000066-cad-files.zip"
+kind = "zip"
+license = "CC-BY-SA-4.0"
+
+[[board]]
+id = "rp2040_minimal_kicad"
+name = "Raspberry Pi RP2040 minimal design (official)"
+url = "https://pip.raspberrypi.com/documents/RP-008296-DS-Minimal-KiCAD.zip"
+kind = "zip"
+license = "BSD-3-Clause (Raspberry Pi hardware design terms)"
+
+# ---------------------------------------------------------------------------
+# Gerber-only, for the reverse-extraction tier
+#
+# These ship no native CAD, only manufacturing files, which is the point: they
+# exercise reconstructing a circuit from copper geometry alone.
+#
+# ClockworkPi publishes these without a clear licence statement, so they are
+# marked unconfirmed and skipped unless you pass --include-unconfirmed. Nothing
+# in the default test suite depends on them.
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "inkplate6_gerber"
+name = "Soldered Inkplate 6 main board (gerbers only)"
+url = "https://github.com/SolderedElectronics/Inkplate-6-hardware"
+rev = "main"
+license = "MIT"
+
+[[board]]
+id = "uconsole_gerber"
+name = "ClockworkPi uConsole CPI 3.14 mainboard (gerbers only)"
+url = "https://github.com/clockworkpi/uConsole"
+rev = "main"
+license = "unconfirmed"
+license_confirmed = false
+
+[[board]]
+id = "uconsole_cm4_adapter_gerber"
+name = "ClockworkPi RPI CM4 to CPI v3.14 adapter (gerbers only)"
+url = "https://github.com/clockworkpi/uConsole"
+rev = "main"
+license = "unconfirmed"
+license_confirmed = false
+
+# ---------------------------------------------------------------------------
+# Local-only boards
+#
+# Present in the maintainers' corpus and deliberately absent here, because they
+# are not ours to redistribute or point at. Listed so the split between "you can
+# reproduce this" and "you cannot" is explicit rather than implied. Nothing in
+# the public test suite depends on any of them.
+#
+#   stormduino/                  a private board
+#   altium_xval/                 Altium cross-validation set, licence unclear
+#   eagle/                       assorted one-off Eagle files
+#   arduino_uno_r3_from_scratch/ a hand reconstruction
+#   famous/rpi4_usbc_reconstruction/  a reconstruction, not an upstream release
+# ---------------------------------------------------------------------------
