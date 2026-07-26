@@ -11,8 +11,8 @@
 //! no `evalexpr` evaluation (that lives engine-side, where the expression
 //! evaluator already is). It is the shared contract both the interpreter and
 //! the extractor validate against.
-//!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/sensor_spec.md.
+//!
 //!
 //! ## TOML shape
 //!
@@ -90,6 +90,7 @@
 //!
 //! I2C (`i2c_pointer`) uses a full 8-bit register pointer with no folded
 //! direction bit, so its `addr` values are used raw (unmasked).
+//!
 
 use serde::{Deserialize, Serialize};
 
@@ -262,7 +263,7 @@ impl RegisterSpec {
 // ## The Rust/expression boundary (deliberate, documented)
 //
 // evalexpr has NO integer bit operations (the same constraint that makes the
-// BME280 spec expose raw ADC counts, see docs/hunts/specs/bme280.toml). Write
+// BME280 spec expose raw ADC counts). Write
 // decode is bit-field surgery (a 12-bit DAC code straddling two bytes, a 3-bit
 // mux field inside a config word), so the bit extraction lives HERE, in the
 // declarative framing layer, as data ([`BitFieldSpec`]): a named field is a

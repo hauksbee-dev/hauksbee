@@ -380,9 +380,9 @@ R2 A B 2k
 
     #[test]
     fn scale_suffix_with_trailing_unit_is_not_dropped() {
-        // The old `ends_with` parser collided the femto scale letter with a
-        // trailing farad unit: "4pF" took the femto branch and then failed to
-        // parse "4p" as a mantissa, returning None and dropping CJO entirely.
+        // An `ends_with` parser collides the femto scale letter with a trailing
+        // farad unit: "4pF" takes the femto branch, then fails to parse "4p" as
+        // a mantissa, returns None and drops CJO entirely.
         // The scale must be read from the FRONT of the suffix, the unit ignored.
         let cases: [(&str, f64); 13] = [
             ("4pF", 4e-12),

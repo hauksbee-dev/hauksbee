@@ -313,8 +313,8 @@ mod tests {
     #[test]
     fn typoed_pin_role_is_caught_but_extra_pins_are_allowed() {
         // U3: a required signal role missing from an explicit [models.pins] map
-        // (typically a typo) used to pass lint clean, then bind the part OPEN at
-        // run time with a misleading "not connected" message. It must fail lint.
+        // (typically a typo) must fail lint. Passing lint clean, it binds the
+        // part OPEN at run time with a misleading "not connected" message.
         let mut d = make_diode(1e-14, 1.5, 1.0);
         d.pins = BTreeMap::from([
             ("1".into(), "anmode".into()),
