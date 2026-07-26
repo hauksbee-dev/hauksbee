@@ -335,9 +335,10 @@ impl StressMonitor {
         //
         // Sampling every operating point up front (before pass 2 can mutate
         // the circuit destructively) also means every check this chunk sees
-        // the one solved state, previously a device evaluated after an
-        // earlier device's same-chunk destruction saw mutated parameters
-        // under stale node voltages. The next chunk re-solves either way.
+        // the one solved state; sampling lazily would let a device evaluated
+        // after an earlier device's same-chunk destruction see mutated
+        // parameters under stale node voltages. The next chunk re-solves
+        // either way.
         let ops: Vec<Option<OperatingPoint>> = self
             .metas
             .iter()
@@ -805,9 +806,9 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
                 });
             }
             // Continuous current rating; the natural home for an inductor's
-            // rated / saturation current. Previously unchecked for passives, so a
-            // coil's steady-state current limit was silently unenforced (and an
-            // inductor's power_w is 0, leaving Overpower/Overtemperature dead too).
+            // rated / saturation current. Skip it for passives and a coil's
+            // steady-state current limit goes silently unenforced (an inductor's
+            // power_w is 0, so Overpower/Overtemperature are dead there too).
             if let Some(imax) = r.max_current_a {
                 checks.push(Check {
                     kind: FaultKind::Overcurrent,
@@ -937,10 +938,11 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
 /// Thermal utilisation as a RISE-based fraction: (Tj − ambient)/(Tj_max −
 /// ambient). An idle part reads ~0, comparable with the power/current/voltage
 /// checks, which are all true 0-at-idle ratios, and a part at its junction
-/// limit reads 1.0. The old absolute-Celsius ratio (Tj/Tj_max) floored every
+/// limit reads 1.0. An absolute-Celsius ratio (Tj/Tj_max) instead floors every
 /// dissipating part at ~ambient/Tj_max (~0.2), giving the exported heat-map a
-/// spurious floor. The trip threshold is unchanged: frac > 1 ⟺ Tj > Tj_max under
-/// either formula. Clamped at 0 so a below-ambient junction never reads negative.
+/// spurious floor. The trip threshold is the same either way: frac > 1 ⟺ Tj >
+/// Tj_max under both. Clamped at 0 so a below-ambient junction never reads
+/// negative.
 fn thermal_stress_frac(tj_c: f64, tj_max_c: f64, ambient_c: f64) -> f64 {
     let span = tj_max_c - ambient_c;
     if span > 0.0 {
@@ -1168,7 +1170,7 @@ mod monitor_temp_tests {
             (i_hot - expected).abs() <= expected.abs() * 1e-9,
             "diode_current must use is_at(T): got {i_hot:e}, expected {expected:e}"
         );
-        // The old nominal-Is result would be materially smaller, guard the gap.
+        // A nominal-Is result would be materially smaller, guard the gap.
         let nominal = model.is * ((vd / vt_hot).exp() - 1.0);
         assert!(
             i_hot > nominal * 1.5,

@@ -85,7 +85,7 @@ pub struct WebSection {
     pub verdict: String,
     pub findings: Vec<WebFinding>,
     /// Actionable info-level notes promoted from [`PlainReport::heads_up`] (the
-    /// 171-ohm USB controlled-impedance note that used to disappear on the web).
+    /// 171-ohm USB controlled-impedance note is the canonical example).
     /// These never count as findings but must NEVER be silently dropped: a
     /// "Looks healthy" verdict that hides the only actionable observation is the
     /// exact false-comfort breach the plain/text/json surfaces already avoid.
@@ -199,8 +199,8 @@ pub struct WebCosimSection {
     pub spi_framing: Vec<WebSpiFraming>,
     /// Per-gate power-up state panel (what the firmware does to each
     /// transistor-gate control net at boot). Mirrors the CLI `--json`
-    /// `boot_gates` / `--plain` gate panel so the web surface can no longer give
-    /// false comfort on a board that energises a switched load at power-up.
+    /// `boot_gates` / `--plain` gate panel so the web surface cannot give false
+    /// comfort on a board that energises a switched load at power-up.
     /// Empty (and omitted) when the firmware ran no relevant gates, so the
     /// common JSON shape is unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -357,7 +357,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
 /// so [`analyze_with_firmware`] can normalize ONCE and hand the same
 /// [`crate::board_input::NormalizedBoard`] to both the static report and the
 /// co-sim, instead of re-reading the original bytes with a weaker sniffer
-/// (the old path failed co-sim on any `.board` or gerber zip that had just
+/// (re-reading fails co-sim on any `.board` or gerber zip that has just
 /// produced a clean static report).
 fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoard) -> WebReport {
     let is_binary = norm.is_binary();
@@ -420,7 +420,7 @@ fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoar
 
     // USB-C CC compliance: the CLI text/plain/json surfaces all carry this
     // verdict (a Serious shared-CC-pulldown fault gates `--check --strict`), but
-    // the web persona used to omit it entirely, a board with the RPi-4 fault
+    // omitting it from the web persona lets a board with the RPi-4 fault
     // read "Looks healthy". Fold it in so all four personas agree: a Serious
     // verdict becomes a serious WebFinding (raising serious/total), an Info
     // verdict becomes a heads-up (suppressing a false "Looks healthy").
@@ -439,8 +439,8 @@ fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoar
 
     // Bind to count nets/components consistently with the report panel, AND to
     // derive the same bind-role honesty data the CLI/JSON surfaces carry. The
-    // web report previously dropped this entirely (a board with every active IC
-    // open showed "Looks healthy"); compute it once here from the bound report.
+    // web dropping this would let a board with every active IC open show "Looks
+    // healthy"; compute it once here from the bound report.
     let bound = bind_board(board, &lib);
     let bind_summary = BindSummary::from_report(&bound.report);
     let bind_web = BindSummaryWeb::from_summary(&bind_summary);
@@ -547,9 +547,9 @@ pub fn analyze_with_firmware(
     fw_bytes: &[u8],
 ) -> WebReport {
     // Normalize ONCE; the static analysis and the co-sim share the same
-    // extracted board. The old path re-read the ORIGINAL bytes for co-sim with
-    // only the text/binary sniffers, so a `.board` or gerber zip that had just
-    // produced a clean static report failed with "could not re-read the board".
+    // extracted board. Re-reading the ORIGINAL bytes for co-sim with only the
+    // text/binary sniffers fails with "could not re-read the board" on a
+    // `.board` or gerber zip that has just produced a clean static report.
     let norm = match crate::board_input::from_bytes(file_name, contents) {
         Ok(n) => n,
         // No board to co-sim against; return the normalization error as-is.
@@ -959,9 +959,9 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
     // findings list reads as "no faults"). Surface it BOTH as a loud prepended
     // finding (so it leads the prose) and as the structural `analog_valid` /
     // `failed_windows` fields below (so a JSON consumer reads it as data). This
-    // parallels the CLI `--json` and the TUI pane; the web path used to consult
-    // neither `analog_valid()` nor `failed_windows()`, so a diverged run showed
-    // as quiet.
+    // parallels the CLI `--json` and the TUI pane; a web path that consults
+    // neither `analog_valid()` nor `failed_windows()` shows a diverged run as
+    // quiet.
     let analog_valid = sched.analog_valid();
     let failed_windows: Vec<WebFailedWindow> = sched
         .failed_windows()
@@ -1151,10 +1151,10 @@ pub fn analyze_with_firmware_json(
 /// TOGGLE COUNT descending, then VOLTAGE RANGE descending, then name; the exact
 /// three-key "top movers first" contract the CLI toggle table and JSON
 /// activity_summary use (see `reports::cosim`). Ranking by the driven flag then
-/// alphabetically (the old order) truncated away the genuinely most-active nets
-/// whenever more than `limit` nets were driven; dropping the voltage-range middle
-/// key (a later regression) made the web keep a DIFFERENT subset than the CLI/JSON
-/// at the truncation boundary when nets tie on toggle count.
+/// alphabetically truncates away the genuinely most-active nets whenever more
+/// than `limit` nets are driven; dropping the voltage-range middle key makes the
+/// web keep a DIFFERENT subset than the CLI/JSON at the truncation boundary when
+/// nets tie on toggle count.
 fn top_gpio_nets(
     stats: &std::collections::HashMap<String, crate::scheduler::NetStat>,
     net_volts: &std::collections::HashMap<String, f64>,
@@ -1264,7 +1264,7 @@ mod tests {
         // Parity fix (the 171-ohm USB controlled-impedance case): an actionable
         // info note stored on PlainReport.heads_up must reach the web section,
         // even when the section verdict reads "healthy" (zero findings). This is
-        // the exact note that used to vanish on the web while showing on --plain.
+        // the note that must not vanish on the web while showing on --plain.
         let mut p = PlainReport::default();
         p.subject = "signal-integrity".to_string();
         p.heads_up.push(HeadsUp::glossed(
@@ -1314,8 +1314,8 @@ mod tests {
 
     #[test]
     fn web_report_carries_bind_summary() {
-        // The web report must include the bind-role honesty summary (it used to
-        // drop it entirely). Even a healthy board carries the critical-parts
+        // The web report must include the bind-role honesty summary, never drop
+        // it. Even a healthy board carries the critical-parts
         // ratio so the surface matches the CLI/JSON bind section.
         let r = analyze("bp.kicad_pcb", BLUEPILL);
         let bind = r.bind.expect("bind summary present on a bound board");
@@ -1328,10 +1328,10 @@ mod tests {
 
     #[test]
     fn web_persona_carries_usbc_verdict_like_the_cli() {
-        // R23 (web-drops-usbc-verdict): the web report used to omit the USB-C CC
-        // compliance verdict entirely, so a board with the RPi-4 shared-CC-
-        // pulldown fault (which the CLI text/plain/json all flag SERIOUS) could
-        // read "Looks healthy" on the web. A Serious verdict must become a
+        // R23 (web-drops-usbc-verdict): a web report that omits the USB-C CC
+        // compliance verdict lets a board with the RPi-4 shared-CC-pulldown
+        // fault (which the CLI text/plain/json all flag SERIOUS) read
+        // "Looks healthy" on the web. A Serious verdict must become a
         // serious section finding that raises the counts; an Info verdict must
         // become a heads-up that suppresses a false "Looks healthy".
         use crate::checks::usb_c::{Attach, UsbcLevel, UsbcReport};
@@ -1529,9 +1529,10 @@ fn main {
         );
     }
 
-    /// Real gerber archive through the WEB path (the drop-zone claim "gerber
-    /// zip" used to be false there: the reader registry knows no zips, so the
-    /// upload died with "unrecognized board format"). Corpus-gated like the
+    /// Real gerber archive through the WEB path, which is what makes the
+    /// drop-zone claim "gerber zip" true: the reader registry knows no zips on
+    /// its own, so without it an upload dies with "unrecognized board format".
+    /// Corpus-gated like the
     /// extract crate's gerber tests: skips when board-corpus is absent.
     #[test]
     fn analyze_gerber_zip_reverse_extracts() {
@@ -1598,10 +1599,10 @@ fn main {
 
     #[test]
     fn zipped_board_export_with_firmware_reaches_cosim() {
-        // B6 regression: the co-sim used to RE-READ the original upload bytes
-        // with only the text/binary sniffers, so a zipped .board export that
-        // produced a clean static report failed co-sim with "could not re-read
-        // the board". Normalizing once must give a REAL co-sim outcome: here
+        // B6 regression: RE-READING the original upload bytes with only the
+        // text/binary sniffers fails co-sim with "could not re-read the board"
+        // on a zipped .board export that produced a clean static report.
+        // Normalizing once must give a REAL co-sim outcome: here
         // the DSL board has no MCU, so the honest "no microcontroller" note.
         use std::io::Write;
         let dsl = br#"# Board-as-Code (hauksbee board DSL v1)
@@ -1719,15 +1720,15 @@ fn main {
     // A minimal binary Altium .PcbDoc (OLE2 container, two resistors sharing a
     // MID net), the deterministic fixture the extract crate's altium tests
     // synthesise. Binary on purpose: its bytes do NOT survive a lossy UTF-8
-    // round-trip, which is exactly what the old web path performed.
+    // round-trip, so it catches any slip back to text-first routing on the web.
     const ALTIUM: &[u8] = include_bytes!("../../../testdata/boards/altium_two_resistor.PcbDoc");
 
     #[test]
     fn binary_altium_board_survives_the_web_path() {
-        // Regression (web bytes fix): the analyze path used to lossy-UTF8-decode
-        // the upload and only ever try the TEXT sniffer, so a binary Altium
-        // board was corrupted before parse AND never routed to its reader. Raw
-        // bytes must now extract and report like any text board.
+        // Regression (web bytes fix): lossy-UTF8-decoding the upload and only
+        // ever trying the TEXT sniffer corrupts a binary Altium board before
+        // parse AND never routes it to its reader. Raw bytes must extract and
+        // report like any text board.
         let r = analyze("two_resistor.PcbDoc", ALTIUM);
         assert!(
             r.ok,
@@ -1737,8 +1738,8 @@ fn main {
         assert_eq!(r.num_components, 2, "R1 and R2 survive");
         assert!(r.num_nets > 0, "nets survive: {}", r.num_nets);
         // The guard that proves the bytes path is what makes it work: the SAME
-        // board pushed through the lossy round-trip the old path performed is
-        // mangled (the OLE2 magic is not valid UTF-8) and fails to read.
+        // board pushed through a lossy UTF-8 round-trip is mangled (the OLE2
+        // magic is not valid UTF-8) and fails to read.
         let lossy = String::from_utf8_lossy(ALTIUM).into_owned();
         assert_ne!(
             lossy.as_bytes(),

@@ -1,6 +1,6 @@
 //! `hauksbee serve [--port N]`: the local web front door.
 //!
-//! W6 §1 (one web experience): this serves the SAME React bundle as
+//! One web experience: this serves the SAME React bundle as
 //! `hauksbee run --serve`, with no board preloaded. The app lands on the
 //! drop-zone: drop a board (and optionally firmware) to get the plain-language
 //! report from the analysis API, then press "run it" to bring a board to life.

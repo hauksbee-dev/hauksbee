@@ -89,8 +89,7 @@ struct McuShared {
     /// in the order the firmware produced them. Unlike `pin_edges` (latest-level
     /// map, which collapses a sub-µs `shiftOut` SCLK pulse train to its final
     /// level), this preserves each edge AND its MCU cycle so the bit-banged
-    /// digital layer replays at edge granularity in cycle order (FIX 1, 05 §1.1;
-    /// numerical lore #8).
+    /// digital layer replays at edge granularity in cycle order (FIX 1, 05 §1.1).
     pin_edge_log: Vec<PinEdge>,
     /// UART bytes the firmware emitted since last drain.
     uart_out: Vec<u8>,
@@ -127,8 +126,8 @@ struct LiveMcu {
     /// a chunk-boundary level would stomp the mid-transaction bit the
     /// responder just presented.
     responder_input_pins: std::collections::HashSet<(char, u8)>,
-    /// Last logic level pushed into the core for each plain digital input pin
-    ///; the hysteresis memory of the per-chunk node-voltage → digital-pin
+    /// Last logic level pushed into the core for each plain digital input pin;
+    /// the hysteresis memory of the per-chunk node-voltage → digital-pin
     /// sync (no entry = never pushed; the core still holds its power-on
     /// level). Also the change filter: `set_digital_in` is only called when
     /// the decided level differs, so poll backends (Renode/QEMU, one socket
@@ -230,7 +229,7 @@ pub struct Scheduler {
     /// bit-banged SPI MISO, soft-I2C). `None` until the first responder is
     /// registered for that MCU; the dispatch closure is installed lazily so a
     /// board with no responders keeps the backend hook empty (zero per-edge
-    /// cost, exactly the pre-registry behaviour).
+    /// cost).
     responder_registries: Vec<Option<Arc<Mutex<crate::responders::ResponderRegistry>>>>,
     /// Latest solved node voltages, shared with the 165 read chains so their
     /// PL-load sampling (which fires inside the MCU run, before this chunk's
@@ -698,7 +697,8 @@ impl Scheduler {
         // (port, bit), then identify the 595 daisy-chain(s) and bind their
         // broadcast control signals (SRCLK / RCLK / SRCLR_n) and head SER to
         // GPIO pins. A chain whose essential control pins are not bound to GPIO
-        // is left to the old once-per-chunk digital tick (so nothing regresses).
+        // is left to the once-per-chunk digital tick, which still models it,
+        // just at chunk granularity.
         let (chains, chain_mcu, chain_chips) = build_595_chains(&digital, &live);
 
         // Standalone GPIO-edge-driven digital components (05 §1.2): shift/latch
@@ -988,7 +988,7 @@ impl Scheduler {
                 let chain = Arc::new(Mutex::new(chain));
                 // Register with the owning MCU's responder registry: dispatch
                 // is keyed on the chain's PL/SCLK pins, so every other edge is
-                // ignored as cheaply as the pre-registry closure did. The
+                // ignored on a bare pin comparison. The
                 // responder reads the shared voltage snapshot for the PL-load
                 // sampling of the latch inputs.
                 let responder =
@@ -1663,7 +1663,7 @@ impl Scheduler {
             for (&ch, &node) in &m.binding.adc_nets {
                 // Skip a pin the firmware has promoted to a GPIO output. An
                 // analog-capable pin binds BOTH an ADC channel and a tri-stated
-                // GPIO driver (dynamic promotion, 05-cosim-fidelity §4.1); once
+                // GPIO driver (dynamic promotion); once
                 // that driver is enabled the pin is being DRIVEN, not read, so
                 // injecting an ADC voltage for it is contradictory (a phantom
                 // analog reading on a pin the firmware owns as an output).
@@ -1683,10 +1683,10 @@ impl Scheduler {
             }
             // 1a. Plain digital inputs: mirror the previous chunk's SOLVED net
             // voltage into the core's digital-in for every wired GPIO pin the
-            // circuit (not the firmware) owns; the missing direction of the
-            // pin coupling (`set_digital_in` previously had no engine caller,
-            // so a pushbutton / limit switch / comparator output on a plain
-            // input pin never reached `digitalRead`). Symmetric to the
+            // circuit (not the firmware) owns. This is the inbound direction
+            // of the pin coupling: without it nothing calls `set_digital_in`,
+            // and a pushbutton / limit switch / comparator output on a plain
+            // input pin never reaches `digitalRead`. Symmetric to the
             // adc_nets loop above: injected before `run_micros`, so firmware
             // reads the level of the last settled operating point.
             //
@@ -1827,7 +1827,7 @@ impl Scheduler {
             // configured the pin as a driven output, so enable the (initially
             // tri-stated) Thevenin leg before setting its level. This is also
             // the promotion path for a dual-bound analog-capable pin (dynamic
-            // promotion, 05-cosim-fidelity §4.1): the first firmware drive of
+            // promotion): the first firmware drive of
             // an A-pin enables its driver exactly like any other GPIO, while a
             // pin never driven keeps its driver disabled and stays a pure ADC
             // input.
@@ -1981,7 +1981,7 @@ impl Scheduler {
         self.restore_pwl_drives(&pwl_restores);
         // An MCU that refused to advance makes this chunk untrustworthy even if
         // the analog march converged. `solve_chunk` records an analog failure but
-        // NO LONGER resets the consecutive-failure streak on its own; the streak
+        // does NOT reset the consecutive-failure streak on its own; the streak
         // must reflect an MCU failure too. Fold the MCU failure into the same
         // accounting so the failed-window and consecutive-failure surfaces see
         // it. Only record here when the analog side converged, otherwise
@@ -2037,24 +2037,24 @@ impl Scheduler {
 
         // 3c. SPI bus chunk-boundary deselect: HEURISTIC-MODE BUSES ONLY.
         //
-        // History: this used to deselect EVERY bus unconditionally at the chunk
-        // boundary, standing in for a real chip-select edge because simavr's SPI
-        // IRQ surfaces only byte transfers, never CS. That heuristic was wrong in
-        // two documented ways (the comment deleted here, 05 §2):
-        //   * two CS-framed transactions inside one chunk were NOT separated:
-        //     the second transaction's bytes appended to the first slave's state,
-        //     because no reset happened between them; and
-        //   * a single transaction SPANNING a chunk boundary was reset mid-way:
-        //     the slave deselected with bytes still pending, corrupting the reply
-        //     (the debug guard below fired on exactly this case).
+        // A chunk-boundary deselect stands in for a real chip-select edge,
+        // which simavr's SPI IRQ never surfaces (it reports byte transfers and
+        // nothing else). Applied to EVERY bus unconditionally it is wrong in
+        // two documented ways (05 §2):
+        //   * two CS-framed transactions inside one chunk are NOT separated:
+        //     the second transaction's bytes append to the first slave's state,
+        //     because no reset happens between them; and
+        //   * a single transaction SPANNING a chunk boundary is reset mid-way:
+        //     the slave deselects with bytes still pending, corrupting the reply
+        //     (the debug guard below fires on exactly this case).
         //
-        // Both are now fixed for buses with a real CS source. When the binder
-        // resolved the CS net to an MCU pin (`cs_pin`), the `on_pin_change`
+        // Neither can bite a bus with a real CS source. When the binder
+        // resolves the CS net to an MCU pin (`cs_pin`), the `on_pin_change`
         // closure frames transactions at the true active-low CS edges (mid-chunk
         // included) via the `CsFrame` hook (05 §2.1); and a backend that surfaces
         // CS itself (Renode hardware-NSS `FinishTransmission`) frames via the
         // `note_backend_deselect` path. For those buses (`frames_itself()`), a
-        // chunk-boundary reset would REINTRODUCE failure mode b (truncating a
+        // chunk-boundary reset would CAUSE failure mode b (truncating a
         // legitimately boundary-spanning transaction), so we SKIP it and let the
         // real CS edges own framing (05 §2, failure mode b).
         //
@@ -2433,12 +2433,12 @@ impl Scheduler {
     }
 
     /// Restart the sim clock and drop every run-accumulated diagnostic so a
-    /// re-run starts clean. Zeroing only `sim_time` (as the engine's `reset`
-    /// once did) left the failed-chunk count, failed-time windows, the
-    /// consecutive-failure streak, the sub-microsecond clock carry, the running
-    /// net stats, and the per-frame peak accumulators from the PREVIOUS run in
-    /// place, so a fresh run inherited a stale `analog_valid:false`, phantom
-    /// failed windows, and a firmware clock already offset by the old carry.
+    /// re-run starts clean. Zeroing only `sim_time` would leave the
+    /// failed-chunk count, failed-time windows, the consecutive-failure
+    /// streak, the sub-microsecond clock carry, the running net stats, and the
+    /// per-frame peak accumulators from the PREVIOUS run in place, so a fresh
+    /// run would inherit a stale `analog_valid:false`, phantom failed windows,
+    /// and a firmware clock already offset by the carry.
     /// These are all "since the run began" accumulators; a reset must clear
     /// them. Board topology, bindings, and forced overrides are left intact.
     pub fn reset_run_state(&mut self) {
@@ -2478,9 +2478,9 @@ impl Scheduler {
         // band (a 2.5 V midpoint) is a 5 V-rail assumption: on a 3.3 V board
         // (every renode/qemu external MCU returns logic_high 3.3) a loaded high
         // output settles below 3.0 V through the driver's series R, so every high
-        // sample landed in the hysteresis band, `last_logic` never established a
-        // level, and `toggles` stayed 0; the net read as inactive in the activity
-        // table and CI min_toggles/freq asserts falsely failed. Scale the band by
+        // sample lands in the hysteresis band, `last_logic` never establishes a
+        // level, and `toggles` stays 0; the net reads as inactive in the activity
+        // table and CI min_toggles/freq asserts fail falsely. Scale the band by
         // the board's logic-high rail (0.6/0.4·Vhigh = the original 3.0/2.0 at 5 V,
         // unchanged there), mirroring the rail-relative digital-IN thresholds.
         // Use the LOWEST MCU rail on the board, not the highest: a single global
@@ -2617,7 +2617,7 @@ impl Scheduler {
     /// Current voltage of a net by name.
     /// Reconcile one MCU's GPIO Thevenin drivers with the configured-output
     /// pin set its core reported at the end of a chunk (both halves of the
-    /// dynamic-promotion story, 05-cosim-fidelity §4.1):
+    /// dynamic promotion):
     ///
     /// * **Promotion**, a pin the firmware set as an OUTPUT but has so far
     ///   only held at its reset level (DDR write, no PORT toggle, e.g. an
@@ -3001,13 +3001,13 @@ impl Scheduler {
     /// GPIO-clocked shift/latch (`replay_chips`). One micro-tick per edge-group
     /// sharing a cycle. Returns the micro-tick count.
     ///
-    /// This unifies two previously-separate per-chip mechanisms. The 595 chain
+    /// One mechanism covers every edge-driven chip. The 595 chain
     /// stays byte-exact: replaying a cycle-group sub-slice evolves the chain's
     /// state identically to replaying the whole log (replay is a stateful
     /// sequential fold), so PATH B still latches its bytes exactly. The 74HC165
     /// read path is deliberately NOT here: it resolves synchronously inside
     /// `run_micros` through the input responder; this post-run replay reconciles
-    /// only the write side (numerical lore #8).
+    /// only the write side.
     fn replay_digital_edges(&mut self, mi: usize, edge_log: &[PinEdge]) -> usize {
         if edge_log.is_empty() {
             return 0;
@@ -3223,8 +3223,8 @@ impl Scheduler {
 
     /// Per edge-driven 74HC595 chain, the MCU GPIO `(port, bit)` bound to its
     /// SRCLK, RCLK, optional SRCLR_n, optional OE_n, and head SER, plus the chip
-    /// count. Empty when no chain is clocked by the MCU (the old once-per-chunk
-    /// path is used). Exposed for diagnostics and co-sim tests of the chain
+    /// count. Empty when no chain is clocked by the MCU (the once-per-chunk
+    /// path handles it). Exposed for diagnostics and co-sim tests of the chain
     /// wiring (FIX 1).
     #[allow(clippy::type_complexity)]
     pub fn hc595_chain_pins(
@@ -3867,10 +3867,10 @@ fn build_generic_replay_chips(
         // register (sequential, pulse trains on its pins would collapse at
         // chunk granularity) and one of those sequential pins (clock / reset /
         // load / enable / serial data, straight from the spec) is wired to a
-        // GPIO-driven net. This is the old Hc595|Hc165 kind filter generalized
-        // to DATA: a declarative 74HC74 clocked by a GPIO rides the same edge
+        // GPIO-driven net. The test reads the spec rather than a part-kind
+        // list, so a declarative 74HC74 clocked by a GPIO rides the same edge
         // path with no Rust change. Purely combinational parts (gates,
-        // latches) stay on the once-per-chunk analog tick, as before.
+        // latches) stay on the once-per-chunk analog tick.
         if !d.is_sequential() {
             continue;
         }
@@ -4019,7 +4019,7 @@ mod tests {
             module: true,
         };
         // ch0's own driver is DISABLED: not promoted, even though a neighbour on
-        // the same net IS enabled (the old net-keyed check wrongly said promoted).
+        // the same net IS enabled (a net-keyed check would wrongly say promoted).
         assert!(
             !adc_channel_promoted(&binding, 0),
             "a neighbour's driver must not promote ch0"
@@ -4176,13 +4176,13 @@ mod tests {
         Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler")
     }
 
-    /// The W4 acceptance gate (08 section 2, closes TARSKI_RESULTS 5.1): a
+    /// The W4 acceptance gate (08 section 2): a
     /// firmware-shaped bit-bang latches a REAL bound 74HC595 through its
     /// electrical nets. The MCU pins drive SER/SRCLK/RCLK nets; the chip is
     /// bound from the models DB (not a hand-built fixture); the edge train is
     /// the exact shape shiftOut(MSBFIRST, 0xA6) emits; the assertion reads the
     /// latched byte back from the SOLVED node voltages of the output nets,
-    /// which is what the old latest-level collapse could never produce.
+    /// which a latest-level collapse could never produce.
     #[cfg(feature = "avr")]
     const CHAIN_BOARD: &str = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -4339,11 +4339,11 @@ mod tests {
         );
     }
 
-    /// The electrical face of lore #8: ten 5 us pulses inside one 100 us
-    /// chunk end LOW, so the final-level DC drive leaves the RC integrator
-    /// empty; the PWL drive integrates every pulse and pumps it to roughly
-    /// the 50%-duty average. This is the analog half of the fidelity ceiling
-    /// fix (the digital half is the cycle-ordered replay).
+    /// The electrical face of sub-chunk pulse fidelity: ten 5 us pulses
+    /// inside one 100 us chunk end LOW, so a final-level DC drive leaves the
+    /// RC integrator empty; the PWL drive integrates every pulse and pumps it
+    /// to roughly the 50%-duty average. This is the analog half of sub-chunk
+    /// fidelity, the digital half being the cycle-ordered replay.
     ///
     /// `rc_scheduler` binds an `simavr:atmega328p` Nano, whose in-process
     /// core is always instantiated, so this test needs the GPL-gated `avr`
@@ -4473,7 +4473,7 @@ mod tests {
 
         // Chunk 2: the pin drops out of the configured set (DDR back to
         // input, no PORT edge). The driver must be DISABLED and the pull-down
-        // must win; the old code left it enabled and the net latched at 5 V.
+        // must win; leaving the driver enabled latches the net at 5 V.
         sched.sync_configured_outputs(0, std::collections::HashSet::new());
         assert!(
             !sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled,
@@ -4946,8 +4946,9 @@ mod tests {
             sched.node_volts.resize(idx + 1, 0.0);
         }
 
-        // A loaded 3.3 V GPIO output swings 0 V <-> 2.7 V (below the old 3.0 V
-        // high threshold). Drive high/low/high/low, three transitions.
+        // A loaded 3.3 V GPIO output swings 0 V <-> 2.7 V, below the 3.0 V
+        // high threshold a fixed 5 V band would impose. Drive
+        // high/low/high/low, three transitions.
         for v in [2.7_f64, 0.0, 2.7, 0.0] {
             sched.node_volts[idx] = v;
             sched.update_stats();
@@ -5218,9 +5219,10 @@ mod tests {
     }
 
     /// Regression (R47): `Mcu::on_i2c` and `set_i2c_slave_addresses` are
-    /// SINGLE-SLOT on the core, so the old per-bus closure meant a second
-    /// `attach_i2c_bus` silently disconnected the first bus; its slave never
-    /// saw firmware traffic and its addresses vanished from the TWI filter.
+    /// SINGLE-SLOT on the core, so a per-bus closure would let a second
+    /// `attach_i2c_bus` silently disconnect the first bus; its slave would
+    /// never see firmware traffic and its addresses would vanish from the TWI
+    /// filter.
     /// The dispatcher must route each event by its 7-bit address to the bus
     /// that owns it, and the filter must be the union across attached buses.
     #[test]
@@ -5313,9 +5315,9 @@ mod tests {
         );
     }
 
-    /// Regression (R47): `Mcu::on_spi` is SINGLE-SLOT, so the old per-bus
-    /// closure meant a second `attach_spi_bus` silently disconnected the
-    /// first, every firmware byte went to the LAST-attached slave regardless
+    /// Regression (R47): `Mcu::on_spi` is SINGLE-SLOT, so a per-bus closure
+    /// would let a second `attach_spi_bus` silently disconnect the first, and
+    /// every firmware byte would go to the LAST-attached slave regardless
     /// of which chip-select was asserted. The dispatcher must forward each
     /// byte to the bus whose CS is currently asserted (per its cs_frame).
     #[test]
@@ -5591,8 +5593,8 @@ mod tests {
     /// the truncated remainder into the next chunk, otherwise the firmware
     /// clock drifts from sim time by up to ~1 µs per chunk. Ten 1.3 µs chunks
     /// are 13.0 µs of true time; the delivered microseconds must sum to within
-    /// one microsecond of that. The old `(chunk * 1e6).round()` per chunk
-    /// delivered 1 µs each (10 µs total), 3 µs, ~23 %, of pure drift.
+    /// one microsecond of that. Rounding `(chunk * 1e6)` per chunk with no
+    /// carry delivers 1 µs each (10 µs total), 3 µs, ~23 %, of pure drift.
     #[test]
     fn fractional_microsecond_chunks_do_not_drift_the_mcu_clock() {
         let (mut sched, micros) = sched_with_micros_core(false);
@@ -5622,8 +5624,8 @@ mod tests {
 
     /// Regression for SCHED-1b: a PERSISTENTLY sub-microsecond chunk (a fine
     /// `fixed_dt = 0.5e-6`) must not race the firmware clock ahead of sim time.
-    /// The old `.floor().max(1.0)` delivered 1 µs every chunk while sim time
-    /// advanced only 0.5 µs, banking unrepayable negative debt, an unbounded 2x
+    /// A `.floor().max(1.0)` delivers 1 µs every chunk while sim time
+    /// advances only 0.5 µs, banking unrepayable negative debt, an unbounded 2x
     /// drift. Twenty 0.5 µs chunks are 10.0 µs of true time; the delivered
     /// microseconds must sum to within one microsecond of that, NOT the 20 µs
     /// the min-1 clamp would inject.
@@ -5646,17 +5648,17 @@ mod tests {
             "sub-µs chunks must not inject time the sim never elapsed: \
              delivered {delivered} µs vs {true_us} µs true"
         );
-        // The old min-1 clamp delivered one microsecond per chunk (20 µs total)
-        //, double the true elapsed time. Guard against that regression.
+        // A min-1 clamp delivers one microsecond per chunk (20 µs total),
+        // double the true elapsed time. Guard against that regression.
         assert!(
             delivered <= 11,
             "min-1 clamp races the firmware clock ahead: got {delivered} µs for {true_us} µs true"
         );
     }
 
-    /// Regression for SCHED-2: a `run_micros` error was swallowed with
-    /// `let _ = ...`, so an MCU that refused to advance (crashed core, backend
-    /// transport error) left the chunk looking like a normal quiet run even
+    /// Regression for SCHED-2: swallowing a `run_micros` error with
+    /// `let _ = ...` leaves an MCU that refused to advance (crashed core,
+    /// backend transport error) looking like a normal quiet chunk even
     /// though the firmware side never executed. The failure must feed the same
     /// failed-chunk / `analog_valid` surface the analog march uses, so strict
     /// and CI consumers refuse to trust the window.
@@ -5682,12 +5684,13 @@ mod tests {
     }
 
     /// R15: a sustained MCU crash (run_micros Err) while the analog march keeps
-    /// converging must trip the strict/CI abort. The consecutive-failure streak
-    /// used to be reset to 0 inside solve_chunk on analog convergence, BEFORE
-    /// run_chunk re-recorded the MCU failure, so each such chunk zeroed then
-    /// bumped the streak to 1, capping max_consecutive_failed_chunks at 1 and
-    /// never reaching the abort threshold. The reset now happens only on a fully-
-    /// successful chunk (analog converged AND MCU advanced).
+    /// converging must trip the strict/CI abort. Resetting the
+    /// consecutive-failure streak inside solve_chunk on analog convergence,
+    /// BEFORE run_chunk re-records the MCU failure, makes each such chunk zero
+    /// the streak and then bump it back to 1, capping
+    /// max_consecutive_failed_chunks at 1 so the abort threshold is never
+    /// reached. The reset therefore happens only on a fully-successful chunk
+    /// (analog converged AND MCU advanced).
     #[test]
     fn sustained_mcu_failure_trips_the_strict_abort() {
         let (mut sched, _micros) = sched_with_micros_core(true);

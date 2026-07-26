@@ -297,7 +297,7 @@ fn route_board(
             .unwrap_or_else(|| std::env::temp_dir().join("hauksbee-freerouting"));
         // Announce the DSN up front: it is the hand-off artifact an operator
         // wants when this run fails or times out (route it themselves, then
-        // `hauksbee merge-ses`), and it used to be written silently.
+        // `hauksbee merge-ses`), so it is never written silently.
         eprintln!(
             "routing: freerouting handoff (DSN -> freerouting -> SES); DSN at {}",
             workdir.join(forge_codegen::DSN_FILE_NAME).display()

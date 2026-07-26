@@ -822,8 +822,8 @@ mod tests {
 
     /// Round-8 #6: an as-built `[[jumper]]` merging net `N` (NodeId 2) onto
     /// `BUS` (NodeId 1) must remap not only the circuit devices and net_nodes
-    /// but also the cached NodeIds the binder stashed on the event-driven layer
-    ///; the MCU's role/ADC/GPIO node maps and the DAC output drivers. Left
+    /// but also the cached NodeIds the binder stashed on the event-driven layer;
+    /// the MCU's role/ADC/GPIO node maps and the DAC output drivers. Left
     /// stale they point at the orphaned node.
     #[test]
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {
