@@ -1,11 +1,11 @@
 //! Data-driven MCU/SoC descriptors (06-extensibility-sdk §2).
 //!
-//! The per-part `RenodeConfig`/`QemuConfig` constructors used to embed register
-//! offsets, platform paths, and port maps in hand-written Rust; the single
-//! largest hardcoded surface in the co-sim layer, and the home of the
-//! F103-vs-F4 ODR-offset footgun. This module moves that data into reviewed
-//! TOML: one `db/mcu/<part>.soc.toml` file per part, read through a single
-//! validated path with fail-loud, named errors, mirroring `sensor_spec.rs`.
+//! The register offsets, platform paths, and port maps behind the per-part
+//! `RenodeConfig`/`QemuConfig` constructors are the largest part-specific
+//! surface in the co-sim layer, and the home of the F103-vs-F4 ODR-offset
+//! footgun. They live as reviewed TOML rather than as hand-written Rust: one
+//! `db/mcu/<part>.soc.toml` file per part, read through a single validated
+//! path with fail-loud, named errors, mirroring `sensor_spec.rs`.
 //!
 //! # The shape (06 §2)
 //!

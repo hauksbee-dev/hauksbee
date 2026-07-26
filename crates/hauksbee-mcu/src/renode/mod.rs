@@ -54,8 +54,9 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 
 /// How a single GPIO port is addressed inside Renode.
 ///
-/// This is the per-port register-offset data (05-cosim-fidelity §5.5): the
-/// STM32F1-vs-F4 ODR-offset footgun lives here as an explicit `odr_offset`
+/// Every per-part difference is carried as plain data rather than as backend
+/// logic, and this is the per-port slice of that surface: the STM32F1-vs-F4
+/// ODR-offset footgun lives here as an explicit `odr_offset`
 /// field, not as logic scattered through the backend, so a new part declares
 /// "where do I read output state" as data. `Serialize`/`Deserialize` make it a
 /// file-load target for W5 without any loader landing now.
@@ -71,7 +72,7 @@ pub struct PortMap {
     /// Number of bits in this port (usually 16 on STM32, 32 on nRF52).
     pub width: u8,
     /// Where and how to read this port's DIRECTION/MODE register, if the
-    /// platform model supports reading it back. `None` keeps the old
+    /// platform model supports reading it back. `None` selects the
     /// conservative behavior: every ODR bit change is reported as a drive and
     /// direction stays unobservable ([`Mcu::drive_direction_observable`] false).
     ///
@@ -148,7 +149,7 @@ fn decode_dir_mask(encoding: DirEncoding, low: u32, high: u32, width: u8) -> u32
 }
 
 /// How a modeled ADC voltage is delivered into the Renode machine for one
-/// engine ADC channel (05-cosim-fidelity §5.1).
+/// engine ADC channel.
 ///
 /// Both variants ride the same Monitor TCP channel the backend already uses
 /// for its ODR diffing, injection is one Monitor command per chunk, issued
@@ -192,7 +193,8 @@ pub struct AdcChannelMap {
 
 /// Per-MCU Renode configuration: enough to bring up a machine and wire it.
 ///
-/// This is the whole per-part surface as plain data (05-cosim-fidelity §5.5):
+/// This is the whole per-part surface as plain data, with no part-specific
+/// branching left in the backend:
 /// the platform-description reference, GPIO port maps with their register
 /// offsets, the UART/I2C/SPI controller names, and the ADC injection recipes are
 /// all struct fields a constructor fills, not logic in the backend. Adding a
@@ -264,10 +266,10 @@ impl RenodeConfig {
     // ── Built-in parts (06 §2) ──────────────────────────────────────────────
     //
     // These are named accessors over the shipped `db/mcu/*.soc.toml` descriptors:
-    // the register offsets, platform paths, and port maps that used to be
-    // hand-written here now live in the TOML (the single source of truth,
-    // embedded via `include_str!` so the binary stays self-contained; the
-    // mcp4728.toml precedent). Each descriptor's header comment carries the
+    // the register offsets, platform paths, and port maps all live in the TOML
+    // (the single source of truth, embedded via `include_str!` so the binary
+    // stays self-contained; the mcp4728.toml precedent). Each descriptor's
+    // header comment carries the
     // hard-won knowledge (the F1-vs-F4 ODR footgun, the RP2040 SIO adaptation,
     // the F4 SPI-redefinition trap, the FE310 PRCI/vinit bring-up). A fresh part
     // is added purely as data via [`crate::SocConfig::resolve`], these
@@ -1003,8 +1005,8 @@ impl RenodeBackend {
     /// output-direction mask before diffing: an ODR bit on a pin the firmware
     /// has NOT configured as an output is not a drive (on STM32/nRF it is
     /// meaningless until the pin becomes an output), so it must not synthesize
-    /// a driven-level edge. Ports without a dir map keep the old behavior,
-    /// every ODR change is reported, and direction stays unobservable.
+    /// a driven-level edge. For a port without a dir map every ODR change is
+    /// reported and direction stays unobservable.
     fn poll_gpio_edges(&mut self) {
         let ports: Vec<PortMap> = match &self.active_ports {
             Some(active) => self
@@ -1025,7 +1027,7 @@ impl RenodeBackend {
             let dir_mask = self.read_dir(port);
             let odr = self.read_odr(port);
             // Only a configured-output pin's ODR bit is a drive; a port with no
-            // dir map reports every ODR bit (mask all-ones), the old behavior.
+            // dir map reports every ODR bit (mask all-ones).
             let new = odr & dir_mask.unwrap_or(!0);
             let prev = *self.last_odr.get(&port.letter).unwrap_or(&0);
             if new != prev {
@@ -2077,8 +2079,8 @@ mod tests {
         // 2.0 V of 3.3 V against the 2^n full scale: (2.0/3.3)*4096 = 2482.4 →
         // 2482 (top-code clamp only bites at true full scale).
         assert_eq!(adc_count(2.0, 3.3, 4095), 2482);
-        // Near full scale the 2^n scaling reads 4095 where the old (2^n-1)
-        // scaling under-read to 4094: 3.2992/3.3 → *4096 = 4095.0 vs *4095 = 4094.
+        // Near full scale the 2^n scaling reads 4095 where a (2^n-1) scaling
+        // would under-read to 4094: 3.2992/3.3 → *4096 = 4095.0 vs *4095 = 4094.
         assert_eq!(adc_count(3.2992, 3.3, 4095), 4095);
         // Broken map (zero full scale) reads stuck-at-zero, not NaN.
         assert_eq!(adc_count(1.0, 0.0, 4095), 0);
@@ -2305,7 +2307,7 @@ mod tests {
         ));
     }
 
-    /// The generated C# no longer makes the over-fetch decision: it forwards
+    /// The generated C# does not make the over-fetch decision: it forwards
     /// the controller's true `count` on the wire (the Rust host owns the
     /// prefetch policy, which the tests above pin).
     #[test]
