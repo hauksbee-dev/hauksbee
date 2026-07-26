@@ -12,9 +12,9 @@
 //! This check reads the per-part strap table from the model db
 //! (`[[models.straps]]`, see `crates/hauksbee-models/db/mcu.toml`) and, for each
 //! bound MCU, examines the net each strap pin sits on. It fires only on the
-//! structurally unambiguous case, in line with the famous-sweep calibration
-//! discipline (zero false positives on known-good boards or the check does not
-//! ship, see `docs/record/KNOWN_FAULTS_VALIDATION.md`):
+//! structurally unambiguous case, in line with the calibration discipline the
+//! rest of hauksbee follows (zero false positives on known-good boards, or the
+//! check does not ship):
 //!
 //!   (a) a *free-running clock source* (a powered oscillator) reaches the strap
 //!       net with no strong static pull to override it -> HIGH severity, because
@@ -385,11 +385,11 @@ fn is_ground_name(name: &str) -> bool {
 /// Is this net name a power rail? Every use in this file is boolean ("is the
 /// far side of this pull / this hop a rail"), so this is a predicate, not a
 /// voltage table. Breadth matches boot.rs's `is_power_or_ground_net`, and for
-/// the same calibration reason: the old exact-name table (3V3/5V/1V8 plus
-/// VCC/VBUS-gated forms) missed VBAT/VSYS/VMOT/VIN and bare voltages (9V/12V),
-/// so a correct pull-up to "VBAT" read as a signal net, which both let the
+/// the same calibration reason: an exact-name table (3V3/5V/1V8 plus
+/// VCC/VBUS-gated forms) misses VBAT/VSYS/VMOT/VIN and bare voltages (9V/12V),
+/// so a correct pull-up to "VBAT" reads as a signal net, which both lets the
 /// clock-reach hop wander onto a rail (a spurious HIGH clock finding through an
-/// oscillator's VDD) and hid a genuine wrong-direction pull from `wrong_pull`.
+/// oscillator's VDD) and hides a genuine wrong-direction pull from `wrong_pull`.
 fn is_rail_name(name: &str) -> bool {
     let n = norm(name);
     // Ground is its own family, never a rail.
@@ -582,9 +582,9 @@ mod tests {
     #[test]
     fn strap_pullup_to_vbat_rail_does_not_reach_oscillator_vdd() {
         // Bug #19 regression: same shape as the +3V3 test above, but the rail
-        // is named "VBAT", a name the old exact table did not recognise, so
-        // the series-R hop walked onto the rail, found the oscillator's VDD,
-        // and fired a spurious HIGH "free-running clock" finding on a correct
+        // is named "VBAT", a name an exact-name rail table misses, and then the
+        // series-R hop walks onto the rail, finds the oscillator's VDD, and
+        // fires a spurious HIGH "free-running clock" finding on a correct
         // pull-up. VBAT must count as a rail; the board is clean.
         let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
@@ -628,9 +628,9 @@ mod tests {
     #[test]
     fn boot0_pulled_to_vbat_rail_fires_medium() {
         // Bug #20 regression: BOOT0 needs LOW, and here it is pulled up to a
-        // rail named "VBAT". The old table returned None for VBAT, so the
-        // wrong-direction pull read as "not a rail" and the genuine mis-strap
-        // was silently missed. It must fire the Medium wrong-pull finding.
+        // rail named "VBAT". A rail table that returns None for VBAT makes the
+        // wrong-direction pull read as "not a rail", silently missing a genuine
+        // mis-strap. It must fire the Medium wrong-pull finding.
         let text = stm32_boot0_board(true).replace("+3V3", "VBAT");
         let r = strap_findings(&text);
         let strap: Vec<_> = r.of_check(LintCheck::StrapPin).collect();

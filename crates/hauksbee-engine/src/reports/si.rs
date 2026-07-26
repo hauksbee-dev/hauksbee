@@ -28,7 +28,7 @@ pub fn emit(
     // The single SI chokepoint: extract-layer SI checks plus the engine-layer
     // trace-ampacity + input-cap-ripple checks. Shared with `--check`, the JSON
     // aggregate, the TUI and the web front door so every SI surface runs the
-    // identical set (the augmentation used to live only here).
+    // identical set.
     let report = crate::checks::engine_si(board, lib, geo_text);
     match mode {
         OutputMode::Json => {

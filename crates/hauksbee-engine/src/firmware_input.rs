@@ -15,8 +15,8 @@
 //! 3. **Project build**: a zip (or, on the CLI, a directory) that carries a
 //!    `platformio.ini` but no built image is built with the user's own `pio`
 //!    (detect-don't-bundle, exactly like the Renode / ngspice / kicad-cli
-//!    oracles). A missing `pio` or a failing build is a loud, actionable error
-//!, never a silent fallback.
+//!    oracles). A missing `pio` or a failing build is a loud, actionable error,
+//!    never a silent fallback.
 //!
 //! Asymmetry, stated on purpose: a CLI **directory** with a `platformio.ini`
 //! is always (re)built; it is the user's live project and `pio run` is
@@ -241,11 +241,11 @@ pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwa
         let resolved = resolve_firmware_bytes(name, &bytes).map_err(anyhow::Error::msg)?;
         // The loaders want a file. Stage it in a fresh tempfile dir
         // (unpredictable name, created 0700: no symlink pre-creation race,
-        // unlike the old guessable PID-derived path), then deliberately
+        // which a guessable PID-derived path would allow), then deliberately
         // persist it with `keep()`: the caller takes only `.path` and the
         // loaders read the image much later in the run, so a Drop-cleaned dir
-        // would vanish under them. The CLI process is short-lived and the
-        // previous behavior also left the staged file to the OS temp cleaner.
+        // would vanish under them. The CLI process is short-lived, so the
+        // staged file is left to the OS temp cleaner.
         let dir = tempfile::TempDir::new()?.keep();
         let out = dir.join(&resolved.name);
         std::fs::write(&out, &resolved.bytes)?;

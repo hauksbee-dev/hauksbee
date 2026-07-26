@@ -989,8 +989,8 @@ pub struct UsbcReport {
 /// failure; the RPi 4 rev-1.0/1.1 shared-CC-pulldown, only manifests with an
 /// e-marked cable: the e-marker's Ra drags the shared node into the Ra band so a
 /// compliant source declares an Audio Adapter Accessory and withholds VBUS, while
-/// a passive cable still reads the same node as a sink. (This is the real,
-/// historically-accurate behaviour: the RPi 4 failed to charge from USB-C-to-C
+/// a passive cable still reads the same node as a sink. (This matches the
+/// documented hardware behaviour: the RPi 4 failed to charge from USB-C-to-C
 /// cables but worked from A-to-C.) `attach`/`powers_vbus` report the e-marked
 /// case, the stricter and more modern one.
 ///
@@ -1383,8 +1383,9 @@ mod tests {
         assert!(is_dc_bridge(&bridge_part("R5", "0R", "Device:R")));
         assert!(!is_dc_bridge(&bridge_part("R6", "5.1k", "Device:R")));
         // R42: the R-as-decimal-point zero markings "0R0" and "0.0R" (IEC 60062)
-        // are 0 Ω too; they fell through the old literal list, so a CC bridge
-        // labelled "0R0" was not unioned and the termination read as absent.
+        // are 0 Ω too; they fall through a literal zero-value list, so a CC
+        // bridge labelled "0R0" is not unioned and the termination reads as
+        // absent.
         assert!(is_dc_bridge(&bridge_part("R7", "0R0", "Device:R")));
         assert!(is_dc_bridge(&bridge_part("R8", "0.0R", "Device:R")));
         assert!(is_dc_bridge(&bridge_part("R9", "0.0", "Device:R")));

@@ -1,13 +1,14 @@
 //! One module per report family. Each builds the **structured** finding type (the
 //! honesty layer in [`crate::result`]) and renders it in exactly one of the three
 //! output surfaces. The per-flag `if json / else if plain / else` triplication
-//! that used to live inline in `cmd_run` collapses into a single `match` on
-//! [`OutputMode`] per report, and the ~700-line `cmd_run` becomes a thin
-//! dispatcher: pick the mode once, call the right report's `emit`.
+//! collapses into a single `match` on [`OutputMode`] per report, which keeps
+//! `cmd_run` a thin dispatcher: pick the mode once, call the right report's
+//! `emit`.
 //!
-//! Rendering itself is unchanged, each `emit` delegates to the existing
+//! Rendering itself lives elsewhere: each `emit` delegates to the shared
 //! renderers (`DrcStructured::render`, `plain_*`, `JsonReport`, the extract-crate
-//! text renderers) so the output stays byte-for-byte what it was.
+//! text renderers), so every surface emits byte-identical output for the same
+//! report.
 
 pub mod ac;
 pub mod ampacity;

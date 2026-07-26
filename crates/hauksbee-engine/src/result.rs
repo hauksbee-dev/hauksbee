@@ -1,8 +1,8 @@
 //! The structured-honest result layer.
 //!
-//! Every static check (`--si`/`--drc`/`--lint`/`--report`/`--thermal`/`--ac`)
-//! historically rendered straight to a Unicode table or to a plain-language
-//! verdict. That produced two failure modes the personas hit hard:
+//! A static check (`--si`/`--drc`/`--lint`/`--report`/`--thermal`/`--ac`) that
+//! renders straight to a Unicode table or to a plain-language verdict opens two
+//! failure modes:
 //!
 //! 1. **Silent sentinels.** An AC sweep with no signal path prints 121 rows of
 //!    `-6000 dB`; a thermal table with no resolved dissipating devices prints
@@ -247,7 +247,8 @@ impl BindSummary {
         // Surface the same union the web/json personas do: active ICs that are
         // unresolved OR resolved-but-open on the live circuit both make
         // analog/AC/thermal on their nets untrustworthy, so the banner must warn
-        // on either (a resolved MCU with all I/O pins open used to slip through).
+        // on either (warn on one alone and a resolved MCU with all I/O pins open
+        // slips through).
         if self.active_ics_unresolved() || self.active_open_on_live_circuit() {
             let _ = writeln!(
                 s,
@@ -1763,8 +1764,8 @@ mod tests {
     #[test]
     fn thermal_invalid_when_resolved_but_open_active_ic_leaves_empty_table() {
         // R36: an empty thermal table with a RESOLVED-BUT-OPEN power IC (bound to
-        // a model, but open on the live circuit) used to report a false "runs
-        // cool" pass, thermal_validity only escalated the UNRESOLVED case. Both
+        // a model, but open on the live circuit) reports a false "runs cool"
+        // pass if thermal_validity escalates only the UNRESOLVED case. Both
         // open cases make the table equally untrustworthy and must exit 3.
         let mut report = BindReport::default();
         report.push(row(

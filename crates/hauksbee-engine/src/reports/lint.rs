@@ -21,8 +21,9 @@ pub fn emit(
     mode: OutputMode,
     strict: bool,
 ) -> anyhow::Result<()> {
-    // device_decode is now inside engine_lint (so --check/--json/TUI/frontdoor
-    // get it too); no longer spliced here, which would double-count it.
+    // device_decode lives inside engine_lint (so --check/--json/TUI/frontdoor
+    // get it too), so it must not be spliced in here as well: that
+    // double-counts every decode finding.
     let report = crate::checks::engine_lint(board, lib);
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
@@ -101,8 +102,8 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
 
 /// Build the `--lint --json` document: the bind header, the lint findings, and
 /// the pin-role guesses as structured `bind_role` notes. Kept as a pure helper
-/// (no stdout) so a test can assert the whole thing is ONE valid JSON document
-///; the guesses must ride the `notes` array, never trail the document as loose
+/// (no stdout) so a test can assert the whole thing is ONE valid JSON document;
+/// the guesses must ride the `notes` array, never trail the document as loose
 /// text that would break a JSON consumer.
 fn lint_json(
     bound: &crate::binder::BoundBoard,
@@ -183,10 +184,10 @@ mod tests {
         }
     }
 
-    /// R16: `--lint --json` used to `println!` the pin-role guess block AFTER the
-    /// JSON document, so stdout was a valid JSON object followed by loose
-    /// "pin-role guesses (...)" text; the whole stream no longer parsed as one
-    /// JSON document. The guesses must now ride the structured `notes` array.
+    /// R16: `println!`ing the pin-role guess block AFTER the JSON document
+    /// leaves stdout a valid JSON object followed by loose "pin-role guesses
+    /// (...)" text, so the stream as a whole does not parse as one JSON
+    /// document. The guesses must ride the structured `notes` array instead.
     #[test]
     fn lint_json_with_guesses_is_one_valid_json_document() {
         let bound = empty_bound();

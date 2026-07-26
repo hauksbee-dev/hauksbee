@@ -10,14 +10,13 @@
 //!
 //! Behaviour is DECLARATIVE: each part's model entry carries a
 //! `[models.logic]` block (06-extensibility §1.1) that the generic
-//! [`LogicComponent`] evaluator compiles at bind time; the old hardcoded
-//! `DigitalKind::{Hc595, Hc165, Buffer, NorLatch}` enum and its per-kind tick
-//! methods were deleted after a byte-exact regression proved the spec-driven
-//! reimplementations identical at every edge (`tests/logic_migration.rs`).
-//! A digital model WITHOUT a logic block falls back to a synthesized
-//! transparent passthrough over its wired `a*`/`y*` role pairs (the old
-//! `Buffer` semantics, preserved for `adc`-kind passthroughs and unmodelled
-//! parts).
+//! [`LogicComponent`] evaluator compiles at bind time. No part's shift, latch
+//! or gate behaviour is hardcoded in Rust; the 74HC595, 74HC165, buffer and
+//! NOR-latch specs are pinned edge by edge against goldens in
+//! `tests/logic_migration.rs`. A digital model WITHOUT a logic block falls
+//! back to a synthesized transparent passthrough over its wired `a*`/`y*`
+//! role pairs (plain buffer semantics, which is what `adc`-kind passthroughs
+//! and unmodelled parts want).
 //!
 //! What stays Rust, deliberately: the MCU-facing chain controllers
 //! ([`Hc595Chain`], [`Hc165Chain`]) and their net-walking recovery
@@ -109,8 +108,7 @@ outputs = ["q", "qb"]
 /// This is the ordered, cycle-stamped edge event of 05 §1.1: it carries the MCU
 /// cycle counter at the instant of the edge alongside the pin and its new level,
 /// so a sub-µs `shiftOut` SCLK burst replays in true order and multiplicity
-/// instead of collapsing to a resting level (numerical lore #8,
-/// `docs/learn/tarski-saga.md` §5). Within a chunk the log preserves
+/// instead of collapsing to a resting level. Within a chunk the log preserves
 /// order and multiplicity; `cycle` is exact on push backends (simavr) and the
 /// coarse poll-slice time on poll backends (Renode/QEMU), flagged by
 /// `Mcu::cycle_exact`.
@@ -243,8 +241,8 @@ pub fn replay_components_on_edges(
 /// The Thevenin output [`PinDriver`]s are referenced to GROUND, not to the
 /// part's VCC net, so a switching output moves charge that the supply rail
 /// never sees, a metering shunt in series with VCC reads zero forever. This
-/// leg is what the shunt sees. Two terms, both defaulting to zero (a model
-/// without the params draws nothing, exactly the old behaviour):
+/// leg is what the shunt sees. Two terms, both defaulting to zero, so a model
+/// without the params draws nothing:
 ///
 /// - **static** (`supply_static_ua`, µA): the datasheet quiescent ICC per
 ///   package, drawn whenever the rail is up.
@@ -327,20 +325,18 @@ pub struct DigitalComponent {
     pub drivers: HashMap<String, PinDriver>,
     /// The compiled `[models.logic]` evaluator. `None` for an inert part (a
     /// model with no logic block and no mirrorable `a*`/`y*` role pairs):
-    /// such a part keeps its stamped drivers at their initial low level,
-    /// exactly what the old kind-`Buffer` fallback did when it had nothing
-    /// to mirror.
+    /// such a part keeps its stamped drivers at their initial low level.
     pub logic: Option<LogicComponent>,
-    /// VCC supply draw (`None` for models without supply params, no leg is
-    /// stamped and behaviour is byte-identical to before the feature).
+    /// VCC supply draw (`None` for models without supply params: no leg is
+    /// stamped and the package draws no rail current).
     pub supply: Option<SupplyDraw>,
 }
 
 /// Synthesize the transparent-passthrough spec for a digital model WITHOUT a
 /// `[models.logic]` block: every wired `a<idx>` input role mirrors onto its
-/// wired `y<idx>` output role (the 74HCxx buffer/gate naming). This is the
-/// old kind-`Buffer` behaviour, generated as data at bind time from the
-/// ACTUAL wiring so partial wiring behaves identically (an unpaired wired
+/// wired `y<idx>` output role (the 74HCxx buffer/gate naming). Plain buffer
+/// behaviour, generated as data at bind time from the ACTUAL wiring so
+/// partial wiring behaves sanely (an unpaired wired
 /// `y*` keeps its stamped driver's initial low level; an unwired pair simply
 /// does not exist). Returns `None` when there is nothing to mirror.
 fn synth_passthrough_spec(roles: &HashMap<String, NodeId>) -> Option<Logic> {
@@ -380,7 +376,7 @@ impl DigitalComponent {
     /// expressions are never re-parsed on the tick path). A model without a
     /// logic block gets the synthesized `a*`/`y*` passthrough. A model WITH a
     /// logic block that fails to compile is a hard error: the caller decides
-    /// whether to skip the part loudly (nets float, lore #9); it is never
+    /// whether to skip the part loudly (its nets then float); it is never
     /// silently downgraded to a passthrough.
     pub fn new(
         reference: String,
@@ -545,7 +541,8 @@ impl DigitalComponent {
     /// Structural chain candidacy: a part declaring a `ser` serial input and
     /// a `qh_serial` cascade output participates in 74HC595-style write
     /// chains. The role names are the data-visible contract the chain
-    /// controllers key on (formerly the `DigitalKind::Hc595` enum tag).
+    /// controllers key on, so a new model joins a chain by declaring the
+    /// roles, with no Rust change.
     pub fn chains_as_595(&self) -> bool {
         self.logic
             .as_ref()
@@ -1150,7 +1147,7 @@ impl Hc165Chain {
 /// Used by the binder to decide which pins to stamp Thevenin drivers on.
 /// Declarative parts answer from their `[models.logic]` outputs; parts
 /// without a logic block fall back to the `y*` role convention the
-/// synthesized passthrough mirrors onto (the old `Buffer` behaviour).
+/// synthesized buffer passthrough mirrors onto.
 pub fn output_roles(model: &ModelEntry) -> Vec<String> {
     if !model.logic.is_empty() {
         return model.logic.outputs.clone();
@@ -1531,7 +1528,7 @@ mod tests {
 
     /// Bit-identical-when-off (05 §1.6 / master doctrine §5): a SINGLE edge on a
     /// pin in the chunk yields the same digital state through the generalized
-    /// replay as the old once-per-chunk collapse (which sampled the settled
+    /// replay as the once-per-chunk collapse (which samples the settled
     /// level). Nothing needs ordering, so the outcome is identical.
     #[test]
     fn single_edge_matches_collapsed_tick() {
@@ -1622,9 +1619,9 @@ mod tests {
         }
     }
 
-    /// Regression guard: this is what the OLD once-per-chunk path saw. Collapsing
-    /// the SCLK pulse train to its LATEST level (what `pin_edges` did, and what
-    /// `tick_595` sampled) clocks the chain AT MOST once per chunk, so it can
+    /// Regression guard for what the once-per-chunk path sees. Collapsing
+    /// the SCLK pulse train to its LATEST level (the `pin_edges` map)
+    /// clocks the chain AT MOST once per chunk, so it can
     /// never reproduce the PATH B latch. This asserts the collapsed model gets
     /// the WRONG answer, proving the edge path is load-bearing.
     #[test]

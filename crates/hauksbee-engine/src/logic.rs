@@ -3,8 +3,8 @@
 //! (the digital-domain essay) and docs/how-and-why/hauksbee-models/logic_spec.md
 //! (the format and the byte-exact migration record).
 //!
-//! One [`LogicComponent`] replaces the old `DigitalKind` enum: a digital
-//! part's behaviour arrives as data (a validated
+//! One [`LogicComponent`] covers every digital part: a part's behaviour
+//! arrives as data (a validated
 //! [`hauksbee_models::logic_spec::Logic`] block) and is COMPILED once at bind
 //! time into pin index tables, `u64` register state, and evalexpr operator
 //! trees, then evaluated per tick with no parsing and no per-tick
@@ -62,12 +62,12 @@
 //! CONTROL pin reads the level that keeps the part operating normally:
 //! resets and loads released, clocks enabled, tri-states driving. (A board
 //! that ties these does so in copper; a spec input left unwired must not
-//! freeze the part.) This matches the old hardcoded parts' behaviour, an
-//! unwired SRCLR_n read released, an unwired OE_n stayed enabled, with one
-//! documented exception: the old `tick_165` treated an unwired PL_n as LOW
-//! (load permanently transparent), which was a modeling artifact, not
-//! silicon; here an unwired PL_n reads released like every other active-low
-//! control.
+//! freeze the part.) So an unwired SRCLR_n reads released and an unwired
+//! OE_n reads enabled. The rule is uniform: an unwired 74HC165 PL_n also
+//! reads released rather than LOW, so parallel load is NOT permanently
+//! transparent on an unwired PL_n. A permanently transparent load is a
+//! modeling artifact rather than silicon behaviour, so a board that wants it
+//! must tie PL_n low in copper as the real part requires.
 
 use std::collections::HashMap;
 

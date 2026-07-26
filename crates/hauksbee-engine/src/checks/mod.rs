@@ -52,9 +52,9 @@ use hauksbee_models::ModelLibrary;
 /// model-aware driver contention.
 /// Kept as one function so every surface (`--lint`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set and no caller can
-/// reopen the "Looks healthy" hole by forgetting one, device_decode used to be
-/// spliced in only on the `--lint` path, so the other surfaces returned a false
-/// PASS on those faults.
+/// reopen the "Looks healthy" hole by forgetting one: splice device_decode in
+/// on the `--lint` path alone and every other surface returns a false PASS on
+/// those faults.
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = board.net_lint();
     report
@@ -75,10 +75,10 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
 /// needs the bound DB models, trace ampacity (IPC-2221) and input-cap ripple.
 /// Kept as one chokepoint so every SI surface (`--si`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set. The
-/// ampacity/ripple checks were previously appended only on the dedicated `--si`
-/// path, so `--check`, the combined `--json`, and the web report returned a
+/// ampacity/ripple checks appended on the dedicated `--si` path alone would
+/// leave `--check`, the combined `--json`, and the web report returning a
 /// false "looks healthy" over an under-width power trace or an over-ripple input
-/// cap that `--si` flagged; the SI twin of the `engine_lint` hole above.
+/// cap that `--si` flags; the SI twin of the `engine_lint` hole above.
 /// `geo_text` is the raw layout text (None for Altium, whose geometry is not yet
 /// threaded into the text-based SI checks).
 pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&str>) -> SiReport {

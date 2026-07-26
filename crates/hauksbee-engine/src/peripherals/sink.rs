@@ -292,8 +292,8 @@ mod tests {
     fn transition_count_excludes_the_t0_dump_even_when_high() {
         // A net that powers up HIGH emits its initial value dump at t=0 with
         // level=HIGH. That dump is NOT a transition; transition_count must
-        // exclude it (it used to count it via `|| c.level`, over-counting by 1
-        // and disagreeing with transitions_for).
+        // exclude it (counting it via `|| c.level` over-counts by 1 and
+        // disagrees with transitions_for).
         let mut c = Circuit::new();
         let n = c.node("PWR");
         let mut sink = VcdSink::new("VCD", vec![("PWR".into(), n)], None);

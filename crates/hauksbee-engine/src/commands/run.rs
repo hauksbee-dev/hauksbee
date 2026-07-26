@@ -738,7 +738,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     let file_name = crate::commands::common::file_name(&cfg.board);
     let board_url = format!("/boards/{file_name}");
 
-    // W6 §1: `run --serve` preloads the board, so the React app lands on THIS
+    // `run --serve` preloads the board, so the React app lands on THIS
     // board's report (the same JSON the drop path produces) and "run it" expands
     // it into the live sim already running on `/ws`. Compute the report once here
     // and hand it to the app via `/api/startup`. Board-only unless firmware was
