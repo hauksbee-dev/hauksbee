@@ -1923,7 +1923,7 @@ fn bind_passive_array(
     let mut notes: Vec<String> = Vec::new();
     // (element name, a, b) before connectivity filtering.
     let mut elements: Vec<(String, Option<NodeId>, Option<NodeId>)> = Vec::new();
-    if pads.len().is_multiple_of(2) {
+    if pads.len() % 2 == 0 {
         // Isolated-array convention: sequential pad pairs.
         for (i, pair) in pads.chunks(2).enumerate() {
             elements.push((
@@ -2095,7 +2095,7 @@ fn bind_bjt(
                 c,
                 b,
                 e,
-                model: m,
+                model: m.clone(),
             });
             stamped += 1;
         }
@@ -3800,7 +3800,7 @@ mod natural_ref_key_tests {
         // Raw String Ord would rank "U10" < "U2" (byte-wise '1' < '2'); the
         // natural key must rank U2 before U10 so addresses ascend by device.
         let mut refs = vec!["U10", "U2", "U1", "U100"];
-        refs.sort_by_key(|a| natural_ref_key(a));
+        refs.sort_by(|a, b| natural_ref_key(a).cmp(&natural_ref_key(b)));
         assert_eq!(refs, vec!["U1", "U2", "U10", "U100"]);
     }
 
@@ -3809,7 +3809,8 @@ mod natural_ref_key_tests {
         // Simulate the address-assignment pass over DAC bindings whose
         // designators are non-uniform width (U2, U10). U2 must get 0x60 and
         // U10 0x61; the reverse of the old lexicographic bug (#12).
-        let mut dacs = [DacBinding {
+        let mut dacs = vec![
+            DacBinding {
                 reference: "U10".into(),
                 address: 0,
                 vref: 0.0,
@@ -3822,7 +3823,8 @@ mod natural_ref_key_tests {
                 vref: 0.0,
                 gain: 0,
                 vout_drivers: [None, None, None, None],
-            }];
+            },
+        ];
         dacs.sort_by(|a, b| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)));
         for (i, d) in dacs.iter_mut().enumerate() {
             d.address = 0x60 + i as u8;
@@ -4231,7 +4233,7 @@ mod crystal_fallback_tests {
         // a diode), never as a passive; the reference-class gate wins.
         let cr = fallback_entry(&comp_fp("CR1", "5.1V", "Diode_SMD:D_SOD-123"));
         assert!(
-            cr.is_none_or(|e| e.kind != ComponentKind::Passive),
+            cr.map_or(true, |e| e.kind != ComponentKind::Passive),
             "a CR-referenced zener must never bind as a passive"
         );
 

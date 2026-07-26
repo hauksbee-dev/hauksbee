@@ -307,7 +307,7 @@ mod tests {
                 c: a[i],
                 b: base,
                 e: a[(i + 1) % 4],
-                model: *model,
+                model: model.clone(),
             });
             c.add(Device::Resistor {
                 name: format!("{prefix}_Rb{i}"),
@@ -444,7 +444,7 @@ mod tests {
                 c: n1,
                 b: base,
                 e: n2,
-                model,
+                model: model.clone(),
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),

@@ -58,7 +58,7 @@ fn pulse_circuit() -> (Circuit, NodeId) {
 
 #[test]
 fn adaptive_step_lands_on_pwl_corners_and_sees_the_pulse() {
-    let (c, _out) = pulse_circuit();
+    let (c, out) = pulse_circuit();
     let opts = SolverOptions {
         step: StepControl::Adaptive {
             dt_initial: 1e-6,

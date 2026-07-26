@@ -1274,7 +1274,7 @@ impl Scheduler {
             m.binding
                 .gpio_drivers
                 .get(&pin)
-                .is_some_and(|drv| cs_net.is_none_or(|node| drv.net == node))
+                .is_some_and(|drv| cs_net.map_or(true, |node| drv.net == node))
         });
         if let Some(m) = owner {
             let mut sh = m.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -2723,7 +2723,7 @@ impl Scheduler {
                         continue;
                     }
                     let g = (w[1].0.saturating_sub(w[0].0)) as f64 / span * chunk;
-                    if width.is_none_or(|cur| g < cur) {
+                    if width.map_or(true, |cur| g < cur) {
                         width = Some(g);
                     }
                 }

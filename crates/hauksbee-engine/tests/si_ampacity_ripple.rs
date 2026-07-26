@@ -30,7 +30,7 @@ fn run_si(board: &ExtractedBoard, text: &str) -> SiReport {
     report
 }
 
-fn findings_of(report: &SiReport, check: SiCheck) -> Vec<&hauksbee_extract::SiFinding> {
+fn findings_of<'a>(report: &'a SiReport, check: SiCheck) -> Vec<&'a hauksbee_extract::SiFinding> {
     report
         .findings
         .iter()

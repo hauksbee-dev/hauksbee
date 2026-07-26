@@ -116,7 +116,8 @@ fn destructive_led_opens_and_current_collapses() {
 fn resistor_overpower_faults() {
     // A 0402 resistor (1/16 W = 62.5 mW rating) of 25 Ω straight across +5V
     // dissipates 5²/25 = 1 W, ~16× its rating → sustained overpower fault.
-    let board = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+    let board = format!(
+        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
   (net 2 "+5V")
@@ -128,7 +129,8 @@ fn resistor_overpower_faults() {
     (pad 2 smd roundrect (at 2 0) (net 1 "GND"))
   )
 )
-"#.to_string();
+"#
+    );
     // Confirm the footprint-derived rating is the 0402 value.
     assert!(
         (resistor_power_from_footprint("Resistor_SMD:R_0402_1005Metric") - 1.0 / 16.0).abs() < 1e-9

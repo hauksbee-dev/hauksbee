@@ -544,7 +544,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model,
+                model: model.clone(),
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),
@@ -695,7 +695,7 @@ mod tests {
                 c: col,
                 b,
                 e: mid,
-                model,
+                model: model.clone(),
             });
             c.add(Device::Resistor {
                 name: format!("MRb{k}"),
@@ -721,7 +721,7 @@ mod tests {
                 c: col,
                 b,
                 e: inner,
-                model,
+                model: model.clone(),
             });
             c.add(Device::Resistor {
                 name: format!("IRb{k}"),
@@ -828,7 +828,7 @@ mod tests {
                 c: col,
                 b: base,
                 e: rail,
-                model,
+                model: model.clone(),
             });
             c.add(Device::Resistor {
                 name: format!("Rb{k}"),

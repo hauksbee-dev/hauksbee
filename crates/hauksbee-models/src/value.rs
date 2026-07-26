@@ -232,8 +232,10 @@ fn fixup_tolerance_unit(unit: Option<String>, suffix: Option<&str>) -> Option<St
 
 /// Normalise unicode characters that appear in BOM values.
 fn normalise_unicode(s: &str) -> String {
-    s.replace(['\u{00b5}', '\u{03bc}'], "u") // μ → u (greek mu)
-        .replace(['\u{03a9}', '\u{2126}'], "R") // Ω (ohm sign) → R
+    s.replace('\u{00b5}', "u") // µ → u (micro sign)
+        .replace('\u{03bc}', "u") // μ → u (greek mu)
+        .replace('\u{03a9}', "R") // Ω → R
+        .replace('\u{2126}', "R") // Ω (ohm sign) → R
 }
 
 /// Core parser, operating on an ASCII string (after unicode normalisation).
@@ -901,7 +903,7 @@ mod tests {
         // magnitude stays 10 (the trailing token is ignored, as before the fix).
         let r = parse_value("10 5");
         assert!(
-            r.is_none_or(|v| (v.si - 10.5).abs() > 1e-9),
+            r.map_or(true, |v| (v.si - 10.5).abs() > 1e-9),
             "'10 5' must not silently fuse into 10.5"
         );
     }

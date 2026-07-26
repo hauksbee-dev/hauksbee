@@ -82,10 +82,11 @@ impl Layout {
         let mut next = n_real;
         for (_, dev) in circuit.iter() {
             if let Device::Bjt { model, .. } = dev {
-                if (model.rc > 0.0 || model.rb > 0.0 || model.re > 0.0)
-                    && bjt_internal_of.is_empty() {
+                if model.rc > 0.0 || model.rb > 0.0 || model.re > 0.0 {
+                    if bjt_internal_of.is_empty() {
                         bjt_internal_of = vec![[None; 3]; circuit.devices.len()];
                     }
+                }
             }
         }
         if !bjt_internal_of.is_empty() {
@@ -115,10 +116,11 @@ impl Layout {
         let mut mos_internal_of: Vec<[Option<usize>; 2]> = Vec::new();
         for (_, dev) in circuit.iter() {
             if let Device::Mosfet { model, .. } = dev {
-                if (model.rd > 0.0 || model.rs > 0.0)
-                    && mos_internal_of.is_empty() {
+                if model.rd > 0.0 || model.rs > 0.0 {
+                    if mos_internal_of.is_empty() {
                         mos_internal_of = vec![[None; 2]; circuit.devices.len()];
                     }
+                }
             }
         }
         if !mos_internal_of.is_empty() {
