@@ -172,8 +172,8 @@ struct PortState {
     /// ONLY; it never enables a circuit driver or fires a pin-change; it just
     /// lets a higher layer tell an output-low-held pin (driven LOW) from one the
     /// firmware never configured (floating). Keeping it out of the drive path is
-    /// deliberate: an earlier version that drove the circuit from DDR edges
-    /// latched open-drain pins low and clamped SPI nets, so this is read-only.
+    /// deliberate: driving the circuit from DDR edges latches open-drain pins
+    /// low and clamps SPI nets, so this stays strictly read-only.
     output_dir: u8,
 }
 
@@ -274,7 +274,9 @@ macro_rules! make_port_hook {
                     // The IRQ fires synchronously inside `avr_run`, so `avr->cycle`
                     // here is the EXACT cycle of this edge. Stamping it lets the
                     // scheduler replay a sub-µs SCLK burst in true order rather
-                    // than collapsing it to a level (numerical lore #8).
+                    // than collapsing it to a level: a pulse train reduced to a
+                    // single resting level loses the energy carried by its
+                    // edges, so the edges must survive and be integrated.
                     let cycle = if avr.is_null() {
                         0
                     } else {
@@ -660,8 +662,8 @@ impl AvrMcu {
             (*avr).frequency = frequency as u32;
             // Route simavr's own logging through hauksbee's debug channel. By
             // default simavr writes AVR_LOG lines straight to fd 2, including
-            // `avr_sadly_crashed`'s crash dump, which the persona panel saw leak
-            // into user-facing CI output when a boot assert ran without firmware.
+            // `avr_sadly_crashed`'s crash dump, which leaks into user-facing CI
+            // output when a boot assert runs without firmware.
             // AVR_LOG is gated on `avr->log`, so setting it to LOG_NONE (0)
             // silences the emulator's internal chatter unless the same
             // `HAUKSBEE_DEBUG` switch that opens the solver's debug channel is set
@@ -822,8 +824,8 @@ impl AvrMcu {
             // Bounds gate: simavr allocated exactly `flashend + 1` bytes of
             // flash for THIS part, and `copy_nonoverlapping` below trusts the
             // hex's own addresses. A hex built for a larger part (a mega2560
-            // image loaded onto a 328p) would memcpy straight past the buffer
-            //, silent heap corruption, not a diagnostic. The `.elf` path is
+            // image loaded onto a 328p) would memcpy straight past the buffer,
+            // silent heap corruption, not a diagnostic. The `.elf` path is
             // arch-gated; give the `.hex` path the equivalent fail-loud check.
             let flash_size = (*self.avr).flashend as usize + 1;
             let base = boot_base as usize;
@@ -1134,7 +1136,7 @@ mod cycle_budget_tests {
     }
 
     /// A clock that IS a multiple of the chunk rate never accrues carry, so
-    /// the behavior is bit-identical to the old plain division.
+    /// the behavior is bit-identical to plain division.
     #[test]
     fn exact_multiple_clock_never_carries() {
         let freq = 16_000_000; // 16 MHz -> 1600 cycles / 100 µs, no remainder
