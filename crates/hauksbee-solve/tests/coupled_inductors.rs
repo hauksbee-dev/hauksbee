@@ -5,13 +5,13 @@
 //!
 //! * **The k=1 trap.** A perfect-coupling group's inductance matrix
 //!   [[L1,M],[M,L2]] is exactly singular, and k=1 is legal on the card. The
-//!   companion stamps L directly (never inverts it), so the deck must SOLVE —
+//!   companion stamps L directly (never inverts it), so the deck must SOLVE,
 //!   the analytic gate below holds the k=1 transformer to the ideal-ratio
 //!   closed form.
 //! * **Island binding.** Two galvanically separate loops joined only by
 //!   mutual flux must fuse into ONE island (a branch-current coupling is
 //!   never a tear candidate), and the node-less Coupling device itself must
-//!   land IN that island's device list — a dropped Coupling would silently
+//!   land IN that island's device list, a dropped Coupling would silently
 //!   decouple the windings inside the island's own Layout.
 //! * **The LinearIsland refusal.** Coupling is `is_linear() == true`, so a
 //!   coupled RL island reaches the state-space reducer under Auto; the
@@ -115,7 +115,7 @@ fn last_cycle_amplitude(c: &Circuit, wf: &Waveforms, node: &str, tstop: f64) -> 
 // --- the k=1 trap -------------------------------------------------------------
 
 /// Exact phasor solve of the two-winding fixture at frequency `f` for unit
-/// drive — valid for EVERY k including 1 (no matrix inversion, mirroring the
+/// drive, valid for EVERY k including 1 (no matrix inversion, mirroring the
 /// stamp): eliminate I2 = −Vs/RL from
 ///   Vin = I1·Rs + jw(L1 I1 + M I2),   Vs = jw(M I1 + L2 I2).
 fn closed_form_vsec(f: f64, k: f64, l1: f64, l2: f64, rs: f64, rl: f64) -> Complex64 {
@@ -132,7 +132,7 @@ fn closed_form_vsec(f: f64, k: f64, l1: f64, l2: f64, rs: f64, rl: f64) -> Compl
 /// inverted), and the steady-state secondary amplitude must land on the
 /// two-winding closed form (which at k=1 includes the magnetizing droop:
 /// wL1 = 62.8 ohm at 10 kHz shunts the 250-ohm reflected load, so the exact
-/// value is well below the ideal 1.667 V — grading against the ideal would
+/// value is well below the ideal 1.667 V, grading against the ideal would
 /// be grading the wrong physics). The ngspice deck xfmr_k1 pins the exact
 /// waveform; this gate needs no oracle installed.
 #[test]
@@ -186,7 +186,7 @@ fn without_coupling_secondary_is_dead() {
 /// Two loops sharing only ground are two islands without the K card; with it
 /// they must fuse into ONE island whose device list contains BOTH windings
 /// AND the node-less Coupling itself (sub-circuit extraction rebuilds the
-/// island's own Layout from that list — a missing Coupling would silently
+/// island's own Layout from that list, a missing Coupling would silently
 /// decouple the windings there, the §1 hazard class).
 #[test]
 fn coupling_binds_would_be_separate_islands() {

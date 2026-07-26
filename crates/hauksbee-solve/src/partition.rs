@@ -74,7 +74,7 @@ pub struct Island {
     pub nodes: Vec<NodeId>,
     /// True iff every device in the island is linear (no Newton needed).
     pub linear: bool,
-    /// Boundary nodes this island depends on but does not own — driven by an
+    /// Boundary nodes this island depends on but does not own, driven by an
     /// ideal source or shared with another island. The orchestrator supplies
     /// their voltages each step.
     pub boundary_in: Vec<NodeId>,
@@ -82,13 +82,13 @@ pub struct Island {
 
 /// A shunt-fed rail tear: an internal supply rail node (e.g. `ANALOG_VDD`) that
 /// is fed from a pinned source rail (e.g. `+5V`) through a *single* series
-/// resistor — a current-sense shunt or supply impedance — and is shared by many
+/// resistor, a current-sense shunt or supply impedance, and is shared by many
 /// otherwise-independent nonlinear blocks (the current-mirror emitters).
 ///
 /// Because the rail couples the blocks only through one scalar (its voltage),
 /// the system is bordered-block-diagonal: it decomposes EXACTLY into the per-
 /// block islands plus a single scalar KCL balance at the rail. The driver solves
-/// that balance by tearing — pin the rail to a trial voltage, solve every block,
+/// that balance by tearing, pin the rail to a trial voltage, solve every block,
 /// sum the block currents drawn from the rail, and adjust the rail voltage until
 /// the shunt current matches. At convergence this reproduces the monolithic
 /// solution bit-for-bit within Newton tolerance; nothing is approximated.
@@ -103,7 +103,7 @@ pub struct RailTear {
     /// Series resistance of the shunt (Ω).
     pub r_shunt: f64,
     /// Other linear devices that also tie to the rail and have a free (non-rail,
-    /// non-pinned) terminal — e.g. membrane pull-up resistors. These couple only
+    /// non-pinned) terminal, e.g. membrane pull-up resistors. These couple only
     /// through the rail voltage and are accounted for via their islands' boundary
     /// currents. A rail load with NO free terminal (e.g. a rail-to-ground bypass
     /// capacitor) would be dropped by the island analysis and its current lost,
@@ -163,7 +163,7 @@ impl Partition {
     }
 
     /// Core analysis. `extra_pinned` nodes are treated as boundary inputs (not
-    /// unioned through), exactly like ideal-source-pinned nodes — used for rail
+    /// unioned through), exactly like ideal-source-pinned nodes, used for rail
     /// tear nodes. `tear_shunts` are the tears' series feed resistors: their
     /// currents are the analytic `(v_feed - v_rail)/R` terms of the balance
     /// equations, so they must NOT also become boundary-only islands (that
@@ -189,7 +189,7 @@ impl Partition {
         // If the source stayed a cut, its branch unknown would live in no
         // island's sub-system (cut sources are global, applied as pinned
         // boundary voltages only) and the F/H stamp would have no column to
-        // write — not even a lagged one. So "union the F/H island with the
+        // write, not even a lagged one. So "union the F/H island with the
         // control source's island" (04-spice-compat.md §2.2) concretely means
         // DEMOTING the control source from cut to ordinary island member:
         //
@@ -204,7 +204,7 @@ impl Partition {
         // control source's free nodes, because the F/H's node list does not
         // contain the control terminals (the control is a device reference).
         // Cost: a supply that doubles as a control probe un-cuts and fuses its
-        // legs into one island — conservative, exact, merely slower. If the
+        // legs into one island, conservative, exact, merely slower. If the
         // demoted source still ends up with every terminal pinned (a probe
         // wedged directly between two supply rails), it is dropped from
         // islands like any all-pinned device; the executor detects the missing
@@ -277,7 +277,7 @@ impl Partition {
         // Controlled sources (Vcvs/Vccs) take this default path ON PURPOSE:
         // only INDEPENDENT sources are cut. A VCVS pins its output-port
         // differential like a Vsource, but its value is the live control-pair
-        // voltage, not a known time function — cutting the output while the
+        // voltage, not a known time function, cutting the output while the
         // control sits in another island would replay the control across a
         // Gauss-Seidel step lag, exactly the O(dt) coupling error the tear
         // rules forbid. So a dependent source never cuts: it unions its
@@ -297,7 +297,7 @@ impl Partition {
                 .collect();
             // F/H (and behavioral `I(...)` deps): the control terminals are
             // not in `nodes()` (the control is a device reference), so the
-            // fuse the doc comment above promises needs an explicit edge —
+            // fuse the doc comment above promises needs an explicit edge,
             // union this device's free nodes with EVERY control source's free
             // nodes. (A B-source's `V(node)` deps need nothing here: they ARE
             // in `nodes()`, so the default union above already fuses them,
@@ -339,14 +339,14 @@ impl Partition {
             if matches!(dev, Device::Vsource { .. }) && !ctrl_demoted[id.0 as usize] {
                 continue; // global, not in any island (demoted probes stay)
             }
-            // A K-coupling has NO nodes of its own, so `rep` sees nothing —
+            // A K-coupling has NO nodes of its own, so `rep` sees nothing,
             // but it must NOT drop from islands: sub-circuit extraction
             // rebuilds each island's own Layout, and a coupling absent from
             // the device list would silently decouple the windings there (the
             // silent-drop hazard class of 04-spice-compat.md §1). Its island
-            // is its windings' island — ONE island by construction, because
+            // is its windings' island, ONE island by construction, because
             // the `controlling_sources` union above fused the two windings'
-            // free nodes — so borrow the first winding rep. If BOTH windings
+            // free nodes, so borrow the first winding rep. If BOTH windings
             // are all-pinned (dropped from islands themselves), the coupling
             // drops with them, consistently.
             let coupling_rep = || -> Option<usize> {
@@ -560,7 +560,7 @@ fn pinned_nodes(circuit: &Circuit, n_nodes: usize) -> Vec<bool> {
 /// A node `rail` qualifies as a tear iff ALL of:
 ///   * it is NOT itself pinned by an ideal source;
 ///   * exactly one resistor connects it to a *pinned* node (the sense shunt /
-///     supply impedance) — call that node `feed`;
+///     supply impedance), call that node `feed`;
 ///   * no ideal voltage source touches `rail` (it is genuinely internal);
 ///   * at least [`TEAR_MIN_NONLINEAR_FANOUT`] nonlinear devices touch `rail`
 ///     (it is the shared rail of a current-mirror array, not an incidental net).
@@ -631,12 +631,12 @@ fn detect_rail_tears(circuit: &Circuit) -> Vec<RailTear> {
         let (feed, shunt, r_shunt) = shunt_links[rail][0];
         // Other linear loads tied to the rail (e.g. membrane pull-up resistors)
         // are recorded for diagnostics; they live in their blocks' islands and
-        // are accounted for through the rail voltage automatically — UNLESS a
+        // are accounted for through the rail voltage automatically, UNLESS a
         // device
         // connects ONLY between the rail and already-pinned/ground nodes. Such a
         // device (e.g. a rail-to-ground decoupling capacitor) has no free node,
         // so `analyze_inner` drops it from every island and its current would be
-        // silently excluded from the rail balance — diverging from the monolithic
+        // silently excluded from the rail balance, diverging from the monolithic
         // engine, which stamps it on the single rail node. We CANNOT account for
         // its current with the boundary-source bookkeeping, so we reject the tear
         // entirely and fall back to the monolithic path (exact, just not torn).

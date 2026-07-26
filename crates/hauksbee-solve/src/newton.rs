@@ -38,7 +38,7 @@ pub struct Workspace {
     /// Persistent linearization-point buffer: a snapshot of `x` taken at the top
     /// of each Newton iteration (the point the Jacobian is stamped at), replacing
     /// the per-iteration `x.clone()`. Fully overwritten each iteration before any
-    /// read, so its lifetime — not its value history — is all that changed (plan
+    /// read, so its lifetime, not its value history, is all that changed (plan
     /// §4.3).
     lin_point: Vec<f64>,
     /// Persistent buffer holding the PREVIOUS iteration's linearization point,
@@ -109,13 +109,13 @@ pub struct Workspace {
     /// a behavioral-expression error (`stamp::take_behavioral_fault`): an
     /// expression that errored or went non-finite at some iterate. Cleared at
     /// the top of every `newton_solve`, so `Some` here always describes the
-    /// LAST attempt — the drivers append it to their final refusal message so
+    /// LAST attempt; the drivers append it to their final refusal message so
     /// a non-convergence caused by `ln(-2)` names the device instead of
     /// reading as generic Newton failure. Never set on a converged solve.
     behavioral_fault: Option<String>,
     /// Device-evaluation bypass caches (dev-plan 03 §6), built lazily on the
     /// first bypass-armed solve (`Workspace::new` does not see the options).
-    /// `None` on every run with `NewtonBypass::Off` — the default path never
+    /// `None` on every run with `NewtonBypass::Off`; the default path never
     /// allocates or consults it, which is the bit-identical-when-off contract.
     bypass: Option<Box<crate::bypass::BypassState>>,
     /// Transient-driver hold: set for the trials that follow an event-resolved
@@ -136,7 +136,7 @@ pub struct Workspace {
     spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
     /// TEST-ONLY probe of the stall/census norm plumbing: when armed
     /// (`Some`), every `newton_solve` iteration appends
-    /// `(stall_norm, post_globalizer_norm)` — the norm actually handed to the
+    /// `(stall_norm, post_globalizer_norm)`; the norm actually handed to the
     /// stall detector and census, and the node-step norm re-measured from
     /// `ws.x` AFTER the line search has rewritten it. The pair is what lets a
     /// unit test prove the detector sees the TRUE undamped step (the two
@@ -173,7 +173,7 @@ impl Workspace {
     }
 
     /// `(evaluations, skips)` of the device-evaluation bypass since this
-    /// workspace was built — `(0, 0)` when bypass never armed. Observability
+    /// workspace was built, `(0, 0)` when bypass never armed. Observability
     /// for tests and gates (the census carries the per-march view).
     pub fn bypass_counters(&self) -> (u64, u64) {
         self.bypass.as_ref().map_or((0, 0), |b| b.counters())
@@ -220,7 +220,7 @@ impl Workspace {
     /// `use_ic = false`; a transient initial-condition solve pins reactive nodes
     /// to their `.ic` via a penalty conductance, so measuring the residual with
     /// caps OPEN (`use_ic = false`) would report the KCL of a *different* system
-    /// than the one the iterate actually satisfies — making the ResidualAccept
+    /// than the one the iterate actually satisfies, making the ResidualAccept
     /// backstop reject a genuine IC operating point (or judge it against the
     /// wrong system). The caller passes the `use_ic` in force for that solve.
     pub fn dc_residual_inf_norm_with(
@@ -433,7 +433,7 @@ pub fn newton_solve(
     const ARMIJO_ALPHA_FLOOR: f64 = 1.0 / 64.0;
     // Device-evaluation bypass (dev-plan 03 §6): an explicit opt-in, and even
     // then only on the per-step transient Newton with self-deciding discrete
-    // states — never DC (reactive elements open/short and the staged ladder
+    // states, never DC (reactive elements open/short and the staged ladder
     // owns its own convergence story), never event-frozen inner solves (the
     // discrete state is mid-resolution), never the trials right after an
     // event-resolved accept (ws.bypass_hold, set by the transient driver),
@@ -592,7 +592,7 @@ pub fn newton_solve(
             // This can happen AT a valid solution of a diode-laden board: once
             // every signal diode is reverse-biased its tangent conductance is
             // ~1e-10 S, so a node reachable only through such junctions has an
-            // (almost) empty row and the frozen-ordering LU finds a zero pivot —
+            // (almost) empty row and the frozen-ordering LU finds a zero pivot,
             // even though the operating point itself is well-defined (anchored
             // by gmin). If the previous Newton step had already converged (the
             // current linearization point barely moved from the one before it),
@@ -688,7 +688,7 @@ pub fn newton_solve(
         // sees the GLOBALIZED step (use_alpha * max|dx|), not the Newton step.
         // The stall detector and the census/"maxdV(undamped)" readouts judge
         // limit-cycle progress on this norm; feeding them the globalized step
-        // registers phantom "progress" whenever the search backtracks — the
+        // registers phantom "progress" whenever the search backtracks; the
         // exact failure the post-damping ordering invariant on
         // `damp_node_steps` already guards against, one damper earlier. On the
         // paths where the line search is off, nothing touches ws.x between
@@ -803,7 +803,7 @@ pub fn newton_solve(
 
         // (Staged path only) damp ws.x in place. The undamped norm the census,
         // the "maxdV(undamped)" debug line and the stall detector report was
-        // captured ABOVE, before the line search — never re-derived from ws.x
+        // captured ABOVE, before the line search, never re-derived from ws.x
         // here, where it would be the globalized and/or damped step (see the
         // ordering invariant on `damp_node_steps`).
         #[cfg(test)]
@@ -903,14 +903,14 @@ pub fn newton_solve(
 /// Infinity-norm of the node-block step `ws.x - ws.lin_point` and the node
 /// index attaining it.
 ///
-/// ORDERING INVARIANT: call this on the FRESH Newton iterate — after the
+/// ORDERING INVARIANT: call this on the FRESH Newton iterate, after the
 /// backsolve writes ws.x, before EITHER globalizer (the Armijo line search or
 /// the staged per-node damping) rewrites it. Both are path globalizations:
 /// they shorten the step the iteration walks, not the distance to the root,
 /// so measuring after either one hands the stall detector a shrunken norm
 /// (use_alpha*|dx| after the search, alpha_node*|dx| after the damping) that
-/// registers phantom "progress" every backtracking iteration — resetting the
-/// stall counter on a genuine limit cycle — and misreports the
+/// registers phantom "progress" every backtracking iteration, resetting the
+/// stall counter on a genuine limit cycle, and misreports the
 /// census/"maxdV(undamped)" readouts. Same doctrine as the convergence
 /// predicates: judge on the undamped step, always.
 fn node_step_norm(ws: &Workspace) -> (f64, usize) {
@@ -930,7 +930,7 @@ fn node_step_norm(ws: &Workspace) -> (f64, usize) {
 ///
 /// Returns how many nodes the damping classified as oscillating this
 /// iteration (always 0 when `damp` is false). The undamped step norm is NOT
-/// measured here — see `node_step_norm` and its ordering invariant; on the
+/// measured here, see `node_step_norm` and its ordering invariant; on the
 /// line-search-armed path ws.x is already the globalized point by the time
 /// this runs, so a measurement taken here would be doubly wrong.
 ///
@@ -1046,7 +1046,7 @@ fn residual_inf_norm_at(
     // nothing, so the residual below would be measured against an incomplete
     // system and could look spuriously small. Poison the trial instead: +inf
     // is never accepted, the line search backtracks toward the last good
-    // point — a fault at a probe point is a reason to shorten the step, not
+    // point, a fault at a probe point is a reason to shorten the step, not
     // to kill the solve.
     if crate::stamp::take_behavioral_fault().is_some() {
         return f64::INFINITY;
@@ -1132,7 +1132,7 @@ pub fn dc_operating_point(
 /// initial conditions. SPICE `.ac` always linearizes around the ordinary DC
 /// operating point and ignores `.ic`/UIC. [`dc_operating_point`] sets `use_ic`
 /// whenever any cap/inductor carries an IC, which pins those elements to their
-/// IC (a cap with `ic` is shorted, an inductor's branch current is fixed) — the
+/// IC (a cap with `ic` is shorted, an inductor's branch current is fixed); the
 /// transient initial state, NOT the steady-state bias. Reusing that for AC would
 /// collapse the true bias and evaluate every nonlinear device tangent (diode gd,
 /// BJT gm/gpi/go, MOSFET gm/gds) at the wrong point, silently corrupting the
@@ -1171,7 +1171,7 @@ pub fn dc_operating_point_seeded(
 /// Copy each series-resistance BJT's EXTERNAL terminal voltages onto its
 /// device-private internal unknowns (dev-plan 04 §3.2). `.nodeset` can only
 /// name netlist nodes, so a cold start would otherwise leave the intrinsic
-/// nodes at zero volts behind a seeded external — putting the intrinsic
+/// nodes at zero volts behind a seeded external, putting the intrinsic
 /// junction back into the limiting-walk trap the nodeset was written to
 /// avoid. Through a small ohmic resistance "same voltage as the terminal" is
 /// the physically sensible guess. On the all-zero cold start this is a no-op
@@ -1196,7 +1196,7 @@ fn seed_bjt_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
 /// its device-private internal drain/source unknown. Cold-starting the internal
 /// nodes at zero volts behind an already-biased external terminal leaves the
 /// intrinsic channel evaluated at a wildly wrong Vds every first iteration, and
-/// the stiff power-FET transconductance then walks Newton off — even
+/// the stiff power-FET transconductance then walks Newton off, even
 /// source-stepping cannot recover it. "Same voltage as the terminal through a
 /// small ohmic resistance" is the physically sensible guess. On the all-zero
 /// cold start this is a no-op (0 -> 0), and a circuit without MOS internal
@@ -1248,7 +1248,7 @@ fn dc_solve(
 
     // Attempt 1: direct cold start. Normally the zero vector; but `.nodeset`
     // cards (SPICE-compat §4.1) seed the START VECTOR for named nodes. This is a
-    // convergence GUESS only — Newton is free to walk away from it (nothing is
+    // convergence GUESS only, Newton is free to walk away from it (nothing is
     // pinned), so on a well-posed circuit the root is unchanged, while on a
     // multi-stable one the seed selects which root is found. Every other node
     // stays zero, exactly as before.
@@ -1282,7 +1282,7 @@ fn dc_solve(
         ));
     }
 
-    // Attempt 2: gmin stepping — start with a large shunt and ramp it down.
+    // Attempt 2: gmin stepping, start with a large shunt and ramp it down.
     for v in ws.x.iter_mut() {
         *v = 0.0;
     }
@@ -1306,7 +1306,7 @@ fn dc_solve(
         eprintln!("[dc] gmin ladder failed (ok={ok})");
     }
 
-    // Attempt 3: source stepping — ramp every source from 0 to full.
+    // Attempt 3: source stepping, ramp every source from 0 to full.
     for v in ws.x.iter_mut() {
         *v = 0.0;
     }
@@ -1341,7 +1341,7 @@ fn dc_solve(
     //       capacitor (open at DC), so its row is numerically singular at the
     //       default gmin of 1e-12.
     // Fix both: solve a RELAXED circuit first (every diode replaced by its OFF
-    // state, a large linear leak resistor — what a reverse-biased junction is to
+    // state, a large linear leak resistor, what a reverse-biased junction is to
     // first order), then warm-start the FULL circuit from that operating point
     // while holding gmin at a floor that anchors the otherwise-floating high-Z
     // nodes.
@@ -1411,7 +1411,7 @@ fn dc_solve(
             // because the LMV7219 comparators are bang-bang: as Newton settles
             // the analog core, a comparator input crosses threshold, its output
             // swings rail-to-rail, and that swing destabilizes the inputs feeding
-            // it — a limit cycle (verified: the per-iteration node delta pins at
+            // it, a limit cycle (verified: the per-iteration node delta pins at
             // the damping cap once the analog part has converged). The cure is to
             // FREEZE each comparator's decision for an inner solve (making the
             // circuit smooth so Newton converges), then re-evaluate the decisions
@@ -1656,7 +1656,7 @@ impl SpdtPairs {
 /// BREAK-BEFORE-MAKE: for the two complementary legs of one SPDT (paired in
 /// `pairs`), both legs are NEVER allowed ON in the same frozen state. During the
 /// flip the smooth tanh conductance of each leg would otherwise make the common
-/// node simultaneously low-Z to BOTH throws (GND and the output membrane) — the
+/// node simultaneously low-Z to BOTH throws (GND and the output membrane); the
 /// multi-decade conductance snap that makes the per-step Newton matrix singular.
 /// When both legs of a pair evaluate ON, the leg whose control sits LESS firmly
 /// in its on-region is forced OFF (break) so the other can make. The
@@ -1745,7 +1745,7 @@ fn staged_event_solve(
     // switches each carry a tanh conductance whose control sits near transition
     // for the coupled core, so both must be held fixed for the inner circuit to
     // be smooth (otherwise a flipping switch flips the synapse current that
-    // flips a comparator that flips the switch — the measured limit cycle on the
+    // flips a comparator that flips the switch; the measured limit cycle on the
     // switch-control / BJT-base nodes).
     let spdt = SpdtPairs::analyze(circuit);
     let mut cmp_states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
@@ -1803,7 +1803,7 @@ fn staged_event_solve(
 /// Event-driven TRANSIENT step solve: the per-step analogue of
 /// [`staged_event_solve`]. Where the bare per-step [`newton_solve`] limit-cycles
 /// at a comparator/switch flip (the synapse spike-gate SPDT snapping multiple
-/// conductance decades while it carries real mirror current — "Newton failed at
+/// conductance decades while it carries real mirror current, "Newton failed at
 /// t~133us"), this freezes BOTH the comparator and the analog-switch discrete
 /// states for each inner solve (making the step a smooth circuit Newton can
 /// converge), re-derives every state from the converged inner solution
@@ -1822,9 +1822,9 @@ fn staged_event_solve(
 ///
 /// DAMPED PARTIAL FLIP: the bare DC event loop flips every disagreeing state at
 /// once and can cycle (the brief's "fails at pass 1, 369 flips don't settle").
-/// Here the re-derivation is bounded — at most `MAX_FLIPS_PER_PASS` switches are
+/// Here the re-derivation is bounded, at most `MAX_FLIPS_PER_PASS` switches are
 /// allowed to change state per Gauss-Seidel pass, chosen by largest control
-/// over/under-drive — so the discrete state walks toward consistency instead of
+/// over/under-drive, so the discrete state walks toward consistency instead of
 /// thrashing. Comparators (few, and the spike driver) are not throttled.
 #[allow(clippy::too_many_arguments)]
 pub fn newton_solve_event(
@@ -1935,7 +1935,7 @@ pub fn newton_solve_event(
 
         // Comparators flip freely (few, and they DRIVE the event). When the
         // comparators are self-deciding (cmp_smooth), their state isn't frozen so
-        // there is no frozen-vs-derived flip to count — consistency is automatic
+        // there is no frozen-vs-derived flip to count, consistency is automatic
         // (the smooth transfer always agrees with its own inputs), so the loop's
         // fixed point is governed by the switch set alone.
         let cmp_flips = if cmp_smooth {
@@ -1946,7 +1946,7 @@ pub fn newton_solve_event(
 
         // Switches: bound how many flip this pass. Rank the disagreeing switches
         // by how far their control has moved past the relevant threshold and flip
-        // only the most-committed handful — a damped Gauss-Seidel that walks
+        // only the most-committed handful, a damped Gauss-Seidel that walks
         // toward the consistent state instead of flipping all 369 at once (which
         // cycles). The break-before-make in want_sw already guarantees no SPDT
         // pair is both-on, so flipping a subset never shorts the summing bus.
@@ -1997,7 +1997,7 @@ pub fn newton_solve_event(
 /// seed, solve a sequence of circuits whose diode `is` is scaled from a tiny
 /// fraction up to 1.0, warm-starting each solve from the previous converged
 /// point. Returns the operating point of the FULL circuit (scale 1.0, the real
-/// `is`) — the true diode-laden DC root — or `None` if any step fails.
+/// `is`), the true diode-laden DC root, or `None` if any step fails.
 ///
 /// Why this works where a cold full solve limit-cycles: at small `is` the diodes
 /// barely conduct (close to the relaxed circuit that converged), so Newton
@@ -2046,7 +2046,7 @@ fn solve_diode_is_homotopy(
         // continuation has left the basin and we give up (caller falls back).
         ws.x.copy_from_slice(&x);
         // Use the plain seeded Newton at the staged gmin (no recursion into the
-        // staged ladder — we are already inside it and supply the warm start).
+        // staged ladder; we are already inside it and supply the warm start).
         let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(work.devices.len());
         let r = newton_solve(&mut ws, &work, opts, 0.0, 1.0, coeffs, &empty, true, false, staged_gmin, 1.0);
@@ -2092,7 +2092,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     }
     let mut ws = Workspace::new(&relaxed);
     // Cold solve of the relaxed circuit (no seed). It is far better conditioned
-    // than the full one: the diode nonlinearity is gone — and so is the BJT
+    // than the full one: the diode nonlinearity is gone, and so is the BJT
     // intrinsic mesh (dev-plan 04 §3.2): `series_resistance` is relaxed OFF,
     // which pins each internal unknown behind a unit diagonal and puts the
     // Gummel-Poon cores back on the external nodes, the base-topology system
@@ -2100,7 +2100,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     // with the intrinsic rb/rc/re mesh live, cold source-stepping limit-cycles
     // on the mirror pairs' internal nodes at scale ~0.2 and the whole staged
     // DC dies). The full-toggle solve then warm-starts from this converged
-    // point with the internal unknowns seeded from their external terminals —
+    // point with the internal unknowns seeded from their external terminals,
     // the same relax-then-continue discipline the diode OFF-conductance swap
     // embodies. For a circuit with no series-R BJT both changes are no-ops.
     let mut relaxed_opts = *opts;
@@ -2323,7 +2323,7 @@ mod residual_tests {
         // must IGNORE initial conditions. A 1 V divider (two equal 1k) with a cap
         // across the lower leg carrying ic=0: the TRUE DC bias floats the cap open,
         // so the midpoint sits at 0.5 V. `dc_operating_point` honors the ic (pins
-        // the cap, shorting the midpoint to 0 V) — correct for the transient
+        // the cap, shorting the midpoint to 0 V), correct for the transient
         // initial state but WRONG for AC, where it would evaluate every nonlinear
         // tangent at a collapsed bias. `dc_operating_point_no_ic` (used by AC) must
         // return the real 0.5 V bias regardless of the ic.
@@ -2358,7 +2358,7 @@ mod residual_tests {
         );
 
         // The ic-honoring path (transient initial state) pins the cap to ic=0,
-        // shorting the midpoint — proving the two paths genuinely differ, so
+        // shorting the midpoint, proving the two paths genuinely differ, so
         // reusing it for AC would corrupt the bias.
         let mut ws_ic = Workspace::new(&c);
         dc_operating_point(&mut ws_ic, &c, &opts).unwrap();
@@ -2390,7 +2390,7 @@ mod residual_tests {
         c.add(Device::Resistor { name: "R1".into(), a: top, b: mid, ohms: 1e3, tc1: None });
         c.add(Device::Resistor { name: "R2".into(), a: mid, b: NodeId::GROUND, ohms: 1e3, tc1: None });
         // Cap across the lower leg pinned to ic=0, so the ic solve holds mid at 0 V
-        // — far from the true 0.5 V divider bias, giving the caps-open KCL a large
+        //, far from the true 0.5 V divider bias, giving the caps-open KCL a large
         // imbalance at this iterate.
         c.add(Device::Capacitor {
             name: "C1".into(),
@@ -2412,11 +2412,11 @@ mod residual_tests {
         );
 
         // With caps OPEN (the old hard-coded use_ic=false), the pinned node shows
-        // ~1 mA of KCL imbalance — the false rejection ResidualAccept would make.
+        // ~1 mA of KCL imbalance; the false rejection ResidualAccept would make.
         let r_open = ws.dc_residual_inf_norm_with(&c, &opts, false);
         assert!(
             r_open > 1e-4,
-            "the caps-open residual at the IC point is large, {r_open:e} — measuring \
+            "the caps-open residual at the IC point is large, {r_open:e}, measuring \
              it there is the bug"
         );
         // The no-arg form is the caps-open one, confirming the default is unchanged.
@@ -2634,7 +2634,7 @@ mod switch_freeze_tests {
     // This exercises the switch half of the Gauss-Seidel loop end-to-end and
     // confirms the returned vector is a self-consistent root.
     //
-    // (The freeze is correct precisely when the root is saturated — pinning a
+    // (The freeze is correct precisely when the root is saturated, pinning a
     // switch to a rail cannot represent a switch whose true solution is partial
     // conduction at its own knee; that case is handled by the smooth tanh path
     // with the new control tangent, not the freeze. The limit-cycle cure's
@@ -2719,12 +2719,12 @@ mod staged_stall_norm_tests {
     // UNDAMPED Newton step, not the damped one. The per-node oscillation damping
     // overwrites ws.x in place with `lin_point + alpha*full`, alpha shrinking
     // geometrically (0.25, 0.125, ... to a ~1e-3 floor) for every consecutive
-    // oscillating iteration — so a post-damping `|x - lin_point|` KEEPS shrinking
+    // oscillating iteration, so a post-damping `|x - lin_point|` KEEPS shrinking
     // on a genuine limit cycle whose undamped amplitude is CONSTANT. A detector
     // fed that damped norm sees phantom "progress" every iteration, resets its
     // counter, and delays the STALL_WINDOW early bail by ~9 extra full
     // (assemble+refactor+solve) iterations. The norm must therefore be
-    // captured by `node_step_norm` BEFORE `damp_node_steps` rewrites ws.x —
+    // captured by `node_step_norm` BEFORE `damp_node_steps` rewrites ws.x,
     // the same measure-then-damp call order `newton_solve` uses (R15: the
     // measure moved further up still, ahead of the Armijo line search, which
     // is the OTHER globalizer that rewrites ws.x and contaminated the norm
@@ -2736,7 +2736,7 @@ mod staged_stall_norm_tests {
     // every iteration even as the damped step in ws.x shrinks, (b) the stall
     // detector arithmetic fed that norm bails right after STALL_WINDOW, and
     // (c) the same arithmetic fed the post-damping norm (the old, broken
-    // quantity) would NOT have bailed within the same horizon — the exact
+    // quantity) would NOT have bailed within the same horizon; the exact
     // failure mode being regressed against.
     #[test]
     fn stall_norm_is_the_undamped_step_not_the_damped_one() {
@@ -2754,7 +2754,7 @@ mod staged_stall_norm_tests {
 
         for k in 0..rounds {
             // Mimic the solver: linearize at the current iterate, then the
-            // "solve" proposes the opposite rail — a constant-amplitude
+            // "solve" proposes the opposite rail, a constant-amplitude
             // two-cycle, the textbook staged-DC limit cycle.
             ws.lin_point.copy_from_slice(&ws.x);
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
@@ -2775,7 +2775,7 @@ mod staged_stall_norm_tests {
             }
 
             // The damped step left in ws.x shrinks geometrically while the
-            // undamped amplitude does not — the regime that fooled the old
+            // undamped amplitude does not; the regime that fooled the old
             // detector. (alpha halves each consecutive oscillation until the
             // shrink exponent saturates at iteration 9.)
             let damped = (ws.x[0] - ws.lin_point[0]).abs();
@@ -2818,7 +2818,7 @@ mod staged_stall_norm_tests {
         );
         assert!(
             !damped_bailed,
-            "measuring the DAMPED step must not have bailed in this horizon — if it did, \
+            "measuring the DAMPED step must not have bailed in this horizon, if it did, \
              the scripted cycle no longer distinguishes the undamped from the damped norm"
         );
     }
@@ -2929,11 +2929,11 @@ mod line_search_convergence_tests {
 
     // The bug this guards (R15): the stall detector and census were handed a
     // node-step norm measured AFTER the Armijo line search had rewritten
-    // ws.x = lin_point + use_alpha*dx — i.e. use_alpha * max|dx|, the
+    // ws.x = lin_point + use_alpha*dx, i.e. use_alpha * max|dx|, the
     // GLOBALIZED step, under a contract that promises the TRUE undamped step.
     // On the TransientDyn path (branch_reg > 0 AND the line search armed,
     // exactly as the transient driver arms them) a hard-backtracking limit
-    // cycle therefore fed the detector a shrunken, alpha-modulated norm —
+    // cycle therefore fed the detector a shrunken, alpha-modulated norm,
     // phantom "progress" of the same species the post-damping ordering
     // invariant already guards one globalizer later. Same board as above (the
     // rootless V forces the alpha floor on every iteration), instrumented
@@ -2973,13 +2973,13 @@ mod line_search_convergence_tests {
         // not the undamped step at all.
         // (b) At least one iteration backtracked hard (this board exists to
         // force the alpha floor), and there the two norms must genuinely
-        // diverge — under the R15 bug they are EQUAL on every iteration.
+        // diverge, under the R15 bug they are EQUAL on every iteration.
         let mut hard_backtracks = 0usize;
         for (k, &(stall_norm, post_ls_norm)) in probe.iter().enumerate() {
             assert!(
                 stall_norm >= post_ls_norm * (1.0 - 1e-12),
                 "iter {k}: stall norm {stall_norm:.6e} below the globalized \
-                 step {post_ls_norm:.6e} — not the undamped step"
+                 step {post_ls_norm:.6e}, not the undamped step"
             );
             if post_ls_norm < stall_norm * 0.25 {
                 hard_backtracks += 1;

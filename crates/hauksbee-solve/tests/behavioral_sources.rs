@@ -2,8 +2,8 @@
 //! `docs/dev-plans/04-spice-compat.md` §1 and §2.5.
 //!
 //! The B-source is the maximal-coupling device: its expression may read node
-//! voltages (`V(node)` — sense edges, like an E/G control pair), branch
-//! currents (`I(vname)` — device references, like an F/H control), and time,
+//! voltages (`V(node)`, sense edges, like an E/G control pair), branch
+//! currents (`I(vname)`, device references, like an F/H control), and time,
 //! all at once. The gates that matter most:
 //!
 //! * **Island fusion, both dependency kinds.** A `V(node)` dep must fuse the
@@ -11,11 +11,11 @@
 //!   cut), while the conduction graph keeps them separate islands with the
 //!   coupling visible as a cross-island SENSE edge (the free-tear vocabulary).
 //!   An `I(vname)` dep must demote the ammeter from cut to island member and
-//!   fuse — a branch-current read has no node-replay, so it is never a tear
+//!   fuse, a branch-current read has no node-replay, so it is never a tear
 //!   candidate and contributes NO sense edge.
 //! * **The named-fault refusal.** An expression that errors mid-solve
 //!   (`ln` of a negative iterate, division by zero) must surface as a
-//!   device-named refusal from the DC / transient drivers — never a silent
+//!   device-named refusal from the DC / transient drivers, never a silent
 //!   NaN in the matrix, never a truncated waveform.
 //! * **Never silently dropped.** Under `Partitioning::Auto` the waveform must
 //!   match the bit-exact `Off` monolith AND the analytic value a dropped
@@ -30,7 +30,7 @@ use hauksbee_solve::{
     Partition, Partitioning, Probe, SolverOptions, StepControl, Sweep, Transient, Workspace,
 };
 
-/// Driver leg: `V1 -> R -> ctrl` with a capacitor to ground — the island whose
+/// Driver leg: `V1 -> R -> ctrl` with a capacitor to ground; the island whose
 /// voltage the B-source senses. (Same shape as the controlled-sources gates.)
 fn add_driver_leg(c: &mut Circuit) -> NodeId {
     let vin = c.node("in");
@@ -105,7 +105,7 @@ fn behavioral_vdep(out: NodeId, ctrl: NodeId, voltage_out: bool) -> Device {
 
 /// A V(node) dep fuses the sensed island with the output island in the
 /// partitioner (like an E/G control pair), and the fused island is TAINTED
-/// nonlinear — which is itself the LinearIsland gate: `compile` refuses any
+/// nonlinear, which is itself the LinearIsland gate: `compile` refuses any
 /// non-linear island before it ever walks devices.
 #[test]
 fn behavioral_vdep_fuses_islands_and_taints_nonlinear() {
@@ -134,7 +134,7 @@ fn behavioral_vdep_fuses_islands_and_taints_nonlinear() {
             "a behavioral source must taint its island nonlinear"
         );
         assert_eq!(p.sources.len(), 1, "only V1 is a cut source");
-        // The LinearIsland walk refuses the island (nonlinear gate) — the
+        // The LinearIsland walk refuses the island (nonlinear gate); the
         // exhaustive-match arm exists for the day a `linear`-classified
         // island ever carries one, and refusing is exact either way.
         assert!(
@@ -146,7 +146,7 @@ fn behavioral_vdep_fuses_islands_and_taints_nonlinear() {
 
 /// The decompose layer sees the same structure through the W1 classifier: the
 /// two legs stay separate CONDUCTION islands (a V(node) dep carries no
-/// current) with the coupling visible as a cross-island sense edge — the plan
+/// current) with the coupling visible as a cross-island sense edge; the plan
 /// §2.5 declaration that the B-source reads across the tear boundary.
 #[test]
 fn behavioral_vdep_is_a_cross_island_sense_edge() {
@@ -214,7 +214,7 @@ fn add_sensed_driver_leg(c: &mut Circuit) -> DeviceId {
 }
 
 /// An I(vname) dep must DEMOTE the ammeter from cut to island member and fuse
-/// everything into one island containing it — the F/H rule, reached through
+/// everything into one island containing it; the F/H rule, reached through
 /// the B-source's plural `controlling_sources` path.
 #[test]
 fn behavioral_idep_demotes_ammeter_and_fuses() {
@@ -296,7 +296,7 @@ fn behavioral_voltage_dc_matches_analytic() {
 }
 
 /// I-output DC with a genuinely nonlinear expression: `I={1m*tanh(v(a))}`
-/// pulled out of a 1 k load gives `v_out = -1000 * 1e-3 * tanh(v_a)` — the
+/// pulled out of a 1 k load gives `v_out = -1000 * 1e-3 * tanh(v_a)`; the
 /// closed form a dropped or mislinearized stamp cannot hit. Also proves the
 /// mixed V+I dependency stamp: a second term reads the ammeter current.
 #[test]
@@ -434,7 +434,7 @@ fn auto_partitioning_never_drops_behavioral() {
 // --- the named-fault refusal path ---------------------------------------------
 
 /// A DC solve whose B expression is poisoned at the operating point (`ln` of
-/// a pinned negative voltage) must refuse with the DEVICE NAME — never emit a
+/// a pinned negative voltage) must refuse with the DEVICE NAME, never emit a
 /// NaN operating point.
 #[test]
 fn dc_fault_names_the_device() {
@@ -453,7 +453,7 @@ fn dc_fault_names_the_device() {
     );
 }
 
-/// Division by zero (an INF value, not an eval error — IEEE semantics) is the
+/// Division by zero (an INF value, not an eval error, IEEE semantics) is the
 /// same named refusal.
 #[test]
 fn dc_division_by_zero_names_the_device() {
@@ -473,7 +473,7 @@ fn dc_division_by_zero_names_the_device() {
 }
 
 /// A transient march whose expression goes bad MID-RUN (`ln(0.5 - time)`
-/// collapses at t = 0.5 s) must refuse loudly with the device name — the
+/// collapses at t = 0.5 s) must refuse loudly with the device name; the
 /// waveform is never silently truncated or continued through NaN.
 #[test]
 fn transient_fault_names_the_device_and_refuses() {
@@ -605,7 +605,7 @@ fn time_dependent_behavioral_matches_sin_source() {
 }
 
 /// The compiled two-tier assembly must agree with the interpreted walk on a
-/// B-source deck (the Slotted table now carries branch and control columns —
+/// B-source deck (the Slotted table now carries branch and control columns,
 /// new plan.rs code under test).
 #[test]
 fn planned_assembly_matches_interpreted_on_behavioral_deck() {

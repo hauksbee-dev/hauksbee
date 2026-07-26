@@ -84,7 +84,7 @@ fn at(time: &[f64], wave: &[f64], t: f64) -> f64 {
 }
 
 /// (1) Finite `pole_hz`: a step input produces the first-order rise
-/// `v(t) = V·(1 - exp(-t/τ))`, τ = 1/(2π·pole_hz) — NOT an instantaneous
+/// `v(t) = V·(1 - exp(-t/τ))`, τ = 1/(2π·pole_hz), NOT an instantaneous
 /// jump. Checks the ~63% point at t = τ and the whole trajectory.
 #[test]
 fn pole_gives_first_order_rise_not_instant_jump() {
@@ -100,7 +100,7 @@ fn pole_gives_first_order_rise_not_instant_jump() {
     let first = at(&time, &out, dt);
     assert!(
         first < 0.05 * v,
-        "output jumped to {first} V one step in — pole ignored in transient"
+        "output jumped to {first} V one step in, pole ignored in transient"
     );
 
     // ~63.2% at t = τ.
@@ -155,7 +155,7 @@ fn slew_limits_step_to_linear_ramp() {
 }
 
 /// (3) No pole, no slew (absent or zero): the output still matches the old
-/// instantaneous ideal — the classic behavior is the degradation target.
+/// instantaneous ideal; the classic behavior is the degradation target.
 #[test]
 fn ideal_opamp_still_instantaneous() {
     let dt = 1e-7;
@@ -239,7 +239,7 @@ fn ac_margins_unchanged_by_slew() {
 /// island must produce the SAME output as the monolith. The partitioned engine
 /// omitted the `Device::OpAmp` arm from BOTH its reactive seed and its advance,
 /// so the op-amp's internal drive EMF was never seeded to the DC operating point
-/// nor rolled forward — `stamp_opamp` re-derived the output from a frozen v_prev
+/// nor rolled forward, `stamp_opamp` re-derived the output from a frozen v_prev
 /// of 0 every step and the bandwidth-limited output collapsed toward 0 instead
 /// of tracking gain·(v+−v−). Under `Partitioning::Auto` (fragmented by extra RC
 /// legs so the partitioned engine genuinely engages) the output must match

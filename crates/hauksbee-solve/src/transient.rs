@@ -75,13 +75,13 @@ impl Transient {
         // Pre-name branch current outputs, pairing each Vsource/Inductor with the
         // ABSOLUTE index of its branch-current unknown in `x`. Branch unknowns are
         // NOT contiguous per device kind: `Layout` assigns one to every
-        // branch-owning device — Vsource, Inductor, VCVS, CCVS and a V-output
-        // behavioral source — interleaved in circuit order. A running offset over
+        // branch-owning device, Vsource, Inductor, VCVS, CCVS and a V-output
+        // behavioral source, interleaved in circuit order. A running offset over
         // the Vsource/Inductor-only list therefore lands on the wrong slot as soon
         // as a dependent voltage source precedes one of them; read each device's
         // real index via `Layout::branch(id)` instead. (The node block can also be
-        // larger than `node_count()` — a series-resistance BJT owns private
-        // internal unknowns there — which `Layout::branch` already accounts for.)
+        // larger than `node_count()`, a series-resistance BJT owns private
+        // internal unknowns there, which `Layout::branch` already accounts for.)
         let layout = crate::system::Layout::new(circuit);
         let mut branch_outputs: Vec<usize> = Vec::new();
         for (id, dev) in circuit.iter() {
@@ -159,7 +159,7 @@ impl Transient {
         let n_dev = circuit.devices.len();
 
         // Convergence doctrine for behavioral sources (dev-plan 04 §2.5):
-        // B-sources are where decks go to diverge — an arbitrary expression's
+        // B-sources are where decks go to diverge, an arbitrary expression's
         // tangent can overshoot Newton exactly like the traveling stiff-mesh
         // case the Armijo line search was built for. Their PRESENCE arms the
         // per-step line search unconditionally: it is a no-op on steps that
@@ -169,7 +169,7 @@ impl Transient {
         // globalization instead of a dt_min death. Decks WITHOUT a B-source
         // take the `false` branch and stay bit-identical (the flagship
         // fixture hash pins that). Heavier rungs (TransientDyn, staged
-        // regularizers) stay caller-granted — the corpus converges without
+        // regularizers) stay caller-granted; the corpus converges without
         // them, and a non-converged march still REFUSES loudly with the
         // device-named fault rather than emitting a wrong waveform.
         if circuit
@@ -271,7 +271,7 @@ impl Transient {
         // powers on from rest, ignoring any device initial conditions. Otherwise
         // seed it from the DC operating point as usual.
         //
-        // EXCEPTION: FromZero WITH `.ic` node voltages — seed the reactive state
+        // EXCEPTION: FromZero WITH `.ic` node voltages, seed the reactive state
         // from the now-nonzero ws.x so a capacitor spanning an `.ic` node starts
         // at the corresponding voltage (`seed_reactive_state` derives the cap
         // voltage from its node values), giving the physically-correct initial
@@ -368,8 +368,8 @@ impl Transient {
             }
             // Floor against LTE-rejection thrash FIRST, then clamp to the time
             // remaining to tstop. Order matters: clamping to (tstop - t) first
-            // and flooring second would push the final partial step — when the
-            // remaining time is below dt_min — back up past tstop, overshooting
+            // and flooring second would push the final partial step, when the
+            // remaining time is below dt_min, back up past tstop, overshooting
             // the requested stop by up to dt_min. The exact landing on tstop
             // wins over the floor: dt_min is a thrash guard, not a sampling
             // contract (same rationale as the breakpoint landing below).
@@ -421,7 +421,7 @@ impl Transient {
                 }
             }
             // Bypass hold (dev-plan 03 §6 discipline): the trials that follow
-            // an event-resolved accept must not bypass — the accepted pair
+            // an event-resolved accept must not bypass; the accepted pair
             // straddles the discontinuity the event loop just resolved, the
             // same reason the extrapolation seed is skipped there. Mirrors
             // `pred_skip_once`'s lifetime (true from an event-resolved accept
@@ -545,7 +545,7 @@ impl Transient {
             // (every comparator + switch state re-derived to a fixed point with
             // break-before-make). Bisecting toward the crossing here would throw
             // away that converged solution and re-seed a mid-transition step the
-            // bare Newton can't solve — the exact dt_min thrash that re-opened the
+            // bare Newton can't solve; the exact dt_min thrash that re-opened the
             // wall. With the event loop owning the discontinuity, accept the step.
             if !used_event {
             if let Some(frac) = crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes()) {
@@ -613,7 +613,7 @@ impl Transient {
                             // Breakpoint-truncated accept: the trial h was cut
                             // to the sliver `bp - t`, so its LTE is measured on
                             // the sliver and (err small) the growth factor
-                            // saturates at 2.0 — recomputing next_dt from this
+                            // saturates at 2.0, recomputing next_dt from this
                             // h would collapse dt to ~2x the sliver and force
                             // a geometric regrow after EVERY corner. The
                             // controller's dt was tuned on full-size steps and
@@ -621,7 +621,7 @@ impl Transient {
                             // is initialized to dt above): a corner costs
                             // exactly one exact landing, as the truncation
                             // comment promises. A rejected landing still
-                            // shrinks from the truncated h below — the error
+                            // shrinks from the truncated h below; the error
                             // there WAS measured on that h.
                         } else {
                             // Grow/shrink for next step from the error ratio.
@@ -687,7 +687,7 @@ impl Transient {
 /// At the operating point, capacitor voltage = node-voltage difference and
 /// inductor current = its branch current; derivatives are zero (DC). A
 /// charge-storing diode (dev-plan 04 §3.1) seeds its CHARGE `Q(vd)` at the
-/// operating-point junction voltage — its `ReactiveState` slots hold charge,
+/// operating-point junction voltage; its `ReactiveState` slots hold charge,
 /// not voltage, so the companion stamp's history terms integrate `i = dQ/dt`
 /// on the same machinery the linear capacitor uses.
 fn seed_reactive_state(
@@ -720,7 +720,7 @@ fn seed_reactive_state(
             // Charge-storing BJT (dev-plan 04 §3.2): both junction charges,
             // seeded at the operating-point INTRINSIC junction voltages
             // (internal nodes when series resistance is stamped). Bank A is
-            // Q_be, bank B is Q_bc — the packing `ReactiveState` documents.
+            // Q_be, bank B is Q_bc; the packing `ReactiveState` documents.
             Device::Bjt { c, b, e, model, .. }
                 if crate::stamp::bjt_has_charge(model, &opts.effects) =>
             {
@@ -733,7 +733,7 @@ fn seed_reactive_state(
                 state.xb[0].dx1[i] = 0.0;
             }
             // Charge-storing MOSFET (dev-plan 04 §3.3): all four charges at
-            // the operating-point junction voltages — bank A = Q_gs,
+            // the operating-point junction voltages, bank A = Q_gs,
             // xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs (the `ReactiveState`
             // packing table).
             Device::Mosfet { d, g, s, b, model, .. }
@@ -751,7 +751,7 @@ fn seed_reactive_state(
             }
             // Op-amp with output dynamics (pole_hz/slew): its state is the
             // internal drive EMF, seeded at the DC point's clipped ideal
-            // target — a single pole passes DC unattenuated, so the filtered
+            // target, a single pole passes DC unattenuated, so the filtered
             // EMF at the operating point IS the target. Ideal op-amps
             // (neither field set) never read the slot; the seed is harmless.
             Device::OpAmp {
@@ -952,8 +952,8 @@ fn advance_reactive_state(
             // used this step (`opamp_transient_output` is shared code), from
             // the same frozen previous EMF and the ACCEPTED input voltages.
             // At convergence this reproduces exactly the EMF the final
-            // Newton iteration stamped. Updated here — on step acceptance
-            // only, never mid-Newton — matching the capacitor's lifecycle.
+            // Newton iteration stamped. Updated here, on step acceptance
+            // only, never mid-Newton, matching the capacitor's lifecycle.
             // Ideal op-amps (no pole, no slew) return None and leave the
             // slot untouched.
             Device::OpAmp {
@@ -1046,7 +1046,7 @@ fn lte_estimate(
             }
             // A charge-storing diode is a reactive element: it participates in
             // truncation-error control through its CHARGE (the state its
-            // companion integrates), with `chgtol` as the absolute floor —
+            // companion integrates), with `chgtol` as the absolute floor,
             // SPICE's classic charge-based LTE. Charge-free diodes (`cjo == 0`,
             // `tt == 0`, or the toggle off) hit the `continue` below exactly as
             // before, so existing decks' step sequences are untouched.
@@ -1057,7 +1057,7 @@ fn lte_estimate(
                 (q, opts.chgtol)
             }
             // A charge-storing BJT participates through BOTH junction
-            // charges (chgtol floor each) — two states, two curvature
+            // charges (chgtol floor each), two states, two curvature
             // checks, same divided-difference estimator. Charge-free BJTs
             // hit the `continue` exactly as before.
             Device::Bjt { c, b, e, model, .. }
@@ -1069,7 +1069,7 @@ fn lte_estimate(
                 continue;
             }
             // A charge-storing MOSFET participates through all four charges
-            // (chgtol floor each) — gate charge is what shapes its switching
+            // (chgtol floor each), gate charge is what shapes its switching
             // edges, so it must gate the step size exactly as a capacitor
             // would. Charge-free MOSFETs hit the `continue` exactly as before.
             Device::Mosfet { d, g, s, b, model, .. }
@@ -1123,7 +1123,7 @@ fn lte_estimate(
 /// the controller is left to its own rhythm (once locked onto a periodic
 /// waveform the accepted-step history carries the curvature signal, so the
 /// cap loses the guarantee only for the tail, not the lock-on). PWL vertices
-/// and ramp kinks are finite by construction and are never truncated — they
+/// and ramp kinks are finite by construction and are never truncated; they
 /// are collected into a separate always-kept list ([`Corners`]) so the cap
 /// counts only PULSE corners and a dense periodic source can never evict a
 /// late PWL landing.
@@ -1131,13 +1131,13 @@ const MAX_BREAKPOINTS: usize = 100_000;
 
 /// Corner times split by whether they may be truncated. Keeping the two kinds
 /// apart is what lets the [`MAX_BREAKPOINTS`] cap bound only the unbounded
-/// PULSE enumeration without ever evicting a finite PWL vertex — see
+/// PULSE enumeration without ever evicting a finite PWL vertex, see
 /// [`breakpoint_table`].
 #[derive(Default)]
 struct Corners {
-    /// PWL vertices and ramp kinks — finite by construction, NEVER truncated.
+    /// PWL vertices and ramp kinks, finite by construction, NEVER truncated.
     always: Vec<f64>,
-    /// PULSE periodic corners — capped at [`MAX_BREAKPOINTS`] collectively.
+    /// PULSE periodic corners, capped at [`MAX_BREAKPOINTS`] collectively.
     capped: Vec<f64>,
 }
 
@@ -1309,7 +1309,7 @@ mod breakpoint_cap_tests {
     /// source enumerates far more than `MAX_BREAKPOINTS` corners ahead of it.
     /// The old single-list `truncate` kept only the earliest 100k times across
     /// ALL sources, so the PWL landing at 0.9 s was silently dropped behind the
-    /// PULSE burst that filled the cap in the first ~25 ms — exactly the
+    /// PULSE burst that filled the cap in the first ~25 ms, exactly the
     /// stride-over-a-pulse aliasing the breakpoint table exists to prevent.
     #[test]
     fn pwl_vertex_survives_a_cap_exhausting_pulse() {

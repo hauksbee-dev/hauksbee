@@ -8,8 +8,8 @@
 //! Compares the torn mirror arrays under `ParallelPolicy::Off` (the sequential
 //! reference, which does the same per-step work S3 shipped) against
 //! `ParallelPolicy::Auto` (the S4 pool), with the monolithic solve for
-//! context, and confirms the RC ladder guard board — where `Auto` correctly
-//! declines to parallelize — pays nothing. Every timed run asserts the same
+//! context, and confirms the RC ladder guard board, where `Auto` correctly
+//! declines to parallelize, pays nothing. Every timed run asserts the same
 //! rail-sag sanity window as the criterion harness so a speed win that breaks
 //! the numbers cannot look like a win.
 

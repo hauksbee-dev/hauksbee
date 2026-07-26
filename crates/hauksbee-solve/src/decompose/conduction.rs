@@ -86,7 +86,7 @@ impl ConductionGraph {
                 .filter(|n| !n.is_ground())
                 .map(|n| n.0 as usize)
                 .collect();
-            // F/H control coupling FUSES islands here — deliberately NOT a
+            // F/H control coupling FUSES islands here, deliberately NOT a
             // sense edge. A sense edge is a node-voltage read whose free-tear
             // replay (cut the wire, replay the voltage as a source) is exact
             // because no current crosses it. What an F/H reads is the control
@@ -270,7 +270,7 @@ mod tests {
             // below must prove clean, so the ammeter's own incidence entries
             // must stay off it (the ammeter writes only its own p row and
             // branch, so the assertion still isolates the example device's
-            // sense claim — which for F/H is empty anyway, their control is a
+            // sense claim, which for F/H is empty anyway, their control is a
             // branch-current read declared via `controlling_sources`).
             // The K-coupling example's convention differs: it points its
             // WINDINGS at DeviceId(0) and DeviceId(1), which must be

@@ -8,7 +8,7 @@
 //!   so an island containing one stays classified linear and reaches the
 //!   state-space reducer under `Partitioning::Auto`. The reducer models only
 //!   R/C/L/I; it must return `None` for such an island (routing it to the MNA
-//!   sub-solve) — never compile it with the controlled source silently absent
+//!   sub-solve), never compile it with the controlled source silently absent
 //!   from the A matrix.
 //! * **The partitioner coupling.** A controlled source is never a cut: its
 //!   control pair must fuse with its output port in the union-find, or the
@@ -20,11 +20,11 @@
 //!
 //! * the control is a DEVICE reference (a branch-current read), so the
 //!   partitioner must DEMOTE the control Vsource from cut to island member and
-//!   fuse it with the F/H — its branch unknown must live in the same
+//!   fuse it with the F/H; its branch unknown must live in the same
 //!   sub-system as the F/H stamp, not behind a boundary pin;
 //! * the conduction graph must fuse too, because a branch-current sense can
 //!   never be a free-tear candidate (there is no node voltage whose replay
-//!   reproduces it) — unlike E/G, whose node-voltage senses stay visible as
+//!   reproduces it), unlike E/G, whose node-voltage senses stay visible as
 //!   cross-island sense edges.
 
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
@@ -144,7 +144,7 @@ fn controlled_source_fuses_control_and_output_islands() {
 
 /// The decompose layer sees the same structure through the W1 classifier: the
 /// two legs stay separate CONDUCTION islands (the control pair carries no
-/// current) with the coupling visible as cross-island sense edges — the raw
+/// current) with the coupling visible as cross-island sense edges; the raw
 /// material of a future proven tear, kept explicit rather than fused blindly.
 #[test]
 fn conduction_graph_keeps_control_coupling_as_sense_edges() {
@@ -402,7 +402,7 @@ fn vcvs_dc_matches_analytic() {
 }
 
 /// The VCVS control port draws zero current even mid-transient: load the
-/// control node with ONLY the controlled source and a capacitor — if the E
+/// control node with ONLY the controlled source and a capacitor, if the E
 /// stamp leaked current into its control rows, the capacitor voltage would
 /// drift off the analytic RC trajectory.
 #[test]
@@ -477,7 +477,7 @@ fn vcvs_control_port_is_high_impedance() {
 
 /// Driver leg with an in-line zero-volt ammeter: `V1 -> Rd -> ctrl -> Cd`,
 /// and the sensed branch `ctrl -> Vs(0V) -> cm -> Rs -> gnd`. Returns the
-/// ammeter's id (the F/H control) — its current is v_ctrl / 1k.
+/// ammeter's id (the F/H control); its current is v_ctrl / 1k.
 fn add_sensed_driver_leg(c: &mut Circuit) -> DeviceId {
     let vin = c.node("in");
     let ctrl = c.node("ctrl");
@@ -592,7 +592,7 @@ fn current_control_demotes_ammeter_from_cut_to_island_member() {
     }
 }
 
-/// The conduction graph fuses too — and, unlike E/G, contributes NO sense
+/// The conduction graph fuses too, and, unlike E/G, contributes NO sense
 /// edge. A sense edge is a node-voltage read whose free-tear replay is exact;
 /// a branch-current read has no such replay, so surfacing it as a tear
 /// candidate would hand the feedforward pass a coupling its one-directionality
@@ -627,7 +627,7 @@ fn conduction_graph_fuses_branch_current_coupling() {
 /// An island containing an F/H (and its demoted control ammeter) is still
 /// classified linear; the state-space reducer must refuse it (`None`) so the
 /// MNA sub-solve stamps it exactly. (The demoted Vsource in the island refuses
-/// too — either arm alone routes the island to MNA; the never-dropped
+/// too, either arm alone routes the island to MNA; the never-dropped
 /// end-to-end below proves the whole partitioned path stays exact.)
 #[test]
 fn linear_island_with_current_controlled_source_forces_mna() {
@@ -823,7 +823,7 @@ fn cccs_dc_matches_analytic() {
 /// CCVS DC. Same 2 mA control current; H1 out 0 transres=2k PINS
 /// v_out = 2k * 2mA = 4 V, and its own branch sources the 4 mA the load
 /// draws (Vsource sign convention: sourcing is negative). The control loop is
-/// undisturbed — H reads the ammeter's branch COLUMN, never its rows.
+/// undisturbed, H reads the ammeter's branch COLUMN, never its rows.
 #[test]
 fn ccvs_dc_matches_analytic() {
     let mut c = Circuit::new();
@@ -882,7 +882,7 @@ fn ccvs_dc_matches_analytic() {
 
 /// Subckt composition end-to-end: an F inside a `.subckt` naming an ammeter in
 /// the same body must resolve per-instance to the MANGLED name (X1.Vsense /
-/// X2.Vsense) and solve correctly — two instances with different drive
+/// X2.Vsense) and solve correctly, two instances with different drive
 /// currents prove the references did not cross-bind.
 #[test]
 fn cccs_in_subckt_resolves_per_instance_and_solves() {

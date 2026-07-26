@@ -4,12 +4,12 @@
 //! this runs ngspice `-b` and the hauksbee solver over the SAME deck, resamples
 //! ngspice onto our timebase, and compares each declared probe against its
 //! declared PER-QUANTITY tolerance (a diode forward drop wants mV; an RC tail
-//! only percent — one global bar cannot serve both). Each deck emits a per-deck
+//! only percent, one global bar cannot serve both). Each deck emits a per-deck
 //! pass/fail with its worst-case error and where it occurred, and the whole
 //! corpus regenerates `docs/spice-compat/results.md`.
 //!
 //! ngspice lookup: `$NGSPICE`, then `PATH`, then the known per-OS install
-//! locations — so the harness runs on any machine with ngspice, not just the
+//! locations, so the harness runs on any machine with ngspice, not just the
 //! one Mac whose Homebrew path was once hardcoded. If ngspice is not found the
 //! harness SKIPS (contributors without it are never blocked); it never fails
 //! for want of the oracle.
@@ -141,7 +141,7 @@ fn parse_tran_table(text: &str) -> Option<NgSeries> {
 }
 
 /// A parsed indexed table with any number of value columns: `x` is the sweep
-/// axis (column 1 — time / v-sweep / frequency) and `cols[k]` is value column
+/// axis (column 1, time / v-sweep / frequency) and `cols[k]` is value column
 /// `k` (column `k + 2`). Serves `.print dc` (one value column) and `.print ac`
 /// (a `vm` and a `vp` column requested side by side).
 struct NgTable {
@@ -416,7 +416,7 @@ fn rewrite_with_print(orig: &str, print_card: &str) -> String {
 /// Worst relative error of `ours` vs interpolated ngspice, with a floor so
 /// zero-crossings don't blow the ratio up: the probe's own `abstol` when the
 /// expect file states one (the op-branch convention, extended to tran for
-/// probes whose off-state is an exponential tail toward zero — a switch
+/// probes whose off-state is an exponential tail toward zero, a switch
 /// drain settling to millivolts turns sub-mV agreement into O(1) "relative"
 /// noise without it), else 1% of `full_scale`. Returns (worst, at_time).
 fn worst_tran_error(
@@ -640,7 +640,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     "{name}: ngspice ac table for {} has no vm/vp columns",
                     pr.label()
                 );
-                // ngspice vp() is in RADIANS; our phase is degrees — convert to compare.
+                // ngspice vp() is in RADIANS; our phase is degrees, convert to compare.
                 let ng_mag = NgSeries {
                     t: tbl.x.clone(),
                     v: tbl.cols[0].clone(),
@@ -750,7 +750,7 @@ fn ngspice_corpus() {
         // never a silently-green gate with zero coverage.
         if std::env::var_os("HAUKSBEE_REQUIRE_NGSPICE").is_some() {
             panic!(
-                "HAUKSBEE_REQUIRE_NGSPICE is set but ngspice was not found                  ($NGSPICE / PATH / known locations) — the SPICE differential                  gate cannot run"
+                "HAUKSBEE_REQUIRE_NGSPICE is set but ngspice was not found                  ($NGSPICE / PATH / known locations); the SPICE differential                  gate cannot run"
             );
         }
         eprintln!("ngspice not found ($NGSPICE / PATH / known locations); skipping corpus.");
