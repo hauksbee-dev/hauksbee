@@ -1,0 +1,124 @@
+# INA219 current/power monitor — declarative I2C sensor spec (calibration write)
+# -----------------------------------------------------------------------------
+# Part: Texas Instruments INA219 high-side current shunt and power monitor.
+# Bus:  I2C. 7-bit address 0x40 with A1=A0 tied to GND (datasheet §8.5.5.1,
+#       Table 1). This spec uses 0x40.
+# Ref:  TI datasheet SBOS448. Section/equation numbers below.
+#
+# ── Why this part is here ─────────────────────────────────────────────────────
+# The INA219 is the second write→read coupling proof (05 §6.1 item 4): the
+# firmware WRITES the calibration register and that value FEEDS the current
+# and power register math. Until calibration is programmed the current and
+# power registers read zero (§8.5.1) — the model reproduces that from the
+# arithmetic, because the calibration store's POR default is 0.
+#
+# ── What this models ──────────────────────────────────────────────────────────
+# Register map (§8.6): 0x00 Config (R/W, POR 0x399F), 0x01 Shunt voltage (R),
+# 0x02 Bus voltage (R), 0x03 Power (R), 0x04 Current (R), 0x05 Calibration
+# (R/W, POR 0x0000).
+#
+#   * Shunt register: 10 uV/LSB (§8.6.3.2) -> code = round(Vshunt / 10uV).
+#   * Bus register: 4 mV/LSB in bits 15:3 (§8.6.3.3) -> value << 3; the CNVR
+#     flag (bit 1) reads 1 (conversion timing is not modeled, data is always
+#     "ready"), OVF (bit 0) reads 0.
+#   * Current register (§8.5.1 Eq. 4): current_reg = shunt_reg * cal / 4096.
+#   * Power register  (§8.5.1 Eq. 5): power_reg = current_reg * bus_reg / 5000.
+#   * Calibration register: bit 0 (FS0) is read-only zero (§8.6.3.7) — the
+#     effective calibration is the written value with the LSB dropped, modeled
+#     by extracting bits 15:1 and doubling (`cal_msb15 * 2`), and the register
+#     reads back with that LSB forced low, exactly like silicon.
+#
+# Worked example anchoring the fixture (datasheet §8.5.1, "Programming the
+# Calibration Register"): R_SHUNT = 0.1 ohm, maximum expected current 3.2 A,
+# Current_LSB chosen 100 uA/bit -> Cal = trunc(0.04096 / (100e-6 * 0.1))
+# = 4096 = 0x1000, Power_LSB = 20 * Current_LSB = 2 mW/bit. At I = 2 A,
+# VBUS = 12 V: Vshunt = 0.2 V -> shunt_reg 20000; current_reg = 20000 *
+# 4096 / 4096 = 20000 (= 2.0 A); bus_reg value = 3000 -> register 0x5DC2
+# (with CNVR); power_reg = 20000 * 3000 / 5000 = 12000 (= 24 W = 12 V * 2 A).
+#
+# ── What this does NOT model (stated, not faked) ──────────────────────────────
+#   * Conversion timing / averaging: the config register's mode, PGA range,
+#     and ADC resolution/averaging bits are stored and read back exactly, but
+#     conversions are instantaneous and the shunt PGA never clips (the config
+#     PGA field would only matter for clipping, and faking a clip law nothing
+#     exercises would be fake fidelity — the raw i16 encoding clamp still
+#     bounds the register).
+#   * The math overflow flag (OVF) and the power-register overflow behaviour.
+
+[sensor]
+name        = "INA219"
+bus         = "i2c"
+i2c_address = 0x40   # A1 = A0 = GND (Table 1)
+
+# ── Physical inputs, driven by the harness ────────────────────────────────────
+[[sensor.input]]
+name    = "shunt_v"   # volts across the shunt resistor (VIN+ - VIN-)
+default = 0.0
+
+[[sensor.input]]
+name    = "bus_v"     # volts at VIN- relative to GND
+default = 0.0
+
+# ── Writable registers ────────────────────────────────────────────────────────
+
+[[sensor.write_register]]
+addr     = 0x00
+encoding = "u16_be"
+store    = "config"
+default  = 14751.0   # 0x399F POR (§8.6.3.1)
+
+# Calibration (0x05, §8.6.3.7): POR 0 -> current/power stay 0 until programmed.
+# FS0 (bit 0) is read-only zero; `cal_msb15 * 2` is the effective calibration.
+[[sensor.write_register]]
+addr     = 0x05
+encoding = "u16_be"
+store    = "cal"
+default  = 0.0
+
+[[sensor.write_register.field]]
+name = "cal_msb15"
+bits = [15, 1]
+
+# ── Read registers ────────────────────────────────────────────────────────────
+
+# Config readback (0x00): stored written value, byte-exact.
+[[sensor.register]]
+addr     = 0x00
+encoding = "u16_be"
+expr     = "config"
+
+# Shunt voltage (0x01): 10 uV/LSB (§8.6.3.2).
+[[sensor.register]]
+addr     = 0x01
+encoding = "i16_be"
+expr     = "shunt_v"
+scale    = 100000.0
+
+# Bus voltage (0x02): 4 mV/LSB left-shifted 3 (§8.6.3.3), CNVR (bit 1) always
+# set — conversion timing is not modeled, the data is always fresh.
+[[sensor.register]]
+addr     = 0x02
+encoding = "u16_be"
+expr     = "floor(bus_v / 0.004) * 8 + 2"
+
+# Power (0x03, Eq. 5): current_reg * bus_reg_value / 5000, at 20*Current_LSB
+# per bit. Uses the same quantized intermediate values the silicon does.
+[[sensor.register]]
+addr     = 0x03
+encoding = "u16_be"
+expr     = "round(shunt_v * 100000) * (cal_msb15 * 2) / 4096 * floor(bus_v / 0.004) / 5000"
+
+# Current (0x04, Eq. 4): shunt_reg * cal / 4096, at Current_LSB per bit.
+[[sensor.register]]
+addr     = 0x04
+encoding = "i16_be"
+expr     = "round(shunt_v * 100000) * (cal_msb15 * 2) / 4096"
+
+# Calibration readback (0x05): the written value with FS0 forced low (§8.6.3.7).
+[[sensor.register]]
+addr     = 0x05
+encoding = "u16_be"
+expr     = "cal_msb15 * 2"
+
+[sensor.protocol]
+style = "i2c_pointer"

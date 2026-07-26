@@ -71,7 +71,7 @@ pub struct McuBinding {
 /// VOUT-channel [`PinDriver`]s already stamped into the circuit. The scheduler
 /// realizes each binding as a spec-driven
 /// [`RegisterMapSensor`](crate::RegisterMapSensor) instance of
-/// `docs/hunts/specs/mcp4728.toml` on a shared bus, binding these drivers to
+/// `testdata/sensor-specs/mcp4728.toml` on a shared bus, binding these drivers to
 /// the spec's per-channel outputs; the slave then drives the VOUT nets itself
 /// at each transaction end (the ctx-bearing `on_stop`, 05 §3.1), so the analog
 /// solve sees the DAC output voltages.

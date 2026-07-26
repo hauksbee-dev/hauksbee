@@ -1483,15 +1483,15 @@ addr_mask = 0x7f
     //
     // The sensor-coverage rule: each new sensor lands with a fixture that reads
     // a known register value through the bound bus and asserts the decoded
-    // physical quantity. These load the SHIPPED specs (docs/hunts/specs/*.toml)
+    // physical quantity. These load the SHIPPED specs (testdata/sensor-specs/*.toml)
     // so the fixture proves the exact spec that ships, drive them through the real
     // `I2cBus` dispatch path (no injection, no hand-coded model), and assert the
     // decoded physical output against datasheet worked-example numbers.
 
     /// The canonical shipped BME280 spec (single source of truth for the model).
-    const BME280_SPEC: &str = include_str!("../../../../docs/hunts/specs/bme280.toml");
+    const BME280_SPEC: &str = include_str!("../../../../testdata/sensor-specs/bme280.toml");
     /// The canonical shipped MPU6050 spec.
-    const MPU6050_SPEC: &str = include_str!("../../../../docs/hunts/specs/mpu6050.toml");
+    const MPU6050_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mpu6050.toml");
 
     /// Pointered burst read of `n` bytes starting at register `reg` from the I2C
     /// slave at 7-bit `addr`, through the real bus dispatch path.
@@ -2054,9 +2054,9 @@ style = "i2c_pointer"
     // (cited inline).
 
     /// The canonical shipped ADS1115 spec.
-    const ADS1115_SPEC: &str = include_str!("../../../../docs/hunts/specs/ads1115.toml");
+    const ADS1115_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ads1115.toml");
     /// The canonical shipped INA219 spec.
-    const INA219_SPEC: &str = include_str!("../../../../docs/hunts/specs/ina219.toml");
+    const INA219_SPEC: &str = include_str!("../../../../testdata/sensor-specs/ina219.toml");
 
     /// Pointer-framed 16-bit register write: [ptr, hi, lo] in one transaction.
     fn i2c_write_u16(bus: &mut I2cBus, addr: u8, reg: u8, value: u16) {
@@ -2207,12 +2207,12 @@ style = "i2c_pointer"
     //
     // These are the hand-coded `Mcp4728` model's unit tests, ported verbatim,
     // same bytes in, same assert values, against the SHIPPED spec
-    // (docs/hunts/specs/mcp4728.toml). The bespoke Rust died only once these
+    // (testdata/sensor-specs/mcp4728.toml). The bespoke Rust died only once these
     // passed unweakened (plus the engine-level mcp4728_cosim and the LOAD_DAC
     // regression in tarski_firmware_cosim).
 
     /// The canonical shipped MCP4728 spec (also embedded by the scheduler).
-    const MCP4728_SPEC: &str = include_str!("../../../../docs/hunts/specs/mcp4728.toml");
+    const MCP4728_SPEC: &str = include_str!("../../../../testdata/sensor-specs/mcp4728.toml");
 
     /// A spec-driven MCP4728 at `addr` with the board config the hand-coded
     /// `Mcp4728::new` used (internal VREF 2.048 V, gain 2; the spec defaults).

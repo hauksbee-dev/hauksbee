@@ -6,7 +6,7 @@
 //! push-pull master waveform the [`SoftI2cResponder`] documents, sampling
 //! every ACK and read bit with a plain `PIND` read one instruction after the
 //! SCL rising edge. The slave is the shipped declarative MPU-6050 spec
-//! (docs/hunts/specs/mpu6050.toml) on the existing [`I2cBus`]; the same
+//! (testdata/sensor-specs/mpu6050.toml) on the existing [`I2cBus`]; the same
 //! model class the hardware-TWI path serves, no parallel device.
 //!
 //! The firmware performs two classic pointered reads with repeated-START
@@ -27,7 +27,7 @@ use hauksbee_models::ModelLibrary;
 use hauksbee_server::engine::Engine;
 
 /// The shipped declarative MPU-6050 spec (address 0x68, WHO_AM_I = 0x68).
-const MPU6050_SPEC: &str = include_str!("../../../docs/hunts/specs/mpu6050.toml");
+const MPU6050_SPEC: &str = include_str!("../../../testdata/sensor-specs/mpu6050.toml");
 
 /// The temperature the test drives into the model.
 const TEMP_C: f64 = 30.0;
