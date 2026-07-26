@@ -308,8 +308,8 @@ fn branch_constrainedness(branch: &str) -> u32 {
                     // following `*`/`?` cancels the entire group (plus the usual dock
                     // unit), not just one unit. An optional group `(W)?` matches zero
                     // chars; leaving last_atom=0 let `^1N4148(W)?$` (group +2, `?`
-                    // docked only 1 → net +1) out-score the exact `^1N4148$` override
-                    //; the same inversion R32/R42 close for `[..]*` and `(A|B)`.
+                    // docked only 1 → net +1) out-score the exact `^1N4148$` override;
+                    // the same inversion R32/R42 close for `[..]*` and `(A|B)`.
                     last_atom = group_add;
                 } else {
                     last_atom = 0;
@@ -474,10 +474,10 @@ mod tests {
     fn optional_quantifier_lowers_specificity_below_the_exact_override() {
         // R32: an optional-quantified token (`[A-Z0-9-]*`, `a?`) matches zero
         // characters and constrains nothing, so it must NOT inflate the score.
-        // Previously the class scored +1 and the `*` retracted nothing, so the
-        // family pattern outscored the exact `^1N4148$` override it carves out of
-        // and won the same-layer regex tie-break, silently binding the generic
-        // params. The exact literal must now win deterministically.
+        // If the class scored +1 and the `*` retracted nothing, the family
+        // pattern would outscore the exact `^1N4148$` override it carves out of,
+        // win the same-layer regex tie-break, and silently bind the generic
+        // params. The exact literal wins deterministically.
         assert!(
             pattern_constrainedness("^1N4148$") > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
             "the exact override must out-score the optional-tail family"

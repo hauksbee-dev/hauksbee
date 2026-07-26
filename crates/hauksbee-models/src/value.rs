@@ -114,10 +114,11 @@ fn is_jedec_semiconductor(v: &str) -> bool {
     // An UPPERCASE 'N' is the JEDEC spelling (1N34, 1N60, 1N21, 2N3904), so a
     // 2+-digit serial there is a part number and must return None (a bare
     // `parse_inner` would read it as the RKM nano form ~1.x nF and defeat the
-    // binder's generic-diode fallback; the R33 failure mode, previously left
-    // open for the short 2-digit germanium detectors). RKM nano values only ever
-    // use LOWERCASE 'n' ("4n7", "1n5"), so a lowercase form still needs 3+ serial
-    // digits before it is treated as a part number rather than a 1–2-digit value.
+    // binder's generic-diode fallback; the R33 failure mode, which a 3-digit
+    // minimum leaves open for the short 2-digit germanium detectors). RKM nano
+    // values only ever use LOWERCASE 'n' ("4n7", "1n5"), so a lowercase form
+    // still needs 3+ serial digits before it is treated as a part number rather
+    // than a 1–2-digit value.
     let min_serial = if upper_n { 2 } else { 3 };
     ndigits >= min_serial
 }
@@ -181,7 +182,7 @@ fn normalise_comma_decimal(s: &str) -> String {
             // guard (`int_grouped`) is what separates thousands from a European
             // decimal: "0,047uF" is 0.047 uF (leading-zero integer part), while
             // "4,700uF" is grouped. Requiring the group to be the whole string
-            // used to mis-read every unit-suffixed grouped value as a decimal, a
+            // would mis-read every unit-suffixed grouped value as a decimal, a
             // 1000x under-count (4700 uF read as 4.7 uF).
             let int_grouped = before_comma.bytes().all(|b| b.is_ascii_digit())
                 && before_comma.as_bytes().first() != Some(&b'0');
@@ -682,12 +683,13 @@ mod tests {
         // (no leading zero) is 4700 µF (round-7 #4).
         check("0,047uF", 47e-9); // 0.047 µF = 47 nF, NOT 47 µF
         check("0,022uF", 22e-9);
-        check("0,1uF", 100e-9); // 1-2 digit group already worked
+        check("0,1uF", 100e-9); // a 1-2 digit group is a decimal
         check("4,7uF", 4.7e-6);
         check("5,1k", 5100.0); // 5.1 kΩ
                                // Genuine thousands grouping (nonzero integer part) stays 1000x, and a
-                               // trailing unit does not demote it to a decimal (R34: the old
-                               // "group is the whole string" clause read "4,700uF" as 4.7 µF, 1000x low).
+                               // trailing unit does not demote it to a decimal (R34: a
+                               // "group is the whole string" clause reads "4,700uF"
+                               // as 4.7 µF, 1000x low).
         check("4,700", 4700.0);
         check("4,700uF", 4.7e-3); // 4700 µF = 4.7 mF, NOT 4.7 µF
         check("2,200uF", 2.2e-3); // 2200 µF = 2.2 mF
@@ -883,10 +885,10 @@ mod tests {
     }
 
     /// Round-29 (HIGH): a space BEFORE the SI multiplier ("10 kOhm") is the
-    /// canonical typeset form, but parse_suffix never skipped it, so the
-    /// multiplier was dropped and the value came out 10^n too small with the unit
-    /// silently lost. The space-AFTER form ("10k Ohm") already worked; the two
-    /// must agree.
+    /// canonical typeset form, so parse_suffix has to skip it. Not skipping it
+    /// drops the multiplier, and the value comes out 10^n too small with the
+    /// unit silently lost. It must agree with the space-AFTER form
+    /// ("10k Ohm").
     #[test]
     fn test_space_before_multiplier_keeps_the_scale() {
         check("10 kOhm", 10_000.0);

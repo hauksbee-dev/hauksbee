@@ -285,8 +285,8 @@ pub struct SenseProgram {
     /// The programming-divider numerator resistance (ohms): the on-die or fixed
     /// resistor the external `prog_ohms` divides against. The threshold scales
     /// as `prog_ohms / prog_ref_ohms`, linearly with the programming resistor,
-    /// consistent with the struct-level doc and the engine's `program_iin_limit`
-    /// (an earlier version of this line had the ratio inverted).
+    /// consistent with the struct-level doc and the engine's
+    /// `program_iin_limit`.
     pub prog_ref_ohms: f64,
 
     /// Full-scale sense voltage (V): the maximum current-sense threshold,
