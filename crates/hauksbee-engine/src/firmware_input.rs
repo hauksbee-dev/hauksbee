@@ -29,6 +29,12 @@
 //! software and this server is localhost-only, but it is why the web tier
 //! never builds anything the user did not explicitly upload.
 
+// This module reads firmware images and zips the user did not write, and `hauksbee serve`
+// exposes it to a browser, so a panic here is a denial of service rather than
+// a crash in a CLI. Failures must be typed errors that the caller can report.
+// Test code below is exempt: an unwrap in a test is an assertion.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
@@ -204,8 +210,10 @@ pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwa
     if path.is_dir() {
         // A live project directory: build it (pio run is incremental), or fall
         // back to an existing .pio/build artifact when there is no ini at all.
-        if find_platformio_project(path).is_some() {
-            let project = find_platformio_project(path).unwrap();
+        // One lookup, not a probe followed by an unwrap: this scans a directory
+        // the user just handed us, and anything that removed the ini between
+        // the two calls would panic inside `serve`.
+        if let Some(project) = find_platformio_project(path) {
             let (artifact, note) = pio_build(&project).map_err(anyhow::Error::msg)?;
             return Ok(Some(ResolvedFirmwareFile {
                 path: artifact,

@@ -922,6 +922,7 @@ dependencies = [
  "hauksbee-models",
  "hauksbee-server",
  "hauksbee-solve",
+ "hauksbee-testkit",
  "regex",
  "schemars",
  "serde",
@@ -947,6 +948,7 @@ dependencies = [
  "hauksbee-models",
  "hauksbee-server",
  "hauksbee-solve",
+ "hauksbee-testkit",
  "notify",
  "ratatui",
  "rust-embed",
@@ -968,6 +970,7 @@ dependencies = [
  "gerber-types",
  "gerber_parser",
  "hauksbee-models",
+ "hauksbee-testkit",
  "quick-xml",
  "regex",
  "rstar",
@@ -995,6 +998,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bindgen",
+ "hauksbee-testkit",
  "libc",
  "pkg-config",
  "serde",
@@ -1047,6 +1051,10 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
 ]
+
+[[package]]
+name = "hauksbee-testkit"
+version = "0.1.0"
 
 [[package]]
 name = "heapless"

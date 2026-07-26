@@ -6,7 +6,7 @@
 //! after each rising clock edge, deliberately NOT the ATmega328P's hardware
 //! SPI pins, so only the engine's [`BitBangSpiResponder`] bridging to the
 //! byte-level [`SpiBus`] slave can answer. The slave is the shipped ICM-42605
-//! declarative spec (docs/hunts/specs/icm42605.toml) loaded into a
+//! declarative spec (testdata/sensor-specs/icm42605.toml) loaded into a
 //! [`RegisterMapSensor`]; the existing SPI slave model, no parallel device.
 //!
 //! The firmware reads WHO_AM_I (0x75 -> 0x42) and a two-byte burst from
@@ -28,7 +28,7 @@ use hauksbee_server::engine::Engine;
 
 /// The shipped declarative ICM-42605 spec (same file the boot-coverage hunts
 /// use); WHO_AM_I = 0x42, GYRO_CONFIG1/GYRO_ACCEL_CONFIG0 = 0x06.
-const ICM42605_SPEC: &str = include_str!("../../../docs/hunts/specs/icm42605.toml");
+const ICM42605_SPEC: &str = include_str!("../../../testdata/sensor-specs/icm42605.toml");
 
 /// Minimal board: U1 ATmega328P with the software-SPI GPIOs on PD4..PD7
 /// (DIP-28 pads 6, 11, 12, 13), power/ground wired, and the IMU U2's SPI pins

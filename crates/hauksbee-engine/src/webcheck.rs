@@ -10,6 +10,12 @@
 //! so the web panel can never drift from CI truth. Detect-don't-bundle,
 //! exactly like the kicad-cli / ngspice oracles.
 
+// This module reads check specs composed in a browser the user did not write, and `hauksbee serve`
+// exposes it to a browser, so a panic here is a denial of service rather than
+// a crash in a CLI. Failures must be typed errors that the caller can report.
+// Test code below is exempt: an unwrap in a test is an assertion.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
