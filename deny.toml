@@ -1,0 +1,46 @@
+# cargo-deny: licence and advisory checking.
+#
+#   cargo install cargo-deny && cargo deny check
+#
+# Licences matter more than usual here. hauksbee is MIT, but the `avr` feature
+# links the GPL libsimavr, so the default build shape is GPL-encumbered while
+# `--no-default-features --features renode,qemu` is not. CI already asserts that
+# shape stays genuinely avr-free; this checks the dependency tree that feeds it.
+
+[advisories]
+yanked = "deny"
+# Add an entry only with a note saying why the advisory does not reach us, and
+# a link to whatever would let it be removed again.
+ignore = []
+
+[licences]
+version = 2
+# Permissive licences, plus the ones the Rust ecosystem uses widely and that
+# impose no obligation on a binary we ship.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+# A dependency whose licence is not on that list is a decision, not a warning:
+# it either gets added here with a reason, or it does not ship.
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The forge-* crates are vendored under vendor/kicad-forge rather than pulled
+# from a git dependency, so no git sources are expected at all.
+allow-git = []
