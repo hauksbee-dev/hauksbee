@@ -1,0 +1,9 @@
+# Commits that touch a lot of lines without changing behaviour. Ignore them
+# when attributing code:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub reads this file automatically.
+
+# style: rustfmt the workspace
+ef9dac777e5722659ec3b0a42c4ed89059716f08
