@@ -20,7 +20,7 @@
 //! The check fires only for genuine ELF images (the `0x7F 'E' 'L' 'F'` magic).
 //! Raw `.bin` images (e.g. an `esptool merge_bin` flash image) carry no header
 //! and therefore no recoverable architecture, so the check is *skipped* for
-//! them rather than guessed — see [`read_e_machine`] returning `None` and the
+//! them rather than guessed, see [`read_e_machine`] returning `None` and the
 //! `bin`-handling notes in each backend.
 
 use anyhow::{bail, Result};
@@ -36,13 +36,13 @@ const E_MACHINE_OFFSET: usize = 0x12;
 // ── e_machine constants (subset relevant to the supported backends) ──────────
 // Values are the canonical `EM_*` numbers from the System V ABI / the ELF spec.
 
-/// `EM_ARM` — 32-bit ARM (Cortex-M: STM32, nRF52 under Renode).
+/// `EM_ARM`, 32-bit ARM (Cortex-M: STM32, nRF52 under Renode).
 pub const EM_ARM: u16 = 0x28; // 40
-/// `EM_AVR` — Atmel AVR 8-bit (atmega* under simavr).
+/// `EM_AVR`, Atmel AVR 8-bit (atmega* under simavr).
 pub const EM_AVR: u16 = 0x53; // 83
-/// `EM_XTENSA` — Tensilica Xtensa (ESP32 / ESP32-S3 under qemu-system-xtensa).
+/// `EM_XTENSA`, Tensilica Xtensa (ESP32 / ESP32-S3 under qemu-system-xtensa).
 pub const EM_XTENSA: u16 = 0x5E; // 94
-/// `EM_RISCV` — RISC-V (ESP32-C3 under qemu-system-riscv32; SiFive FE310 under
+/// `EM_RISCV`, RISC-V (ESP32-C3 under qemu-system-riscv32; SiFive FE310 under
 /// Renode).
 pub const EM_RISCV: u16 = 0xF3; // 243
 
@@ -80,7 +80,7 @@ pub fn machine_name(e_machine: u16) -> &'static str {
 /// Returns:
 ///   - `Ok(Some(e_machine))` when the file is a valid ELF (correct magic and
 ///     long enough to contain the field),
-///   - `Ok(None)` when the file is NOT an ELF (no magic) — e.g. a raw `.bin`
+///   - `Ok(None)` when the file is NOT an ELF (no magic), e.g. a raw `.bin`
 ///     flash image, which carries no architecture to check, so the caller
 ///     should skip the gate rather than error,
 ///   - `Err(..)` only on a real I/O failure reading the file.
@@ -138,7 +138,7 @@ fn read_header(path: &Path) -> Result<Option<[u8; E_MACHINE_OFFSET + 2]>> {
 /// not. `mcu_label` names the board/MCU in the message (e.g. `"ESP32-C3"`).
 ///
 /// Raw `.bin` images (no ELF header) cannot be checked, so this is a no-op for
-/// them — it returns `Ok(())` without guessing.
+/// them; it returns `Ok(())` without guessing.
 pub fn validate_arch(path: &Path, expected: u16, mcu_label: &str) -> Result<()> {
     let Some(found) = read_e_machine(path)? else {
         // Not an ELF (raw .bin / .hex without a recoverable arch): skip.

@@ -159,14 +159,14 @@ fn pin_net_for_role(
 
 /// The *rail-carrying* power nets of a part: only the pads whose model pin role
 /// is a supply/through terminal (an in/out/vbus/bat/pack rail). The part's full
-/// continuous rating flows on these, and only these — an enable, feedback,
+/// continuous rating flows on these, and only these, an enable, feedback,
 /// bypass, soft-start, sense or signal pin carries no rail current, so charging
 /// it the full rating would manufacture a load and over-flag a correctly-sized
 /// signal trace. Ground pins are excluded (the return is not the rail the
 /// ampacity question is about).
 ///
 /// When the model gives *no* pin roles at all (an untyped connector), we fall
-/// back to "every non-ground pad" — a connector's contacts are all through
+/// back to "every non-ground pad", a connector's contacts are all through
 /// terminals, and a rating with no pin map is the old conservative behaviour.
 fn power_nets_of(
     board: &ExtractedBoard,
@@ -204,7 +204,7 @@ fn power_nets_of(
 }
 
 /// Whether a model pin role names a rail terminal that carries the part's
-/// continuous current — a supply input, a regulated/switched output, or a
+/// continuous current, a supply input, a regulated/switched output, or a
 /// bus/battery through terminal. Enable, feedback, bypass, soft-start, sense,
 /// reference and signal/data roles are deliberately excluded: they set or
 /// monitor the rail but do not carry it.
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn power_nets_of_charges_only_rail_pins_not_en_fb() {
         // A 5-pin LDO: in/gnd/en/noise_bypass/out. Its continuous rating flows
-        // on the in and out rails only — the EN and noise_bypass (bypass) pins
+        // on the in and out rails only; the EN and noise_bypass (bypass) pins
         // carry no rail current, so power_nets_of must not return them (#11).
         let model = model_from_toml(
             r#"

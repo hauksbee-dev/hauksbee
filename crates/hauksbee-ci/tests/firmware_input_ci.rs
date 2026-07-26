@@ -1,7 +1,7 @@
 //! CI parity for the firmware input tiers (see `hauksbee-engine`'s
 //! `firmware_input`): the spec's `firmware` key accepts a zip or a PlatformIO
 //! project exactly like `run --firmware` and the web drop zone, so the same
-//! repo layout works on every surface — including the GitHub Action, which
+//! repo layout works on every surface, including the GitHub Action, which
 //! shells `hauksbee-ci run`.
 
 use std::io::Write;

@@ -97,14 +97,14 @@ impl HauksbeeEngine {
     }
 
     /// Force an output SPIKE net's voltage after each analog solve (until
-    /// cleared) — the hook the firmware-driven Tarski inference uses to drive the
+    /// cleared); the hook the firmware-driven Tarski inference uses to drive the
     /// 10 SPIKE nets from the EXACT feedforward decomposition (the monolith does
     /// not converge). Returns false if the net does not exist.
     pub fn force_net_voltage(&mut self, net: &str, volts: f64) -> bool {
         self.sched.force_net_voltage(net, volts)
     }
 
-    /// Force a net HIGH while `t_start <= sim_time < t_end`, else LOW — used to
+    /// Force a net HIGH while `t_start <= sim_time < t_end`, else LOW, used to
     /// rate-code an output SPIKE net (HIGH for a sim-time fraction proportional
     /// to its decomposed spike count). Returns false if the net is absent.
     pub fn force_net_voltage_windowed(

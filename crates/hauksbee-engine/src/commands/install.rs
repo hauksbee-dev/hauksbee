@@ -9,7 +9,7 @@
 //!
 //! The interactive half lives here too: [`offer_esp_qemu_install`] is the
 //! co-sim pre-flight `hauksbee run` calls when a board needs a `qemu:` core
-//! whose emulator is absent — on a TTY it offers to install inline and the
+//! whose emulator is absent, on a TTY it offers to install inline and the
 //! run then proceeds; declined / non-TTY paths keep the loud install-guidance
 //! error exactly as before. The prompt lives at the CLI layer on purpose: the
 //! engine library and server must never block on stdin.
@@ -70,7 +70,7 @@ pub fn esp_qemu(_yes: bool) -> anyhow::Result<()> {
 
 /// Co-sim pre-flight for `hauksbee run --firmware` (and anything else CLI-side
 /// that is about to boot a `qemu:` core): when one of `backends` is a
-/// `qemu:<part>` whose emulator binary is absent, offer — on a real TTY — to
+/// `qemu:<part>` whose emulator binary is absent, offer, on a real TTY, to
 /// install it inline, so the run can continue instead of dying with the
 /// install-guidance error. Returns `Ok(())` both when nothing was needed and
 /// after a successful install; declining is also `Ok(())` (the co-sim then
@@ -136,7 +136,7 @@ pub fn offer_esp_qemu_install(_backends: &[String]) -> anyhow::Result<()> {
 }
 
 /// One-line y/N prompt on stderr, reading a line from stdin. Refuses (returns
-/// an error) when stdin is not a terminal — a piped stdin must never be able
+/// an error) when stdin is not a terminal, a piped stdin must never be able
 /// to "answer" a consent prompt.
 #[cfg(feature = "qemu")]
 fn confirm(prompt: &str) -> anyhow::Result<bool> {

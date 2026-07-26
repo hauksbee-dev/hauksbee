@@ -115,7 +115,7 @@ fn raw_merged_flash_bin_is_unchecked_not_false_errored() {
 
 /// End-to-end through the real QEMU backend constructor: a sibling Xtensa ELF
 /// beside a raw flash image must make `QemuBackend::new` for the RISC-V
-/// ESP32-C3 bail at the arch gate BEFORE any QEMU process is spawned — even on
+/// ESP32-C3 bail at the arch gate BEFORE any QEMU process is spawned, even on
 /// a machine where Espressif QEMU is not installed.
 #[cfg(feature = "qemu")]
 #[test]

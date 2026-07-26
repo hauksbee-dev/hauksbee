@@ -32,7 +32,7 @@ use hauksbee_extract::{DrcReport, ViolationKind};
 use crate::report::{BindOutcome, BindReport};
 
 /// Distinct process exit code for "the board is invalid for the analysis you
-/// asked for" — a meaningless result, not a clean one. Kept here so the CLI and
+/// asked for", a meaningless result, not a clean one. Kept here so the CLI and
 /// any future caller share one source of truth.
 pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
@@ -74,7 +74,7 @@ pub struct BindSummary {
     pub resolved: usize,
     pub unresolved: usize,
     pub non_ignored: usize,
-    /// `"M/N"` — active ICs (MCU + U/IC-prefixed parts) that bound, over the
+    /// `"M/N"`, active ICs (MCU + U/IC-prefixed parts) that bound, over the
     /// total active ICs on the board. The metric, not a bare percentage.
     pub critical_parts_bound: String,
     pub critical_parts_bound_n: usize,
@@ -159,7 +159,7 @@ impl BindSummary {
             // records them. We only care about ACTIVE IC refs (a passive with a
             // dangling pin does not invalidate a thermal/AC sweep the way an open
             // driver does). CRUCIAL: an `[auto-bind] ... GPIO map ...` note is a
-            // pin-NAME-derivation limitation, NOT an open circuit — a working MCU
+            // pin-NAME-derivation limitation, NOT an open circuit, a working MCU
             // carries it routinely. Treating it as "open/undriven" cried wolf on
             // healthy boards (df-pill, stm32-multiprotocol), so it is excluded.
             let resolved_open = !unresolved
@@ -197,7 +197,7 @@ impl BindSummary {
     /// pin warning raised against it (e.g. an MCU bound as `BindOutcome::Mcu`
     /// whose every I/O pin was `open_warning`'d, or a resolved analog part with
     /// a dangling pin). These escape [`active_ics_unresolved`] because their
-    /// outcome is not `Unresolved`, yet the part still does not drive its nets —
+    /// outcome is not `Unresolved`, yet the part still does not drive its nets,
     /// so a thermal/AC result over those nets is just as untrustworthy. We walk
     /// `Mcu`/`Resolved`-style rows that carry a `warning` and name an active IC.
     pub fn active_open_on_live_circuit(&self) -> bool {
@@ -207,7 +207,7 @@ impl BindSummary {
     }
 
     /// Whether any active IC that actually sits on the live circuit is
-    /// unresolved — the condition that makes analog/AC/thermal results
+    /// unresolved; the condition that makes analog/AC/thermal results
     /// untrustworthy and should WARN instead of reporting "ok".
     ///
     /// We deliberately key this on `active_path_unresolved` (unresolved active
@@ -299,7 +299,7 @@ fn is_active_ic_ref(reference: &str) -> bool {
 fn is_open_pin_warning(warning: &str) -> bool {
     // Positive match on explicit open-pin markers, NOT a negative catch-all: a
     // benign advisory on a fully-wired resolved IC (e.g. an analog switch whose
-    // VCC net is non-canonically named — "...may read as open, so verify the
+    // VCC net is non-canonically named, "...may read as open, so verify the
     // switch's actual supply") contains the bare word "open" but is not an
     // open-pin condition, and must not push the part into resolved_but_open.
     if warning.contains("[auto-bind]") || warning.contains("GPIO map") {
@@ -381,9 +381,9 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
     if dissipating_rows > 0 {
         return Validity::valid();
     }
-    // Zero rows. If there are active ICs left OPEN on the live circuit — whether
+    // Zero rows. If there are active ICs left OPEN on the live circuit, whether
     // UNRESOLVED (no model) or RESOLVED-BUT-OPEN (bound but with an open/undriven
-    // pin) — the table is empty because those dissipating devices are open, not
+    // pin); the table is empty because those dissipating devices are open, not
     // because the board runs cool. Both cases make the thermal result equally
     // untrustworthy, so both must escalate to invalid (exit 3); testing only the
     // unresolved case let a resolved-but-open power IC report a false "runs cool"
@@ -405,14 +405,14 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
             refs.join(", ")
         ))
     } else {
-        // Genuinely no dissipating devices and nothing unresolved — a valid (if
+        // Genuinely no dissipating devices and nothing unresolved, a valid (if
         // boring) result, e.g. a passive-only board at ambient.
         Validity::valid()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Per-check COVERAGE (distinct from Validity) — the honest "N of M" annotation
+// Per-check COVERAGE (distinct from Validity); the honest "N of M" annotation
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives
@@ -425,7 +425,7 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
 pub struct CheckCoverage {
     /// Covered active ICs / total active ICs, clamped to `[0, 1]`: how much of the
     /// active circuit the check actually modelled. `1.0` when every active IC is
-    /// covered (or there are none — vacuously complete); low when power ICs are
+    /// covered (or there are none, vacuously complete); low when power ICs are
     /// open/unresolved.
     pub resolved_fraction: f64,
     /// Devices that actually produced a row in the check's table.
@@ -441,7 +441,7 @@ pub struct CheckCoverage {
 
 /// Thermal coverage, parallel to [`thermal_validity`] but NON-gating. Returns
 /// `partial = true` when there ARE dissipating rows yet an active IC on the live
-/// circuit is open or unresolved — i.e. the table is real but incomplete (rows
+/// circuit is open or unresolved, i.e. the table is real but incomplete (rows
 /// exist only because some passives/parts resolved while a power IC is open).
 /// `thermal_validity` itself is unchanged; this is the honest companion metric.
 pub fn thermal_coverage(dissipating_rows: usize, summary: &BindSummary) -> CheckCoverage {
@@ -457,7 +457,7 @@ pub fn thermal_coverage(dissipating_rows: usize, summary: &BindSummary) -> Check
         .count();
     let open_active = open_unresolved + open_resolved;
     let total_active = summary.critical_parts_total;
-    // resolved_fraction is COVERED active ICs / total active ICs — NOT dissipating
+    // resolved_fraction is COVERED active ICs / total active ICs, NOT dissipating
     // rows / active ICs. Dividing the (mostly-passive) dissipating-row count by the
     // active-IC count is meaningless and inverts the signal: it read 1.0 on a board
     // with every power IC open (40 passive rows / 7 ICs, clamped) and 0.0 on a clean
@@ -569,7 +569,7 @@ pub struct CosimJson {
     /// ADC channels whose per-chunk injections the MCU backend DROPPED because
     /// the platform carries no injection map (U3 finding 1). Non-empty means
     /// the analog solve drove these nets but the firmware NEVER received a
-    /// sample — analog readings on those pins are meaningless, and this run
+    /// sample, analog readings on those pins are meaningless, and this run
     /// cannot vouch for them. Empty (and omitted) on full coverage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adc_dropped: Vec<CosimAdcDrop>,
@@ -720,7 +720,7 @@ pub struct DrcGroup {
 
 impl DrcGroup {
     /// The honest one-line label. `gap == rule` is "exactly at minimum clearance
-    /// (no margin)" — NOT "below the spacing the board asks for" (which is only
+    /// (no margin)", NOT "below the spacing the board asks for" (which is only
     /// true when gap < rule). For a mixed group we name BOTH counts so we never
     /// overstate how many locations are actually below the rule.
     pub fn label(&self) -> String {
@@ -792,7 +792,7 @@ impl DrcStructured {
             BTreeMap::new();
 
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
-        // they carry "note" severity, not "serious" — every structured consumer
+        // they carry "note" severity, not "serious", every structured consumer
         // (JSON, TUI) inherits the downgrade from this single source.
         let short_severity = if report.version_warning.is_some() {
             "note"
@@ -945,7 +945,7 @@ impl DrcStructured {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Machine-readable JSON (Fix #6 / §4.1) — one structured surface for every check
+// Machine-readable JSON (Fix #6 / §4.1), one structured surface for every check
 // ─────────────────────────────────────────────────────────────────────────────
 
 use hauksbee_extract::{LintCheck, NetLintReport, Severity, SiCheck, SiReport, SiSeverity};
@@ -1216,11 +1216,11 @@ impl JsonReport {
     /// consumer can read pass/fail without re-deriving it from every finding.
     /// Returns `(ok, verdict, serious_count, actionable_count)` where `verdict`
     /// is `"pass"` | `"fail"` | `"invalid"`:
-    ///   - `fail` — at least one serious finding (a DRC short, a co-sim stress
+    ///   - `fail`, at least one serious finding (a DRC short, a co-sim stress
     ///     fault, a serious lint/SI finding);
-    ///   - `invalid` — nothing serious, but an analysis that ran could not be
+    ///   - `invalid`, nothing serious, but an analysis that ran could not be
     ///     judged (AC or thermal reported `valid:false`);
-    ///   - `pass` — otherwise.
+    ///   - `pass`, otherwise.
     /// Mirrors the run's own exit gate: DRC shorts are ignored when the board is
     /// newer than the validated copper extraction (`version_warning` set), the
     /// same carve-out the CI gate makes.
@@ -1455,7 +1455,7 @@ mod tests {
     #[test]
     fn drc_json_findings_carry_plain_and_fix() {
         // U3: DRC serialized as DrcShort/DrcGroup with no `plain`/`fix`, unlike
-        // SI/lint findings — so a --json consumer got remediation for every
+        // SI/lint findings, so a --json consumer got remediation for every
         // finding category except shorts/clearance. Both now carry them.
         let short = DrcShort {
             net_a: "GND".into(),
@@ -1517,7 +1517,7 @@ mod tests {
     fn open_pin_warning_matches_only_genuine_open_conditions() {
         // R23 (is-open-pin-warning-overbroad): a benign rail-assumption advisory
         // on a fully-wired resolved IC contains the bare word "open" but is NOT
-        // an open-pin condition — it must not push the part to resolved_but_open.
+        // an open-pin condition; it must not push the part to resolved_but_open.
         let switch_advisory =
             "U3 (SN74LVC1G3157): VCC net non-canonical, may read as open, so verify the \
              switch's actual supply";
@@ -1538,7 +1538,7 @@ mod tests {
     fn banner_warns_on_resolved_but_open_active_ic() {
         // R23 (check-heads-up-drops-resolved-but-open): a resolved MCU whose I/O
         // pins are all open on the live circuit makes its nets untrustworthy, so
-        // the banner must WARN and NAME it — not just for unresolved active ICs
+        // the banner must WARN and NAME it, not just for unresolved active ICs
         // (which the web/json personas already carry via resolved_but_open_active).
         let s = summary_with(Vec::new(), vec![active_ic("U1")]);
         let banner = s.render_banner();
@@ -1728,7 +1728,7 @@ mod tests {
     fn thermal_invalid_when_resolved_but_open_active_ic_leaves_empty_table() {
         // R36: an empty thermal table with a RESOLVED-BUT-OPEN power IC (bound to
         // a model, but open on the live circuit) used to report a false "runs
-        // cool" pass — thermal_validity only escalated the UNRESOLVED case. Both
+        // cool" pass, thermal_validity only escalated the UNRESOLVED case. Both
         // open cases make the table equally untrustworthy and must exit 3.
         let mut report = BindReport::default();
         report.push(row(
@@ -1834,7 +1834,7 @@ mod tests {
 
     #[test]
     fn boot_control_net_kind_serializes_as_snake_case() {
-        // The JSON contract is "boot_control_net" — a consumer filtering
+        // The JSON contract is "boot_control_net", a consumer filtering
         // notes[].kind must see exactly that, not "BootControlNet".
         let note = JsonNote {
             kind: JsonNoteKind::BootControlNet,

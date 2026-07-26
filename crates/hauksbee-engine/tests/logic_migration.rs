@@ -1,6 +1,6 @@
 //! Migration regression for the declarative digital-logic evaluator.
 //!
-//! ## Provenance — how these goldens were proven
+//! ## Provenance, how these goldens were proven
 //!
 //! Before the `DigitalKind` enum was deleted, this file drove BOTH the legacy
 //! hardcoded implementations (`Hc595`, `Hc165`, `Buffer`, `NorLatch`) and the
@@ -9,7 +9,7 @@
 //! voltage equal AT EVERY EDGE (89/54/24/16 edges respectively), plus a
 //! 4-chip daisy chain compared per edge against [`Hc595Chain`] (99 edges × 4
 //! chips). That old-vs-new proof is commit `ed80984` ("tests: byte-exact
-//! regression, legacy DigitalKind vs spec-driven LogicComponent") — check it
+//! regression, legacy DigitalKind vs spec-driven LogicComponent"), check it
 //! out to re-run the two-sided comparison. Only after it passed was the enum
 //! deleted.
 //!
@@ -24,7 +24,7 @@
 //! * **SRCLK rising while SRCLR_n is HELD low (74HC595).** The legacy
 //!   `tick_595` cleared the register and THEN shifted within the same
 //!   sample; the TI SN74HC595 function table (SCLS041I, "SRCLR L, SRCLK X
-//!   -> shift register clear") says the register stays cleared — which is
+//!   -> shift register clear") says the register stays cleared, which is
 //!   what `Hc595Chain::replay` implemented and what the spec's
 //!   reset-dominant semantics implement. A legacy artifact no firmware
 //!   sequence exercises.
@@ -33,7 +33,7 @@
 //!   there. Sequences release the two lines on separate edges (defined, and
 //!   proven identical).
 //! * **74HC165 clocked-shift direction.** Legacy `tick_165` shifted AWAY
-//!   from QH (QH read SER after one clock) — inverted from TI SCLS052I
+//!   from QH (QH read SER after one clock), inverted from TI SCLS052I
 //!   ("data is shifted toward the QH output": QH shows H, then G, ...). The
 //!   real read path (`Hc165Chain` + responder, untouched by the migration)
 //!   always had the datasheet direction, and nothing in the corpus
@@ -181,7 +181,7 @@ fn nor_latch_golden_trajectory_from_byte_exact_proof() {
     let mut latch =
         DigitalComponent::new_nor_latch("U_L1".into(), levels, roles, HashMap::new());
 
-    // (pin, level, expected q after the edge) — captured from the proof run.
+    // (pin, level, expected q after the edge), captured from the proof run.
     let seq: &[(&str, bool, bool)] = &[
         ("set", false, true),
         ("reset", false, true),
@@ -218,7 +218,7 @@ fn nor_latch_golden_trajectory_from_byte_exact_proof() {
 }
 
 /// The shipping 74HC165 spec follows the DATASHEET shift direction
-/// (TI SCLS052I: shifted toward QH — QH emits H, G, F, ... after a load),
+/// (TI SCLS052I: shifted toward QH, QH emits H, G, F, ... after a load),
 /// agreeing with the untouched `Hc165Chain` read path.
 #[test]
 fn hc165_silicon_direction_matches_datasheet() {
@@ -243,7 +243,7 @@ fn hc165_silicon_direction_matches_datasheet() {
 }
 
 /// The passthrough fallback (a part with no `[models.logic]`) mirrors wired
-/// a*/y* pairs — the old `Buffer` behaviour, golden from the proof run.
+/// a*/y* pairs; the old `Buffer` behaviour, golden from the proof run.
 #[test]
 fn passthrough_fallback_mirrors_wired_pairs() {
     let mut model = builtin("74HC595");
@@ -281,7 +281,7 @@ fn passthrough_fallback_mirrors_wired_pairs() {
 
 /// STILL TWO-SIDED: a 4-chip spec-driven daisy chain (qh_serial -> next ser
 /// through emulated nets with simultaneous-clock overlay semantics) versus
-/// the legacy [`Hc595Chain`] controller — independent Rust that survives the
+/// the legacy [`Hc595Chain`] controller, independent Rust that survives the
 /// migration as the MCU-facing fast path. Byte-exact per chip per edge.
 #[test]
 fn spec_chain_matches_hc595chain_reference() {

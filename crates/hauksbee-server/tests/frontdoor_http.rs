@@ -1,6 +1,6 @@
 //! Front-door API HTTP test: boot the analysis routes with a stub analyzer (so
 //! the server crate test stays independent of the engine crate), then drive them
-//! over a real TCP socket — POST `/api/analyze` runs the analyzer on the uploaded
+//! over a real TCP socket, POST `/api/analyze` runs the analyzer on the uploaded
 //! bytes and echoes the filename header back; `/api/analyze-with-firmware` threads
 //! board + firmware parts through verbatim. There is no server-rendered page
 //! (W6 §1): the React bundle owns `/` in the unified server router.
@@ -45,7 +45,7 @@ async fn spawn() -> std::net::SocketAddr {
 
 // (W6 §1) The server-rendered HTML front door is gone: the one web experience
 // is the React bundle in `frontend/dist`, and this crate now exposes only the
-// JSON analysis API it fetches. There is no GET `/` here anymore — the static
+// JSON analysis API it fetches. There is no GET `/` here anymore; the static
 // bundle owns `/` in the unified server router.
 
 #[tokio::test]
@@ -76,7 +76,7 @@ async fn analyze_runs_the_callback_on_uploaded_bytes() {
 async fn analyze_passes_binary_board_bytes_verbatim() {
     // Regression (web bytes fix): the handler used to lossy-UTF8-decode the
     // body before calling the analyzer, so a binary board (Altium .PcbDoc, an
-    // OLE2 container) was corrupted before it was ever parsed — each invalid
+    // OLE2 container) was corrupted before it was ever parsed, each invalid
     // byte below would have ballooned into a 3-byte U+FFFD. The exact byte
     // count echoed back proves the raw bytes now reach the analyzer intact.
     let addr = spawn().await;
@@ -375,7 +375,7 @@ async fn deps_install_failure_carries_the_real_tail() {
 async fn deps_install_refuses_cross_site_requests() {
     // The install route runs an installer, so a drive-by POST from a hostile
     // page (Sec-Fetch-Site: cross-site, which page JS cannot forge) must be
-    // refused before anything starts — same guard as the analyze/check routes.
+    // refused before anything starts, same guard as the analyze/check routes.
     let addr = spawn_deps().await;
     let resp = http(
         addr,

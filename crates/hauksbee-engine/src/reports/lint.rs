@@ -23,7 +23,7 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode, strict
     let bound = bind_board(board, lib);
     // Pin-role GUESS warnings: roles the binder inferred from the configurable
     // pin-rule table rather than an explicit pin-function. Nothing is silently
-    // guessed, so the lint reports each one — but on the correct channel per
+    // guessed, so the lint reports each one, but on the correct channel per
     // mode. In JSON mode they ride the structured `notes` array (kind
     // `bind_role`); printing them to stdout after the document would append
     // non-JSON text and corrupt the single JSON document a consumer parses.
@@ -99,7 +99,7 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
 /// Build the `--lint --json` document: the bind header, the lint findings, and
 /// the pin-role guesses as structured `bind_role` notes. Kept as a pure helper
 /// (no stdout) so a test can assert the whole thing is ONE valid JSON document
-/// — the guesses must ride the `notes` array, never trail the document as loose
+///; the guesses must ride the `notes` array, never trail the document as loose
 /// text that would break a JSON consumer.
 fn lint_json(
     bound: &crate::binder::BoundBoard,
@@ -182,7 +182,7 @@ mod tests {
 
     /// R16: `--lint --json` used to `println!` the pin-role guess block AFTER the
     /// JSON document, so stdout was a valid JSON object followed by loose
-    /// "pin-role guesses (...)" text — the whole stream no longer parsed as one
+    /// "pin-role guesses (...)" text; the whole stream no longer parsed as one
     /// JSON document. The guesses must now ride the structured `notes` array.
     #[test]
     fn lint_json_with_guesses_is_one_valid_json_document() {
@@ -193,7 +193,7 @@ mod tests {
             ("U1.PB3".to_string(), "spi_sck".to_string()),
         ];
         let out = lint_json(&bound, &report, &guesses);
-        // The ENTIRE output must parse as a single JSON value — no trailing text.
+        // The ENTIRE output must parse as a single JSON value, no trailing text.
         let v: serde_json::Value =
             serde_json::from_str(&out).expect("lint --json must emit ONE parseable JSON document");
         // The guesses are present, on the structured `notes` channel.

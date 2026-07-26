@@ -105,7 +105,7 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
       className="relative w-full h-full overflow-hidden"
       style={{ background: '#020617' }}
     >
-      {/* Radial gradient backdrop — gives the board a grounded space instead of flat black */}
+      {/* Radial gradient backdrop, gives the board a grounded space instead of flat black */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{

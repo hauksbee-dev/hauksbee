@@ -133,7 +133,7 @@ fn i2c_with_named_rail_pullup_is_clean() {
 fn i2c_resistor_array_pullup_is_clean() {
     // R55: is_resistor excludes RN refs and >2-pad parts, so a resistor-array
     // pull-up (a standard I2C termination) was invisible and a false "missing
-    // pull-up" fired on a correctly-terminated bus — and RN1 was also miscounted
+    // pull-up" fired on a correctly-terminated bus, and RN1 was also miscounted
     // as an active device.
     let comps = r#"
     (comp (ref U1) (value MCU) (footprint Package:QFN))
@@ -546,7 +546,7 @@ fn output_contention_refs_are_sorted_deterministically() {
 
 /// R35: `control_role` promised (in its own doc/inline comments) to handle the
 /// bare trailing-N active-low reset spelling, but only stripped the "_N" form,
-/// so `RESETN` / `RSTN` normalised to themselves and matched no reset arm —
+/// so `RESETN` / `RSTN` normalised to themselves and matched no reset arm,
 /// silently skipping a floating active-low reset. A degree-1 RESETN pin on an
 /// active IC must now fire the High floating-control finding.
 #[test]

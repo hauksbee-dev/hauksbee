@@ -363,7 +363,7 @@ export function renderBoard(
         } else if (hasVoltages && s.netName && netVoltages!.has(s.netName)) {
           const v = netVoltages!.get(s.netName)!
           trackColor = voltageTintColor(color, v)
-          // Bloom-like glow on active traces — stronger to visually pulse
+          // Bloom-like glow on active traces, stronger to visually pulse
           if (Math.abs(v) > 0.05) {
             trackGlow = v > 0 ? '#ffb347cc' : '#60a0ffcc'
           }

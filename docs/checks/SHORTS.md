@@ -94,7 +94,7 @@ board**, which drowned the real findings. So a small tolerance
 yet above the geometry's own rounding noise) raises the floor for the soft
 clearance band: a positive gap is a clearance violation only when it falls more
 than the tolerance below the rule. **Shorts (gap <= 0, real copper overlap) are
-unaffected** — the tolerance only relaxes the soft clearance band, never a true
+unaffected**; the tolerance only relaxes the soft clearance band, never a true
 intersection.
 
 Validated: bms-c1 drops from 137 spurious notes to **0** ("no shorts or
@@ -263,8 +263,8 @@ the corpus test without re-measuring the timings):
 | Adafruit Trinket M0 | 0.2032 mm | 369 | 0 | 0 | ~12 ms |
 | SparkFun RedBoard | 0.2032 mm | 851 | 0 | 1 | ~32 ms |
 | SparkFun Pro Micro | 0.1016 mm | 868 | 0 | 0 | ~7 ms |
-| SparkFun Thing Plus SAMD51 | board rule | — | 0 | — | — |
-| SparkFun Thing Plus RP2040 | board rule | — | 0 | — | — |
+| SparkFun Thing Plus SAMD51 | board rule |, | 0 |, |, |
+| SparkFun Thing Plus RP2040 | board rule |, | 0 |, |, |
 
 The last two were the round-3 additions: the RP2040 Thing Plus in particular is
 the regression guard for the Eagle mirror-transform fix in `drc.rs` (its MR0

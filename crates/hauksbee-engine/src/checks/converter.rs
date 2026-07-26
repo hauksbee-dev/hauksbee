@@ -365,7 +365,7 @@ fn classify_topology(input_name: &str, output_name: &str) -> Topology {
 fn rail_nominal_v(name: &str) -> Option<f64> {
     let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
     let leaf = n.rsplit('/').next().unwrap_or(&n);
-    // Explicit numeric voltage tokens are reliable, so they come FIRST — a rail
+    // Explicit numeric voltage tokens are reliable, so they come FIRST, a rail
     // named "+12V" always reports 12 V regardless of any role-name hint below.
     for (tok, v) in [("+12V", 12.0), ("+5V", 5.0), ("+3V3", 3.3), ("+3.3V", 3.3), ("+1V8", 1.8)] {
         if leaf == tok {
@@ -373,7 +373,7 @@ fn rail_nominal_v(name: &str) -> Option<f64> {
         }
     }
     // No role-name guessing at all. An earlier version fabricated 40 V for any
-    // name CONTAINING "SOLAR"/"PV"/"VBUS_IN" (and 13 V/40 V for VIN/VOUT/BAT) —
+    // name CONTAINING "SOLAR"/"PV"/"VBUS_IN" (and 13 V/40 V for VIN/VOUT/BAT),
     // but "PV" is a substring of ordinary buck/gate-driver nets like PVDD/PVCC,
     // and a fabricated voltage on the OUTPUT rail outranked a real "+12V" token
     // on the input and flipped a buck to a boost (skipping the ripple check).

@@ -74,7 +74,7 @@ fn sim_frame_supply_states_shape_matches_the_frontend_reader() {
     assert_eq!(json["supply_states"]["VBAT"]["kind"], "battery");
     assert!(json.get("power_supply_soc").is_none());
 
-    // Empty maps/lists are omitted entirely — the frontend must optional-chain.
+    // Empty maps/lists are omitted entirely; the frontend must optional-chain.
     let empty = serde_json::to_value(ServerMessage::SimFrame(SimFrame::default())).unwrap();
     assert!(empty.get("supply_states").is_none());
     assert!(empty.get("faults").is_none());

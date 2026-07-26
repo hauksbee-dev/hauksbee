@@ -55,7 +55,7 @@ export function toWireSupply(cfg: SupplyConfig): PowerSupplyWire {
   }
 }
 
-/** Supply net names from BoardInfo.power_supplies — a net→config MAP on the
+/** Supply net names from BoardInfo.power_supplies, a net→config MAP on the
  *  wire, not an array. Iterating it with `for..of` was a TypeError that took
  *  the whole app down on any board with configurable supplies. */
 export function supplyNetNames(

@@ -34,7 +34,7 @@ const palette: Record<string, LayerStyle> = {
   'F.Courtyard': { color: '#404040', zIndex: 10, visible: false },
   'B.Courtyard': { color: '#404040', zIndex:  9, visible: false },
 
-  // Paste / Mask — not usually visible
+  // Paste / Mask, not usually visible
   'F.Paste': { color: '#606060', zIndex:  5, visible: false },
   'B.Paste': { color: '#606060', zIndex:  4, visible: false },
   'F.Mask':  { color: '#308040', zIndex:  3, visible: false },

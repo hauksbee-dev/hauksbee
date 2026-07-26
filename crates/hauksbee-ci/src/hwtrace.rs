@@ -1,8 +1,8 @@
 //! Hardware-trace comparison: the T6 oracle tier (validation plan §T6).
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ci/hwtrace.md.
 //!
-//! A *hardware trace* is a captured waveform from a physical board — an
-//! oscilloscope CSV export or a logic-analyzer VCD — checked into
+//! A *hardware trace* is a captured waveform from a physical board, an
+//! oscilloscope CSV export or a logic-analyzer VCD, checked into
 //! `testdata/hwtraces/<board>/<scenario>/` beside a `trace.toml` that states
 //! where it came from (instrument, probe point, **provenance**) and which
 //! *features* of it the simulation must reproduce. A `[[assert]]` block with
@@ -13,7 +13,7 @@
 //! **Feature-based, never pointwise.** Real hardware carries component
 //! tolerances, probe loading, supply drift, and timing jitter that a correct
 //! simulation legitimately will not match sample-for-sample. What an EE
-//! actually checks on a scope is a small set of derived quantities — the
+//! actually checks on a scope is a small set of derived quantities; the
 //! settled level, the peak, the period and duty of an oscillation, the pulse
 //! width, how many edges fired. Those are the vocabulary here, each compared
 //! within its own stated tolerance (hardware traces carry their own error
@@ -24,7 +24,7 @@
 //! `provenance = "real" | "synthetic"`. `real` means the data came off an
 //! instrument probing a physical board. `synthetic` means it was constructed
 //! (from datasheet-typical behavior, another simulator, or by hand) to prove
-//! the pipeline — useful as scaffolding, but it validates the *harness*, not
+//! the pipeline, useful as scaffolding, but it validates the *harness*, not
 //! the simulator. A synthetic trace passed off as hardware is exactly the
 //! fake this repo refuses; the field is mandatory so the label can never be
 //! omitted silently.
@@ -69,7 +69,7 @@ pub struct TraceMeta {
     /// `"real"` (captured from a physical board) or `"synthetic"`
     /// (constructed; validates the harness, not the simulator). REQUIRED.
     pub provenance: String,
-    /// The instrument (e.g. "Rigol DS1054Z, 10x passive probe") — or, for a
+    /// The instrument (e.g. "Rigol DS1054Z, 10x passive probe"), or, for a
     /// synthetic trace, how it was constructed. REQUIRED so a trace can never
     /// silently omit its source.
     pub instrument: String,
@@ -108,13 +108,13 @@ pub struct Channel {
 
 /// One feature assertion: extract the same quantity from the captured and the
 /// simulated waveform, compare within the stated tolerance. Each kind is
-/// something an EE would read off a scope's measure menu — nothing fancier.
+/// something an EE would read off a scope's measure menu, nothing fancier.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Feature {
     /// `level | min | max | period | duty | pulse_width | edge_count`.
     pub kind: String,
-    /// Ignore samples before this time (ms) — lets the boot transient pass.
+    /// Ignore samples before this time (ms), lets the boot transient pass.
     #[serde(default)]
     pub after_ms: f64,
     /// Edge threshold in volts for the timing features. Default: 50% of each
@@ -143,7 +143,7 @@ const FEATURE_KINDS: &[(&str, &str)] = &[
 ];
 
 /// Timing features are meaningful on a digital (VCD) channel; the voltage
-/// features are not — a logic analyzer records bits, not volts, and comparing
+/// features are not, a logic analyzer records bits, not volts, and comparing
 /// its 0/1 levels against simulated volts would be a fake agreement.
 const VCD_ALLOWED: &[&str] = &["period", "duty", "pulse_width", "edge_count"];
 
@@ -159,7 +159,7 @@ impl Feature {
 
 impl Trace {
     /// Load and validate a `trace.toml`. Fails loud with a named reason on any
-    /// structural problem — a bad trace must never silently skip.
+    /// structural problem, a bad trace must never silently skip.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| SpecError::Io(format!("reading trace {}: {e}", path.display())))?;
@@ -283,7 +283,7 @@ pub fn trace_path(spec: &Spec, a: &crate::spec::Assertion) -> Result<PathBuf, Sp
 /// separated fields parse as floats is a `(time_s, volts)` sample; everything
 /// else (instrument preamble, column headers, units rows) is skipped. This is
 /// deliberately permissive because every scope vendor writes a different
-/// header, but it fails loud when fewer than 8 samples survive — a file that
+/// header, but it fails loud when fewer than 8 samples survive, a file that
 /// is all preamble is a wrong file, not an empty waveform.
 fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
     let text = std::fs::read_to_string(path)
@@ -327,7 +327,7 @@ fn load_csv(path: &Path) -> Result<Vec<(f64, f64)>, SpecError> {
 
 /// Load a logic-analyzer VCD: minimal parser for the subset every LA export
 /// uses (`$timescale`, `$var`, `#time`, scalar `0<id>`/`1<id>` changes).
-/// Returns a `(t_seconds, value)` event series with values 0.0/1.0 — the
+/// Returns a `(t_seconds, value)` event series with values 0.0/1.0; the
 /// digital levels, which is why only timing features are allowed on VCD
 /// channels. `signal` picks the `$var` by reference name; with exactly one
 /// signal in the file it may be omitted.
@@ -408,9 +408,9 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
             }
             continue;
         }
-        // Scalar change: '0<id>' / '1<id>' (x/z are skipped — undefined levels
+        // Scalar change: '0<id>' / '1<id>' (x/z are skipped, undefined levels
         // carry no honest edge information). Split on the first CHAR, not byte 1
-        // — a body line beginning with a multibyte UTF-8 char would panic a
+        //, a body line beginning with a multibyte UTF-8 char would panic a
         // byte-index split_at(1).
         let mut cs = l.chars();
         if let Some(val) = cs.next() {
@@ -431,8 +431,8 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
         )));
     }
     // The capture observed the signal (holding its last value) up to the final
-    // time marker; record that endpoint so the observation window — which the
-    // edge_count comparison depends on — is the capture's, not the last edge's.
+    // time marker; record that endpoint so the observation window, which the
+    // edge_count comparison depends on, is the capture's, not the last edge's.
     if let Some(&(t_last, v_last)) = out.last() {
         if last_marker > t_last {
             out.push((last_marker, v_last));
@@ -470,7 +470,7 @@ struct Edge {
 /// Detect threshold crossings with hysteresis (±5% of swing around the
 /// threshold), the way a scope's measure menu does. Without hysteresis, noise
 /// riding on a real capture near the threshold would manufacture edges and
-/// fake a period/duty disagreement — or worse, fake an agreement.
+/// fake a period/duty disagreement, or worse, fake an agreement.
 fn detect_edges(series: &[(f64, f64)], threshold: Option<f64>) -> Vec<Edge> {
     let (min, max) = extremes(series);
     let swing = max - min;
@@ -507,7 +507,7 @@ fn extremes(series: &[(f64, f64)]) -> (f64, f64) {
 
 /// Extract one feature's value from a waveform. Returns a named reason when
 /// the waveform cannot honestly yield the feature (too few edges, empty
-/// window) — the comparison surfaces that reason as a failure, never a skip.
+/// window); the comparison surfaces that reason as a failure, never a skip.
 pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
     let start_s = f.after_ms / 1000.0;
     let win: Vec<(f64, f64)> = series
@@ -605,7 +605,7 @@ pub fn extract(series: &[(f64, f64)], f: &Feature) -> Result<f64, String> {
 // ── comparison ────────────────────────────────────────────────────────────────
 
 /// One feature's captured-vs-simulated comparison, with both values and the
-/// tolerance band that judged them — the report line an EE can argue with.
+/// tolerance band that judged them; the report line an EE can argue with.
 #[derive(Debug, Clone)]
 pub struct FeatureResult {
     /// The net (probe point).
@@ -621,7 +621,7 @@ pub struct FeatureResult {
 
 /// Compare one feature across the captured and simulated waveforms. The
 /// tolerance band is `max(abstol, reltol * |captured|)` of whichever are
-/// stated — the captured value is the oracle, so the relative band is
+/// stated; the captured value is the oracle, so the relative band is
 /// anchored on it.
 pub fn compare(
     net: &str,
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn extracts_square_wave_features() {
-        // 200 ms period, 50% duty, 0..5 V, 1 s at 0.5 ms — the blinky shape.
+        // 200 ms period, 50% duty, 0..5 V, 1 s at 0.5 ms; the blinky shape.
         let s = square(0.2, 0.5, 0.0, 5.0, 1.0, 0.0005);
         let period = extract(&s, &feat("period")).unwrap();
         assert!((period - 200.0).abs() < 2.0, "period {period}");
@@ -781,7 +781,7 @@ mod tests {
     fn noise_near_threshold_does_not_manufacture_edges() {
         // A 2.5 V flat line with ±0.1 V "noise" around it: without hysteresis
         // scaled to the swing this would rack up hundreds of fake edges; with
-        // it, the swing IS the noise so crossings are genuine — but a real
+        // it, the swing IS the noise so crossings are genuine, but a real
         // square wave with small noise must still count only the real edges.
         let mut s = square(0.2, 0.5, 0.0, 5.0, 1.0, 0.0005);
         for (i, p) in s.iter_mut().enumerate() {

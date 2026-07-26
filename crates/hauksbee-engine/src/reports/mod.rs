@@ -5,7 +5,7 @@
 //! [`OutputMode`] per report, and the ~700-line `cmd_run` becomes a thin
 //! dispatcher: pick the mode once, call the right report's `emit`.
 //!
-//! Rendering itself is unchanged — each `emit` delegates to the existing
+//! Rendering itself is unchanged, each `emit` delegates to the existing
 //! renderers (`DrcStructured::render`, `plain_*`, `JsonReport`, the extract-crate
 //! text renderers) so the output stays byte-for-byte what it was.
 

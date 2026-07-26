@@ -181,7 +181,7 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
 fn tripped_abort_with_no_invalid_assertion_errors_in_junit_not_all_green() {
     // Same state as `tripped_abort_forces_exit_3_even_when_assertions_pass`: the
     // abort tripped but the only assertion (UART, not analog-derived) passed, so
-    // no per-assertion result carries INVALID. The run exits 3 — and the JUnit
+    // no per-assertion result carries INVALID. The run exits 3, and the JUnit
     // surface must agree: `render_human` and `render_github_annotations` both
     // special-case this state, so `render_junit` must too, with one synthetic
     // errored testcase instead of a false `failures="0" errors="0"` ALL-GREEN.

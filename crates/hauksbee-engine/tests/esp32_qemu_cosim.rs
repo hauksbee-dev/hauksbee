@@ -300,7 +300,7 @@ fn esp32c3_full_cosim_through_solved_circuit() {
 //
 // Regression for the ESP32-S3 co-sim gap: the builtin `esp32s3` model entry
 // carried no `backend` param, so a Watchy-v3-class board silently inherited
-// the binder's AVR default (`simavr:atmega328p`) — wrong ISA, and the
+// the binder's AVR default (`simavr:atmega328p`), wrong ISA, and the
 // GPL-gated `avr` feature the MIT-clean build excludes. These tests pin the
 // whole chain: bind → `qemu:esp32s3` → SocConfig::resolve (esp32s3.soc.toml)
 // → QemuBackend spawning the Espressif fork's *esp32s3* machine.
@@ -371,7 +371,7 @@ fn blank_s3_flash(dir: &std::path::Path) -> PathBuf {
 }
 
 /// The bind result and the instantiation path, with or without the emulator
-/// installed. Never the AVR path — that is the bug this file's header names.
+/// installed. Never the AVR path, that is the bug this file's header names.
 #[test]
 fn esp32s3_board_instantiates_qemu_backend_never_avr() {
     use hauksbee_engine::scheduler::Scheduler;
@@ -404,7 +404,7 @@ fn esp32s3_board_instantiates_qemu_backend_never_avr() {
         Err(e) => {
             // Without the Espressif fork installed the ONLY acceptable failure
             // is the loud install-guidance error from the QEMU locator (or the
-            // machine rejecting the image) — never a wrong-ISA AVR fallback and
+            // machine rejecting the image), never a wrong-ISA AVR fallback and
             // never the misleading "rebuild with --features avr" message.
             let msg = format!("{e:#}").to_lowercase();
             assert!(

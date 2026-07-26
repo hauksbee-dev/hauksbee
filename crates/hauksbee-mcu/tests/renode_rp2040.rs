@@ -8,7 +8,7 @@
 //! # Why this is (honestly) skip-gated
 //!
 //! The Renode build installed on this machine (portable **v1.16.1**) ships **no
-//! rp2040 platform** — `platforms/cpus/` carries only `picosoc`/`litex_picorv32`
+//! rp2040 platform**, `platforms/cpus/` carries only `picosoc`/`litex_picorv32`
 //! (unrelated RISC-V soft cores). Per 05 §5.4's gate, the smoke checks for the
 //! platform `.repl` first and SKIPS LOUDLY with the reason when it is absent,
 //! rather than failing. When run against a Renode that carries the platform, it
@@ -20,7 +20,7 @@
 //!
 //! RP2040 is Cortex-M0+, which executes the Thumb(-1) subset. The hand-assembled
 //! image below uses only `LDR (literal)` (T1), `STR (immediate)` (T1), and `B`
-//! (T2, unconditional) — all present on M0/M0+ — the same instruction family the
+//! (T2, unconditional), all present on M0/M0+; the same instruction family the
 //! `renode_adc_injection.rs` M3 fixture uses. No Thumb-2-only encoding appears.
 
 #![cfg(feature = "renode")]

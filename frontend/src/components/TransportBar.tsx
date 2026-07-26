@@ -49,7 +49,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
         height: 44,
       }}
     >
-      {/* Logo — copper wordmark with glow (the one bold accent) */}
+      {/* Logo, copper wordmark with glow (the one bold accent) */}
       <div
         className="font-bold tracking-widest select-none"
         style={{
@@ -147,7 +147,7 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
 
       <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />
 
-      {/* Sim time — primary readout: larger + brighter */}
+      {/* Sim time, primary readout: larger + brighter */}
       <div className="flex items-center gap-1.5" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
         <span className="text-[9px] uppercase tracking-wider" style={{ color: '#334155' }}>t</span>
         <span className="text-[13px] font-semibold" style={{ color: '#cbd5e1' }}>{formatTime(simTime)}</span>

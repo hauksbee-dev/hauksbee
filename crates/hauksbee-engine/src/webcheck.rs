@@ -2,10 +2,10 @@
 //! the REAL `hauksbee-ci` binary.
 //!
 //! The web checks panel builds the body of a spec (supplies, assertions,
-//! duration — everything except the file paths); this module stages the
+//! duration, everything except the file paths); this module stages the
 //! uploaded board and firmware in a temp dir, injects the `board`/`firmware`
 //! keys, and shells the installed `hauksbee-ci run <spec> --json`. Shelling
-//! the sibling binary — not reimplementing the runner — is the point: the
+//! the sibling binary, not reimplementing the runner, is the point: the
 //! result the browser shows is byte-for-byte what a pipeline would produce,
 //! so the web panel can never drift from CI truth. Detect-don't-bundle,
 //! exactly like the kicad-cli / ngspice oracles.

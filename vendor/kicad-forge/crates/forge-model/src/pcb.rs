@@ -567,7 +567,7 @@ impl<'a> Pad<'a> {
         let (px, py, _) = self.at();
         let angle = frot * PI / 180.0;
         // KiCad's board frame is y-DOWN with CCW-positive rotation, so the
-        // world offset is (px·cos + py·sin, −px·sin + py·cos) — NOT the textbook
+        // world offset is (px·cos + py·sin, −px·sin + py·cos), NOT the textbook
         // y-up matrix. The y-up form (px·cos − py·sin, px·sin + py·cos) mirrors
         // X for any non-0/180° footprint (e.g. frot=90 sends a pad at (0, py) to
         // −py instead of +py). This matches hauksbee-extract's pcb/drc/si pad
@@ -830,7 +830,7 @@ mod pad_transform_tests {
 
     // A pad offset (0, 5) inside a footprint placed at (10, 20) rotated 90°
     // (KiCad y-down, CCW-positive) lands at world (15, 20): the +Y local offset
-    // rotates onto +X. The old y-up matrix wrongly produced (5, 20) — a mirror.
+    // rotates onto +X. The old y-up matrix wrongly produced (5, 20), a mirror.
     #[test]
     fn rotated_pad_absolute_pos_uses_kicad_y_down_frame() {
         let text = r#"(kicad_pcb

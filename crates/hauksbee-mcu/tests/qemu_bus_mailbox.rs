@@ -176,7 +176,7 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     );
 
     // A READ transaction: two bytes, replies must land in the response cell.
-    // A write→read turnaround on the SAME address is a repeated START — no
+    // A write→read turnaround on the SAME address is a repeated START, no
     // Stop in between (a register-read slave must not see its transaction
     // boundary mid-read), mirroring the Renode bridge's ensure_mode.
     mcu.debug_write_u32(mailbox::I2C_REQ_OP, mailbox::I2C_OP_READ)
@@ -264,7 +264,7 @@ fn qemu_spi_mailbox_surfaces_byte_events() {
 
 /// Bit-identical-when-off (00-MASTER-PLAN §5): with callbacks registered but
 /// the firmware never raising BUS_MAGIC (every firmware that exists today),
-/// the backend must not touch the bus cells — no events, no acknowledgement.
+/// the backend must not touch the bus cells, no events, no acknowledgement.
 #[test]
 fn qemu_bus_mailbox_is_inert_without_magic() {
     let _guard = qemu_test_lock();

@@ -170,7 +170,7 @@ impl CompiledEntry {
 /// Heuristic constrainedness of a regex pattern (higher = more exact).
 ///
 /// The pattern is split on top-level `|` and the *least* constrained branch
-/// counts — an alternation is only as specific as its loosest arm. Within a
+/// counts, an alternation is only as specific as its loosest arm. Within a
 /// branch: literal characters score 2, a character class (`[...]`) or escaped
 /// class (`\d`, `\w`, …) scores 1 (it pins one position but admits several
 /// characters), anchors score 1, and wildcards / quantifiers / grouping
@@ -295,7 +295,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                     let body_score = pattern_constrainedness(&body);
                     // A grouped ALTERNATION matches a superset of any single arm,
                     // so it is strictly LOOSER than the exact override that pins one
-                    // arm — dock one looseness unit below the loosest arm, exactly
+                    // arm, dock one looseness unit below the loosest arm, exactly
                     // as `*`/`?` dock an optional region. This lets a dedicated
                     // exact override (`^ZZ904$`) deterministically beat the family
                     // (`^(ZZ901|…|ZZ905)$`) it carves out of, instead of merely tying
@@ -309,7 +309,7 @@ fn branch_constrainedness(branch: &str) -> u32 {
                     // unit), not just one unit. An optional group `(W)?` matches zero
                     // chars; leaving last_atom=0 let `^1N4148(W)?$` (group +2, `?`
                     // docked only 1 → net +1) out-score the exact `^1N4148$` override
-                    // — the same inversion R32/R42 close for `[..]*` and `(A|B)`.
+                    //; the same inversion R32/R42 close for `[..]*` and `(A|B)`.
                     last_atom = group_add;
                 } else {
                     last_atom = 0;
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn anchored_exact_outranks_unanchored_prefix() {
-        // ^INA186$ vs (?i)^INA186 — the anchored exact is more constrained.
+        // ^INA186$ vs (?i)^INA186; the anchored exact is more constrained.
         assert!(pattern_constrainedness("^INA186$") > pattern_constrainedness("(?i)^INA186"));
     }
 
@@ -467,7 +467,7 @@ mod tests {
         // characters and constrains nothing, so it must NOT inflate the score.
         // Previously the class scored +1 and the `*` retracted nothing, so the
         // family pattern outscored the exact `^1N4148$` override it carves out of
-        // and won the same-layer regex tie-break — silently binding the generic
+        // and won the same-layer regex tie-break, silently binding the generic
         // params. The exact literal must now win deterministically.
         assert!(
             pattern_constrainedness("^1N4148$")
@@ -480,7 +480,7 @@ mod tests {
                 > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
             "a required class char out-scores the same class made optional"
         );
-        // `+` requires at least one occurrence, so it still constrains — a `+`
+        // `+` requires at least one occurrence, so it still constrains, a `+`
         // family is not docked below its `*` sibling to nothing.
         assert!(
             pattern_constrainedness("^1N4148[A-Z0-9-]+$")
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn grouped_alternation_does_not_defeat_the_exact_override() {
         // R42: an alternation nested inside a group `(A|B|C)` was never split, so
-        // each internal `|` and every arm's literals were summed — inflating a
+        // each internal `|` and every arm's literals were summed, inflating a
         // grouped-alternation FAMILY far above the exact override it carves out of,
         // so the broad family won the same-layer regex tie-break and bound the
         // wrong params. The group is now scored as its loosest arm, docked one unit
@@ -524,7 +524,7 @@ mod tests {
         // R44: a quantified single-branch group `(W)?` matches zero chars, so the
         // `?` must retract the WHOLE group. Before, the group added 2 and the `?`
         // docked only 1, so `^1N4148(W)?$` (15) out-scored the exact `^1N4148$` (14)
-        // override it carves out of — the inversion regex_specificity prevents.
+        // override it carves out of; the inversion regex_specificity prevents.
         assert!(
             pattern_constrainedness("^1N4148$")
                 > pattern_constrainedness("^1N4148(W)?$"),

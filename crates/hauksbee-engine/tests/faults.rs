@@ -221,7 +221,7 @@ fn overloaded_nmos_overcurrent_faults() {
     // Drive the stress monitor directly: an NMOS held fully on, whose channel
     // carries ~2 A against a 1 A continuous rating, must raise `overcurrent`.
     // Regression for the Mosfet arm of operating_point() hardcoding current
-    // and power to zero — with the zeros, the Overcurrent / Overpower /
+    // and power to zero, with the zeros, the Overcurrent / Overpower /
     // Overtemperature checks could never fire for any MOSFET.
     let mut circuit = Circuit::new();
     let drain = circuit.node("DRAIN");
@@ -288,7 +288,7 @@ fn overloaded_nmos_overcurrent_faults() {
 
     // The conducting channel dissipates Vds·Id ≈ 4 W, so the power-gated
     // thermal path must be live too: the monitor publishes a junction
-    // temperature above ambient. (Impossible before the fix — power was 0,
+    // temperature above ambient. (Impossible before the fix, power was 0,
     // so no MOSFET ever got a temperature or an Overtemperature check.)
     let tj = mon
         .temp_by_ref()
@@ -339,7 +339,7 @@ fn healthy_board_raises_no_faults() {
 }
 
 /// Path to the demo firmware (mirrors tests/common but kept local so this test
-/// file is self-contained — the brief asks for distinct new test files).
+/// file is self-contained; the brief asks for distinct new test files).
 #[cfg(feature = "avr")]
 fn demo_firmware() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -437,7 +437,7 @@ fn dbg_led() {
 /// Monitor-level: a per-pin meta over a driver's hidden Vsource raises
 /// `pin_overcurrent` when the pin's branch current exceeds `max_pin_current_a`,
 /// and stays quiet under the limit. The Vsource operating-point arm reports the
-/// branch current — exactly the current the pin sources/sinks through its
+/// branch current, exactly the current the pin sources/sinks through its
 /// Thevenin leg.
 #[test]
 fn pin_overcurrent_fires_on_driver_leg_current() {
@@ -499,7 +499,7 @@ fn pin_overcurrent_fires_on_driver_leg_current() {
 }
 
 /// Binder-level: binding a 74HC595 (25 mA/pin rating in the model DB) produces
-/// one per-pin DeviceMeta over each stamped output driver's Vsource — the
+/// one per-pin DeviceMeta over each stamped output driver's Vsource; the
 /// structural half that makes the PinOvercurrent arm reachable on real boards.
 #[test]
 fn binder_gathers_per_pin_metas_for_logic_outputs() {

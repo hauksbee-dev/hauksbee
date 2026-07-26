@@ -15,9 +15,9 @@
 //!    24/24 seeds is statistical evidence, not a worst-case bound. The report
 //!    wording says so. Corner mode (`mode = "corners"`) enumerates every
 //!    all-min/all-max combination deterministically, which bounds the worst
-//!    case *only for monotonic responses* — also stated in the report.
+//!    case *only for monotonic responses*, also stated in the report.
 //! 2. **Reproducibility is doctrine.** Every sampled value is a pure function
-//!    of `(spec, seed, component reference)` — nothing depends on iteration
+//!    of `(spec, seed, component reference)`, nothing depends on iteration
 //!    order or on how many other components are toleranced. A failing seed can
 //!    therefore be re-run in isolation (`hauksbee-ci run spec.toml --seed N`)
 //!    and produces byte-identical values. The tolerance stream is
@@ -34,7 +34,7 @@ use hauksbee_extract::ExtractedBoard;
 
 /// Full-factorial corner enumeration is capped at 2^CORNER_CAP runs. Above
 /// this many toleranced components, corner mode refuses and points at
-/// Monte-Carlo instead — silently truncating the corner set would fake the
+/// Monte-Carlo instead, silently truncating the corner set would fake the
 /// bounded claim the mode exists to make.
 pub const CORNER_CAP: usize = 10;
 
@@ -44,7 +44,7 @@ pub enum Distribution {
     /// Uniform over [-tol, +tol]. The default: it assumes nothing about the
     /// vendor's binning and stresses the tolerance edges hardest.
     Uniform,
-    /// Gaussian with sigma = tol/3, truncated (by rejection) at ±tol — the
+    /// Gaussian with sigma = tol/3, truncated (by rejection) at ±tol; the
     /// standard EDA convention: the datasheet tolerance is treated as a 3-sigma
     /// bound, and no sample may exceed it (a part outside its marked tolerance
     /// would have been binned out at the factory).
@@ -88,7 +88,7 @@ pub enum Corner {
 #[derive(Debug, Clone)]
 pub struct SampledValue {
     pub reference: String,
-    /// The sampled value in SI units — this exact number is written into the
+    /// The sampled value in SI units; this exact number is written into the
     /// board before binding.
     pub si: f64,
     pub nominal_si: f64,
@@ -153,7 +153,7 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
     // sorted-by-reference output directly.
     let mut by_ref: BTreeMap<String, ResolvedTolerance> = BTreeMap::new();
 
-    // The value each component will have *after* overrides are applied — an
+    // The value each component will have *after* overrides are applied, an
     // override without a tolerance still moves the nominal the tolerance rule
     // spreads around.
     let overridden_value = |reference: &str| -> Option<&str> {
@@ -205,7 +205,7 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
 
     // Overrides with a tolerance: applied last, so they win over any [[tolerance]]
     // pattern covering the same ref. The nominal must be the ref's EFFECTIVE board
-    // value — the LAST override on that ref (apply_overrides is last-wins) — not
+    // value; the LAST override on that ref (apply_overrides is last-wins), not
     // the value of whichever (possibly earlier) override carries the tolerance
     // field. Otherwise duplicate overrides on one ref spread the ensemble around a
     // stale nominal while the board runs the last override's value.
@@ -247,7 +247,7 @@ fn parse_nominal(reference: &str, value: &str) -> Result<f64, SpecError> {
 }
 
 /// Minimal glob: `*` matches any (possibly empty) run of characters; every
-/// other character matches itself. Enough for `R*` / `R1?`-free use — we
+/// other character matches itself. Enough for `R*` / `R1?`-free use; we
 /// deliberately support only `*` to keep the matching teachable.
 pub fn glob_match(pattern: &str, s: &str) -> bool {
     fn inner(p: &[u8], s: &[u8]) -> bool {
@@ -289,7 +289,7 @@ pub fn build_plans(
             }
             if n > CORNER_CAP {
                 // n can be arbitrarily large here (one tolerance per component),
-                // so 1u64 << n overflows for n >= 64 — a debug panic / wrong
+                // so 1u64 << n overflows for n >= 64, a debug panic / wrong
                 // number in the very message that reports the cap was blown.
                 let runs = match u32::try_from(n).ok().and_then(|s| 1u64.checked_shl(s)) {
                     Some(v) => v.to_string(),
@@ -333,7 +333,7 @@ pub fn build_plans(
 /// Sample one component's value for one seed. Pure in `(seed, reference,
 /// rule)`: the PRNG stream is seeded from a domain-separated hash of the seed
 /// and the reference, so the value does not depend on what other components
-/// are toleranced or on evaluation order — that is what makes `--seed N`
+/// are toleranced or on evaluation order, that is what makes `--seed N`
 /// re-runs byte-identical.
 pub fn sample(seed: u32, t: &ResolvedTolerance) -> SampledValue {
     let tol = t.percent / 100.0;
@@ -365,7 +365,7 @@ pub fn sample(seed: u32, t: &ResolvedTolerance) -> SampledValue {
     }
 }
 
-/// A splitmix64 PRNG — tiny, solid, and stateless to seed. The same family the
+/// A splitmix64 PRNG, tiny, solid, and stateless to seed. The same family the
 /// fuzz path's `hash2` uses, kept separate and domain-tagged (`"tol:"`) so the
 /// two streams can never collide.
 struct SplitMix(u64);
@@ -446,7 +446,7 @@ pub fn format_engineering(v: f64) -> String {
     let mut digits = sig_digits(mantissa);
     // Detect the carry: rounding the mantissa to `digits` decimals can push it up
     // to 1000 (e.g. 999999 -> "1000k", 999.6 -> "1000"). When that happens promote
-    // to the next-larger suffix so the shown mantissa stays in [1, 1000) — "1M"/"1k"
+    // to the next-larger suffix so the shown mantissa stays in [1, 1000), "1M"/"1k"
     // rather than "1000k"/"1000". At the top suffix (G) there is nothing larger, so
     // leave it (unreachable for realistic component tolerances).
     if round_to(mantissa, digits) >= 1000.0 && idx > 0 {
@@ -490,8 +490,8 @@ mod tests {
     fn duplicate_override_spreads_around_the_last_value() {
         // R55: apply_overrides is last-wins (the board runs the LAST override's
         // value), but resolve() keyed the ensemble nominal off whichever override
-        // carried the tolerance field. Two overrides on R1 — the first with a
-        // tolerance, the second setting the real value — must spread around the
+        // carried the tolerance field. Two overrides on R1; the first with a
+        // tolerance, the second setting the real value, must spread around the
         // LAST value, not the earlier one.
         let spec: Spec = toml::from_str(
             "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn engineering_format_carries_past_a_decade_edge() {
         // R23 (FMT-ENG-DECADE-ROUNDUP): rounding the mantissa up to 1000 must
-        // carry into the next-larger suffix — never emit a wrong-decade label
+        // carry into the next-larger suffix, never emit a wrong-decade label
         // like "1000k" or a bare "1000".
         assert_eq!(format_engineering(999_999.0), "1M");
         assert_eq!(format_engineering(999.6), "1k");

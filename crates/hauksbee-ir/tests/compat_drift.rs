@@ -5,11 +5,11 @@
 //! against the real loader on every `cargo test`. The doc therefore cannot
 //! drift from the code:
 //!
-//! * `supported_claims_round_trip` — every card the doc claims SUPPORTED parses
+//! * `supported_claims_round_trip`, every card the doc claims SUPPORTED parses
 //!   successfully (a minimal snippet per claim, loaded through `SpiceLoader`).
-//! * `refused_claims_refuse` — every card the doc claims REFUSED produces an
+//! * `refused_claims_refuse`, every card the doc claims REFUSED produces an
 //!   error whose message contains the documented fragment.
-//! * `doc_matches_claims` — the generated tables between the `BEGIN GENERATED`
+//! * `doc_matches_claims`; the generated tables between the `BEGIN GENERATED`
 //!   / `END GENERATED` markers in the doc equal what this claim list renders,
 //!   so the human-readable doc can never disagree with the enforced list.
 //!   Regenerate after editing the claims with:
@@ -75,7 +75,7 @@ struct Claim {
     /// A minimal complete deck (the first line is a title and is dropped by the
     /// loader, matching SPICE convention).
     deck: &'static str,
-    /// Auxiliary files written alongside the deck (name, contents) — for
+    /// Auxiliary files written alongside the deck (name, contents), for
     /// `.include` / `.lib` claims.
     aux: &'static [(&'static str, &'static str)],
     expect: Expect,
@@ -149,7 +149,7 @@ fn claims() -> Vec<Claim> {
         accept(Cat::Expression, "`{expr}` values", "Curly-brace arithmetic over `.param` names anywhere a numeric value is taken (evalexpr, bare f64s).", "t\n.param w=3\nR1 a 0 {1000*w}\nV1 a 0 {w-1}\n.end\n"),
 
         // ===================================================================
-        // REFUSED, LOUDLY — each proves the exact message fragment the user sees.
+        // REFUSED, LOUDLY, each proves the exact message fragment the user sees.
         // ===================================================================
         refuse("`T` transmission line", "Transmission lines were cut (dev-plan step 15); the letter is unknown.", "t\nT1 a 0 b 0 Z0=50 TD=1n\nR1 b 0 50\n.end\n", "unknown element type `T`"),
         refuse("`J` JFET", "JFETs are unsupported; the element letter is unrecognized.", "t\nJ1 d g s JM\n.model JM NJF\nV1 d 0 5\n.end\n", "unknown element type `J`"),

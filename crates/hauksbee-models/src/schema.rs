@@ -32,7 +32,7 @@ pub struct ModelEntry {
     /// Stable identifier used in diagnostics and as a cross-reference key.
     pub id: String,
 
-    /// Component kind — drives which param fields are required by the solver.
+    /// Component kind, drives which param fields are required by the solver.
     pub kind: ComponentKind,
 
     /// Human-readable description for reports.
@@ -76,7 +76,7 @@ pub struct ModelEntry {
 
     /// Optional declarative digital-logic model (combinational expressions,
     /// clocked registers, tri-state groups) interpreted by the engine's
-    /// generic logic evaluator — a digital part's behaviour is data, not a
+    /// generic logic evaluator, a digital part's behaviour is data, not a
     /// Rust match arm. See [`crate::logic_spec`].
     #[serde(default, skip_serializing_if = "crate::logic_spec::Logic::is_empty")]
     pub logic: crate::logic_spec::Logic,
@@ -111,7 +111,7 @@ pub struct StrapPin {
     /// Whether the *silicon* provides an internal pull on this strap pin. This is
     /// what decides whether a *floating* strap net is a fault: ESP32 strapping
     /// pins each carry a documented internal pull, so an undriven net settles to a
-    /// defined level and is fine — but an STM32 BOOT0 has **no** internal pull, so
+    /// defined level and is fine, but an STM32 BOOT0 has **no** internal pull, so
     /// a floating BOOT0 leaves the boot source genuinely undefined and the part
     /// can enter the bootloader instead of the application. The lint's
     /// floating-strap arm fires only when this is [`StrapInternalPull::None`].
@@ -261,11 +261,11 @@ pub enum ComponentKind {
     Adc,
     /// Shift register (serial in/out or parallel in/out).
     ShiftRegister,
-    /// Microcontroller unit — hands off to hauksbee-mcu backend.
+    /// Microcontroller unit, hands off to hauksbee-mcu backend.
     Mcu,
     /// Connector: models pin continuity only.
     Connector,
-    /// Mounting hole, logo, test point, fiducial — silently ignored.
+    /// Mounting hole, logo, test point, fiducial, silently ignored.
     Ignore,
 }
 
@@ -356,7 +356,7 @@ impl Params {
     }
 
     /// Retrieve a boolean param by name. `None` when the key is absent or its
-    /// value is not a bool — so `flag = false` is distinguishable from omitted.
+    /// value is not a bool, so `flag = false` is distinguishable from omitted.
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.0.get(key)?.as_bool()
     }
@@ -382,7 +382,7 @@ impl Params {
     }
 }
 
-/// A parameter value — either a float, integer, or string.
+/// A parameter value, either a float, integer, or string.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum ParamValue {

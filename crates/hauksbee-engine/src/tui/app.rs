@@ -132,7 +132,7 @@ fn connectivity(
     use std::collections::HashMap;
     // net id → name, skipping the unconnected net 0 and KiCad's per-pad
     // `unconnected-*` placeholder nets (an explicit no-connect, not real
-    // connectivity — the binder filters these the same way).
+    // connectivity; the binder filters these the same way).
     let net_name: HashMap<i64, &str> = board
         .nets
         .iter()
@@ -291,10 +291,10 @@ fn event_loop(
         // rest. This is also the fix for the `Esc`-then-`r` keystroke-queuing
         // exit: many terminals encode a quick `Esc r` as a single Alt+r event
         // (Esc as the meta prefix), so an Alt-modified key while a modal is open
-        // is treated as the Esc that was meant to close it — not the action.
+        // is treated as the Esc that was meant to close it, not the action.
         if state.any_overlay_open() {
             // Two ways to close: an explicit close key (Esc/Enter/q), or an
-            // Alt-modified key — many terminals encode a quick `Esc <key>` burst
+            // Alt-modified key, many terminals encode a quick `Esc <key>` burst
             // as a single Alt+<key> event (Esc as the meta prefix), so an
             // Alt-modified key while a modal is up IS the Esc that was meant to
             // close it, not the action the trailing byte would otherwise run.
@@ -329,7 +329,7 @@ fn event_loop(
             KeyCode::Enter => state.activate(),
             KeyCode::Char('r') => {
                 if state.no_mcu {
-                    // No firmware to co-simulate — `r` just surfaces the pane's
+                    // No firmware to co-simulate, `r` just surfaces the pane's
                     // static-analysis message rather than faking a run.
                     state.focus = Pane::Cosim;
                 } else if let Some(h) = &cosim {

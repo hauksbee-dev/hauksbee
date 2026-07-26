@@ -137,16 +137,16 @@ estimator by design.
 
 ## Surfaces
 
-- **`hauksbee run <board> --thermal [--ambient C]`** — runs a short headless
+- **`hauksbee run <board> --thermal [--ambient C]`**: runs a short headless
   co-sim and prints a per-device junction-temperature table, marking any part
   over its limit. Informational (exits 0).
-- **`hauksbee check-code <code> [--ambient C]`** — the over-temperature fault
+- **`hauksbee check-code <code> [--ambient C]`**: the over-temperature fault
   shows up in the fault report alongside the others; a destroyed part fails the
   check.
-- **`hauksbee-ci`** — the `max_temp` assertion (per-device or explicit ceiling)
+- **`hauksbee-ci`**: the `max_temp` assertion (per-device or explicit ceiling)
   and the top-level `ambient_c` key. The `no_faults` assertion also catches
   over-temperature. See [CI.md](../ci/CI.md).
-- **Live UI** — per-component junction temperature is exported next to the stress
+- **Live UI**: per-component junction temperature is exported next to the stress
   fraction for the heat-map, and over-temperature faults appear in the fault
   overlay.
 
@@ -155,8 +155,8 @@ estimator by design.
 A 30 ohm 2512 power resistor across a 5 V rail dissipates `5^2 / 30 = 0.833 W`.
 In a 2512 (theta_JA = 80 C/W):
 
-- at 25 C ambient: `Tj = 25 + 0.833 * 80 = 91.7 C` — within the 125 C limit.
-- at 90 C ambient: `Tj = 90 + 0.833 * 80 = 156.7 C` — over the 125 C limit, so
+- at 25 C ambient: `Tj = 25 + 0.833 * 80 = 91.7 C`, within the 125 C limit.
+- at 90 C ambient: `Tj = 90 + 0.833 * 80 = 156.7 C`, over the 125 C limit, so
   the monitor raises `overtemperature`.
 
 This is the two-sided example shipped as

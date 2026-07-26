@@ -4,12 +4,12 @@
 //!
 //! hauksbee's boot strap-pin lint ([`straps`](super::straps)) keys off the
 //! per-part device model's strap table. When a strap-bearing MCU (STM32 / ESP32
-//! class) has no such table — it is absent from the model DB, or resolved only
-//! to a strapless engine fallback — the strap lint iterates to zero findings. In
+//! class) has no such table; it is absent from the model DB, or resolved only
+//! to a strapless engine fallback; the strap lint iterates to zero findings. In
 //! the report that is byte-identical to a board where it ran and found nothing,
 //! so a bare "Looks healthy" verdict ends up claiming coverage that never
-//! happened. On a real STM32WL55 board (phancak/LoRa-Board) the BOOT0 strap — a
-//! hardware-only boot-mode latch the firmware cannot override — was silently
+//! happened. On a real STM32WL55 board (phancak/LoRa-Board) the BOOT0 strap, a
+//! hardware-only boot-mode latch the firmware cannot override, was silently
 //! unchecked while `--lint` printed "Looks healthy".
 //!
 //! This check closes that gap. It emits one informational
@@ -70,7 +70,7 @@ fn is_active_ic_refdes(reference: &str) -> bool {
     prefix == "U" || prefix == "IC" || prefix == "MCU"
 }
 
-/// Families with a boot-mode pin sampled by hardware at reset — the surface the
+/// Families with a boot-mode pin sampled by hardware at reset; the surface the
 /// strap lint exists for. STM32 and its pin-compatible clones latch BOOT0; the
 /// ESP32 family latches its strapping pins (GPIO0/2/12/15). These are the ONLY
 /// families for which "no strap table examined" is a real coverage gap: AVR
@@ -110,7 +110,7 @@ fn is_strap_bearing_family(comp: &Component) -> bool {
     })
 }
 
-/// Heuristic: does this component look like an MCU? Conservative by design —
+/// Heuristic: does this component look like an MCU? Conservative by design,
 /// it must be an active-IC designator AND carry an MCU signature in its value,
 /// a property string, or KiCad's `MCU_*` symbol library id.
 pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
@@ -124,7 +124,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
     // `MCU_ST_STM32WL:STM32WL55CCUx`) and modules in `RF_Module:ESP32-WROOM-32`.
     // The library is the part before ':'. Accept either convention, or a library
     // that names a known family directly, so an ESP module whose *value* is
-    // "ESP-WROOM-32" (does not open with "ESP32") is still recognised — matching
+    // "ESP-WROOM-32" (does not open with "ESP32") is still recognised, matching
     // what `is_strap_bearing_family` keys on.
     let lib_up = comp.lib_id.to_ascii_uppercase();
     let lib_seg = lib_up.split(':').next().unwrap_or("");
@@ -138,7 +138,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
         return true;
     }
     // Only consult part-number-like properties (MPN / "Part Number"), never free
-    // text such as Datasheet or Description — a regulator whose description opens
+    // text such as Datasheet or Description, a regulator whose description opens
     // with "STM32-compatible …" must not be mistaken for an MCU.
     comp.properties.iter().any(|(k, v)| {
         let kl = k.to_ascii_lowercase();
@@ -156,7 +156,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
 ///    BOOT0 clones, or the ESP32 family. These are the only families with a
 ///    reset-sampled boot strap, so they are the only ones for which "no strap
 ///    table" is a real gap. AVR (fuses), PIC, MSP430, SAMD, nRF, etc. are not
-///    flagged — they have no boot strap to check.
+///    flagged; they have no boot strap to check.
 ///
 /// 2. Its strap table was not examined: the part resolved to no model, OR to a
 ///    model with an empty strap table. The load-bearing subtlety is that "has a
@@ -289,7 +289,7 @@ mod tests {
 
     /// End-to-end against the real model DB: an unmodelled strap-bearing MCU
     /// (STM32WL55) yields exactly one UncheckedMcu note naming it; a DB-authored
-    /// strap-bearing MCU with a populated strap table (STM32F103C8 — straps WERE
+    /// strap-bearing MCU with a populated strap table (STM32F103C8, straps WERE
     /// examined) and a passive yield none. This is the guard that stops "Looks
     /// healthy" from being printed over an MCU whose straps were never examined.
     #[test]
@@ -318,7 +318,7 @@ mod tests {
     /// engine fallback (STM32F407 → `route_mcu_family`) must STILL be flagged. The
     /// fallback gives it a model with no strap table, so `strap_lint` skips its
     /// BOOT0 silently; gating on `model.is_some()` would miss it and reprint "Looks
-    /// healthy" over an unchecked boot-mode latch — the exact bug this check exists
+    /// healthy" over an unchecked boot-mode latch; the exact bug this check exists
     /// to prevent. A DB-authored STM32F103C8 (real strap table) must NOT be flagged.
     #[test]
     fn flags_fallback_routed_mcu_but_not_a_db_authored_one() {
@@ -341,8 +341,8 @@ mod tests {
     }
 
     /// The ESP32 co-headline: an unmodelled ESP32 part (whose strap table the DB
-    /// would otherwise carry) is flagged; a DB-authored `ESP32-WROOM-32` — which
-    /// the strap lint really does model with GPIO0/2/12/15 — is not. Also pins the
+    /// would otherwise carry) is flagged; a DB-authored `ESP32-WROOM-32`, which
+    /// the strap lint really does model with GPIO0/2/12/15, is not. Also pins the
     /// `lib_id`-only recognition path: a module whose value is "ESP-WROOM-32" (does
     /// not open with "ESP32") but whose library is `RF_Module:ESP32-WROOM-32`.
     #[test]
@@ -382,7 +382,7 @@ mod tests {
 
     /// ESP32 positive path (the co-headline): an ESP32 value that misses the DB
     /// but routes to a strapless engine fallback (e.g. a bare `ESP32-C3`) must be
-    /// flagged — its GPIO strapping pins were never examined.
+    /// flagged; its GPIO strapping pins were never examined.
     #[test]
     fn flags_fallback_routed_esp32() {
         let lib = ModelLibrary::builtin();
@@ -410,7 +410,7 @@ mod tests {
 
     /// A non-strap-bearing MCU must NOT be flagged, even when unmodelled. SAMD
     /// (like AVR/PIC/nRF) has no reset-sampled boot strap, so "no strap table" is
-    /// not a coverage gap — flagging it would be the noise this check avoids.
+    /// not a coverage gap, flagging it would be the noise this check avoids.
     #[test]
     fn non_strap_bearing_unmodelled_mcu_is_not_flagged() {
         let lib = ModelLibrary::builtin();

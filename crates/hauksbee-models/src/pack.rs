@@ -31,7 +31,7 @@
 //! `~/.hauksbee/packs.toml` (the lockfile-ish record, sibling of the packs
 //! dir). Validation is fail-loud: every failure category is a named
 //! [`PackError`] variant, and every `models/*.toml` file must pass the same
-//! per-entry validation `hauksbee models lint` applies — a pack that installs
+//! per-entry validation `hauksbee models lint` applies, a pack that installs
 //! is a pack that loads.
 //!
 //! # Where packs sit in resolution
@@ -39,7 +39,7 @@
 //! Installed packs load at [`crate::SourceLayer::Pack`] (priority 10): above
 //! the builtin db, below the user model dirs. Same-layer conflicts *between*
 //! packs (two packs shipping the same model id) are reported loudly at load,
-//! naming both packs — never silently resolved. See [`crate::ModelLibrary`].
+//! naming both packs, never silently resolved. See [`crate::ModelLibrary`].
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/pack.md.
 
@@ -386,7 +386,7 @@ impl Pack {
                 // The behavioural block carries its own finiteness/positivity gates
                 // (converter setpoints & limits, pull/od/drive voltages & ohms,
                 // programmed sense params, FSM dwell). Without this call those gates
-                // never ran on a real installed pack — a `vout_setpoint = nan`
+                // never ran on a real installed pack, a `vout_setpoint = nan`
                 // panics the solver at `v_cmd.clamp(0.0, nan)` on a model that
                 // "validated clean". Gate it here like params and logic.
                 if !entry.behavioral.is_empty() {
@@ -405,7 +405,7 @@ impl Pack {
                 // The behavioural block carries its own finiteness/positivity gates
                 // (converter setpoints & limits, pull/od/drive voltages & ohms,
                 // programmed sense params, FSM dwell). Without this call those gates
-                // never ran on a real installed pack — a `vout_setpoint = nan`
+                // never ran on a real installed pack, a `vout_setpoint = nan`
                 // panics the solver at `v_cmd.clamp(0.0, nan)` on a model that
                 // "validated clean". Gate it here like params and logic.
             }

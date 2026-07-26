@@ -98,7 +98,7 @@ function numOr(v: string): string | null {
   return Number.isFinite(Number(t)) ? t : null
 }
 
-/** Compose the spec BODY (no board/firmware keys — the server injects those
+/** Compose the spec BODY (no board/firmware keys; the server injects those
  *  from the uploaded files). */
 function buildToml(name: string, duration: string, supplies: SupplyRow[], checks: CheckRow[]): string {
   let out = `name = ${tomlString(name)}\n`
@@ -249,7 +249,7 @@ export function ChecksPanel({ report, boardFile, firmwareFile, selectedNet }: {
   report: WebReport
   boardFile: File | null
   firmwareFile: File | null
-  /** Net last clicked on the board render — offered as a one-click check. */
+  /** Net last clicked on the board render, offered as a one-click check. */
   selectedNet: string | null
 }) {
   const storageKey = checksStorageKey(report)
@@ -378,12 +378,12 @@ jobs:
   return (
     <section className="mt-7" data-testid="checks-panel">
       <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: '#64748b' }}>
-        Checks — make this board's rules repeatable
+        Checks, make this board's rules repeatable
       </h2>
       <div className="rounded-lg px-4 py-4" style={{ background: '#0a0f1e', border: '1px solid #1e293b' }}>
         <div className="text-[13px] leading-relaxed mb-3" style={{ color: '#94a3b8' }}>
           Pick what must hold (a rail voltage, a blink, a print, nothing over-stressed), run it
-          here, then take the spec file with you — the same file <code>hauksbee-ci</code> runs in a
+          here, then take the spec file with you; the same file <code>hauksbee-ci</code> runs in a
           pipeline. Click a trace on the board map to start a check on that net.
         </div>
 
@@ -408,7 +408,7 @@ jobs:
           <>
             {/* Power */}
             <div className="text-[12px] font-semibold mb-1.5" style={{ color: '#8fa0b3' }}>
-              Power (detected from the board — adjust if wrong)
+              Power (detected from the board, adjust if wrong)
             </div>
             {supplies.map((s, i) => (
               <div key={i} className="flex items-center gap-2 mb-1.5">
@@ -528,7 +528,7 @@ jobs:
         <div className="mt-4">
           <div className="flex items-center justify-between mb-1">
             <div className="text-[12px] font-semibold" style={{ color: '#8fa0b3' }}>
-              The spec (TOML) — this exact text is what runs
+              The spec (TOML); this exact text is what runs
             </div>
             <button type="button" data-testid="raw-toggle" className="text-[12px] cursor-pointer"
               style={{ color: '#64748b', background: 'none', border: 'none' }}
@@ -612,7 +612,7 @@ jobs:
               <code>hardware/</code>, firmware in <code>firmware/</code>, this spec in <code>ci/</code>.
             </div>
             <div className="text-[12px] mb-1" style={{ color: '#8fa0b3' }}>
-              1. <code>ci/{specStem}.toml</code> — the Download button above produces it (paths
+              1. <code>ci/{specStem}.toml</code>; the Download button above produces it (paths
               already relative to that layout).
             </div>
             <div className="text-[12px] mb-1.5" style={{ color: '#8fa0b3' }}>
@@ -645,7 +645,7 @@ jobs:
                     ? { background: '#08130c', border: '1px solid #14532d', color: '#86efac' }
                     : { background: '#160b0b', border: '1px solid #7f1d1d', color: '#fca5a5' }}>
                   {result.passed ? 'All checks passed.' : 'Checks failed.'}
-                  {result.analog_abort && ' (analog solve aborted — results not trustworthy)'}
+                  {result.analog_abort && ' (analog solve aborted, results not trustworthy)'}
                 </div>
                 {(result.results ?? []).map((r, i) => (
                   <div key={i} className="mt-1.5 rounded-lg px-3 py-2 text-[13px] flex gap-2"

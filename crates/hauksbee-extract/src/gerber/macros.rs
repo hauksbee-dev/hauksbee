@@ -58,7 +58,7 @@ pub fn instantiate_macro(
                 let r = d / 2.0;
                 // The circle primitive carries an optional rotation about the
                 // macro origin (0,0). For an off-origin circle that rotation
-                // MOVES the center, so it must be applied — dropping it placed a
+                // MOVES the center, so it must be applied, dropping it placed a
                 // rotated arm/eye at the wrong location. (An origin-centered
                 // circle is unaffected, as expected.)
                 let (rsin, rcos) = c
@@ -112,7 +112,7 @@ pub fn instantiate_macro(
                 };
                 let (hw, hh) = (w / 2.0, h / 2.0);
                 // The CenterLine primitive carries a rotation angle that rotates
-                // it about the MACRO ORIGIN (0,0), not about its own center — the
+                // it about the MACRO ORIGIN (0,0), not about its own center; the
                 // same rule the Circle/VectorLine/Outline siblings follow. So the
                 // center itself must be carried through the rotation: form the
                 // absolute corner (x+dx, y+dy) and rotate the whole point about
@@ -133,7 +133,7 @@ pub fn instantiate_macro(
                 // The outline primitive rotates about the macro origin (0,0);
                 // its points are absolute macro coordinates, so the rotation both
                 // reorients AND (for an off-origin outline) translates the shape.
-                // Dropping it — the sibling of the CenterLine bug — reconstructed
+                // Dropping it; the sibling of the CenterLine bug, reconstructed
                 // a rotated custom pad at the wrong orientation and location.
                 let (sin, cos) = decimal(&o.angle, &vars).unwrap_or(0.0).to_radians().sin_cos();
                 for (px, py) in &o.points {
@@ -162,7 +162,7 @@ pub fn instantiate_macro(
                 // would otherwise drive a multi-gigabyte vertex push (OOM/hang).
                 let n = nv.clamp(3, 12) as usize;
                 // An AM primitive's rotation is about the MACRO ORIGIN (0,0), not
-                // the primitive's own center — so an off-origin polygon center must
+                // the primitive's own center, so an off-origin polygon center must
                 // itself be rotated, exactly as the Circle/CenterLine/Outline/
                 // VectorLine handlers do. Rotating only the vertex angle left the
                 // centroid at its unrotated (x,y), placing an off-origin rotated
@@ -454,7 +454,7 @@ mod tests {
         use gerber_types::{MacroBoolean, PolygonPrimitive};
         // An out-of-spec vertex count (here u32::MAX, as a hostile/corrupt
         // gerber could declare) must be clamped to the Gerber-legal 3..=12, not
-        // trusted — otherwise it drives a multi-gigabyte vertex push (OOM/hang).
+        // trusted, otherwise it drives a multi-gigabyte vertex push (OOM/hang).
         let poly = PolygonPrimitive {
             exposure: MacroBoolean::Value(true),
             vertices: MacroInteger::Value(u32::MAX),
@@ -475,7 +475,7 @@ mod tests {
         use gerber_types::{MacroBoolean, PolygonPrimitive};
         // R41: a hexagon centred at (3,0) rotated 45°. Per RS-274X an AM primitive
         // rotates about the MACRO ORIGIN, so the centre moves to (3cos45, 3sin45)
-        // ~= (2.12, 2.12) — like the Circle/CenterLine/Outline siblings. The old
+        // ~= (2.12, 2.12), like the Circle/CenterLine/Outline siblings. The old
         // handler rotated only the vertex angle, leaving the centroid at (3,0),
         // ~2.1 mm off in the wrong direction (a mis-bound pad/net).
         let poly = PolygonPrimitive {
@@ -528,7 +528,7 @@ mod tests {
         // macro origin. The center itself must rotate: (3,0)→(0,3), so the hull
         // spans x∈[-1,1], y∈[2,4]. The old handler rotated only the corner
         // offsets and kept the center at (3,0), leaving the rect at x∈[2,4],
-        // y∈[-1,1] — a pad centroid ~3 units away from where the fab put it.
+        // y∈[-1,1], a pad centroid ~3 units away from where the fab put it.
         let cl = CenterLinePrimitive {
             exposure: MacroBoolean::Value(true),
             dimensions: (MacroDecimal::Value(2.0), MacroDecimal::Value(2.0)),
@@ -548,7 +548,7 @@ mod tests {
         use gerber_types::{MacroBoolean, OutlinePrimitive};
         // An off-origin outline (a 2×2 square whose corners sit at x∈[1,3],
         // y∈[0,2]) rotated 90° about the macro origin must land at x∈[-2,0],
-        // y∈[1,3] — the rotation both reorients AND translates it. The old
+        // y∈[1,3]; the rotation both reorients AND translates it. The old
         // handler dropped the angle and left it at x∈[1,3], y∈[0,2], so the pad
         // centroid was in the wrong place and bound to the wrong net.
         let pt = |x: f64, y: f64| (MacroDecimal::Value(x), MacroDecimal::Value(y));

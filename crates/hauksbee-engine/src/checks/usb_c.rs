@@ -404,7 +404,7 @@ pub fn classify_attach(term: SinkTermination, rp: Rp, cable: Cable) -> CcResult 
 /// CC1 and CC2 resolve to one net.
 ///
 /// Rd is credited when it returns to ANY recognised ground (the GND family:
-/// GND/GNDA/AGND/DGND/PGND/…), the same ground set `audit_cc_termination` uses —
+/// GND/GNDA/AGND/DGND/PGND/…), the same ground set `audit_cc_termination` uses,
 /// not only the single net literally named "GND". A board whose CC pulldown
 /// returns to a secondary analog ground (e.g. the Lily58 keyboard's GNDA) would
 /// otherwise be mis-read as un-terminated, contradicting the audit and yielding a
@@ -864,7 +864,7 @@ fn is_dc_bridge(comp: &hauksbee_extract::Component) -> bool {
     let r = comp.reference.to_ascii_uppercase();
     let v = comp.value.to_ascii_uppercase();
     // 0 Ω resistor. Accept the R-as-decimal-point markings too: "0R", "0R0",
-    // "0.0R" (IEC 60062) all mean 0 Ω but only "0R"/"0"/"0.0" were recognised —
+    // "0.0R" (IEC 60062) all mean 0 Ω but only "0R"/"0"/"0.0" were recognised,
     // "0R0"/"0.0R" (R mid-string / trailing) fell through, so a CC bridge marked
     // "0R0" was not unioned. Normalise 'R' to a decimal point and parse.
     if is_resistor(comp) {
@@ -951,8 +951,8 @@ fn receptacle_score(comp: &hauksbee_extract::Component) -> i32 {
 }
 
 /// Heuristic: is this component a plain resistor (a candidate CC pulldown)?
-/// Excludes the R-prefixed parts that are NOT plain resistors — RV (varistor),
-/// RT (thermistor/NTC), RN (network), RP/RM (arrays) — so an ESD/EMC part on the
+/// Excludes the R-prefixed parts that are NOT plain resistors, RV (varistor),
+/// RT (thermistor/NTC), RN (network), RP/RM (arrays), so an ESD/EMC part on the
 /// CC line is never over-credited as an Rd. Mirrors device_decode::resistor_ohms.
 fn is_resistor(comp: &hauksbee_extract::Component) -> bool {
     let lib = comp.lib_id.to_ascii_uppercase();
@@ -979,7 +979,7 @@ pub fn classify_board(board: &ExtractedBoard, rp: Rp, cable: Cable) -> Option<Cc
 /// Severity of a board-level USB-C CC verdict ([`UsbcReport`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbcLevel {
-    /// A compliant source applies VBUS — the receptacle reads as a sink.
+    /// A compliant source applies VBUS; the receptacle reads as a sink.
     Ok,
     /// No fault asserted, but the CC story can't be fully judged from copper
     /// (e.g. termination is provided inside a PD-controller IC hauksbee can't see).
@@ -990,7 +990,7 @@ pub enum UsbcLevel {
 
 /// A board-level USB-C CC compliance verdict for `hauksbee run --usb-c`. Built
 /// from the primary receptacle's termination classified against a default-Rp
-/// source through a passive cable — the standard "plug it into a charger" case.
+/// source through a passive cable; the standard "plug it into a charger" case.
 #[derive(Debug, Clone)]
 pub struct UsbcReport {
     pub receptacles: Vec<ReceptacleCc>,
@@ -1009,7 +1009,7 @@ pub struct UsbcReport {
 ///
 /// The board is classified against a default-Rp source through BOTH a passive
 /// cable AND an e-marked (electronically-marked) cable, because the canonical
-/// failure — the RPi 4 rev-1.0/1.1 shared-CC-pulldown — only manifests with an
+/// failure; the RPi 4 rev-1.0/1.1 shared-CC-pulldown, only manifests with an
 /// e-marked cable: the e-marker's Ra drags the shared node into the Ra band so a
 /// compliant source declares an Audio Adapter Accessory and withholds VBUS, while
 /// a passive cable still reads the same node as a sink. (This is the real,
@@ -1029,7 +1029,7 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     // "Intends to be a self-terminated sink" means a discrete pulldown in a
     // *plausible Rd band*, not any resistor to GND. USB-C Rd is nominally 5.1 kΩ;
     // anything well above that (a bleeder, an ESD/EMC resistor, a non-Rd part on
-    // the CC net) is not an Rd and must not push the verdict to SERIOUS — that
+    // the CC net) is not an Rd and must not push the verdict to SERIOUS, that
     // would false-positive on a fine controller-terminated board. Trade-off: a
     // grossly-wrong Rd (e.g. a 51 kΩ typo) reads as Info, not Serious.
     const RD_PLAUSIBLE_MAX_OHMS: f64 = 10_000.0;
@@ -1046,10 +1046,10 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
     );
 
     // Report the EFFECTIVE Rd (external ∥ controller-internal) of the primary
-    // receptacle — the same number the text/web renderers show via
+    // receptacle; the same number the text/web renderers show via
     // `effective_rd_ohms()`. `term.cc*_rd_ohms` is the external discrete Rd only,
     // so on a double-terminated board the JSON scalar would read a nominal-looking
-    // 5.1k while text/web (and the very headline) report the out-of-spec ~2.55k —
+    // 5.1k while text/web (and the very headline) report the out-of-spec ~2.55k,
     // a cross-surface disagreement. Fall back to the external Rd when no audit ran.
     let (cc1_rd_ohms, cc2_rd_ohms) = audit
         .as_ref()
@@ -1076,7 +1076,7 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
 /// double-terminated: the effective Rd (~2.55k for two parallel 5.1k) is out of
 /// the 5.1k spec, dragging CC voltage out of range and making the source
 /// mis-detect current. That audit was computed but never influenced the verdict,
-/// so the defect graded Ok — invisible to `--json`, the web report, and `--strict`.
+/// so the defect graded Ok, invisible to `--json`, the web report, and `--strict`.
 /// Surfacing it as Info reaches every persona (web_gloss returns a section for
 /// Info) and denies a false "looks healthy". A Serious verdict is NOT downgraded.
 fn apply_double_termination(
@@ -1288,7 +1288,7 @@ mod tests {
     #[test]
     fn web_gloss_mirrors_the_cli_verdict_per_level() {
         // R23 (web-drops-usbc-verdict): the (what, why, fix) gloss the web/plain
-        // finding surfaces consume must agree with the level — a Serious verdict
+        // finding surfaces consume must agree with the level, a Serious verdict
         // carries the split-pulldown remedy, an Info verdict is a self-contained
         // note (no fix), and an Ok verdict surfaces nothing.
         let mut r = UsbcReport {
@@ -1319,7 +1319,7 @@ mod tests {
     fn receptacles_are_ordered_primary_first_by_score_not_board_order() {
         // R49: the scalar verdict fields derive from the HIGHEST-scoring receptacle
         // (receptacle_cc_nets picks max score), but the exposed `receptacles` list
-        // was board-order — so on a board whose higher-scoring receptacle came
+        // was board-order, so on a board whose higher-scoring receptacle came
         // later, receptacles[0] (the "primary" the detail list and audit report)
         // described a DIFFERENT connector than the verdict. all_receptacle_cc_nets
         // must return the max-score receptacle first.
@@ -1383,7 +1383,7 @@ mod tests {
         assert!(is_dc_bridge(&bridge_part("R5", "0R", "Device:R")));
         assert!(!is_dc_bridge(&bridge_part("R6", "5.1k", "Device:R")));
         // R42: the R-as-decimal-point zero markings "0R0" and "0.0R" (IEC 60062)
-        // are 0 Ω too — they fell through the old literal list, so a CC bridge
+        // are 0 Ω too; they fell through the old literal list, so a CC bridge
         // labelled "0R0" was not unioned and the termination read as absent.
         assert!(is_dc_bridge(&bridge_part("R7", "0R0", "Device:R")));
         assert!(is_dc_bridge(&bridge_part("R8", "0.0R", "Device:R")));
@@ -1636,7 +1636,7 @@ mod tests {
     fn double_termination_escalates_ok_to_info_and_reaches_every_surface() {
         // R44: the double-termination audit was computed but never influenced the
         // verdict, so an out-of-spec board (external Rd + a PMIC internal Rd) graded
-        // Ok — invisible to --json/--web/--strict and top-lined "looks healthy". A
+        // Ok, invisible to --json/--web/--strict and top-lined "looks healthy". A
         // would-be-Ok verdict must escalate to Info (which web_gloss surfaces and
         // which denies "healthy").
         let (lvl, msg) = apply_double_termination(UsbcLevel::Ok, "healthy".into(), true);
@@ -1657,7 +1657,7 @@ mod tests {
         // only, while text/web render the EFFECTIVE Rd (external ∥ internal). On a
         // double-terminated board (external 5.1k + nPM1300 internal 5.1k) the JSON
         // read a nominal-looking 5100 while the effective (and the headline) is the
-        // out-of-spec ~2550 — a cross-surface disagreement. The JSON must match.
+        // out-of-spec ~2550, a cross-surface disagreement. The JSON must match.
         let pin = |number: &str, net: i64, function: &str| hauksbee_extract::Pin {
             number: number.into(),
             net: Some(net),

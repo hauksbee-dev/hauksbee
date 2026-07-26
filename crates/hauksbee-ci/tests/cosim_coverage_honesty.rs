@@ -13,10 +13,10 @@
 //!   2. **Unexercised bus sensor** (finding 2): the LM75 thermostat spec run
 //!      against a platform whose descriptor models NO I2C controller (the
 //!      shipped stm32f103 descriptor with its controllers emptied, loaded via
-//!      `$HAUKSBEE_MCU_DIR` — the exact stock-nRF52840 failure shape before
+//!      `$HAUKSBEE_MCU_DIR`; the exact stock-nRF52840 failure shape before
 //!      this round gave nRF real controllers). The bound sensor never sees a
 //!      transaction; its state stays at the input default, which sits INSIDE
-//!      the assertion window — the false green this round makes impossible. A
+//!      the assertion window; the false green this round makes impossible. A
 //!      `peripheral` assertion against it must FAIL with the never-exercised
 //!      wording, and the coverage warning must reach every report format.
 //!

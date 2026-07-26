@@ -207,7 +207,7 @@ export default function SimView() {
               ))}
             </div>
 
-            {/* Simulation stats — always-visible compact card below the tab bar */}
+            {/* Simulation stats, always-visible compact card below the tab bar */}
             <div
               className="shrink-0 px-3 py-2"
               style={{ borderBottom: '1px solid #1e293b', background: 'rgba(15,23,42,0.6)' }}
@@ -232,7 +232,7 @@ export default function SimView() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[10px]" style={{ color: '#475569' }}>rt</span>
-                  <span className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{frame ? `${frame.realtime_factor.toFixed(2)}×` : '—'}</span>
+                  <span className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{frame ? `${frame.realtime_factor.toFixed(2)}×` : ', '}</span>
                 </div>
                 {boardInfo && (
                   <>

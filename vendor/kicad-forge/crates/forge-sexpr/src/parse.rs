@@ -5,7 +5,7 @@
 //! The source is copied once into an `Arc<str>` owned by the resulting
 //! [`Document`]; every token's raw text and every trivia run is a borrowed
 //! [`Text::Span`] into that buffer (see `text.rs`). Parsing therefore allocates
-//! the source once plus the child `Vec`s — no `String`, and no refcount bump,
+//! the source once plus the child `Vec`s, no `String`, and no refcount bump,
 //! per token.
 
 use std::sync::Arc;

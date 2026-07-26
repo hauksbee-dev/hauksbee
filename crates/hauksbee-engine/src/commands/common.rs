@@ -123,7 +123,7 @@ pub fn serve(
 /// `dist/`, so `hauksbee serve` happily serves a stale bundle and the user
 /// re-hits bugs that are already fixed in the sources. If any file under the
 /// sibling `frontend/src` (or `frontend/index.html`) is newer than
-/// `dist/index.html`, say so — loudly enough to act on, quietly enough not to
+/// `dist/index.html`, say so, loudly enough to act on, quietly enough not to
 /// block anything.
 pub fn warn_if_dist_stale(dist_dir: &Path) {
     let Some(frontend) = dist_dir.parent() else { return };

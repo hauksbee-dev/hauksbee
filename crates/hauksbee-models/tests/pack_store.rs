@@ -1,5 +1,5 @@
 //! PackStore install / list / remove round-trip, entirely inside a temp
-//! "home" — the real ~/.hauksbee is never touched.
+//! "home"; the real ~/.hauksbee is never touched.
 
 use std::path::Path;
 

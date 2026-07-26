@@ -5,7 +5,7 @@
 //! has pads `1`/`2`, never `anode`/`cathode`. A netlist *does* carry the role
 //! (`pinfunction "A"`/`"K"`), but the moment a board round-trips through a layout
 //! the role is gone, and a role-dependent binder (diode, BJT, MOSFET) can no
-//! longer tell which pad is which — so the part fails to bind.
+//! longer tell which pad is which, so the part fails to bind.
 //!
 //! This module is the inference layer that closes that gap. A [`PinRuleTable`]
 //! holds an ordered list of [`PinRule`]s; each rule matches on a footprint regex

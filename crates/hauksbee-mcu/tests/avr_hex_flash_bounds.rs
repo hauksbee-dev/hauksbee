@@ -93,7 +93,7 @@ fn hex_straddling_flash_end_errors_cleanly() {
 /// loads and runs.
 #[test]
 fn hex_within_flash_still_loads() {
-    // rjmp .-2 at address 0 — the tiniest valid firmware.
+    // rjmp .-2 at address 0; the tiniest valid firmware.
     let data = ihex_record(0x00, 0x0000, &[0xFF, 0xCF]);
     let hex = write_hex("tiny.hex", &[data]);
 

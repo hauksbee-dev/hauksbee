@@ -1,14 +1,14 @@
 //! Data-driven MCU/SoC descriptor loader tests (06-extensibility-sdk §2).
 //!
 //! Three proofs:
-//!   1. EQUIVALENCE — every shipped `db/mcu/*.soc.toml` loads to a config
+//!   1. EQUIVALENCE, every shipped `db/mcu/*.soc.toml` loads to a config
 //!      byte-identical to the Rust constructor it replaces. This is the gate the
 //!      constructors' hand-written bodies were deleted behind (06 §2: "verified
 //!      by the existing backend tests before its Rust constructor is deleted").
-//!   2. VALIDATION — each named-error category fires against a deliberately
+//!   2. VALIDATION, each named-error category fires against a deliberately
 //!      broken descriptor (unknown backend, empty platform, overlapping/zero-
 //!      width ports, duplicate controllers, unknown e_machine, …).
-//!   3. RESOLUTION — `SocConfig::resolve("backend:part")` finds the embedded
+//!   3. RESOLUTION, `SocConfig::resolve("backend:part")` finds the embedded
 //!      built-ins, and a user descriptor dropped in `$HAUKSBEE_MCU_DIR` is added
 //!      purely as data (06 §6.4).
 
@@ -35,7 +35,7 @@ const ESP32C3: &str = include_str!("../db/mcu/esp32c3.soc.toml");
 
 #[test]
 fn renode_descriptors_equal_constructors() {
-    // Byte-equal at the struct level (RenodeConfig: PartialEq) — the descriptor
+    // Byte-equal at the struct level (RenodeConfig: PartialEq); the descriptor
     // reproduces every field the hand-written constructor set.
     assert_eq!(
         RenodeConfig::from_soc_toml(STM32F103).unwrap(),
@@ -337,7 +337,7 @@ fn resolve_bad_spec_and_missing() {
     ));
 }
 
-/// 06 §6.4 acceptance: a NEW Renode MCU added purely as data — drop a descriptor
+/// 06 §6.4 acceptance: a NEW Renode MCU added purely as data, drop a descriptor
 /// in $HAUKSBEE_MCU_DIR and resolve it, no recompile. The override dir also wins
 /// over a built-in of the same part name.
 #[test]
@@ -394,7 +394,7 @@ width = 16
 /// named error up front (not a NotFound), and the embedded lookup is keyed by
 /// the FULL spec, so a builtin part named under the wrong backend is NotFound
 /// rather than a silent backend swap. (An override-dir file whose declared
-/// backend disagrees with the spec is a BackendMismatch — see
+/// backend disagrees with the spec is a BackendMismatch, see
 /// `override_dir_is_fail_loud_and_beats_builtin`.)
 #[test]
 fn resolve_validates_the_spec_backend_token() {
@@ -410,7 +410,7 @@ fn resolve_validates_the_spec_backend_token() {
 
 /// The fail-loud contract on the override dirs (the fresh-context critic's
 /// decisive probe): an INVALID override descriptor for a part about to be
-/// used — including a BUILTIN part name — fails the resolution with the file
+/// used, including a BUILTIN part name, fails the resolution with the file
 /// path and the named inner error. It is never silently skipped in favour of
 /// the embedded builtin. And a VALID override for a builtin name WINS over
 /// the builtin (the repo's layering doctrine).

@@ -53,7 +53,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
         } else if let Some(name) = n.arg_value(1).filter(|s| !s.is_empty()) {
             // The id slot is present but not a valid i64 (overflow, garbage).
             // The declared name is still authoritative: never adopt the raw
-            // digit string as the net's name — that would break exact-name
+            // digit string as the net's name, that would break exact-name
             // matches downstream (ground/power detection on "GND"/"VSS").
             table.id_of(&name);
         }
@@ -115,12 +115,12 @@ fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
     let net = list.find("net")?;
     if let Some(first) = net.arg(0).filter(|t| !t.is_string()) {
         // ≤v9 numeric id slot. An unparseable id (overflow, garbage) must not
-        // leak its digit string in as a name — resolve through the declared
+        // leak its digit string in as a name, resolve through the declared
         // name in the next slot instead.
         if let Some(id) = first.as_i64() {
             // KiCad reserves net 0 (always name "") as the "no net": every
             // unconnected / mounting / free pad carries `(net 0 "")`. Interning
-            // it would fuse all of them onto one shared node — the same hazard
+            // it would fuse all of them onto one shared node; the same hazard
             // the v10 empty-name guard below prevents.
             if id == 0 {
                 return None;
@@ -133,7 +133,7 @@ fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
     // v10 name-only reference. An empty name means "no net": interning ""
     // would hand every unconnected pad in the file the same synthetic id,
     // fusing unrelated pads onto one node. No net clause and `(net "")`
-    // must land in the same place — `None`.
+    // must land in the same place, `None`.
     let name = net.arg_value(0).filter(|n| !n.is_empty())?;
     Some(table.id_of(&name))
 }

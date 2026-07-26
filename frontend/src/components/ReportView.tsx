@@ -116,7 +116,7 @@ export function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUr
             boxShadow: '0 0 14px rgba(224,138,78,0.18)',
           }}
         >
-          <PlayIcon size={13} /> Drive it live — the board, a scope, and firmware in real time
+          <PlayIcon size={13} /> Drive it live; the board, a scope, and firmware in real time
         </button>
       ) : (
         <div
@@ -216,7 +216,7 @@ interface FindingGroup {
 /** Collapse same-shaped findings so the shared explanation is shown ONCE
  *  (persona-panel fix #6). Order-independent: any findings with identical
  *  level/why/fix merge, no matter where they sit in the list. Nothing is hidden
- *  — every individual `what` is still listed, just under one explanation. */
+ *, every individual `what` is still listed, just under one explanation. */
 function groupFindings(findings: WebFinding[]): FindingGroup[] {
   const groups: FindingGroup[] = []
   for (const f of findings) {
@@ -286,7 +286,7 @@ function GroupedFindingCard({ group: g }: { group: FindingGroup }) {
         {g.level} · {n} similar
       </span>
       <div className="font-semibold text-sm mt-1 mb-1.5">
-        {n} similar findings — same cause, listed once below.
+        {n} similar findings, same cause, listed once below.
       </div>
       <details className="mb-1.5">
         <summary className="text-sm cursor-pointer" style={{ color: '#94a3b8' }}>

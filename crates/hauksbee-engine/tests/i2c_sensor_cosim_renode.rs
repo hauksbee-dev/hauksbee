@@ -32,7 +32,7 @@
 //!
 //! ## Firmware
 //!
-//! `testdata/firmware/stm32_i2c_thermostat/thermostat.elf` — built with
+//! `testdata/firmware/stm32_i2c_thermostat/thermostat.elf`, built with
 //! `make -C testdata/firmware/stm32_i2c_thermostat`. Source in that directory.
 //!
 //! ## Running

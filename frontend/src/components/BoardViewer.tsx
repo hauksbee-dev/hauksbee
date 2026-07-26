@@ -27,7 +27,7 @@ interface BoardViewerProps {
    *  nothing is within reach. Fires only for a true click (no drag). */
   onNetClick?: (net: string | null) => void
   /** Called when the file parsed but yielded NOTHING drawable (no footprints,
-   *  segments or vias) — the embedding view can fall back to a simpler map
+   *  segments or vias); the embedding view can fall back to a simpler map
    *  instead of showing an empty void. */
   onEmptyBoard?: () => void
   /** Faulted component references for pulse highlights */
@@ -336,7 +336,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
   // A "click" is a press that never travelled: dragging.current is armed on
   // EVERY mousedown (it also drives pan), so it cannot distinguish click from
-  // drag — the old `!wasDragging` guard was always false and footprint clicks
+  // drag; the old `!wasDragging` guard was always false and footprint clicks
   // never fired. Track actual movement instead.
   const movedSinceDown = useRef(false)
 

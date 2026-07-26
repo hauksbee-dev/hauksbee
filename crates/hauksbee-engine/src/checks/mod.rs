@@ -17,7 +17,7 @@
 //!   from the model db and flags a strap net that cannot hold the level the part
 //!   needs at reset (a free-running clock on it, or a pull to the wrong rail).
 //! - [`mcu_coverage`]: flags a recognised MCU that has no authored device model,
-//!   so the strap and resource-conflict checks above could not run on it —
+//!   so the strap and resource-conflict checks above could not run on it,
 //!   keeping a "Looks healthy" verdict from being printed over a recognised MCU
 //!   the tool never modelled.
 //! - [`converter`]: discrete switching-converter topology recovery (switch node
@@ -47,12 +47,12 @@ use hauksbee_extract::{ExtractedBoard, NetLintReport, SiReport};
 use hauksbee_models::ModelLibrary;
 
 /// The full engine-level lint: the connectivity net-lint plus the model-aware
-/// checks — strap pins, MCU resource conflicts, the unmodelled-MCU coverage
+/// checks, strap pins, MCU resource conflicts, the unmodelled-MCU coverage
 /// note, configured-device decode faults (e.g. a CYPD3177 PD-sink divider), and
 /// model-aware driver contention.
 /// Kept as one function so every surface (`--lint`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set and no caller can
-/// reopen the "Looks healthy" hole by forgetting one — device_decode used to be
+/// reopen the "Looks healthy" hole by forgetting one, device_decode used to be
 /// spliced in only on the `--lint` path, so the other surfaces returned a false
 /// PASS on those faults.
 pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
@@ -74,13 +74,13 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
 
 /// The full engine-level signal-integrity report: the extract-layer SI checks
 /// (`board.si_checks`) PLUS the model-aware engine-layer checks whose attribution
-/// needs the bound DB models — trace ampacity (IPC-2221) and input-cap ripple.
+/// needs the bound DB models, trace ampacity (IPC-2221) and input-cap ripple.
 /// Kept as one chokepoint so every SI surface (`--si`, `--check`, the JSON
 /// aggregate, TUI, the web front door) runs the identical set. The
 /// ampacity/ripple checks were previously appended only on the dedicated `--si`
 /// path, so `--check`, the combined `--json`, and the web report returned a
 /// false "looks healthy" over an under-width power trace or an over-ripple input
-/// cap that `--si` flagged — the SI twin of the `engine_lint` hole above.
+/// cap that `--si` flagged; the SI twin of the `engine_lint` hole above.
 /// `geo_text` is the raw layout text (None for Altium, whose geometry is not yet
 /// threaded into the text-based SI checks).
 pub fn engine_si(board: &ExtractedBoard, lib: &ModelLibrary, geo_text: Option<&str>) -> SiReport {

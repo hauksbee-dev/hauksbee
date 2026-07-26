@@ -51,7 +51,7 @@ fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
 }
 
 /// Bug #1: a DNP component is on the layout but NOT assembled. It must
-/// contribute no device and no pin-to-net wiring — before the fix a DNP
+/// contribute no device and no pin-to-net wiring, before the fix a DNP
 /// resistor bridging two nets was stamped like a populated part, silently
 /// joining nets that are open on the real board.
 #[test]
@@ -102,7 +102,7 @@ fn dnp_component_is_not_stamped() {
             .any(|d| d.nodes().contains(&a) && d.nodes().contains(&bnode)),
         "no single device may bridge NET_A and NET_B (R1 is DNP)"
     );
-    // And the report says so, as a skip — not a bound or unresolved row.
+    // And the report says so, as a skip, not a bound or unresolved row.
     let row = bound
         .report
         .rows
@@ -218,7 +218,7 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
     );
     // Reachability: with select low, (vcc - select) = 3.3 V must EXCEED von,
     // i.e. the leg actually conducts when selected. Before the fix von was
-    // 3.75 V > 3.3 V — never.
+    // 3.75 V > 3.3 V, never.
     assert!(
         rail > von,
         "s0 leg must be able to close on a {rail} V rail (von = {von})"
@@ -226,7 +226,7 @@ fn spdt_s0_thresholds_follow_the_actual_rail() {
 }
 
 /// R5: an analog-switch VCC net that does not resolve to a known rail voltage
-/// (a non-canonical name like "VDD_MUX") must NOT silently assume 5 V — that
+/// (a non-canonical name like "VDD_MUX") must NOT silently assume 5 V, that
 /// reintroduces the "s0 permanently open on a low-voltage board" bug the
 /// rail-referenced thresholds fixed. It still falls back to 5 V, but says so in
 /// the bind report.
@@ -311,7 +311,7 @@ fn cr_designated_diode_is_not_a_capacitor() {
 
 /// Bug (binder-r3 #1): a multi-element passive array (a 4-pad isolated
 /// resistor network) used to bind as ONE 2-terminal resistor across its first
-/// two pads — the other elements silently vanished from the circuit. An even
+/// two pads; the other elements silently vanished from the circuit. An even
 /// pad count is the isolated-array convention: sequential pad pairs (1-2,
 /// 3-4, …), one element per pair at the pack's per-element value.
 #[test]
@@ -367,7 +367,7 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
     }
     // R5: the 1-2/3-4 sequential pairing is a convention (a mirror-pinout array
     // would pair differently), so the even-count path must say so in the bind
-    // report — matching the odd-count branch, not a silent guess.
+    // report, matching the odd-count branch, not a silent guess.
     let row = bound
         .report
         .rows
@@ -383,7 +383,7 @@ fn isolated_passive_array_stamps_one_element_per_pad_pair() {
 
 /// Odd pad counts are ambiguous (bussed common could sit at either end). The
 /// binder assumes the bussed convention (lowest pad common) but must say so
-/// LOUDLY in the bind report — never a silent single-element bind.
+/// LOUDLY in the bind report, never a silent single-element bind.
 #[test]
 fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
     // 5-pad bussed array: pad 1 common, elements to pads 2..5.
@@ -445,7 +445,7 @@ fn bussed_passive_array_binds_all_elements_with_a_loud_warning() {
 /// Bug (binder-r3 #2): negative supply rails ("-5V", "-12V") were never
 /// recognised by `power_rail_voltage` (the substring fallback required a
 /// leading '+'), so the net got no SupplyLeg and silently floated at 0 V.
-/// A negative rail must get a supply at the NEGATIVE voltage — and must not
+/// A negative rail must get a supply at the NEGATIVE voltage, and must not
 /// be conflated with ground.
 #[test]
 fn negative_rails_get_supply_legs_at_negative_voltage() {
@@ -500,13 +500,13 @@ fn negative_rails_get_supply_legs_at_negative_voltage() {
 
 /// Bug (binder-r3 #3): electrode-letter pad numbers ("A"/"K" on a diode
 /// footprint, no pinfunction, numerically-keyed fallback pad map) were never
-/// interpreted as roles, so the diode bound OPEN — a real junction deleted.
+/// interpreted as roles, so the diode bound OPEN, a real junction deleted.
 /// The pad letters must map to anode/cathode with correct polarity.
 #[test]
 fn diode_with_electrode_letter_pads_binds_with_correct_polarity() {
     // Footprint-only extraction: pads are NAMED "A"/"K", pinfunctions empty.
     // Value "D" resolves through the engine's 1N4148 fallback, whose pad map
-    // is keyed "1"/"2" — so before the fix nothing matched and D1 bound open.
+    // is keyed "1"/"2", so before the fix nothing matched and D1 bound open.
     let d = comp(
         "D1",
         "D",
@@ -556,7 +556,7 @@ fn diode_with_eagle_ordinal_pads_binds_via_numeric_pad_map() {
 }
 
 /// Bug #12: a dual op-amp (LM358) defines out_a/in_plus_a/in_minus_a AND the
-/// _b channel, but the binder only looked up channel A — one device stamped,
+/// _b channel, but the binder only looked up channel A, one device stamped,
 /// channel B's output net left floating with no warning. Both channels must
 /// stamp, keyed with the multi-unit `_q<N>` suffix the CI aggregation matches.
 #[test]
@@ -785,7 +785,7 @@ fn quad_bilateral_switch_stamps_one_vswitch_per_gate() {
     );
 }
 
-/// Bug #14: bare "VDD" carries no magnitude — on a 3.3 V/1.8 V board it is the
+/// Bug #14: bare "VDD" carries no magnitude, on a 3.3 V/1.8 V board it is the
 /// local core rail, so assuming 5 V overdrives the whole net. It must resolve
 /// to None (no ideal-supply stamp); voltage-suffixed forms keep their volts.
 #[test]

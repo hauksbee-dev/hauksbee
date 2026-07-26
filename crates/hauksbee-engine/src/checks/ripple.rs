@@ -326,7 +326,7 @@ mod tests {
     fn nonpositive_ripple_rating_is_guarded_against_infx() {
         // Bug-hunt #10: a zero/negative/NaN ripple rating (a malformed model-DB
         // ratings entry) must be treated as unusable, never divided into the
-        // overstress ratio — which for a zero rating printed "~infx overstress".
+        // overstress ratio, which for a zero rating printed "~infx overstress".
         // This pins the exact `!(rating_a > 0.0)` predicate the check applies.
         for bad in [0.0f64, -1.0, f64::NAN] {
             assert!(!(bad > 0.0), "rating {bad} must be rejected as unusable");

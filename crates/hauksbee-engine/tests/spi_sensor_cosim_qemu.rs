@@ -18,7 +18,7 @@
 //! only be surfaced for firmware that submits its transactions through the
 //! mailbox cells. THIS firmware (`testdata/firmware/esp32_spi_adc`) drives the
 //! real SPI2 controller with the esp-idf driver, which the emulator never
-//! surfaces to the host — so these tests still FAIL with a FLAG-stuck-LOW
+//! surfaces to the host, so these tests still FAIL with a FLAG-stuck-LOW
 //! assertion. Un-ignore when either (a) the firmware is rebuilt against the
 //! mailbox bus contract (needs an esp-idf/Xtensa toolchain), or (b) the QEMU
 //! fork grows a real SPI peripheral hook (the §5.3 preferred ending). The

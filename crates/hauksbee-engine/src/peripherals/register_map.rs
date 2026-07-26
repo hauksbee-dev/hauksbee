@@ -8,7 +8,7 @@
 //! (the `spi_reg` protocol), producing the same bytes a hand-coded model would.
 //!
 //! Crucially it does NOT wrap or delegate to `Lm75` / `Mcp3008`: every byte is
-//! computed here from the spec — the register pointer selects a
+//! computed here from the spec; the register pointer selects a
 //! [`RegisterSpec`], its `expr` is evaluated against the current input values
 //! with `evalexpr`, and the resulting number is packed per the register's
 //! [`Encoding`]. A declarative LM75 is therefore byte-for-byte identical to the
@@ -18,7 +18,7 @@
 //! It attaches through the existing bus peripherals unchanged: build an
 //! [`I2cBus`] with the sensor as a slave (`add_slave` / `with_slave`), or a
 //! [`SpiBus`] (`SpiBus::new`). The `on_i2c` / `on_spi` Renode/simavr bridge is
-//! untouched — this is just another slave.
+//! untouched; this is just another slave.
 //!
 //! ## Write side (05 §3.2)
 //!
@@ -28,7 +28,7 @@
 //! the conversion register reads), and command-framed writes (the MCP4728
 //! shape) update per-channel state whose output voltage laws drive analog nets
 //! through the ctx-bearing `on_stop` (05 §3.1). Bit-field extraction happens
-//! here in Rust from the spec's declared `[high, low]` ranges — evalexpr has
+//! here in Rust from the spec's declared `[high, low]` ranges, evalexpr has
 //! no bit operations, so the bit surgery is framing-layer data, never
 //! expression math (see the boundary note in `sensor_spec.rs`). Write bytes
 //! the spec does not declare are accepted-and-ignored but COUNTED
@@ -71,7 +71,7 @@ impl CompiledRegister {
 
         // Encoded register: evaluate the expr, apply scale/offset, pack.
         // A None program here means the spec passed validation without an expr,
-        // which should not happen for an encoded register — treat as 0.0.
+        // which should not happen for an encoded register, treat as 0.0.
         let enc = self.spec.encoding.unwrap_or(Encoding::U8);
         let program = self.program.as_ref().expect(
             "RegisterMapSensor: encoded register has no compiled expression; \
@@ -213,7 +213,7 @@ struct CompiledCommand {
 }
 
 /// A compiled output law, plus the net driver the engine attached (None until
-/// [`RegisterMapSensor::attach_output_driver_for_channel`] binds one — an
+/// [`RegisterMapSensor::attach_output_driver_for_channel`] binds one, an
 /// unbound output still evaluates for `state()` / assertions, it just drives
 /// nothing).
 struct CompiledOutput {
@@ -529,7 +529,7 @@ impl RegisterMapSensor {
 
     /// The modeled temperature in °C, if this sensor declares an LM75/TMP-style
     /// temperature register (`q7.1_be` encoding). This is the value QEMU pushes
-    /// into its emulated `tmp105` device on the co-sim path — the same physical
+    /// into its emulated `tmp105` device on the co-sim path; the same physical
     /// temperature the firmware would decode from the register bytes, recovered
     /// from the register's `expr` (with its `scale`/`offset`) rather than by
     /// unpacking the count. Returns `None` when the sensor models no such
@@ -758,7 +758,7 @@ impl RegisterMapSensor {
     }
 
     /// The bytes a read of `addr` currently produces (the spec-driven encoding).
-    /// Returns `[0xFF]` for any address not declared in the spec — this matches
+    /// Returns `[0xFF]` for any address not declared in the spec; this matches
     /// typical I2C/SPI open-drain bus idle behaviour and makes undeclared reads
     /// visible rather than silently returning another register's data.
     ///
@@ -903,8 +903,8 @@ impl I2cSlave for RegisterMapSensor {
         // decodes and commits as soon as its full width has arrived (further
         // bytes are ignored-and-counted: none of the modeled parts
         // auto-increment writes). Payload for an undeclared register keeps the
-        // old accept-and-ignore behaviour — the firmware's config writes don't
-        // stall — but is now counted instead of silently dropped.
+        // old accept-and-ignore behaviour; the firmware's config writes don't
+        // stall, but is now counted instead of silently dropped.
         let key = self.normalize_addr(self.pointer);
         if let Some(w) = self.write_regs.get(&key) {
             let width = w.encoding.natural_width();
@@ -1055,7 +1055,7 @@ impl SpiSlave for RegisterMapSensor {
     /// Every branch of `transfer` computes its MISO byte from state set by
     /// PRIOR bytes (command exchange and write phase return the fixed 0x00
     /// status don't-care; read bytes stream `read_buf` / the auto-increment
-    /// successor), never from the incoming MOSI byte — which is why this
+    /// successor), never from the incoming MOSI byte, which is why this
     /// sensor is fully previewable and hence readable over bit-banged SPI.
     /// A unit test locks the preview to the transfer stream byte-for-byte.
     fn miso_preview(&mut self) -> Option<u8> {
@@ -1139,7 +1139,7 @@ style = "i2c_pointer"
 
     /// PROOF: a declarative LM75 is byte-identical to the hand-coded `Lm75`
     /// across a temperature sweep, through the real I2C bus dispatch path. The
-    /// bytes come from the generic interpreter reading the spec — it never
+    /// bytes come from the generic interpreter reading the spec; it never
     /// touches `Lm75`.
     #[test]
     fn declarative_lm75_is_byte_identical_to_handcoded() {
@@ -1189,7 +1189,7 @@ style = "i2c_pointer"
     }
 
     /// A RegisterMapSensor with no `q7.1_be` register is not a temperature
-    /// sensor and must stay `None` — QEMU must not push a bogus temperature into
+    /// sensor and must stay `None`, QEMU must not push a bogus temperature into
     /// a device that models something else.
     #[test]
     fn temperature_mc_is_none_for_non_temperature_sensor() {
@@ -1263,9 +1263,9 @@ addr_mask = 0x7f
     }
 
     /// PROOF of the `miso_preview` contract the bit-banged SPI responder rests
-    /// on: at EVERY byte position of a transaction — command byte, in-register
+    /// on: at EVERY byte position of a transaction, command byte, in-register
     /// streaming, the auto-increment hop past a register's end, and across a
-    /// CS deassert — the preview equals the byte the very next `transfer`
+    /// CS deassert; the preview equals the byte the very next `transfer`
     /// returns, and previewing repeatedly does not advance the stream.
     #[test]
     fn miso_preview_matches_transfer_stream_byte_for_byte() {
@@ -1312,7 +1312,7 @@ addr_mask = 0x7f
 "#;
 
     // Same sensor but declared with the PRE-MASKED address 0x50 (the old hand-
-    // masked style). Must still resolve identically — backward compatibility.
+    // masked style). Must still resolve identically, backward compatibility.
     const BMP280_PREMASKED_SPEC: &str = r#"
 [sensor]
 name = "BMP280"
@@ -1342,7 +1342,7 @@ addr_mask = 0x7f
         let id = bus.transfer(0x00);
         assert_eq!(id, 0x58, "raw-addr (0xD0) chip-ID read should return 0x58");
 
-        // Pre-masked address 0x50 — same command byte must yield the same byte.
+        // Pre-masked address 0x50, same command byte must yield the same byte.
         let sensor = RegisterMapSensor::from_toml(BMP280_PREMASKED_SPEC).unwrap();
         let mut bus = SpiBus::new("SPI", Box::new(sensor));
         let _status = bus.transfer(0xD0);
@@ -1477,7 +1477,7 @@ addr_mask = 0x7f
     // ── Bosch BME280/BMP280 integer compensation (datasheet §4.2.3, §8.2) ─────
     // Direct ports of the datasheet reference C. `wrapping_*` reproduces C's
     // modular int32 semantics exactly (the routines are designed not to wrap for
-    // valid inputs, so this is faithful, not lossy). These run in the FIXTURE —
+    // valid inputs, so this is faithful, not lossy). These run in the FIXTURE,
     // they are the raw→physical consumer the model deliberately does not embed.
 
     /// Returns `(t_fine, T)` where `T` is temperature in 0.01 °C.
@@ -1539,8 +1539,8 @@ addr_mask = 0x7f
     }
 
     /// FIXTURE: BME280 chip-ID gate reads 0x60 through the bound I2C bus, and a
-    /// burst read of the raw data registers decodes — via the datasheet Bosch
-    /// compensation — to the datasheet Appendix worked-example physical values.
+    /// burst read of the raw data registers decodes, via the datasheet Bosch
+    /// compensation, to the datasheet Appendix worked-example physical values.
     ///
     /// Authority: the trimming + raw ADC inputs are the Bosch datasheet Appendix
     /// (§8.2) worked example; the compensated temperature 25.08 °C is the exact
@@ -1578,7 +1578,7 @@ addr_mask = 0x7f
         // Full coefficient round-trip through the bus. Covering EVERY pressure
         // coefficient here (not just p1) is deliberate: a wrong two's-complement
         // byte in the spec (e.g. dig_P2/dig_P8) would otherwise only surface as a
-        // small pressure error downstream — this pins each to its datasheet value.
+        // small pressure error downstream; this pins each to its datasheet value.
         assert_eq!(
             (t1, t2, t3),
             (27504, 26435, -1000),
@@ -1627,7 +1627,7 @@ addr_mask = 0x7f
     }
 
     /// FIXTURE: MPU6050 WHO_AM_I reads 0x68 through the bound I2C bus, and a
-    /// burst read of the data registers decodes — via the linear scale factors —
+    /// burst read of the data registers decodes, via the linear scale factors,
     /// to the driven physical quantities (accel Z = +1 g, gyro X = 250 °/s,
     /// temp = 25 °C). Here the whole forward map is expressible as evalexpr
     /// value expressions (`expr * scale + offset`), so no encoding addition is
@@ -1814,7 +1814,7 @@ style = "i2c_pointer"
 
     // A command-framed device whose command completes in a SINGLE byte
     // (group_bytes = 1): the command byte IS the group. Regression for round-4
-    // #4 — the group used to never drain (drain ran only from the Active arm on
+    // #4; the group used to never drain (drain ran only from the Active arm on
     // the next write), so a Start/Write/Stop produced no state change at all.
     const ONE_BYTE_CMD_SPEC: &str = r#"
 [sensor]
@@ -1919,7 +1919,7 @@ style = "i2c_pointer"
     }
 
     /// The ctx-bearing on_stop drives a bound PinDriver with the output law's
-    /// voltage — the full 05 §3.1 path with a real stamped circuit.
+    /// voltage; the full 05 §3.1 path with a real stamped circuit.
     #[test]
     fn on_stop_drives_bound_output_net() {
         use crate::peripherals::TickCtx;
@@ -1990,7 +1990,7 @@ style = "i2c_pointer"
     }
 
     /// FIXTURE: ADS1115 config write selects mux/PGA and the conversion read
-    /// reflects the driven input — the write→read coupling that is the point
+    /// reflects the driven input; the write→read coupling that is the point
     /// of §6.1 item 3.
     ///
     /// Authority (TI SBAS444): POR config 0x8583 (§8.6.4) is MUX=000
@@ -2058,8 +2058,8 @@ style = "i2c_pointer"
         );
     }
 
-    /// FIXTURE: INA219 calibration write feeds the current/power math — the
-    /// §6.1 item-4 coupling — anchored to the datasheet §8.5.1 worked example
+    /// FIXTURE: INA219 calibration write feeds the current/power math; the
+    /// §6.1 item-4 coupling, anchored to the datasheet §8.5.1 worked example
     /// (TI SBOS448): R_SHUNT = 0.1 Ω, Current_LSB = 100 uA -> Cal = 0x1000;
     /// at I = 2 A, VBUS = 12 V: shunt 20000, bus 0x5DC2, current 20000
     /// (= 2.0 A), power 12000 (= 24 W at 2 mW/bit).
@@ -2103,8 +2103,8 @@ style = "i2c_pointer"
 
     // ── THE PROOF (05 §3.2): the MCP4728 as a data instance of the schema ────
     //
-    // These are the hand-coded `Mcp4728` model's unit tests, ported verbatim —
-    // same bytes in, same assert values — against the SHIPPED spec
+    // These are the hand-coded `Mcp4728` model's unit tests, ported verbatim,
+    // same bytes in, same assert values, against the SHIPPED spec
     // (docs/hunts/specs/mcp4728.toml). The bespoke Rust died only once these
     // passed unweakened (plus the engine-level mcp4728_cosim and the LOAD_DAC
     // regression in tarski_firmware_cosim).
@@ -2113,7 +2113,7 @@ style = "i2c_pointer"
     const MCP4728_SPEC: &str = include_str!("../../../../docs/hunts/specs/mcp4728.toml");
 
     /// A spec-driven MCP4728 at `addr` with the board config the hand-coded
-    /// `Mcp4728::new` used (internal VREF 2.048 V, gain 2 — the spec defaults).
+    /// `Mcp4728::new` used (internal VREF 2.048 V, gain 2; the spec defaults).
     fn mcp4728_at(addr: u8) -> RegisterMapSensor {
         let mut s = RegisterMapSensor::from_toml(MCP4728_SPEC).unwrap();
         s.set_i2c_address(addr);

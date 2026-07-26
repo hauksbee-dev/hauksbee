@@ -67,7 +67,7 @@ fn evaluate_hwtrace(
 ) -> Vec<AssertResult> {
     use crate::hwtrace;
 
-    // In corners mode a member index is a corner number, not a random seed —
+    // In corners mode a member index is a corner number, not a random seed,
     // label it to match evaluate_one, the coverage banner, and every sibling
     // assertion (the round-30 fix, previously left unapplied to this path).
     let member = match mode {
@@ -125,7 +125,7 @@ fn evaluate_hwtrace(
 
             // Per-seed comparison; the feature must hold on every EVALUABLE seed.
             // A member whose analog solve diverged (non-empty failed_windows) has
-            // held-stale net_series, so SKIP it — its comparison is untrustworthy.
+            // held-stale net_series, so SKIP it; its comparison is untrustworthy.
             // FAIL > INVALID (round-50): a converged member's real disagreement with
             // the capture must beat a diverged sibling's INVALID, so we only fall
             // back to INVALID (below) when no converged member fails.
@@ -219,7 +219,7 @@ fn evaluate_one(
         _ => "seed",
     };
 
-    // Is this member's analog evaluation window held-stale — i.e. does it overlap
+    // Is this member's analog evaluation window held-stale, i.e. does it overlap
     // a chunk the solver failed on? Such a member's samples cannot be trusted, so
     // its pass/fail is meaningless (05 §3b, "refuse rather than fake").
     let member_invalid = |out: &RunOutcome| -> bool {
@@ -228,11 +228,11 @@ fn evaluate_one(
     };
 
     // Precedence is FAIL > INVALID > PASS. Evaluate every ensemble member so the
-    // result carries the pass-rate and the full failing-seed list — but SKIP a
+    // result carries the pass-rate and the full failing-seed list, but SKIP a
     // member whose own window is analog-invalid: its held-stale samples are not a
     // trustworthy fail or pass. A member that fails on a fully-converged solve is a
     // real, disproving failure and is decisive under the all-seeds rule, even if a
-    // DIFFERENT member diverged — so we must evaluate trustworthy failures before
+    // DIFFERENT member diverged, so we must evaluate trustworthy failures before
     // letting a diverged sibling refuse the whole assertion (otherwise a genuine
     // brownout on one corner is silently downgraded to INVALID by an unrelated
     // convergence hiccup on another).
@@ -304,7 +304,7 @@ fn evaluate_one(
     }
 
     // No trustworthy failure. INVALID > PASS: if any member's evaluation window
-    // was held-stale (analog divergence), we can neither honestly pass nor fail —
+    // was held-stale (analog divergence), we can neither honestly pass nor fail,
     // report a distinct INVALID rather than let a window with no valid samples
     // masquerade as a pass. This fires per-window (not per consecutive-abort), so
     // an intermittent divergence below the abort threshold still refuses.
@@ -361,7 +361,7 @@ fn evaluate_one(
 
 /// The all-members-green detail string for an assertion, worded to the ensemble
 /// mode. `members` is the total member count INCLUDING the nominal baseline
-/// (member 0), so a MonteCarlo run reports `members - 1` sampled seeds — the
+/// (member 0), so a MonteCarlo run reports `members - 1` sampled seeds; the
 /// nominal draws no random sample and must not be counted as one (mirrors the
 /// run banner in `lib.rs`, which also subtracts the nominal).
 fn all_green_detail(
@@ -465,7 +465,7 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
     if let (Some(d), Some(for_ms)) = (a.dip_below, a.for_max_ms) {
         // A duration needs at least two samples to measure (windows(2) yields
         // nothing from one point, so dip_duration_s folds to 0 and silently
-        // auto-passes). A window that spans less than one frame is degenerate —
+        // auto-passes). A window that spans less than one frame is degenerate,
         // fail loudly rather than claim a timing spec we could not evaluate.
         if win.samples.len() < 2 {
             ok = false;
@@ -511,11 +511,11 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
     let net = a.supply_net.clone().unwrap_or_default();
     let want = a.expect_trip.unwrap_or(false);
     // When the assertion names a scenario, only count trips that latched inside
-    // that scenario's window — a trip from an earlier scenario must not satisfy
+    // that scenario's window, a trip from an earlier scenario must not satisfy
     // (or violate) an assertion scoped to a later one. Unscoped assertions fall
     // back to the run-wide "ever tripped" flag. An explicit empty scenario ("")
     // means the run-wide window, same as leaving it unset (Spec::validate's
-    // documented contract) — filter it out so it takes the run-wide branch, not a
+    // documented contract), filter it out so it takes the run-wide branch, not a
     // scoped lookup that misses and returns a false RED. Mirrors check_rail_window.
     let tripped = match a.scenario.as_deref().filter(|s| !s.is_empty()) {
         Some(scope) => {
@@ -574,7 +574,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // The boot window is [0, deadline], but the firmware run only produced data
     // out to sim_ms. If the deadline lands past the end of the simulation the
     // tail of the window was never observed, so "boot window clean" would be
-    // asserting coverage over an unsimulated interval — a false green. Report it
+    // asserting coverage over an unsimulated interval, a false green. Report it
     // as unmet (mirrors check_voltage's "never sampled" failure) rather than
     // trusting a first-cross with no chance of a later drop being seen.
     if deadline > out.sim_ms + 1e-9 {
@@ -591,7 +591,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let first_cross = out.boot_first_cross_ms.get(&key).copied();
     let drop_after = out.boot_drop_after_cross_ms.get(&key).copied();
     match first_cross {
-        // Never reached its level at all — genuinely undriven or driven-but-low.
+        // Never reached its level at all, genuinely undriven or driven-but-low.
         None => (
             false,
             boot_below_threshold_msg(
@@ -614,7 +614,7 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             // deadline: a drop back below level at or before the deadline breaks
             // coverage (this is the case the old end-of-run latch conflated with
             // "never reached"). A drop AFTER the deadline is a legitimate release
-            // and does not fail — boot coverage is about the boot window only.
+            // and does not fail, boot coverage is about the boot window only.
             if let Some(td) = drop_after {
                 if td <= deadline + 1e-9 {
                     return (
@@ -655,10 +655,10 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 ///     it was driven, the voltage just never crossed the threshold;
 ///   - it is not driven and the backend can report drive direction (the AVR
 ///     backend reads DDR; a Renode part with a direction-register map in its
-///     SoC descriptor reads MODER/CRL+CRH/DIR — either way a held-LOW pin is
+///     SoC descriptor reads MODER/CRL+CRH/DIR, either way a held-LOW pin is
 ///     known driven): a net absent here is genuinely undriven / Hi-Z;
 ///   - it is not driven and the backend cannot report drive direction (QEMU,
-///     or a Renode part without a dir map — those see drive state only through
+///     or a Renode part without a dir map, those see drive state only through
 ///     observed edges): absence is ambiguous, so we say only what is known
 ///     rather than asserting Hi-Z on what might be a held-LOW pin.
 fn boot_below_threshold_msg(
@@ -719,7 +719,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     // Unexercised-bus refusal (U3 finding 2): this peripheral was bound on a
     // platform that models no matching bus controller, so the firmware never
     // sent it a single transaction. Its snapshot is the slave's POWER-ON
-    // DEFAULT state — asserting on that could green-pass (an LM75 default
+    // DEFAULT state, asserting on that could green-pass (an LM75 default
     // temp is in-range for most specs), which is exactly the false green this
     // check exists to prevent. FAIL loudly before any field/bytes check.
     if out.unexercised_bus_ids.contains(&id) {
@@ -740,7 +740,7 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     };
     // SPI framing-tier flag (U3 finding 3): a heuristic-framed bus guesses
     // transaction boundaries at chunk edges (merges/truncates transactions),
-    // so any verdict about this peripheral carries that caveat in its detail —
+    // so any verdict about this peripheral carries that caveat in its detail,
     // in the report itself, not a code comment.
     let framing_flag = match out.spi_framing.get(&id).map(String::as_str) {
         Some("heuristic") => {
@@ -852,7 +852,7 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let text: String = match &a.mcu {
         Some(m) => out.uart.get(m).cloned().unwrap_or_default(),
         None => {
-            // Concatenate all MCUs in a STABLE (sorted-by-key) order — iterating
+            // Concatenate all MCUs in a STABLE (sorted-by-key) order, iterating
             // a HashMap's values put the streams in nondeterministic order, so an
             // anchored/boundary-spanning match (`^BOOT`) flaked run to run.
             let mut items: Vec<(&String, &String)> = out.uart.iter().collect();
@@ -987,7 +987,7 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         return (false, format!("net '{net}' has no AC data"));
     }
 
-    // A requested frequency outside the swept band cannot be measured — interp_db
+    // A requested frequency outside the swept band cannot be measured, interp_db
     // would silently clamp to the nearest endpoint gain and report it AS IF taken
     // at the requested frequency. Fail loudly instead of comparing an endpoint
     // gain against the bound. (R7 #13)
@@ -1129,7 +1129,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             // No current data. The runner rejects a max_current on an untracked
             // component kind at bind time (`check_trackable_assert_refs`), so
             // reaching this branch means the tracked device never produced a
-            // sample — fail loud rather than report a guard that was never
+            // sample, fail loud rather than report a guard that was never
             // evaluated as green.
             false,
             format!(
@@ -1145,7 +1145,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 /// package stamps one device per unit with a `_q<N>` / `_s<N>` suffix
 /// ("IC3906_q2", "SW1_s0"), so per-unit producers (`peak_temp_c`, faults) never
 /// record the bare package ref. Mirrors the binder's suffix rule and the
-/// runner's `thermally_tracked` gate — the gate accepts a bare ref whose units
+/// runner's `thermally_tracked` gate; the gate accepts a bare ref whose units
 /// are monitored, so the consumers here MUST match those unit keys too, or a
 /// safety assert on a multi-unit package could never fail.
 fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
@@ -1204,7 +1204,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 // with no thermal model at bind time (`check_trackable_assert_refs`),
                 // so here the part IS stress-monitored and simply never dissipated
                 // measurably: its junction sat at AMBIENT. That is only a pass if
-                // ambient itself is within the ceiling — in a hot-ambient spec a
+                // ambient itself is within the ceiling, in a hot-ambient spec a
                 // ceiling below ambient is violated by the idle part sitting at
                 // ambient, not silently skipped.
                 if out.ambient_c <= limit + 1e-6 {
@@ -1335,7 +1335,7 @@ mod tests {
         // Round-30: in corners mode a member index is a corner number (a specific
         // min/max combination), not a random fuzz seed. evaluate_one's INVALID
         // branch hardcoded "seed {n}:" instead of the mode-aware `member`, so a
-        // held-stale corner was mislabeled — an EE told to re-run "seed 3" when the
+        // held-stale corner was mislabeled, an EE told to re-run "seed 3" when the
         // coverage banner and every other line call it "corner 3". The prefix must
         // track the mode, matching the FAIL path.
         use crate::runner::RunOutcome;
@@ -1343,7 +1343,7 @@ mod tests {
         fn outcome(seed: u32, failed: Vec<(f64, f64)>) -> RunOutcome {
             // A clean, in-band VOUT window so a converged corner PASSES this
             // assertion. (R50: FAIL now beats INVALID, so the converged member must
-            // not itself fail — the INVALID must come purely from the diverged
+            // not itself fail; the INVALID must come purely from the diverged
             // corner's held-stale window, which is what this test exercises.)
             let mut windows = HashMap::new();
             windows.insert(
@@ -1431,7 +1431,7 @@ mod tests {
         assert!(key_belongs_to_ref("SW1", "SW1_q12"));
         assert!(key_belongs_to_ref("SW1", "SW1_s0"));
         // R44: `_e` is the binder's suffix for resistor/passive ARRAY units (RN1_e1),
-        // and it was omitted — so a package-level safety assert on an array's bare
+        // and it was omitted, so a package-level safety assert on an array's bare
         // ref could never match its overheating element.
         assert!(key_belongs_to_ref("RN1", "RN1_e1"));
         assert!(key_belongs_to_ref("RN1", "RN1_e12"));
@@ -1476,7 +1476,7 @@ mod tests {
     }
 
     // U3 finding 2: a `peripheral` assertion against a bus device the platform
-    // never exercised (no matching controller modeled) must FAIL loudly — the
+    // never exercised (no matching controller modeled) must FAIL loudly; the
     // snapshot is the slave's power-on default, and a default LM75 temperature
     // sits inside most spec windows, so evaluating it would be a false green.
     #[test]
@@ -1490,7 +1490,7 @@ mod tests {
         )
         .unwrap();
 
-        // The slave's default state WOULD pass the window — that is the trap.
+        // The slave's default state WOULD pass the window, that is the trap.
         let mut snap = PeripheralSnapshot::default();
         snap.fields.insert("temp_c".to_string(), 25.0);
         let mut out = RunOutcome::default();
@@ -1604,7 +1604,7 @@ mod tests {
         // R34: the run stops at duration_ms, so RunOutcome only carries data out
         // to sim_ms. A first-cross before a deadline that lands PAST sim_ms left
         // drop_after = None (a later drop could never be observed), and the old
-        // code returned GREEN "boot window clean" — asserting coverage over an
+        // code returned GREEN "boot window clean", asserting coverage over an
         // unsimulated tail. The deadline outrunning the sim must FAIL, not pass.
         use super::check_boot_coverage;
         use crate::runner::RunOutcome;
@@ -1801,7 +1801,7 @@ mod tests {
         use std::collections::HashMap;
 
         // Net BATT latched at some point in the run, but only within the
-        // "inrush" window — NOT within the later "steady" window.
+        // "inrush" window, NOT within the later "steady" window.
         fn outcome() -> RunOutcome {
             let mut protection_tripped = HashMap::new();
             protection_tripped.insert("BATT".to_string(), true);
@@ -1869,7 +1869,7 @@ mod tests {
     }
 
     // A max_temp ceiling BELOW ambient must fail for an idle (non-dissipating)
-    // device — its junction sits at ambient, which already exceeds the ceiling.
+    // device; its junction sits at ambient, which already exceeds the ceiling.
     // Auto-passing on "no dissipation measured" hid a hot-ambient violation
     // (round-7 #8).
     #[test]
@@ -1938,7 +1938,7 @@ mod tests {
     }
 
     // A rail_window brownout floor must see an intra-frame sag that recovers by
-    // the frame's last chunk — the runner folds the scheduler's per-frame extremes
+    // the frame's last chunk; the runner folds the scheduler's per-frame extremes
     // into RailWindow.min_v/max_v, exactly like the plain voltage path. Without the
     // fold (base bug), min_v is the settled 3.3 V and a min=3.0 floor false-passes
     // the very sag it exists to catch (R49).
@@ -2027,7 +2027,7 @@ mod tests {
         let a = spec.asserts[0].clone();
 
         // Corner 0 converged, but its sim period (500 ms) disagrees with the 200 ms
-        // capture — a trustworthy FAIL. Corner 1 diverged (a failed window).
+        // capture, a trustworthy FAIL. Corner 1 diverged (a failed window).
         let mut ns0 = std::collections::HashMap::new();
         ns0.insert("D".to_string(), square(0.5));
         let corner0 = RunOutcome { seed: 0, net_series: ns0, sim_ms: 1000.0, ..Default::default() };
@@ -2061,7 +2061,7 @@ mod tests {
 
     // A vcd_sink `transitions` field is analog-derived (per-frame threshold
     // crossings), so its assertion window must be gated by analog validity like
-    // `toggle` — otherwise a diverged chunk silently yields a definite PASS/FAIL on
+    // `toggle`, otherwise a diverged chunk silently yields a definite PASS/FAIL on
     // held-stale edge counts instead of INVALID (R51). Digital bus-slave fields
     // stay un-gated.
     #[test]
@@ -2108,7 +2108,7 @@ mod tests {
             );
             w
         };
-        // Corner 1: converged cleanly (no failed windows), VOUT sagged to 2.0 V —
+        // Corner 1: converged cleanly (no failed windows), VOUT sagged to 2.0 V,
         // a real, trustworthy brownout (RED).
         let corner1 = RunOutcome {
             seed: 1,
@@ -2147,7 +2147,7 @@ mod tests {
             res.detail
         );
         // R52: the pass-rate must NOT count the held-stale (INVALID) corner 2 as
-        // passed. Of 2 corners: 0 passed, 1 failed, 1 invalid — the base bug
+        // passed. Of 2 corners: 0 passed, 1 failed, 1 invalid; the base bug
         // reported "passed 1/2" (folding the skipped INVALID member into passed).
         assert!(
             res.detail.contains("passed 0/2") && res.detail.contains("1 invalid"),
@@ -2181,7 +2181,7 @@ mod tests {
         assert!(mk("A", "B"), "A-first: sorted haystack starts with A's BOOT_OK");
         assert!(mk("A", "B") == mk("A", "B"), "deterministic");
         // If B held BOOT and A held READY, sorted order puts READY first, so
-        // ^BOOT must NOT match — and must not match by luck either.
+        // ^BOOT must NOT match, and must not match by luck either.
         let mut uart2 = std::collections::HashMap::new();
         uart2.insert("A".to_string(), "READY\n".to_string());
         uart2.insert("B".to_string(), "BOOT_OK\n".to_string());
@@ -2222,7 +2222,7 @@ mod tests {
         assert!(msg.contains("outside the swept band"), "msg names the cause: {msg}");
 
         // An in-band frequency evaluates normally (−5 dB is within max=−20? no,
-        // −5 > −20 so it fails the bound — but for a real measured reason, not
+        // −5 > −20 so it fails the bound, but for a real measured reason, not
         // out-of-band).
         let inband: crate::spec::Assertion = toml::from_str(
             "kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1000.0\nmax = -20.0\n",

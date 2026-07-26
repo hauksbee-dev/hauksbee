@@ -57,11 +57,11 @@ pub fn emit(
         }
         OutputMode::Plain => {
             // Bind-role honesty (Marco): the plain persona surface must not hide
-            // that active ICs are unmodelled — otherwise `--check --plain` reads
+            // that active ICs are unmodelled, otherwise `--check --plain` reads
             // "healthy" while firmware/analog/AC/thermal on their nets are
             // uncovered. Text/JSON/web all carry this; plain must too. Use the
-            // SAME union the web/json personas do — unresolved active ICs PLUS
-            // resolved-but-open active ICs — so all four personas agree.
+            // SAME union the web/json personas do, unresolved active ICs PLUS
+            // resolved-but-open active ICs, so all four personas agree.
             let open = crate::result::coverage_open_active_refs(&summary).len();
             if open > 0 {
                 let m = summary.critical_parts_total;

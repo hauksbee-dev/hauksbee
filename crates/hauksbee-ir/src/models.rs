@@ -262,8 +262,8 @@ pub struct MosfetModel {
     /// DELIBERATE DEVIATION from ngspice: ngspice materializes a default
     /// `TOX = 1e-7 m` (plus default `W = L = 100 um`) even when the card
     /// omits them, so every ngspice level-1 MOS carries intrinsic Meyer
-    /// capacitance. Here an omitted `TOX` yields `c_ox = 0` — no intrinsic
-    /// gate charge — because the bit-identity bar requires default models to
+    /// capacitance. Here an omitted `TOX` yields `c_ox = 0`, no intrinsic
+    /// gate charge, because the bit-identity bar requires default models to
     /// stamp exactly what they stamped before this field existed. A deck
     /// that wants the intrinsic caps states `TOX` (and real `W`/`L`).
     pub c_ox: f64,
@@ -272,7 +272,7 @@ pub struct MosfetModel {
     ///
     /// DELIBERATE DEVIATION from ngspice: ngspice defaults MOS `IS` to
     /// `1e-14 A`, so its bulk junctions always exist. Here the default is
-    /// `0` — no bulk junctions — for the same bit-identity reason as `c_ox`.
+    /// `0`, no bulk junctions, for the same bit-identity reason as `c_ox`.
     /// A deck that wants the body diode (synchronous rectification, flyback
     /// reverse conduction) states `IS` on the card.
     pub body_is: f64,

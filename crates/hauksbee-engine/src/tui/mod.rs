@@ -1,4 +1,4 @@
-//! The interactive terminal UI — hauksbee's default human-facing surface.
+//! The interactive terminal UI, hauksbee's default human-facing surface.
 //!
 //! `hauksbee run <board>` with no output-selecting flag, on a TTY, lands here.
 //! The TUI is a **renderer over the existing structured-honest result**: it
@@ -6,13 +6,13 @@
 //! ([`app::build_state`]), so it can never disagree with the machine output.
 //!
 //! Module layout:
-//! - [`state`]   — the pure, terminal-free model (findings, parts, nets, pane
+//! - [`state`]; the pure, terminal-free model (findings, parts, nets, pane
 //!                 focus, selection, verdict). Fully unit-testable with no PTY.
-//! - [`cosim`]   — the background co-sim worker that streams incremental UART /
+//! - [`cosim`]; the background co-sim worker that streams incremental UART /
 //!                 GPIO / progress updates to the UI over a channel.
-//! - [`render`]  — ratatui drawing of the four panes (Nets & Parts, Findings,
+//! - [`render`], ratatui drawing of the four panes (Nets & Parts, Findings,
 //!                 Co-sim, Scope) + footer.
-//! - [`app`]     — terminal lifecycle (alt-screen, raw mode, panic-safe restore)
+//! - [`app`], terminal lifecycle (alt-screen, raw mode, panic-safe restore)
 //!                 and the event loop.
 
 pub mod app;

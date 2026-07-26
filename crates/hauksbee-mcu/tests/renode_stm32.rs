@@ -90,7 +90,7 @@ fn stm32_pc13_led_toggles() {
 /// The GPIO drive-DIRECTION capability, live against Renode: with the F103
 /// descriptor's CRL/CRH dir maps, the backend reports direction as observable
 /// and distinguishes pins the firmware CONFIGURED as outputs from pins it
-/// never touched — the distinction that lets a boot-coverage check tell a
+/// never touched; the distinction that lets a boot-coverage check tell a
 /// held-LOW output from a floating input on an external backend.
 #[test]
 fn stm32_reports_drive_direction() {
@@ -111,7 +111,7 @@ fn stm32_reports_drive_direction() {
     );
 
     // Boot the blinky: it configures PA5 (alive LED, held HIGH), PC13
-    // (blinker — LOW half the time), and PA9 (USART1 TX, AF output).
+    // (blinker, LOW half the time), and PA9 (USART1 TX, AF output).
     for _ in 0..6 {
         mcu.run_micros(50_000).expect("run chunk");
     }
@@ -197,7 +197,7 @@ fn stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk() {
         return;
     }
 
-    // Bring up the STM32F4 Discovery platform. No firmware is loaded — we only
+    // Bring up the STM32F4 Discovery platform. No firmware is loaded; we only
     // care that platform setup and SPI bridge registration succeed.
     let mut mcu = RenodeBackend::new(RenodeConfig::stm32f4_discovery())
         .expect("spawn Renode STM32F4 Discovery — platform or bridge setup failed");
@@ -234,7 +234,7 @@ fn stm32f4_spi2_and_spi3_bridge_setup_no_crosstalk() {
 
     // Both bridge registrations must have succeeded. The test asserts this
     // implicitly: if either panicked above the test would already have failed.
-    // No firmware means there are no actual SPI transactions to route — the
+    // No firmware means there are no actual SPI transactions to route; the
     // bridge setup (C# compile + peripheral registration in Renode) is what
     // we are verifying here. Confirm neither byte sink received garbage from
     // the other controller.

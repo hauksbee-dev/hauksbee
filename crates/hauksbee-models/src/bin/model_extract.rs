@@ -1,4 +1,4 @@
-//! `model-extract` — datasheet extraction binary.
+//! `model-extract`, datasheet extraction binary.
 //!
 //! Extracts a simulation model entry from a PDF datasheet using an LLM backend
 //! and validates it against the hauksbee-models schema.
@@ -358,7 +358,7 @@ mod truncate_tests {
 
     /// Round-8 #4: datasheet text was truncated with a byte-index slice, which
     /// panics when a multibyte glyph straddles the cut. `truncate_to_chars`
-    /// cuts on char boundaries — no panic, and it never splits a char.
+    /// cuts on char boundaries, no panic, and it never splits a char.
     #[test]
     fn truncates_on_char_boundaries_without_panic() {
         // 30 multibyte chars ('µ' = 2 bytes each); a byte slice at 40 would
@@ -604,7 +604,7 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
 ///
 /// Invocation notes learned the hard way:
 ///   * `--sandbox workspace-write` (the old `--full-auto` is deprecated).
-///   * `--skip-git-repo-check` — codex otherwise refuses to run outside a repo.
+///   * `--skip-git-repo-check`, codex otherwise refuses to run outside a repo.
 ///   * `--cd <pdf_dir>` so codex can open the datasheet PDF / extracted text
 ///     directly when pdftotext was unavailable.
 ///   * stdin must be closed/empty or codex blocks "Reading additional input

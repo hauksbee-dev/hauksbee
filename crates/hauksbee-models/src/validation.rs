@@ -37,8 +37,8 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         ($key:expr, $min:expr, $max:expr) => {
             if let Some(v) = entry.params.get_f64($key) {
                 // A non-finite value (NaN / ±inf) slips through `v < min || v > max`
-                // because every IEEE comparison against NaN is false — NaN is
-                // neither below-min nor above-max — so it must be rejected up front
+                // because every IEEE comparison against NaN is false, NaN is
+                // neither below-min nor above-max, so it must be rejected up front
                 // or a `nan`/`inf` TOML literal defeats the whole physical-bounds
                 // gate and propagates into the solver.
                 if !v.is_finite() || v < $min || v > $max {
@@ -57,7 +57,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // Require `$lo` < `$hi` when both are present. A swapped/degenerate pair
     // (e.g. an opamp with rail_lo=5, rail_hi=0) is otherwise accepted as valid
     // and gives the solver an empty/inverted saturation band, silently pinning
-    // the output. Only checked when both parse — the require_f64! calls report a
+    // the output. Only checked when both parse; the require_f64! calls report a
     // missing member on their own.
     macro_rules! check_order {
         ($lo:expr, $hi:expr) => {
@@ -107,7 +107,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             // the tens or hundreds (the repo's own datasheet-cited db/mosfet.toml
             // has kp up to 200 for ipa045n10n3g). A 1.0 A/V² ceiling false-flagged
             // 6 of 8 shipped models and rejected any correctly-extracted power
-            // FET. Bound generously — still catches a nonsense hallucination.
+            // FET. Bound generously, still catches a nonsense hallucination.
             check_range!("kp", 1e-6, 1000.0);
             check_range!("lambda", 0.0, 1.0);
         }
@@ -145,7 +145,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             // On-resistance must be far below off-resistance; the two ranges
             // overlap ([0.01,1e4] vs [1e3,1e12]), so a swapped/degenerate pair
             // (ron=5000, roff=2000) is representable and would model a switch that
-            // conducts MORE when open — an inverted transmission gate the solver
+            // conducts MORE when open, an inverted transmission gate the solver
             // routes the wrong way. Same hazard the R35 opamp/comparator order
             // checks close.
             check_order!("ron", "roff");
@@ -161,7 +161,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
     // only look at `params`, never `ratings`), then silently disables the fault:
     // the stress monitor computes `if limit > 0.0 { value/limit } else { 0.0 }`,
     // so a NaN (NaN>0 is false) or non-positive limit yields frac 0 and the
-    // Overcurrent/Overvoltage/Overpower check never trips — an unprotected part
+    // Overcurrent/Overvoltage/Overpower check never trips, an unprotected part
     // that validated clean. Reject any present rating that is not positive-finite.
     for (name, rating) in [
         ("max_current_a", entry.ratings.max_current_a),
@@ -201,7 +201,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
 /// When an entry supplies an explicit `[models.pins]` map, verify it carries the
 /// signal roles the binder needs for that kind. A role typo (`"1" = "anmode"`)
 /// otherwise passes every check above, then binds the part OPEN at run time with
-/// a misleading "pin not connected" message — the exact trap a first-time part
+/// a misleading "pin not connected" message; the exact trap a first-time part
 /// author hits. This checks only that each REQUIRED role is PRESENT (under any
 /// binder-accepted alias / channel suffix); it never flags EXTRA pins, so a
 /// legitimately-declared power/NC pin (an op-amp's `vcc`/`vee`) is fine. An
@@ -212,7 +212,7 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
     }
     // A behavioral part (converter/FSM/DAC power IC) references its pins from the
     // [models.behavioral] block by arbitrary datasheet names (e.g. an LTC4020's
-    // `bat`/`pvin`), NOT through the simple analog binder — so the canonical
+    // `bat`/`pvin`), NOT through the simple analog binder, so the canonical
     // anchor roles do not apply. Leave it alone.
     if !entry.behavioral.is_empty() {
         return;
@@ -384,7 +384,7 @@ mod tests {
     fn nonpositive_or_nonfinite_thermal_resistances_are_rejected() {
         // R53: theta_ja_c_per_w / theta_jc_c_per_w are UNFLOORED solver inputs
         // (Tj = ambient + power*theta_ja), so a negative/NaN value drives Tj at or
-        // below ambient and the Overtemperature fault never trips — a silent
+        // below ambient and the Overtemperature fault never trips, a silent
         // safety-disable the R52 ratings gate missed for these two fields.
         let mut entry = make_diode(1e-14, 1.5, 1.0);
         entry.ratings.theta_ja_c_per_w = Some(-50.0);
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn out_of_range_is_fails() {
-        // IS way too large — physically impossible
+        // IS way too large, physically impossible
         let entry = make_diode(1.0, 1.5, 1.0);
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("is")));
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn power_mosfet_kp_above_one_is_accepted() {
         // R39: kp = k'·(W/L) legitimately reaches the tens/hundreds for discrete
-        // power MOSFETs — the repo's own db/mosfet.toml has kp up to 200. The old
+        // power MOSFETs; the repo's own db/mosfet.toml has kp up to 200. The old
         // 1.0 A/V² ceiling false-flagged 6 of 8 shipped models and rejected any
         // correctly-extracted power FET.
         for kp in [4.5, 10.0, 15.0, 30.0, 200.0] {
@@ -588,7 +588,7 @@ mod tests {
     fn analog_switch_with_ron_above_roff_is_rejected() {
         // R37: on-resistance must be far below off-resistance, but the two ranges
         // overlap and there was no order check, so a swapped pair (ron=5000,
-        // roff=2000) validated — an inverted transmission gate. Must be rejected.
+        // roff=2000) validated, an inverted transmission gate. Must be rejected.
         let mut p = Params::default();
         p.set_f64("ron", 5000.0);
         p.set_f64("roff", 2000.0);

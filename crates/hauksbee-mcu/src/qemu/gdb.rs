@@ -128,7 +128,7 @@ impl GdbStub {
 
     /// Read a `$payload#cc` packet from the stream, verify its checksum, ack it,
     /// and return the payload. A packet whose checksum does not match is NAK'd
-    /// (`-`) so the stub retransmits, up to [`MAX_NAKS`] times — never trusted as
+    /// (`-`) so the stub retransmits, up to [`MAX_NAKS`] times, never trusted as
     /// data, which for a memory-read response would feed a corrupt GPIO/mailbox
     /// word straight into the analog solve.
     fn read_packet(&mut self) -> Result<String> {
@@ -194,7 +194,7 @@ const MAX_NAKS: u32 = 8;
 
 /// Result of scanning `buf` for the next RSP packet.
 enum Scan {
-    /// No complete `$...#cc` packet yet — read more bytes.
+    /// No complete `$...#cc` packet yet, read more bytes.
     NeedMore,
     /// A verified packet: its payload, and the number of leading bytes of `buf`
     /// it consumed (through the two checksum digits).
@@ -207,7 +207,7 @@ enum Scan {
 /// Scan `buf` for the first complete `$...#cc` packet, ignoring any leading
 /// `+`/`-` acks, and VERIFY its RSP checksum (the low byte of the sum of the
 /// payload bytes, two hex digits after `#`). A corrupt or non-hex checksum is
-/// reported as [`Scan::BadChecksum`] rather than being silently trusted — the
+/// reported as [`Scan::BadChecksum`] rather than being silently trusted; the
 /// receive side must be as strict as [`encode_packet`] is on the send side.
 fn scan_packet(buf: &[u8]) -> Scan {
     let Some(dollar) = buf.iter().position(|&b| b == b'$') else {
@@ -268,8 +268,8 @@ mod tests {
 
     #[test]
     fn bad_checksum_is_rejected_not_trusted() {
-        // Bug-hunt #9: the correct checksum for "OK" is 9a; anything else — a
-        // flipped byte or a non-hex digit — must be reported as BadChecksum so
+        // Bug-hunt #9: the correct checksum for "OK" is 9a; anything else, a
+        // flipped byte or a non-hex digit, must be reported as BadChecksum so
         // read_packet NAKs and retries instead of returning corrupt data.
         assert!(matches!(scan_packet(b"$OK#00"), Scan::BadChecksum(_)));
         assert!(matches!(scan_packet(b"$OK#zz"), Scan::BadChecksum(_)));

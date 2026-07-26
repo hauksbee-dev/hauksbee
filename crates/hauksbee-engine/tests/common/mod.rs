@@ -32,7 +32,7 @@ pub fn tarski_board() -> hauksbee_extract::ExtractedBoard {
 
 /// A minimal synthetic `.kicad_pcb` (KiCad-5 `module` style, bare atoms):
 ///
-/// - U1: ATmega328P (TQFP-32 pad map) — VCC/AVCC on +5V, GND pads on GND,
+/// - U1: ATmega328P (TQFP-32 pad map), VCC/AVCC on +5V, GND pads on GND,
 ///   PB5 (pad 19) on net "D13", ADC0 (pad 23) on net "ADC0".
 /// - R1 330Ω from D13 to LED_A.
 /// - D1 RED_LED from LED_A (anode) to GND (cathode).

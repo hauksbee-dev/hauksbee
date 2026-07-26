@@ -105,7 +105,7 @@ impl ClearanceRules {
     }
 
     pub fn add_class(&mut self, rule: NetClassRule) {
-        // Keep a class that carries ANY usable rule — an explicit clearance OR a
+        // Keep a class that carries ANY usable rule, an explicit clearance OR a
         // diff-pair gap. A KiCad class routinely leaves `clearance` at 0 ("inherit
         // board default") while still defining a `diff_pair_gap`; dropping it
         // wholesale (the old `clearance_mm > 0.0` gate) discarded the gap AND made
@@ -129,7 +129,7 @@ impl ClearanceRules {
             .get(net)
             .and_then(|class| self.classes.get(class))
             // A class clearance of 0 means "inherit the board default", not a
-            // literal zero-clearance rule — resolve it to the default so a
+            // literal zero-clearance rule, resolve it to the default so a
             // diff-pair-only class does not report a 0 mm spacing requirement.
             .map(|r| if r.clearance_mm > 0.0 { r.clearance_mm } else { self.default_clearance_mm })
             .unwrap_or(self.default_clearance_mm)
@@ -228,7 +228,7 @@ pub fn clearance_rules_from_kicad_pro<'a>(
         // parse. The old `?` propagated None out of the function, so one bad
         // object (e.g. in a hand-edited .kicad_pro) silently discarded EVERY
         // class, default clearance, and diff-pair gap, dropping DRC to the bare
-        // default everywhere — a KiCad 10 board keeps its clearances only here.
+        // default everywhere, a KiCad 10 board keeps its clearances only here.
         // The sibling assignment/pattern loops already skip bad entries; match
         // that.
         let Some(name) = class.get("name").and_then(|x| x.as_str()).map(str::to_string) else {
@@ -293,7 +293,7 @@ pub fn clearance_rules_from_kicad_pro<'a>(
 fn kicad_netclass_pattern_matches(pattern: &str, net: &str) -> bool {
     // Iterative two-pointer glob: on a mismatch, back up to just past the most
     // recent `*` and let it absorb one more net character. Each retry advances
-    // that star's anchor, so matching is O(len(pattern) · len(net)) — no
+    // that star's anchor, so matching is O(len(pattern) · len(net)), no
     // exponential backtracking on `*`-heavy patterns from a crafted .kicad_pro
     // (the old recursive `inner(&p[1..], n) || inner(p, &n[1..])` was).
     fn inner(p: &[char], n: &[char]) -> bool {
@@ -461,7 +461,7 @@ pub struct DrcReport {
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
 /// validated against. KiCad 9 is `20241229`; KiCad 10 (`20260206`) changed both
 /// the net encoding (name-only, no numeric ids) and the baked zone-fill geometry,
-/// neither of which is handled yet — and the kicad-cli ≤ 9 oracle cannot load it
+/// neither of which is handled yet, and the kicad-cli ≤ 9 oracle cannot load it
 /// to cross-check. So `>= 20260000` is treated as unvalidated.
 pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20260000;
 
@@ -1152,7 +1152,7 @@ fn collect_primitives(root: &List, nets: &mut NetResolver) -> LayerBuckets {
                 // barrel physically passes through every copper layer between
                 // them. Expand the named span across the board's ordered
                 // copper stack so inner-layer copper (In1.Cu, ...) is tested
-                // too — mirroring how pads reach all layers via expand_layers.
+                // too, mirroring how pads reach all layers via expand_layers.
                 let names: Vec<String> = (0..)
                     .map_while(|i| l.arg_value(i))
                     .filter(|n| n.ends_with(".Cu"))

@@ -19,7 +19,7 @@ pub const EXIT_MALFORMED_DECK: i32 = 2;
 pub enum SimFormat {
     /// One column per probe, one row per timepoint (or one row for `.op`).
     Csv,
-    /// ngspice ASCII rawfile — the format `ngnutmeg`/`gaw`/`spicelib` read.
+    /// ngspice ASCII rawfile; the format `ngnutmeg`/`gaw`/`spicelib` read.
     Raw,
     /// CSV and rawfile side by side (needs `--out` so the two files have names).
     Both,
@@ -57,7 +57,7 @@ pub fn run(
     })?;
 
     // Parse. A SpiceError already carries its line number; print it verbatim and
-    // exit 2 (malformed deck) — never fall through to a wrong parse.
+    // exit 2 (malformed deck), never fall through to a wrong parse.
     let (circuit, directives) = match SpiceLoader::load_with_directives(&text) {
         Ok(v) => v,
         Err(e) => {
@@ -141,7 +141,7 @@ pub fn run(
         ps
     } else {
         // Collect the deck's output variables for this analysis. `.plot` is
-        // treated as `.print` (we emit CSV, never an ASCII plot) — noted once.
+        // treated as `.print` (we emit CSV, never an ASCII plot), noted once.
         let mut deck_vars: Vec<String> = Vec::new();
         for pr in &directives.prints {
             if pr.analysis == analysis_tag {
@@ -367,7 +367,7 @@ fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
 /// and its `.temp` card. The loader records the deck temperature in
 /// `circuit.temp_c`; the solver reads every temperature-dependent quantity
 /// (diode/BJT saturation current, thermal voltage, resistor `tc1`) through
-/// `opts.temperature_c`, which defaults to 27 °C — so `.temp` must be copied
+/// `opts.temperature_c`, which defaults to 27 °C, so `.temp` must be copied
 /// here or every analysis silently runs at 27 °C regardless of the deck.
 fn solver_opts_from_deck(
     circuit: &hauksbee_ir::Circuit,

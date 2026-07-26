@@ -423,7 +423,7 @@ fn is_single_ended_50(name: &str) -> bool {
     let n = norm(name);
     let toks: Vec<&str> = n.split(|c: char| !c.is_ascii_alphanumeric()).collect();
     // A control/status/select qualifier means this is the antenna/RF *control*
-    // GPIO (ANT_SEL, ANT_DET, RF_EN, ANT_SW…), an ordinary logic signal — NOT the
+    // GPIO (ANT_SEL, ANT_DET, RF_EN, ANT_SW…), an ordinary logic signal, NOT the
     // deliberate 50 ohm feed trace. The RF token would otherwise match the bare
     // `ANT`/`RF` token these names still carry, fabricating a controlled-impedance
     // finding on a GPIO. Exclude them to stay at zero false positives.
@@ -450,7 +450,7 @@ fn is_single_ended_50(name: &str) -> bool {
             *t,
             "RF" | "RFIN" | "RFOUT" | "RFOUTPUT" | "ANT" | "ANTENNA" | "RF_IN" | "RF_OUT"
         ) || t.starts_with("RFIO")
-            // `ANT` followed by DIGITS ONLY (ANT1/ANT2, a switched antenna feed) —
+            // `ANT` followed by DIGITS ONLY (ANT1/ANT2, a switched antenna feed),
             // NOT a bare `starts_with("ANT")`, which would swallow non-RF tokens
             // like ANTIALIAS and fabricate a controlled-impedance finding on a
             // mixed-signal net (the module's zero-false-positive contract).
@@ -826,7 +826,7 @@ mod tests {
     fn out_of_band_finding_deviation_does_not_read_equal_to_the_tolerance() {
         // R50: judge() decides in_band on the unrounded deviation (<= 15%) but the
         // finding message rounded deviation to whole percent, so a 15.4% deviation
-        // rendered "+15% deviation exceeds +-15% tolerance" — the number shown
+        // rendered "+15% deviation exceeds +-15% tolerance"; the number shown
         // equalled the limit it claimed to break. Higher display precision must
         // make the deviation read as genuinely greater than the tolerance.
         let stackup = Stackup {
@@ -861,7 +861,7 @@ mod tests {
     fn antenna_control_gpio_is_not_a_50_ohm_line() {
         // R49: is_single_ended_50 matched the bare `ANT` token these carry, so an
         // antenna-diversity control GPIO was classified as a 50 ohm RF feed and
-        // judged against controlled-impedance limits — a false finding on a
+        // judged against controlled-impedance limits, a false finding on a
         // wireless board (which declares controlled impedance for its real feed).
         assert!(!is_single_ended_50("ANT_SEL"), "ANT_SEL is a control GPIO");
         assert!(!is_single_ended_50("ANT_DET"), "ANT_DET is antenna-detect status");

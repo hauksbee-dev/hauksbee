@@ -33,7 +33,7 @@ fn device_names(text: &str) -> BTreeSet<String> {
 #[test]
 fn board_as_code_run_matches_kicad_pcb() {
     // Decompile the synthetic KiCad PCB to Board-as-Code, then recompile it and
-    // bind — the device set must match binding the original PCB directly.
+    // bind; the device set must match binding the original PCB directly.
     let pcb = common::SYNTH_BOARD;
     let code = decompile_any_to_code(pcb).expect("to-code");
     assert!(

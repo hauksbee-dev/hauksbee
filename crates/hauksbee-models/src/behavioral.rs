@@ -284,7 +284,7 @@ pub struct SenseProgram {
 
     /// The programming-divider numerator resistance (ohms): the on-die or fixed
     /// resistor the external `prog_ohms` divides against. The threshold scales
-    /// as `prog_ohms / prog_ref_ohms` — linearly with the programming resistor,
+    /// as `prog_ohms / prog_ref_ohms`, linearly with the programming resistor,
     /// consistent with the struct-level doc and the engine's `program_iin_limit`
     /// (an earlier version of this line had the ratio inverted).
     pub prog_ref_ohms: f64,
@@ -492,7 +492,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         // A current limit must be a positive finite number. A NEGATIVE iout_limit_a
         // (a sign typo) is treated as a real CC threshold the output current always
         // exceeds (iout is `.abs()`), so the loop folds v_cmd negative and clamps it
-        // to 0 V — the regulated rail silently reads 0 V for the whole run. A NaN
+        // to 0 V; the regulated rail silently reads 0 V for the whole run. A NaN
         // limit silently disables the CC loop. Reject both up front, like
         // vout_setpoint / efficiency above.
         for (name, lim) in [("iout_limit_a", c.iout_limit_a), ("iin_limit_a", c.iin_limit_a)] {
@@ -512,7 +512,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // The literal shunt / program resistances are the missing siblings of
             // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
             // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
-            // limit balloons to ~50 kA — the over-current fold-back can never
+            // limit balloons to ~50 kA; the over-current fold-back can never
             // engage and the converter is silently unprotected. Reject non-positive.
             for (name, v) in [
                 ("rsense_ohms", sp.rsense_ohms),
@@ -529,13 +529,13 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // The literal shunt / program resistances are the missing siblings of
             // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
             // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
-            // limit balloons to ~50 kA — the over-current fold-back can never
+            // limit balloons to ~50 kA; the over-current fold-back can never
             // engage and the converter is silently unprotected. Reject non-positive.
             if !sp.prog_ref_ohms.is_finite() || sp.prog_ref_ohms <= 0.0 {
                 // A non-finite prog_ref_ohms (an `inf` overflow typo) passes a bare
                 // `<= 0.0` test but the engine's `prog_ref.max(1.0)` yields inf, so
                 // `v_sense = vprog_ref*prog/inf = 0` zeroes the input-current limit
-                // and folds the regulated rail to 0 V for the whole run — the same
+                // and folds the regulated rail to 0 V for the whole run; the same
                 // silent-zero the sibling gates below prevent. Reject non-finite too.
                 errs.push(format!(
                     "converter.iin_program: prog_ref_ohms must be a positive finite number, got {}",
@@ -546,8 +546,8 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // limit the same way iout_limit_a/iin_limit_a gate the literal one:
             // the engine computes `v_sense = (vprog_ref*prog/prog_ref).min(
             // v_sense_full).max(0.0)` and `i_limit = v_sense/rsense`. A negative
-            // or zero value for either (a sign typo) drives v_sense — and hence
-            // the limit — to 0, so update_converter folds v_cmd to 0 and the
+            // or zero value for either (a sign typo) drives v_sense, and hence
+            // the limit, to 0, so update_converter folds v_cmd to 0 and the
             // regulated rail silently reads 0 V for the whole run with no fault.
             // Reject both up front, like the literal limits above.
             for (name, v) in [
@@ -891,7 +891,7 @@ v_sense_full = 0.05
         // R55: the literal shunt/program resistances escaped the positive-finite
         // gate that validates every sibling. The engine floors rsense with
         // `.max(1e-6)`, so a sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the
-        // input-current limit balloons to ~50 kA — the fold-back never engages.
+        // input-current limit balloons to ~50 kA; the fold-back never engages.
         let spec = |extra: &str| {
             format!(
                 r#"
@@ -951,7 +951,7 @@ v_sense_full = 0.05
     #[test]
     fn non_finite_converter_and_pin_values_are_rejected() {
         // R44: `nan`/`inf` are legal TOML floats and every `<= 0.0`/range compare is
-        // false for them, so they slipped the gate — then a NaN vout_setpoint reaches
+        // false for them, so they slipped the gate, then a NaN vout_setpoint reaches
         // the engine's `v_cmd.clamp(0.0, vout_setpoint)` and PANICS (clamp with a NaN
         // max), and a NaN efficiency propagates a NaN input current. Reject up front.
         let nan_vout: Behavioral = toml::from_str(
@@ -988,7 +988,7 @@ v_sense_full = 0.05
     #[test]
     fn converter_current_limits_must_be_positive_finite() {
         // R46: a negative iout_limit_a (a sign typo) is treated as a real CC
-        // threshold the output current always exceeds, folding v_cmd to 0 V — the
+        // threshold the output current always exceeds, folding v_cmd to 0 V; the
         // regulated rail reads 0 V for the whole run with no fault. A NaN limit
         // silently disables the CC loop. Both must be rejected, like vout_setpoint.
         let neg: Behavioral = toml::from_str(

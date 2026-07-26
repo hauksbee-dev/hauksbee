@@ -205,7 +205,7 @@ fn ac_all_requested_nodes_missing_is_invalid_not_valid() {
         "the reason must name the missing requested node(s); got: {reason}"
     );
     // R15: the structured `not_found_nets` field must carry the missing node too,
-    // not just the prose reason — a machine consumer reads the field. The old
+    // not just the prose reason, a machine consumer reads the field. The old
     // all-not-found early exit left it empty while the partial-sweep path
     // populated it, defeating the field's never-silent purpose.
     let not_found = v["ac"]["not_found_nets"]
@@ -287,7 +287,7 @@ fn ac_loop_cli_reports_real_one_pole_phase_margin() {
 
 #[test]
 fn ac_csv_is_written_even_with_json() {
-    // R19: `--ac-csv FILE` and `--json` are orthogonal — a CI/tooling caller
+    // R19: `--ac-csv FILE` and `--json` are orthogonal, a CI/tooling caller
     // legitimately wants structured JSON on stdout AND a CSV artifact on disk.
     // The CSV writer used to sit AFTER the `--json` early return, so passing both
     // silently dropped the CSV (never written, no diagnostic, exit 0).
@@ -340,7 +340,7 @@ fn ac_csv_is_written_even_with_json() {
 #[test]
 fn ac_partial_json_surfaces_a_not_found_node() {
     // R12: a valid sweep that requests one REAL net (OUT) and one that doesn't
-    // exist must still name the missing net in the JSON — the text path warns
+    // exist must still name the missing net in the JSON; the text path warns
     // "net not found", so the JSON must not silently drop it.
     let b = ac_loop_board();
     let models = ac_loop_models();
@@ -378,7 +378,7 @@ fn ac_partial_json_surfaces_a_not_found_node() {
 #[test]
 fn plain_check_surfaces_open_active_ic_bind_honesty() {
     // R22 (L4-01): `--check --plain` used to print ONLY the DRC/lint/SI verdicts
-    // and drop the bind-role honesty that the text/JSON/web surfaces all carry —
+    // and drop the bind-role honesty that the text/JSON/web surfaces all carry,
     // so a board whose active ICs are unmodelled read "healthy" while
     // firmware/analog/AC/thermal on their nets were never covered. The plain
     // persona must warn about the open active ICs like the sibling --bind plain
@@ -398,14 +398,14 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
             && stdout.contains("--models-dir"),
         "plain --check must surface the open-active-IC bind honesty; got:\n{stdout}"
     );
-    // And it must not be a false alarm on the copper checks — the heads-up
+    // And it must not be a false alarm on the copper checks; the heads-up
     // explicitly says the DRC below is unaffected.
     assert!(
         stdout.contains("copper checks below are unaffected"),
         "the heads-up must keep the copper verdict trustworthy; got:\n{stdout}"
     );
     // R39: the heads-up must point at a REAL flag. It used to say "run --bind",
-    // but the bind table is produced by `--report` — following "--bind" errors
+    // but the bind table is produced by `--report`, following "--bind" errors
     // with clap's "unexpected argument". The guidance must name --report.
     assert!(
         stdout.contains("--report") && !stdout.contains("--bind"),
@@ -486,7 +486,7 @@ fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
 /// geometric short on a KiCad-10 (20260206) board must NOT fail `--strict` (its
 /// shorts may be phantom and can't be cross-checked), while the identical short
 /// on a validated KiCad-7 (20221018) board MUST fail `--strict`. Same geometry,
-/// only the format version differs — so this pins the version gate, not the DRC.
+/// only the format version differs, so this pins the version gate, not the DRC.
 #[test]
 fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
     // Validated (KiCad 7): the short gates the build.
@@ -565,7 +565,7 @@ fn boot_advisory_emits_note_and_strict_boot_gates() {
 }
 
 /// R25 (HB-01, HIGH): the DEFAULT text headless persona (neither --json nor
-/// --plain) must ALSO surface the boot power-up hazard — it was the only persona
+/// --plain) must ALSO surface the boot power-up hazard; it was the only persona
 /// that hid a switched load energised at reset while --json/--plain/web all carry
 /// it. Advisory-only: exit stays 0 without --strict-boot.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary, so it
@@ -625,7 +625,7 @@ fn clean_firmware_raises_no_boot_advisory() {
 /// The informational boot-state panel, end to end: a board with a transistor
 /// gate driven HIGH at boot (boot_gate + variant A) names that gate in the
 /// --plain panel and in --json `boot_gates`; variant B (gate never driven)
-/// reports it as floating. Reporting, not gating — exit stays 0 either way.
+/// reports it as floating. Reporting, not gating, exit stays 0 either way.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
 // so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
 // refuses AVR firmware by design).
@@ -672,7 +672,7 @@ fn boot_state_panel_reports_gate_drive_state() {
 
 /// Regression lock for the boot-state panel level-inversion bug: a gate that is
 /// driven HIGH and held but ALSO has a bias (pulldown) resistor must still
-/// report "driven HIGH" — earlier the panel reused the safety-filtered held-high
+/// report "driven HIGH", earlier the panel reused the safety-filtered held-high
 /// set (which drops biased nets), inverting the label to LOW on ordinary boards.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
 // so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build

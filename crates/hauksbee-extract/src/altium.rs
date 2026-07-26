@@ -250,7 +250,7 @@ impl<'a> StreamReader<'a> {
 /// field twice in one block: a CP1252 twin (`NAME=Mü` as `M\xFC`) and a UTF-8
 /// twin (`%UTF8%NAME=Mü` as `M\xC3\xBC`). Decoding the whole block as one unit
 /// failed UTF-8 on the CP1252 twin's high byte and fell back to CP1252 for
-/// everything — mojibake'ing the genuine UTF-8 twin (`M\xC3\xBC` → `MÃ¼`),
+/// everything, mojibake'ing the genuine UTF-8 twin (`M\xC3\xBC` → `MÃ¼`),
 /// which is exactly the twin `prop_str` prefers. So decode per value: a
 /// `%UTF8%` key is genuine UTF-8 (strict, lossy only as a last resort); the
 /// ANSI twin keeps the UTF-8-or-CP1252 heuristic.
@@ -326,7 +326,7 @@ pub(crate) struct PadRecord {
 /// native Windows codepage (Windows-1252), though modern exports may be UTF-8.
 /// Prefer a valid UTF-8 reading (exact for ASCII and modern files); otherwise
 /// fall back to Windows-1252 so a byte like `0xE4` ('ä') decodes to the right
-/// character instead of the U+FFFD `from_utf8_lossy` would emit — which silently
+/// character instead of the U+FFFD `from_utf8_lossy` would emit, which silently
 /// corrupts internationally-authored footprint/net/component names.
 fn decode_altium_str(raw: &[u8]) -> String {
     match std::str::from_utf8(raw) {
@@ -412,7 +412,7 @@ pub(crate) fn parse_pads(buf: &[u8]) -> Vec<PadRecord> {
         // byte). enter_subrecord clamps a declared length that overruns the
         // buffer, so a truncated stream yields e5 < s5+21; the field readers
         // below would then silently return 0 and place the pad at the origin.
-        // Stop rather than misread — the same discipline as the record-marker
+        // Stop rather than misread; the same discipline as the record-marker
         // check above (a phantom pad at (0,0) is worse than a short pad list).
         if e5 - s5 < 21 {
             break;
@@ -759,7 +759,7 @@ mod tests {
     #[test]
     fn full_pad_geometry_is_parsed() {
         // Control: the SAME shape with enough geometry bytes yields one pad, so
-        // the truncation guard is what drops the record above — not a malformed
+        // the truncation guard is what drops the record above, not a malformed
         // fixture.
         let buf = pads_stream(21, 21);
         let pads = parse_pads(&buf);

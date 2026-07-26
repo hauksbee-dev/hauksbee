@@ -2,21 +2,21 @@
 //! simulator binds models onto.
 //!
 //! Several sources, one output shape:
-//! - [`ExtractedBoard::from_kicad_pcb`] — layout only. Every pad in a
+//! - [`ExtractedBoard::from_kicad_pcb`], layout only. Every pad in a
 //!   `.kicad_pcb` carries its net, so the board file alone fully describes
 //!   connectivity. This is the "hand us any PCB" path.
-//! - [`ExtractedBoard::from_kicad_netlist`] — a `kicad-cli sch export
+//! - [`ExtractedBoard::from_kicad_netlist`], a `kicad-cli sch export
 //!   netlist --format kicadsexpr` export. Richer (pin names/types), used
 //!   when the schematic is available.
 //! - [`ExtractedBoard::from_kicad_schematic`] /
-//!   [`ExtractedBoard::from_kicad_schematic_path`] — a `.kicad_sch` directly.
+//!   [`ExtractedBoard::from_kicad_schematic_path`], a `.kicad_sch` directly.
 //!   The schematic carries no nets, so connectivity is *derived* geometrically
 //!   the way eeschema derives it (wires, pins, junctions, labels, power
 //!   symbols, hierarchy). This is the "simulate before there's a layout" path;
 //!   see `docs/ingest/SCHEMATICS.md`.
-//! - [`ExtractedBoard::from_eagle_brd`] / [`ExtractedBoard::from_ipc_d356`] —
+//! - [`ExtractedBoard::from_eagle_brd`] / [`ExtractedBoard::from_ipc_d356`],
 //!   other EDA formats.
-//! - [`ExtractedBoard::from_altium_pcb`] — Altium Designer `.PcbDoc` (binary
+//! - [`ExtractedBoard::from_altium_pcb`], Altium Designer `.PcbDoc` (binary
 //!   OLE2). This unlocks the professional / enterprise / regulated tier; see
 //!   `docs/ingest/ALTIUM.md`.
 //!
@@ -72,7 +72,7 @@ pub enum ExtractError {
         found: Option<String>,
     },
     /// No registered [`reader::BoardReader`] recognised the input. `tried`
-    /// enumerates every reader that was offered the bytes, in order — a more
+    /// enumerates every reader that was offered the bytes, in order, a more
     /// actionable failure than the old "last fallback's error" behaviour.
     #[error("unrecognized board format; tried {tried}")]
     Unrecognized { tried: String },

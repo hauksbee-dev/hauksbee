@@ -1,4 +1,4 @@
-// Analysis-report types — mirrors hauksbee-engine frontdoor.rs (WebReport et al)
+// Analysis-report types, mirrors hauksbee-engine frontdoor.rs (WebReport et al)
 // exactly. This is the JSON `/api/analyze` and `/api/analyze-with-firmware`
 // return, and what `/api/startup` embeds under `report` when a board was
 // preloaded via `hauksbee run <board> --serve`.
@@ -28,7 +28,7 @@ export interface WebSection {
 }
 
 export interface BindSummaryWeb {
-  /** "M/N" — active ICs that bound, over the total active ICs on the board. */
+  /** "M/N", active ICs that bound, over the total active ICs on the board. */
   critical_parts_bound: string
   /** Active ICs left open on the live circuit; may be omitted when empty. */
   active_path_unresolved?: string[]
@@ -89,7 +89,7 @@ export interface WebReport {
   components: WebComponent[]
   bind?: BindSummaryWeb | null
   notes?: JsonNote[]
-  /** Every net name, sorted — the checks builder's pickers. */
+  /** Every net name, sorted; the checks builder's pickers. */
   nets?: string[]
   /** Binder-detected supplies (rail net → nominal volts) for the checks
    *  builder's prefill. */

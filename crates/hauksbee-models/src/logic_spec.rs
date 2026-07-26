@@ -5,7 +5,7 @@
 //! a part's logic is described DECLARATIVELY here: its input/output pins,
 //! combinational expressions, clocked registers, and tri-state groups. The
 //! engine's generic `LogicComponent` evaluator realizes the spec against a
-//! board's nets; this module owns the *format* and *validation* only — no
+//! board's nets; this module owns the *format* and *validation* only, no
 //! evaluation and no `evalexpr` (that lives engine-side, where the expression
 //! evaluator already is, same split as `sensor_spec.rs`).
 //!
@@ -45,7 +45,7 @@
 //!
 //! Combinational expressions are boolean expressions over pin, output, and
 //! register-bit names. The grammar is deliberately small (this is gate logic,
-//! not arithmetic): identifiers (which may start with a digit — `1a` is a real
+//! not arithmetic): identifiers (which may start with a digit, `1a` is a real
 //! 74HC02 pin name), the literals `0`/`1`, `!` (NOT), `&` (AND), `^` (XOR),
 //! `|` (OR), parentheses, and `name[i]` register-bit references. `&&`/`||`
 //! are accepted as aliases. Precedence, tightest first: `!`, `&`, `^`, `|`.
@@ -64,13 +64,13 @@
 //! more fails validation rather than silently truncating. Per evaluation step:
 //!
 //! 1. every declared control pin is sampled;
-//! 2. every register computes its NEXT value from the PRE-step state —
+//! 2. every register computes its NEXT value from the PRE-step state,
 //!    priority: active `reset` (asynchronous, dominant: clock edges while
 //!    reset is active leave the register at the reset value, matching the
 //!    74HC595 datasheet's SRCLR row), then active `load` (asynchronous
 //!    parallel load, dominant over the clock, matching the 74HC165's PL), then
 //!    a qualifying clock edge applies `op`; otherwise hold;
-//! 3. all registers commit simultaneously — a register loading from another
+//! 3. all registers commit simultaneously, a register loading from another
 //!    register captures the pre-step value, so simultaneous shift+latch clocks
 //!    behave like real tied-clock silicon (store one step behind shift);
 //! 4. combinational outputs evaluate in dependency order; outputs forming a
@@ -114,14 +114,14 @@ impl Level {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegisterOp {
-    /// `reg = (reg << 1) | data_in` — serial data enters at bit 0, exits at
+    /// `reg = (reg << 1) | data_in`, serial data enters at bit 0, exits at
     /// bit `bits-1` (the 74HC595 shift direction: bit 0 = QA).
     ShiftLeft,
-    /// `reg = (reg >> 1) | (data_in << (bits-1))` — serial data enters at bit
+    /// `reg = (reg >> 1) | (data_in << (bits-1))`, serial data enters at bit
     /// `bits-1`, exits at bit 0.
     ShiftRight,
     /// `reg = data_in` (another register of the same width, or, for a 1-bit
-    /// register, a pin — the D flip-flop shape).
+    /// register, a pin; the D flip-flop shape).
     Load,
     CountUp,
     CountDown,
@@ -136,7 +136,7 @@ pub struct ClockSpec {
 
 /// An asynchronous, level-sensitive reset/preset to a constant value. A
 /// register may declare several (the 74HC74 has independent CLR and PRE);
-/// when more than one is active simultaneously the FIRST declared wins — the
+/// when more than one is active simultaneously the FIRST declared wins; the
 /// silicon's both-asserted race (both outputs high) is not representable in a
 /// single register and is deliberately not faked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,7 +213,7 @@ pub struct TristateSpec {
 pub struct Logic {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
-    /// Output names in DECLARATION ORDER — this order is also the fixpoint
+    /// Output names in DECLARATION ORDER; this order is also the fixpoint
     /// resolution order for combinational cycles, so it is semantically
     /// load-bearing, not cosmetic.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -271,7 +271,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogicExpr {
     Const(bool),
-    /// A pin, output, or (invalidly — the validator rejects it) register name.
+    /// A pin, output, or (invalidly; the validator rejects it) register name.
     Name(String),
     /// `register[bit]`.
     Bit(String, u32),
@@ -651,7 +651,7 @@ pub enum LogicSpecError {
 pub struct ValidatedLogic {
     /// `(output name, parsed expression)` in outputs-declaration order.
     pub comb: Vec<(String, LogicExpr)>,
-    /// Human-readable warnings (combinational cycles found — legal, but the
+    /// Human-readable warnings (combinational cycles found, legal, but the
     /// engine must verify fixpoint convergence at bind time).
     pub warnings: Vec<String>,
     /// Outputs participating in at least one combinational cycle.
@@ -860,7 +860,7 @@ impl Logic {
             .filter_map(|r| r.clock.as_ref().map(|c| (c.pin.as_str(), r.name.as_str())))
             .collect();
 
-        // Parse in outputs-declaration order — the evaluation order contract.
+        // Parse in outputs-declaration order; the evaluation order contract.
         let mut comb: Vec<(String, LogicExpr)> = Vec::with_capacity(self.outputs.len());
         for out in &self.outputs {
             let src = &self.comb[out];

@@ -16,7 +16,7 @@ fn blinky() -> PathBuf {
 }
 
 /// An STM32F103 blue pill board: its MCU binds to the external `renode:stm32f103`
-/// backend, whose SoC descriptor maps every port's CRL/CRH direction register —
+/// backend, whose SoC descriptor maps every port's CRL/CRH direction register,
 /// so it CAN report pin drive direction and boot-coverage scaffolds without the
 /// backend-gap note.
 fn stm32_bluepill() -> PathBuf {
@@ -24,7 +24,7 @@ fn stm32_bluepill() -> PathBuf {
 }
 
 /// An ESP32 devkit board: its MCU binds to the `qemu:esp32` backend, which
-/// observes GPIO through a RAM mailbox carrying LEVELS only — it cannot report
+/// observes GPIO through a RAM mailbox carrying LEVELS only; it cannot report
 /// pin drive direction, so boot-coverage keeps the honest backend-gap note.
 fn esp32_devkit() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/esp32_devkit_demo.kicad_pcb")
@@ -75,7 +75,7 @@ fn init_generates_a_spec_the_loader_accepts() {
     // The starter must run GREEN out of the box: only `no_faults` is live.
     // boot-coverage is scaffolded COMMENTED-OUT on every backend (even the AVR
     // in-process one), because it asserts on firmware behaviour and `firmware =`
-    // is itself commented in the starter — left live it goes RED on the first run
+    // is itself commented in the starter, left live it goes RED on the first run
     // (the exact false-red the persona panel hit). The rail voltage asserts also
     // stay commented. So exactly one assertion loads.
     let kinds: Vec<&str> = spec.asserts.iter().map(|a| a.kind.as_str()).collect();
@@ -102,7 +102,7 @@ fn init_generates_a_spec_the_loader_accepts() {
 #[test]
 fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
     // The ESP32 devkit binds to the `qemu:esp32` backend, whose GPIO mailbox
-    // carries pin LEVELS only — it cannot report pin drive direction, so it
+    // carries pin LEVELS only; it cannot report pin drive direction, so it
     // cannot tell a held-LOW control net from an undriven one (docs/cosim/MCU.md). A
     // live boot-coverage assertion there can go RED with a misleading diagnosis
     // on a net the firmware actually drives, so init must scaffold it
@@ -139,7 +139,7 @@ fn init_comments_out_boot_coverage_when_the_backend_cannot_satisfy_it() {
 
 /// The capability flip: `renode:stm32f103` maps every port's direction
 /// register (CRL/CRH) in its SoC descriptor, so it now REPORTS pin drive
-/// direction and the scaffold treats it like the AVR backend — the same
+/// direction and the scaffold treats it like the AVR backend; the same
 /// commented-out starter block (GREEN out of the box, firmware is commented
 /// too) but WITHOUT the direction-gap note that direction-blind backends get.
 #[test]

@@ -218,7 +218,7 @@ struct LawLeg {
     source: DeviceId,
     /// For a Voltage law, its series output resistor and that resistor's
     /// on-resistance (ohms). Deactivating an `only_in_state` voltage law must
-    /// tri-state this resistor (OFF_OHMS) to RELEASE the pin — zeroing the
+    /// tri-state this resistor (OFF_OHMS) to RELEASE the pin, zeroing the
     /// Vsource alone would clamp the pin to 0 V through the stiff series R (a
     /// near-short). A Current law releases correctly by zeroing its Isource, so
     /// it carries `None` here.
@@ -843,7 +843,7 @@ impl BehavioralDevice {
         // Validation (`hauksbee-models::validate_behavioral`) accepts any
         // efficiency in (0,1]; honour it. The tiny floor is purely a divide
         // guard for the reflected-current computation below, not a physics
-        // clamp — a 1% efficient stage really does reflect 100x the output
+        // clamp, a 1% efficient stage really does reflect 100x the output
         // power onto its input.
         let eff = c.cfg.efficiency.unwrap_or(0.9).clamp(1e-9, 1.0);
 
@@ -878,7 +878,7 @@ impl BehavioralDevice {
                 // the stale measured one: re-reflect through the load
                 // conductance seen this chunk (iout/vout). Otherwise the
                 // output would deliver full power while the input drew the
-                // previous under-limit current — energy from nowhere, and the
+                // previous under-limit current, energy from nowhere, and the
                 // limit never actually enforced.
                 iin = (v_cmd * v_cmd * (iout / vout)) / (eff * vin);
             }
